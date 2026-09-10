@@ -35,7 +35,7 @@ fn fw_with_audit(path: &std::path::Path) -> Firewall {
 fn firewall_blocks_shell_injection_in_request() {
     let fw = default_fw();
     let args = json!({ "command": "; rm -rf / " });
-    let verdict = fw.check_request("sess-1", "backend", "exec_tool", &args, "caller");
+    let verdict = fw.check_request("sess-1", "backend", "exec_tool", &args, "caller", "sess-1");
 
     assert!(!verdict.allowed, "Shell injection must be blocked");
     assert_eq!(
@@ -95,7 +95,14 @@ fn firewall_audit_log_written_on_request() {
     let fw = fw_with_audit(tmp.path());
 
     let args = json!({ "query": "normal search" });
-    let _verdict = fw.check_request("sess-3", "srv", "search_tool", &args, "api-key-abc");
+    let _verdict = fw.check_request(
+        "sess-3",
+        "srv",
+        "search_tool",
+        &args,
+        "api-key-abc",
+        "sess-3",
+    );
 
     // File must have at least one line.
     let content = std::fs::read_to_string(tmp.path()).unwrap();
@@ -126,7 +133,7 @@ fn firewall_audit_log_written_on_request() {
 fn firewall_blocks_path_traversal_in_request() {
     let fw = default_fw();
     let args = json!({ "file": "../../../etc/passwd" });
-    let verdict = fw.check_request("sess-4", "backend", "read_file", &args, "caller");
+    let verdict = fw.check_request("sess-4", "backend", "read_file", &args, "caller", "sess-4");
 
     assert!(!verdict.allowed, "Path traversal must be blocked");
     assert_eq!(verdict.action, FirewallAction::Block);
@@ -145,7 +152,7 @@ fn firewall_blocks_path_traversal_in_request() {
 fn firewall_warns_on_sql_injection() {
     let fw = default_fw();
     let args = json!({ "query": "' OR 1=1" });
-    let verdict = fw.check_request("sess-5", "backend", "search", &args, "caller");
+    let verdict = fw.check_request("sess-5", "backend", "search", &args, "caller", "sess-5");
 
     // SQL injection is MEDIUM severity → Warn, not Block.
     assert!(verdict.allowed, "SQL injection should warn, not block");
@@ -170,7 +177,7 @@ fn disabled_firewall_passes_shell_injection() {
     let fw = Firewall::from_config(cfg, None);
 
     let args = json!({ "cmd": "; rm -rf / " });
-    let verdict = fw.check_request("sess-6", "srv", "exec", &args, "caller");
+    let verdict = fw.check_request("sess-6", "srv", "exec", &args, "caller", "sess-6");
     assert!(verdict.allowed);
     assert_eq!(verdict.action, FirewallAction::Allow);
     assert!(verdict.findings.is_empty());
@@ -193,7 +200,7 @@ fn exec_rule_elevates_sql_injection_to_block() {
 
     // SQL injection alone is MEDIUM (→ warn), but the exec_* rule → block.
     let args = json!({ "q": "' OR 1=1" });
-    let verdict = fw.check_request("sess-7", "srv", "exec_query", &args, "caller");
+    let verdict = fw.check_request("sess-7", "srv", "exec_query", &args, "caller", "sess-7");
     assert!(!verdict.allowed);
     assert_eq!(verdict.action, FirewallAction::Block);
 }
@@ -227,7 +234,7 @@ fn audit_log_written_for_both_request_and_response() {
     let fw = fw_with_audit(tmp.path());
 
     let args = json!({ "x": "value" });
-    fw.check_request("sess-9", "srv", "tool", &args, "caller");
+    fw.check_request("sess-9", "srv", "tool", &args, "caller", "sess-9");
 
     let mut response = json!({ "result": "ok" });
     fw.check_response("sess-9", "srv", "tool", &mut response, "caller");

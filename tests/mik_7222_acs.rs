@@ -7,7 +7,7 @@ use mcp_gateway::config::TransportConfig;
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 use mcp_gateway::security::{
     diagnostic_url, request_error_category, safe_http_status_error, safe_oauth_http_error,
-    safe_reqwest_message, summarize_stdio_command,
+    safe_request_error, safe_reqwest_message, summarize_stdio_command,
 };
 use reqwest::StatusCode;
 
@@ -114,13 +114,13 @@ async fn sweep_decode_error_must_not_echo_url_credentials() {
         .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
         let (mut stream, _) = listener.accept().await.expect("accept");
         let body = b"not-json";
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
         );
-        use tokio::io::AsyncWriteExt;
         let _ = stream.write_all(response.as_bytes()).await;
         let _ = stream.write_all(body).await;
     });
@@ -138,10 +138,16 @@ async fn sweep_decode_error_must_not_echo_url_credentials() {
         .expect_err("malformed body must fail decode");
     assert!(
         err.to_string().contains(CANARY),
-        "fixture is only useful if Display would leak; got {}",
-        err
+        "fixture is only useful if Display would leak; got {err}"
     );
     let safe = safe_reqwest_message("Failed to parse token response", &err);
     assert!(!safe.contains(CANARY), "{safe}");
     assert_eq!(request_error_category(&err), "response parse failed");
+
+    // `safe_request_error` is the wrapper the HTTP transport and the A2A client
+    // actually call (8 sites). It delegates to `safe_reqwest_message` today, and
+    // nothing but this line stops it being rewritten back to interpolate `{e}`.
+    let wrapped = safe_request_error("Request failed", &err).to_string();
+    assert!(!wrapped.contains(CANARY), "{wrapped}");
+    assert!(wrapped.contains("response parse failed"), "{wrapped}");
 }

@@ -90,6 +90,11 @@ fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
 
@@ -110,7 +115,7 @@ async fn authz_13b_gateway_invoke_denied() {
     let meta = MetaMcp::new(registry);
 
     let result = meta
-        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll))
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll), None)
         .await;
 
     assert!(result.is_err(), "a denied gateway_invoke must be refused");
@@ -127,7 +132,7 @@ async fn authz_13b_gateway_invoke_allowed() {
     let meta = MetaMcp::new(registry);
 
     let result = meta
-        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll), None)
         .await;
 
     assert!(result.is_ok(), "an allowed invoke must succeed: {result:?}");
@@ -654,7 +659,7 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
 
     // Prime the cache as a permitted caller.
     let primed = meta
-        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll), None)
         .await;
     assert!(primed.is_ok(), "priming call must succeed: {primed:?}");
     assert_eq!(
@@ -666,7 +671,7 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
     // AUTHZ.12a — the cache is real and reachable, so the refusal below is not
     // just an empty cache.
     let hit = meta
-        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll), None)
         .await;
     assert!(hit.is_ok(), "a second permitted call must succeed");
     assert_eq!(
@@ -678,7 +683,7 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
 
     // Now refuse the same target.
     let refused = meta
-        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll))
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll), None)
         .await;
     let refusal = refused.expect_err("a refused caller must not be served the cached payload");
     assert!(
@@ -715,12 +720,12 @@ async fn authz_20_refused_call_consumes_no_nonce() {
     let mut args = invoke_args("alpha", "read");
     args["nonce"] = json!("nonce-used-once");
 
-    let refused = meta.invoke_tool(&args, None, &ctx(&DenyAll)).await;
+    let refused = meta.invoke_tool(&args, None, &ctx(&DenyAll), None).await;
     assert!(refused.is_err(), "the call must be refused");
 
     // The same nonce must still be usable: the refusal happened before it was
     // registered.
-    let allowed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    let allowed = meta.invoke_tool(&args, None, &ctx(&AllowAll), None).await;
     assert!(
         allowed.is_ok(),
         "a refused call must not burn the nonce — the honest retry is being \
@@ -728,7 +733,7 @@ async fn authz_20_refused_call_consumes_no_nonce() {
     );
 
     // And the nonce IS a real one: replaying it now must fail.
-    let replayed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    let replayed = meta.invoke_tool(&args, None, &ctx(&AllowAll), None).await;
     let replay_error = replayed.expect_err("a replayed nonce must be rejected");
     assert!(
         replay_error.to_string().to_lowercase().contains("nonce")
@@ -800,5 +805,105 @@ async fn authz_13a_surfaced_tool_allowed_reaches_the_backend() {
         calls.load(Ordering::SeqCst),
         1,
         "and must actually reach the backend"
+    );
+}
+
+/// A verified OIDC identity distinguished only by its subject.
+fn verified(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
+    crate::key_server::oidc::VerifiedIdentity {
+        subject: subject.to_string(),
+        email: format!("{subject}@example.test"),
+        name: None,
+        groups: Vec::new(),
+        issuer: "https://issuer.example.test".to_string(),
+    }
+}
+
+/// MIK-7408, production path. The helper-level forgery tests pin how the
+/// retry key is COMPOSED; none of them pins that `invoke_tool` still hands the
+/// identity to the composer. A wiring regression there is invisible to all of
+/// them and visible here.
+///
+/// Two verified callers, one shared client key, identity propagation OFF —
+/// `cache_binding` is `None`, which is the shipped default and the exact
+/// configuration under which the suffix used to be empty for everyone.
+#[tokio::test]
+async fn a_second_verified_caller_is_not_served_the_firsts_idempotent_result() {
+    let (registry, calls) = counted_backend("alpha");
+    let mut meta = MetaMcp::new(registry);
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+
+    let retry = crate::protocol::mrtr::RetryFields {
+        input_responses: None,
+        request_state: None,
+        idempotency_key: Some("one-key-both-callers".to_string()),
+        malformed: Vec::new(),
+    };
+    let alice = verified("alice");
+    let bob = verified("bob");
+    let args = invoke_args("alpha", "read");
+
+    let first = meta
+        .invoke_tool(
+            &args,
+            None,
+            &MetaMcpCallerContext {
+                verified_identity: Some(&alice),
+                retry: &retry,
+                ..ctx(&AllowAll)
+            },
+            None,
+        )
+        .await;
+    assert!(first.is_ok(), "the first call must succeed: {first:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "and must reach the backend"
+    );
+
+    let second = meta
+        .invoke_tool(
+            &args,
+            None,
+            &MetaMcpCallerContext {
+                verified_identity: Some(&bob),
+                retry: &retry,
+                ..ctx(&AllowAll)
+            },
+            None,
+        )
+        .await;
+    assert!(second.is_ok(), "the second call must succeed: {second:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "bob was served alice's stored result — the verified identity is not \
+         reaching the retry key on the production path"
+    );
+
+    // And the key IS live, so the assertion above cannot have passed because
+    // idempotency was inert: alice repeating her own call is de-duplicated.
+    let repeat = meta
+        .invoke_tool(
+            &args,
+            None,
+            &MetaMcpCallerContext {
+                verified_identity: Some(&alice),
+                retry: &retry,
+                ..ctx(&AllowAll)
+            },
+            None,
+        )
+        .await;
+    assert!(repeat.is_ok(), "alice's repeat must succeed: {repeat:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "alice's own repeat reached the backend a second time — idempotency is \
+         inert here, and the caller-separation assertion above proved nothing"
     );
 }

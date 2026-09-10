@@ -149,6 +149,46 @@ pub struct TransparencyLogger {
     config: Arc<TransparencyLogConfig>,
 }
 
+/// Which rung of the correlation chain supplied an invocation entry's
+/// `session_id` field.
+///
+/// Recorded alongside the key because the key alone is opaque: an operator
+/// reading two entries with different keys cannot otherwise tell whether the
+/// caller changed or the gateway merely fell to a different rung. A key with
+/// no source names an invocation nobody can place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorrelationSource {
+    /// A W3C trace id the caller carried in `_meta`; spans the whole call.
+    OtelTraceId,
+    /// The connection's session id — a legacy caller that sent no trace.
+    SessionId,
+    /// The trace id the gateway minted for this invocation. Always available,
+    /// which is what makes the chain total.
+    TraceId,
+}
+
+/// A correlation key together with the rung that supplied it. They travel as
+/// one value because a key without its provenance is what CONTROL.3a set out
+/// to remove.
+#[derive(Debug, Clone, Copy)]
+pub struct CorrelationKey<'a> {
+    /// The key written to the entry's `session_id` field.
+    pub id: &'a str,
+    /// Which rung of the chain produced `id`.
+    pub source: CorrelationSource,
+}
+
+impl CorrelationSource {
+    #[must_use]
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::OtelTraceId => "otel_trace_id",
+            Self::SessionId => "session_id",
+            Self::TraceId => "trace_id",
+        }
+    }
+}
+
 impl TransparencyLogger {
     /// Open (or create) the transparency log file and recover chain state.
     ///
@@ -228,16 +268,45 @@ impl TransparencyLogger {
         request_hash: &str,
         response_hash: &str,
     ) -> io::Result<()> {
+        self.log_invocation_correlated(
+            CorrelationKey {
+                id: session_id,
+                source: CorrelationSource::SessionId,
+            },
+            caller,
+            server,
+            tool,
+            request_hash,
+            response_hash,
+        )
+    }
+
+    /// As [`Self::log_invocation`], but records which rung of the correlation
+    /// chain supplied `session_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `io::Error` if serialisation or the file write fails.
+    pub fn log_invocation_correlated(
+        &self,
+        key: CorrelationKey<'_>,
+        caller: &str,
+        server: &str,
+        tool: &str,
+        request_hash: &str,
+        response_hash: &str,
+    ) -> io::Result<()> {
         let timestamp = Utc::now().to_rfc3339();
 
         // Domain fields for an invocation entry. `counter`, `prev_entry_hash`,
         // `entry_hash`, and `sig`/`key_id` are added by `append_core`.
         let mut fields = serde_json::Map::new();
         fields.insert("caller".into(), caller.into());
+        fields.insert("correlation_source".into(), key.source.as_str().into());
         fields.insert("request_hash".into(), request_hash.into());
         fields.insert("response_hash".into(), response_hash.into());
         fields.insert("server".into(), server.into());
-        fields.insert("session_id".into(), session_id.into());
+        fields.insert("session_id".into(), key.id.into());
         fields.insert("timestamp".into(), timestamp.into());
         fields.insert("tool".into(), tool.into());
 

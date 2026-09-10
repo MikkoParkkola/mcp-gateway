@@ -4,12 +4,12 @@
 [![Crates.io](https://img.shields.io/crates/v/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Downloads](https://img.shields.io/crates/d/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Rust](https://img.shields.io/badge/rust-1.95+-blue.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-PolyForm--NC%20%2B%20MIT%20core-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
+[![License](https://img.shields.io/badge/license-PolyForm--NC-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
 [![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
-[![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
+[![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
 [![MITRE F3](https://img.shields.io/badge/MITRE_F3-gateway_boundary_mapped-lightgrey.svg)](docs/compliance/MITRE-F3-MAPPING.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Quality Score](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badges/score.svg)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
@@ -18,11 +18,11 @@
 
 **One gateway between your AI and every tool it needs, without flooding the context window.**
 
-MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect MCP servers and REST APIs behind it, and the agent sees a compact meta-surface of 14 to 16 tools instead of every backend definition. It discovers and calls backend tools on demand. A small live-agent benchmark found no completed-task token saving from that extra hop, so the value is catalog capacity plus policy and routing—not a blanket token claim. See [Benchmarks](docs/BENCHMARKS.md).
+MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect MCP servers and REST APIs behind it, and the agent sees a compact meta-surface of 14 to 17 tools instead of every backend definition. It discovers and calls backend tools on demand. A small live-agent benchmark found no completed-task token saving from that extra hop, so the value is catalog capacity plus policy and routing—not a blanket token claim. See [Benchmarks](docs/BENCHMARKS.md).
 
 ![demo](demo.gif)
 
-Personal and noncommercial use is free, including running the full gateway. Running it commercially needs a [commercial license](#license), and only a small MIT core of generic building blocks is MIT-licensed.
+Personal and noncommercial use is free, including running the full gateway. Running it commercially needs a [commercial license](#license).
 
 ## The problem this removes
 
@@ -34,7 +34,7 @@ MCP Gateway moves the full catalog out of the exposed tool list. The agent loads
 flowchart LR
     AI["AI client<br/>(Claude, Cursor, ...)"]
     subgraph GW["MCP Gateway (single binary)"]
-        META["Compact meta-surface<br/>14-16 tools"]
+        META["Compact meta-surface<br/>14-17 tools"]
         DISC{"Discover on demand<br/>gateway_search_tools<br/>gateway_invoke"}
     end
     T1["MCP backend<br/>Tavily (stdio)"]
@@ -43,7 +43,7 @@ flowchart LR
     C2["REST capability<br/>Stripe"]
     Cn["110+ capabilities"]
 
-    AI -->|"14-16 tool defs"| META
+    AI -->|"14-17 tool defs"| META
     META --> DISC
     DISC --> T1
     DISC --> T2
@@ -253,15 +253,15 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 
 | | Without gateway | With gateway |
 |---|----------------|--------------|
-| **Tools in context** | Every definition, every request | 16 meta-tools in the README benchmark (~1,600 tokens) |
-| **Schema footprint** | ~15,000 modeled tokens (100 tools) | ~1,600 modeled tokens before discovery; not completed-task cost |
+| **Tools in context** | Every definition, every request | 17 meta-tools in the README benchmark (~1,700 tokens) |
+| **Schema footprint** | ~15,000 modeled tokens (100 tools) | ~1,700 modeled tokens before discovery; not completed-task cost |
 | **Measured task cost** | Direct path was lower at every tested size | Meta path used 1.2–16.1% more input tokens and one extra turn |
 | **Practical tool limit** | 20 to 50 tools under context pressure | Unlimited, discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
-The gateway exposes 14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, reload, and webhook status.
+The gateway exposes 14 tools minimum, 17 in the README benchmark scenario. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, and reload. Webhook status is listed only where it can answer: a deployment with a webhook registry attached, which the stdio transport never has. It costs context exactly where it is useful.
 
 ### Code Mode: two tools instead of the meta-tool set
 
@@ -302,7 +302,7 @@ Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gatew
 ```mermaid
 flowchart TB
     subgraph GW["MCP Gateway (:39400)"]
-        META["Meta-MCP surface: 14-16 tools<br/>gateway_list_servers · gateway_list_tools<br/>gateway_search_tools · gateway_invoke"]
+        META["Meta-MCP surface: 14-17 tools<br/>gateway_list_servers · gateway_list_tools<br/>gateway_search_tools · gateway_invoke"]
         FS["Failsafes: circuit breaker · retry · rate limit"]
         META --> FS
     end
@@ -328,6 +328,7 @@ Embedded web UI at `/ui`: live status, searchable tools, server health, a read-o
 | **Cross-site protection** | `Origin`, `Host` and `Sec-Fetch-Site` validation refuses web pages reaching the local port. A client that sends no `Origin` is not refused for that, but the `Host` check applies to every request, so a client reaching the gateway by a name it does not answer to is refused whether or not it is a browser | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#browser-access-to-the-gateway-port) |
 | **End-user identity propagation** | Three configured strategies (`identity_propagation` config): gateway-signed assertion, client-token passthrough, and RFC 8693 token exchange. Fails closed when a backend requires identity. Per-user cache isolation. Enforced on dispatch, Code Mode, and direct routes. | [docs/adr/ADR-007-identity-propagation.md](docs/adr/ADR-007-identity-propagation.md) |
 | **Per-user OAuth isolation** | Fail-closed default (v3.0): a backend that requires a per-user OAuth identity refuses a call that lacks one instead of serving a shared stored token. Opt into the previous shared-credential behavior with `auth.single_user: true` (personal gateway) or `oauth.shared_account: true` (a specific backend). Upgrading from 2.x backs up `gateway.yaml` and prints a one-time posture notice; no config changes automatically. | [docs/adr/ADR-008-multi-user-oauth-isolation.md](docs/adr/ADR-008-multi-user-oauth-isolation.md), [docs/UPGRADING-3.0.md](docs/UPGRADING-3.0.md) |
+| **Cleartext credential refusal** | A backend whose configuration is credential-bearing — an `oauth` section, identity propagation, injected secrets, any static header whatever its name, or userinfo or a query in the URL — over plain `http://` to a host off this machine is refused at config load rather than started. Loopback is exempt; `allow_cleartext_credentials: true` on that backend accepts the exposure knowingly | [docs/REMOTE_BACKENDS.md](docs/REMOTE_BACKENDS.md#authenticated-remote-backends) |
 | **Per-client tool scopes** | Allowlist or denylist tools per API key with glob patterns | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
 | **Security firewall** | Credential redaction, prompt-injection detection, and shell/SQL/path-traversal scanning | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
 | **Cost governance** | Per-tool, per-key, daily budgets with alert thresholds (log/notify/block) | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
@@ -394,7 +395,7 @@ This table compares public, user-facing behavior, not internal roadmap scoring. 
 | Imports and bridges | Native MCP backends plus REST capability YAML and protocol-import planning | Docker-packaged MCP server catalog | MCP server aggregation | Strong bridge story for OpenAPI, SSE, WebSocket, and stdio compatibility |
 | Ranking and routing | Safety-aware ranking, explanations, cost/latency/trust/health signals | Catalog/profile selection, not an MCP tool ranker | Gateway-level routing to configured servers | Transport routing, not semantic tool ranking |
 | Deployment | Local, team gateway, Docker Compose, systemd, launchd, a security-hardened Helm chart (non-root, seccomp, read-only rootfs), and experimental (v1alpha1) Kubernetes CRDs | Docker Desktop, Docker CLI, Docker Hub/catalog workflow | Local or shared self-hosted gateway | Local or remote bridge process beside the target MCP server |
-| Licensing | Noncommercial-default (PolyForm-NC) with a small MIT core of generic building blocks; commercial use of the runnable gateway requires a license | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
+| Licensing | PolyForm Noncommercial 1.0.0 throughout; commercial use requires a license | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
 
 ### vs Anthropic MCP tunnels
 
@@ -404,7 +405,7 @@ mcp-gateway and Anthropic's MCP tunnel sit at different layers and compose. The 
 
 | Concern | Anthropic MCP tunnel | mcp-gateway | Boundary |
 |---|---|---|---|
-| **Backend topology** | Single MCP server per tunnel, exposed through one outbound connection ([overview](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)) | N-backend aggregation: 110+ REST capabilities plus multiple MCP backends behind a compact 14-16 tool meta-surface (`src/gateway/`, `capabilities/*.yaml`) | Different primitive: 1-server reachability vs many-backend aggregation |
+| **Backend topology** | Single MCP server per tunnel, exposed through one outbound connection ([overview](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)) | N-backend aggregation: 110+ REST capabilities plus multiple MCP backends behind a compact 14-17 tool meta-surface (`src/gateway/`, `capabilities/*.yaml`) | Different primitive: 1-server reachability vs many-backend aggregation |
 | **Tool routing** | Opaque pass-through; the agent sees whatever tool list the tunneled server publishes | Capability namespacing plus dynamic `gateway_search_tools` / `gateway_invoke` discovery (`src/gateway/`); SHA-256 pinning per capability (`src/capability/hash.rs`) | Different layer: transport reachability vs tool-surface curation and integrity |
 | **Observability** | Per-tunnel session telemetry from Anthropic's side | Unified `trace_id` and cost accounting across every backend invocation (`src/cost_accounting/`, `src/gateway/`) | Scope distinction: per-tunnel session vs cross-backend trace correlation |
 
@@ -496,7 +497,35 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 
 **Backend will not connect?** Test the command directly (`npx -y @anthropic/mcp-server-tavily`), then check gateway logs with `--log-level debug`.
 
-**Circuit breaker open?** Check `curl localhost:39400/health | jq '.backends'`. Adjust thresholds in `failsafe.circuit_breaker`.
+**Circuit breaker open?** Ask your MCP client for `gateway_list_servers`: it
+reports `circuit_breaker` per backend and works on the shipped config. The HTTP
+equivalent, `curl -H "Authorization: Bearer $ADMIN_KEY" localhost:39400/health |
+jq '.backends'`, additionally needs `auth.enabled: true` and an admin
+credential — authentication is off by default, and while it is off every caller
+is anonymous, so the token is ignored and even a bearer-carrying request sees
+just `{count, all_healthy}`. Adjust thresholds in `failsafe.circuit_breaker`
+(default: opens after 5 consecutive failures, retries after 30s).
+
+**One tool went quiet, then came back on its own about five minutes later?**
+That is the per-capability error budget, not the circuit breaker — separate
+mechanism, separate keys. A capability whose failure rate crosses
+`error_budget.capability.threshold` is disabled on its own, leaving the rest of
+its backend serving, and re-enables itself on the next call once
+`error_budget.capability.cooldown` (default 5 minutes) has elapsed.
+`gateway_list_disabled_capabilities` names the ones currently suspended.
+
+**A whole backend went offline and stayed offline?** The backend-level error
+budget auto-killed it: its failure rate crossed `error_budget.threshold` over
+the sliding window. Unlike a capability, a killed backend does **not** come
+back by itself — revive it with `gateway_revive_server`, and raise the
+threshold or the window if the kill was premature. `gateway_list_servers`
+reports a killed backend as `"status": "disabled"`, which is how you tell an
+auto-kill apart from an open breaker.
+
+Every key of both budgets is documented inline in `examples/gateway-full.yaml`
+under `error_budget:`. Rate-limited responses (`429`, `RESOURCE_EXHAUSTED`) are
+excluded from both budgets: a throttled backend is a working backend, so
+throttling alone can neither kill a backend nor disable a capability.
 
 **Tools not appearing?** Verify the backend is running (`gateway_list_servers`). Tool lists are cached for 5 minutes.
 
@@ -511,7 +540,7 @@ command that changes behaviour, is a breaking change.
 modularity and testing, not as a supported embedding API, and they may change
 in any release. The crate ships a binary; at the time of writing crates.io
 reports zero reverse dependencies. If you embed the library, pin an exact
-version (`=3.5.1`) rather than a caret range.
+version (`=4.0.0`) rather than a caret range.
 
 This is stated explicitly because "removing a `pub` field" and "breaking a
 supported API" are only the same thing when the API is supported. Here it is
@@ -531,42 +560,35 @@ mcp-gateway is part of a suite of MCP tools:
 
 | Tool | Description |
 |------|-------------|
-| **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **Universal MCP gateway: a compact 14-16 tool surface replaces 100+ registrations** |
+| **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **Universal MCP gateway: a compact 14-17 tool surface replaces 100+ registrations** |
 | [trvl](https://github.com/MikkoParkkola/trvl) | AI travel agent, 36 MCP tools for flights, hotels, ground transport |
 | [nab](https://github.com/MikkoParkkola/nab) | Web content extraction: fetch any URL with cookies and anti-bot bypass |
 | [axterminator](https://github.com/MikkoParkkola/axterminator) | macOS GUI automation, 34 MCP tools via the Accessibility API |
 
 ## License
 
-mcp-gateway uses **mixed, per-file licensing**, and the default is Noncommercial.
-
-| Scope | License |
-|-------|---------|
-| Files whose header carries `// SPDX-License-Identifier: MIT` (below the copyright line) | MIT ([LICENSE-MIT](LICENSE-MIT)) |
-| Everything else (the default) | PolyForm Noncommercial 1.0.0 ([LICENSE-NONCOMMERCIAL](LICENSE-NONCOMMERCIAL)) |
-
-If a file is not explicitly marked MIT, it is Noncommercial. The MIT core is a
-small set of simple, generic building blocks with no enterprise logic: the MCP
-protocol types, natural-language tool search, response shaping/transforms, the
-server design validator, the skills bridge, generic capability schema-validation
-and hashing, and the `gateway-core` primitives crate. The exact paths are in
-[`.mit-core-allowlist`](.mit-core-allowlist).
+mcp-gateway is licensed under the **PolyForm Noncommercial License 1.0.0**
+([LICENSE-NONCOMMERCIAL](LICENSE-NONCOMMERCIAL)). Every first-party file carries
+a copyright line and an explicit
+`// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0` header. There is no
+second license and no allowlist.
 
 What this means:
 
 - **Personal and noncommercial use is free**, including running the whole gateway.
-- **Running the gateway commercially requires a commercial license.** The runnable
-  gateway, covering dispatch, transport, backend management, identity, security,
-  governance, is Noncommercial. The MIT core is building blocks, not a
-  free-for-commercial gateway. See [COMMERCIAL.md](COMMERCIAL.md).
-- Versions 3.0.0–3.2.1 were published with MIT metadata for code now licensed as
-  Noncommercial from v3.3.0. Those copies stay MIT (a granted license cannot be
-  revoked) but are deprecated. See [NOTICE.md](NOTICE.md).
+- **Running the gateway commercially requires a commercial license.** This covers
+  the whole project — dispatch, transport, backend management, identity,
+  security, governance — including the generic building blocks that earlier 3.x
+  releases shipped under MIT headers. See [COMMERCIAL.md](COMMERCIAL.md).
+- Rights granted in earlier releases are not revoked. Versions 3.0.0–3.2.1 were
+  published with MIT package metadata, and v3.3.0 onward in the 3.x line shipped
+  a small MIT core under per-file headers. Those copies stay MIT for their
+  recipients; from **v4.0.0** there is no MIT core. See [NOTICE.md](NOTICE.md).
 
 Full model: [LICENSES.md](LICENSES.md).
 
 ## Credits
 
-Created by [Mikko Parkkola](https://github.com/MikkoParkkola). Implements [Model Context Protocol](https://modelcontextprotocol.io/) version 2025-11-25.
+Created by [Mikko Parkkola](https://github.com/MikkoParkkola). Implements [Model Context Protocol](https://modelcontextprotocol.io/) versions 2025-11-25 and 2026-07-28; the newer revision is served by default and can be switched off.
 
 [Changelog](CHANGELOG.md) | [Releases](https://github.com/MikkoParkkola/mcp-gateway/releases)

@@ -48,6 +48,7 @@ fn make_handler_state(
             ..WebhookConfig::default()
         },
         stats: Arc::new(EndpointStats::default()),
+        env: Arc::new(crate::config::LiveEnv::default()),
     }
 }
 
@@ -453,4 +454,67 @@ fn method_to_filter_known_methods_mapped_correctly() {
     let _ = method_to_filter("PATCH");
     let _ = method_to_filter("DELETE");
     let _ = method_to_filter("UNKNOWN"); // defaults to POST
+}
+
+#[tokio::test]
+async fn webhook_handler_rejects_a_secret_that_resolves_to_nothing() {
+    // A `{env.VAR}` secret naming an unset variable expands to the empty
+    // string. An empty HMAC key is computable by anyone, so a caller can forge
+    // a signature the check would otherwise accept.
+    let multiplexer = make_multiplexer();
+    let mut definition = make_definition(true);
+    definition.secret = Some("{env.MIK_7256_WEBHOOK_SECRET_THAT_IS_NEVER_SET}".to_string());
+    definition.signature_header = Some("X-Signature".to_string());
+    let state = make_handler_state(multiplexer, definition);
+
+    let body = br#"{"event":"forged"}"#;
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(b"").unwrap();
+    mac.update(body);
+    let forged = hex::encode(mac.finalize().into_bytes());
+
+    let mut headers = HeaderMap::new();
+    headers.insert("X-Signature", forged.parse().unwrap());
+
+    let response = webhook_handler(State(state), headers, axum::body::Bytes::from_static(body))
+        .await
+        .into_response();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn webhook_handler_accepts_a_secret_an_env_file_assigns() {
+    // Env files load into an in-memory overlay rather than into the process
+    // environment, so a `{env.VAR}` secret is only resolvable through that
+    // overlay. Without it the secret expands to the empty string and every
+    // legitimate signature is rejected.
+    let dir = tempfile::tempdir().unwrap();
+    let env_file = dir.path().join(".env");
+    std::fs::write(&env_file, "MIK_7256_OVERLAY_SECRET=well-known-test-value\n").unwrap();
+    let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
+    let env = Arc::new(crate::config::LiveEnv::new(
+        Arc::new(overlay),
+        crate::config::ResolvedEnvFiles::default(),
+    ));
+
+    let multiplexer = make_multiplexer();
+    let mut definition = make_definition(true);
+    definition.secret = Some("{env.MIK_7256_OVERLAY_SECRET}".to_string());
+    definition.signature_header = Some("X-Signature".to_string());
+    let mut state = make_handler_state(multiplexer, definition);
+    state.env = env;
+
+    let body = br#"{"event":"legitimate"}"#;
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(b"well-known-test-value").unwrap();
+    mac.update(body);
+    let signature = hex::encode(mac.finalize().into_bytes());
+
+    let mut headers = HeaderMap::new();
+    headers.insert("X-Signature", signature.parse().unwrap());
+
+    let response = webhook_handler(State(state), headers, axum::body::Bytes::from_static(body))
+        .await
+        .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
 }

@@ -209,35 +209,40 @@ pub fn tool_schema_fingerprint(tools: &[Value]) -> String {
 // Request metadata injection
 // ============================================================================
 
-/// Inject `prompt_cache_key` into the `_meta` field of a JSON-RPC request params object.
+/// Build the outbound `_meta` for a backend `tools/call`, from what the caller
+/// sent and the prompt-cache key this hop derived.
 ///
-/// The `_meta` field is the MCP-standard extension point for request metadata.
-/// When the downstream backend is OpenAI-compatible it can read this field and
-/// forward the key appropriately.
+/// One function rather than two, because `_meta` is one object: a trace writer
+/// and a cache-key writer that each own the key would each have to know about
+/// the other's field. This is the sole writer of the outbound object — the
+/// separate cache-key injector it replaced was the second (design §3.4a).
 ///
-/// If `params` is `None` a new object `{"_meta": {"prompt_cache_key": key}}` is returned.
-/// If `params` already contains `_meta`, the key is merged in without overwriting other fields.
+/// `None` when there is nothing to send — the caller carried no propagable
+/// trace context and this hop has no cache key. Absent, never empty: a backend
+/// is entitled to read the presence of `_meta` as meaning something.
+///
+/// Nothing else from `inbound_meta` is relayed. The gateway already strips
+/// peer-supplied `_meta.provenance` from backend responses; the same refusal
+/// applies on the way out.
 #[must_use]
-pub fn inject_cache_key(params: Option<Value>, key: &str) -> Value {
-    match params {
-        None => serde_json::json!({
-            "_meta": { "prompt_cache_key": key }
-        }),
-        Some(mut p) => {
-            if let Value::Object(map) = &mut p {
-                let meta = map
-                    .entry("_meta")
-                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
-                if let Value::Object(meta_map) = meta {
-                    meta_map.insert(
-                        "prompt_cache_key".to_string(),
-                        Value::String(key.to_string()),
-                    );
-                }
-            }
-            p
-        }
+pub fn build_outbound_meta(inbound_meta: Option<&Value>, cache_key: Option<&str>) -> Option<Value> {
+    let mut meta = inbound_meta
+        .and_then(crate::protocol::trace::TraceContext::from_meta)
+        .map(|trace| trace.to_meta())
+        .and_then(|value| match value {
+            Value::Object(map) => Some(map),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    if let Some(key) = cache_key {
+        meta.insert(
+            "prompt_cache_key".to_string(),
+            Value::String(key.to_string()),
+        );
     }
+
+    (!meta.is_empty()).then_some(Value::Object(meta))
 }
 
 /// Extract `prompt_cache_key` from response usage data (OpenAI-compatible format).
@@ -468,39 +473,105 @@ mod tests {
         assert_eq!(f.len(), 64); // SHA-256 → 64 hex chars
     }
 
-    // ── inject_cache_key ─────────────────────────────────────────────
+    // ── build_outbound_meta: the hop (OTEL.1.b/.c/.d) ─────────────────
+    //
+    // Fixture direction is inbound-only in every row: trace values are placed
+    // on the caller's `_meta` and asserted on what goes out. A row that seeded
+    // the outbound object would have verified serde, not the hop.
 
-    #[test]
-    fn inject_cache_key_creates_meta_when_params_none() {
-        let result = inject_cache_key(None, "my-key");
-        assert_eq!(result["_meta"]["prompt_cache_key"], "my-key");
+    const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    /// The inbound `_meta` every row below starts from: three trace fields and
+    /// one unrelated key that must not be relayed.
+    fn inbound_with_poison() -> Value {
+        json!({
+            "traceparent": TRACEPARENT,
+            "tracestate": "vendor=abc",
+            "baggage": "k=v",
+            "example.test/poison": "must not be relayed",
+        })
     }
 
     #[test]
-    fn inject_cache_key_adds_to_existing_params() {
-        let params = json!({"name": "my_tool", "arguments": {}});
-        let result = inject_cache_key(Some(params), "my-key");
-        assert_eq!(result["name"], "my_tool");
-        assert_eq!(result["_meta"]["prompt_cache_key"], "my-key");
+    fn t1_trace_propagates_with_no_cache_key_and_the_poison_key_does_not() {
+        let outbound = build_outbound_meta(Some(&inbound_with_poison()), None)
+            .expect("a propagable trace context yields _meta");
+
+        // Exact key set: a contains-check would pass an implementation that
+        // clones inbound `_meta` wholesale and relays attacker metadata.
+        let mut keys: Vec<&str> = outbound
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["baggage", "traceparent", "tracestate"]);
+        assert_eq!(outbound["traceparent"], json!(TRACEPARENT));
+        assert_eq!(outbound["tracestate"], json!("vendor=abc"));
+        assert_eq!(outbound["baggage"], json!("k=v"));
     }
 
     #[test]
-    fn inject_cache_key_merges_with_existing_meta() {
-        let params = json!({
-            "_meta": {"existing_field": "value"},
-            "arguments": {}
+    fn t2_the_cache_key_merges_with_the_trace_keys_rather_than_replacing_them() {
+        let outbound = build_outbound_meta(Some(&inbound_with_poison()), Some("my-key"))
+            .expect("both sources present");
+
+        let mut keys: Vec<&str> = outbound
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["baggage", "prompt_cache_key", "traceparent", "tracestate"]
+        );
+        assert_eq!(outbound["prompt_cache_key"], json!("my-key"));
+    }
+
+    #[test]
+    fn t3_no_trace_arrives_so_none_is_minted() {
+        // Asserted as absence of the whole object, not as an empty value: a
+        // minted root would be a non-empty value and is what this refuses.
+        assert_eq!(
+            build_outbound_meta(Some(&json!({ "other": 1 })), None),
+            None
+        );
+    }
+
+    #[test]
+    fn t4_a_malformed_traceparent_is_dropped_not_minted_and_not_repaired() {
+        // Three parts, everything else valid (A9: one thing broken).
+        let inbound = json!({
+            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
         });
-        let result = inject_cache_key(Some(params), "new-key");
-        // Both fields should be present
-        assert_eq!(result["_meta"]["prompt_cache_key"], "new-key");
-        assert_eq!(result["_meta"]["existing_field"], "value");
+        assert_eq!(build_outbound_meta(Some(&inbound), None), None);
     }
 
     #[test]
-    fn inject_cache_key_overwrites_existing_prompt_cache_key() {
-        let params = json!({"_meta": {"prompt_cache_key": "old-key"}});
-        let result = inject_cache_key(Some(params), "new-key");
-        assert_eq!(result["_meta"]["prompt_cache_key"], "new-key");
+    fn t5_baggage_alone_reaches_the_backend_without_a_traceparent() {
+        let outbound = build_outbound_meta(Some(&json!({ "baggage": "k=v" })), None)
+            .expect("baggage propagates on its own");
+        assert_eq!(outbound["baggage"], json!("k=v"));
+        assert!(outbound.get("traceparent").is_none(), "got {outbound}");
+    }
+
+    #[test]
+    fn t5b_orphaned_tracestate_is_not_relayed() {
+        assert_eq!(
+            build_outbound_meta(Some(&json!({ "tracestate": "vendor=abc" })), None),
+            None
+        );
+    }
+
+    #[test]
+    fn build_outbound_meta_carries_the_cache_key_when_the_caller_sent_nothing() {
+        // The pre-existing behaviour this function subsumes: a hop with a cache
+        // key and no inbound `_meta` still sends the key.
+        let outbound = build_outbound_meta(None, Some("my-key")).expect("a cache key alone");
+        assert_eq!(outbound, json!({ "prompt_cache_key": "my-key" }));
     }
 
     // ── extract_cached_tokens ─────────────────────────────────────────

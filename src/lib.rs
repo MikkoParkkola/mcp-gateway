@@ -6,7 +6,7 @@
 //!
 //! # Features
 //!
-//! - **Meta-MCP Mode**: 14 tools minimum; 16 in the README benchmark scenario; 17 when webhook status is surfaced
+//! - **Meta-MCP Mode**: 14 tools minimum; 17 in the README benchmark scenario
 //! - **Streaming**: Real-time notifications via SSE (MCP 2025-03-26 Streamable HTTP)
 //! - **Notification Multiplexer**: Routes backend notifications to connected clients
 //! - **Multi-Transport**: stdio, Streamable HTTP, SSE support
@@ -20,7 +20,6 @@
 //! - 2025-06-18
 //! - 2025-03-26 (Streamable HTTP)
 //! - 2024-11-05
-//! - 2024-10-07
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]

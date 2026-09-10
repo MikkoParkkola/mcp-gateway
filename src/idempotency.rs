@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry as MapEntry;
 use serde_json::Value;
 use tracing::debug;
 
@@ -28,6 +29,18 @@ use crate::{Error, Result};
 // ── Public constants ──────────────────────────────────────────────────────────
 
 /// TTL for completed results (24 hours).
+///
+/// **Stated assumption, flagged to the team lead (MIK-7272.SUB.4, 2026-09-07,
+/// carried forward unchanged by the 2026-09-08 ruling).** Nobody has decided
+/// how long a client may retry a side-effecting call and still be owed the
+/// first result; 24 hours is a defensible default, not a settled requirement.
+/// The 2026-09-08 ruling removed the config field that would have carried it,
+/// so it lives here as a constant — that changed WHERE the assumption is
+/// recorded, never that it is one. It takes CONTROL.4's shape: a value with a
+/// defensible default, named as an assumption where a reader of the constant
+/// finds it. Revisit if an operator reports either half of the failure — a
+/// retry outside the window that duplicated a side effect, or memory pressure
+/// from entries held this long.
 pub const COMPLETED_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Timeout for in-flight markers (5 minutes).
@@ -35,6 +48,22 @@ pub const COMPLETED_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// If a tool call does not complete within this window the in-flight marker
 /// is treated as stale and a new execution is allowed.
 pub const IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Maximum number of tracked entries.
+///
+/// Mirrors the response cache bound (`src/config/features/cache.rs:12`). At the
+/// bound the guard fails **closed**: a new protected side effect is refused
+/// rather than an older entry evicted, because evicting readmits the duplicate
+/// that entry existed to suppress. Entries already tracked stay servable.
+pub const MAX_ENTRIES: usize = 10_000;
+
+/// How often the background sweep evicts stale entries (1 minute).
+///
+/// Not a correctness bound — [`IN_FLIGHT_TIMEOUT`] and [`COMPLETED_TTL`] decide
+/// what an entry means, and a lookup honours both whether or not the sweep has
+/// run. This only decides how long a dead entry keeps occupying one of the
+/// [`MAX_ENTRIES`] slots.
+pub const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 
 // ── State machine ─────────────────────────────────────────────────────────────
 
@@ -91,7 +120,36 @@ impl IdempotencyState {
 /// ```
 #[derive(Debug, Default)]
 pub struct IdempotencyCache {
-    entries: DashMap<String, IdempotencyState>,
+    entries: DashMap<String, Entry>,
+}
+
+/// One tracked key: its state, and the request it was minted for.
+///
+/// The fingerprint is stored beside the state rather than mixed into the key,
+/// because a mismatch has to be *refused*. Folding it into the key would make
+/// the second call a different key, and a different key executes — which is the
+/// duplicate the client's key was meant to prevent.
+#[derive(Debug)]
+struct Entry {
+    state: IdempotencyState,
+    /// The request this key was admitted for, or empty when the entry came from
+    /// [`IdempotencyCache::mark_in_flight`], which has no request to bind to.
+    /// An empty fingerprint binds nothing and matches anything.
+    fingerprint: String,
+}
+
+impl Entry {
+    fn new(state: IdempotencyState, fingerprint: &str) -> Self {
+        Self {
+            state,
+            fingerprint: fingerprint.to_string(),
+        }
+    }
+
+    /// Whether `fingerprint` is the request this entry was admitted for.
+    fn matches(&self, fingerprint: &str) -> bool {
+        self.fingerprint.is_empty() || self.fingerprint == fingerprint
+    }
 }
 
 /// Outcome of checking the idempotency cache before executing a tool call.
@@ -133,6 +191,35 @@ pub(crate) fn decide_check_plan(status: CacheEntryStatus) -> (CheckPlan, bool) {
     }
 }
 
+/// Outcome of the atomic admission step performed by [`IdempotencyCache::admit`].
+#[derive(Debug)]
+pub(crate) enum AdmitOutcome {
+    /// The key is now registered in-flight for this caller alone.
+    Proceed,
+    /// Another caller holds a live in-flight entry.
+    InFlight,
+    /// A completed entry exists — return the cached result.
+    Completed(Value),
+    /// The cache is at [`MAX_ENTRIES`] and this key is not tracked yet.
+    AtCapacity,
+    /// The key is tracked, but for a different request.
+    Mismatch,
+}
+
+#[must_use]
+fn classify(state: &IdempotencyState) -> CacheEntryStatus {
+    match state {
+        IdempotencyState::InFlight(started) if started.elapsed() <= IN_FLIGHT_TIMEOUT => {
+            CacheEntryStatus::LiveInFlight
+        }
+        IdempotencyState::InFlight(_) => CacheEntryStatus::StaleInFlight,
+        IdempotencyState::Completed(_, stored) if stored.elapsed() <= COMPLETED_TTL => {
+            CacheEntryStatus::LiveCompleted
+        }
+        IdempotencyState::Completed(_, _) => CacheEntryStatus::ExpiredCompleted,
+    }
+}
+
 impl IdempotencyCache {
     /// Create a new, empty cache.
     #[must_use]
@@ -157,16 +244,7 @@ impl IdempotencyCache {
             };
         };
 
-        let status = match entry.value() {
-            IdempotencyState::InFlight(started) if started.elapsed() <= IN_FLIGHT_TIMEOUT => {
-                CacheEntryStatus::LiveInFlight
-            }
-            IdempotencyState::InFlight(_) => CacheEntryStatus::StaleInFlight,
-            IdempotencyState::Completed(_, stored) if stored.elapsed() <= COMPLETED_TTL => {
-                CacheEntryStatus::LiveCompleted
-            }
-            IdempotencyState::Completed(_, _) => CacheEntryStatus::ExpiredCompleted,
-        };
+        let status = classify(&entry.value().state);
 
         let (decision, evict) = decide_check_plan(status);
         if evict {
@@ -180,7 +258,7 @@ impl IdempotencyCache {
             CheckPlan::Proceed => CheckOutcome::Proceed,
             CheckPlan::InFlight => CheckOutcome::InFlight,
             CheckPlan::Completed => {
-                let IdempotencyState::Completed(value, _) = entry.value() else {
+                let IdempotencyState::Completed(value, _) = &entry.value().state else {
                     unreachable!("live completed status must hold a completed value");
                 };
                 CheckOutcome::Completed(value.clone())
@@ -188,18 +266,119 @@ impl IdempotencyCache {
         }
     }
 
+    /// Atomically inspect `key` and, when nothing else owns it, register it as
+    /// in-flight in the same operation.
+    ///
+    /// `check` followed by `mark_in_flight` is two independent `DashMap`
+    /// operations, so two concurrent retries of one key could both observe
+    /// `Proceed` and both execute. Holding a single entry guard across the
+    /// inspect and the write closes that window.
+    pub(crate) fn admit(&self, key: &str, fingerprint: &str) -> AdmitOutcome {
+        // `DashMap::len` read-locks every shard, so it must be read *before*
+        // the entry guard below takes a shard write lock — reading it inside
+        // the guard's scope deadlocks. The count can therefore grow by at most
+        // the number of callers racing admission of distinct new keys.
+        let at_capacity = self.entries.len() >= MAX_ENTRIES;
+
+        match self.entries.entry(key.to_string()) {
+            MapEntry::Occupied(mut occupied) => {
+                // Before the state: a live entry for another request must be
+                // refused whether it is in flight or already completed, and a
+                // stale one is replaced by this request anyway.
+                let (plan, evict) = decide_check_plan(classify(&occupied.get().state));
+                if !matches!(plan, CheckPlan::Proceed) && !occupied.get().matches(fingerprint) {
+                    return AdmitOutcome::Mismatch;
+                }
+                match plan {
+                    CheckPlan::InFlight => AdmitOutcome::InFlight,
+                    CheckPlan::Completed => {
+                        let IdempotencyState::Completed(value, _) = &occupied.get().state else {
+                            unreachable!("live completed status must hold a completed value");
+                        };
+                        AdmitOutcome::Completed(value.clone())
+                    }
+                    CheckPlan::Proceed => {
+                        debug_assert!(evict, "an occupied entry only proceeds after eviction");
+                        // Replacing in place keeps the entry count flat, so a
+                        // stale entry never costs a caller its admission.
+                        occupied.insert(Entry::new(
+                            IdempotencyState::InFlight(Instant::now()),
+                            fingerprint,
+                        ));
+                        debug!(key, "Replaced stale idempotency entry");
+                        AdmitOutcome::Proceed
+                    }
+                }
+            }
+            MapEntry::Vacant(vacant) => {
+                if at_capacity {
+                    return AdmitOutcome::AtCapacity;
+                }
+                vacant.insert(Entry::new(
+                    IdempotencyState::InFlight(Instant::now()),
+                    fingerprint,
+                ));
+                AdmitOutcome::Proceed
+            }
+        }
+    }
+
     /// Register `key` as in-flight.  Overwrites any stale entry.
     pub fn mark_in_flight(&self, key: &str) {
-        self.entries
-            .insert(key.to_string(), IdempotencyState::InFlight(Instant::now()));
+        self.entries.insert(
+            key.to_string(),
+            Entry::new(IdempotencyState::InFlight(Instant::now()), ""),
+        );
     }
 
     /// Transition `key` from in-flight to completed with `result`.
-    pub fn mark_completed(&self, key: &str, result: Value) {
+    ///
+    /// A result the backend has not finished producing is *not* stored, and any
+    /// in-flight entry for `key` is dropped so the call stays retryable. MCP
+    /// 2026 marks such a result with a `resultType` other than `"complete"` —
+    /// `"input_required"` being the case that matters, where the backend is
+    /// waiting for the caller to supply something. Caching that would make
+    /// every retry replay the request for input instead of running the call,
+    /// so the exchange could never complete.
+    ///
+    /// The guard lives here rather than at each call site because the property
+    /// belongs to the cache: nothing non-final should ever be servable from it,
+    /// including from call sites not yet written.
+    pub fn mark_completed(&self, key: &str, result: Value) -> bool {
+        // The fingerprint survives the state transition: the completed result
+        // belongs to the request that was admitted, not to whatever asks next.
+        // A caller holding a reservation knows that fingerprint and passes it
+        // to `mark_completed_bound`; this entry point can only recover it from
+        // the entry, which is why it must not be used once the entry may be
+        // gone.
+        let fingerprint = self
+            .entries
+            .get(key)
+            .map_or_else(String::new, |e| e.fingerprint.clone());
+        self.mark_completed_bound(key, result, &fingerprint)
+    }
+
+    /// [`mark_completed`](Self::mark_completed) with the admitting request's
+    /// fingerprint supplied rather than looked up.
+    ///
+    /// The lookup cannot recover it once the entry is gone — released by a
+    /// failed dispatch, or swept after [`IN_FLIGHT_TIMEOUT`] — and an empty
+    /// fingerprint matches every later request, so a result stored that way
+    /// would answer any call reusing the key.
+    pub(crate) fn mark_completed_bound(&self, key: &str, result: Value, fingerprint: &str) -> bool {
+        if !crate::protocol::cacheable::is_final(&result) {
+            self.entries.remove(key);
+            debug!(key, "Refused to cache a non-final result");
+            return false;
+        }
         self.entries.insert(
             key.to_string(),
-            IdempotencyState::Completed(result, Instant::now()),
+            Entry::new(
+                IdempotencyState::Completed(result, Instant::now()),
+                fingerprint,
+            ),
         );
+        true
     }
 
     /// Remove `key` entirely (used when a call fails and should be retryable).
@@ -208,17 +387,18 @@ impl IdempotencyCache {
     }
 
     /// Evict all stale entries.  Called by the background maintenance task.
+    ///
+    /// The expiry test and the removal MUST happen under the same lock. A
+    /// collect-then-remove pass leaves a window in which a fresh admission
+    /// takes the key between the two halves and is then deleted as though it
+    /// were the stale entry it displaced — silently unprotecting a call the
+    /// client asked to protect. `retain` holds each shard's write lock across
+    /// the predicate and the removal, so the window does not exist rather than
+    /// being narrowed.
     pub fn evict_expired(&self) {
-        let stale: Vec<String> = self
-            .entries
-            .iter()
-            .filter_map(|e| e.value().is_expired().then(|| e.key().clone()))
-            .collect();
-
-        let count = stale.len();
-        for key in stale {
-            self.entries.remove(&key);
-        }
+        let before = self.entries.len();
+        self.entries.retain(|_, entry| !entry.state.is_expired());
+        let count = before.saturating_sub(self.entries.len());
         if count > 0 {
             debug!(count, "Evicted stale idempotency entries");
         }
@@ -300,11 +480,117 @@ pub fn derive_key(tool_name: &str, arguments: &Value) -> String {
 
 // ── Idempotency enforcement ───────────────────────────────────────────────────
 
+/// Owned reservation of an admitted idempotency key.
+///
+/// Holding one is the right to execute the protected side effect exactly once.
+/// Every exit path after admission reaches a terminal state, so no early return
+/// can strand an entry as in-flight until [`IN_FLIGHT_TIMEOUT`]. Which terminal
+/// state depends on whether the side effect has run: before
+/// [`commit`](Self::commit) a drop releases the key so the call can be retried;
+/// after it, a drop stores the committed result, because once the backend has
+/// acted a retry must not execute it again.
+#[derive(Debug)]
+pub struct IdempotencyReservation {
+    cache: Arc<IdempotencyCache>,
+    key: String,
+    /// The fingerprint the key was admitted for, so a result stored after the
+    /// entry is gone stays bound to this request instead of matching any.
+    fingerprint: String,
+    settled: bool,
+    on_drop: OnDrop,
+}
+
+/// What an unsettled [`IdempotencyReservation`] does when it is dropped.
+#[derive(Debug)]
+enum OnDrop {
+    /// Nothing has been executed yet — free the key so the call can be retried.
+    Release,
+    /// The protected side effect has committed — settle with this result so a
+    /// retry is served the cached value instead of re-executing.
+    Complete(Value),
+}
+
+impl IdempotencyReservation {
+    fn new(cache: Arc<IdempotencyCache>, key: &str, fingerprint: &str) -> Self {
+        Self {
+            cache,
+            key: key.to_string(),
+            fingerprint: fingerprint.to_string(),
+            settled: false,
+            on_drop: OnDrop::Release,
+        }
+    }
+
+    /// The key this reservation owns.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Settle by storing `result`. Returns whether it was cached — a non-final
+    /// result is refused by [`IdempotencyCache::mark_completed`] and the key is
+    /// released instead, so the call stays retryable.
+    ///
+    /// Callable after [`release`](Self::release): a failed dispatch releases the
+    /// key first and may still store a structured error result afterwards, which
+    /// is the behaviour the invoke path already relied on.
+    pub fn complete(&mut self, result: &Value) -> bool {
+        self.settled = true;
+        self.cache
+            .mark_completed_bound(&self.key, result.clone(), &self.fingerprint)
+    }
+
+    /// Record that the protected side effect has committed.
+    ///
+    /// After this, dropping the reservation unsettled stores `result` as the
+    /// terminal state instead of releasing the key. Once a backend has acted, a
+    /// post-dispatch early return must not readmit the retry that would execute
+    /// it a second time. No-op once the reservation is already settled.
+    pub fn commit(&mut self, result: &Value) {
+        if !self.settled {
+            self.on_drop = OnDrop::Complete(result.clone());
+        }
+    }
+
+    /// Settle by releasing the key so the call can be retried.
+    pub fn release(&mut self) {
+        self.settled = true;
+        self.cache.remove(&self.key);
+    }
+}
+
+impl Drop for IdempotencyReservation {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        match std::mem::replace(&mut self.on_drop, OnDrop::Release) {
+            OnDrop::Release => {
+                self.cache.remove(&self.key);
+                debug!(key = %self.key, "Released abandoned idempotency reservation");
+            }
+            OnDrop::Complete(result) => {
+                if self
+                    .cache
+                    .mark_completed_bound(&self.key, result, &self.fingerprint)
+                {
+                    debug!(key = %self.key, "Settled abandoned idempotency reservation");
+                } else {
+                    // A non-final result is refused by `mark_completed`. Leaving
+                    // the entry in flight is the one outcome this guard exists to
+                    // prevent, so fall back to releasing the key.
+                    self.cache.remove(&self.key);
+                }
+            }
+        }
+    }
+}
+
 /// Outcome of the idempotency guard.
 #[derive(Debug)]
 pub enum GuardOutcome {
-    /// Proceed with execution; the key has been registered as in-flight.
-    Proceed,
+    /// Proceed with execution, holding the reservation for the key.
+    Proceed(IdempotencyReservation),
     /// Return the cached result — no execution needed.
     CachedResult(Value),
 }
@@ -314,19 +600,45 @@ pub enum GuardOutcome {
 ///
 /// # Errors
 ///
-/// Returns [`Error::DuplicateRequest`] (HTTP 409 equivalent) when an identical
-/// request is already in flight.
-pub fn enforce(cache: &IdempotencyCache, key: &str) -> Result<GuardOutcome> {
-    match cache.check(key) {
-        CheckOutcome::Proceed => {
-            cache.mark_in_flight(key);
-            Ok(GuardOutcome::Proceed)
-        }
-        CheckOutcome::InFlight => Err(Error::json_rpc(
+/// Returns a 409 error when an identical request is already in flight, a 409
+/// error when `key` is already bound to a *different* request, and a 503 error
+/// when the cache is at [`MAX_ENTRIES`] and the key is not yet tracked —
+/// refusing rather than evicting, since eviction readmits a duplicate.
+///
+/// `fingerprint` identifies the request the key is being used for. A client key
+/// is an opaque string it chose; nothing about the string says which call it
+/// was minted for, so without binding, one key reused for a second, different
+/// call is served the first call's result as though it were its own.
+pub fn enforce(
+    cache: &Arc<IdempotencyCache>,
+    key: &str,
+    fingerprint: &str,
+) -> Result<GuardOutcome> {
+    match cache.admit(key, fingerprint) {
+        AdmitOutcome::Proceed => Ok(GuardOutcome::Proceed(IdempotencyReservation::new(
+            Arc::clone(cache),
+            key,
+            fingerprint,
+        ))),
+        AdmitOutcome::InFlight => Err(Error::json_rpc(
             409,
             format!("Duplicate request in progress for key: {key}"),
         )),
-        CheckOutcome::Completed(value) => Ok(GuardOutcome::CachedResult(value)),
+        AdmitOutcome::Completed(value) => Ok(GuardOutcome::CachedResult(value)),
+        AdmitOutcome::Mismatch => Err(Error::json_rpc(
+            409,
+            format!(
+                "Idempotency key is already in use for a different request: {key}. \
+                 A key identifies one call; reuse it only to repeat that same call."
+            ),
+        )),
+        AdmitOutcome::AtCapacity => Err(Error::json_rpc(
+            503,
+            format!(
+                "Idempotency cache at capacity ({MAX_ENTRIES} entries); \
+                 refusing new protected request for key: {key}"
+            ),
+        )),
     }
 }
 
@@ -492,12 +804,15 @@ mod tests {
         // Insert an entry with a timestamp in the distant past
         cache.entries.insert(
             "stale".to_string(),
-            IdempotencyState::InFlight(
-                Instant::now()
-                    .checked_sub(IN_FLIGHT_TIMEOUT)
-                    .unwrap()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap(),
+            Entry::new(
+                IdempotencyState::InFlight(
+                    Instant::now()
+                        .checked_sub(IN_FLIGHT_TIMEOUT)
+                        .unwrap()
+                        .checked_sub(Duration::from_secs(1))
+                        .unwrap(),
+                ),
+                "",
             ),
         );
         assert!(matches!(cache.check("stale"), CheckOutcome::Proceed));
@@ -512,13 +827,16 @@ mod tests {
         let cache = IdempotencyCache::new();
         cache.entries.insert(
             "old".to_string(),
-            IdempotencyState::Completed(
-                json!(null),
-                Instant::now()
-                    .checked_sub(COMPLETED_TTL)
-                    .unwrap()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap(),
+            Entry::new(
+                IdempotencyState::Completed(
+                    json!(null),
+                    Instant::now()
+                        .checked_sub(COMPLETED_TTL)
+                        .unwrap()
+                        .checked_sub(Duration::from_secs(1))
+                        .unwrap(),
+                ),
+                "",
             ),
         );
         assert!(matches!(cache.check("old"), CheckOutcome::Proceed));
@@ -526,6 +844,66 @@ mod tests {
     }
 
     // ── evict_expired ─────────────────────────────────────────────────────────
+
+    /// Repro harness for the eviction race gpt-review raised on 2026-09-08.
+    ///
+    /// A race has no honest single-shot failing test, so the repair protocol
+    /// asks for a deterministic repro harness instead. The invariant is
+    /// one-sided and holds under any interleaving: a freshly admitted entry is
+    /// not expired, so `evict_expired` must never remove it. Under the previous
+    /// collect-then-remove pass it could — the evictor selected the key while
+    /// the old entry was stale and deleted whatever held the key afterwards.
+    #[test]
+    fn eviction_never_removes_a_fresh_entry_that_replaced_an_expired_one() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        // GIVEN: one key that keeps alternating between an expired entry the
+        // evictor wants and a fresh entry it must leave alone
+        let cache = Arc::new(IdempotencyCache::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let lost = Arc::new(AtomicUsize::new(0));
+        let expired_at = Instant::now()
+            .checked_sub(COMPLETED_TTL)
+            .unwrap()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap();
+
+        // WHEN: the background evictor runs against that churn
+        let evictor = {
+            let cache = Arc::clone(&cache);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    cache.evict_expired();
+                }
+            })
+        };
+
+        let deadline = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < deadline {
+            cache.entries.insert(
+                "k".to_string(),
+                Entry::new(IdempotencyState::Completed(json!(null), expired_at), ""),
+            );
+            cache.entries.insert(
+                "k".to_string(),
+                Entry::new(IdempotencyState::InFlight(Instant::now()), ""),
+            );
+            if !cache.entries.contains_key("k") {
+                lost.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        evictor.join().unwrap();
+
+        // THEN: the fresh entry survived every pass
+        assert_eq!(
+            lost.load(Ordering::Relaxed),
+            0,
+            "eviction deleted an entry that was not expired"
+        );
+    }
 
     #[test]
     fn evict_expired_removes_only_stale_entries() {
@@ -537,13 +915,16 @@ mod tests {
         cache.mark_completed("fresh", json!(1));
         cache.entries.insert(
             "stale".to_string(),
-            IdempotencyState::Completed(
-                json!(2),
-                Instant::now()
-                    .checked_sub(COMPLETED_TTL)
-                    .unwrap()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap(),
+            Entry::new(
+                IdempotencyState::Completed(
+                    json!(2),
+                    Instant::now()
+                        .checked_sub(COMPLETED_TTL)
+                        .unwrap()
+                        .checked_sub(Duration::from_secs(1))
+                        .unwrap(),
+                ),
+                "",
             ),
         );
 
@@ -560,9 +941,9 @@ mod tests {
         // GIVEN: an empty cache
         // WHEN: enforcing on a new key
         // THEN: Proceed, and the key is now in-flight
-        let cache = IdempotencyCache::new();
-        let outcome = enforce(&cache, "k1").expect("should not fail");
-        assert!(matches!(outcome, GuardOutcome::Proceed));
+        let cache = Arc::new(IdempotencyCache::new());
+        let outcome = enforce(&cache, "k1", "fp1").expect("should not fail");
+        assert!(matches!(outcome, GuardOutcome::Proceed(_)));
         assert!(matches!(cache.check("k1"), CheckOutcome::InFlight));
     }
 
@@ -571,13 +952,13 @@ mod tests {
         // GIVEN: a completed key in cache
         // WHEN: enforcing on that key
         // THEN: CachedResult with the stored value
-        let cache = IdempotencyCache::new();
+        let cache = Arc::new(IdempotencyCache::new());
         let expected = json!({"done": true});
         cache.mark_in_flight("k2");
         cache.mark_completed("k2", expected.clone());
-        match enforce(&cache, "k2").expect("should not fail") {
+        match enforce(&cache, "k2", "fp2").expect("should not fail") {
             GuardOutcome::CachedResult(v) => assert_eq!(v, expected),
-            GuardOutcome::Proceed => panic!("expected CachedResult"),
+            GuardOutcome::Proceed(_) => panic!("expected CachedResult"),
         }
     }
 
@@ -586,9 +967,9 @@ mod tests {
         // GIVEN: a live in-flight key
         // WHEN: enforcing on the same key from a concurrent caller
         // THEN: Err with code 409
-        let cache = IdempotencyCache::new();
+        let cache = Arc::new(IdempotencyCache::new());
         cache.mark_in_flight("k3");
-        let err = enforce(&cache, "k3").expect_err("should return 409");
+        let err = enforce(&cache, "k3", "fp3").expect_err("should return 409");
         match err {
             crate::Error::JsonRpc { code, .. } => assert_eq!(code, 409),
             _ => panic!("expected JsonRpc error"),
@@ -663,13 +1044,16 @@ mod tests {
         let cache = Arc::new(IdempotencyCache::new());
         cache.entries.insert(
             "stale".to_string(),
-            IdempotencyState::Completed(
-                json!(null),
-                Instant::now()
-                    .checked_sub(COMPLETED_TTL)
-                    .unwrap()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap(),
+            Entry::new(
+                IdempotencyState::Completed(
+                    json!(null),
+                    Instant::now()
+                        .checked_sub(COMPLETED_TTL)
+                        .unwrap()
+                        .checked_sub(Duration::from_secs(1))
+                        .unwrap(),
+                ),
+                "",
             ),
         );
 
@@ -679,5 +1063,36 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         assert_eq!(cache.len(), 0, "stale entry should have been evicted");
+    }
+
+    #[test]
+    fn released_then_completed_entry_stays_bound_to_its_own_request() {
+        // GIVEN: a key admitted for request A, whose dispatch failed — the
+        // invoke path releases the reservation and then still stores the
+        // structured error result (`src/gateway/meta_mcp/invoke.rs:1480`,
+        // `:1836`), which `complete` documents as deliberate.
+        let cache = Arc::new(IdempotencyCache::new());
+        let GuardOutcome::Proceed(mut reservation) = enforce(&cache, "k", "fp-A").unwrap() else {
+            panic!("a fresh key is admitted");
+        };
+        reservation.release();
+        assert!(reservation.complete(&json!({"isError": true})));
+
+        // WHEN: a *different* request reuses the same client-supplied key
+        let outcome = enforce(&cache, "k", "fp-B");
+
+        // THEN: it is refused, not answered with request A's error. A stored
+        // result carries the fingerprint it was admitted for; an entry that
+        // binds nothing answers every later request for the whole TTL.
+        let Err(err) = outcome else {
+            panic!("key bound to fp-A must not serve fp-B");
+        };
+        // Named, not merely `is_err`: the in-flight and at-capacity refusals
+        // are errors too, and neither would prove the binding held.
+        let message = err.to_string();
+        assert!(
+            message.contains("already in use for a different request"),
+            "expected the fingerprint-mismatch refusal, got: {message}"
+        );
     }
 }

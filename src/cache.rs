@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use serde_json::Value;
+use tracing::debug;
 
 use crate::hashing::canonical_json_sha256;
 
@@ -90,6 +91,36 @@ impl CacheStats {
     }
 }
 
+/// The routing and policy context a cached response depends on but the call's
+/// own `{server, tool, arguments}` never name.
+///
+/// A response assembled under one routing profile, protocol revision or policy
+/// generation is not interchangeable with one assembled under another, so these
+/// belong to the key even though no caller writes them down.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KeyContext<'a> {
+    /// Name of the routing profile the call was admitted under.
+    pub routing_profile: &'a str,
+    /// Negotiated protocol revision, or `None` when the caller declared none.
+    pub protocol_revision: Option<&'a str>,
+    /// Generation of the policy the response was assembled under. Bumping it
+    /// must strand every entry assembled under the previous generation.
+    pub policy_epoch: u64,
+}
+
+impl KeyContext<'_> {
+    /// Digest of the routing and policy inputs, hashed for the same reason the
+    /// principal is: a profile name is caller-controlled and must not reach the
+    /// key verbatim, and a fixed-width digest keeps the key bounded.
+    fn digest(&self) -> String {
+        canonical_json_sha256(&serde_json::json!({
+            "routing_profile": self.routing_profile,
+            "protocol_revision": self.protocol_revision,
+            "policy_epoch": self.policy_epoch,
+        }))
+    }
+}
+
 impl ResponseCache {
     /// Create a new empty cache with no size limit
     #[must_use]
@@ -148,9 +179,25 @@ impl ResponseCache {
     /// # Arguments
     ///
     /// * `key` - Cache key (typically `server:tool:args_hash`)
-    /// * `value` - JSON value to cache
+    /// * `value` - JSON value to cache. A non-final MCP result (one whose
+    ///   `resultType` is anything other than `complete`) is refused, because
+    ///   serving it from cache would replay a request for input instead of an
+    ///   answer.
     /// * `ttl` - Time-to-live duration
-    pub fn set(&self, key: &str, value: Value, ttl: Duration) {
+    ///
+    /// Returns whether the value was stored, so a caller cannot log a write
+    /// that a refusal silently skipped.
+    pub fn set(&self, key: &str, value: Value, ttl: Duration) -> bool {
+        // A result the backend has not finished producing is not stored:
+        // replaying an `input_required` from the cache returns the request for
+        // input rather than the answer, so the exchange could never complete.
+        // `is_final` defaults a missing `resultType` to complete, so every
+        // pre-2026 backend's result stays cacheable.
+        if !crate::protocol::cacheable::is_final(&value) {
+            debug!(key, "Refused to cache a non-final result");
+            return false;
+        }
+
         // Enforce max_entries before inserting
         if self.max_entries > 0 && self.entries.len() >= self.max_entries {
             self.enforce_max_entries();
@@ -162,6 +209,7 @@ impl ResponseCache {
             ttl,
         };
         self.entries.insert(key.to_string(), entry);
+        true
     }
 
     /// Enforce the maximum entry limit by evicting expired then oldest entries.
@@ -205,6 +253,44 @@ impl ResponseCache {
     pub fn build_key(server: &str, tool: &str, arguments: &Value) -> String {
         let args_hash = Self::hash_arguments(arguments);
         format!("{server}:{tool}:{args_hash}")
+    }
+
+    /// The key an entry is stored under and read back by.
+    ///
+    /// [`build_key`](Self::build_key) covers the three inputs a call names for
+    /// itself. This adds the two it does not name and the response still varies
+    /// by: the projection the reply was shaped for, and the principal it was
+    /// assembled for. Both call sites go through here, because a key built in
+    /// two places is two keys the day one of them is edited.
+    ///
+    /// The principal is hashed rather than appended: a subject is caller-
+    /// supplied text, and appending it raw lets one spell another's suffix.
+    ///
+    /// `None` is a caller the gateway could not identify. Two of those are the
+    /// same caller as far as the cache can tell, and they share an entry.
+    ///
+    /// `context` carries the routing and policy inputs the call does not name:
+    /// the routing profile that chose which backends answer, the protocol
+    /// revision the reply was shaped for, and the policy epoch it was
+    /// authorized under. They are mixed in as one digest for the same reason
+    /// the principal is hashed, and unconditionally: a suffix that is empty
+    /// for a default context is a dimension that is only sometimes keyed.
+    #[must_use]
+    pub fn response_key(
+        server: &str,
+        tool: &str,
+        arguments: &Value,
+        projection_suffix: &str,
+        principal: Option<&str>,
+        context: KeyContext<'_>,
+    ) -> String {
+        let base = Self::build_key(server, tool, arguments);
+        let principal = principal.map_or_else(String::new, |subject| {
+            let digest = canonical_json_sha256(&Value::String(subject.to_string()));
+            format!("|sub:{digest}")
+        });
+        let context = context.digest();
+        format!("{base}{projection_suffix}{principal}|ctx:{context}")
     }
 
     /// Compute SHA-256 hash of arguments in canonical JSON form

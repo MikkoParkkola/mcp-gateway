@@ -39,6 +39,13 @@ pub struct CallbackParams {
 
     /// Error description
     pub error_description: Option<String>,
+
+    /// The issuer the authorization response came from (RFC 9207).
+    ///
+    /// Carried rather than checked here: the specification requires the
+    /// comparison to happen before the code is redeemed, and the recorded
+    /// issuer belongs to the client that started the flow, not to this server.
+    pub iss: Option<String>,
 }
 
 /// OAuth callback result
@@ -50,6 +57,9 @@ pub struct CallbackResult {
     /// State parameter (validated but kept for debugging)
     #[allow(dead_code)]
     pub state: String,
+
+    /// The issuer the authorization server named, when it named one.
+    pub iss: Option<String>,
 }
 
 /// State shared with the callback handler
@@ -287,6 +297,7 @@ async fn handle_callback(
     let result = Ok(CallbackResult {
         code,
         state: params.state.unwrap_or_default(),
+        iss: params.iss,
     });
     if let Some(tx) = state.tx.take() {
         let _ = tx.send(result);
@@ -341,6 +352,35 @@ mod tests {
             Some("User denied access")
         );
         assert!(params.code.is_none());
+    }
+
+    #[test]
+    fn callback_params_carries_the_issuer() {
+        // RFC 9207: the authorization server returns `iss`. It has to survive
+        // deserialization before anything can validate it.
+        let params: CallbackParams =
+            serde_urlencoded::from_str("code=c&state=s&iss=https%3A%2F%2Fauth.example.com")
+                .unwrap();
+        assert_eq!(params.iss.as_deref(), Some("https://auth.example.com"));
+    }
+
+    #[tokio::test]
+    async fn callback_server_forwards_the_issuer_to_the_redeemer() {
+        // The mix-up defence lives at redeem time, so the value the server
+        // received must reach the caller rather than being read and dropped.
+        let server = start_callback_server("st4te".to_string(), Some("127.0.0.1"), None, None)
+            .await
+            .unwrap();
+        let url = format!(
+            "{}?code=c0de&state=st4te&iss=https://auth.example.com",
+            server.callback_url
+        );
+
+        let get = tokio::spawn(async move { reqwest::get(&url).await });
+        let (_, result) = server.wait_for_callback().await.unwrap();
+        get.await.unwrap().unwrap();
+
+        assert_eq!(result.iss.as_deref(), Some("https://auth.example.com"));
     }
 
     #[test]

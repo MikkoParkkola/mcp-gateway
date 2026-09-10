@@ -10,6 +10,7 @@
 use std::{
     collections::BTreeSet,
     process::{Command, Stdio},
+    sync::Arc,
 };
 
 use crate::hashing::sha256_hex;
@@ -633,8 +634,24 @@ pub trait RuntimeCommandRunner {
 }
 
 /// Default runtime command runner backed by `std::process::Command`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct StdRuntimeCommandRunner;
+#[derive(Debug, Clone, Default)]
+pub struct StdRuntimeCommandRunner {
+    env: Option<Arc<crate::config::LiveEnv>>,
+}
+
+impl StdRuntimeCommandRunner {
+    /// Resolves allowed keys through the env-file overlay as well as the
+    /// process environment.
+    ///
+    /// Without this a key an env file supplies reaches nothing: env files no
+    /// longer write the process environment, so `std::env` alone starts a
+    /// sandboxed backend without the credential it was configured with.
+    #[must_use]
+    pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
+        self.env = Some(env);
+        self
+    }
+}
 
 impl RuntimeCommandRunner for StdRuntimeCommandRunner {
     fn run(
@@ -647,8 +664,14 @@ impl RuntimeCommandRunner for StdRuntimeCommandRunner {
         if let Some(path) = std::env::var_os("PATH") {
             child.env("PATH", path);
         }
+        let overlay = self.env.as_ref().map(|env| env.get());
         for key in env_keys {
-            if let Some(item) = std::env::var_os(key) {
+            // The process environment is the fall-through inside `resolve`, so
+            // the `else` only carries a value no overlay is in force for —
+            // which keeps it an `OsString` rather than a lossy conversion.
+            if let Some(value) = overlay.as_ref().and_then(|overlay| overlay.resolve(key)) {
+                child.env(key, value);
+            } else if let Some(item) = std::env::var_os(key) {
                 child.env(key, item);
             }
         }

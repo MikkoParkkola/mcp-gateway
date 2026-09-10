@@ -176,6 +176,28 @@ backends:
       client_id: "env:GOOGLE_CLIENT_ID"
 ```
 
+Credentials require TLS. An enabled backend whose `http_url` or `a2a_url` is
+`http://` against a host off this machine is refused at config load when its
+configuration is credential-bearing — an `oauth` section (including one with
+`enabled: false`), identity propagation, secret injection, any static header
+whatever its name, or userinfo or a query string in the URL itself. Such a
+credential is readable by every host on the path and replayable for as long as it
+is valid. The test is blunt on purpose: `X-Trace-Id` and `?page=2` trip it as
+surely as a bearer token, because config load cannot tell which of them carries a
+secret. Loopback is exempt. To accept the exposure knowingly — a link you terminate
+yourself, say — set `allow_cleartext_credentials: true` on that backend.
+
+That opt-out does not cover OAuth. Since 4.0.0 a backend whose `oauth` section is
+`enabled: true` is refused at the *transport* layer whatever
+`allow_cleartext_credentials` says: the backend fails to start with `refusing to
+send an OAuth token in cleartext to <origin>`, and the token is checked again at
+request time against the endpoint actually being posted to. A bearer token is
+replayable by anyone on the path for as long as it is valid, and no flag makes
+that acceptable — the flag remains the way to accept a readable static header,
+identity propagation, secret injection, or a credential-bearing URL. Loopback is still exempt: `http://localhost`,
+`127.0.0.0/8` and `::1`. `http://[::ffff:127.0.0.1]` is deliberately *not*
+loopback — write `http://127.0.0.1`.
+
 See [`examples/gateway-full.yaml`](../examples/gateway-full.yaml) for the full
 set of backend fields, including timeouts, idle hibernation, secret injection,
 and `passthrough` mode.

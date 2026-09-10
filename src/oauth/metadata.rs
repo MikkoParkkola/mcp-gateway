@@ -103,13 +103,31 @@ where
     }
 }
 
+/// Where the issuer string handed to [`AuthorizationServerMetadata::discover`]
+/// came from, which decides how exactly the response is held to it.
+///
+/// The distinction is the whole point: one of these strings is the server's
+/// own spelling of its identity, the other is one this gateway made up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssuerSource {
+    /// Published by the resource server in its protected-resource metadata.
+    /// The server chose every character, so RFC 8414 s3.3's "identical" is
+    /// compared literally.
+    Advertised,
+    /// Synthesised here by [`base_url`] from the resource URL: scheme, host
+    /// and port, no path and never a trailing slash. Nothing in it reflects
+    /// what the authorization server calls itself, so a trailing slash in the
+    /// response is tolerated.
+    Origin,
+}
+
 impl AuthorizationServerMetadata {
     /// Discover authorization server metadata from a base URL
     ///
     /// # Errors
     ///
     /// Returns an error if the metadata endpoint is unreachable or returns invalid data.
-    pub async fn discover(client: &Client, base_url: &str) -> Result<Self> {
+    pub async fn discover(client: &Client, base_url: &str, source: IssuerSource) -> Result<Self> {
         let url = well_known_url(base_url, "oauth-authorization-server")?;
         info!(url = %url, "Discovering OAuth authorization server metadata");
 
@@ -130,6 +148,36 @@ impl AuthorizationServerMetadata {
             .json()
             .await
             .map_err(|e| Error::OAuth(format!("Failed to parse OAuth metadata: {e}")))?;
+
+        // RFC 8414 s3.3: the issuer in the response must match the one the
+        // well-known URI was built from. Without this the response body
+        // chooses its own identity, and every credential this gateway files
+        // under a discovered issuer could be claimed by whichever server
+        // answers the request.
+        //
+        // How exactly depends on who wrote the string being matched against,
+        // which is what `source` records. An advertised identifier is the
+        // server's own spelling, so it is compared literally. A synthesised
+        // origin is ours -- `scheme://host[:port]`, never slash-terminated --
+        // and carries none of the server's spelling, so a trailing slash is
+        // tolerated there rather than locking out every server that publishes
+        // one, Auth0 among them. Normalising BOTH let one advertised
+        // identifier satisfy a discovery aimed at a different one.
+        let issuer_matches = match source {
+            IssuerSource::Advertised => metadata.issuer == base_url,
+            // Only the response side is trimmed. `base_url()` never produces a
+            // trailing slash, so trimming it too would be a normalisation with
+            // nothing to normalise -- and would quietly restore the both-sides
+            // comparison for any future caller that passed a slash-terminated
+            // string as an origin.
+            IssuerSource::Origin => metadata.issuer.trim_end_matches('/') == base_url,
+        };
+        if !issuer_matches {
+            return Err(Error::OAuth(format!(
+                "OAuth metadata issuer mismatch: discovered at {base_url}, metadata claims {}",
+                metadata.issuer
+            )));
+        }
 
         info!(issuer = %metadata.issuer, "Discovered authorization server");
         Ok(metadata)
@@ -227,6 +275,129 @@ mod tests {
     // =========================================================================
     // well_known_url — RFC 8414 §3.1 path-aware construction (issue #346)
     // =========================================================================
+
+    /// Serve one canned authorization-server metadata document, and return
+    /// the base URL it is reachable at.
+    async fn serve_metadata(issuer_claimed: &str) -> String {
+        use axum::{Router, routing::get};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = serde_json::json!({
+            "issuer": issuer_claimed,
+            "authorization_endpoint": format!("{issuer_claimed}/authorize"),
+            "token_endpoint": format!("{issuer_claimed}/token"),
+        });
+        let app = Router::new().route(
+            "/.well-known/oauth-authorization-server",
+            get(move || {
+                let body = body.clone();
+                async move { axum::Json(body) }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn discovery_refuses_metadata_claiming_another_issuer() {
+        // RFC 8414 s3.3. Without this the response body names its own issuer,
+        // and anything keyed by the discovered issuer -- persisted tokens and
+        // registered client ids -- can be claimed by whichever server answers.
+        let base = serve_metadata("https://someone-elses-as.invalid-test").await;
+        let err =
+            AuthorizationServerMetadata::discover(&Client::new(), &base, IssuerSource::Origin)
+                .await
+                .expect_err("metadata naming a different issuer must be refused");
+        assert!(
+            err.to_string().contains("issuer mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_accepts_metadata_naming_the_issuer_it_was_found_at() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let base = format!("http://{addr}");
+        let served = serve_metadata_at(&base, &base).await;
+        let meta =
+            AuthorizationServerMetadata::discover(&Client::new(), &served, IssuerSource::Origin)
+                .await
+                .expect("matching issuer is accepted");
+        assert_eq!(meta.issuer, served);
+    }
+
+    /// Pick a free address without holding it, so a helper can bind it next.
+    async fn free_addr() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn an_advertised_issuer_is_held_to_the_rfc_s_identical() {
+        // The resource server advertised this identifier, so every character
+        // in it is the authorization server's own. Two spellings of one origin
+        // are still two identifiers, and credentials filed under one must not
+        // be reachable by discovery aimed at the other.
+        let base = free_addr().await;
+        let served = serve_metadata_at(&base, &format!("{base}/")).await;
+        let err = AuthorizationServerMetadata::discover(
+            &Client::new(),
+            &served,
+            IssuerSource::Advertised,
+        )
+        .await
+        .expect_err("an advertised issuer differing by a trailing slash must be refused");
+        assert!(
+            err.to_string().contains("issuer mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_origin_fallback_tolerates_a_trailing_slash() {
+        // Same response, different question: here the gateway synthesised the
+        // string from the resource URL and it never carries a slash, so a
+        // server publishing one -- Auth0's shape -- stays reachable.
+        let base = free_addr().await;
+        let served = serve_metadata_at(&base, &format!("{base}/")).await;
+        let meta =
+            AuthorizationServerMetadata::discover(&Client::new(), &served, IssuerSource::Origin)
+                .await
+                .expect("the origin fallback tolerates a trailing slash");
+        assert_eq!(meta.issuer, format!("{served}/"));
+    }
+
+    /// Serve metadata at a chosen address, claiming `issuer_claimed`. Serving
+    /// address and claimed identity are separate parameters so a test can make
+    /// them differ by exactly one character.
+    async fn serve_metadata_at(base: &str, issuer_claimed: &str) -> String {
+        use axum::{Router, routing::get};
+        let addr: std::net::SocketAddr = base.trim_start_matches("http://").parse().unwrap();
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let issuer = issuer_claimed.to_string();
+        let body = serde_json::json!({
+            "issuer": issuer,
+            "authorization_endpoint": format!("{issuer}/authorize"),
+            "token_endpoint": format!("{issuer}/token"),
+        });
+        let app = Router::new().route(
+            "/.well-known/oauth-authorization-server",
+            get(move || {
+                let body = body.clone();
+                async move { axum::Json(body) }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        base.to_string()
+    }
 
     #[test]
     fn well_known_url_inserts_between_authority_and_path() {

@@ -559,3 +559,38 @@ fn normalize_tools_list_response_fills_direct_backend_proxy_annotations() {
     assert_eq!(archive["idempotentHint"], false);
     assert_eq!(archive["openWorldHint"], true);
 }
+
+#[test]
+fn normalize_tools_list_response_excludes_a_violator_beside_a_malformed_sibling() {
+    // GIVEN a descriptor the `Tool` shape cannot accept (no `name`) sitting
+    // next to a tool whose `x-mcp-header` breaches the token constraint
+    let mut response = JsonRpcResponse::success(
+        RequestId::Number(1),
+        json!({
+            "tools": [
+                {"description": "no name field", "inputSchema": {"type": "object"}},
+                {
+                    "name": "bad",
+                    "inputSchema": {"type": "object", "properties": {
+                        "tenant": {"type": "string", "x-mcp-header": "Tenant Id"}
+                    }}
+                },
+                {"name": "search", "inputSchema": {"type": "object"}}
+            ]
+        }),
+    );
+
+    // WHEN the direct passthrough response is normalized
+    normalize_tools_list_response("beeper", &mut response);
+
+    // THEN the malformed sibling no longer shields the violator: `bad` is
+    // gone, `search` survives, and the unreadable entry is still forwarded
+    let tools = response.result.expect("success result")["tools"]
+        .as_array()
+        .expect("tools array")
+        .clone();
+    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    assert_eq!(names, vec!["search"]);
+    assert_eq!(tools.len(), 2);
+    assert_eq!(tools[1]["description"], "no name field");
+}

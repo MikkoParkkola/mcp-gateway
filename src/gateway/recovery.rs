@@ -260,6 +260,52 @@ pub fn attach_recovery(mut value: Value, hint: RecoveryHint) -> Value {
     value
 }
 
+/// Whether an error text unambiguously reports rate limiting.
+///
+/// Shared by both health recorders — the `MetaMCP` error budget and the backend
+/// circuit breaker — so the two cannot disagree about what a `429` is
+/// (GH #475).
+///
+/// The two mistakes are not symmetric. Counting a real rate-limit response as a
+/// failure trips a breaker on a healthy backend; excluding a real failure as a
+/// rate-limit response means a sick backend never trips one at all. The second
+/// is strictly worse, so **ambiguity resolves toward counting**: this matches
+/// only status-shaped or unambiguous phrases.
+///
+/// Deliberately not matched: a digit run inside a larger token (`4291a` in a
+/// `500`), and `throttling`, which appears in its own negation ("throttling
+/// disabled"). `throttled` — the past participle, which reports what happened
+/// rather than naming the feature — is matched, because "request throttled by
+/// upstream" is a shape this gateway has actually seen, unless negated
+/// ("not throttled", "unthrottled"): those report an ordinary failure, and a
+/// wrong exclusion there is the worse of the two mistakes above. The negated
+/// forms are stripped before the match runs, per-occurrence rather than as a
+/// whole-payload veto, so a negated phrase never suppresses a separate,
+/// genuine "throttled" elsewhere in the same text (GH475.RL.5 review fix).
+#[must_use]
+pub fn is_rate_limited(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+
+    if lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("rate-limit")
+        || lower.contains("ratelimit")
+        || lower.contains("resource_exhausted")
+        || lower
+            .replace("not throttled", "")
+            .replace("unthrottled", "")
+            .contains("throttled")
+    {
+        return true;
+    }
+
+    // `429` only as a standalone token, never as a run of digits inside a
+    // longer identifier.
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|tok| tok == "429")
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -416,5 +462,74 @@ mod tests {
             v.get("fix_example").is_none(),
             "fix_example should be omitted when None"
         );
+    }
+
+    // GH #475: the rate-limit predicate is shared by both recorders. These
+    // cases pin the narrowing the design requires -- a wrong exclusion hides a
+    // sick backend from its circuit breaker, so ambiguity resolves toward
+    // counting the failure.
+    #[test]
+    fn rate_limit_predicate_matches_unambiguous_signals() {
+        for s in [
+            "HTTP 429 Too Many Requests",
+            "429",
+            "backend returned 429: slow down",
+            "Too Many Requests",
+            "rate limit exceeded",
+            "rate-limit exceeded",
+            "ratelimit exceeded",
+            "RESOURCE_EXHAUSTED",
+            "request throttled by upstream",
+        ] {
+            assert!(is_rate_limited(s), "expected rate-limited for {s:?}");
+        }
+    }
+
+    #[test]
+    fn rate_limit_predicate_rejects_ambiguous_text() {
+        for s in [
+            // a digit run inside a larger token, in a 500
+            "HTTP 500: internal error, request id 4291a",
+            "trace 14293 failed",
+            // the form that appears in its own negation
+            "throttling disabled for this backend",
+            // plain failures that must still reach the breaker
+            "HTTP 503 Service Unavailable",
+            "connection reset by peer",
+        ] {
+            assert!(!is_rate_limited(s), "expected NOT rate-limited for {s:?}");
+        }
+    }
+
+    // GH475.RL.5: `throttled` (the past participle) is matched deliberately
+    // (see the doc comment above), but that substring match also fires on the
+    // word's own negation -- "not throttled" and "unthrottled" both contain
+    // "throttled" and both report the OPPOSITE of a rate limit. A false
+    // exclusion here hides a sick backend from the circuit breaker, which is
+    // the worse of the two mistakes the doc comment names. This closes the
+    // negation class for `throttled` specifically (past-participle and its
+    // prefixed form), not general natural-language negation.
+    #[test]
+    fn rate_limit_predicate_rejects_negated_throttled() {
+        for s in [
+            "not throttled, connection reset",
+            "backend is not throttled but timing out",
+            "unthrottled failure",
+        ] {
+            assert!(!is_rate_limited(s), "expected NOT rate-limited for {s:?}");
+        }
+    }
+
+    // §12 review (gpt-review + kimi-review, both HIGH, confirmed independently):
+    // the first version of RL.5 vetoed on ANY negated occurrence appearing
+    // anywhere in the text, so a negated phrase silently suppressed a
+    // separate, genuine "throttled" elsewhere in the same payload -- exactly
+    // the false-exclusion mistake RL.5 exists to prevent. Fixed by stripping
+    // the negated forms before matching, so only what remains decides.
+    #[test]
+    fn rate_limit_predicate_still_matches_genuine_throttled_alongside_a_negation() {
+        assert!(is_rate_limited(
+            "not throttled earlier, but request throttled by upstream"
+        ));
     }
 }

@@ -1,0 +1,237 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+//! Protocol extensions, declared and negotiated (MCP 2026-07-28).
+//!
+//! The revision added an `extensions` field to client and server capabilities,
+//! which gives a gateway's own additions a sanctioned home instead of a bespoke
+//! field nobody else can read.
+//!
+//! The negotiation rule is the specification's: if one party supports an
+//! extension and the other does not, the supporting party **MUST** either
+//! revert to core behaviour or reject the request. This gateway reverts —
+//! rejecting would refuse a conforming client for declining something optional.
+
+use serde_json::Value;
+
+/// An extension this gateway knows about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Extension {
+    /// `io.modelcontextprotocol/tasks` — long-running calls, polled rather than
+    /// held open.
+    Tasks,
+}
+
+impl Extension {
+    /// The reverse-DNS identifier this extension is declared under.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Tasks => "io.modelcontextprotocol/tasks",
+        }
+    }
+
+    /// The extension with this identifier, if it is one we know.
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "io.modelcontextprotocol/tasks" => Some(Self::Tasks),
+            _ => None,
+        }
+    }
+}
+
+/// A set of extensions one party supports.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExtensionSet {
+    supported: Vec<Extension>,
+}
+
+impl ExtensionSet {
+    /// What this gateway declares: the single source of that answer.
+    ///
+    /// Reached from `server/discover` through [`Self::to_extensions`], so the
+    /// advertised identifier and the negotiated one cannot drift — an earlier
+    /// revision of this comment said nothing called it, which stopped being
+    /// true the moment discovery advertised the extension.
+    ///
+    /// The `initialize` result carries it for a 2026 peer and for no one else.
+    /// Both halves of the handshake read THIS method through
+    /// `initialize_extensions(era)`, so `server/discover` and `initialize`
+    /// cannot drift. The legacy arm stays an absent KEY rather than an empty
+    /// object: the 2026-07-28 lifecycle scopes the older handshake to
+    /// "2025-11-25 and earlier", those clients can never use the extension, and
+    /// an always-present `"extensions": {}` would itself change a wire answer
+    /// they already depend on.
+    ///
+    /// The task model in `super::tasks` is knowingly short of the extension
+    /// specification for 4.0.0 — `input_required` is out of scope by design,
+    /// and the timestamp fields with it. Advertising while the model is short
+    /// is the intended 4.0.0 state, not an oversight: discovery states which
+    /// extension the gateway speaks, and MIK-7311 completes the model behind
+    /// it.
+    #[must_use]
+    pub fn gateway_declares() -> Self {
+        Self {
+            supported: vec![Extension::Tasks],
+        }
+    }
+
+    /// Read a peer's declared extensions from its capabilities.
+    ///
+    /// An identifier we do not know is skipped rather than kept: carrying it
+    /// would let a peer's declaration decide what this gateway claims to do.
+    #[must_use]
+    pub fn from_capabilities(capabilities: &Value) -> Self {
+        // The key names the extension; the value carries its settings and the
+        // specification requires an object. Accepting a key whose value is a
+        // null, a number or a string let a malformed declaration switch on
+        // behaviour the peer never validly negotiated — presence is not
+        // agreement.
+        let supported = capabilities
+            .get("extensions")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .filter(|(_, settings)| settings.is_object())
+                    .filter_map(|(id, _)| Extension::from_id(id))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self { supported }
+    }
+
+    /// The `extensions` field a party carrying this set advertises.
+    ///
+    /// Each identifier maps to an empty settings object, which is the
+    /// specification's "supported, no settings" — and the shape
+    /// [`Self::from_capabilities`] requires on the way back in, so a value this
+    /// produces survives a round trip through a peer.
+    #[must_use]
+    pub fn to_extensions(&self) -> std::collections::HashMap<String, Value> {
+        self.supported
+            .iter()
+            .map(|extension| (extension.id().to_string(), serde_json::json!({})))
+            .collect()
+    }
+
+    /// Whether this set contains an extension.
+    #[must_use]
+    pub fn contains(&self, extension: Extension) -> bool {
+        self.supported.contains(&extension)
+    }
+
+    /// Whether it contains nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.supported.is_empty()
+    }
+
+    /// What both parties support.
+    ///
+    /// An intersection, never a union: a peer declaring something this gateway
+    /// cannot do must not make the gateway behave as though it can.
+    #[must_use]
+    pub fn negotiate(&self, peer: &Self) -> Self {
+        Self {
+            supported: self
+                .supported
+                .iter()
+                .copied()
+                .filter(|extension| peer.contains(*extension))
+                .collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // These came from `tests/mik_7272_exploit_acs.rs`, where they sat under a
+    // `MIK-7272.EXT.1` banner they could not honour: EXT.1 is about the
+    // `extensions` field on serialised `ServerCapabilities`, which this module
+    // never touches. They are unit tests of negotiation and always were. The
+    // banner was the defect, not the assertions.
+    //
+    // EXT.1's own evidence is cases E1-E5 of
+    // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`,
+    // which are red on HEAD by design. Nothing here is expected to fail today.
+    //
+    // Both sides are built through `from_capabilities` on purpose. Using
+    // `gateway_declares` for the gateway side would pin these to a static list
+    // that MIK-7311 changes, and would test policy where the subject is
+    // mechanism.
+
+    #[test]
+    fn an_extension_the_peer_does_not_support_is_not_negotiated() {
+        // The specification: if one party supports an extension and the other
+        // does not, the supporting party MUST either revert to core behaviour
+        // or reject the request. Reverting is the choice here — rejecting would
+        // refuse a conforming client for declining something optional.
+        let client = ExtensionSet::from_capabilities(&json!({ "extensions": {} }));
+        assert!(!client.contains(Extension::Tasks));
+
+        let gateway = ExtensionSet::from_capabilities(&json!({
+            "extensions": { "io.modelcontextprotocol/tasks": {} }
+        }));
+        assert!(
+            gateway.negotiate(&client).is_empty(),
+            "an extension the client does not support is not used on that request"
+        );
+    }
+
+    #[test]
+    fn a_shared_extension_is_negotiated() {
+        let both = ExtensionSet::from_capabilities(&json!({
+            "extensions": { "io.modelcontextprotocol/tasks": {} }
+        }));
+        assert!(both.negotiate(&both).contains(Extension::Tasks));
+    }
+
+    #[test]
+    fn an_extension_only_the_peer_has_is_not_acquired() {
+        // Negotiation is an intersection, not a union. A peer declaring
+        // something this gateway cannot do must not make the gateway claim it,
+        // and an identifier we do not know is dropped on the way in.
+        let client = ExtensionSet::from_capabilities(
+            &json!({ "extensions": { "com.example/not-ours": {} } }),
+        );
+        assert!(client.is_empty());
+
+        let gateway = ExtensionSet::from_capabilities(&json!({
+            "extensions": { "io.modelcontextprotocol/tasks": {} }
+        }));
+        assert!(gateway.negotiate(&client).is_empty());
+    }
+
+    #[test]
+    fn what_this_gateway_advertises_parses_back_to_what_it_declared() {
+        // `to_extensions` documents itself as producing the shape
+        // `from_capabilities` requires on the way back in. That was a CLAIM in
+        // a doc comment: the discover test pins the served shape and the
+        // negotiation tests pin the parser, but nothing joined them, so the
+        // advertised settings value and the value the parser accepts could
+        // drift apart without a single case going red.
+        //
+        // The join is the assertion. It fails if either side moves alone --
+        // give the settings a non-object value and the parser drops the key;
+        // tighten the parser past an empty object and the gateway stops being
+        // able to read its own advertisement.
+        let declared = ExtensionSet::gateway_declares();
+        let map = declared.to_extensions();
+        assert!(
+            !map.is_empty(),
+            "an empty declaration would satisfy the round trip vacuously"
+        );
+        let advertised = json!({ "extensions": map });
+
+        assert_eq!(
+            ExtensionSet::from_capabilities(&advertised),
+            declared,
+            "a peer that echoes this gateway's own advertisement back at it \
+             must negotiate the set the gateway declared: {advertised}"
+        );
+    }
+}

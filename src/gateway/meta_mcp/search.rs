@@ -158,8 +158,16 @@ impl MetaMcp {
         }
     }
 
+    /// The FSM workflow state every discovery entry point filters capabilities
+    /// by: `code_mode_search` (`:378`), `list_tools_single_server` (`:581`),
+    /// `list_tools` (`:645`) and `search_tools` (`:724`).
+    ///
+    /// It is the only read of `session_state` on that path, and keeping it the
+    /// only one is the point: two of those callers each carried their own copy
+    /// of this body, so a filter applied here would have left them reading the
+    /// store unguarded (`MIK-7272.ORDER.2`, test-plan precondition 1).
     fn current_search_state(&self, session_id: Option<&str>) -> String {
-        session_id.map_or_else(
+        super::session_key(session_id).map_or_else(
             || crate::gateway::state::DEFAULT_STATE.to_string(),
             |sid| self.session_state.get_state(sid),
         )
@@ -470,7 +478,8 @@ impl MetaMcp {
         // Code Mode carries the caller's identity + attribution through to
         // dispatch, so an identity-required backend gets the per-user credential
         // just like the direct gateway_invoke path (MIK-6734).
-        self.invoke_tool(&invoke_args, session_id, caller).await
+        self.invoke_tool(&invoke_args, session_id, caller, None)
+            .await
     }
 
     /// Execute a sequential chain of `{tool, arguments}` steps.
@@ -513,7 +522,10 @@ impl MetaMcp {
                 "arguments": arguments,
             });
 
-            match self.invoke_tool(&invoke_args, session_id, caller).await {
+            match self
+                .invoke_tool(&invoke_args, session_id, caller, Some(idx))
+                .await
+            {
                 Ok(result) => results.push(json!({
                     "step": idx,
                     "tool": tool_ref,
@@ -578,10 +590,7 @@ impl MetaMcp {
         if let Some(cap) = self.get_capabilities()
             && server == cap.name
         {
-            let current_state = session_id.map_or_else(
-                || crate::gateway::state::DEFAULT_STATE.to_string(),
-                |sid| self.session_state.get_state(sid),
-            );
+            let current_state = self.current_search_state(session_id);
             let tools: Vec<_> = cap
                 .get_tools_for_state(&current_state)
                 .into_iter()
@@ -645,10 +654,7 @@ impl MetaMcp {
         if let Some(cap) = self.get_capabilities()
             && profile.backend_allowed(&cap.name)
         {
-            let current_state = session_id.map_or_else(
-                || crate::gateway::state::DEFAULT_STATE.to_string(),
-                |sid| self.session_state.get_state(sid),
-            );
+            let current_state = self.current_search_state(session_id);
             let cap_killed = self.kill_switch.is_killed(&cap.name);
             for tool in cap.get_tools_for_state(&current_state) {
                 if !profile.tool_allowed(&tool.name) || !tool_matches_role(&tool, role_filter) {

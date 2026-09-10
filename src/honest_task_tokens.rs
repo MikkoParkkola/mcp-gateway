@@ -16,8 +16,10 @@
 pub const DIRECT_TOKENS_PER_TOOL: u64 = 150;
 /// Meta-tool definition size used by `benchmarks/public_claims.json`.
 pub const META_TOKENS_PER_TOOL: u64 = 100;
-/// README benchmark meta-surface.
-pub const README_META_TOOLS: u64 = 16;
+/// README benchmark meta-surface. Seventeen, not sixteen: `webhooks.enabled`
+/// defaults to true, so a default HTTP deployment is served
+/// `gateway_webhook_status` as well.
+pub const README_META_TOOLS: u64 = 17;
 /// Tool counts the ticket asked for.
 pub const TOOL_COUNTS: [u64; 4] = [50, 100, 200, 500];
 /// Default discovery path: `gateway_search_tools` then `gateway_invoke`.
@@ -143,8 +145,8 @@ mod tests {
     fn schema_only_100_tools_matches_readme_model() {
         let row = schema_only_first_request(100);
         assert_eq!(row.eager_tokens, 15_000);
-        assert_eq!(row.meta_tokens, 1_600);
-        assert!((row.savings_percent - 89.333).abs() < 0.01);
+        assert_eq!(row.meta_tokens, 1_700);
+        assert!((row.savings_percent - 88.667).abs() < 0.01);
         assert!(row.meta_wins());
     }
 

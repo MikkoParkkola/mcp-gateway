@@ -26,9 +26,12 @@ use url::Url;
 use super::Transport;
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
+use crate::protocol::era::Era;
+use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::{
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
-    is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
+    JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
+    RequestId, is_version_mismatch_error, negotiate_best_version,
+    parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
     SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
@@ -48,6 +51,47 @@ fn same_origin(a: &Url, b: &Url) -> bool {
     a.scheme() == b.scheme()
         && a.host_str() == b.host_str()
         && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// Refuse to put an OAuth bearer token on the wire in cleartext.
+///
+/// CWE-319 / `CodeQL` `rust/cleartext-transmission` #90 and #91: the token this
+/// transport attaches is a bearer credential, so anyone on the path can replay
+/// it. TLS is therefore required — with one exemption, loopback, because a
+/// local MCP backend has no certificate and never leaves the machine.
+///
+/// Loopback is decided by the classifier the Origin gate and the config-load
+/// credential guard already use, so the three cannot drift; `host_str` hands it
+/// a bare host, brackets and all for an IPv6 literal. IPv4-mapped IPv6
+/// (`http://[::ffff:127.0.0.1]`) is therefore *not* loopback —
+/// `Ipv6Addr::is_loopback` says so, and the safe answer for an address form no
+/// backend uses is to refuse.
+///
+/// There is deliberately no configuration escape hatch here, and the config
+/// layer's `allow_cleartext_credentials` does not reach this guard: that flag
+/// lets an operator accept a readable static header, but a flag that re-enables
+/// a HIGH finding for OAuth would leave the alert open, and 4.0.0 is the release
+/// that may break it.
+///
+/// The error is `TransportPermanent`, not `Transport`: waiting never makes a
+/// cleartext origin secure, and warm-start treats a plain `Transport` error as
+/// "not ready yet" and retries it forever at `debug` level, so the operator
+/// sees a backend that silently never starts. Permanent gets one `warn!` and
+/// stops.
+fn require_secure_oauth_target(url: &Url) -> Result<()> {
+    let secure = match url.scheme() {
+        "https" => true,
+        "http" => crate::gateway::is_loopback_host(url.host_str().unwrap_or_default()),
+        _ => false,
+    };
+    if secure {
+        return Ok(());
+    }
+    Err(Error::TransportPermanent(format!(
+        "refusing to send an OAuth token in cleartext to {}; use https:// or a loopback host \
+         (allow_cleartext_credentials does not cover OAuth)",
+        sanitize_url_for_diagnostics(url.as_str())
+    )))
 }
 
 /// Outcome of evaluating one redirect hop for the transport's HTTP client.
@@ -157,6 +201,14 @@ pub struct HttpTransport {
     message_url: RwLock<Option<String>>,
     /// Custom headers
     headers: HashMap<String, String>,
+    /// The owning `Backend`'s era cache, attached at start (MIK-7214.HEADER.9).
+    ///
+    /// Shared rather than copied: the verdict is re-probed on the backend when
+    /// an ordinary answer contradicts it, and a copy taken at start would keep
+    /// shaping requests for a peer that has since been replaced. `OnceLock`
+    /// because a transport is rebuilt per start, so the cache it serves never
+    /// changes for the life of this object.
+    era: std::sync::OnceLock<Arc<crate::protocol::era::EraCache>>,
     /// Per-caller-identity MCP session ids (MIK-6784).
     ///
     /// A single `HttpTransport` is Arc-shared across every gateway user for a
@@ -221,6 +273,222 @@ fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
         .map_err(|_| Error::OAuth("OAuth token is not a valid HTTP header value".into()))
 }
 
+/// One request's SSE exchange: its response, and the notifications the server
+/// sent on that request's own stream ahead of it, in arrival order.
+///
+/// The two travel together out of one call because that is what makes stream
+/// order free: capture and result leave the parse as a single value, so no
+/// second delivery path can reorder them. `MIK-7272.SUB.2b`.
+#[derive(Debug)]
+pub(crate) struct SseExchange {
+    /// The response frame that ended the scan.
+    pub(crate) response: JsonRpcResponse,
+    /// Notifications seen on this request's stream, in the order they arrived.
+    ///
+    /// SCAFFOLD, and labelled one: no production path reads this yet. The only
+    /// caller of `parse_sse_response` — `send_request_with_headers` — maps it
+    /// away, and the consumer
+    /// that will read it — the `Accept`-negotiated event-stream body in
+    /// `gateway::router::handlers::meta_mcp_handler` — is the outbound half of
+    /// `MIK-7272.SUB.2b` and lands next. Until then the field is proven only by
+    /// the unit tests, so the lib build cannot see it read.
+    // ponytail: allow lifts the moment the outbound consumer lands; if it has
+    // not, this attribute is the evidence that SUB.2b is still half-built.
+    #[allow(dead_code)]
+    pub(crate) notifications: Vec<JsonRpcNotification>,
+}
+
+/// Extract the JSON-RPC response carried by an SSE body, with the notifications
+/// that preceded it on the same stream.
+///
+/// A server may interleave notifications on a request's own stream ahead of the
+/// final response. They are CAPTURED, not skipped: they belong to this request
+/// and the caller is entitled to them (`MIK-7272.SUB.2b`). An inbound *request*
+/// is still refused: it is a call addressed to this client, never this call's
+/// result.
+///
+/// Returns a transport error when the body carries no response frame, or when a
+/// payload does not deserialize as a JSON-RPC message.
+fn parse_sse_response(text: &str) -> Result<SseExchange> {
+    let mut notifications = Vec::new();
+    for line in text.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let message: JsonRpcMessage = serde_json::from_str(data.trim())
+            .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")))?;
+        match message {
+            JsonRpcMessage::Response(response) => {
+                return Ok(SseExchange {
+                    response,
+                    notifications,
+                });
+            }
+            JsonRpcMessage::Notification(notification) => {
+                debug!(method = %notification.method, "Notification on response stream");
+                notifications.push(notification);
+            }
+            JsonRpcMessage::Request(request) => {
+                return Err(Error::Transport(format!(
+                    "Peer sent request '{}' on the response stream",
+                    request.method
+                )));
+            }
+        }
+    }
+    Err(Error::Transport("No data in SSE response".to_string()))
+}
+
+/// Re-assert on a modern peer's request what the revision requires of it.
+///
+/// Runs at the LAST writer on each outbound path rather than inside
+/// `build_mcp_headers`, and that placement is the point. The builder merges the
+/// backend's static headers itself, and the request path merges per-request
+/// `extra_headers` *after* the builder returns — so a value written inside the
+/// builder is one an operator's configured header silently overrides. These are
+/// protocol facts about the dialect being spoken, not defaults an operator gets
+/// to disagree with.
+///
+/// Removing `MCP-Session-Id` is `MIK-7215.STATELESS.3a`: the revision prohibits
+/// emitting it, and the prohibition is on emission rather than on minting, so
+/// the session a legacy handshake left behind must be dropped here rather than
+/// never taken.
+///
+/// `Mcp-Name` mirrors the body field the *method* selects
+/// (`crate::protocol::headers::mcp_name_body_field`), never a search for a
+/// plausible field: a `resources/read` carrying a decoy `name` beside the `uri`
+/// it actually uses would otherwise be routed on a value the body never agreed
+/// to. A method that must carry a name and cannot produce one fails here rather
+/// than on the wire — a modern peer rejects it `-32602`, and doing it locally
+/// keeps the reason attached to the call that caused it.
+fn finalise_modern_headers(
+    headers: &mut header::HeaderMap,
+    method: &str,
+    params: Option<&Value>,
+) -> Result<()> {
+    headers.insert(
+        "MCP-Protocol-Version",
+        header::HeaderValue::from_static(MODERN_VERSIONS[0]),
+    );
+    headers.remove("MCP-Session-Id");
+    headers.insert(
+        "Mcp-Method",
+        modern_header_value(method, "Mcp-Method", method)?,
+    );
+
+    let Some(field) = crate::protocol::headers::mcp_name_body_field(method) else {
+        // Not every method names something. Writing the header anyway would
+        // assert a name the body does not have.
+        headers.remove("Mcp-Name");
+        return Ok(());
+    };
+    let name = params
+        .and_then(|params| params.get(field))
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            // `Protocol`, not `TransportPermanent`: nothing was transported.
+            // The caller's own body is malformed, so this maps to -32600
+            // (invalid request) and stays out of the backend's failure record.
+            Error::Protocol(format!(
+                "cannot send `{method}` to a 2026 peer: `Mcp-Name` mirrors \
+                 `params.{field}`, which is missing, empty or not a string"
+            ))
+        })?;
+    headers.insert("Mcp-Name", modern_header_value(name, "Mcp-Name", method)?);
+    Ok(())
+}
+
+/// One header value, encoded so a legal name cannot become an illegal header.
+///
+/// A tool name is backend-supplied and may hold anything UTF-8 allows, so the
+/// value is sentinel-encoded rather than trusted
+/// (`crate::protocol::headers::encode_header_value`). The residual failure is
+/// unreachable in practice — the encoder's output is visible ASCII — and is
+/// returned rather than unwrapped because a panic on the outbound path would
+/// take the whole gateway down for one malformed name.
+fn modern_header_value(
+    value: &str,
+    header: &'static str,
+    method: &str,
+) -> Result<header::HeaderValue> {
+    header::HeaderValue::from_str(&crate::protocol::headers::encode_header_value(value)).map_err(
+        |_| {
+            Error::TransportPermanent(format!(
+                "cannot send `{method}` to a 2026 peer: `{header}` could not be encoded"
+            ))
+        },
+    )
+}
+
+/// Wrap outbound `params` in the `_meta` envelope a modern peer requires.
+///
+/// Merges rather than replaces: `_meta` is a shared namespace and a caller's
+/// own keys (a trace context, say) are not this transport's to discard. The two
+/// protocol keys are overwritten because their value is a fact about the
+/// dialect, not a caller preference.
+///
+/// `clientInfo` is deliberately absent. It is optional and self-asserted, so
+/// sending one would be an identity claim made by the transport on the
+/// gateway's behalf — the ticket's identity criteria decide that, not this.
+///
+/// Both failures are LOCAL: nothing is sent. A `params` that is not an object,
+/// or an `_meta` that is not an object, cannot carry the required keys, and the
+/// alternatives are worse than failing — overwriting destroys caller data, and
+/// sending unchanged means a real modern peer answers `-32602` after the fact.
+fn with_modern_meta(method: &str, params: Option<Value>) -> Result<Option<Value>> {
+    let mut params = match params {
+        None => serde_json::Map::new(),
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            return Err(Error::Protocol(format!(
+                "cannot send `{method}` to a 2026 peer: `params` must be an object to carry the \
+                 required `_meta`, got {kind}",
+                kind = value_kind(&other),
+            )));
+        }
+    };
+
+    let meta = match params.remove("_meta") {
+        None => serde_json::Map::new(),
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            return Err(Error::Protocol(format!(
+                "cannot send `{method}` to a 2026 peer: `params._meta` must be an object, got \
+                 {kind}",
+                kind = value_kind(&other),
+            )));
+        }
+    };
+
+    let mut meta = meta;
+    meta.insert(
+        KEY_PROTOCOL_VERSION.to_string(),
+        Value::String(MODERN_VERSIONS[0].to_string()),
+    );
+    // Matches what the legacy handshake already declares for this client
+    // (`"capabilities": {}`), so the two paths cannot disagree about the
+    // gateway's own capabilities.
+    meta.insert(
+        KEY_CLIENT_CAPABILITIES.to_string(),
+        Value::Object(serde_json::Map::new()),
+    );
+    params.insert("_meta".to_string(), Value::Object(meta));
+    Ok(Some(Value::Object(params)))
+}
+
+/// Name a JSON value's kind for an error a human has to act on.
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
+}
+
 impl HttpTransport {
     /// Create a new HTTP transport
     ///
@@ -258,6 +526,12 @@ impl HttpTransport {
         // transport at all, so failing construction here is correct.
         let base_origin = Url::parse(url)
             .map_err(|e| Error::Transport(format!("Invalid transport base URL: {e}")))?;
+        // Refuse at construction, not only at request time: `initialize` runs
+        // the full authorization flow and starts a refresh task, so a
+        // request-time-only guard would mint a credential it may never send.
+        if oauth_client.is_some() {
+            require_secure_oauth_target(&base_origin)?;
+        }
         let client = Client::builder()
             .timeout(timeout)
             .pool_max_idle_per_host(10)
@@ -283,6 +557,7 @@ impl HttpTransport {
             base_url: url.to_string(),
             message_url: RwLock::new(None),
             headers,
+            era: std::sync::OnceLock::new(),
             sessions: RwLock::new(HashMap::new()),
             single_tenant_hint: AtomicBool::new(false),
             request_id: AtomicU64::new(1),
@@ -317,6 +592,33 @@ impl HttpTransport {
     /// `debug_assert!` provably safe to enable: it must stay OFF (the
     /// default) for a `Shared`-slot instance, which is Arc-shared across
     /// every caller and relies on `sessions` staying multi-entry.
+    /// Attach the owning `Backend`'s era cache, so outbound messages can be
+    /// shaped for the dialect the peer actually speaks (MIK-7214.HEADER.9).
+    ///
+    /// A setter rather than a constructor parameter: `new` and `new_with_oauth`
+    /// are both public, and widening two published signatures for a value only
+    /// the lifecycle can supply would put an argument in front of every
+    /// external caller that has nothing to pass for it.
+    ///
+    /// Idempotent by construction. A second call is the lifecycle attaching a
+    /// cache to a transport that already has one, which cannot happen for a
+    /// freshly built transport and must not silently swap the cache if it ever
+    /// did.
+    pub(crate) fn attach_era(&self, era: Arc<crate::protocol::era::EraCache>) {
+        let _ = self.era.set(era);
+    }
+
+    /// The peer's era, as far as it is known right now.
+    ///
+    /// Never probes and never blocks on one in flight: an unresolved era reads
+    /// `None`, and `None` means legacy. Waiting here would deadlock — the probe
+    /// is itself a request through this transport.
+    /// Non-blocking on purpose: see `EraCache::cached_now`. This runs on the
+    /// path the probe itself takes.
+    fn outbound_era(&self) -> Option<crate::protocol::era::Era> {
+        self.era.get().and_then(|era| era.cached_now())
+    }
+
     pub(crate) fn mark_single_tenant(&self) {
         self.single_tenant_hint.store(true, Ordering::Relaxed);
     }
@@ -483,7 +785,18 @@ impl HttpTransport {
         // immediately or do not implement client notifications. The gateway
         // can still use request/response tools in that case, so notification
         // delivery must not make backend startup fail.
-        if let Err(error) = self.notify("notifications/initialized", None).await {
+        //
+        // `send_notification` with era `None`, not `notify`: this notification
+        // is the second half of the handshake, and `initialize()` is re-entered
+        // on reconnect and on session expiry — by which time the era cache can
+        // already say `Modern`. Shaping it by era would send a 2026-shaped
+        // `initialized` beside a 2025 `initialize`, to a peer we are still
+        // introducing ourselves to. `send_request` refuses the era here for the
+        // same reason.
+        if let Err(error) = self
+            .send_notification("notifications/initialized", None, None, None)
+            .await
+        {
             debug!(url = %sanitize_url_for_diagnostics(&self.base_url), error = %error, "Initialized notification failed (ignored)");
         }
 
@@ -582,6 +895,21 @@ impl HttpTransport {
             }
         }
 
+        // MIK-7214.HEADER.9a/9b: the GET stream is built here and never reaches
+        // `finalise_modern_headers`, so without this it carries whatever the
+        // legacy handshake negotiated even after the peer has been observed to
+        // be modern. Last, so it outranks an operator static exactly as
+        // `finalise_modern_headers` outranks one on the POST paths. A `None`
+        // era (not yet probed, or legacy) leaves the handshake version alone.
+        if matches!(mode, HeaderMode::Sse)
+            && self.outbound_era() == Some(crate::protocol::era::Era::Modern)
+        {
+            headers.insert(
+                "MCP-Protocol-Version",
+                header::HeaderValue::from_static(MODERN_VERSIONS[0]),
+            );
+        }
+
         // Ambient trace ID (send_request only; not SSE or notify).
         if matches!(mode, HeaderMode::Request { .. })
             && let Some(trace_id) = trace::current()
@@ -596,6 +924,17 @@ impl HttpTransport {
     /// Get OAuth access token if OAuth is configured
     async fn get_oauth_token(&self) -> Result<Option<String>> {
         if let Some(ref oauth_mutex) = self.oauth_client {
+            // The barrier between the token and the socket: every caller of
+            // `build_mcp_headers` posts to `get_message_url`, so checking it
+            // here covers the base URL and the SSE-advertised endpoint alike.
+            let target = self.get_message_url();
+            let parsed = Url::parse(&target).map_err(|e| {
+                Error::TransportPermanent(format!(
+                    "refusing to send an OAuth token to an unparseable target: {e}"
+                ))
+            })?;
+            require_secure_oauth_target(&parsed)?;
+
             let oauth = oauth_mutex.lock().await;
             let token = oauth.get_token().await?;
             Ok(Some(token))
@@ -781,7 +1120,11 @@ impl HttpTransport {
 
     /// Send a raw request to the message endpoint
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
-        self.send_request_with_headers(request, &[], None).await
+        // `None`, not `self.outbound_era()`: this is the handshake, and a
+        // modern-shaped `initialize` is a message the peer we are still
+        // introducing ourselves to may be unable to parse.
+        self.send_request_with_headers(request, &[], None, None)
+            .await
     }
 
     /// Send a raw request, merging `extra_headers` into the outbound header set
@@ -799,6 +1142,7 @@ impl HttpTransport {
         request: &JsonRpcRequest,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
+        era: Option<Era>,
     ) -> Result<JsonRpcResponse> {
         let message_url = self.get_message_url();
 
@@ -819,6 +1163,11 @@ impl HttpTransport {
             ) {
                 headers.insert(name, value);
             }
+        }
+        // AFTER every merge this path runs. Placed inside `build_mcp_headers`
+        // it would be overridden by the loop just above.
+        if era == Some(Era::Modern) {
+            finalise_modern_headers(&mut headers, &request.method, request.params.as_ref())?;
         }
 
         let response = self
@@ -893,15 +1242,10 @@ impl HttpTransport {
                 .await
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e))?;
 
-            // Find the data line and extract JSON
-            for line in text.lines() {
-                if let Some(data) = line.strip_prefix("data:") {
-                    let json_str = data.trim();
-                    return serde_json::from_str(json_str)
-                        .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")));
-                }
-            }
-            Err(Error::Transport("No data in SSE response".to_string()))
+            // ponytail: caller still wants only the response. The captured
+            // notifications are dropped HERE and nowhere else, so the outbound
+            // consumer lands by changing this one line. `MIK-7272.SUB.2b`.
+            parse_sse_response(&text).map(|e| e.response)
         } else {
             // Parse JSON response
             response
@@ -925,6 +1269,72 @@ impl HttpTransport {
     fn bucket_key(identity_key: Option<&str>) -> &str {
         identity_key.unwrap_or("")
     }
+
+    // MIK-6735 fix 2: threads `identity_key` into `build_mcp_headers` so a
+    // notification for a per-user identity selects that same identity's
+    // `MCP-Session-Id` bucket — previously every notification hardcoded
+    // `HeaderMode::Notify, None`, i.e. the shared bucket, even when it
+    // correlated a request that had gone out on a per-user session.
+    /// Send a notification to the message endpoint, shaped for `era`.
+    ///
+    /// `era` is a parameter rather than a read of `self.outbound_era()`, for
+    /// the reason `send_request` takes one: the handshake's own
+    /// `notifications/initialized` must stay legacy-shaped even once the cache
+    /// says `Modern`, and a path that reads the era for itself cannot make that
+    /// exception. Ordinary notifications pass `outbound_era()`.
+    async fn send_notification(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        identity_key: Option<&str>,
+        era: Option<Era>,
+    ) -> Result<()> {
+        let message_url = self.get_message_url();
+        let params = if era == Some(Era::Modern) {
+            with_modern_meta(method, params)?
+        } else {
+            params
+        };
+
+        let notification = JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params,
+        };
+
+        let mut headers = self
+            .build_mcp_headers(HeaderMode::Notify, identity_key)
+            .await?;
+        // This path has no per-request merge, so the builder's return is the
+        // last writer here. Finalising only in `send_request_with_headers`
+        // would leave every notification unshaped.
+        if era == Some(Era::Modern) {
+            finalise_modern_headers(&mut headers, method, notification.params.as_ref())?;
+        }
+
+        let response = self
+            .client
+            .post(&message_url)
+            .headers(headers)
+            .json(&notification)
+            .send()
+            .await
+            .map_err(|e| safe_request_error("Notification failed", &e))?;
+
+        if !response.status().is_success() {
+            // Many HTTP backends (e.g. exa, beeper) do not support MCP
+            // notifications and return 4xx. This is expected behaviour — log at
+            // DEBUG so it does not spam the operator logs.
+            debug!(
+                status = %response.status(),
+                url = %sanitize_url_for_diagnostics(message_url.as_str()),
+                method = method,
+                "Notification not supported by backend (ignored)"
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -940,6 +1350,17 @@ impl Transport for HttpTransport {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
+        // Read the era once, here, and carry it into the send. Reading it
+        // inside the header builder instead would leave the body half of the
+        // envelope decided somewhere else, and the two must agree about which
+        // dialect this one message is written in.
+        let era = self.outbound_era();
+        let params = if era == Some(Era::Modern) {
+            with_modern_meta(method, params)?
+        } else {
+            params
+        };
+
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: self.next_id(),
@@ -948,7 +1369,7 @@ impl Transport for HttpTransport {
         };
 
         let result = self
-            .send_request_with_headers(&request, extra_headers, identity_key)
+            .send_request_with_headers(&request, extra_headers, identity_key, era)
             .await;
 
         // MIK-5982 / MIK-6040: when the backend's session expires (daemon restart,
@@ -985,7 +1406,7 @@ impl Transport for HttpTransport {
             self.sessions.write().remove(bucket);
             self.initialize().await?;
             return self
-                .send_request_with_headers(&request, extra_headers, identity_key)
+                .send_request_with_headers(&request, extra_headers, identity_key, era)
                 .await;
         }
 
@@ -1004,51 +1425,14 @@ impl Transport for HttpTransport {
         self.notify_with_headers(method, params, None).await
     }
 
-    // MIK-6735 fix 2: threads `identity_key` into `build_mcp_headers` so a
-    // notification for a per-user identity selects that same identity's
-    // `MCP-Session-Id` bucket — previously every notification hardcoded
-    // `HeaderMode::Notify, None`, i.e. the shared bucket, even when it
-    // correlated a request that had gone out on a per-user session.
     async fn notify_with_headers(
         &self,
         method: &str,
         params: Option<Value>,
         identity_key: Option<&str>,
     ) -> Result<()> {
-        let message_url = self.get_message_url();
-
-        let notification = JsonRpcNotification {
-            jsonrpc: "2.0".to_string(),
-            method: method.to_string(),
-            params,
-        };
-
-        let headers = self
-            .build_mcp_headers(HeaderMode::Notify, identity_key)
-            .await?;
-
-        let response = self
-            .client
-            .post(&message_url)
-            .headers(headers)
-            .json(&notification)
-            .send()
+        self.send_notification(method, params, identity_key, self.outbound_era())
             .await
-            .map_err(|e| safe_request_error("Notification failed", &e))?;
-
-        if !response.status().is_success() {
-            // Many HTTP backends (e.g. exa, beeper) do not support MCP
-            // notifications and return 4xx. This is expected behaviour — log at
-            // DEBUG so it does not spam the operator logs.
-            debug!(
-                status = %response.status(),
-                url = %sanitize_url_for_diagnostics(message_url.as_str()),
-                method = method,
-                "Notification not supported by backend (ignored)"
-            );
-        }
-
-        Ok(())
     }
 
     fn is_connected(&self) -> bool {

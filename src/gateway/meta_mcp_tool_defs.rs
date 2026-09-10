@@ -534,28 +534,56 @@ pub(crate) fn build_cost_report_tool() -> Tool {
     }
 }
 
-/// Construct the full meta-tool list, optionally including stats, webhooks, playbooks, and reload.
+/// Which conditionally-served meta-tools a caller wants.
+///
+/// Four independent booleans in a parameter list are silently transposable --
+/// nothing at a call site says which position is which, and the positions are
+/// not interchangeable. Named fields make each gate something the caller
+/// states rather than something a reader counts.
+#[allow(clippy::struct_excessive_bools)]
+// Independent gates; each is read from a
+// different source and none constrains another, so an enum would only rename them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MetaToolGates {
+    /// `gateway_stats`, served when a stats collector is attached.
+    pub(crate) stats: bool,
+    /// `gateway_reload_config`, served when a reload context exists.
+    pub(crate) reload: bool,
+    /// `gateway_cost_report`, hardcoded true on the served path.
+    pub(crate) cost_report: bool,
+    /// `gateway_webhook_status`, served where a webhook registry is attached.
+    pub(crate) webhook_status: bool,
+}
+
+/// Construct the full meta-tool list, optionally including stats, cost reporting, and reload.
 ///
 /// `tool_count` and `server_count` are threaded into [`build_base_tools`] so descriptions
 /// reflect live registry state rather than static placeholder text.
-#[allow(clippy::fn_params_excessive_bools)] // 4 feature flags; enum would be over-engineered
+///
+/// `gates.webhook_status` is whether a webhook registry is actually attached,
+/// not whether the feature is configured on. Dispatchable is not the same as
+/// answerable, and only the HTTP transport makes it both: `run_stdio` never
+/// calls `set_webhook_registry`, so over stdio the handler refuses the call
+/// whatever the configuration says. Webhooks need an HTTP endpoint to receive
+/// on, so absence over stdio is correct rather than a gap. Enumerating on the
+/// config flag would advertise a tool that cannot answer on the commonest local
+/// transport; enumerating on attachment cannot.
+///
+/// This is why `NFR.PERF.4` bands the surface at 14-17 rather than 14-16: the
+/// webhook feature defaults to enabled, so an HTTP deployment reaching 17 is
+/// the shipped default, not an exotic combination. See
+/// `docs/design/2026-09-08-perf4-webhook-status-restoration.md`.
 pub(crate) fn build_meta_tools(
-    stats_enabled: bool,
-    webhooks_enabled: bool,
-    reload_enabled: bool,
-    cost_report_enabled: bool,
+    gates: MetaToolGates,
     tool_count: usize,
     server_count: usize,
 ) -> Vec<Tool> {
     let mut tools = build_base_tools(tool_count, server_count);
-    if stats_enabled {
+    if gates.stats {
         tools.push(build_stats_tool());
     }
-    if cost_report_enabled {
+    if gates.cost_report {
         tools.push(build_cost_report_tool());
-    }
-    if webhooks_enabled {
-        tools.push(build_webhook_status_tool());
     }
     tools.push(build_playbook_tool());
     tools.push(build_kill_server_tool());
@@ -565,10 +593,17 @@ pub(crate) fn build_meta_tools(
     tools.push(build_list_disabled_capabilities_tool());
     tools.push(build_list_profiles_tool());
     tools.push(build_set_state_tool());
-    if reload_enabled {
+    if gates.reload {
         tools.push(build_reload_config_tool());
     }
     tools.push(build_reload_capabilities_tool());
+    if gates.webhook_status {
+        // The only surface answering "are events still arriving". A push
+        // pipeline fails silently -- a rotated secret makes signature
+        // validation reject everything and events simply stop -- so a
+        // diagnostic the model cannot see is a diagnostic that does not exist.
+        tools.push(build_webhook_status_tool());
+    }
     tools
 }
 
@@ -729,3 +764,142 @@ pub(crate) fn build_code_mode_tools() -> Vec<Tool> {
 #[cfg(test)]
 #[path = "meta_mcp_tool_defs_tests.rs"]
 mod tests;
+
+// ============================================================================
+// Meta-tool exposure (GH issue 449)
+// ============================================================================
+
+/// Every meta-tool name `build_meta_tools` can produce.
+///
+/// Derived from the builder with all optional features on, so it cannot drift
+/// from what the gateway actually lists. Deliberately not a hard-coded roster:
+/// three hand-maintained copies already exist elsewhere and two of them list
+/// Code Mode tools this builder never emits.
+fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
+    static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> =
+        std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        // Every built-in the dispatcher recognises, from *both* builders. Every
+        // gate is on because membership follows what is *callable*, never what
+        // any one deployment lists: `gateway_webhook_status` is dispatchable by
+        // name on a surface that does not enumerate it, and Code Mode's
+        // `gateway_execute` reaches every backend tool. Either one left outside
+        // this set gives an operator allow-list an escape hatch, because
+        // `is_exposed` admits anything ungoverned.
+        build_meta_tools(
+            MetaToolGates {
+                stats: true,
+                reload: true,
+                cost_report: true,
+                webhook_status: true,
+            },
+            0,
+            0,
+        )
+        .into_iter()
+        .chain(build_code_mode_tools())
+        .map(|t| t.name)
+        .collect()
+    })
+}
+
+/// Whether the name belongs to this gateway's own meta-tool roster.
+///
+/// Distinct from exposure: a governed name can be hidden, and a name outside
+/// the roster is a surfaced backend tool that no gateway policy owns.
+pub(crate) fn is_governed_meta_tool(name: &str) -> bool {
+    governed_meta_tool_names().contains(name)
+}
+
+/// Which meta-tools an operator has chosen to expose.
+///
+/// One predicate, consumed by both `tools/list` and `tools/call`. Hiding a
+/// tool from the list while still executing it is security theatre, so the
+/// listed set is *derived from* this predicate rather than maintained beside
+/// it — the two cannot disagree.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MetaToolExposure {
+    /// `None` exposes everything. `Some` is an allow-list of meta-tool names.
+    allowed: Option<std::collections::HashSet<String>>,
+}
+
+impl MetaToolExposure {
+    /// Expose every meta-tool — the behaviour of a gateway that configures none.
+    pub(crate) fn expose_all() -> Self {
+        Self { allowed: None }
+    }
+
+    /// Build the predicate from `meta_mcp.exposed_meta_tools`.
+    ///
+    /// Empty means expose-all. Unrecognised names are warned about and dropped
+    /// rather than aborting startup, matching `surfaced_tools`: a typo must not
+    /// take a production gateway down.
+    pub(crate) fn from_names(names: &[String]) -> Self {
+        if names.is_empty() {
+            return Self::expose_all();
+        }
+        let governed = governed_meta_tool_names();
+        let allowed: std::collections::HashSet<String> = names
+            .iter()
+            .filter(|name| {
+                let known = governed.contains(*name);
+                if !known {
+                    tracing::warn!(
+                        meta_tool = %name,
+                        "meta_mcp.exposed_meta_tools names an unrecognised meta-tool; dropping it"
+                    );
+                }
+                known
+            })
+            .cloned()
+            .collect();
+        // A dropped `surfaced_tools` entry costs one pinned tool. An allow-list
+        // that was meant to name gateway_invoke and missed leaves a gateway that
+        // can list backends and invoke nothing, which is worth saying out loud.
+        if !allowed.contains("gateway_invoke") {
+            tracing::warn!(
+                "meta_mcp.exposed_meta_tools omits gateway_invoke; \
+                 backend tools will be unreachable through this gateway"
+            );
+        }
+        Self {
+            allowed: Some(allowed),
+        }
+    }
+
+    /// Whether `name` may be listed and called.
+    ///
+    /// Names outside the builders' roster are always exposed: surfaced backend
+    /// tools are not meta-tools, and an operator's meta-tool allow-list has
+    /// nothing to say about them.
+    pub(crate) fn is_exposed(&self, name: &str) -> bool {
+        match &self.allowed {
+            None => true,
+            Some(allowed) => allowed.contains(name) || !governed_meta_tool_names().contains(name),
+        }
+    }
+
+    /// Drop from `tools` everything this gateway does not expose.
+    ///
+    /// Every list path goes through here, so a builder added later is filtered
+    /// by construction rather than by remembering to filter it.
+    pub(crate) fn filter(&self, tools: Vec<Tool>) -> Vec<Tool> {
+        tools
+            .into_iter()
+            .filter(|t| self.is_exposed(&t.name))
+            .collect()
+    }
+}
+
+/// `build_meta_tools`, restricted to what the operator exposes.
+///
+/// The filter is the whole difference: the listed set is the predicate's
+/// output, so `tools/list` and `tools/call` cannot disagree about a tool.
+pub(crate) fn build_meta_tools_filtered(
+    gates: MetaToolGates,
+    tool_count: usize,
+    server_count: usize,
+    exposure: &MetaToolExposure,
+) -> Vec<Tool> {
+    exposure.filter(build_meta_tools(gates, tool_count, server_count))
+}

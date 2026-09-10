@@ -23,7 +23,7 @@ impl CapabilityExecutor {
         let key = &auth.key;
 
         if let Some(var_name) = key.strip_prefix("env:") {
-            std::env::var(var_name).map_err(|_| {
+            self.env.get().resolve(var_name).ok_or_else(|| {
                 Error::Config(format!(
                     "Environment variable '{}' not set (required for {})",
                     var_name, auth.description
@@ -38,12 +38,14 @@ impl CapabilityExecutor {
             self.fetch_from_file(file_spec)
         } else if key.starts_with("{env.") && key.ends_with('}') {
             let var_name = &key[5..key.len() - 1];
-            std::env::var(var_name)
-                .map_err(|_| Error::Config(format!("Environment variable '{var_name}' not set")))
+            self.env
+                .get()
+                .resolve(var_name)
+                .ok_or_else(|| Error::Config(format!("Environment variable '{var_name}' not set")))
         } else if key.is_empty() {
             Err(Error::Config("No credential key configured".to_string()))
         } else if Self::looks_like_env_var_name(key) {
-            std::env::var(key).map_err(|_| {
+            self.env.get().resolve(key).ok_or_else(|| {
                 Error::Config(format!(
                     "Environment variable '{key}' not set. Set it with: export {key}=your_key"
                 ))
@@ -181,7 +183,7 @@ impl CapabilityExecutor {
     /// `client_id` is forwarded when present (required by Google and other providers).
     /// `client_secret` is looked up from the macOS Keychain under the key
     /// `"{provider}-client-secret"` and included when found.
-    async fn perform_token_refresh(
+    pub(super) async fn perform_token_refresh(
         &self,
         provider: &str,
         refresh_token: &str,
@@ -212,7 +214,9 @@ impl CapabilityExecutor {
             .await
             .map_err(|e| {
                 Error::Config(format!(
-                    "OAuth refresh request to '{token_endpoint}' failed: {e}"
+                    "OAuth refresh request to '{}' failed: {}",
+                    crate::security::sanitize::redact_url_for_diagnostics(token_endpoint),
+                    super::redact_url(e)
                 ))
             })?;
 
@@ -387,6 +391,7 @@ mod tests {
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("test"),
+            env: Arc::new(crate::config::LiveEnv::default()),
         }
     }
 
@@ -398,6 +403,7 @@ mod tests {
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("test"),
+            env: Arc::new(crate::config::LiveEnv::default()),
         }
     }
 

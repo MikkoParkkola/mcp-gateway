@@ -21,6 +21,41 @@ type CleanupFn = Box<dyn Fn(&str) + Send + Sync>;
 #[derive(Default)]
 pub struct SessionLifecycle {
     callbacks: RwLock<Vec<(String, Arc<CleanupFn>)>>,
+    /// Keys awaiting reclamation, and the deadline each is reclaimed at.
+    ///
+    /// MCP 2026-07-28 removed protocol sessions, so `on_disconnect` has nothing
+    /// left to fire on: there is no session to DELETE, and the stream whose
+    /// close drove the other trigger is replaced by `subscriptions/listen`.
+    /// Every handler registered here would simply never run, and everything it
+    /// reclaimed would leak — in silence, because nothing errors when a
+    /// callback is not called.
+    ///
+    /// So the trigger becomes a deadline. The handlers are unchanged; what
+    /// changes is that something still fires them.
+    tracked: RwLock<std::collections::HashMap<String, u64>>,
+}
+
+/// How long an identity's derived state outlives its last observed request.
+///
+/// The revision removed protocol sessions, so nothing signals a disconnect and
+/// the only honest question left is "has this identity been quiet long enough".
+/// Five minutes is the answer the reclaim-latency bound in the design is stated
+/// against: a caller idle this long has its per-identity state reclaimed, and a
+/// caller still working keeps pushing its deadline forward.
+pub const IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Seconds since the Unix epoch, the unit every deadline in this module uses.
+///
+/// One helper so the seam between this module's `u64` seconds and callers that
+/// think in `Instant` is crossed in exactly one place. A clock set backwards
+/// delays a reclaim and one set forwards reclaims early; both touch derived
+/// state only, which is why wall-clock is acceptable here and a monotonic
+/// `Instant` — unloggable, unpersistable, uncomparable across a restart — is
+/// not.
+pub fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 impl SessionLifecycle {
@@ -33,7 +68,11 @@ impl SessionLifecycle {
     ///
     /// The callback receives the session ID string when a session disconnects.
     /// Name is used for debug logging only.
-    pub fn register(&self, name: impl Into<String>, callback: impl Fn(&str) + Send + Sync + 'static) {
+    pub fn register(
+        &self,
+        name: impl Into<String>,
+        callback: impl Fn(&str) + Send + Sync + 'static,
+    ) {
         self.callbacks
             .write()
             .push((name.into(), Arc::new(Box::new(callback))));
@@ -44,15 +83,97 @@ impl SessionLifecycle {
     /// Called by the notification multiplexer when a session is reaped
     /// or by the DELETE /mcp handler.
     pub fn on_disconnect(&self, session_id: &str) {
+        // Whatever brought us here, this key is done: drop its deadline so a
+        // later reap cannot fire the handlers for it a second time.
+        self.untrack(session_id);
+        self.fire_cleanup(session_id);
+    }
+
+    /// Run the cleanup handlers for a key whose deadline is already gone.
+    ///
+    /// Separate from [`Self::on_disconnect`] because reaping has **already**
+    /// removed the key. Removing it a second time cannot remove the entry
+    /// reaping took — that one is gone — so the only thing a second removal can
+    /// delete is a deadline some other caller re-registered in between, taking
+    /// a live caller's state with it.
+    ///
+    /// **Residual, stated rather than implied**: a key re-tracked between
+    /// reaping's removal and this call still has its handlers fired, because
+    /// nothing holds the two together. Closing that needs the ownership model
+    /// this module does not yet have — it is not reached from production at all
+    /// (MIK-7291), and the fix belongs with the decision to wire it.
+    fn fire_cleanup(&self, session_id: &str) {
         let cbs = self.callbacks.read();
         if cbs.is_empty() {
             return;
         }
-        debug!(session_id, callbacks = cbs.len(), "Session disconnect cleanup");
+        debug!(
+            session_id,
+            callbacks = cbs.len(),
+            "Session disconnect cleanup"
+        );
         for (name, cb) in cbs.iter() {
             cb(session_id);
             debug!(session_id, handler = %name, "Cleanup handler executed");
         }
+    }
+
+    /// Note that `key` is reclaimable once `expires_at` has passed.
+    ///
+    /// The key is whatever the caller is identified by — a principal after the
+    /// migration, a session before it. The handlers do not care which; they
+    /// care that something eventually names the key again.
+    /// One deadline per key, replaced rather than accumulated. Appending a
+    /// second deadline for a key already tracked kept the older one, so a
+    /// refreshed caller was reclaimed on its previous deadline while still
+    /// live — and the handlers, which free things, ran twice for one key.
+    pub fn track(&self, key: impl Into<String>, expires_at: u64) {
+        self.tracked.write().insert(key.into(), expires_at);
+    }
+
+    /// Stop tracking a key that has already been reclaimed.
+    ///
+    /// Without this a disconnect leaves the deadline behind, and the next reap
+    /// fires the handlers again for a key that is already gone.
+    pub fn untrack(&self, key: &str) {
+        self.tracked.write().remove(key);
+    }
+
+    /// Reclaim every tracked key whose deadline has passed.
+    ///
+    /// Each key fires the handlers exactly once and is then forgotten: these
+    /// callbacks free things, and a handler that runs twice for one key is its
+    /// own defect.
+    ///
+    /// Returns the number of keys reclaimed. A caller logging a sweep cannot
+    /// get this from `tracked_count()` either side of the call: a live request
+    /// may track a key between the two reads, and the difference is wrong the
+    /// moment it does.
+    pub fn reap(&self, now: u64) -> usize {
+        let expired: Vec<String> = {
+            let mut tracked = self.tracked.write();
+            let expired: Vec<String> = tracked
+                .iter()
+                .filter(|(_, expires_at)| now > **expires_at)
+                .map(|(key, _)| key.clone())
+                .collect();
+            for key in &expired {
+                tracked.remove(key);
+            }
+            expired
+        };
+        let reclaimed = expired.len();
+        for key in expired {
+            // Already removed above. `on_disconnect` would remove it again, and
+            // a second removal can only take an entry someone re-registered.
+            self.fire_cleanup(&key);
+        }
+        reclaimed
+    }
+
+    /// How many keys are awaiting reclamation.
+    pub fn tracked_count(&self) -> usize {
+        self.tracked.read().len()
     }
 
     /// Number of registered callbacks (for diagnostics).
@@ -61,10 +182,90 @@ impl SessionLifecycle {
     }
 }
 
+/// Register the firewall's per-identity cleanup with a lifecycle registry.
+///
+/// Held as a `Weak`, never an `Arc`: the registry outlives a request and would
+/// otherwise keep the firewall — and every scanner and tracker it owns — alive
+/// for the process lifetime. An upgrade that fails means the firewall is gone,
+/// and so is the state this handler existed to reclaim.
+///
+/// Production code calls this at gateway startup. Tests call the same function,
+/// because a test that registers its own handler proves only that a test can
+/// register one.
+#[cfg(feature = "firewall")]
+pub fn wire_session_lifecycle(
+    lifecycle: &Arc<SessionLifecycle>,
+    firewall: &Arc<crate::security::firewall::Firewall>,
+) {
+    let firewall = Arc::downgrade(firewall);
+    lifecycle.register("firewall-anomaly", move |key| {
+        if let Some(firewall) = firewall.upgrade() {
+            firewall.on_session_end(key);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn a_refreshed_key_keeps_only_its_latest_deadline() {
+        // Tracking the same key twice used to keep both deadlines. The older
+        // one then reclaimed a caller that was still live, and the handlers —
+        // which free things — ran twice for one key.
+        let lifecycle = SessionLifecycle::new();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&fired);
+        lifecycle.register("test", move |_key| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.track("caller-a", 100);
+        lifecycle.track("caller-a", 200);
+        assert_eq!(
+            lifecycle.tracked_count(),
+            1,
+            "one key must hold one deadline, not one per refresh"
+        );
+
+        lifecycle.reap(150);
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            0,
+            "a refreshed caller must not be reclaimed on its previous deadline"
+        );
+        assert_eq!(lifecycle.tracked_count(), 1, "and must still be tracked");
+
+        lifecycle.reap(250);
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            1,
+            "past its real deadline it is reclaimed exactly once"
+        );
+    }
+
+    #[test]
+    fn a_disconnect_drops_the_deadline_so_reaping_cannot_repeat_it() {
+        let lifecycle = SessionLifecycle::new();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&fired);
+        lifecycle.register("test", move |_key| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.track("caller-b", 100);
+        lifecycle.on_disconnect("caller-b");
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+
+        lifecycle.reap(200);
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            1,
+            "a key already reclaimed must not be reclaimed again by a later reap"
+        );
+    }
 
     #[test]
     fn test_callback_fires_on_disconnect() {

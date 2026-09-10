@@ -1,0 +1,108 @@
+{
+  "criterion": "GH452.SESSION.1",
+  "base": "0d4df3c0bd4e3b3ca5afa3f2d63bdb3261b118cf",
+  "runtime_matches_reviewed_files": true,
+  "source_pins": {
+    "src/gateway/router/handlers.rs": "c92849aaf2043af0c17dbfb2cf2069f963b570b41e9bc9acb4ea3dc29307ff45",
+    "src/gateway/streaming.rs": "f789a86be1215773122b4e5b12c207ec05ec11c7f1ef9501f737406bdd19b8c9",
+    "tests/gh452_session_owner.rs": "1027fb68293a934787ae28b36297484f20c17b20c40aebbde439d4e42e78f1ab"
+  },
+  "code_review": {
+    "run_id": "mcp-v4-session-code-20260906-r1",
+    "material_sha256": "a17a0e734df4de71159ca47cff63d88b7e7d3eeecf1fc9294fabc636e9362c1c",
+    "gpt": "SHIP",
+    "grok": "SHIP",
+    "actual_exits": [
+      0,
+      0
+    ],
+    "unique_ledger_bindings_verified": true
+  },
+  "isolated_validation": {
+    "acceptance": {
+      "command": "cargo test --all-features --test gh452_session_owner",
+      "passed": 11,
+      "exit_code": 0
+    },
+    "streaming_controls": {
+      "commands": [
+        "cargo test --all-features --lib gateway::streaming::tests::",
+        "cargo test --all-features --lib gateway::streaming::session_ownership_tests::"
+      ],
+      "passed": [
+        9,
+        5
+      ],
+      "exit_codes": [
+        0,
+        0
+      ]
+    },
+    "clippy": {
+      "command": "cargo clippy --all-features --all-targets -- -D warnings",
+      "exit_code": 0,
+      "initial_failure": "field_reassign_with_default in test fixture; repaired by direct initialization"
+    },
+    "format": {
+      "command": "cargo fmt --check",
+      "exit_code": 0
+    },
+    "workflow": {
+      "command": "actionlint .github/workflows/ci.yml",
+      "exit_code": 0,
+      "identical_to_commit": "bfa16dc3d179d8acc9889454d66f8c23eae1ee18"
+    }
+  },
+  "unchanged_runtime_quantitative_evidence": {
+    "coverage_source_regions": {
+      "covered": 56,
+      "total": 56
+    },
+    "mutation": {
+      "caught": 10,
+      "viable": 11,
+      "missed": 1,
+      "unviable": 0,
+      "caught_percent": 90.9090909090909,
+      "missed_names": [
+        "src/gateway/router/handlers.rs:358:46: replace && with || in mcp_delete_handler"
+      ]
+    }
+  },
+  "independent_functional_acceptance": {
+    "binary_sha256": "6d128266e994d460cc5cec8d0c7d141bf93f034e04ee65f423061b667a826530",
+    "criterion_verdicts": {
+      "GH452.SESSION.1": "PASS",
+      "GH452.SESSION.2": "PASS",
+      "GH452.SESSION.3": "PASS",
+      "GH452.SESSION.4": "PASS",
+      "GH452.SESSION.5": "PASS",
+      "GH452.SESSION.6": "PASS",
+      "GH452.SESSION.7": "PASS"
+    },
+    "observations": [
+      "Foreign and unknown DELETE return indistinguishable 404 and preserve streams",
+      "Owner DELETE returns204 and terminates only its own session; repeated DELETE404",
+      "Missing/non-text headers400; missing/invalid credentials401 with Bearer challenge",
+      "Same display name does not merge credential identities",
+      "Observed concurrent owner results204/404 and foreign404",
+      "Auth-enabled public path refuses anonymous DELETE before lookup; authenticated owner remains supported"
+    ],
+    "all_owned_processes_stopped": true,
+    "scope_limit": "One observed concurrency schedule; atomicity is supported separately by the reviewed single write guard."
+  },
+  "remaining_gates": [
+    "Delivery-evidence corrections and GPT finder confirmation",
+    "CI on final PR revision; existing ORDER.2 failures are a separate prerequisite",
+    "Integration, full release acceptance and issue closure"
+  ],
+  "test_fixture_revision": {
+    "reviewed_sha256": "1ba5a3287fe6e96da61361b487925e8f22acfed0d89e1d621e4fd23d8c3c8e0c",
+    "current_sha256": "1027fb68293a934787ae28b36297484f20c17b20c40aebbde439d4e42e78f1ab",
+    "byte_identical_to_original_review": false,
+    "delta": "Direct initialization of unchanged Config.auth fixture; assertions and configured values unchanged. Covered by delivery-delta review, not byte identity.",
+    "review_run_id": "mcp-v4-gh452-delivery-delta-20260907-r1",
+    "gpt": "SHIP-WITH-FIXES: two evidence/documentation corrections; finder confirmation pending",
+    "grok": "SHIP"
+  }
+}

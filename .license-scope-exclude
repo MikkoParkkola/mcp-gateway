@@ -1,6 +1,6 @@
 # .license-scope-exclude — paths OUTSIDE the per-file license default.
 #
-# The mixed, per-file licensing model (see LICENSES.md) applies only to
+# The PolyForm Noncommercial 1.0.0 default (see LICENSES.md) applies only to
 # first-party material authored for mcp-gateway and owned by Mikko Parkkola.
 # Files listed here are third-party (vendored, upstream-licensed) or generated,
 # and are governed by their own terms — NOT the Noncommercial default. The

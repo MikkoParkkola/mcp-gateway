@@ -4,6 +4,7 @@
 
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::Value;
 use tracing::{debug, warn};
@@ -14,13 +15,30 @@ use crate::{Error, Result};
 use super::{DiscoveredServer, DiscoverySource, ServerMetadata};
 
 /// Scans config files for MCP server definitions
-pub struct ConfigScanner;
+#[derive(Default)]
+pub struct ConfigScanner {
+    /// The environment the gateway resolves against, when one has been
+    /// published. `None` keeps the process environment as the only source,
+    /// which is what a scanner built without one has always read.
+    env: Option<Arc<crate::config::LiveEnv>>,
+}
 
 impl ConfigScanner {
     /// Create new config scanner
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self { env: None }
+    }
+
+    /// Resolve the environment scan against the live environment.
+    ///
+    /// Consuming builder rather than a constructor argument, matching the other
+    /// consumers of `LiveEnv`: every existing call site keeps working, and the
+    /// one that has an environment says so.
+    #[must_use]
+    pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
+        self.env = Some(env);
+        self
     }
 
     /// Scan all known config locations
@@ -208,8 +226,17 @@ impl ConfigScanner {
     pub fn scan_environment(&self) -> Result<Vec<DiscoveredServer>> {
         let mut servers = Vec::new();
 
+        // Process environment first so an env-file assignment wins, which is
+        // the precedence `EnvOverlay::resolve` states. Merged rather than
+        // substituted: an overlay carries only its own files' assignments, so
+        // reading it alone would stop discovering shell-exported endpoints.
+        let mut merged: std::collections::BTreeMap<String, String> = env::vars().collect();
+        if let Some(env) = &self.env {
+            merged.extend(env.get().effective_vars());
+        }
+
         // Look for MCP_SERVER_* environment variables
-        for (key, value) in env::vars() {
+        for (key, value) in merged {
             if key.starts_with("MCP_SERVER_") && key.ends_with("_URL") {
                 // Extract server name from MCP_SERVER_NAME_URL
                 let name = key
@@ -219,7 +246,10 @@ impl ConfigScanner {
                     .to_lowercase()
                     .replace('_', "-");
 
-                debug!("Found MCP server in environment: {name} = {value}");
+                // The variable name, never its value: an endpoint URL carries
+                // userinfo and query-string tokens often enough that logging it
+                // writes a credential into the log because discovery ran.
+                debug!("Found MCP server in environment: {name} (from {key})");
 
                 servers.push(DiscoveredServer {
                     name: name.clone(),
@@ -705,8 +735,59 @@ impl ConfigScanner {
     }
 }
 
-impl Default for ConfigScanner {
-    fn default() -> Self {
-        Self::new()
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn discovered_url(servers: &[DiscoveredServer], name: &str) -> Option<String> {
+        servers
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| match &s.transport {
+                TransportConfig::Http { http_url, .. } => http_url.clone(),
+                other => {
+                    panic!("environment discovery must produce an HTTP transport, got {other:?}")
+                }
+            })
+    }
+
+    #[test]
+    fn an_env_file_endpoint_reaches_the_environment_scan() {
+        // The scan enumerated the process environment, which cannot see a value
+        // an env file assigns once env files load into an overlay instead of
+        // being applied to the process.
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        std::fs::write(&env_file, "MCP_SERVER_ROTATED_URL=http://127.0.0.1:9931\n").unwrap();
+        let overlay = Arc::new(crate::config::EnvOverlay::from_paths(&[env_file]));
+        let env = Arc::new(crate::config::LiveEnv::new(
+            Arc::clone(&overlay),
+            crate::config::ResolvedEnvFiles::default(),
+        ));
+
+        let bare = ConfigScanner::new().scan_environment().unwrap();
+        assert!(
+            discovered_url(&bare, "rotated").is_none(),
+            "the value exists only in the env file, so a process-only scan must not see it"
+        );
+
+        let scanner = ConfigScanner::new().with_env(Arc::clone(&env));
+        assert_eq!(
+            discovered_url(&scanner.scan_environment().unwrap(), "rotated").as_deref(),
+            Some("http://127.0.0.1:9931"),
+            "the env-file endpoint must be discoverable"
+        );
+
+        // A reload that drops the assignment must reach a scanner built before it.
+        env.set(Arc::new(crate::config::EnvOverlay::none()));
+        assert!(
+            discovered_url(&scanner.scan_environment().unwrap(), "rotated").is_none(),
+            "a reload that clears the assignment must be visible to the next scan"
+        );
+
+        assert!(std::env::var("MCP_SERVER_ROTATED_URL").is_err());
     }
 }

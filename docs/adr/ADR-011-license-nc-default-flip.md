@@ -2,6 +2,7 @@
 
 - **Status**: Accepted (pending legal review + operator tag approval), 2026-07-10
 - **Supersedes**: the MIT-default + EE-allowlist model (ADR-001 / LICENSE-EE.md)
+- **Superseded by**: ADR-013 (single Noncommercial license, whole repository, 2026-09-10)
 
 ## Context
 

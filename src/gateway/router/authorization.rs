@@ -63,6 +63,13 @@ pub(super) fn backend_tool_targets_for_call(
 /// rejected: it would refuse a client that legitimately picks its own routing
 /// at connect time, to prevent something that grants no access it did not
 /// already have.
+///
+/// All of the above is about the legacy path, which is the only one with
+/// sessions left. MCP 2026-07-28 removed them, so on the modern path
+/// `gateway_set_profile` is refused outright and `initialize` binds nothing:
+/// there is no per-caller session to write, only a key every modern
+/// connection would share (`meta_mcp::session_key`, and `ORDER.2` in
+/// `docs/requirements/RELEASE-4.0.0-requirements.md`).
 pub(crate) const ADMIN_META_TOOLS: &[&str] = &[
     "gateway_kill_server",
     "gateway_revive_server",

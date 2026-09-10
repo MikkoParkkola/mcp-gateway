@@ -8,10 +8,9 @@
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::idempotency::{IdempotencyCache, derive_key};
+use crate::idempotency::IdempotencyCache;
 use crate::playbook::ToolInvoker;
 
-use super::super::meta_mcp_helpers::extract_optional_str;
 use super::MetaMcp;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 
@@ -19,30 +18,151 @@ use crate::gateway::meta_mcp::MetaMcpCallerContext;
 // Idempotency
 // ============================================================================
 
-/// Resolve the idempotency key for a `gateway_invoke` call.
+/// Build the idempotency key for a `gateway_invoke` call.
 ///
-/// Priority:
-/// 1. Explicit `"idempotency_key"` string in `args` — used verbatim.
-/// 2. Auto-derived from `(server, tool, arguments)` when an `IdempotencyCache`
-///    is active.  This protects against exact-duplicate LLM retries even when
-///    the client supplies no key.
+/// `client_key` is the key the client sent in `params._meta`; there is no other
+/// source. A call without one is not protected, and that is the correct
+/// outcome: a key the client never chose cannot express which repeats are
+/// deliberate, so deriving one from `(server, tool, arguments)` made an
+/// identical second call — a retry the user asked for — silently return the
+/// first result instead of running.
 ///
-/// Returns `None` when no idempotency cache is configured.
-pub(super) fn resolve_idempotency_key(
-    args: &Value,
+/// The suffixes are the ADR-008 INV-3 binding. They stay part of the key so one
+/// caller's stored result is never served to another under the same client key.
+///
+/// The client key is LENGTH-PREFIXED because it is the one attacker-chosen
+/// segment: appended raw, a caller could simply spell another caller's suffix
+/// inside its own key and derive that caller's entry (MIK-7408). The length
+/// says where the client's bytes stop, so no choice of key can reach across
+/// the boundary into a segment the gateway derives.
+///
+/// `step` is the ordinal of a chain or playbook step. It is another suffix the
+/// gateway derives, and it sits outside the length prefix with the rest of
+/// them. A chain runs every step through one caller, so without it all the
+/// steps derived one key while each carried its own fingerprint: step 2 met
+/// step 1's entry, mismatched, and was refused, stopping the chain partway.
+/// `None` for an ordinary single invocation, whose key is unchanged.
+///
+/// Returns `None` when no idempotency cache is configured, or when the client
+/// sent no key.
+pub(super) fn idempotency_key_for(
+    client_key: Option<&str>,
+    projection_key_suffix: &str,
+    identity_suffix: &str,
+    idem_cache: Option<&std::sync::Arc<IdempotencyCache>>,
+    step: Option<usize>,
+) -> Option<String> {
+    idem_cache?;
+    let key = client_key?;
+    let len = key.len();
+    let step_suffix = step.map_or_else(String::new, |idx| format!("|step:{idx}"));
+    Some(format!(
+        "{len}:{key}{projection_key_suffix}{identity_suffix}{step_suffix}"
+    ))
+}
+
+/// The retry de-duplication suffix: WHO a stored idempotency entry belongs to.
+///
+/// The propagated `cache_binding` when identity propagation is minting
+/// per-user credentials, otherwise the verified subject — which is still the
+/// identity the backend's answer depended on. Keying on the binding alone left
+/// the suffix empty for EVERY caller whenever propagation was off, which is the
+/// shipped default, so two authenticated callers sharing one client key shared
+/// one entry.
+///
+/// The two arms are tagged differently (`idp:` vs `sub:`) so a binding can
+/// never collide with an actor id that happens to read the same.
+///
+/// Empty for a caller with neither: two such callers are pooled by the
+/// operator's own decision to run without authentication, the same pooling
+/// `handlers.rs`'s `unattributed` already expresses. This mints no rule of its
+/// own about empty keys.
+pub(super) fn retry_identity_suffix(
+    cache_binding: Option<&str>,
+    verified_subject: Option<&str>,
+) -> String {
+    match CallerIdentity::select(cache_binding, verified_subject) {
+        Some(CallerIdentity::Binding(binding)) => format!("|idp:{binding}"),
+        Some(CallerIdentity::Subject(subject)) => format!("|sub:{subject}"),
+        None => String::new(),
+    }
+}
+
+/// WHO a keyed call belongs to.
+///
+/// The propagated `cache_binding` when identity propagation is minting
+/// per-user credentials, otherwise the verified subject. ONE spelling of that
+/// order: both keys derived at an invoke need it — the retry suffix above and
+/// the response cache's `caller_principal` — and a second copy is how the two
+/// keying contracts drift apart the day a third identity source arrives.
+///
+/// SELECTING the caller is the part that must not drift. COMPOSING the key is
+/// the part that must stay separate, and it deliberately still is: the suffix
+/// tags its arms so a binding can never collide with an actor id reading the
+/// same, and the response-cache principal takes the value alone.
+pub(super) enum CallerIdentity<'a> {
+    /// A credential identity propagation minted for this caller.
+    Binding(&'a str),
+    /// The verified subject, which is what the backend's answer depended on
+    /// when no per-user credential was minted.
+    Subject(&'a str),
+}
+
+impl<'a> CallerIdentity<'a> {
+    /// `None` for a caller with neither: such callers are pooled by the
+    /// operator's own decision to run without authentication.
+    pub(super) fn select(
+        cache_binding: Option<&'a str>,
+        verified_subject: Option<&'a str>,
+    ) -> Option<Self> {
+        match (cache_binding, verified_subject) {
+            (Some(binding), _) => Some(Self::Binding(binding)),
+            (None, Some(subject)) => Some(Self::Subject(subject)),
+            (None, None) => None,
+        }
+    }
+
+    /// The identity's own value, untagged — for a key that carries no second
+    /// identity arm to collide with.
+    pub(super) fn value(self) -> &'a str {
+        match self {
+            Self::Binding(value) | Self::Subject(value) => value,
+        }
+    }
+}
+
+/// Build the response-cache key for a `gateway_invoke` call.
+///
+/// One function rather than the expression repeated at the read and the write:
+/// a key derived in two places is a key that can be derived two ways, and a
+/// write that lands under a key no read computes is a cache that never hits
+/// while looking exactly like one that does.
+///
+/// The retry discriminator is the MRTR.10 binding. A retry reuses the original
+/// call's arguments, so without it two continuations answering the same gate
+/// differently share one entry and the first answer is served for the second.
+///
+/// `context` is forwarded, not consumed here: the routing profile, protocol
+/// revision and policy generation belong to the key the cache layer derives,
+/// so this passes them down rather than mixing a discriminator of its own.
+pub(super) fn response_cache_key_for(
     server: &str,
     tool: &str,
     arguments: &Value,
-    idem_cache: Option<&std::sync::Arc<IdempotencyCache>>,
-) -> Option<String> {
-    idem_cache?;
-    // Explicit key takes precedence.
-    if let Some(key) = extract_optional_str(args, "idempotency_key") {
-        return Some(key.to_string());
-    }
-    // Auto-derive from (server, tool, arguments) — stable, deterministic.
-    let combined = format!("{server}:{tool}");
-    Some(derive_key(&combined, arguments))
+    projection_key_suffix: &str,
+    principal: Option<&str>,
+    retry: &crate::protocol::mrtr::RetryFields,
+    context: crate::cache::KeyContext<'_>,
+) -> String {
+    let base = crate::cache::ResponseCache::response_key(
+        server,
+        tool,
+        arguments,
+        projection_key_suffix,
+        principal,
+        context,
+    );
+    format!("{base}{}", retry.key_discriminator())
 }
 
 // ============================================================================
@@ -142,6 +262,44 @@ pub(super) fn ranked_results_to_code_mode_json(
         .collect()
 }
 
+/// Signals that are the same for every tool in every response.
+///
+/// Measured 2026-07-31 on a live `gateway_search` call: 13 of 16 signals were
+/// the constant `1.0`. A signal that never varies distinguishes nothing — it is
+/// scoring-engine diagnostics shipped to a consumer that cannot act on it, on
+/// the repository whose stated value proposition is token savings.
+const CONSTANT_SIGNALS: &[&str] = &[
+    "cost_efficiency",
+    "freshness",
+    "grant",
+    "latency",
+    "organization_preference",
+    "permission_fit",
+    "policy_fit",
+    "risk",
+    "runtime_health",
+    "safety",
+    "success_rate",
+    "trust",
+    "user_preference",
+];
+
+/// Drop the signals that carry no information.
+///
+/// Named rather than a value test, deliberately. Dropping every field that
+/// happens to equal `1.0` would drop a real score sitting at its maximum —
+/// `relevance` does that legitimately — and the caller would lose the one
+/// number that told it something. The list is what was measured, not what a
+/// heuristic guessed.
+#[must_use]
+pub fn prune_constant_signals(ranking: &Value) -> Value {
+    let mut pruned = ranking.clone();
+    if let Some(signals) = pruned.get_mut("signals").and_then(Value::as_object_mut) {
+        signals.retain(|name, _| !CONSTANT_SIGNALS.contains(&name.as_str()));
+    }
+    pruned
+}
+
 // ============================================================================
 // ToolInvoker bridge
 // ============================================================================
@@ -157,6 +315,12 @@ pub(super) struct MetaMcpInvoker<'a, 'c> {
     /// authorizer, which nothing on this path consulted — an identity no check
     /// reads is not a check.
     pub(super) caller: &'c MetaMcpCallerContext<'c>,
+    /// The ordinal of the next step this invoker runs.
+    ///
+    /// One invoker serves a whole playbook run, so it can count its own steps.
+    /// Without the count every step derived the caller's one key and the
+    /// second step was refused on a fingerprint mismatch.
+    pub(super) step: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait::async_trait]
@@ -168,7 +332,10 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         // step they could run directly, which is a regression rather than a
         // control: a playbook is not a way AROUND a check, so it faces the same
         // one — now including the scope checks, at the chokepoint.
-        self.meta.invoke_tool(&args, None, self.caller).await
+        let step = self.step.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.meta
+            .invoke_tool(&args, None, self.caller, Some(step))
+            .await
     }
 }
 
@@ -332,6 +499,152 @@ mod tests {
     use super::strip_backend_provenance;
     use serde_json::json;
 
+    /// MIK-7408. Identity propagation ON: the retry entry is tagged with the
+    /// propagated binding, which already distinguishes user AND audience.
+    #[test]
+    fn retry_identity_suffix_uses_the_binding_when_propagation_is_on() {
+        let suffix = super::retry_identity_suffix(Some("idp:1:a:3:mem"), Some("oidc:3:idp:1:b"));
+
+        assert_eq!(suffix, "|idp:idp:1:a:3:mem");
+    }
+
+    /// MIK-7408. Identity propagation OFF — the shipped default. The suffix
+    /// falls back to the verified subject rather than staying empty, so two
+    /// authenticated callers sending the same client key do not share one
+    /// stored result. The fallback carries its OWN tag, so a binding and an
+    /// actor id that read alike cannot collide either.
+    #[test]
+    fn retry_identity_suffix_falls_back_to_the_verified_subject() {
+        let unbound = super::retry_identity_suffix(None, Some("oidc:3:idp:1:b"));
+
+        assert_eq!(unbound, "|sub:oidc:3:idp:1:b");
+        assert_ne!(
+            unbound,
+            super::retry_identity_suffix(Some("oidc:3:idp:1:b"), None),
+            "a binding and an actor id with identical text must stay distinct"
+        );
+    }
+
+    /// MIK-7408. A caller with neither a binding nor a verified identity gets
+    /// an EMPTY suffix, so two such callers share one entry. That pooling is
+    /// the operator's own decision to run without authentication — the same
+    /// decision `handlers.rs` already spells `unattributed`. This asserts the
+    /// pooling deliberately rather than inventing a rule about empty keys.
+    #[test]
+    fn retry_identity_suffix_pools_callers_the_operator_left_unattributed() {
+        assert_eq!(super::retry_identity_suffix(None, None), "");
+    }
+
+    /// MIK-7408. Two callers, one client key each, on a backend where identity
+    /// propagation is off for the forger. The victim is bound and gets the
+    /// suffix `|idp:V` appended; the forger is unbound and simply SPELLS that
+    /// suffix inside the client key it chose. Concatenation without a boundary
+    /// makes both derive the same string, so the forger's call is admitted
+    /// against — and can replay — the victim's stored result. The two keys MUST
+    /// differ whatever the client key contains.
+    #[test]
+    fn a_forged_client_key_cannot_spell_another_callers_identity_suffix() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let victim = super::idempotency_key_for(Some("X"), "", "|idp:V", Some(&cache), None);
+        let forger = super::idempotency_key_for(Some("X|idp:V"), "", "", Some(&cache), None);
+
+        assert_ne!(
+            victim, forger,
+            "a client key that spells the victim's identity suffix must not \
+             collide with the victim's key"
+        );
+    }
+
+    /// BLOCK-2. A chain runs every step through one caller, so all its steps
+    /// derived the SAME key while each step's fingerprint differed: step 2 met
+    /// step 1's entry, mismatched, and was refused, stopping the chain partway.
+    /// Identical repeated steps failed the other way and replayed step 1's
+    /// result instead of running. Each step owns its own entry, so the step
+    /// ordinal is part of what the key is derived from.
+    #[test]
+    fn block2_two_chain_steps_under_one_client_key_derive_distinct_keys() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let first = super::idempotency_key_for(Some("K"), "", "|sub:A", Some(&cache), Some(0));
+        let second = super::idempotency_key_for(Some("K"), "", "|sub:A", Some(&cache), Some(1));
+
+        assert_ne!(
+            first, second,
+            "two steps of one chain must not share one idempotency entry"
+        );
+    }
+
+    /// The step ordinal is gateway-derived, so it sits OUTSIDE the
+    /// length-prefixed client segment like every other derived suffix
+    /// (MIK-7408). A client that spells a step suffix inside its own key must
+    /// not reach the entry the gateway derives for that step.
+    #[test]
+    fn block2_a_client_key_cannot_forge_a_step_suffix() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let step = super::idempotency_key_for(Some("K"), "", "", Some(&cache), Some(1));
+        let forger = super::idempotency_key_for(Some("K|step:1"), "", "", Some(&cache), None);
+
+        assert_ne!(
+            step, forger,
+            "a client key spelling a step suffix must not collide with that step's key"
+        );
+    }
+
+    /// A single (non-chain) invocation keeps the key it always derived: the
+    /// step segment is absent, so no caller's existing key moves and no stored
+    /// entry from before this change is stranded.
+    #[test]
+    fn block2_a_single_invocation_key_is_unchanged() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let key = super::idempotency_key_for(Some("K"), "", "|sub:A", Some(&cache), None);
+
+        assert_eq!(key.as_deref(), Some("1:K|sub:A"));
+    }
+
+    /// MIK-7408, the arm that is live on the shipped default. With identity
+    /// propagation off nobody has a binding, so every authenticated caller is
+    /// keyed on `|sub:<actor id>` instead. The forgery is the same shape and
+    /// the fix must hold in both arms, or the defect merely moved to the arm
+    /// almost every deployment runs.
+    #[test]
+    fn a_forged_client_key_cannot_spell_another_callers_verified_subject() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let victim = super::idempotency_key_for(Some("X"), "", "|sub:V", Some(&cache), None);
+        let forger = super::idempotency_key_for(Some("X|sub:V"), "", "", Some(&cache), None);
+
+        assert_ne!(
+            victim, forger,
+            "a client key that spells the victim's verified subject must not \
+             collide with the victim's key"
+        );
+    }
+
+    /// MIK-7408, third segment. The projection arm is the OTHER thing
+    /// concatenated into this key, and the elimination claim covers it only
+    /// because `projection_key_suffix` draws from four `&'static str` literals
+    /// a client cannot reach. That argument is about today's producer; the
+    /// length prefix is what makes the boundary hold whatever the producer
+    /// later emits. Pinned here so the claim is a test rather than a paragraph.
+    #[test]
+    fn a_forged_client_key_cannot_spell_another_callers_projection_arm() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let victim =
+            super::idempotency_key_for(Some("X"), "#arm=treatment", "", Some(&cache), None);
+        let forger =
+            super::idempotency_key_for(Some("X#arm=treatment"), "", "", Some(&cache), None);
+
+        assert_ne!(
+            victim, forger,
+            "a client key that spells the victim's projection arm must not \
+             collide with the victim's key"
+        );
+    }
+
     /// A backend-forged `_meta.provenance` block MUST be removed on the
     /// stamping-off path so a naive reader cannot trust a receipt the gateway
     /// never signed (MIK-6909, AC.4). Sibling `_meta` keys survive.
@@ -425,5 +738,85 @@ mod tests {
     fn internal_invoke_args_preserves_non_object_arguments() {
         let args = internal_invoke_args("s", "t", json!("scalar"));
         assert_eq!(args["arguments"], json!("scalar"));
+    }
+
+    /// MRTR.10: two continuations of one call that differ only in the answers
+    /// the user gave MUST NOT share a response-cache entry. Removing the retry
+    /// argument from `response_cache_key_for` makes this assertion fail — which
+    /// is what stops that wiring being dropped by a later edit.
+    #[test]
+    fn response_cache_key_separates_two_answers_to_one_gate() {
+        use crate::protocol::mrtr::RetryFields;
+        let args = json!({"flight": "AY1337"});
+        let key_for = |answer: serde_json::Value| {
+            let retry = RetryFields {
+                input_responses: Some(answer),
+                request_state: Some("st-1".to_string()),
+                idempotency_key: None,
+                malformed: Vec::new(),
+            };
+            super::response_cache_key_for(
+                "air",
+                "book",
+                &args,
+                "",
+                None,
+                &retry,
+                crate::cache::KeyContext::default(),
+            )
+        };
+        assert_ne!(
+            key_for(json!({"confirm": "accept"})),
+            key_for(json!({"confirm": "decline"})),
+            "a declined booking must not be served the accepted booking's result"
+        );
+    }
+
+    /// A call with no retry fields MUST derive exactly the key the
+    /// principal-scoped builder derives on its own, or the upgrade silently
+    /// empties every cache. What is actually under test is that
+    /// `NO_RETRY.key_discriminator()` contributes nothing: any non-empty
+    /// discriminator on an ordinary call fails this.
+    #[test]
+    fn response_cache_key_is_unchanged_for_an_ordinary_call() {
+        let args = json!({"q": 1});
+        let key = super::response_cache_key_for(
+            "srv",
+            "tool",
+            &args,
+            "|proj",
+            Some("actor-1"),
+            &crate::protocol::mrtr::NO_RETRY,
+            crate::cache::KeyContext::default(),
+        );
+        let before = crate::cache::ResponseCache::response_key(
+            "srv",
+            "tool",
+            &args,
+            "|proj",
+            Some("actor-1"),
+            crate::cache::KeyContext::default(),
+        );
+        assert_eq!(key, before);
+    }
+
+    /// The principal is part of the key, not decoration: two callers must not
+    /// share one entry. Guards the property HEAD added and the MRTR key
+    /// builder now inherits rather than replaces.
+    #[test]
+    fn response_cache_key_separates_two_principals() {
+        let args = json!({"q": 1});
+        let k = |p| {
+            super::response_cache_key_for(
+                "srv",
+                "tool",
+                &args,
+                "",
+                Some(p),
+                &crate::protocol::mrtr::NO_RETRY,
+                crate::cache::KeyContext::default(),
+            )
+        };
+        assert_ne!(k("actor-1"), k("actor-2"));
     }
 }

@@ -46,7 +46,7 @@ auth:
 # --- Meta-MCP ---
 
 meta_mcp:
-  enabled: true                   # Enable Meta-MCP mode (12 tools minimum / 15 with webhook status; README benchmark uses 14 without it)
+  enabled: true                   # Enable Meta-MCP mode (14 tools minimum / 16 in the README benchmark scenario)
   cache_tools: true               # Cache tool lists from backends
   cache_ttl: 5m                   # Tool cache TTL
   # Backends to pre-connect and cache on startup.
@@ -99,6 +99,22 @@ failsafe:
     enabled: true
     interval: 30s                 # Health check interval
     timeout: 5s                   # Health check timeout
+
+# --- Error Budget / Kill Switch ---
+
+# Error budget / kill switch (GH #475). Every key is optional; an absent key
+# keeps the shipped default. Thresholds are failure RATES in (0.0, 1.0].
+error_budget:
+  threshold: 0.8          # backend auto-kill at an 80% failure rate
+  window_size: 100        # calls in the backend sliding window
+  window_duration: 5m     # maximum age of a call in that window
+  min_samples: 10         # calls required before the budget is evaluated
+  capability:
+    threshold: 0.8        # per-capability auto-disable rate
+    window_size: 50
+    window_duration: 5m
+    min_samples: 5
+    cooldown: 5m          # offline period before a capability auto-recovers
 
 # --- Response Cache ---
 
@@ -241,6 +257,13 @@ backends:
   #   protocol_version: "2025-03-26"  # Override protocol version
   #   headers:
   #     Authorization: "Bearer ${API_TOKEN}"
+  #   allow_cleartext_credentials: false  # Credential-bearing configuration —
+  #                               # any header, an oauth or identity_propagation
+  #                               # section, secrets, or userinfo or a query in
+  #                               # the URL — is refused over `http://` to a host
+  #                               # off this machine; loopback (as above) is
+  #                               # exempt. Set it true to accept that what is
+  #                               # sent is readable and replayable in transit.
 
   # Example: SSE backend
   # pieces:

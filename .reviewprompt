@@ -1,0 +1,47 @@
+You are reviewing a §P2 TEST PLAN (round 2). No test code exists yet and none is
+in scope — judge the PLAN.
+
+CONTEXT
+Repo: mcp-gateway (Rust). The plan under review is
+docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity-test-plan.md
+It plans the tests for release criterion SCHEMA.1, stated verbatim at
+docs/requirements/RELEASE-4.0.0-requirements.md:200:
+  "Tool schemas exposed by the gateway MUST avoid the nested-object-in-array
+   shapes that induce key invention in current models, and MUST remain valid
+   under JSON Schema 2020-12 with the revision's $ref and composition bounds."
+The design it tests is docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity.md
+(and the seam design in commit 832ef3d9).
+
+SCOPE (§P0), declared before this review and frozen
+FOR: a test plan whose rows, taken together, decide SCHEMA.1 — one row per
+clause, each row falsifiable, each named unknown either resolved with a
+recorded answer or deferred with owner/probe/trigger/fallback.
+OUT: writing any test code; repairing docs/requirements/criteria-status.md
+(the clause-A record); implementing the seam; choosing the validator crate (D1).
+
+ROUND 1 DISPOSITION — verify the repairs, do not re-raise what is closed
+Round 1 gave ~15 findings across three vendors. Four were verified at source and
+repaired. Three source verifications, for your reference:
+ - src/capability/loader.rs:29 is `load_directory`, returning
+   Vec<CapabilityDefinition>; `load_from_directory` does not exist; issues are
+   logged inside the skip, never returned.
+ - tests/mik_7272_exploit_acs.rs:351 reads `inputSchema` only, while
+   src/gateway/meta_mcp_tool_defs.rs:119 publishes an outputSchema whose
+   "matches" array has an items object with 4 non-empty properties — the
+   forbidden shape. So criteria-status.md:101 records clause A MET against a
+   population that excludes a live offender.
+ - The design's U8 is live (invoke-path cost); the plan's unknown was renamed U9.
+
+WHAT TO JUDGE — three questions, in order
+1. Does EVERY clause of the criterion have a row, or a stated reason it has
+   none? An empty cell is the finding, not an omission you should excuse.
+2. Can each named row actually FAIL? Specifically: is there a fixture that
+   makes its own assertion true, a staging step that removes the condition the
+   row observes, or an assertion so weak that the mutant it names would still
+   pass? Name the row and the mechanism.
+3. Did any round-1 repair introduce a new defect, or leave the original finding
+   still stateable in different words?
+
+Be adversarial. A finding is a lead until verified at source — cite file:line
+for anything you assert about the code. Report SCOPE-CHALLENGE as a first-class
+finding if you think the scope above is wrong; do not refuse instead.

@@ -1,0 +1,89 @@
+<!--
+SPDX-FileCopyrightText: 2026 Mikko Parkkola
+SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+-->
+
+# NFR.OBS.4 — test plan for the continuation counters
+
+Plan, not tests. The design is `docs/design/2026-09-01-continuation-telemetry.md`, including its
+2026-09-07 receipt update, which decides the counter set, the label sets, and how a test reads the
+numbers. Nothing here re-decides any of that; this says what proves it.
+
+## These tests fail freely — no falsifier probe
+
+No continuation counter exists at any revision of this repo (`NFR.OBS.4` = ABSENT in
+`docs/requirements/RELEASE-4.0.0-criteria-status.md`). Every case below therefore fails for the
+right reason on the day it is written — the counter it reads is not in `render()` output at all —
+and the retrofitting exception does not apply. That is the opposite of `NFR.PERF.3`, whose
+mechanism is already built and whose soak needs the probe recorded in
+`docs/design/2026-09-01-nfr-perf3-reclamation.md`. The two halves of this release slice are at
+different points of the same process, and treating them alike would either waste a probe here or
+skip one there.
+
+## How every case observes a counter
+
+Fixed once, so no row restates it. `metrics` is a default feature; the case is
+`#[cfg(feature = "metrics")]`, calls `crate::metrics::install()`, reads `crate::metrics::render()`
+before and after the action, and asserts `after >= before + N` on the parsed series. Precedent and
+the reason the assertion is `>=` rather than `==`: the design's 2026-09-07 receipt. A helper that
+parses one series out of the Prometheus text is written once and shared; `invoke.rs:4749`
+(`suppressed_counter_value_for`) is the shape.
+
+Absolute-value assertions are banned in this plan, in every row, including the ones where a value
+of 1 looks safe. The recorder is process-global and these counters have no per-test label to
+isolate on.
+
+The `>=` delta is one-sided in BOTH directions, and only one side was written down. It cannot be
+made red by another test's increment — that is the asymmetry the receipt names — but it can be made
+GREEN by one: `after >= before + 1` is satisfied by a concurrent test's increment on the same
+series while the action under test incremented nothing. A missing increment is exactly the defect
+these rows exist to catch, so every row whose evidence is *my own action moved this counter* is
+maskable, not only the two that assert non-movement.
+
+One rule covers both halves, so neither needs per-row reasoning about who else writes the series:
+**a case that asserts movement, or non-movement, is the sole test in its own file under `tests/`.**
+Every file there compiles into its own separate binary, so the recorder it reads has performed only
+its own action, and the delta means what it says. `OBS.4.8` and `OBS.4.9` stay unit tests: they
+assert the SHAPE of the emitted series — which label keys, which legal pairs — and a concurrent
+increment carrying the same keys cannot make either of them wrong.
+`tests/metrics_export_test.rs` is the precedent in this repo — one test, one process, reading
+`mcp_gateway::metrics::render()` around a single action — and `metrics`, `protocol::continuation`
+are `pub`, so the production paths `OBS.4.10` demands are reachable from there (`src/lib.rs:60`,
+`src/lib.rs:65`, `src/protocol/mod.rs:7`). `OBS.4.5` is an expiry-at-redeem case, so its file
+drives the redeem entry point named in `OBS.4.10`, not `begin_exchange`. Non-movement asserted anywhere else in this plan is a defect,
+not a choice.
+
+## The cases
+
+`ID` decomposes one release criterion for tracking inside this plan; the criterion is the row
+`NFR.OBS.4` in the criteria table, and these are not new acceptance criteria.
+
+| ID | claim it proves | case | level | type | how it goes red |
+|---|---|---|---|---|---|
+| OBS.4.1 | mint is counted | one successful mint through the production mint path; assert `mcp_continuation_mint_total` rose by ≥1 | integration, sole test in its own file | functional | counter absent, or minting does not increment it |
+| OBS.4.2 | redeem is counted | one envelope minted then successfully redeemed; assert `mcp_continuation_redeem_total` rose by ≥1 | integration, sole test in its own file | functional | as above, on the redeem path |
+| OBS.4.3 | **redeem counts acceptances, not attempts** | one envelope refused at redeem (`not_authentic`); assert `redeem_total` did **not** rise and `rejected_total{reason="not_authentic",phase="redeem"}` did | integration, sole test in its own file | negative | an implementation that increments on attempt passes 4.2 and fails only here |
+| OBS.4.4 | expiry is counted, with who noticed | an envelope presented after its deadline; assert `expired_total{detected="presented",phase="redeem"}` rose | integration, sole test in its own file | boundary | expiry counted on the wrong counter, or `detected` not carried |
+| OBS.4.5 | **an expiry is never also a rejection** | same action as 4.4; assert `rejected_total` did not rise on any `reason` | integration, sole test in its own file | negative | the mapping books `ContinuationError::Expired` as a reason, which the design forbids by name |
+| OBS.4.6 | every `ContinuationError` variant maps to its documented reason | table-driven over the **seven** `ContinuationError` variants that map to a `reason` — `Malformed`, `UnknownVersion`, `UnknownKey`, `NotAuthentic`, `MintBudgetExhausted`, `TooLarge`, `LifetimeExceeded` (`src/protocol/continuation.rs`, enum `ContinuationError`) — one refusal each, asserting the exact `reason` value. The eighth variant, `Expired`, is deliberately absent: the design forbids booking it as a reason and `OBS.4.5` is what holds that. Seven plus the four `phase="bridge"` reasons in the empty-cells table is the design's 11 | integration, sole test in its own file | functional, table-driven | a variant mapped to the wrong label, or to none |
+| OBS.4.7 | **the reason set is the refusal set, not one type's variants** | one refusal that has no `ContinuationError` — a mint refused for want of a principal fingerprint — asserting `rejected_total{reason="no_principal_fingerprint",phase="mint"}` | integration, sole test in its own file | functional | an implementation that derives the enum from `ContinuationError` compiles, passes 4.6, and fails only here. This is the case the design's own §"the reason set is the refusal set" exists to force |
+| OBS.4.8 | the label **keys** are the compatibility surface | for each of the four counters, assert the key set on its emitted series is exactly the documented one (values not asserted) | unit | contract | a key added, renamed or dropped — the change the design says breaks consumers |
+| OBS.4.9 | cardinality is bounded by construction | an **exhaustive `match` over the `reason`x`phase` and `detected`x`phase` pairs**, every arm declaring the pair legal or illegal, asserting the legal set is exactly the 15 pairs the design tabulates — 12 for `rejected_total` (11 reasons, `too_large` legal in both `mint` and `redeem`) and 3 for `expired_total` — and that no emitted series carries an illegal pair. No arithmetic: the ceiling is the enumerated table, and a new enum member fails the `match` at **compile time**, before any assertion runs | unit | boundary, exhaustive | a label whose values are not a closed enum, which is the D-threat the design mitigates; or a legal pair the implementation cannot emit |
+| OBS.4.10 | the counters fire from the production path | the mint and redeem cases each drive the entry point production actually uses, never a test-only constructor. They are two different entry points and the row names both: mint is `ContinuationState::begin_exchange` (`src/gateway/meta_mcp/invoke.rs:385`); redeem is `redeem_retry` (`src/gateway/meta_mcp/invoke.rs:587`, which opens the envelope via `redeemable_by` at `:625` and is reached from `invoke_tool` at `:1391`) — `begin_exchange` is not on the redeem path at all | integration, sole test in its own file | wiring | counters wired to a path only tests reach — passes every row above and satisfies nothing |
+
+## Criteria with no case, and why — the empty cells
+
+| claim | why no case here | owner |
+|---|---|---|
+| `detected="awaited"`, and the `round_budget`, `capability_undeclared`, `delivery_failed`, `declined` reasons | all four are `phase="bridge"` and the bridge does not exist: `docs/design/2026-09-01-mrtr7-legacy-client-bridge.md` is a design, `MRTR.7` is out of this slice's scope | MRTR.7. Each of these reasons gets its case in the change that builds the site that raises it, which is also where the site can first be made to raise it |
+| `detected="reaped"` | the reaper-side expiry is asserted by the lifetime case in `docs/design/2026-09-01-nfr-perf3-reclamation.md` §"Three cases the uniform-deadline epochs cannot reach", which already asserts `expired_total{detected="reaped"}` advanced by exactly N | `NFR.PERF.3` + MRTR.8b. Duplicating it here would give two owners one assertion |
+| `too_large` on the `mint` phase | the reason's `redeem` phase is covered by 4.6; the mint-phase arm needs an oversized mint payload fixture, which is a fixture question, not a coverage gap — added with 4.6's table if the arm exists at implementation time, and recorded as a missing row if it does not | this change |
+| the derived quantity *decided redemptions* | it is an arithmetic identity over three counters that 4.2–4.5 each assert, plus a documented dashboard expression. A test would assert addition | none — stated, not deferred |
+
+## What this plan does not prove
+
+An operator can see the numbers. Every case reads `render()` in-process; none scrapes `/metrics`
+over HTTP. The endpoint is exercised by `tests/metrics_export_test.rs` for counters that already
+exist, and these four ride the same recorder — so the gap is the wiring between `install()` at
+server startup and these increments, not the export. Named because "counters nobody can see" is
+the failure mode `NFR.OBS.4` exists to prevent, and no row above would notice it.

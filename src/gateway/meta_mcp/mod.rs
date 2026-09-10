@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 #[cfg(feature = "spec-preview")]
@@ -38,6 +39,7 @@ use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
 use crate::identity_grants::{GrantSubject, LocalIdentityGrantStore};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::PlaybookEngine;
+use crate::protocol::meta::Declared;
 use crate::protocol::{JsonRpcResponse, LoggingLevel, RequestId, negotiate_version};
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
@@ -52,13 +54,17 @@ use crate::trust::{
 use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
-    build_code_mode_tools, build_discovery_preamble, build_initialize_result, build_meta_tools,
+    build_code_mode_tools, build_discovery_preamble, build_initialize_result,
     build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
     wrap_tool_success,
 };
+use super::meta_mcp_tool_defs::{MetaToolExposure, MetaToolGates, build_meta_tools_filtered};
 use super::webhooks::WebhookRegistry;
 
+mod direct_route;
 mod invoke;
+#[cfg(test)]
+mod policy_epoch_tests;
 mod prompt_cache;
 mod protocol;
 mod resources;
@@ -69,6 +75,7 @@ mod support;
 mod surfaced;
 
 pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
+pub use support::prune_constant_signals;
 
 // ============================================================================
 // Constants
@@ -127,6 +134,57 @@ pub struct MetaMcpCallerContext<'a> {
     /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
     /// `router::authorization`, which only knows whole tools.
     pub is_admin: bool,
+    /// What this caller declared on **this** request.
+    ///
+    /// A parsed set rather than a single "may be asked for input" bit, because
+    /// MRTR.9 refuses per requested method and MRTR.9a per requested *mode*: a
+    /// client that declared `elicitation` and not `sampling` may be sent one
+    /// and not the other, and one that declared elicitation in form mode alone
+    /// may not be sent a url request. On stdio there is no per-request
+    /// declaration to read, so this is [`Declared::NONE`] — absent means
+    /// absent, and a caller that declared nothing is never sent a continuation.
+    pub input_capabilities: Declared,
+    /// How this caller can be asked to confirm a destructive action.
+    ///
+    /// A transport that has no way to reach an operator carries
+    /// [`ConfirmationChannel::Unavailable`] and its destructive calls are
+    /// refused. Deciding that here, rather than at one edge, is what makes the
+    /// gate apply to every transport that dispatches.
+    pub confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel<'a>,
+    /// The multi-round-trip fields this call carried, already parsed.
+    ///
+    /// Borrowed inbound shape, still attacker-controlled: `request_state` here
+    /// is whatever the client sent back, and only becomes trustworthy once the
+    /// gateway opens it as one of its own sealed envelopes. Nothing downstream
+    /// may forward this field to a backend verbatim.
+    pub retry: &'a crate::protocol::mrtr::RetryFields,
+    /// Which protocol era this caller declared on **this** request.
+    ///
+    /// Carried rather than re-derived: both production sites already hold the
+    /// `RequestShape` classification that `initialize` advertises against, and
+    /// a second era predicate computed downstream is exactly the drift
+    /// [`crate::protocol::meta::classify_request`] exists to prevent.
+    ///
+    /// No `Default`, for the same reason the authorizer has none — a defaulted
+    /// era is a site that silently claims an era it never saw.
+    ///
+    /// SCAFFOLD as of this commit: the reader is the MRTR.9 gate at
+    /// `meta_mcp::invoke` (`interim.undeclared(caller.input_capabilities)`),
+    /// which must merge the session declaration for `Legacy` and read only the
+    /// request's own `_meta` for `Modern`. That merge is `MIK-7212.WIRE.1`
+    /// through `WIRE.4` and lands next; until it does, nothing on the
+    /// production path reads this field.
+    pub era: crate::protocol::meta::Era,
+    /// How this caller can be sent a request of the gateway's own — a bridged
+    /// `sampling/createMessage` or `elicitation/create`.
+    ///
+    /// Distinct from `confirmation`, which answers a narrower question and
+    /// would become a general client-request pipe if reused for this. A
+    /// transport with nowhere to send carries
+    /// [`crate::gateway::input_bridge::NoClientChannel`], so "cannot ask" is a
+    /// channel that refuses rather than an absent one every read site must
+    /// remember to check.
+    pub channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
 }
 
 // ============================================================================
@@ -156,6 +214,29 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
             crate::Error::Forbidden { status, .. } => Some(serde_json::json!({
                 crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
             })),
+            // A gateway-authored refusal may carry a recovery payload the
+            // client needs: MRTR.9 names the capability an input request would
+            // have required and MRTR.9a the mode, which is the difference
+            // between a client that can fix its declaration and retry and one
+            // that only sees prose. Named keys are forwarded, never the whole
+            // object, because `data` is a shared channel — `invoke_tool` puts a
+            // *backend's* error data into this same variant, so forwarding it
+            // wholesale is what would hand a backend the status field above.
+            crate::Error::JsonRpc {
+                data: Some(data), ..
+            } => {
+                let forwarded: serde_json::Map<String, serde_json::Value> = [
+                    invoke::REQUIRED_CAPABILITIES_DATA_KEY,
+                    invoke::UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
+                ]
+                .into_iter()
+                .filter_map(|key| Some((key.to_string(), data.get(key)?.clone())))
+                .collect();
+                // `None` rather than an empty object, so a backend error
+                // carrying none of these keys leaves `data` absent exactly as
+                // it did when one key was forwarded.
+                (!forwarded.is_empty()).then_some(serde_json::Value::Object(forwarded))
+            }
             _ => None,
         };
     }
@@ -169,6 +250,15 @@ pub struct MetaMcp {
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
+    /// Continuation keys, spent-ledger and held legacy exchanges.
+    ///
+    /// Here rather than on `AppState` because of lifetime: this struct is built
+    /// once per gateway run, while the caller context is built per call, and a
+    /// keyring rebuilt per call would refuse every retry that arrived on a
+    /// later request. `AppState` shares this same `Arc` rather than minting its
+    /// own — two keyrings would mint on one and redeem on the other, and every
+    /// refusal would say only "continuation rejected".
+    pub(super) continuation: Arc<crate::protocol::continuation::ContinuationState>,
     pub(super) stats: Option<Arc<UsageStats>>,
     pub(super) ranker: Option<Arc<SearchRanker>>,
     pub(super) transition_tracker: RwLock<Option<Arc<TransitionTracker>>>,
@@ -231,6 +321,12 @@ pub struct MetaMcp {
     /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
     /// `HashMap` lookup instead of a linear scan on every call.
     pub(super) surfaced_tools_map: HashMap<String, String>,
+
+    /// Which meta-tools this gateway exposes, from `MetaMcpConfig::exposed_meta_tools`.
+    ///
+    /// Consulted on both `tools/list` and `tools/call`. The default exposes every
+    /// meta-tool, so an existing deployment is unaffected.
+    pub(super) meta_tool_exposure: MetaToolExposure,
     /// Per-backend bound for `prompts/list` and `resources/list`
     /// aggregation. Configurable via `meta_mcp.prompts_resources_fetch_timeout`
     /// (default 10s); overridable per-instance for tests.
@@ -328,6 +424,16 @@ pub struct MetaMcp {
     /// owner, and live grant evidence.
     pub(super) identity_grants: RwLock<LocalIdentityGrantStore>,
 
+    /// Generation of the policy every cached response was assembled under.
+    ///
+    /// Lives here and not on `ResponseCache` because a gateway with caching
+    /// switched off must still advance it: the counter is what a later reader
+    /// compares against, and one that vanishes with the cache is one a
+    /// reconfigured gateway cannot strand entries with. `Arc` so the mutation
+    /// sites outside this struct (config reload, capability reload) bump the
+    /// same allocation `KeyContext` reads.
+    pub(super) policy_epoch: Arc<AtomicU64>,
+
     /// Trust caller identity headers from an authenticated edge proxy.
     ///
     /// Disabled by default because direct clients can otherwise spoof headers.
@@ -370,6 +476,7 @@ impl MetaMcp {
             cache,
             default_cache_ttl,
             idempotency_cache: None,
+            continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
             stats,
             ranker,
             transition_tracker: RwLock::new(None),
@@ -395,6 +502,7 @@ impl MetaMcp {
             cost_registry: None,
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
+            meta_tool_exposure: MetaToolExposure::expose_all(),
             prompts_resources_fetch_timeout: std::time::Duration::from_secs(10),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
@@ -410,6 +518,7 @@ impl MetaMcp {
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
             identity_grants: RwLock::new(LocalIdentityGrantStore::new()),
+            policy_epoch: Arc::new(AtomicU64::new(0)),
             caller_identity_header_trust: CallerIdentityHeaderTrust::Disabled,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             #[cfg(feature = "firewall")]
@@ -431,6 +540,32 @@ impl MetaMcp {
         default_ttl: Duration,
     ) -> Self {
         Self::build(backends, cache, stats, ranker, default_ttl)
+    }
+
+    /// The continuation state this run mints and redeems with.
+    ///
+    /// Handed to `AppState` so the legacy bridge redeems against the same
+    /// keyring and the same spent-ledger this path mints into.
+    #[must_use]
+    pub fn continuation(&self) -> Arc<crate::protocol::continuation::ContinuationState> {
+        Arc::clone(&self.continuation)
+    }
+
+    /// The policy generation counter this run keys cached responses on.
+    ///
+    /// Handed to the reload paths that change policy outside this struct so
+    /// they bump the counter `KeyContext` reads. Two allocations would be two
+    /// epochs, and a bump on the wrong one strands nothing.
+    ///
+    /// INVARIANT, upheld by convention and not by the type: a caller that
+    /// keys a cache entry reads this ONCE, into a local, BEFORE the
+    /// authorization decision it caches the result of, and uses that same
+    /// local for every key it builds in that call. Reading it again after the
+    /// decision narrows the race between a grant change and the store; it does
+    /// not close it.
+    #[must_use]
+    pub fn policy_epoch(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.policy_epoch)
     }
 
     /// Expose the cost tracker for external use (budget configuration, REST handler).
@@ -478,6 +613,32 @@ impl MetaMcp {
     pub fn with_code_mode(mut self, enabled: bool) -> Self {
         self.code_mode_enabled = enabled;
         self
+    }
+
+    /// Restrict which meta-tools this gateway exposes (consuming builder).
+    ///
+    /// An empty list exposes every meta-tool. A non-empty list is an allow-list:
+    /// a meta-tool that is not named is neither listed nor callable. Unrecognised
+    /// names are logged and dropped rather than aborting startup, matching
+    /// `with_surfaced_tools`.
+    #[must_use]
+    pub fn with_exposed_meta_tools(mut self, names: &[String]) -> Self {
+        self.meta_tool_exposure = MetaToolExposure::from_names(names);
+        self
+    }
+
+    /// Whether the name is one of this gateway's own meta-tools *and* this
+    /// gateway will confirm it exists.
+    ///
+    /// The router asks before its own admin pre-check, so an unexposed admin
+    /// tool is answered by the dispatcher's unrecognised-tool refusal rather
+    /// than by an admin refusal that confirms the tool is real. The roster
+    /// half is what keeps a surfaced backend tool out: `is_exposed` answers
+    /// `true` for every ungoverned name by design, so on its own it cannot
+    /// tell a caller whether the name is *ours*.
+    pub(crate) fn exposes_meta_tool(&self, name: &str) -> bool {
+        super::meta_mcp_tool_defs::is_governed_meta_tool(name)
+            && self.meta_tool_exposure.is_exposed(name)
     }
 
     /// Override the per-backend `prompts/list` and `resources/list` fetch
@@ -555,7 +716,9 @@ impl MetaMcp {
     }
 
     /// Enable idempotency support with a background cleanup task.
-    #[allow(dead_code)]
+    ///
+    /// Called unconditionally from the boot path; while the cache is `None`
+    /// every client-supplied idempotency key is inert.
     pub fn enable_idempotency(&mut self, cache: Arc<IdempotencyCache>, cleanup_interval: Duration) {
         spawn_cleanup_task(Arc::clone(&cache), cleanup_interval);
         self.idempotency_cache = Some(cache);
@@ -791,7 +954,15 @@ impl MetaMcp {
 
     /// Replace the local identity grant store.
     pub fn set_identity_grants(&self, grants: LocalIdentityGrantStore) {
-        *self.identity_grants.write() = grants;
+        let mut store = self.identity_grants.write();
+        *store = grants;
+        // Bump while the write lock is still held, and AFTER the store is
+        // replaced. Bump-then-write leaves a window in which a reader has the
+        // new epoch and the old grants, and caches the old answer under the
+        // new generation -- exactly the hole the epoch exists to close.
+        let previous = self.policy_epoch.fetch_add(1, Ordering::Release);
+        debug_assert!(previous < previous.wrapping_add(1), "policy epoch wrapped");
+        drop(store);
     }
 
     /// Snapshot all identity-grant rows for read-only projection (e.g. the
@@ -859,14 +1030,24 @@ impl MetaMcp {
         Arc::clone(&self.profile_registry)
     }
 
+    /// Snapshot both running budget configurations.
+    ///
+    /// Test-only: the budgets are read inside dispatch, so a caller outside
+    /// this module has no other way to observe what startup applied.
+    #[cfg(test)]
+    pub(crate) fn budget_configs(&self) -> (ErrorBudgetConfig, CapabilityErrorBudgetConfig) {
+        (
+            self.error_budget_config.read().clone(),
+            self.capability_budget_config.read().clone(),
+        )
+    }
+
     /// Override the error-budget configuration.
-    #[allow(dead_code)]
     pub fn set_error_budget_config(&self, config: ErrorBudgetConfig) {
         *self.error_budget_config.write() = config;
     }
 
     /// Override the per-capability error-budget configuration.
-    #[allow(dead_code)]
     pub fn set_capability_budget_config(&self, config: CapabilityErrorBudgetConfig) {
         *self.capability_budget_config.write() = config;
     }
@@ -908,14 +1089,21 @@ impl MetaMcp {
     /// against the backend cache; entries whose backend has gone offline (cache empty)
     /// are silently omitted.
     ///
-    /// Returns an empty `Vec` when no session ID is provided or when the session has
-    /// no promoted tools.
+    /// Returns an empty `Vec` when the caller has no session — no id, or the
+    /// empty id a modern sessionless connection presents (`session_key`) — and
+    /// when the session has no promoted tools.
+    ///
+    /// The `session_key` filter lives here rather than at the three call sites
+    /// (`mod.rs:1266`, `mod.rs:1330`, `spec_preview.rs:112`) so that a future
+    /// list-shaping caller inherits it: promotions written under the shared
+    /// empty key would otherwise be read back by every other modern connection
+    /// (`MIK-7272.ORDER.2`).
     #[cfg(feature = "spec-preview")]
     pub(super) fn promoted_tools_for_session(
         &self,
         session_id: Option<&str>,
     ) -> Vec<crate::protocol::Tool> {
-        let Some(sid) = session_id else {
+        let Some(sid) = session_key(session_id) else {
             return Vec::new();
         };
         let Some(entry) = self.session_promoted.get(sid) else {
@@ -947,12 +1135,17 @@ impl MetaMcp {
     }
 
     /// Resolve the active `RoutingProfile` for a session.
+    ///
+    /// A caller with no session gets the default and cannot be given anything
+    /// else: see [`session_key`] for why an empty id is no session at all.
+    /// This is the one site `surfaced`, `invoke` and `spec_preview` read the
+    /// profile through, so closing it closes the read for all three.
     pub(super) fn active_profile(
         &self,
         session_id: Option<&str>,
     ) -> crate::routing_profile::RoutingProfile {
         let default_name = self.profile_registry.default_name();
-        let name = session_id.map_or_else(
+        let name = session_key(session_id).map_or_else(
             || default_name.to_string(),
             |sid| self.session_profiles.get_profile_name(sid, default_name),
         );
@@ -960,11 +1153,119 @@ impl MetaMcp {
     }
 }
 
+/// The session a request belongs to, if it has one.
+///
+/// MCP 2026-07-28 removed protocol-level sessions, and the router spells that
+/// absence as an empty id rather than `None` (`router::handlers`, the
+/// `declares_modern_by_header` branch). The rest of the router already reads
+/// it that way — `router::helpers::attach_session_header` omits the header
+/// rather than emitting an empty one — so an empty id is not a session with an
+/// unusual name, it is the absence of one.
+///
+/// Routing profiles must read it the same way or they break `ORDER.2`: the
+/// empty key is shared by *every* sessionless caller, so a profile stored
+/// under it does not merely vary the tool set per connection, it varies it
+/// across connections.
+fn session_key(session_id: Option<&str>) -> Option<&str> {
+    session_id.filter(|sid| !sid.is_empty())
+}
+
+/// Refusal shared by the two routing-profile meta-tools.
+///
+/// Both are refused, not only the writer: answering `gateway_get_profile`
+/// would describe a selection the caller cannot make and cannot rely on.
+const NO_SESSION_FOR_PROFILE: &str = "Routing profiles are per-session, and this connection has no session. \
+     MCP 2026-07-28 removed protocol-level sessions; the tool set is decided \
+     by the authorization presented on each request.";
+
+/// The same refusal for the FSM workflow state, and for the same reason: the
+/// state is stored per session, and a connection with no session would be
+/// storing it under a key every other sessionless connection also reads.
+///
+/// It also closes the recovery route: a sessionless caller cannot reach that
+/// shared state by supplying a header its protocol revision no longer uses,
+/// because `session_key` maps the empty header to the same `None`.
+const NO_SESSION_FOR_STATE: &str = "The workflow state is per-session, and this connection has no session. \
+     MCP 2026-07-28 removed protocol-level sessions; capability visibility is \
+     decided by the authorization presented on each request.";
+
 // ============================================================================
 // MCP protocol handlers — initialize + tools
 // ============================================================================
 
 impl MetaMcp {
+    /// Build the `server/discover` document (MCP 2026-07-28).
+    ///
+    /// The revision removes the `initialize` handshake, so this RPC is how a
+    /// peer learns what the gateway speaks. Servers **MUST** implement it, and
+    /// a client **MAY** call it before anything else — on stdio it is also the
+    /// backward-compatibility probe, since a legacy server answers it with an
+    /// error rather than a document.
+    ///
+    /// The version list and identity come from the same source as the
+    /// `initialize` result (`build_initialize_result`). Assembling them
+    /// separately would let the two answers drift, and a peer would get one
+    /// story from the handshake and another from discovery.
+    #[must_use]
+    pub fn discover_document(&self, modern_enabled: bool) -> serde_json::Value {
+        // Modern, because this document IS the 2026 surface. Only identity and
+        // the version list are taken from it -- capabilities are rebuilt below
+        // -- so the era passed here is a statement of what surface this is,
+        // not a second source for the extension list.
+        let handshake = crate::gateway::meta_mcp_helpers::build_initialize_result(
+            crate::protocol::PROTOCOL_VERSION,
+            "",
+            crate::protocol::meta::Era::Modern,
+        );
+
+        // Field names and placement are the specification's, transcribed from
+        // the `DiscoverResult` example rather than invented: `supportedVersions`
+        // (not `protocolVersions`), and `serverInfo` inside `_meta` under its
+        // reverse-DNS key rather than at the top level. A first cut used the
+        // obvious names, and every test passed — because the tests asserted the
+        // same invented names. A wire format that agrees with itself is not a
+        // wire format anyone else can read.
+        // Discovery advertises what this gateway can actually serve, which is
+        // the legacy negotiation list plus the modern revisions when the switch
+        // that serves them is on. Leaving the modern revision out made enabling
+        // it unreachable: a conforming peer asks discovery which revisions
+        // exist, and the one the switch had just turned on was not among them.
+        //
+        // Added HERE and not to `SUPPORTED_VERSIONS`, which is what a legacy
+        // `initialize` negotiates over. A stateless revision cannot be reached
+        // through a handshake it deleted, so advertising it there would offer a
+        // 2025 client a version the handshake can never settle on.
+        let mut versions: Vec<&str> = crate::protocol::SUPPORTED_VERSIONS.to_vec();
+        if modern_enabled {
+            for version in crate::protocol::meta::MODERN_VERSIONS {
+                if !versions.contains(version) {
+                    versions.push(version);
+                }
+            }
+        }
+
+        // Capabilities are rebuilt here rather than taken from `handshake`,
+        // and that is the one thing discovery does NOT share with the
+        // handshake. The extension set is era-specific: `initialize` answers
+        // 2025 clients, which cannot use a 2026 extension and whose result is
+        // pinned byte-for-byte by an existing criterion, while this document is
+        // the 2026 surface and is where a peer looks for what the gateway
+        // speaks. Identity and the version list still come from one source, so
+        // the drift this guards against stays guarded.
+        let capabilities = crate::gateway::meta_mcp_helpers::build_server_capabilities(
+            crate::gateway::meta_mcp_helpers::discovery_extensions(),
+        );
+
+        serde_json::json!({
+            "resultType": "complete",
+            "supportedVersions": versions,
+            "capabilities": capabilities,
+            "_meta": {
+                "io.modelcontextprotocol/serverInfo": handshake.server_info,
+            },
+        })
+    }
+
     /// Handle `initialize` with version negotiation and optional profile binding.
     pub fn handle_initialize(
         &self,
@@ -972,9 +1273,15 @@ impl MetaMcp {
         params: Option<&Value>,
         session_id: Option<&str>,
         header_profile: Option<&str>,
+        era: crate::protocol::meta::Era,
     ) -> JsonRpcResponse {
         let client_version = extract_client_version(params);
         let negotiated_version = negotiate_version(client_version);
+        // NFR.OBS.1. The session is served under this value from here on, and
+        // the observation record has to report it rather than the client's ask
+        // -- the two differ whenever the ask is unsupported. Bound at the one
+        // site that negotiates, so no second derivation can drift from it.
+        crate::protocol_revision_telemetry::bind_session_revision(session_id, negotiated_version);
         debug!(
             client = client_version,
             negotiated = negotiated_version,
@@ -986,7 +1293,7 @@ impl MetaMcp {
                 .and_then(serde_json::Value::as_str)
         });
 
-        if let (Some(sid), Some(name)) = (session_id, profile_hint) {
+        if let (Some(sid), Some(name)) = (session_key(session_id), profile_hint) {
             if self.profile_registry.contains(name) {
                 self.session_profiles.set_profile(sid, name);
                 debug!(
@@ -1004,7 +1311,11 @@ impl MetaMcp {
         }
 
         let instructions = self.build_instructions();
-        let result = build_initialize_result(negotiated_version, &instructions);
+        // `era` is threaded from the dispatcher rather than re-derived from
+        // `params` here: the dispatcher reads the mirrored header as well as
+        // `_meta`, and a second derivation is the two-predicate defect
+        // `protocol::meta::classify_request` records.
+        let result = build_initialize_result(negotiated_version, &instructions, era);
         JsonRpcResponse::success_serialized(id, result)
     }
 
@@ -1018,7 +1329,8 @@ impl MetaMcp {
             server_count += 1;
         }
 
-        let mut instructions = build_discovery_preamble(tool_count, server_count);
+        let mut instructions =
+            build_discovery_preamble(tool_count, server_count, &self.meta_tool_exposure);
 
         if let Some(cap) = self.get_capabilities() {
             let caps = cap.list_capabilities();
@@ -1070,6 +1382,10 @@ impl MetaMcp {
         let session = false;
         crate::protocol_revision_telemetry::observe_tools_list(
             crate::protocol_revision_telemetry::ListFilters {
+                // No principal filter shapes this list. `multi_user` guards
+                // dispatch of a gateway-held token (ADR-008 INV-2); it does
+                // not remove a tool from the answer, so the constant is what
+                // the assembly did, not an assumption about the transport.
                 principal: false,
                 profile,
                 session,
@@ -1086,16 +1402,23 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         self.shadow_tools_list_assembly(session_id, false);
         let tools = if self.code_mode_enabled {
-            build_code_mode_tools()
+            self.meta_tool_exposure.filter(build_code_mode_tools())
         } else {
             let (tool_count, server_count) = self.backend_counts();
-            build_meta_tools(
-                self.stats.is_some(),
-                self.get_webhook_registry().is_some(),
-                self.get_reload_context().is_some(),
-                true, // cost_report always enabled (tracker is always present)
+            build_meta_tools_filtered(
+                MetaToolGates {
+                    stats: self.stats.is_some(),
+                    reload: self.get_reload_context().is_some(),
+                    // The tracker is always present, so this gate is always on.
+                    cost_report: true,
+                    // Attachment, not configuration: the registry is set after
+                    // construction and never over stdio, so this is read here
+                    // rather than passed in.
+                    webhook_status: self.get_webhook_registry().is_some(),
+                },
                 tool_count,
                 server_count,
+                &self.meta_tool_exposure,
             )
         };
         let mut tool_descriptors =
@@ -1187,7 +1510,9 @@ impl MetaMcp {
                     ..crate::protocol_revision_telemetry::ListFilters::default()
                 },
             );
-            let tools = build_code_mode_tools();
+            // Still filtered - a URL parameter must not widen what the
+            // operator exposed.
+            let tools = self.meta_tool_exposure.filter(build_code_mode_tools());
             let tool_descriptors =
                 project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
             return JsonRpcResponse::success(
@@ -1197,6 +1522,122 @@ impl MetaMcp {
         }
         // No override (or static config already handles it): follow normal path.
         self.handle_tools_list_with_params(id, params, session_id)
+    }
+
+    /// Route a call that names a backend tool directly, or `None` when the
+    /// name belongs to the meta-tool surface.
+    ///
+    /// Two ways a backend tool answers to its own name: an operator surfaced
+    /// it, or the call is a retry whose origin the sealed envelope names.
+    async fn route_direct_backend_call(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: &Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Option<JsonRpcResponse> {
+        if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
+            let server_name = server_name.clone();
+            return Some(
+                self.invoke_named_backend_tool(
+                    id,
+                    &server_name,
+                    tool_name,
+                    arguments.clone(),
+                    session_id,
+                    caller,
+                )
+                .await,
+            );
+        }
+        self.route_retry_to_origin_backend(id, tool_name, arguments, session_id, caller)
+            .await
+    }
+
+    /// Route a retry to the backend that opened the exchange, or `None` when
+    /// the call is not a retry this gateway minted a continuation for.
+    ///
+    /// // A retry names the backend tool it continues, not `gateway_invoke`,
+    /// // and a backend tool answers to its own name only where an operator
+    /// // surfaced it. Routing this by name would refuse every honest retry on
+    /// // an unpinned tool with the -32601 fallback below, so the backend comes
+    /// // from the envelope the gateway itself minted. The name the client
+    /// // presented is not trusted by being routed: it is checked against the
+    /// // digest sealed in that same envelope before anything dispatches.
+    /// //
+    /// // Two meta-tools are left alone, and only two. `gateway_invoke` and
+    /// // `gateway_execute` carry their own server and tool and route into
+    /// // `invoke_tool`, where `redeem_retry` opens the same envelope: a retry
+    /// // wrapped in either reaches the guard by its ordinary path, so routing
+    /// // it from here would only open it twice.
+    /// //
+    /// // Every other meta-tool is answered by the gateway itself and never
+    /// // enters that scope. Exempting the whole `gateway_` prefix therefore
+    /// // let a retry naming one — `gateway_list_servers`, say — run as a fresh
+    /// // call with its continuation never examined, which is the repeat the
+    /// // envelope exists to prevent (MIK-7215). Such a retry is routed like
+    /// // any other: the envelope names a backend, the presented name is not
+    /// // that backend's tool, and the digest check refuses it downstream.
+    async fn route_retry_to_origin_backend(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: &Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Option<JsonRpcResponse> {
+        if matches!(tool_name, "gateway_invoke" | "gateway_execute") {
+            return None;
+        }
+        let server_name = match invoke::retry_origin_backend(&self.continuation, caller.retry)? {
+            Ok(server) => server,
+            Err(error) => return Some(error_response_preserving_status(id, &error)),
+        };
+        Some(
+            self.invoke_named_backend_tool(
+                id,
+                &server_name,
+                tool_name,
+                arguments.clone(),
+                session_id,
+                caller,
+            )
+            .await,
+        )
+    }
+
+    /// Dispatch a backend tool the client named directly, returning the
+    /// backend's own result envelope untouched.
+    ///
+    /// `invoke_tool` already returns a complete MCP tools/call result
+    /// (`{content, structuredContent?, isError}`) with output-schema
+    /// enforcement applied. A tool called by its own name is a first-class
+    /// tool to the client, so that envelope is returned verbatim: re-wrapping
+    /// it via `wrap_tool_success` would stringify the whole envelope into a
+    /// text block and drop `structuredContent`, which spec-compliant clients
+    /// such as Open `WebUI` require when a tool advertises an `outputSchema`.
+    async fn invoke_named_backend_tool(
+        &self,
+        id: RequestId,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        let invoke_args = json!({
+            "server": server_name,
+            "tool": tool_name,
+            "arguments": arguments,
+        });
+        match self
+            .invoke_tool(&invoke_args, session_id, caller, None)
+            .await
+        {
+            Ok(content) => JsonRpcResponse::success_serialized(id, content),
+            Err(e) => error_response_preserving_status(id, &e),
+        }
     }
 
     /// Handle `tools/call` — dispatch to the appropriate handler.
@@ -1215,6 +1656,33 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
+        // Operator exposure allow-list. Enforced ahead of the admin gate, not
+        // beside it: a meta-tool hidden from `tools/list` but still executable is
+        // security theatre, and the admin gate answering first would disclose the
+        // tool's existence to the caller the allow-list is hiding it from. Reaching
+        // this check before the admin gate is what makes the refusal wording below
+        // load-bearing rather than decorative. `exposed_meta_tools` promises
+        // that an unlisted tool "is not callable either". Names outside the
+        // governed meta-tool set - surfaced and backend tools - are unaffected.
+        //
+        // The refusal is worded exactly like the unrecognised-tool fallback below:
+        // an operator hiding a tool must not get a reply confirming it exists and
+        // was deliberately withheld.
+        if !self.meta_tool_exposure.is_exposed(tool_name) {
+            // Built the same way the fallback below builds its no-suggestion
+            // form, and returned through the same helper, so the two answers
+            // are byte-identical. Constructing the response directly here
+            // produced a message without the error type's
+            // "JSON-RPC error -32601: " prefix, and that difference was itself
+            // the disclosure. The fallback's did-you-mean hint is deliberately
+            // not reached: a hidden tool name matches itself, so a suggestion
+            // would name the tool the allow-list is hiding.
+            return error_response_preserving_status(
+                id,
+                &crate::Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
+            );
+        }
+
         // Admin gate for the meta-tools that change the gateway for every
         // session. Enforced HERE, at the dispatcher, and not only at the HTTP
         // router that also checks it.
@@ -1238,26 +1706,33 @@ impl MetaMcp {
             );
         }
 
-        // T2.4: Check surfaced tools BEFORE the meta-tool match.
-        if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
-            let invoke_args = json!({
-                "server": server_name,
-                "tool": tool_name,
-                "arguments": arguments,
-            });
-            let result = self.invoke_tool(&invoke_args, session_id, &caller).await;
-            return match result {
-                // `invoke_tool` already returns a complete MCP tools/call result
-                // envelope ({content, structuredContent?, isError}) with output-
-                // schema enforcement applied. A surfaced tool is called by the
-                // client as a first-class tool, so the envelope must be returned
-                // verbatim — re-wrapping via `wrap_tool_success` would stringify
-                // the whole envelope into a text block and drop `structuredContent`
-                // (which spec-compliant clients such as Open WebUI require when the
-                // tool advertises an `outputSchema`).
-                Ok(content) => JsonRpcResponse::success_serialized(id, content),
-                Err(e) => error_response_preserving_status(id, &e),
+        let confirmed_in_band =
+            match destructive_confirmation_gate(&id, tool_name, &arguments, session_id, &caller)
+                .await
+            {
+                GateOutcome::Refuse(response) => return *response,
+                GateOutcome::Proceed => false,
+                GateOutcome::ProceedConfirmed => true,
             };
+
+        // T2.4: a call naming a backend tool directly — because an operator
+        // surfaced it, or because it is a retry of an exchange this gateway
+        // opened — is routed BEFORE the meta-tool match.
+        //
+        // SKIPPED on a confirmed in-band retry, and the invariant is the whole
+        // reason this branch is conditional: the envelope the caller just
+        // redeemed was minted by the gate for a META-tool the gateway executes
+        // itself, never for a backend exchange. Letting the retry fall into
+        // backend routing would hand a second consumer the same single-use
+        // continuation — already spent — so the call would die as a stale
+        // retry instead of running the action the operator just approved.
+        // A retry that reaches here confirmed is, by construction, ours.
+        if !confirmed_in_band
+            && let Some(response) = self
+                .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, &caller)
+                .await
+        {
+            return response;
         }
 
         let result = match tool_name {
@@ -1266,10 +1741,13 @@ impl MetaMcp {
                 self.code_mode_execute(&arguments, session_id, &caller)
                     .await
             }
-            "gateway_list_servers" => self.list_servers(),
+            "gateway_list_servers" => self.list_servers().await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
-            "gateway_invoke" => self.invoke_tool(&arguments, session_id, &caller).await,
+            "gateway_invoke" => {
+                self.invoke_tool(&arguments, session_id, &caller, None)
+                    .await
+            }
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, &caller).await,
             "gateway_webhook_status" => self.webhook_status(),
@@ -1305,7 +1783,20 @@ impl MetaMcp {
                     "gateway_reload_config",
                     "gateway_reload_capabilities",
                 ];
-                let suggestion = did_you_mean(tool_name, META_TOOLS, 3, 3);
+                // The candidate pool is the EXPOSED set, not the static list.
+                // The early return above keeps a hidden tool's exact name from
+                // being confirmed; a near miss of that name reached here and
+                // the suggester, drawing from every meta-tool that exists,
+                // would answer with the name the allow-list is hiding. Filtering
+                // the pool removes the route -- there is no longer a spelling
+                // that makes this branch name an unexposed tool -- rather than
+                // wording the hint more carefully and leaving the route open.
+                let exposed: Vec<&str> = META_TOOLS
+                    .iter()
+                    .copied()
+                    .filter(|name| self.meta_tool_exposure.is_exposed(name))
+                    .collect();
+                let suggestion = did_you_mean(tool_name, &exposed, 3, 3);
                 let msg = match suggestion {
                     Some(hint) => format!("Unknown tool: {tool_name}. {hint}"),
                     None => format!("Unknown tool: {tool_name}"),
@@ -1317,7 +1808,9 @@ impl MetaMcp {
         match result {
             Ok(content) => {
                 let has_output_schema = tool_name == "gateway_search_tools";
-                wrap_tool_success(id, &content, has_output_schema)
+                let mut response = wrap_tool_success(id, &content, has_output_schema);
+                promote_interim_envelope(tool_name, &content, &mut response);
+                response
             }
             Err(e) => error_response_preserving_status(id, &e),
         }
@@ -1334,10 +1827,14 @@ impl MetaMcp {
     /// Returns the previous state, the new state, and the number of capability
     /// tools visible in the new state (across all capability backends).
     fn set_state(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
-        let Some(sid) = session_id else {
-            return Err(Error::Protocol(
-                "gateway_set_state requires a session (send Mcp-Session-Id header)".to_string(),
-            ));
+        // Refused rather than filtered, and refused HERE rather than inside
+        // `SessionStateStore`: the write is the whole point of this call, so a
+        // store that quietly dropped it would turn a refusal the caller can see
+        // into a silent no-op — a worse defect than the one being fixed. The
+        // read side is guarded in the store's readers instead (`ORDER.2` Q4,
+        // ratified 2026-09-06).
+        let Some(sid) = session_key(session_id) else {
+            return Err(Error::Protocol(NO_SESSION_FOR_STATE.to_string()));
         };
 
         let new_state = extract_required_str(args, "state")?;
@@ -1371,10 +1868,8 @@ impl MetaMcp {
 
 impl MetaMcp {
     fn set_profile(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
-        let Some(sid) = session_id else {
-            return Err(Error::Protocol(
-                "gateway_set_profile requires a session (send Mcp-Session-Id header)".to_string(),
-            ));
+        let Some(sid) = session_key(session_id) else {
+            return Err(Error::Protocol(NO_SESSION_FOR_PROFILE.to_string()));
         };
 
         let profile_name = extract_required_str(args, "profile")?;
@@ -1401,12 +1896,14 @@ impl MetaMcp {
         }))
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     fn get_profile(&self, session_id: Option<&str>) -> Result<Value> {
-        let profile = self.active_profile(session_id);
+        let Some(sid) = session_key(session_id) else {
+            return Err(Error::Protocol(NO_SESSION_FOR_PROFILE.to_string()));
+        };
+        let profile = self.active_profile(Some(sid));
         Ok(json!({
             "profile": profile.name,
-            "session_id": session_id,
+            "session_id": sid,
             "description": profile.describe(),
             "available_profiles": self.profile_registry.profile_names(),
         }))
@@ -1418,6 +1915,36 @@ impl MetaMcp {
         let total = summaries.len();
         let default_name = self.profile_registry.default_name();
         Ok(json!({ "profiles": summaries, "default": default_name, "total": total }))
+    }
+}
+
+/// Lift an interim round's fields out of the serialised text block and onto the
+/// JSON-RPC result itself.
+///
+/// `wrap_tool_success` renders a meta-tool's return value as one pretty-printed
+/// text block, so an input-required round would reach the client only as
+/// characters inside a string. A protocol client reads `resultType`,
+/// `inputRequests` and `requestState` from the top level of the result
+/// (`InputRequired::from_result`), so without this the round is unrecognisable
+/// and the continuation the gateway just minted can never be redeemed.
+///
+/// Deliberately silent on a completed call: promoting `resultType: "complete"`
+/// onto every successful invocation would change the shape of every response
+/// for a field absence already means the same thing.
+fn promote_interim_envelope(tool_name: &str, content: &Value, response: &mut JsonRpcResponse) {
+    if !matches!(tool_name, "gateway_invoke" | "gateway_execute") {
+        return;
+    }
+    if content.get("resultType").and_then(Value::as_str) != Some("input_required") {
+        return;
+    }
+    let Some(result) = response.result.as_mut().and_then(Value::as_object_mut) else {
+        return;
+    };
+    for field in ["resultType", "inputRequests", "requestState"] {
+        if let Some(value) = content.get(field) {
+            result.insert((*field).to_string(), value.clone());
+        }
     }
 }
 
@@ -1436,3 +1963,271 @@ mod authz_tests;
 #[cfg(test)]
 #[path = "search_disclosure_e2e.rs"]
 mod search_disclosure_e2e;
+
+#[cfg(test)]
+#[path = "trace_correlation_tests.rs"]
+mod trace_correlation_tests;
+
+/// Destructive-action confirmation. NOT the control -- the admin
+/// requirement is, and `gateway_kill_server`, the only tool carrying
+/// `destructiveHint: true`, is in the admin set. This is the prompt an
+/// honest client shows its user before proceeding.
+///
+/// Enforced HERE for the same reason as the admin gate above: it lived
+/// on the HTTP edge, so a transport that never ran that code was not
+/// refused, it was unjudged. Whether an operator can be asked is a
+/// property of the transport, and the transport says so in
+/// `caller.confirmation` rather than being inferred here.
+///
+/// Deliberately not labelled OWASP ASI09. An earlier version was, and
+/// `destructive_confirmation`'s own header was corrected to say why: the
+/// citation reads as a control and invites over-trust in a prompt a
+/// client may simply not support.
+///
+/// The one place a confirmation refusal is built.
+///
+/// Both refusal branches — nobody could be asked, and an operator who said no
+/// — must carry `confirmation_refusal`, and each used to set it for itself.
+/// Two sites owning one invariant is how one of them loses it in a later edit,
+/// and the loss is silent: the response still looks right on the wire, and the
+/// caller quietly starts accruing failures for a control working as designed.
+/// Making the marker a property of the constructor removes the way they can
+/// disagree rather than adding a check that they have not.
+fn confirmation_refusal_response(id: &RequestId, message: String) -> JsonRpcResponse {
+    let mut response = JsonRpcResponse::error(Some(id.clone()), -32001, message);
+    // The marker is internal and never reaches the wire; the accounting tail
+    // reads it to tell a refusal apart from a client failure.
+    response.confirmation_refusal = true;
+    response
+}
+
+/// The gate's three answers.
+///
+/// Three rather than an `Option<JsonRpcResponse>`, because a confirmed retry is
+/// not the same as an ungoverned call: it carries a `requestState` the caller
+/// echoed back, and the routing that reads one belongs to the backend path, not
+/// to a meta-tool the gateway itself executes.
+enum GateOutcome {
+    /// The call does not run. This is the answer to send.
+    Refuse(Box<JsonRpcResponse>),
+    /// Nothing to confirm, or confirmation obtained out of band. Dispatch
+    /// normally.
+    Proceed,
+    /// A retry whose in-band confirmation was opened and spent here.
+    ProceedConfirmed,
+}
+
+/// The key the in-band confirmation question is asked under, and the key the
+/// answer must come back on.
+///
+/// Server-assigned and versioned: a client echoing an answer must name the
+/// question it answers, and a later question with different semantics gets a
+/// new version rather than a silently different meaning under the same name.
+const CONFIRMATION_INPUT_KEY: &str = "io.mcp-gateway.destructive-confirmation.v1";
+
+/// The caller binding an in-band confirmation is sealed to.
+///
+/// Falls back to the API-key **name** where no verified identity exists,
+/// because the modern stateless path authenticates most callers by key and
+/// `principal_fingerprint` — correctly, for a backend exchange — answers `None`
+/// for them. A backend continuation binds a user to a side effect on a third
+/// party and must not under-bind; this one binds a caller to its own answer to
+/// a question this gateway just asked it, over a single-use envelope already
+/// bound to the exact tool and arguments. The key name is the same authority
+/// the admin check just accepted for this call, so binding to it grants nobody
+/// anything they did not already hold.
+///
+/// A caller with neither — anonymous — gets `None` and is refused, which is the
+/// behaviour it had before this path existed.
+fn confirmation_principal(caller: &MetaMcpCallerContext<'_>) -> Option<String> {
+    crate::protocol::mrtr::principal_fingerprint(caller.verified_identity).or_else(|| {
+        caller
+            .api_key_name
+            .map(|name| crate::hashing::sha256_hex(format!("apikey-name:{name}").as_bytes()))
+    })
+}
+
+/// The refusal sent when a destructive call cannot be confirmed.
+///
+/// One function rather than one per branch: every caller of this is a place
+/// where the gate could not obtain an answer it trusts, and they must be
+/// indistinguishable on the wire. A branch that phrased its own refusal would
+/// tell a caller which check it tripped.
+fn unconfirmable_refusal(id: &RequestId, tool_name: &str, action_desc: &str) -> GateOutcome {
+    warn!(
+        tool = %tool_name,
+        "refusing a destructive call that cannot be confirmed"
+    );
+    GateOutcome::Refuse(Box::new(confirmation_refusal_response(
+        id,
+        format!(
+            "Destructive action requires confirmation and none could be obtained: {action_desc}"
+        ),
+    )))
+}
+
+/// Redeems the confirmation answer this request is carrying, if it carries one.
+///
+/// `None` means no answer rode in on this request, and the gate still has to
+/// ask. Every other path is an answer: honoured, declined, or refused because
+/// it could not be bound to the question it claims to answer.
+async fn redeem_carried_confirmation(
+    id: &RequestId,
+    tool_name: &str,
+    arguments: &Value,
+    action_desc: &str,
+    caller: &MetaMcpCallerContext<'_>,
+) -> Option<GateOutcome> {
+    use crate::gateway::destructive_confirmation::ConfirmationChannel;
+
+    let answer = caller
+        .retry
+        .input_responses
+        .as_ref()
+        .and_then(|responses| responses.get(CONFIRMATION_INPUT_KEY))?;
+    let ConfirmationChannel::InBand { continuation } = caller.confirmation else {
+        // The answer arrived on a transport that never asked. Nothing here
+        // can open it, so it is not an answer.
+        return Some(unconfirmable_refusal(id, tool_name, action_desc));
+    };
+    if caller.retry.request_state.is_none() {
+        // An answer with no envelope binds to nothing: any caller could
+        // send `true`. This is the whole reason the ask carries one.
+        return Some(unconfirmable_refusal(id, tool_name, action_desc));
+    }
+    // Opened FIRST, and spent in the opening, whatever the answer says. A
+    // decline that left the envelope redeemable would let the same token be
+    // answered again until one attempt says `true`.
+    if let Err(error) = crate::gateway::meta_mcp::invoke::redeem_retry(
+        continuation,
+        crate::protocol::continuation::ContinuationPurpose::GatewayConfirmation,
+        caller,
+        confirmation_principal(caller),
+        tool_name,
+        tool_name,
+        arguments,
+    )
+    .await
+    {
+        warn!(tool = %tool_name, %error, "In-band confirmation could not be redeemed");
+        return Some(unconfirmable_refusal(id, tool_name, action_desc));
+    }
+    // Fail closed on anything that is not JSON `true`. A string, a number,
+    // an object: all are answers the operator did not give.
+    if answer.as_bool() != Some(true) {
+        return Some(GateOutcome::Refuse(Box::new(
+            confirmation_refusal_response(id, format!("Operator declined: {action_desc}")),
+        )));
+    }
+    Some(GateOutcome::ProceedConfirmed)
+}
+
+async fn destructive_confirmation_gate(
+    id: &RequestId,
+    tool_name: &str,
+    arguments: &Value,
+    session_id: Option<&str>,
+    caller: &MetaMcpCallerContext<'_>,
+) -> GateOutcome {
+    use crate::gateway::destructive_confirmation::{
+        ConfirmationChannel, ConfirmationOutcome, ConfirmationPolicy, describe_destructive_action,
+        require_destructive_confirmation,
+    };
+
+    if !crate::gateway::destructive_confirmation::is_destructive_meta_tool(tool_name) {
+        return GateOutcome::Proceed;
+    }
+
+    let action_desc = describe_destructive_action(tool_name, arguments);
+
+    // An answer this caller is carrying is read BEFORE the channel is consulted:
+    // a retry must be redeemed, never re-asked. Re-asking would mint a second
+    // envelope for a question already answered, and a client that answers every
+    // ask it receives would then never stop.
+    if let Some(outcome) =
+        redeem_carried_confirmation(id, tool_name, arguments, &action_desc, caller).await
+    {
+        return outcome;
+    }
+
+    match caller.confirmation {
+        // No asker can exist on this transport. Nothing is elicited:
+        // there is no one to elicit from, and producing an "unsupported"
+        // outcome would only re-enter a policy written for a channel
+        // that does exist.
+        ConfirmationChannel::Unavailable => {
+            return unconfirmable_refusal(id, tool_name, &action_desc);
+        }
+        // The caller is asked in-band and answers by retrying. Minted before
+        // the ask goes out, so the question never leaves without the envelope
+        // its answer must come back on.
+        ConfirmationChannel::InBand { continuation } => {
+            let Some(envelope) = crate::gateway::meta_mcp::invoke::mint_continuation(
+                continuation,
+                crate::protocol::continuation::ContinuationPurpose::GatewayConfirmation,
+                confirmation_principal(caller),
+                tool_name,
+                tool_name,
+                arguments,
+                None,
+            )
+            .await
+            else {
+                // Unnameable caller, or no slot to hold the exchange. Both mean
+                // the question cannot be asked in a way its answer could be
+                // trusted, which is the existing refusal exactly.
+                return unconfirmable_refusal(id, tool_name, &action_desc);
+            };
+            // Built here rather than through `confirmation_refusal_response`:
+            // an unfinished round is neither a refusal nor a client failure,
+            // and the accounting tail reads that flag.
+            return GateOutcome::Refuse(Box::new(JsonRpcResponse::success(
+                id.clone(),
+                json!({
+                    "resultType": "input_required",
+                    "inputRequests": {
+                        CONFIRMATION_INPUT_KEY: {
+                            "method": "elicitation/create",
+                            "params": {
+                                "message": format!(
+                                    "Confirm destructive action: {action_desc}"
+                                ),
+                                "mode": "form",
+                            },
+                        },
+                    },
+                    "requestState": envelope,
+                }),
+            )));
+        }
+        ConfirmationChannel::Elicit { proxy, policy } => {
+            let outcome = require_destructive_confirmation(
+                proxy,
+                session_id.unwrap_or_default(),
+                &action_desc,
+            )
+            .await;
+            if outcome == ConfirmationOutcome::Declined {
+                // A decline is the operator using the control, not the
+                // client failing. Before this gate moved into the
+                // dispatcher a decline returned earlier than the
+                // accounting and was never counted; marking it keeps
+                // that true, so exercising the safety control cannot
+                // walk a caller toward a tripped breaker.
+                return GateOutcome::Refuse(Box::new(confirmation_refusal_response(
+                    id,
+                    format!("Operator declined: {action_desc}"),
+                )));
+            }
+            // Nobody could be asked. What that means depends on the era,
+            // and the policy was decided at the edge that knows which era
+            // this request belongs to.
+            if outcome == ConfirmationOutcome::Unsupported
+                && policy.on_unconfirmable() == ConfirmationPolicy::REFUSE
+            {
+                return unconfirmable_refusal(id, tool_name, &action_desc);
+            }
+        }
+    }
+    GateOutcome::Proceed
+}

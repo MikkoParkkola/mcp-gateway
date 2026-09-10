@@ -16,6 +16,7 @@ const SERVER_DRY_RUN: &str =
 const BASE_CONFIGMAP: &str =
     include_str!("../deploy/kubernetes/enterprise-alpha/base/configmap.yaml");
 const HELM_CONFIGMAP: &str = include_str!("../deploy/helm/mcp-gateway/templates/configmap.yaml");
+const EXAMPLE_CONFIG: &str = include_str!("../gateway.example.yaml");
 const KIND_SMOKE: &str =
     include_str!("../deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh");
 
@@ -387,4 +388,49 @@ fn shipped_kubernetes_configs_declare_the_name_clients_dial() {
         HELM_CONFIGMAP.contains("public_url"),
         "the chart must render the same declaration; it knows its own namespace"
     );
+}
+
+/// No shipped configuration publishes `/mcp`.
+///
+/// The unattributed-caller guard on the tasks extension (`handlers.rs`) is not
+/// load-bearing on any default deployment TODAY, because every shipped config
+/// authenticates `/mcp`. That is a premise about these three files, and it was
+/// stated in a review document where nobody editing them would ever read it.
+///
+/// Exact strings on purpose, not a parser: the three files spell the same
+/// declaration three ways (block list, flow list, Helm `list`), and a parser
+/// covering all three is more code than the fact is worth. If you REFORMATTED
+/// one of these, update the expectation. If you ADDED A PATH, ask first whether
+/// the tasks guard has just become the only thing standing between an
+/// unauthenticated caller and the task store.
+#[test]
+fn no_shipped_configuration_publishes_the_mcp_endpoint() {
+    for (name, text, expected) in [
+        (
+            "k8s base configmap",
+            BASE_CONFIGMAP,
+            "public_paths: [\"/health\"]",
+        ),
+        (
+            "helm configmap",
+            HELM_CONFIGMAP,
+            "\"public_paths\" (list \"/health\")",
+        ),
+        (
+            "gateway.example.yaml",
+            EXAMPLE_CONFIG,
+            "public_paths:\n  - /health\n",
+        ),
+    ] {
+        assert!(
+            text.contains(expected),
+            "{name} no longer declares exactly `{expected}` -- see this test's \
+             doc comment before changing the expectation"
+        );
+        assert!(
+            !text.contains("- /mcp") && !text.contains("\"/mcp\""),
+            "{name} publishes /mcp; the tasks-extension guard would become the \
+             only protection on a default deployment"
+        );
+    }
 }

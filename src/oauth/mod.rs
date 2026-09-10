@@ -13,10 +13,10 @@
 //! - Callback server for auth code reception
 
 mod callback;
-mod client;
+pub mod client;
 mod metadata;
 mod storage;
 
 pub use client::{OAuthClient, OAuthClientConfig};
-pub use metadata::{AuthorizationServerMetadata, ProtectedResourceMetadata};
+pub use metadata::{AuthorizationServerMetadata, IssuerSource, ProtectedResourceMetadata};
 pub use storage::{TokenInfo, TokenStorage};

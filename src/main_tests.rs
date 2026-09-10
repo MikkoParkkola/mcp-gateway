@@ -236,6 +236,60 @@ fn write_discovered_to_config_preserves_existing_backends() {
     assert!(loaded.backends.contains_key("tavily"));
 }
 
+// GH462.CONFIG.1 / GH462.CONFIG.2: the shared loader's existing writer stays fail-closed.
+#[test]
+fn gh462_discovery_persistence_preserves_existing_invalid_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("discovered.yaml");
+    let server = make_discovered_server("gh462-import");
+    for original in [
+        "backends:\n  original:\n    command: \"unterminated\n",
+        "backends:\n  bad/name:\n    command: echo original\n",
+    ] {
+        std::fs::write(&output, original).unwrap();
+        let error = Config::load_literal(Some(&output)).unwrap_err();
+        if original.contains("bad/name") {
+            assert!(matches!(error, mcp_gateway::Error::ConfigValidation(_)));
+        }
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(&output).unwrap();
+            (metadata.dev(), metadata.ino())
+        };
+        assert!(write_discovered_to_config(std::slice::from_ref(&server), Some(&output)).is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), original.as_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(&output).unwrap();
+            assert_eq!((metadata.dev(), metadata.ino()), identity);
+        }
+    }
+}
+
+// GH462.CONFIG.3 / GH462.CONFIG.5: existing symlink differs from a missing config.
+#[cfg(unix)]
+#[test]
+fn gh462_discovery_persistence_preserves_dangling_symlink() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("discovered.yaml");
+    let target = dir.path().join("absent-target.yaml");
+    std::os::unix::fs::symlink(&target, &output).unwrap();
+    let identity = std::fs::symlink_metadata(&output).unwrap();
+    let result =
+        write_discovered_to_config(&[make_discovered_server("gh462-import")], Some(&output));
+    assert!(
+        result.is_err(),
+        "a dangling symlink was replaced by defaults"
+    );
+    assert_eq!(std::fs::read_link(&output).unwrap(), target);
+    let after = std::fs::symlink_metadata(&output).unwrap();
+    assert_eq!((after.dev(), after.ino()), (identity.dev(), identity.ino()));
+    assert!(!target.exists());
+}
+
 #[test]
 fn init_command_with_examples_includes_capabilities() {
     let dir = tempfile::tempdir().unwrap();

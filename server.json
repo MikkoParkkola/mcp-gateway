@@ -9,11 +9,11 @@
     "id": "1141522724"
   },
   "websiteUrl": "https://github.com/MikkoParkkola/mcp-gateway#readme",
-  "version": "3.5.1",
+  "version": "4.0.0",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/mikkoparkkola/mcp-gateway:3.5.1",
+      "identifier": "ghcr.io/mikkoparkkola/mcp-gateway:4.0.0",
       "runtimeHint": "docker",
       "packageArguments": [
         {
@@ -77,7 +77,7 @@
       "registryType": "cargo",
       "registryBaseUrl": "https://crates.io",
       "identifier": "mcp-gateway",
-      "version": "3.5.1",
+      "version": "4.0.0",
       "packageArguments": [
         {
           "type": "positional",

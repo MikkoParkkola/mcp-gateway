@@ -12,6 +12,7 @@
 //! - Redactor: credential detection and in-place redaction of response JSON   [firewall]
 //! - `BudgetEnforcer`: pre-invoke cost check (`DashMap` + atomics, target <0.1ms) [cost-governance]
 //! - `SemanticIndex`: TF-IDF query over 500-tool corpus (target <2ms)           [semantic-search]
+//! - Continuation: minting and redeeming a sealed continuation envelope (NFR.PERF.1)
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde_json::{Value, json};
@@ -637,6 +638,165 @@ fn bench_semantic_search(_c: &mut Criterion) {}
 
 // ── criterion wiring ──────────────────────────────────────────────────────────
 
+/// NFR.PERF.1 / NFR.PERF.2 — what the 2026-07-28 path costs per request.
+///
+/// The requirement is a budget (P50 within 5%, P99 within 10% of 3.5.0), and a
+/// budget needs a number. These measure the work the modern path adds that the
+/// legacy path does not do at all: classifying a request from its metadata, and
+/// validating the mirrored headers against the body.
+///
+/// Both run per request on the hot path, so their cost is the release's
+/// per-request overhead — everything else the revision changed is a different
+/// shape of the same work rather than extra work.
+///
+/// NFR.PERF.2 says a performance change without a number does not ship. This is
+/// how header-first routing gets its number before anyone claims it is faster:
+/// `classify_request` here is the parse that routing would avoid.
+fn bench_modern_request_path(c: &mut Criterion) {
+    use mcp_gateway::protocol::headers::HeaderCheck;
+    use mcp_gateway::protocol::meta::classify_request;
+
+    let modern = serde_json::json!({
+        "name": "get_weather",
+        "arguments": { "location": "Helsinki" },
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": { "name": "bench", "version": "1.0.0" }
+        }
+    });
+    let legacy = serde_json::json!({
+        "name": "get_weather",
+        "arguments": { "location": "Helsinki" }
+    });
+
+    let mut group = c.benchmark_group("modern_request_path");
+
+    // The classification every request pays, modern or not.
+    group.bench_function("classify_modern", |b| {
+        b.iter(|| std::hint::black_box(classify_request(Some(&modern), None)));
+    });
+    group.bench_function("classify_legacy", |b| {
+        b.iter(|| std::hint::black_box(classify_request(Some(&legacy), None)));
+    });
+
+    // The header check, which only a modern request pays.
+    group.bench_function("validate_headers", |b| {
+        b.iter(|| {
+            let check = HeaderCheck {
+                header_protocol_version: Some("2026-07-28"),
+                body_protocol_version: Some("2026-07-28"),
+                header_method: Some("tools/call"),
+                body_method: "tools/call",
+                header_name: Some("get_weather"),
+                body_name: Some("get_weather"),
+            };
+            std::hint::black_box(check.validate())
+        });
+    });
+
+    // The same check when the name arrives sentinel-encoded, which is the
+    // expensive shape: it decodes before comparing.
+    group.bench_function("validate_headers_encoded_name", |b| {
+        b.iter(|| {
+            let check = HeaderCheck {
+                header_protocol_version: Some("2026-07-28"),
+                body_protocol_version: Some("2026-07-28"),
+                header_method: Some("tools/call"),
+                body_method: "tools/call",
+                header_name: Some("=?base64?SGVsbG8sIOS4lueVjA==?="),
+                body_name: Some("Hello, \u{4e16}\u{754c}"),
+            };
+            std::hint::black_box(check.validate())
+        });
+    });
+
+    group.finish();
+}
+
+// ── continuation-envelope benchmarks ────────────────────────────────────────
+
+/// NFR.PERF.1 — what a continuation envelope costs to mint and to redeem.
+///
+/// An envelope is minted once when a backend elicits and redeemed once when the
+/// client returns, so the two are separate per-request costs and are timed
+/// separately. Minting is a JSON encode, an AES-256-GCM seal and a base64
+/// encode. Redemption is `Keyring::open` — length guard, base64 decode, AEAD
+/// open, JSON decode — followed by `Payload::redeemable_by`, the constant-time
+/// binding check `open` deliberately does not perform. Timing the two halves of
+/// redemption apart is what makes a regression attributable to one of them.
+///
+/// Seal and open both scale with the backend state the envelope carries, so
+/// each is swept over a short state and one near `MAX_ENVELOPE_LEN`. Everything
+/// that is not per-call work is hoisted out of the timed region: key material,
+/// the keyring, the payloads and the pre-sealed tokens. Key derivation inside
+/// the measured region would produce a number nobody could use. The allocations
+/// `open` makes for the payload it returns stay inside — they are opening.
+fn bench_continuation(c: &mut Criterion) {
+    use mcp_gateway::protocol::continuation::{Keyring, Payload};
+
+    // Fixed clock: minting derives the expiry from it and opening compares
+    // against it, so reading the wall clock would put a syscall in the timed
+    // region and make the expiry check nondeterministic across samples.
+    const NOW: u64 = 1_800_000_000;
+    const PRINCIPAL: &str = "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+    const DIGEST: &str = "sha256:112233445566778899aabbccddeeff00";
+
+    let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("bench keyring");
+    let payload_with_state = |state_len: usize| {
+        Payload::mint(
+            "bench-backend".to_owned(),
+            Some("s".repeat(state_len)),
+            PRINCIPAL.to_owned(),
+            DIGEST.to_owned(),
+            "replica-a".to_owned(),
+            "hold-key-0".to_owned(),
+            NOW,
+        )
+    };
+
+    let mut group = c.benchmark_group("continuation");
+
+    // 32 B is a typical opaque backend cursor; 4 KiB is about the largest state
+    // whose sealed envelope still base64-encodes under MAX_ENVELOPE_LEN (8 KiB).
+    for state_len in [32_usize, 4096] {
+        let payload = payload_with_state(state_len);
+        let token = keyring.mint(&payload).expect("bench envelope");
+
+        // Mint path: serialize, seal under AES-256-GCM, base64-encode.
+        group.bench_with_input(
+            BenchmarkId::new("mint_envelope", state_len),
+            &payload,
+            |b, payload| {
+                b.iter(|| std::hint::black_box(keyring.mint(std::hint::black_box(payload))));
+            },
+        );
+
+        // Redemption, first half: authenticity only, no entitlement check.
+        group.bench_with_input(
+            BenchmarkId::new("open_envelope", state_len),
+            &token,
+            |b, token| {
+                b.iter(|| std::hint::black_box(keyring.open(std::hint::black_box(token), NOW)));
+            },
+        );
+    }
+
+    // Redemption, second half: two SHA-256 digests compared in constant time.
+    // Independent of state length, so it is measured once.
+    let payload = payload_with_state(32);
+    group.bench_function("check_bindings", |b| {
+        b.iter(|| {
+            std::hint::black_box(payload.redeemable_by(
+                std::hint::black_box(PRINCIPAL),
+                std::hint::black_box(DIGEST),
+            ))
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_tool_registry,
@@ -648,5 +808,7 @@ criterion_group!(
     bench_redactor,
     bench_budget_enforcer,
     bench_semantic_search,
+    bench_modern_request_path,
+    bench_continuation,
 );
 criterion_main!(benches);

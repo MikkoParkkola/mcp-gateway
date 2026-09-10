@@ -162,7 +162,7 @@ Sketch. rmcp implements this dispatch already; what follows is the behaviour we 
 
 ### `server/discover` does not spend the Meta-MCP surface budget
 
-This repository's own locked decision keeps the Meta-MCP surface compact — 14 to 16 tools — because the context-token saving *is* the value proposition, and its anti-pattern list names "bloating the Meta-MCP surface" first.
+This repository's own locked decision keeps the Meta-MCP surface compact — 14 to 17 tools — because the context-token saving *is* the value proposition, and its anti-pattern list names "bloating the Meta-MCP surface" first.
 
 **`server/discover` is not a tool.** It is a protocol RPC, alongside `tools/list` and `resources/read`, and it is never enumerated to the model. Implementing it costs zero tokens on the surface budget. Stating this here so the compact-surface rule is not later cited as a reason to skip a MUST.
 

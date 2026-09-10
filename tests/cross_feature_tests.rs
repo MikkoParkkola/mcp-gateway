@@ -42,7 +42,14 @@ mod cost_governance_and_firewall {
 
         // WHEN: a shell-injection request is submitted
         let args = json!({ "cmd": "; rm -rf / " });
-        let verdict = fw.check_request("sess-fw-cost-1", "backend", "search_tool", &args, "alice");
+        let verdict = fw.check_request(
+            "sess-fw-cost-1",
+            "backend",
+            "search_tool",
+            &args,
+            "alice",
+            "sess-fw-cost-1",
+        );
 
         // THEN: the firewall blocks it — the caller must NOT record cost
         assert!(!verdict.allowed, "shell injection must be blocked");
@@ -77,7 +84,14 @@ mod cost_governance_and_firewall {
 
         // WHEN: a clean request passes the firewall
         let args = json!({ "query": "rust async patterns" });
-        let verdict = fw.check_request("sess-fw-cost-2", "backend", "search_tool", &args, "bob");
+        let verdict = fw.check_request(
+            "sess-fw-cost-2",
+            "backend",
+            "search_tool",
+            &args,
+            "bob",
+            "sess-fw-cost-2",
+        );
 
         assert!(verdict.allowed, "clean request must be allowed");
 
@@ -295,8 +309,14 @@ mod semantic_search_and_firewall {
         // WHEN: a client submits a search query containing shell injection
         let malicious_query = "; rm -rf / ";
         let args = json!({ "query": malicious_query });
-        let verdict =
-            fw.check_request("sess-sem-fw-1", "backend", "search_tool", &args, "attacker");
+        let verdict = fw.check_request(
+            "sess-sem-fw-1",
+            "backend",
+            "search_tool",
+            &args,
+            "attacker",
+            "sess-sem-fw-1",
+        );
 
         // THEN: the firewall blocks the request
         assert!(
@@ -329,8 +349,14 @@ mod semantic_search_and_firewall {
     fn firewall_catches_path_traversal_in_search_query() {
         let fw = default_fw();
         let args = json!({ "query": "../../../etc/passwd" });
-        let verdict =
-            fw.check_request("sess-sem-fw-2", "backend", "search_tool", &args, "attacker");
+        let verdict = fw.check_request(
+            "sess-sem-fw-2",
+            "backend",
+            "search_tool",
+            &args,
+            "attacker",
+            "sess-sem-fw-2",
+        );
 
         assert!(!verdict.allowed);
         assert!(
@@ -351,7 +377,14 @@ mod semantic_search_and_firewall {
 
         // WHEN: a clean query is submitted
         let args = json!({ "query": "read a file" });
-        let verdict = fw.check_request("sess-sem-fw-3", "backend", "search_tool", &args, "alice");
+        let verdict = fw.check_request(
+            "sess-sem-fw-3",
+            "backend",
+            "search_tool",
+            &args,
+            "alice",
+            "sess-sem-fw-3",
+        );
 
         // THEN: the firewall allows it
         assert!(verdict.allowed);
@@ -370,8 +403,14 @@ mod semantic_search_and_firewall {
     fn sql_injection_in_search_query_warns_not_blocks() {
         let fw = default_fw();
         let args = json!({ "query": "' OR 1=1" });
-        let verdict =
-            fw.check_request("sess-sem-fw-4", "backend", "search_tool", &args, "attacker");
+        let verdict = fw.check_request(
+            "sess-sem-fw-4",
+            "backend",
+            "search_tool",
+            &args,
+            "attacker",
+            "sess-sem-fw-4",
+        );
 
         // SQL injection is MEDIUM → Warn but still allowed
         assert!(verdict.allowed, "SQL injection is warn-level, not block");
@@ -532,7 +571,14 @@ mod feature_smoke_firewall {
     #[test]
     fn firewall_instantiates_and_allows_clean_request() {
         let fw = Firewall::from_config(FirewallConfig::default(), None);
-        let verdict = fw.check_request("s1", "srv", "tool", &json!({ "key": "value" }), "caller");
+        let verdict = fw.check_request(
+            "s1",
+            "srv",
+            "tool",
+            &json!({ "key": "value" }),
+            "caller",
+            "s1",
+        );
         assert!(verdict.allowed);
         assert_eq!(verdict.action, FirewallAction::Allow);
     }

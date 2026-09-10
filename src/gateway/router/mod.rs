@@ -64,6 +64,14 @@ pub struct AppState {
     pub auth_config: Arc<ResolvedAuthConfig>,
     /// Single-use value that opens the dashboard from the link `serve` prints.
     pub dashboard_bootstrap: Arc<crate::gateway::auth::DashboardBootstrap>,
+    /// Listeners on open `subscriptions/listen` streams.
+    ///
+    /// Separate from `multiplexer`, which is keyed by session id: this revision
+    /// deleted sessions, so there is nothing to key on. Kept beside it rather
+    /// than inside it so the two lifetimes stay distinguishable.
+    pub subscriptions: Arc<crate::gateway::subscription_registry::SubscriptionRegistry>,
+    /// In-flight tasks, scoped to the principal that created them.
+    pub tasks: Arc<crate::protocol::task_store::TaskStore>,
     /// Key server for OIDC-issued temporary tokens (optional)
     pub key_server: Option<Arc<KeyServer>>,
     /// Tool access policy
@@ -77,6 +85,14 @@ pub struct AppState {
     /// Whether URLs declared in `backends:` config are pre-authorised
     /// (skip runtime SSRF check at proxy time). MIK-3529.
     pub trust_configured_backends: bool,
+    /// Continuation keys, spent-ledger and held legacy exchanges — one owner,
+    /// one lifetime, generated per process at startup.
+    ///
+    /// Not three fields: a keyring outliving its ledger is a replay window. The
+    /// keys are never shared with another process, which is what makes a
+    /// continuation single-use across replicas without a shared store. See
+    /// [`crate::protocol::continuation::ContinuationState`].
+    pub continuation: Arc<crate::protocol::continuation::ContinuationState>,
     /// In-flight request tracker for graceful drain.
     /// Each in-flight request holds a permit; shutdown waits for all permits
     /// to be returned.
@@ -109,12 +125,22 @@ pub struct AppState {
     /// SIEM export status, present when the export background task is running
     /// (MIK-6703). Drives the `EvidenceExport` entitlement + export-status route.
     pub export_status: Option<Arc<crate::control_plane::ExportStatus>>,
+    /// The environment the gateway resolves against, so a route reading an
+    /// operator-supplied variable sees what a reload published rather than what
+    /// the process was started with. `None` in tests that construct the state
+    /// directly, which then read the process environment as before.
+    pub env: Option<Arc<crate::config::LiveEnv>>,
     /// Tamper-evident transparency log (issue #133, D3), shared with `MetaMcp`.
     /// Lets the direct backend route (`backend_handlers::backend_handler`),
     /// which bypasses `MetaMcp`, write identity-propagation audit events
     /// (`idp_mint` / `idp_refuse`) into the same hash chain (MIK-6740). `None`
     /// when the transparency log is disabled — audit writes are then a no-op.
     pub transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
+    /// Lifecycle registry for TTL-reaped per-identity state
+    /// (`MIK-7215.CONTROL.4`). `None` when the gateway was constructed
+    /// without lifecycle wiring — tests and any embedder that does not run
+    /// the reaper — in which case tracking and sweeping are both no-ops.
+    pub session_lifecycle: Option<Arc<crate::gateway::session_lifecycle::SessionLifecycle>>,
 }
 
 /// Create the router.
@@ -132,6 +158,20 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 /// routes merged at the call site. Taking them as a parameter removes the
 /// ordering discipline that failed both times.
 #[allow(clippy::needless_pass_by_value)] // Arc<T> is idiomatically passed by value
+impl AppState {
+    /// Announce that the set of available tools has changed.
+    ///
+    /// Two audiences, one event: sessions attached to the pre-2026 GET stream,
+    /// and listeners on `subscriptions/listen`. Kept in one function because
+    /// telling only one of them is the failure mode — the capability is
+    /// advertised as `listChanged: true` to both.
+    pub fn announce_tools_changed(&self) {
+        self.proxy_manager.broadcast_tools_list_changed();
+        self.subscriptions
+            .publish(crate::gateway::subscription_registry::tools_list_changed());
+    }
+}
+
 pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router {
     let auth_state = AuthState {
         auth_config: Arc::clone(&state.auth_config),
@@ -228,7 +268,7 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
-        .with_state(Arc::clone(&state));
+        .with_state(state);
 
     // Merge key server routes (unauthenticated) if enabled
     if let Some(ks_routes) = maybe_ks_routes {

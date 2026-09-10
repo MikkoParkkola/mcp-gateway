@@ -406,32 +406,46 @@ nothing has made live yet. `every_tracked_section_is_covered` already holds the
 exhaustive half — every section reaches the classifier — so what is uncovered is
 narrow: a field moved to live-applied in a section this case does not touch.
 
-### What a refusal does NOT undo
+### What a refusal does NOT undo — and what since closed it
 
-`Config::load` applies the config's `env_files` to the process environment
-before it returns, so by the time this check runs, that much has happened. It is
-true of every failed reload — a parse error, a validation error, the shutdown
-abort — and pre-dates this decision; found in review of it, filed as **MIK-7256**.
+WHEN THIS WAS WRITTEN, `Config::load` applied the config's `env_files` to the
+PROCESS environment before returning, so by the time the check ran, that much had
+happened — on every failed reload, parse error, validation error or shutdown
+abort alike. It pre-dated this decision, was found in review of it, and was filed
+as **MIK-7256**.
 
-It is not inert, either: `capability::executor` resolves an `env:` credential
-with `std::env::var` inside `dispatch_protocol`, per call, so a later capability
-call can use a value the refused file supplied.
+It was not inert: `capability::executor` resolved an `env:` credential with
+`std::env::var` inside `dispatch_protocol`, per call, so a later capability call
+could use a value the refused file had supplied.
 
-The fail-fast ran, and the answer is that undoing it is not expressible here.
-Three consumers read those variables — `expand_string` (`src/config/mod.rs:331`)
-and figment's `Env` provider (`:286`) at load time, and `capability::executor`
-per call — so an undo would have to unset or restore process variables, and
-`#![deny(unsafe_code)]` (`src/lib.rs:25`) forbids the `set_var`/`remove_var`
-that edition 2024 made unsafe. `dotenvy` can set them because it is a
-dependency; we cannot unset them. The alternative — resolving every consumer
-from a candidate map instead of the process environment — is a four-consumer
-refactor with its own design and review, not a fix to this decision.
+The fail-fast ran and returned that undoing it was not expressible: three
+consumers read those process variables, and `#![deny(unsafe_code)]`
+(`src/lib.rs:25`) forbids the `set_var`/`remove_var` that edition 2024 made
+unsafe — `dotenvy` could set them, we could not unset them. The section then
+named the only real alternative, resolving every consumer from a candidate map
+instead of the process environment, and rejected it as a four-consumer refactor
+with its own design and review.
 
-**MIK-7256 is therefore closed as a known residual, not repaired.** The narrower
-patch that suggested itself, refusing when the `env_files` LIST changes, was
-rejected: it misses a same-path file whose CONTENTS changed, which is the
-ordinary case. Nothing in the refusal message claims otherwise today, which is
-what keeps the residual honest rather than hidden.
+**THAT REFACTOR IS THE ONE THAT SHIPPED, AND MIK-7256 IS REPAIRED, NOT A
+RESIDUAL.** The candidate map exists as `EnvOverlay`, built by
+`EnvOverlay::from_paths_checked` (`src/config/mod.rs:435`) and read through
+`LiveEnv`; home expansion reaches its home through the injected `HomeResolver`
+seam (exported at `src/config/mod.rs:31`) rather than an inline `dirs::home_dir()`.
+The per-call consumer went with it: `src/capability/` contains ZERO `std::env::var`
+call sites today, and the executor holds an `Arc<LiveEnv>`
+(`src/capability/executor/mod.rs:72`, injected at `:220`) instead.
+
+So the refusal now undoes what it could not before, because there is nothing in
+the process environment to undo — the values never reach it. This paragraph
+replaced a live-voice account of the pre-fix behaviour that survived the repair
+by four months; it is recorded here rather than deleted because the reasoning
+that rejected the refactor is what a later reader needs in order to understand
+why it was eventually funded.
+
+The narrower patch that suggested itself at the time — refusing when the
+`env_files` LIST changes — was rejected then and stays rejected: it misses a
+same-path file whose CONTENTS changed, which is the ordinary case. The refusal
+message never claimed to cover it.
 
 So the message states two bounded facts — no backend was started or stopped, no
 configuration was published — and offers **no summary of what remains in

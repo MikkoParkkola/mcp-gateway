@@ -74,12 +74,17 @@ fn parse_detail(raw: &str) -> Result<SearchDetail> {
 }
 
 /// Ranking diagnostics object. Emitted only when `explain` is true.
+///
+/// Pruning happens here rather than at the emitters, because there are two of
+/// them and only one used to prune: the ordinary `gateway_search` path shipped
+/// all sixteen signals while the Code Mode path shipped three. Pruning at the
+/// single place both call means a third emitter cannot reintroduce the gap.
 pub(crate) fn ranking_debug_object(result: &SearchResult) -> Value {
-    json!({
+    crate::gateway::meta_mcp::prune_constant_signals(&json!({
         "included": result.explanation.included,
         "reasons": result.explanation.reasons,
         "signals": result.signals,
-    })
+    }))
 }
 
 /// Project a collected (and possibly ranked) Code Mode match onto a tier.

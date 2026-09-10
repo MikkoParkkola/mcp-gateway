@@ -480,3 +480,40 @@ fn inject_literal_value() {
     let result = injector.inject("backend", "test", json!({})).unwrap();
     assert_eq!(result.arguments["token"], "literal-api-key-abc123");
 }
+
+// ── env overlay ───────────────────────────────────────────────────────
+
+/// `{env.VAR}` used to resolve with `std::env::var`, which cannot see a value
+/// an env file assigns now that env files load into an in-memory overlay.
+#[test]
+fn credential_resolves_against_an_env_file_overlay() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_file = dir.path().join(".env");
+    std::fs::write(&env_file, "INJECTOR_OVERLAY_ONLY=from-the-overlay\n").unwrap();
+    let overlay = mcp_gateway::config::EnvOverlay::from_paths(&[env_file]);
+    let env = std::sync::Arc::new(mcp_gateway::config::LiveEnv::new(
+        std::sync::Arc::new(overlay),
+        mcp_gateway::config::ResolvedEnvFiles::default(),
+    ));
+
+    let rules = HashMap::from([(
+        "backend".to_string(),
+        vec![CredentialRule {
+            name: "token".to_string(),
+            credential_type: CredentialType::ApiKey,
+            value: "{env.INJECTOR_OVERLAY_ONLY}".to_string(),
+            inject_as: InjectTarget::Argument,
+            inject_key: "token".to_string(),
+            tools: vec!["*".to_string()],
+        }],
+    )]);
+
+    let result = SecretInjector::new(rules)
+        .with_env(env)
+        .inject("backend", "test", json!({}))
+        .unwrap();
+
+    assert_eq!(result.arguments["token"], "from-the-overlay");
+    assert_eq!(result.injected_count, 1);
+    assert!(std::env::var("INJECTOR_OVERLAY_ONLY").is_err());
+}

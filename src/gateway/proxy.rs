@@ -31,6 +31,7 @@ use uuid::Uuid;
 
 use crate::protocol::{ElicitationCreateParams, Root, SamplingCreateMessageParams};
 
+use super::input_bridge::{ClientChannel, DeliveryError};
 use super::streaming::{NotificationMultiplexer, TaggedNotification};
 
 // ============================================================================
@@ -80,6 +81,29 @@ pub struct ProxyManager {
 struct PendingSample {
     session_id: String,
     tx: oneshot::Sender<Value>,
+}
+
+/// Removes a pending entry when the request future ends, however it ends.
+///
+/// [`ProxyManager::resolve_pending`] clears the entry on the answered path and
+/// the timeout arm clears its own, but neither runs when an OUTER timeout or a
+/// task abort drops the in-flight future first. The entry would then outlive
+/// the caller waiting on it for the proxy's lifetime. Dropping the guard is the
+/// one cleanup that happens on every exit, so it covers cancellation; where a
+/// path has already removed the entry the removal is a harmless no-op.
+///
+/// The transport layer solves the same problem the same way — see
+/// `PendingRequestGuard` in `src/transport/mod.rs`. That guard is typed to the
+/// transports' `DashMap` of response senders, so it cannot be reused here.
+struct PendingSampleGuard<'a> {
+    proxy: &'a ProxyManager,
+    id: &'a str,
+}
+
+impl Drop for PendingSampleGuard<'_> {
+    fn drop(&mut self) {
+        self.proxy.cancel_pending(self.id);
+    }
 }
 
 impl ProxyManager {
@@ -189,6 +213,13 @@ impl ProxyManager {
         let id = format!("sampling-{}", Uuid::new_v4());
 
         let rx = self.register_pending(id.clone(), session_id);
+        // Held across the await: on an outer timeout or a task abort no arm
+        // of the match below runs, and dropping this guard is the only
+        // cleanup left. See `PendingSampleGuard`.
+        let _cleanup = PendingSampleGuard {
+            proxy: self,
+            id: &id,
+        };
 
         let data = json!({
             "jsonrpc": "2.0",
@@ -249,6 +280,13 @@ impl ProxyManager {
         let id = format!("elicitation-{}", Uuid::new_v4());
 
         let rx = self.register_pending(id.clone(), session_id);
+        // Held across the await: on an outer timeout or a task abort no arm
+        // of the match below runs, and dropping this guard is the only
+        // cleanup left. See `PendingSampleGuard`.
+        let _cleanup = PendingSampleGuard {
+            proxy: self,
+            id: &id,
+        };
 
         let data = json!({
             "jsonrpc": "2.0",
@@ -353,29 +391,65 @@ impl ProxyManager {
     // Roots proxying
     // ========================================================================
 
-    /// Forward a `roots/list` request to connected clients.
+    /// Forward a `roots/list` request and wait for the client's own reply.
     ///
-    /// In v1, this sends the roots request as a notification over SSE.
-    pub fn forward_roots_list(&self, session_id: &str) -> bool {
-        let data = json!({
-            "jsonrpc": "2.0",
-            "method": "roots/list"
-        });
+    /// Registers in the SAME pending map as
+    /// [`Self::forward_sampling_with_response`], so `resolve_pending`'s
+    /// session-ownership check covers a roots reply too: a second connected
+    /// client cannot answer on the prompted session's behalf, and refusing a
+    /// forged reply leaves the real one's slot intact.
+    ///
+    /// The id minted here goes on the wire and is what the client must echo
+    /// back. Roots has no fire-and-forget forward: a `roots/list` frame with
+    /// no id is a notification a conforming client need not answer, and no
+    /// answer to it could ever be routed back.
+    pub async fn forward_roots_list_with_response(
+        &self,
+        session_id: &str,
+        timeout: Duration,
+    ) -> Result<Value, SamplingError> {
+        let id = format!("roots-{}", Uuid::new_v4());
+
+        let rx = self.register_pending(id.clone(), session_id);
+        // Held across the await: on an outer timeout or a task abort no arm of
+        // the match below runs, and dropping this guard is the only cleanup
+        // left. See `PendingSampleGuard`.
+        let _cleanup = PendingSampleGuard {
+            proxy: self,
+            id: &id,
+        };
 
         let notification = TaggedNotification {
             source: "gateway".to_string(),
-            event_type: "proxy_request".to_string(),
-            data,
+            event_type: "message".to_string(),
+            data: json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "roots/list"
+            }),
             event_id: Some(self.multiplexer.next_event_id()),
         };
 
-        let sent = self.multiplexer.send_to_session(session_id, notification);
-        if sent {
-            debug!(session_id = %session_id, "Forwarded roots/list to client");
-        } else {
-            warn!(session_id = %session_id, "Failed to forward roots/list");
+        if !self.multiplexer.send_to_session(session_id, notification) {
+            // Registered before the send; an undeliverable request has no
+            // responder, so nothing would ever remove the entry.
+            self.cancel_pending(&id);
+            return Err(SamplingError::NoSession);
         }
-        sent
+        debug!(%id, %session_id, "Sent roots/list to the originating session");
+
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_recv_err)) => {
+                self.cancel_pending(&id);
+                Err(SamplingError::Cancelled)
+            }
+            Err(_timeout) => {
+                self.cancel_pending(&id);
+                warn!(%id, timeout = ?timeout, "roots/list request timed out");
+                Err(SamplingError::Timeout(timeout))
+            }
+        }
     }
 
     /// Broadcast `notifications/roots/list_changed` to all backends
@@ -431,6 +505,59 @@ impl ProxyManager {
 // ============================================================================
 // Tests
 // ============================================================================
+
+/// The gateway's own client connection, as the input bridge's channel.
+///
+/// The bridge owns both the id and the deadline: `id` is its pending id
+/// (`input_bridge.rs:63`), and every call already runs inside its outer
+/// `tokio::time::timeout` (`input_bridge.rs:451`), so this adds neither. What
+/// it must add is the trait's cancellation contract, and it meets it with the
+/// same [`PendingSampleGuard`] the three `forward_*_with_response` methods
+/// hold: when that outer timeout drops this future part-way, no arm below
+/// runs, and dropping the guard is the only cleanup left.
+///
+/// Reusing `ProxyManager` rather than standing up a second channel keeps one
+/// pending map. A separate one would have to be reconciled with the POST-back
+/// path in `router/handlers.rs:754`, which resolves against this one.
+#[async_trait::async_trait]
+impl ClientChannel for ProxyManager {
+    async fn send_request(
+        &self,
+        session_id: &str,
+        id: &str,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, DeliveryError> {
+        let rx = self.register_pending(id.to_string(), session_id);
+        // Held across the await, for the reason on `PendingSampleGuard`.
+        let _cleanup = PendingSampleGuard { proxy: self, id };
+
+        let mut data = json!({ "jsonrpc": "2.0", "id": id, "method": method });
+        // Absent params stays absent: an empty object is a params member the
+        // bridge did not send, and the client cannot tell the two apart.
+        if let Some(params) = params {
+            data["params"] = params;
+        }
+
+        let notification = TaggedNotification {
+            source: "gateway".to_string(),
+            event_type: "message".to_string(),
+            data,
+            event_id: Some(self.multiplexer.next_event_id()),
+        };
+
+        // To the originating session only, for the same reason as sampling and
+        // elicitation: a prompt another client can answer is not a prompt.
+        if !self.multiplexer.send_to_session(session_id, notification) {
+            return Err(DeliveryError::NoSession);
+        }
+        debug!(%id, %session_id, %method, "Sent bridged request to the originating session");
+
+        // A dropped sender means the entry went away without an answer, which
+        // is what the bridge's own timeout arm means by `TimedOut`.
+        rx.await.map_err(|_| DeliveryError::TimedOut)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -677,6 +804,7 @@ mod tests {
         let proxy = ProxyManager::new(mux);
 
         let params = ElicitationCreateParams {
+            mode: None,
             message: "Please provide your API key".to_string(),
             requested_schema: Some(json!({
                 "type": "object",
@@ -684,6 +812,7 @@ mod tests {
                     "api_key": { "type": "string" }
                 }
             })),
+            url: None,
         };
 
         assert!(!proxy.forward_elicitation("nonexistent-session", &params));
@@ -696,8 +825,10 @@ mod tests {
         let proxy = ProxyManager::new(Arc::clone(&mux));
 
         let params = ElicitationCreateParams {
+            mode: None,
             message: "Enter name".to_string(),
             requested_schema: None,
+            url: None,
         };
 
         assert!(proxy.forward_elicitation(&session_id, &params));
@@ -767,28 +898,6 @@ mod tests {
         assert_eq!(received.event_type, "proxy_request");
         assert_eq!(received.data["method"], "sampling/createMessage");
         assert_eq!(received.data["params"]["maxTokens"], 1024);
-    }
-
-    // ── Roots forwarding ───────────────────────────────────────────────
-
-    #[test]
-    fn forward_roots_list_to_nonexistent_session_returns_false() {
-        let mux = make_multiplexer();
-        let proxy = ProxyManager::new(mux);
-        assert!(!proxy.forward_roots_list("nonexistent-session"));
-    }
-
-    #[tokio::test]
-    async fn forward_roots_list_to_existing_session() {
-        let mux = make_multiplexer();
-        let (session_id, mut rx) = mux.get_or_create_session(Some("roots-test"));
-        let proxy = ProxyManager::new(Arc::clone(&mux));
-
-        assert!(proxy.forward_roots_list(&session_id));
-
-        let received = rx.recv().await.unwrap();
-        assert_eq!(received.event_type, "proxy_request");
-        assert_eq!(received.data["method"], "roots/list");
     }
 
     // ── Roots changed broadcast ────────────────────────────────────────
@@ -896,8 +1005,10 @@ mod tests {
         let mux = make_multiplexer();
         let proxy = ProxyManager::new(mux);
         let params = ElicitationCreateParams {
+            mode: None,
             message: "Confirm?".to_string(),
             requested_schema: Some(json!({"type": "object"})),
+            url: None,
         };
 
         // WHEN: delivery to a session that does not exist fails
@@ -911,6 +1022,296 @@ mod tests {
             proxy.pending_sampling.read().len(),
             0,
             "an undeliverable prompt must not leave a pending entry behind"
+        );
+    }
+
+    /// MIK-7212.WIRE.11 — dropping an in-flight sampling call must not strand
+    /// its `pending_sampling` entry.
+    ///
+    /// This is the HTTP mirror of the stdio contract already pinned by
+    /// `cancelled_request_does_not_strand_pending_entry` in
+    /// `src/transport/stdio.rs`: an outer `tokio::time::timeout` or a task
+    /// abort drops the request future BEFORE the proxy's own timeout arm
+    /// runs, so neither `resolve_pending` nor the timeout branch removes the
+    /// entry. Only RAII cleanup on drop can. Without it every cancelled
+    /// sampling call leaks a `PendingSample` for the proxy's lifetime, which
+    /// is the leak MIK-7388.BRIDGE.2 requires the bridged client channel not
+    /// to have.
+    ///
+    /// The live session is what makes the drop happen mid-await: delivery
+    /// must succeed (an undeliverable prompt is already cleaned up on the
+    /// `NoSession` path) and the session must never answer.
+    /// A prompt nobody will ever answer, so the call parks on its receiver.
+    fn never_answered_sampling_params() -> SamplingCreateMessageParams {
+        SamplingCreateMessageParams {
+            messages: vec![SamplingMessage {
+                role: "user".to_string(),
+                content: Content::Text {
+                    text: "never answered".to_string(),
+                    annotations: None,
+                },
+            }],
+            tools: None,
+            tool_choice: None,
+            model_preferences: None,
+            system_prompt: None,
+            max_tokens: 16,
+        }
+    }
+
+    /// The elicitation counterpart of [`never_answered_sampling_params`].
+    fn never_answered_elicitation_params() -> ElicitationCreateParams {
+        ElicitationCreateParams {
+            mode: None,
+            message: "never answered".to_string(),
+            requested_schema: None,
+            url: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn mik_7212_wire_11_cancelled_sampling_does_not_strand_pending_entry() {
+        // GIVEN: a live session that will receive the prompt and never answer
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-cancel"));
+        let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
+        let params = never_answered_sampling_params();
+
+        // The timeout is far beyond the abort below, so the proxy's own
+        // timeout arm cannot be what cleans up — the drop must be.
+        let proxy_for_task = Arc::clone(&proxy);
+        let origin = session.clone();
+        let wait = tokio::spawn(async move {
+            proxy_for_task
+                .forward_sampling_with_response(&origin, &params, Duration::from_secs(30))
+                .await
+        });
+
+        // Receiving the prompt proves the entry is registered and the send
+        // succeeded: the call is now parked on the response receiver.
+        let delivered = tokio::time::timeout(Duration::from_millis(500), rx_session.recv())
+            .await
+            .expect("originating session must receive the sampling request")
+            .expect("channel open");
+        assert_eq!(delivered.data["method"], "sampling/createMessage");
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            1,
+            "precondition: the in-flight call holds exactly one pending entry"
+        );
+
+        // WHEN: the call is cancelled mid-await. Joining the aborted handle
+        // is what makes this deterministic — `abort()` only requests
+        // cancellation, and the future is not dropped until the task is
+        // reaped, so asserting before the join races the runtime.
+        wait.abort();
+        let _ = wait.await;
+
+        // THEN: nothing is left allocated for a caller that no longer exists
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "a cancelled in-flight sampling call must not strand its pending entry"
+        );
+    }
+
+    /// MIK-7212 WIRE-11 (elicitation): the sibling of the sampling case above.
+    ///
+    /// `forward_elicitation_with_response` registers in the SAME
+    /// `pending_sampling` map, so it strands an entry the same way. Covered by
+    /// the same guard, but a guard nobody exercises is a guard nobody has
+    /// checked — the elicitation call site is verified here on its own.
+    #[tokio::test]
+    async fn mik_7212_wire_11_cancelled_elicitation_does_not_strand_pending_entry() {
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-cancel-elicit"));
+        let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
+        let params = never_answered_elicitation_params();
+
+        let proxy_for_task = Arc::clone(&proxy);
+        let origin = session.clone();
+        let wait = tokio::spawn(async move {
+            proxy_for_task
+                .forward_elicitation_with_response(&origin, &params, Duration::from_secs(30))
+                .await
+        });
+
+        let delivered = tokio::time::timeout(Duration::from_millis(500), rx_session.recv())
+            .await
+            .expect("originating session must receive the elicitation request")
+            .expect("channel open");
+        assert_eq!(delivered.data["method"], "elicitation/create");
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            1,
+            "precondition: the in-flight call holds exactly one pending entry"
+        );
+
+        wait.abort();
+        let _ = wait.await;
+
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "a cancelled in-flight elicitation call must not strand its pending entry"
+        );
+    }
+
+    /// MIK-7212 WIRE-11 (outer timeout, sampling): a different way to be cancelled.
+    ///
+    /// The abort tests above cover the task-reaper shape; this is the shape a
+    /// real caller hits, wrapping the call in a timeout of its own. Both end at
+    /// the same `Drop`, so this is a second CALLER rather than a second
+    /// mechanism. The proxy's own timeout is 30s away, so it cannot be what
+    /// cleans up here either.
+    #[tokio::test]
+    async fn mik_7212_wire_11_outer_timeout_on_sampling_does_not_strand_pending_entry() {
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-outer-sampling"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+        let params = never_answered_sampling_params();
+
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            proxy.forward_sampling_with_response(&session, &params, Duration::from_secs(30)),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "the outer timeout must fire first; the proxy's own is 30s away"
+        );
+
+        // Draining afterwards proves the request really was registered and sent
+        // before the outer timeout dropped the future.
+        let delivered = rx_session
+            .try_recv()
+            .expect("the sampling request must have reached the session");
+        assert_eq!(delivered.data["method"], "sampling/createMessage");
+
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "an externally timed-out sampling call must not strand its pending entry"
+        );
+    }
+
+    /// MIK-7212 WIRE-11 (outer timeout, elicitation): the fourth corner.
+    #[tokio::test]
+    async fn mik_7212_wire_11_outer_timeout_on_elicitation_does_not_strand_pending_entry() {
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-outer-elicit"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+        let params = never_answered_elicitation_params();
+
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            proxy.forward_elicitation_with_response(&session, &params, Duration::from_secs(30)),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "the outer timeout must fire first; the proxy's own is 30s away"
+        );
+
+        let delivered = rx_session
+            .try_recv()
+            .expect("the elicitation request must have reached the session");
+        assert_eq!(delivered.data["method"], "elicitation/create");
+
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "an externally timed-out elicitation call must not strand its pending entry"
+        );
+    }
+
+    /// MIK-7212 WIRE-11 (production `ClientChannel`): the bridge's own send is
+    /// held to the same cancellation contract as the proxy's three forwards.
+    ///
+    /// The bridge wraps every `send_request` in an outer timeout
+    /// (`input_bridge.rs:451`) and abandons the future on expiry, so an
+    /// implementation that registers a pending entry before awaiting and
+    /// releases it only on the success or error path leaks one per expired
+    /// prompt. This drives the implementor through the trait, not through
+    /// `forward_elicitation_with_response`, because it is the implementor that
+    /// chooses whether to hold a guard.
+    #[tokio::test]
+    async fn mik_7212_wire_11_cancelled_channel_send_does_not_strand_pending_entry() {
+        use crate::gateway::input_bridge::ClientChannel;
+
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-channel-cancel"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+        let channel: &dyn ClientChannel = &proxy;
+
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            channel.send_request(
+                &session,
+                "elicitation-1",
+                "elicitation/create",
+                Some(json!({"message": "which one?", "requestedSchema": {"type": "object"}})),
+            ),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "the outer timeout must fire first; nothing ever answers this prompt"
+        );
+
+        let delivered = rx_session
+            .try_recv()
+            .expect("the request must have reached the session");
+        assert_eq!(delivered.data["method"], "elicitation/create");
+        assert_eq!(
+            delivered.data["id"], "elicitation-1",
+            "the bridge's own id must go on the wire, not a freshly minted one"
+        );
+        // The answer has to be able to come back. `handlers.rs:754` only
+        // resolves a POST-back whose id passes this gate, so an id that goes
+        // out without it would strand the caller with both halves green.
+        assert!(
+            crate::gateway::input_bridge::is_bridge_reply_id(
+                delivered.data["id"].as_str().expect("the id is a string")
+            ),
+            "the id on the wire must be one the POST-back path admits"
+        );
+
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "a cancelled bridge send must not strand its pending entry"
+        );
+    }
+
+    /// MIK-7212 WIRE-11 (undeliverable): no session to reach is `NoSession`,
+    /// and it leaves nothing behind either.
+    #[tokio::test]
+    async fn mik_7212_wire_11_undeliverable_channel_send_leaves_no_pending_entry() {
+        use crate::gateway::input_bridge::{ClientChannel, DeliveryError};
+
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+        let channel: &dyn ClientChannel = &proxy;
+
+        let err = channel
+            .send_request(
+                "sess-nobody-home",
+                "bridge-elicit-2",
+                "elicitation/create",
+                None,
+            )
+            .await
+            .expect_err("there is no such session to deliver to");
+
+        assert!(
+            matches!(err, DeliveryError::NoSession),
+            "an undeliverable prompt is NoSession, not a timeout: {err:?}"
+        );
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "an undeliverable bridge send must not strand its pending entry"
         );
     }
 }

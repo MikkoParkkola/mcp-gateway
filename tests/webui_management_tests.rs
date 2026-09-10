@@ -93,6 +93,9 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
     let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
 
     Arc::new(AppState {
+        session_lifecycle: None,
+        continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+        env: None,
         backends,
         meta_mcp,
         meta_mcp_enabled: false,
@@ -122,6 +125,10 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(
             mcp_gateway::gateway::auth::DashboardBootstrap::new(),
+        ),
+        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
+        subscriptions: Arc::new(
+            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
         ),
     })
 }
@@ -168,6 +175,9 @@ fn make_app_state_with_reload(
 
     (
         Arc::new(AppState {
+            session_lifecycle: None,
+            continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+            env: None,
             backends,
             meta_mcp,
             meta_mcp_enabled: false,
@@ -197,6 +207,10 @@ fn make_app_state_with_reload(
             transparency_log: None,
             dashboard_bootstrap: std::sync::Arc::new(
                 mcp_gateway::gateway::auth::DashboardBootstrap::new(),
+            ),
+            tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
+            subscriptions: Arc::new(
+                mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
             ),
         }),
         live_config,

@@ -63,6 +63,13 @@ pub struct CapabilityExecutor {
     /// counts as a live backend. Surfaced via the capability backend in
     /// `/health` (MIK-5080).
     pub(super) health: crate::failsafe::HealthTracker,
+    /// The environment a credential name resolves against.
+    ///
+    /// Capability credentials resolve lazily, per call, so this is the reader
+    /// that a rotated env file has to reach. Defaults to the process
+    /// environment; the gateway replaces it with the overlay startup published
+    /// (`with_env`), which a reload republishes.
+    pub(super) env: Arc<crate::config::LiveEnv>,
 }
 
 /// Maximum number of send attempts (1 initial + 2 retries) for transient
@@ -90,6 +97,17 @@ pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
 /// Health: a transport success (any HTTP status) records success; exhausting
 /// retries records a failure. The request is cloned per attempt; a
 /// non-cloneable body is sent once.
+/// Render an outbound transport error without the URL it was built from.
+///
+/// `reqwest::Error`'s `Display` appends `" for url (...)"` verbatim
+/// (`reqwest-0.13.4/src/error.rs:279-280`), and reqwest's own docs on
+/// [`reqwest::Error::without_url`] warn that the URL may carry a credential.
+/// Backend URLs here are operator-configured and a query-string API key is a
+/// common shape, so the raw error must never reach a log sink or a client.
+fn redact_url(e: reqwest::Error) -> reqwest::Error {
+    e.without_url()
+}
+
 pub(super) async fn send_with_retry(
     request: reqwest::RequestBuilder,
     label: &str,
@@ -108,7 +126,10 @@ pub(super) async fn send_with_retry(
                 }
                 Err(e) => {
                     health.record_failure();
-                    Err(Error::Transport(format!("{label} failed: {e}")))
+                    Err(Error::Transport(format!(
+                        "{label} failed: {}",
+                        redact_url(e)
+                    )))
                 }
             };
         };
@@ -119,6 +140,7 @@ pub(super) async fn send_with_retry(
             }
             Err(e) => {
                 let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
+                let e = redact_url(e);
                 if transient && attempt < MAX_SEND_ATTEMPTS {
                     tracing::warn!(
                         label = label,
@@ -188,7 +210,17 @@ impl CapabilityExecutor {
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("capabilities"),
+            env: Arc::new(crate::config::LiveEnv::default()),
         }
+    }
+
+    /// Resolve credential names against `env` instead of the process
+    /// environment.
+    #[must_use]
+    pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
+        self.secret_resolver = Arc::new(SecretResolver::new().with_env(Arc::clone(&env)));
+        self.env = env;
+        self
     }
 
     /// Whether outbound transport is currently considered healthy.
@@ -217,6 +249,7 @@ impl CapabilityExecutor {
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("capabilities"),
+            env: Arc::new(crate::config::LiveEnv::default()),
         }
     }
 

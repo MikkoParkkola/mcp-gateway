@@ -104,11 +104,11 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 
 # mcp-gateway
 
-Universal MCP Gateway | Rust 1.88+ | Edition 2024 | ~101K LOC | PolyForm Noncommercial default, MIT core
+Universal MCP Gateway | Rust 1.95+ | Edition 2024 | ~101K LOC | PolyForm Noncommercial 1.0.0
 
 ## Product Vision
 
-mcp-gateway sits between any AI client and any set of MCP tools. Instead of loading hundreds of tool definitions into every request, the AI sees a compact **Meta-MCP surface** (14 tools minimum, 16 in the README benchmark, 17 when webhook status is surfaced) and discovers the right backend tool on demand. This cuts schema-only first-request context on a 100-tool stack (the 89% README model ignores extra discovery turns; `honest_task_tokens` can lose), removes the "pick which tools to connect" tradeoff, and makes `Unlimited` a practical answer to `how many tools`.
+mcp-gateway sits between any AI client and any set of MCP tools. Instead of loading hundreds of tool definitions into every request, the AI sees a compact **Meta-MCP surface** (14 tools minimum, 17 in the README benchmark) and discovers the right backend tool on demand. This cuts schema-only first-request context on a 100-tool stack (the 89% README model ignores extra discovery turns; `honest_task_tokens` can lose), removes the "pick which tools to connect" tradeoff, and makes `Unlimited` a practical answer to `how many tools`.
 
 The gateway is a **tool + capability router**, not a general chat-completions / embeddings gateway. When a backend asks for `sampling/createMessage`, the connected client still performs the model call. OpenAI-compatible prompt-cache helpers exist only so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally.
 
@@ -116,9 +116,9 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 ## Current Status
 
-- **v3.5.1** · Rust 1.95+ · Edition 2024 · ~101K LOC · MIT core + PolyForm Noncommercial EE
+- **v4.0.0** · Rust 1.95+ · Edition 2024 · ~101K LOC · PolyForm Noncommercial 1.0.0 across the whole repository
 - Published on crates.io + Homebrew + npm + ghcr.io container images + Glama + VS Code + Cursor one-click install
-- **Meta-MCP surface**: 14-16 tools in production scenarios (README benchmark scenario)
+- **Meta-MCP surface**: 14-17 tools in production scenarios (README benchmark scenario)
 - **Capability backends**: 110+ REST capabilities + MCP backends routed via the same surface
 - **Security**: unsafe denied (`#![deny(unsafe_code)]`); dependency-status badge; scoped OWASP Agentic AI self-assessment at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`
 - **Benchmarks**: machine-readable claims in `benchmarks/public_claims.json` with CI drift check
@@ -136,7 +136,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 | Decision | Rationale | Do not |
 |---|---|---|
-| **Meta-MCP surface is compact** (14-16 tools target) | Catalog capacity and on-demand routing are the value proposition | Add meta-tools that could be dynamic-discovery tools |
+| **Meta-MCP surface is compact** (14-17 tools target) | Catalog capacity and on-demand routing are the value proposition | Add meta-tools that could be dynamic-discovery tools |
 | **mcp-gateway is NOT a chat / embeddings gateway** | Scope boundary; model calls stay with the connected client | Add OpenAI chat-completion proxying as a first-class feature |
 | **`#![deny(unsafe_code)]`** | Gateway sits on the trust path for every tool call | Introduce unsafe to chase performance |
 | **Optional SHA-256 capability pinning** | Pinned capability tampering must be detectable and fail closed | Accept a mismatched pin |
@@ -144,7 +144,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 | **Dual MCP + A2A transport** | Cross-provider agent messaging (#145, MIK-2970) | Treat A2A as an afterthought; avoid compiling it out of default builds |
 | **Capability definitions public (mcp-gateway) / private (mcp-gateway-private)** | Public catalog for community; private API credentials / deploy configs | Mix private capabilities into the public catalog |
 | **`cargo clippy --all-targets -- -D warnings` + `cargo fmt --check`** gates | Zero-debt discipline in Rust source | Ship code with lints suppressed ad hoc |
-| **Mixed per-file licensing: MIT core + PolyForm Noncommercial 1.0.0 EE** | Core gateway stays MIT for adoption; security firewall, agent-identity, data-flow, message-signing, policy, response-inspect/scanner, scope-collision, tool-integrity, cost-accounting, key-server, and transparency-log paths require commercial terms for commercial use (see [LICENSE-EE.md](LICENSE-EE.md), v2.11.0+) | Collapse package metadata back to plain MIT |
+| **One license: PolyForm Noncommercial 1.0.0 for the whole repository** | v4.0.0 retires the MIT core and the `.mit-core-allowlist` that enumerated it; one license means one source of truth, and commercial use goes through a commercial license (see [ADR-013](docs/adr/ADR-013-single-noncommercial-license.md), [LICENSES.md](LICENSES.md), [COMMERCIAL.md](COMMERCIAL.md)) | Reintroduce an MIT carve-out or any second per-file license |
 
 ## Anti-Patterns (things agents get wrong in this repo)
 
@@ -174,7 +174,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 | A2A transport | `src/a2a/` |
 | Benchmarks + claims | `docs/BENCHMARKS.md` + `benchmarks/public_claims.json` |
 | OWASP compliance | `docs/OWASP_AGENTIC_AI_COMPLIANCE.md` |
-| Upgrade migrations | `commands/upgrade/` |
+| Upgrade migrations | `src/commands/upgrade.rs` |
 
 ## Build & Test
 
@@ -190,14 +190,14 @@ cargo fmt                            # auto-format
 
 ## Architecture
 
-Single-binary gateway: AI client -> compact Meta-MCP surface (14 tools minimum; 16 in the README scenario) -> dynamic discovery of backend tools.
+Single-binary gateway: AI client -> compact Meta-MCP surface (14 tools minimum; 17 in the README scenario) -> dynamic discovery of backend tools.
 The 89% figure is a schema-only first-request model; completed-task math also counts discovery turns and response history and can report a loss.
 OWASP Agentic AI Top 10: scoped in-tree self-assessment, not certification. MCP + A2A dual-protocol.
 
 Key modules: `gateway/` (core router, OAuth, streaming, UI), `provider/` (MCP/composite/capability),
 `capability/` (discovery, validation), `transport/` (HTTP, stdio), `security/` (firewall, mTLS, message signing, agent identity, memory scanner),
 `cost_accounting/`, `scheduler/`, `skills/`, `tool_profiles/`, `config_reload/`, `a2a/` (A2A transport adapter),
-`commands/upgrade` (post-upgrade migration framework).
+`commands/upgrade.rs` (post-upgrade migration framework).
 
 ## Features (Cargo)
 

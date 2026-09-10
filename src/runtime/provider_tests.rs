@@ -443,7 +443,7 @@ fn runtime_provider_real_docker_smoke_exercises_lifecycle() {
     let plan = planner.plan(&intent);
     let container_name = docker_container_name(&plan);
     let _cleanup = DockerCleanup::new(&container_name);
-    let mut runner = StdRuntimeCommandRunner;
+    let mut runner = StdRuntimeCommandRunner::default();
     let request = RuntimeApplyRequest::empty();
 
     let started = plan
@@ -506,7 +506,7 @@ fn runtime_provider_real_docker_restart_policy_recovers_after_crash() {
     let plan = planner.plan_with_policy(&intent, RuntimeProviderKind::Docker, policy);
     let container_name = docker_container_name(&plan);
     let _cleanup = DockerCleanup::new(&container_name);
-    let mut runner = StdRuntimeCommandRunner;
+    let mut runner = StdRuntimeCommandRunner::default();
     let request = RuntimeApplyRequest::empty();
 
     let started = plan
@@ -637,4 +637,41 @@ fn wait_for_docker_restart_count(container_name: &str) -> u32 {
     docker_inspect(container_name, "{{.RestartCount}}")
         .parse::<u32>()
         .expect("restart count is numeric")
+}
+
+/// Env files no longer write the process environment, so a runner that reads
+/// `std::env` alone launches a backend without the credential its env file
+/// supplies. The overlay is the only place that value exists.
+#[cfg(unix)]
+#[test]
+fn std_runner_passes_an_env_file_only_key_to_the_child() {
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("runtime.env");
+    std::fs::write(&path, "RUNTIME_OVERLAY_ONLY_KEY=from-the-env-file\n").expect("write env file");
+    let overlay = crate::config::EnvOverlay::from_paths(std::slice::from_ref(&path));
+    let live = Arc::new(crate::config::LiveEnv::new(
+        Arc::new(overlay),
+        crate::config::ResolvedEnvFiles::default(),
+    ));
+
+    let mut runner = StdRuntimeCommandRunner::default().with_env(live);
+    let command = RuntimeLaunchCommand {
+        program: "sh".to_string(),
+        args: vec![
+            "-c".to_string(),
+            "printf %s \"$RUNTIME_OVERLAY_ONLY_KEY\"".to_string(),
+        ],
+        mode: crate::runtime::RuntimeLaunchMode::RunToCompletion,
+    };
+
+    let outcome = runner
+        .run(&command, &["RUNTIME_OVERLAY_ONLY_KEY".to_string()])
+        .expect("run the launcher command");
+    assert_eq!(
+        outcome.stdout.trim(),
+        "from-the-env-file",
+        "the child must receive the value the env file supplies"
+    );
 }

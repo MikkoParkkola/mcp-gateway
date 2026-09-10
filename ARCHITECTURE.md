@@ -39,7 +39,7 @@ This is why `src/gateway/meta_mcp/prompt_cache.rs` exists even though the projec
 
 ## Meta-Tools
 
-The gateway advertises 14 to 17 meta-tools to connecting clients. The base set of 4 is always present; `gateway_cost_report` is always built at runtime; the rest are conditional on configuration. When `code_mode.enabled` is set, this whole set is replaced by two tools, `gateway_search` and `gateway_execute`.
+The gateway advertises 14 to 17 meta-tools to connecting clients. Fourteen are unconditional — `gateway_cost_report` among them, because the served path builds it whatever the configuration says. `gateway_get_stats`, `gateway_reload_config` and `gateway_webhook_status` are the conditional additions, and they are where the ceiling of 17 comes from. The table below is the derivation: count the `yes` rows for the floor. When `code_mode.enabled` is set, this whole set is replaced by two tools, `gateway_search` and `gateway_execute`.
 
 | Tool | Always | Purpose |
 |------|--------|---------|
@@ -49,19 +49,19 @@ The gateway advertises 14 to 17 meta-tools to connecting clients. The base set o
 | `gateway_invoke` | yes | Call any tool on any backend. Handles caching, idempotency, kill switch |
 | `gateway_get_stats` | if stats enabled | Usage stats: invocations, cache hits, top tools, and discovery counts |
 | `gateway_cost_report` | yes | Current session and API-key spend |
-| `gateway_webhook_status` | if webhooks enabled | List webhook endpoints and delivery stats |
+| `gateway_webhook_status` | if a webhook registry is attached | Delivery counters for the webhook push pipeline. Listed where the registry exists (HTTP transports); callable by name everywhere, and governed either way |
 | `gateway_run_playbook` | yes | Execute a multi-step playbook as a single call |
 | `gateway_kill_server` | yes | Operator kill switch: immediately disable routing to a backend |
 | `gateway_revive_server` | yes | Re-enable a killed backend and reset its error budget |
-| `gateway_set_profile` | yes | Switch the active routing profile for this session |
-| `gateway_get_profile` | yes | Show the active routing profile and what it allows or denies |
+| `gateway_set_profile` | yes | Switch the active routing profile for this session. Refused on MCP 2026-07-28, which has no sessions |
+| `gateway_get_profile` | yes | Show the active routing profile and what it allows or denies. Refused on MCP 2026-07-28, which has no sessions |
 | `gateway_list_disabled_capabilities` | yes | List capabilities auto-disabled for a high error rate |
 | `gateway_list_profiles` | yes | List available routing profiles |
 | `gateway_set_state` | yes | Transition the session to a new workflow state |
 | `gateway_reload_config` | if reload enabled | Reload `config.yaml` from disk without restarting |
 | `gateway_reload_capabilities` | yes | Re-read capability YAML files and rebuild the registry |
 
-Defined in `src/gateway/meta_mcp_tool_defs.rs`, function `build_meta_tools()` (line 543).
+Defined in `src/gateway/meta_mcp_tool_defs.rs`, function `build_meta_tools()` (line 546).
 
 ## Tool Discovery Resolution Order
 

@@ -1,11 +1,11 @@
 [package]
 name = "mcp-gateway"
-version = "3.5.1"
+version = "4.0.0"
 edition = "2024"
 rust-version = "1.95"
 authors = ["Mikko Parkkola <mikko.parkkola@iki.fi>"]
 description = "Universal MCP Gateway - compact Meta-MCP surface over many backends"
-license-file = "LICENSES.md"
+license = "PolyForm-Noncommercial-1.0.0"
 homepage = "https://github.com/MikkoParkkola/mcp-gateway"
 repository = "https://github.com/MikkoParkkola/mcp-gateway"
 documentation = "https://docs.rs/mcp-gateway"
@@ -24,7 +24,6 @@ include = [
     "LICENSES.md",
     "NOTICE.md",
     "COMMERCIAL.md",
-    ".mit-core-allowlist",
     "CHANGELOG.md",
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",
@@ -173,6 +172,7 @@ pretty_assertions = "1.4"
 tempfile = "3.14"
 serde_urlencoded = "0.7"
 criterion = { version = "0.8", features = ["html_reports"] }
+jsonschema = { version = "0.52.1", default-features = false }
 
 [features]
 default = ["a2a", "webui", "config-export", "cost-governance", "firewall", "discovery", "semantic-search", "tool-profiles", "metrics"]

@@ -12,6 +12,8 @@
 //! across every request. A `RegexSet` compiles all patterns into a single DFA,
 //! so each string is scanned in O(n) regardless of the number of patterns.
 
+use std::sync::Arc;
+
 use regex::RegexSet;
 use serde_json::{Map, Value};
 
@@ -23,6 +25,10 @@ use super::{Finding, FindingLocation, ScanType, Severity};
 /// by default). SQL injection findings are `Severity::Medium` (→ warn by
 /// default) because SQL keywords appear legitimately in many search queries.
 pub struct InputScanner {
+    /// Live env the free-text key override is resolved against, when the
+    /// scanner was built with one. Held rather than snapshotted so a config
+    /// reload changes the list a later scan uses.
+    env: Option<Arc<crate::config::LiveEnv>>,
     shell: RegexSet,
     path: RegexSet,
     sql: RegexSet,
@@ -67,9 +73,12 @@ const FREE_TEXT_KEYS: &[&str] = &[
     "acceptance_criteria",
 ];
 
-/// Resolve the active free-text key list. Env override wins.
-fn free_text_keys() -> Vec<String> {
-    if let Ok(s) = std::env::var("MCP_GATEWAY_FIREWALL_SKIP_KEYS") {
+/// Name of the operator override for the free-text key list.
+const SKIP_KEYS_ENV: &str = "MCP_GATEWAY_FIREWALL_SKIP_KEYS";
+
+/// Resolve the active free-text key list. An override wins over the defaults.
+fn free_text_keys(override_value: Option<&str>) -> Vec<String> {
+    if let Some(s) = override_value {
         return s
             .split(',')
             .map(|k| k.trim().to_lowercase())
@@ -105,7 +114,23 @@ impl InputScanner {
     /// Panics at startup if any pattern string is invalid regex — this is a
     /// programming error caught during development, not a runtime condition.
     pub fn new() -> Self {
+        Self::with_optional_env(None)
+    }
+
+    /// Create a scanner whose free-text key override is resolved against `env`.
+    ///
+    /// Env files load into an in-memory overlay rather than into the process
+    /// environment, so a `std::env` read cannot see an override an env file
+    /// assigns. The live env is held rather than read once, so a reload that
+    /// changes the override takes effect on the next scan.
+    #[must_use]
+    pub fn with_env(env: Arc<crate::config::LiveEnv>) -> Self {
+        Self::with_optional_env(Some(env))
+    }
+
+    fn with_optional_env(env: Option<Arc<crate::config::LiveEnv>>) -> Self {
         Self {
+            env,
             shell: RegexSet::new(SHELL_PATTERNS).expect("Shell injection patterns must compile"),
             path: RegexSet::new(PATH_TRAVERSAL_PATTERNS)
                 .expect("Path traversal patterns must compile"),
@@ -117,26 +142,44 @@ impl InputScanner {
     ///
     /// Recursively descends into nested arrays and objects.
     pub fn scan_args(&self, args: &Map<String, Value>) -> Vec<Finding> {
+        // Resolved once per scan, not per scanned string: re-reading it per
+        // value re-allocated the list for every argument, and caching it for
+        // the scanner's lifetime would keep a list a config reload replaced.
+        let free_text = self.active_free_text_keys();
         let mut findings = Vec::new();
         for (key, value) in args {
-            self.scan_value_recursive(key, value, &mut findings);
+            self.scan_value_recursive(key, value, &free_text, &mut findings);
         }
         findings
     }
 
-    fn scan_value_recursive(&self, key: &str, value: &Value, findings: &mut Vec<Finding>) {
+    /// The free-text key list in force right now.
+    fn active_free_text_keys(&self) -> Vec<String> {
+        match &self.env {
+            Some(env) => free_text_keys(env.get().resolve(SKIP_KEYS_ENV).as_deref()),
+            None => free_text_keys(std::env::var(SKIP_KEYS_ENV).ok().as_deref()),
+        }
+    }
+
+    fn scan_value_recursive(
+        &self,
+        key: &str,
+        value: &Value,
+        free_text: &[String],
+        findings: &mut Vec<Finding>,
+    ) {
         match value {
             Value::String(s) => {
-                self.scan_string(key, s, findings);
+                self.scan_string(key, s, free_text, findings);
             }
             Value::Array(arr) => {
                 for item in arr {
-                    self.scan_value_recursive(key, item, findings);
+                    self.scan_value_recursive(key, item, free_text, findings);
                 }
             }
             Value::Object(map) => {
                 for (k, v) in map {
-                    self.scan_value_recursive(k, v, findings);
+                    self.scan_value_recursive(k, v, free_text, findings);
                 }
             }
             // Numbers, booleans, and nulls cannot contain injection patterns.
@@ -144,10 +187,16 @@ impl InputScanner {
         }
     }
 
-    fn scan_string(&self, key: &str, value: &str, findings: &mut Vec<Finding>) {
+    fn scan_string(
+        &self,
+        key: &str,
+        value: &str,
+        free_text: &[String],
+        findings: &mut Vec<Finding>,
+    ) {
         let fragment = truncate(value, 200);
         let key_lc = key.to_lowercase();
-        let in_free_text = free_text_keys().iter().any(|k| k == &key_lc);
+        let in_free_text = free_text.iter().any(|k| k == &key_lc);
 
         // Shell injection — HIGH severity (deterministic, very few false positives
         // on command/argument fields). Skipped on free-text keys (description,
@@ -210,6 +259,45 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn free_text_override_from_an_env_file_reaches_the_scanner() {
+        // The override used to be read with `std::env::var`, which cannot see a
+        // value an env file assigns once env files load into an overlay.
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        std::fs::write(&env_file, "MCP_GATEWAY_FIREWALL_SKIP_KEYS=release_notes\n").unwrap();
+        let overlay = Arc::new(crate::config::EnvOverlay::from_paths(&[env_file]));
+        let env = Arc::new(crate::config::LiveEnv::new(
+            Arc::clone(&overlay),
+            crate::config::ResolvedEnvFiles::default(),
+        ));
+
+        let mut args = Map::new();
+        args.insert(
+            "release_notes".to_string(),
+            Value::String("run `id`".into()),
+        );
+
+        assert!(
+            !InputScanner::new().scan_args(&args).is_empty(),
+            "default key list must still flag a backtick command in this key"
+        );
+        let scanner = InputScanner::with_env(Arc::clone(&env));
+        assert!(
+            scanner.scan_args(&args).is_empty(),
+            "the env-file override must make this key free text"
+        );
+
+        // A reload that drops the override must reach a scanner built before it.
+        env.set(Arc::new(crate::config::EnvOverlay::none()));
+        assert!(
+            !scanner.scan_args(&args).is_empty(),
+            "a reload that clears the override must be visible to the next scan"
+        );
+
+        assert!(std::env::var("MCP_GATEWAY_FIREWALL_SKIP_KEYS").is_err());
+    }
     use serde_json::json;
 
     fn scanner() -> InputScanner {

@@ -29,7 +29,6 @@ struct PublicClaims {
 struct MetaToolClaims {
     minimum: usize,
     readme_benchmark: usize,
-    with_webhook_status: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,7 +81,7 @@ fn make_reload_context(backends: Arc<BackendRegistry>) -> Arc<ReloadContext> {
     ))
 }
 
-fn operational_meta_mcp(with_webhooks: bool) -> MetaMcp {
+fn operational_meta_mcp() -> MetaMcp {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = MetaMcp::with_features(
         Arc::clone(&backends),
@@ -92,19 +91,20 @@ fn operational_meta_mcp(with_webhooks: bool) -> MetaMcp {
         Duration::from_secs(60),
     );
     meta_mcp.set_reload_context(make_reload_context(Arc::clone(&backends)));
-    if with_webhooks {
-        meta_mcp.set_webhook_registry(Arc::new(parking_lot::RwLock::new(WebhookRegistry::new(
-            WebhookConfig::default(),
-        ))));
-    }
+    // The benchmark scenario is the shipped default, and `webhooks.enabled`
+    // defaults to true, so the surface a real HTTP deployment serves includes
+    // `gateway_webhook_status`. Omitting the registry here would quote a
+    // token saving no default install actually gets.
+    meta_mcp.set_webhook_registry(Arc::new(parking_lot::RwLock::new(WebhookRegistry::new(
+        WebhookConfig::default(),
+    ))));
     meta_mcp
 }
 
 fn live_meta_tool_counts() -> MetaToolClaims {
     MetaToolClaims {
         minimum: meta_tool_count(&MetaMcp::new(Arc::new(BackendRegistry::new()))),
-        readme_benchmark: meta_tool_count(&operational_meta_mcp(false)),
-        with_webhook_status: meta_tool_count(&operational_meta_mcp(true)),
+        readme_benchmark: meta_tool_count(&operational_meta_mcp()),
     }
 }
 
@@ -341,14 +341,15 @@ fn canonical_meta_tool_counts_match_live_runtime() {
 fn readme_quantitative_claims_match_canonical_benchmark_data() {
     let claims = load_claims();
     let readme = read_repo_file("README.md");
-    let rounded_startup_ms = claims.startup_benchmark.mean_ms.round() as u64;
+    // Rendered, not cast: these are non-negative measured values whose only
+    // use is the string in the doc, and a cast would need two lint waivers to
+    // say the same thing.
+    let rounded_startup_ms = format!("{:.0}", claims.startup_benchmark.mean_ms.round());
 
     assert!(
         readme.contains(&format!(
-            "{} tools minimum, {} in the README benchmark scenario, {} when webhook status is surfaced",
-            claims.meta_tools.minimum,
-            claims.meta_tools.readme_benchmark,
-            claims.meta_tools.with_webhook_status
+            "{} tools minimum, {} in the README benchmark scenario",
+            claims.meta_tools.minimum, claims.meta_tools.readme_benchmark
         )),
         "README should advertise the canonical Meta-MCP tool-count range"
     );
@@ -443,10 +444,8 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     );
     assert!(
         benchmarks.contains(&format!(
-            "{} minimum / {} README benchmark / {} with webhook status",
-            claims.meta_tools.minimum,
-            claims.meta_tools.readme_benchmark,
-            claims.meta_tools.with_webhook_status
+            "{} minimum / {} README benchmark",
+            claims.meta_tools.minimum, claims.meta_tools.readme_benchmark
         )),
         "benchmark docs should describe the canonical Meta-MCP tool-count matrix"
     );
@@ -487,14 +486,11 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
         "benchmark docs should derive the gateway schema-token claim from public_claims.json"
     );
     assert!(
-        benchmarks.contains(&format!("**{}% smaller**", savings_percent.round() as u64)),
+        benchmarks.contains(&format!("**{:.0}% smaller**", savings_percent.round())),
         "benchmark docs should derive the rounded schema reduction from public_claims.json"
     );
     assert!(
-        benchmarks.contains(&format!(
-            "**${} per 1K requests**",
-            savings_usd.round() as u64
-        )),
+        benchmarks.contains(&format!("**${:.0} per 1K requests**", savings_usd.round())),
         "benchmark docs should derive the modeled request-cost delta from public_claims.json"
     );
     assert!(
@@ -503,8 +499,8 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     );
     assert!(
         benchmarks.contains(&format!(
-            "~{}ms",
-            claims.startup_benchmark.mean_ms.round() as u64
+            "~{:.0}ms",
+            claims.startup_benchmark.mean_ms.round()
         )),
         "benchmark docs should include the canonical rounded startup metric"
     );

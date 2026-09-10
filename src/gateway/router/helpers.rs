@@ -30,6 +30,13 @@ where
 }
 
 pub(super) fn attach_session_header(headers: &mut axum::http::HeaderMap, session_id: &str) {
+    // An empty id means the caller has no session, which after MCP 2026-07-28
+    // is the ordinary case rather than an error. Emitting the header with an
+    // empty value would be worse than omitting it: a client and an intermediary
+    // would both read a session that does not exist.
+    if session_id.is_empty() {
+        return;
+    }
     match HeaderValue::from_str(session_id) {
         Ok(value) => {
             headers.insert(
@@ -71,6 +78,27 @@ pub(super) fn build_error_response(
 ) -> axum::response::Response {
     build_response(
         JsonRpcResponse::error(id, code, message.into()),
+        session_id,
+        status,
+    )
+}
+
+/// Build a JSON-RPC error carrying a `data` payload the client must act on.
+///
+/// Separate from [`build_error_response`] rather than an `Option` parameter on
+/// it: every existing caller would have to name a payload it does not have, and
+/// a `None` threaded through forty call sites is how the payload ends up
+/// omitted at the one site that needed it.
+pub(super) fn build_error_response_with_data(
+    id: Option<RequestId>,
+    code: i32,
+    message: impl Into<String>,
+    data: serde_json::Value,
+    session_id: &str,
+    status: StatusCode,
+) -> axum::response::Response {
+    build_response(
+        JsonRpcResponse::error_with_data(id, code, message.into(), data),
         session_id,
         status,
     )
@@ -185,6 +213,43 @@ pub(crate) fn extract_tools_call_params(params: Option<&Value>) -> (&str, Value)
         .cloned()
         .unwrap_or(json!({}));
     (tool_name, arguments)
+}
+
+/// Carry the client's `params._meta` into a meta-tool's `arguments`.
+///
+/// A conforming client places `_meta` as a sibling of `arguments` inside
+/// `params` (`src/protocol/meta.rs`), and `extract_tools_call_params` returns
+/// `arguments` alone, so nothing downstream of the router could ever see it.
+/// The meta layer reads it off the argument object it is handed, which is why
+/// it has to travel there.
+///
+/// Conditional on purpose. The merge happens in the router, *before*
+/// `route_direct_backend_call` picks the direct route inside
+/// `handle_tools_call`, so an unconditional merge would synthesise a `_meta`
+/// key into every direct-route backend payload — inventing a field for
+/// backends that never asked for one. `is_meta_tool` is the only thing keeping
+/// the direct route byte-identical, so it must answer "is this name one of
+/// *ours*", not merely "does this gateway confirm the name exists".
+///
+/// An `arguments._meta` the client wrote itself is left alone: the caller's own
+/// value is the more specific one, and overwriting it would silently discard it.
+pub(crate) fn merge_client_meta(
+    arguments: Value,
+    params: Option<&Value>,
+    is_meta_tool: bool,
+) -> Value {
+    if !is_meta_tool {
+        return arguments;
+    }
+    let Some(meta) = params.and_then(|p| p.get("_meta")) else {
+        return arguments;
+    };
+    let mut arguments = arguments;
+    let Some(map) = arguments.as_object_mut() else {
+        return arguments;
+    };
+    map.entry("_meta").or_insert_with(|| meta.clone());
+    arguments
 }
 
 /// Parse JSON-RPC request or notification.

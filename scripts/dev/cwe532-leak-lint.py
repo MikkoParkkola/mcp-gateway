@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Semantic secret-leak lint (CWE-532) — CI Gate 1.
 
 Flags the exact bug class fixed in #323 (fix(security): redact credentials

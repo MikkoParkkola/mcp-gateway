@@ -90,9 +90,9 @@ fn parse_supported_versions_from_paren_format() {
 #[test]
 fn parse_supported_versions_from_supported_colon() {
     use crate::protocol::parse_supported_versions_from_error;
-    let msg = "Supported: 2024-11-05, 2024-10-07";
+    let msg = "Supported: 2024-11-05, 2025-03-26";
     let versions = parse_supported_versions_from_error(msg).unwrap();
-    assert_eq!(versions, vec!["2024-11-05", "2024-10-07"]);
+    assert_eq!(versions, vec!["2024-11-05", "2025-03-26"]);
 }
 
 #[test]
@@ -1086,6 +1086,7 @@ fn session_expired_response_detection_matches_known_signatures() {
             message: message.to_string(),
             data: None,
         }),
+        confirmation_refusal: false,
     };
 
     // MIK-6040: 200 + JSON-RPC error shapes a remote may use for session expiry.
@@ -1113,6 +1114,7 @@ fn session_expired_response_detection_matches_known_signatures() {
         id: None,
         result: Some(serde_json::json!({"ok": true})),
         error: None,
+        confirmation_refusal: false,
     }));
 }
 
@@ -1601,4 +1603,271 @@ fn no_diagnostic_helper_passes_a_canary_through() {
     } else {
         panic!("a cross-origin redirect must be rejected");
     }
+}
+
+/// The SSE body may carry a server-to-client *request* rather than the answer
+/// to the call in flight. Handing that back to the caller as its response is
+/// the defect this guards.
+#[test]
+fn parse_sse_response_rejects_inbound_request_frame() {
+    // GIVEN: an SSE body whose first data line is a request, not a response
+    let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"sampling/createMessage\",\"params\":{}}\n\n";
+
+    // WHEN: the transport parses it
+    let outcome = parse_sse_response(body);
+
+    // THEN: it is refused, never returned as an empty successful response
+    assert!(
+        outcome.is_err(),
+        "a frame carrying `method` must not parse as a response, got {outcome:?}"
+    );
+}
+
+/// Guard the extraction: a genuine response still parses.
+#[test]
+fn parse_sse_response_accepts_response_frame() {
+    let body = "data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"tools\":[]}}\n";
+    let parsed = parse_sse_response(body).expect("valid response must parse");
+    assert!(parsed.response.result.is_some());
+    assert!(parsed.response.error.is_none());
+}
+
+// =========================================================================
+// OAuth cleartext-transmission guard (CodeQL rust/cleartext-transmission
+// alerts #90/#91, CWE-319). An OAuth bearer token must never leave the
+// process over plaintext `http://` unless the peer is loopback.
+//
+// Test plan — one row per acceptance criterion:
+//   1  https + non-loopback + oauth      -> ALLOW  (guard must not over-refuse)
+//   2  http  + non-loopback + oauth      -> REFUSE (the alert itself; RED today)
+//   3  http://localhost + oauth          -> ALLOW  (operator-ruled exemption)
+//   4  http://127.0.0.2 + oauth          -> ALLOW  (127.0.0.0/8, not one address)
+//   5  http://[::1] + oauth              -> ALLOW  (v6 loopback)
+//   6  http://localhost.evil.com + oauth -> REFUSE (kills a substring host check)
+//   7  http://127.0.0.1.evil.com + oauth -> REFUSE (kills a prefix host check)
+//   8  http://[::ffff:127.0.0.1] + oauth -> REFUSE (mapped v4 is not loopback here)
+//   9  ftp://localhost + oauth           -> REFUSE (only http/https are transports)
+//  10  http + non-loopback, NO oauth     -> ALLOW  (no credential, no change)
+//  11  request time: message endpoint downgraded -> get_oauth_token refuses
+//  12  request time: no oauth configured -> Ok(None) even over cleartext
+// =========================================================================
+
+fn oauth_client_for(resource: &str) -> crate::oauth::OAuthClient {
+    use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
+    let storage =
+        Arc::new(TokenStorage::new(std::env::temp_dir().join("http_transport_tls_guard")).unwrap());
+    OAuthClient::new(
+        reqwest::Client::new(),
+        "test-backend".to_string(),
+        resource.to_string(),
+        vec![],
+        storage,
+        OAuthClientConfig {
+            token_refresh_buffer_secs: 300,
+            ..Default::default()
+        },
+    )
+}
+
+fn transport_with_oauth(url: &str) -> Result<Arc<HttpTransport>> {
+    HttpTransport::new_with_oauth(
+        url,
+        HashMap::new(),
+        Duration::from_secs(5),
+        true,
+        Some(oauth_client_for(url)),
+        None,
+    )
+}
+
+#[test]
+fn oauth_over_tls_is_allowed() {
+    assert!(
+        transport_with_oauth("https://backend.example/mcp").is_ok(),
+        "row 1: TLS is the normal case and must keep working"
+    );
+}
+
+#[test]
+fn oauth_over_cleartext_non_loopback_is_refused() {
+    let Err(err) = transport_with_oauth("http://backend.example/mcp") else {
+        panic!("row 2: a bearer token must not travel in cleartext to a remote host");
+    };
+    assert!(
+        err.to_string().contains("cleartext"),
+        "the refusal must name the reason, got: {err}"
+    );
+    // Permanent, not transient: warm-start retries a plain `Transport` error
+    // forever at debug level, so a misclassification hides the refusal from the
+    // operator entirely.
+    assert!(
+        matches!(err, Error::TransportPermanent(_)),
+        "a cleartext origin never becomes secure by waiting, got: {err}"
+    );
+}
+
+#[test]
+fn oauth_over_cleartext_loopback_is_allowed() {
+    // Rows 3-5: local MCP backends legitimately bind loopback without TLS.
+    for url in [
+        "http://localhost:8080/mcp",
+        "http://127.0.0.1:8080/mcp",
+        "http://127.0.0.2:9000/mcp",
+        "http://[::1]:8080/mcp",
+    ] {
+        assert!(
+            transport_with_oauth(url).is_ok(),
+            "{url} is loopback and must stay allowed"
+        );
+    }
+}
+
+#[test]
+fn oauth_over_cleartext_loopback_lookalikes_are_refused() {
+    // Rows 6-9: hosts that a substring/prefix check would wave through, plus a
+    // scheme that is not an HTTP transport at all.
+    for url in [
+        "http://localhost.evil.com/mcp",
+        "http://127.0.0.1.evil.com/mcp",
+        "http://[::ffff:127.0.0.1]/mcp",
+        "ftp://localhost/mcp",
+    ] {
+        assert!(
+            transport_with_oauth(url).is_err(),
+            "{url} must not be treated as a loopback HTTP peer"
+        );
+    }
+}
+
+#[test]
+fn cleartext_without_oauth_is_unchanged() {
+    // Row 10: no credential is attached, so the guard must not fire.
+    assert!(
+        HttpTransport::new(
+            "http://backend.example/mcp",
+            HashMap::new(),
+            Duration::from_secs(5),
+            true,
+        )
+        .is_ok(),
+        "transports without OAuth keep working over plaintext"
+    );
+}
+
+#[tokio::test]
+async fn get_oauth_token_refuses_a_downgraded_message_endpoint() {
+    // Row 11: the request-time barrier, independent of construction. The
+    // message endpoint is the URL the token is actually posted to.
+    let t = transport_with_oauth("https://backend.example/sse").unwrap();
+    *t.message_url.write() = Some("http://backend.example/messages".to_string());
+
+    let err = t
+        .get_oauth_token()
+        .await
+        .expect_err("a downgraded message endpoint must not receive the token");
+    assert!(
+        err.to_string().contains("cleartext"),
+        "the refusal must name the reason, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn get_oauth_token_without_oauth_is_none_over_cleartext() {
+    // Row 12: the guard is about credentials, not about plaintext per se.
+    let t = make_transport("http://backend.example/mcp");
+    assert!(t.get_oauth_token().await.unwrap().is_none());
+}
+
+// =========================================================================
+// MIK-7272.SUB.2b — request-scoped notifications MUST flow on the response
+// stream of their own request. The inbound half: the transport stops
+// discarding a notification it saw on a request's stream and returns it
+// alongside the response, in stream order, from one call.
+//
+// Governing plan: docs/design/2026-08-31-cluster-b-connection-invariance
+// -test-plan.md S-02 (forwarding) and S-03 (per-request isolation).
+// Design: docs/design/2026-09-09-sub2b-request-scoped-notifications.md.
+// =========================================================================
+
+/// A notification seen ahead of the response is CAPTURED, not dropped.
+///
+/// The discard at `mod.rs:294-296` is the defect: a conforming server may
+/// interleave `notifications/progress` on the response stream of the call in
+/// flight, and the caller currently never learns it happened.
+#[test]
+fn parse_sse_response_captures_the_notification_seen_before_the_response() {
+    // GIVEN: a progress notification ahead of the answer, on one stream
+    let body = concat!(
+        "event: message\n",
+        "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"t-1\",\"progress\":1}}\n",
+        "\n",
+        "event: message\n",
+        "data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"tools\":[]}}\n",
+    );
+
+    // WHEN: the transport parses it
+    let exchange = parse_sse_response(body).expect("the response after a notification must parse");
+
+    // THEN: the response still reaches the caller ...
+    assert!(
+        exchange.response.result.is_some(),
+        "the response frame must still be returned"
+    );
+    // ... AND the notification is no longer lost.
+    assert_eq!(
+        exchange
+            .notifications
+            .iter()
+            .map(|n| n.method.as_str())
+            .collect::<Vec<_>>(),
+        vec!["notifications/progress"],
+        "the notification seen on this request's stream must be returned with it"
+    );
+}
+
+/// Stream order is preserved: two notifications come back in the order the
+/// server sent them, ahead of the response that ended the scan.
+///
+/// Order is the property the single-return shape exists to guarantee — an
+/// async sink delivering beside the call could not promise it.
+#[test]
+fn parse_sse_response_preserves_the_order_two_notifications_arrived_in() {
+    // GIVEN: message then progress, in that order, before the answer
+    let body = concat!(
+        "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\"}}\n",
+        "\n",
+        "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":2}}\n",
+        "\n",
+        "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n",
+    );
+
+    // WHEN: the transport parses it
+    let exchange = parse_sse_response(body).expect("the response must parse");
+
+    // THEN: both are returned, in arrival order
+    assert_eq!(
+        exchange
+            .notifications
+            .iter()
+            .map(|n| n.method.as_str())
+            .collect::<Vec<_>>(),
+        vec!["notifications/message", "notifications/progress"],
+        "stream order must survive the capture"
+    );
+}
+
+/// A body with no notifications yields an empty list, never a phantom entry.
+///
+/// The negative case an empty world would also satisfy is guarded by equality
+/// against a literal, not by `is_empty()` alone on an untouched field.
+#[test]
+fn parse_sse_response_returns_no_notifications_when_the_server_sent_none() {
+    let body = "data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"ok\":true}}\n";
+    let exchange = parse_sse_response(body).expect("valid response must parse");
+    assert!(exchange.response.result.is_some());
+    assert_eq!(
+        exchange.notifications.len(),
+        0,
+        "a clean stream must not manufacture a notification"
+    );
 }

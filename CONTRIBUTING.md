@@ -208,25 +208,21 @@ statement in your first PR — see `CLA.md` for the exact wording and how to sig
 
 ## License
 
-Contributions are licensed per the **mixed, per-file model** in `LICENSES.md`.
-As of v3.3.0 the repository default is **PolyForm Noncommercial 1.0.0**:
+Contributions are licensed under **PolyForm Noncommercial 1.0.0**, the single
+license for the whole repository as of v4.0.0 (see `LICENSES.md`):
 
 - **Every source file carries an affirmative header** — a copyright line plus an
-  explicit `// SPDX-License-Identifier: ...`. New files are **not** exempt: run
-  `bash scripts/ci/apply-license-headers.sh --apply` (or add the two-line header
-  by hand) so the file declares its license. The CI guard
+  explicit `// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`. New files
+  are **not** exempt: run `bash scripts/ci/apply-license-headers.sh --apply` (or
+  add the two-line header by hand) so the file declares its license. The CI guard
   (`scripts/ci/check-license-headers.sh`) fails on any file missing the copyright
-  line or a known license id.
-- A file is MIT **only** if its SPDX id is `MIT` **and** its path is in
-  `.mit-core-allowlist`. Every other first-party file is PolyForm Noncommercial.
-- A new file may be MIT only if it is a simple, generic, self-contained building
-  block with no enterprise logic AND the maintainer adds its path to
-  `.mit-core-allowlist`. The guard enforces both directions: MIT-core files must
-  carry the MIT id, and no file outside the allowlist may.
+  line or carrying a different identifier.
+- There is no second license and no allowlist. A first-party file carrying any
+  other identifier is an error, not a carve-out.
+- Third-party or generated material is out of scope and belongs in
+  `.license-scope-exclude`, which is where its own terms are recorded.
 
-Anything an enterprise needs — ranking/authorization, the capability
-registry/engine, identity, security, governance, cost, deployment, multi-user,
-hosted operation — is Noncommercial. Existing MIT releases and files are not
+Existing MIT releases and the MIT-headered files in the 3.x line are not
 retroactively relicensed; see `NOTICE.md`.
 
 ## Contributor Checklist

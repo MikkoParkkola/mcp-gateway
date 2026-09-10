@@ -1,0 +1,291 @@
+# MIK-7246.CONFIRM.2 — blocked: CONFIRM.1a asserts the opposite outcome for the same request
+
+Status: STOPPED before any source edit, per the brief's "if an assertion contradicts the
+design doc, STOP and report". Zero lines of `src/` changed by this lane.
+
+## The contradiction
+
+Three tests issue the SAME request and assert two incompatible outcomes.
+
+| test | request | asserts |
+|---|---|---|
+| `tests/mik_7215_acs.rs:690-745` (CONFIRM.1a) | HTTP `tools/call`, `gateway_kill_server`, modern `_meta` with `clientCapabilities: {}`, `admin-key` | `/error/message` contains `none could be obtained` |
+| `tests/mik_7215_acs.rs:965-992` (CONFIRM.1a row 17) | identical but for the sentinel string | same refusal |
+| `tests/mik_7246_confirm2_acs.rs:70-106` (CONFIRM.2) | identical but for the sentinel string (`common::modern` emits the same `_meta`, `tests/common/mod.rs:31-39`) | `/result/resultType == "input_required"` |
+
+Every discriminator the gate can see is equal: transport (HTTP `tools/call`), era
+(`2026-07-28`), tool name, admin credential, and declared capabilities (`{}`). Only the
+`server` argument string differs, and nothing reads it but
+`describe_destructive_action` (`src/gateway/destructive_confirmation.rs:149-160`).
+
+W4 of `docs/design/2026-09-09-confirm-2-in-band-schema-and-wiring.md:120-130` places
+`InBand` on the HTTP path unconditionally. Under that wiring all three calls take the same
+branch, so exactly one of the two criteria goes red whichever way the branch is built. This
+is not a bug an implementation can route around.
+
+## What the design says, and why it does not settle it
+
+W5 (`:132-141`) orders the gate `describe → capability check (K3) → mint → ask`, and
+constrains the capability refusal to remain a superset of the `none could be obtained`
+sentence *because `mik_7215_acs.rs` closes CONFIRM.1a on that substring*. So the design is
+aware of the coexistence and answers it with a capability check. But K3 (`:34`) names
+`input_capabilities: Declared` and `retry: &RetryFields` as plumbing, not a predicate, and
+two readings of "capability check" survive:
+
+- **`Declared` reading** — refuse when the client declared nothing. CONFIRM.1a stays green;
+  CONFIRM.2 can never go green, because its fixture declares `{}`.
+- **identity reading** — refuse when `principal_fingerprint(caller.verified_identity)` is
+  `None`, which is what `mint_continuation` already requires
+  (`src/gateway/meta_mcp/invoke.rs:401-422`). CONFIRM.2 goes green; both CONFIRM.1a rows go
+  red, since an admin-key caller has an identity.
+
+Note the `Declared` gate that exists today — `interim.undeclared(caller.input_capabilities)`
+(`src/protocol/mrtr.rs:302-327`) — governs relaying a **backend's** interim request to a
+client. A gateway-authored confirmation question is not one, so that function does not
+answer the question by itself.
+
+## What the operator/lead must decide (one of)
+
+1. **CONFIRM.1a's two modern rows are superseded.** CONFIRM.2 replaces the modern refusal
+   with an ask; those rows move to a channel that genuinely cannot ask (stdio /
+   `ConfirmationChannel::Unavailable`, which W4 leaves untouched) or are retired with the
+   clause reopened deliberately.
+2. **The ask is gated on a declaration.** CONFIRM.2's fixture must then declare that
+   capability, i.e. `tests/mik_7246_confirm2_acs.rs` stops using bare `common::modern`. The
+   design must also name the capability string, which it currently does not.
+
+Either is a scope move under §P0 and a §P3 design event; neither is mine to take.
+
+## Second, smaller finding (recorded, not acted on)
+
+On the CONFIRM path the gate returns `None` and dispatch falls through to
+`route_direct_backend_call` (`src/gateway/meta_mcp/mod.rs:1714`), whose
+`route_retry_to_origin_backend` re-opens the very envelope the gate just spent
+(`invoke.rs:582-599`) and routes to `payload.backend_id`. W3 (`:108-118`) answers this with
+W1's typed `origin` on `Payload`, but `src/protocol/continuation.rs` is DO-NOT-EDIT in the
+amendment and is under concurrent edit (` M`).
+
+A local alternative needing no edit to that file: give the gate a three-outcome return
+(`Refuse(response) | Proceed | ProceedConfirmed`) and skip `route_direct_backend_call`
+entirely on `ProceedConfirmed`. Every tool the gate governs is a meta-tool
+(`DESTRUCTIVE_META_TOOLS`, built from `meta_mcp_tool_defs.rs`), never a surfaced backend
+tool, so skipping backend routing for a confirmed destructive call loses nothing and keeps
+the spent token out of the redeem path on all three branches. Two call sites in
+`src/gateway/meta_mcp/tests.rs:3708,3745` would need the new return type. The
+design-rejected sentinel `backend_id` is NOT this.
+
+## Adjudication of the second finding — reverted, scope held (2026-09-09)
+
+The second finding above was acted on, then reverted in full. Recorded because the
+reasoning, not the diff, is the durable part.
+
+**The ordering claim in the finding is wrong.** The gate runs at
+`src/gateway/meta_mcp/mod.rs:1709`; `route_direct_backend_call` at `:1731` is reached only
+under `!confirmed_in_band`. The gate precedes the route and already excludes it on the
+confirmed branch, so the spent envelope never reaches `route_retry_to_origin_backend` on
+that path. The three-outcome `GateOutcome` alternative this note proposed is already in the
+tree at `:1712-1714`/`:1730` with the two `tests.rs` call sites converted. The hazard is
+closed; what was left was defence-in-depth, not a defect.
+
+**What was built and then reverted.** A `ContinuationPurpose` (`Backend` |
+`GatewayConfirmation`) sealed into `Payload`, threaded through both mint sites and both
+redeem sites, refusing a cross-purpose presentation before the handle is spent. Reverted
+for three independent reasons, any one sufficient:
+
+1. It edits `src/protocol/continuation.rs`, which the amendment marks DO-NOT-EDIT and which
+   was under concurrent edit. That is a scope marker, not a judgement call.
+2. The in-tree `GateOutcome` alternative was chosen *because* that file is off-limits, and
+   it already holds the same ground.
+3. No test can be written that fails only for the absence of `purpose`: the payload's
+   `original_request_digest` and `redeemable_by` already refuse a cross-presentation, so any
+   such case would pass with the mechanism deleted. Under the standing constraint — every
+   case must be able to fail only for the reason it names — the mechanism was unprovable as
+   built, which is itself the argument against shipping it.
+
+Two deviations the reverted work had taken, both undone with it: a flat `purpose` field
+rather than W3's typed `origin`, and `VERSION` 1 → 2. `VERSION` is back to 1 and
+`src/protocol/continuation.rs` is byte-identical to `HEAD`.
+
+## The gap this leaves, and the test that would close it
+
+Nothing pins `!confirmed_in_band` at `mod.rs:1730`. Delete that guard and a confirmed retry
+falls through into backend routing, re-opens the envelope the gate has already spent, and
+dies as a stale retry instead of running the approved action — a confirmed destructive
+operation silently not performed, with no test observing it. `tests/mik_7246_confirm2_acs.rs`
+covers the ask and the decline; the `true` → `ProceedConfirmed` arm is untested.
+
+The discriminating case: answer the in-band ask with JSON `true`, assert the approved action
+actually ran, and confirm the case goes red with the guard removed. Not written here — it
+cannot be measured on this host (see below), and an unmeasured case in a destructive-guard
+suite is exactly what this file argues against.
+
+## Measurement status: none
+
+`/System/Volumes/Data` is at 2.1G free against the build guard's 5G floor (it was 4.4G
+earlier the same day and is falling). No `cargo` build, test, or clippy run was performed
+for any claim on this page. `docs/requirements/RELEASE-4.0.0-criteria-status.md:249`
+therefore stays `ABSENT`: the row is unmeasured, not closed.
+
+## Third finding — CONFIRM.1a is now unreachable as written, and `for_modern()` is dead
+
+Found while trying to repair `tests/mik_7215_acs.rs` for the era split, and it is the reason
+that repair was withdrawn rather than committed. Read from source only; nothing was run.
+
+The channel is chosen by era and only by era (`src/gateway/router/handlers.rs:1441-1451`):
+`Era::Modern` gets `ConfirmationChannel::InBand`, `Era::Legacy` gets `Elicit { policy }`.
+`confirmation_policy` is computed from `is_modern` at `:1378-1382`, and its only consumer in
+the file is `policy: confirmation_policy` at `:1449` — inside the `Era::Legacy` arm. So on a
+modern request the policy is built and discarded, and
+`ConfirmationPolicy::for_modern()` (`REFUSE`) has no live consumer on the HTTP path. The
+`policy.on_unconfirmable() == REFUSE` branch at `src/gateway/meta_mcp/mod.rs:2201-2204` is
+reachable only with a legacy era, whose policy is `PROCEED_WITH_WARNING`; it therefore never
+fires from this call site.
+
+Consequences, both confirmed by reading the three sites:
+
+- **A legacy destructive call proceeds.** `Unsupported` + `PROCEED_WITH_WARNING` falls
+  through to `GateOutcome::Proceed` (`mod.rs:2201-2210`). It never emits `none could be
+  obtained`. Re-labelling a CONFIRM.1a fixture as legacy to keep its refusal assertion alive
+  therefore asserts an outcome the source cannot produce — the fix attempted here, and wrong.
+- **A modern destructive call is asked, not refused.** So CONFIRM.1a's stated outcome is not
+  produced by either era through `Elicit`. On HTTP, `none could be obtained` now survives in
+  exactly one place: the `InBand` mint failing (`mod.rs:2141-2155`), i.e. an unnameable
+  principal or no in-flight slot. `ConfirmationChannel::Unavailable` still refuses
+  (`mod.rs:2135-2137`), but that is the stdio and server paths, not this row's.
+
+Neither `HEAD` nor the withdrawn repair is right: `HEAD` asserts a modern refusal that the
+in-band ask replaced, and the repair asserts a legacy refusal that the legacy policy
+contradicts. The fixture CONFIRM.1a needs is one where the mint genuinely cannot happen —
+an unnameable caller, or an exhausted in-flight table — and neither can be written blind,
+because whether an admin-authorized caller can also be unnameable is a source question with
+a compile behind it. The withdrawn diff is not preserved: the approach it took is the one
+this section rejects, and the two candidate fixtures above are the whole of what a
+build host would need.
+
+Also unresolved and larger than a fixture: whether `for_modern()`'s refusal was meant to
+survive the in-band ask at all. If it was, `handlers.rs:1441-1451` splits on era where it
+should split on era *and* channel availability, and the dead `for_modern()` is the symptom.
+That is a design question for the CONFIRM.2 author, not a test repair.
+
+### Amendment (2026-09-09) — verified by the lead, and it is worse than "dead on HTTP"
+
+The lead re-checked this finding at source and it holds. Two anchors sharpened, and one
+claim above is now too weak:
+
+- The construction is `handlers.rs:1379` (`for_modern()`) against `:1381` (`for_legacy()`),
+  chosen by `is_modern` at `:1378`. The single consumer is `policy: confirmation_policy` at
+  `:1449`, inside the `Era::Legacy` arm at `:1446-1451`.
+- `ConfirmationPolicy::for_modern()` has **exactly one construction site in `src/`** —
+  `handlers.rs:1379`. Every other occurrence of the name is a doc comment or a test comment
+  (V: `rg -n 'for_modern' src/`).
+- `ConfirmationChannel::Elicit` also has **exactly one construction site** —
+  `handlers.rs:1447`, the same `Era::Legacy` arm (`mod.rs:2200` is the destructuring match,
+  not a construction). No other transport builds one; stdio and the server path build
+  `Unavailable`.
+
+Those two facts together make the earlier wording ("no live consumer on the HTTP path") an
+understatement. The only policy value that can reach
+`policy.on_unconfirmable() == ConfirmationPolicy::REFUSE` (`src/gateway/meta_mcp/mod.rs:2223`)
+is the one handed in at `handlers.rs:1449`, which is always `for_legacy()` =
+`PROCEED_WITH_WARNING`. So that comparison never yields true **from this call site on any
+transport**, not merely on HTTP. `REFUSE` is a string constant with no runtime producer.
+
+Anchor drift, recorded because it will bite the next reader: this comparison was cited as
+`mod.rs:2201-2204` earlier in this document and as `:1967` in the CONFIRM.1a ledger cell. It
+is at `:2223` in the current worktree. Neither older number was wrong when written — another
+lane's uncommitted hunks in `mod.rs` moved it twice. Cite `on_unconfirmable` by symbol.
+
+Per the lead's ruling this is recorded and **not fixed**: an unmeasured change to a
+destructive-action guard is worse than the gap it closes. The design question — whether
+`for_modern()`'s refusal was ever meant to survive the in-band ask — stays open for a
+compile-capable session, as does the `!confirmed_in_band` test and the CONFIRM.1a fixture
+rewrite, both assigned to this lane for after a host exists.
+
+## Fourth entry — W1 built after all, and the wire version does NOT move
+
+The lead ruled W1 in on 2026-09-09 and approved the flat `purpose` field. The adjudication
+two sections up recorded the opposite outcome; this supersedes it on the ruling, and the
+reasoning there still stands on one point the ruling does not disturb — the mechanism has no
+test that can fail only for its absence. `docs/design/2026-09-09-confirm-2-in-band-schema-and-wiring.md`
+carries the full argument, including the corrected gate-ordering table.
+
+**Decision: `VERSION` stays 1.** Reasoning, since the outcome alone is not the useful part:
+
+- The sealed payload is JSON (`serde_json::to_vec`, `src/protocol/continuation.rs:650`;
+  `from_slice` at `:715`), so `#[serde(default)]` on a new field lets a payload sealed before
+  the field existed deserialize untouched. Nothing about the format forces a bump.
+- Bumping would be actively destructive rather than merely noisy. `open()` reads the version
+  byte off the wire and refuses anything `!= VERSION` (`:692-694`), so a bump invalidates
+  every envelope in flight at the instant of deploy — a rotation event in all but name, and
+  one nobody scheduled.
+- The default is correct rather than convenient. Every envelope minted before this field
+  existed IS a backend exchange, which is precisely what `Backend`-as-default asserts. A
+  defaulted read of an old envelope therefore states a true thing about it, not a guess.
+
+No case was found in which a v1 envelope fails to deserialize without the bump, so the
+lead's condition for bumping ("only if you cannot avoid it") was never met.
+
+**Still unmeasured.** `/` is at 3.4G against the 5G floor. Nothing in this entry was
+compiled or run; the code is committed with that stated in the commit body, per the lead's
+standing instruction. `RELEASE-4.0.0-criteria-status.md:249` stays `ABSENT`.
+
+## Fifth entry (2026-09-09) — the requirement does not demand REFUSE, but CONFIRM.1a's cited test should now be RED
+
+Answering the lead's question directly: **not a fourth blocker.** The requirement text
+(`RELEASE-4.0.0-requirements.md:204-205`) does not demand that `for_modern()`'s `REFUSE` be
+reachable.
+
+- `CONFIRM.1a` demands an *outcome*: "MUST refuse when it cannot obtain confirmation." It
+  names no mechanism. A refusal delivered by the in-band mint failing satisfies it exactly as
+  a policy-driven refusal would.
+- `CONFIRM.1b` demands "MUST NOT proceed on a warning **on the modern path**" and then says
+  the legacy path "keeps `PROCEED_WITH_WARNING` deliberately... that asymmetry is intentional
+  and is not a defect of this criterion." So the legacy-proceeds consequence recorded in the
+  third finding is **explicitly permitted**, and my earlier framing of it as a defect was
+  wrong on the requirement. Withdrawn.
+
+A dead `for_modern()` is therefore dead code, not a requirement violation. What must go is the
+CONFIRM.1a cell's *basis*, not its verdict — as the lead ruled.
+
+### But re-evidencing turns up something worse, and it is a prediction, not a measurement
+
+The row's PASS rests on `ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused`
+(`tests/mik_7215_acs.rs:683`), which asserts `-32001` with "none could be obtained" for a
+modern admin call. Four facts at `HEAD` say that assertion can no longer hold:
+
+1. The era split is **committed**, not in-flight. `HEAD`'s `handlers.rs` holds two
+   `ConfirmationChannel::InBand` sites and two `Elicit` sites (V: re-run 2026-09-10,
+   `git show HEAD:src/gateway/router/handlers.rs | rg -n 'InBand|Elicit'`). Read HEAD, not the
+   worktree: concurrent lanes hold hunks in this file. A modern request takes `InBand`.
+2. `state.continuation` is `Arc<ContinuationState>`, not an `Option` (`router/mod.rs:95`), so
+   the channel always carries one.
+3. `ContinuationState::new()` configures a working keyring — `Keyring::new(&[(1, key)])` with
+   a real 32-byte key (`protocol/continuation.rs:1109-1120`) — and the fixture builds exactly
+   that (`tests/mik_7215_acs.rs:248`). The mint is not short of keys.
+4. `confirmation_principal` falls back to the api-key name (`meta_mcp/mod.rs:2043-2047`), so an
+   `admin-client` api-key caller **is** nameable. This is the "principal fallback" design event
+   named in `e68abcb0`.
+
+With a live channel, a working keyring and a nameable principal, the in-band mint succeeds and
+the modern caller is **asked**. The refusal that test asserts requires the mint to fail, and
+none of its failure modes are present in that fixture.
+
+**Consequence for the ledger.** CONFIRM.1a's cell is not merely mis-based: the test it cites
+is predicted red at `HEAD`. The honest grade is not `PASS` and not `FAIL` — it is unmeasured
+and at risk, pending a host that can run it. Recorded here rather than flipped: verdict
+authority is the lead's, and a prediction is not a measurement. The lead's CI figure of 4155
+of 4157 (two failures) is consistent with this but does not identify which tests failed.
+
+**Consequence for CONFIRM.2, this lane's own row.** The same four facts predict that the ask
+half is already live at `HEAD`, which is what
+`tests/mik_7246_confirm2_acs.rs::modern_destructive_call_asks_in_band` asserts.
+
+Superseded 2026-09-10: the redemption half is committed. `redeem_retry` under
+`ContinuationPurpose::GatewayConfirmation` is at `src/gateway/meta_mcp/mod.rs:2101-2103,2167`
+in `HEAD`, with the `confirmed_in_band` guard at `:1709,1730` (V:
+`git show HEAD:src/gateway/meta_mcp/mod.rs | rg -n 'GatewayConfirmation|redeem_retry'`). The
+"141 uncommitted lines" this entry described are no longer uncommitted, so the decline branch
+no longer waits on them. The row moved `ABSENT` -> `PARTIAL`; what it now waits on is a test
+run, not a missing mechanism.
+
+Everything in this entry is source reading. Nothing was compiled or run; the disk floor stands.

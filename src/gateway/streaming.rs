@@ -14,18 +14,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_stream::stream;
+use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::Stream;
 use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
+use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
 /// A tagged notification event from a backend
 #[derive(Debug, Clone, Serialize)]
@@ -99,9 +101,15 @@ impl NotificationMultiplexer {
     /// Start the background session-reaper task.
     ///
     /// Must be called once after the multiplexer has been placed in an `Arc`.
-    /// All call sites in `server.rs`, `webhooks.rs`, and `proxy.rs` do this
+    /// The single call site is `server::build_app`, which does this
     /// immediately, so the reaper always runs in production.
-    pub fn spawn_reaper_on(self: &Arc<Self>) {
+    ///
+    /// The same tick drives two reclaims that must not diverge: the stream
+    /// sessions owned by this multiplexer, and the lifecycle deadlines that
+    /// fire registered cleanup callbacks. A second timer would let one sweep
+    /// run while the other is wedged, and the divergence is invisible —
+    /// nothing errors when a callback is simply never called.
+    pub fn spawn_reaper_on(self: &Arc<Self>, lifecycle: Arc<SessionLifecycle>) {
         let weak = Arc::downgrade(self);
         let ttl = self.config.session_ttl;
         let interval = self.config.session_reaper_interval;
@@ -119,6 +127,18 @@ impl NotificationMultiplexer {
                 };
 
                 mux.reap_expired_sessions(ttl);
+
+                let reclaimed = lifecycle.reap(now_unix());
+                if reclaimed > 0 {
+                    info!(reclaimed, "Session lifecycle reaper completed");
+                }
+                // Emitted LAST, so every line a sweep produces falls before its
+                // own marker and the markers partition the log into sweeps. An
+                // empty sweep is otherwise indistinguishable from a sweep that
+                // never ran, which leaves "no reclaim line was logged" unable
+                // to fail. Not compiled out under test: a log line that exists
+                // only in one build is a different program.
+                trace!("Session lifecycle sweep complete");
             }
         });
     }
@@ -221,9 +241,39 @@ impl NotificationMultiplexer {
         }
     }
 
+    /// Remove only a matching owner, with lookup and removal under one write lock.
+    pub(crate) fn remove_session_for(&self, session_id: &str, owner: &str) -> bool {
+        let mut sessions = self.sessions.write();
+        match sessions.entry(session_id.to_owned()) {
+            std::collections::hash_map::Entry::Occupied(entry) if entry.get().owner == owner => {
+                entry.remove();
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Check if a session exists
     pub fn has_session(&self, session_id: &str) -> bool {
         self.sessions.read().contains_key(session_id)
+    }
+
+    /// The event id stored for `session_id`, if that session exists.
+    ///
+    /// Read-only, and it exists because the absence of a write is what MIK-7272
+    /// SUB.3 asserts: a refused modern GET must leave resumption state alone.
+    /// Inferring that from "no session was created" tests a weaker claim.
+    ///
+    /// Supported public API, alongside `session_count`: both report multiplexer
+    /// state without changing it. Named as an addition rather than hidden --
+    /// `#[doc(hidden)]` withholds the documentation, never the symbol, and an
+    /// accessor a consumer can call is API whatever its doc attribute says.
+    #[must_use]
+    pub fn last_event_id(&self, session_id: &str) -> Option<String> {
+        self.sessions
+            .read()
+            .get(session_id)
+            .and_then(|session| session.last_event_id.read().clone())
     }
 
     /// Get session count
@@ -386,6 +436,66 @@ pub fn create_sse_response(
     };
 
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
+}
+
+/// The response body of a `subscriptions/listen` request.
+///
+/// An SSE stream that stays open, per the transport specification: the
+/// acknowledgement is its first event, and each notification the client
+/// subscribed to follows on the same stream.
+///
+/// No resumability and no event ids — MCP 2026-07-28 removed both, so there is
+/// nothing for a client to resume from and nothing to number.
+pub fn subscription_stream(
+    mut listener: crate::gateway::subscription_registry::Listener,
+    filter: crate::protocol::subscriptions::ListenRequest,
+    subscription: crate::protocol::subscriptions::SubscriptionId,
+    acknowledgement: &crate::protocol::JsonRpcResponse,
+    keep_alive_interval: Duration,
+) -> axum::response::Response {
+    use crate::gateway::subscription_registry::delivers;
+
+    let ack = serde_json::to_string(acknowledgement).unwrap_or_default();
+
+    let stream = stream! {
+        // The acknowledgement rides the stream it opens, so a client has one
+        // thing to read rather than a body and then a stream.
+        // Annotated because this function erases the stream into a
+        // `Response`, so nothing else pins the error type.
+        yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
+
+        loop {
+            match listener.recv().await {
+                Ok(notification) => {
+                    // Filtered per listener, never at the publisher: one
+                    // client's filter must not decide what another receives.
+                    if !delivers(&filter, &notification) {
+                        continue;
+                    }
+                    let tagged = subscription.tag(notification);
+                    yield Ok(Event::default()
+                        .event("message")
+                        .data(tagged.to_string()));
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Lagged(missed)) => {
+                    // Delivering the remainder would leave this client holding
+                    // stale state with no way to learn it. Closing makes the
+                    // gap visible, and re-subscribing is the recovery the
+                    // revision leaves available now that resumability is gone.
+                    warn!(
+                        missed,
+                        "subscription stream fell behind; closing so the client re-subscribes"
+                    );
+                    break;
+                }
+            }
+        }
+    };
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping"))
+        .into_response()
 }
 
 #[cfg(test)]
@@ -665,7 +775,7 @@ mod tests {
         };
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
-        multiplexer.spawn_reaper_on();
+        multiplexer.spawn_reaper_on(Arc::new(SessionLifecycle::new()));
 
         let (id, rx) = multiplexer.get_or_create_session(Some("auto-reap-session"));
         drop(rx); // Drop receiver immediately
@@ -684,6 +794,39 @@ mod tests {
         assert!(!multiplexer.has_session(&id));
     }
 
+    /// T8 of the `MIK-7215.CONTROL.4` test plan.
+    ///
+    /// GIVEN a lifecycle holding a key whose deadline has already passed
+    /// WHEN the host reaper tick runs
+    /// THEN the key is reclaimed — the tick sweeps the lifecycle, not just the
+    /// session map. Reaping is unconditional (D5): nothing here tells the tick
+    /// whether a request for that key is still in flight.
+    #[tokio::test]
+    async fn spawn_reaper_on_sweeps_the_session_lifecycle() {
+        // GIVEN: a key whose deadline is the Unix epoch, i.e. long past.
+        let lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+        lifecycle.track("stale-identity", 0);
+        assert_eq!(lifecycle.tracked_count(), 1);
+
+        let backends = Arc::new(BackendRegistry::new());
+        let config = StreamingConfig {
+            session_reaper_interval: Duration::from_millis(20),
+            ..StreamingConfig::default()
+        };
+        let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
+
+        // WHEN: the host tick runs.
+        multiplexer.spawn_reaper_on(Arc::clone(&lifecycle));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // THEN: the tick reclaimed it.
+        assert_eq!(
+            lifecycle.tracked_count(),
+            0,
+            "the reaper tick must sweep the lifecycle, not only the session map"
+        );
+    }
+
     /// GIVEN the multiplexer dropped while reaper task is running
     /// WHEN the Arc is dropped
     /// THEN the reaper task exits cleanly (no panic, no leak)
@@ -697,7 +840,7 @@ mod tests {
         };
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
-        multiplexer.spawn_reaper_on();
+        multiplexer.spawn_reaper_on(Arc::new(SessionLifecycle::new()));
 
         // WHEN: drop the only strong reference
         drop(multiplexer);

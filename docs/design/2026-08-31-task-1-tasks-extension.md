@@ -1,0 +1,984 @@
+# TASK.1 — the `io.modelcontextprotocol/tasks` extension
+
+Design note. No code. §P1 of `rules-source/workflows/development-process.md`.
+
+Every `file:line` below is read at commit `112a392c3cc66c2b8fa00d71dd39c9972f351705`
+("docs(mcp): design extension declaration and trace metadata"). Line numbers move; the commit
+does not, so a reader who finds a citation off by a few lines has a way to check rather than a
+reason to distrust the note.
+
+Criterion (`docs/requirements/RELEASE-4.0.0-criteria-status.md:160`, status ABSENT, blocking):
+
+> the tasks extension (`io.modelcontextprotocol/tasks`) MUST be supported for long-running
+> backend calls, with `tasks/get` polling and `tasks/update`
+
+## 0. This note overturns a recorded decision
+
+`docs/requirements/RELEASE-4.0.0-dod-check.md:829-858` records the opposite disposition —
+"4.0.0 does not advertise the tasks extension" — put to the operator, unanswered inside the
+window, and written down as the decision with the sentence "One line overturns it."
+
+The operator's full-scope direction on 2026-08-31 is that line. `RELEASE-4.0.0-plan.md:605-606`
+already carries the overturn; `dod-check.md` does not. Two status documents in the tree
+disagree until that is fixed, and this note may only write one path.
+
+**Scheduled** — owner: whoever lands the first TASK.1 code commit. What resolves it: replacing
+the `dod-check.md:829-858` disposition with a pointer to this note. When: in the same commit
+series as the first implementation change, before it merges. If it resolves badly (nobody
+updates it): a reviewer reads `dod-check.md`, believes the extension is deliberately absent,
+and rejects the implementation as out of scope — which is exactly how a stale status document
+costs a review round.
+
+## 1. Source, and what it is not
+
+**Corrected 2026-08-31, later the same day: a versioned artifact does exist.** The paragraph this
+replaces said there was none, on the evidence of a draft URL and the core schema. Both halves of
+that evidence still hold; the conclusion did not.
+
+Wire shape is pinned to `modelcontextprotocol/ext-tasks`, tree
+`0d0a6bd4c258b35caa3c810a1dd506cf105b1501`, file `specification/2026-07-28/tasks.md`, blob
+`5d6a202eacbaab3444f9d0727ce6587598e7e077` (34,148 bytes, 911 lines), fetched raw from
+`raw.githubusercontent.com` at that tree. It is a dated, versioned directory in a git repository,
+so it is pinnable by hash rather than re-fetchable by hope. Line references of the form `L<n>`
+elsewhere in this note are that blob's.
+
+What remains true from the earlier reading: the core `schema/2026-07-28/schema.json` (181,834
+bytes) contains no `Task` type — one occurrence of the string, at line 3145, as an *example key*
+in the `ServerCapabilities.extensions` description. The extension is versioned separately from
+the core revision. And `https://tasks.extensions.modelcontextprotocol.io/specification`, the path
+the extension index links, returns **404** — which is why the published-site route looked like the
+only one and produced the wrong conclusion. The draft at `.../specification/draft/tasks` (200 OK,
+163,394 bytes) stays useful as a drift check against the pinned blob; it is no longer the source.
+
+## 2. Constraints measured in this tree
+
+| where | what it says | why it binds |
+|---|---|---|
+| `src/protocol/tasks.rs:1-111` | `TaskStatus` = `Working \| Completed \| Failed`; `Task { id, tool, status, result, error }`; `error: Option<String>` at `:37`; id is `format!("task-{}", Uuid::new_v4())` | three of the spec's five statuses; no `createdAt`, `lastUpdatedAt`, `ttlMs`; the failure payload is a string where the spec requires a JSON-RPC error object |
+| `src/protocol/extensions.rs:30,38,46,52-56` | `Extension::Tasks -> "io.modelcontextprotocol/tasks"`, `ExtensionSet`, `gateway_declares()`; `from_capabilities` rejects non-object values | the declaration path exists and is unwired ("Nothing calls this in 4.0.0") |
+| `ADDED_IN_2026_07_28` (`src/protocol/meta.rs`) | `ADDED_IN_2026_07_28 = ["subscriptions/listen", "tasks/get", "tasks/update"]` | short by `tasks/cancel` and `notifications/tasks` |
+| the era gate in `src/gateway/router/handlers.rs` | `if !is_modern && ADDED_IN_2026_07_28.contains(&method)` -> `-32601` | a 2025-era client can reach `tasks/cancel` today, because the list does not name it |
+| `src/gateway/router/handlers.rs:842` | `"subscriptions/listen"` returns an SSE stream, ack first | the stream a task's notifications must ride, and must not carry progress/message |
+| `mcp_name_required` / `mcp_name_body_field` (`src/protocol/headers.rs`) | `mcp_name_required` / `mcp_name_body_field`, "exactly these three" | the extension adds a fourth..sixth: `tasks/get\|update\|cancel` mirror `taskId`, not `name` |
+| `MISSING_REQUIRED_CLIENT_CAPABILITY` (`src/protocol/era.rs`) | `MISSING_REQUIRED_CLIENT_CAPABILITY: i32 = -32021` — "(was `-32003`)" | the draft still says `-32003`; the pinned 2026-07-28 text says `-32021`, and so does this tree |
+| `src/gateway/meta_mcp/support.rs:35-44` | `idempotency_key_for` — client key or nothing; a keyless call gets no key at all (corrected 2026-09-06: the auto-deriving `resolve_idempotency_key` this row previously named is not in the tree) | SUB.4 keys a task-augmented call only when the client supplied a key, and that is the one case the two mechanisms can collide over |
+| `src/protocol/cacheable.rs:99-101` | `is_final(result) == (resultType == "complete")` | `resultType: "task"` is non-final, so neither the response cache nor `mark_completed` can swallow a `CreateTaskResult` |
+
+The `cache.set` call in `src/gateway/meta_mcp/invoke.rs` is the response-cache write, after the
+backend result and before the client stream. Any test that observes whether a backend ran twice
+must set `config.cache.enabled = false` and assert on a mutation counter on the mock tool —
+never on the response body, which the cache will happily replay.
+
+Correction to the tree: the doc comment at `extensions.rs:52-56` says the gap is "two statuses,
+two required fields and the shape of the failure payload". Measured against the pinned blob it is also
+a third method (`tasks/cancel`), a notification (`notifications/tasks`), a required
+nullable `ttlMs`, and an optional `pollIntervalMs`. That comment is part of the change.
+
+## 3. The design
+
+**The gateway originates tasks. It does not proxy a backend's.** No backend in the catalogue
+speaks the extension — cluster C (`RELEASE-4.0.0-plan.md:52-56`) exists precisely because
+backends are mostly pre-2026. So the gateway is the task *server*: it accepts a task-augmented
+`tools/call`, returns a `CreateTaskResult` immediately, runs the backend call on its own, and
+serves `tasks/get` / `tasks/update` / `tasks/cancel` from its own record.
+
+Five pieces, in dependency order.
+
+1. **`tasks.rs` grows into the spec's shape.** Five statuses (`working`, `input_required`,
+   `completed`, `cancelled`, `failed`); `createdAt` and `lastUpdatedAt` required;
+   `ttlMs: Option<...>` present-and-nullable, not absent; `pollIntervalMs` optional; `error`
+   becomes a JSON-RPC error object, not a `String`. `Task::create` keeps a v4 UUID — the spec
+   makes task IDs bearer-token-grade, so entropy is a requirement, not an aesthetic.
+
+   **Changing `error` to an object turns a currently green test red, and that red is this change
+   working.** `ac_task_1_a_failed_task_reports_its_failure_rather_than_an_absence`
+   (`tests/mik_7272_exploit_acs.rs:189`) asserts `task.error() == Some("upstream refused")` — a
+   `String`, the shape the pinned spec forbids. It passes today because the defect is present, so
+   it fails at the moment the defect is removed. Rewrite it against the error object. Do not
+   preserve the `String` to keep it green: that reads as repairing a regression and cements the
+   wrong wire shape, which is the one thing this piece exists to change. Section 8a says why the
+   other four cases in that file are not this problem.
+
+2. **A task store.** Insert-if-absent, TTL-reaped, holding the record plus a secondary index
+   (see §4). **Two primitives, not one: insert-if-absent, and delete-if-`ttlMs`-still-says-so** —
+   the reap is a single store-level compare-and-delete against the record's current `ttlMs`, never
+   a read followed by an unconditional delete. Stated here, on the primitive, rather than only in
+   §11.2's ownership rule (kimi, HIGH, 2026-09-06; team-lead, same day): the requirement has to
+   exist before the store does, or whoever builds it rediscovers it. A read-then-delete reaper
+   reaps a task extended between its two steps — and it reaches further than this piece, because
+   the release's open CONTROL.4 decision assumes the reaper rides the gateway's existing
+   maintenance tick, which is exactly the interval in which that extension can land. It is the *same defect class* as the consumed-continuation ledger recorded open in
+   `dod-check.md` finding #1: process-local today, needs a shared atomic insert-if-absent store
+   before production, and `tasks/get` reaching the replica that owns the task is the same
+   replica-affinity problem cluster A is solving in `src/protocol/continuation.rs`. It inherits
+   that gate rather than inventing a second one. A new store designed independently of cluster
+   A's would be two mechanisms deciding the same thing.
+
+   *Amended by §11.2 (gpt, HIGH): this piece states no admission bound, and the schema permits
+   `ttlMs: null`. The store needs a finite default TTL, a global cap and a
+   per-principal cap, all enforced **before** the backend call starts — the extension is what
+   makes an authenticated flood cheap. The caps count every **unreaped** record, not the running
+   ones: a `completed` or `failed` task is retained until its TTL expires, so a flood of
+   fast-finishing tasks exhausts the same memory while an active-only counter reads zero (gpt,
+   confirmation pass, HIGH). Capacity is released when the record is deleted or expires, never
+   when the task reaches a terminal state. Do not implement from this paragraph alone.*
+
+   *Amended 2026-09-06, closing §10.3's two open rows (`ttlMs` and `pollIntervalMs` **MAY** change
+   over a task's lifetime — `schema.ts:76-90`, `tasks.md:308`, `tasks.md:340`). One rule covers both
+   fields, and it is an **ownership** rule rather than a rule against caching: **the store record is
+   the only place either value exists, and the record's single writer is the only thing that writes
+   it.** Configuration supplies the value in force at creation; from that moment the record is the
+   source of truth, and every later reader — the reaper, `tasks/get`, the serialiser — reads it from
+   the record at the moment it acts. Nothing derives a deadline once and keeps it, so "the reaper
+   and the record disagree about the TTL" is not a sentence that can be said about this design.
+   That is what makes it an elimination rather than a no-caching rule someone has to remember.
+   Said without the elimination framing, because a reviewer asked for it plainly (grok, 2026-09-06):
+   4.0.0's **observable** behaviour is that neither field ever changes, and read-from-the-record is
+   the forward-looking half — the constraint that makes a later mutable release a one-line change at
+   the single writer instead of an audit of every reader.
+   `src/config_reload/` is why the rule is not theoretical — put in the tense it is true in: the
+   reload path exists today and carries no task TTL (`rg 'ttl_ms|TtlMs|ttlMs' src/` finds only
+   `LIST_TTL_MS`, the `tools/list` cache value at `router/handlers.rs:1411`, and the meta-MCP
+   `cache_ttl` the reload already threads, `config_reload/mod.rs:1375`). The task default-TTL key
+   arrives with piece 2; from that day a reload changes the default while tasks are running, and
+   changes it only for tasks created after it. The ownership rule is written before the key exists
+   so the reaper never acquires a deadline that can go stale.
+
+   *Who "the server" is.* The gateway — §3's opening sentence: it originates tasks, it does not
+   proxy a backend's. So "a server changes the value mid-task" means the gateway changing a value
+   it published. The backend-proxy reading has no code path in 4.0.0: nothing hands a backend a
+   task record to mutate, so there is no second writer for the ownership rule to arbitrate.
+
+   *What 4.0.0 does.* It exercises the permission by never using it: neither value changes after
+   creation. That is conformant — **MAY** is a permission, not an obligation — and it creates no
+   client re-read obligation. It also closes an admission hole §11.2 would otherwise leave open:
+   the caps count every unreaped record and capacity is released only on deletion or expiry, so an
+   extendable `ttlMs` is one principal holding a capacity slot for as long as it likes. A later
+   release can make either field mutable as a write through the record's single writer, and the
+   reaper needs no change to follow it — **provided the reaper's delete is conditional on the
+   record's current `ttlMs` and is one store-level operation**, never a read followed by an
+   unconditional delete. A read-then-delete reaps a task extended between the two steps, which is
+   the original finding wearing a race rather than a defect the ownership rule removed. The
+   condition rides the same insert-if-absent primitive the store already needs (§4), so it costs
+   a predicate and not a mechanism (kimi, HIGH, 2026-09-06). Recording it now is the point of
+   stating the rule this way: a later mutable release inherits the constraint instead of
+   rediscovering the race.
+
+   *Two consequences, stated so they are not re-asked.* The gateway does **not** rate-limit clients
+   polling faster than the published `pollIntervalMs` — `tasks.md:308` makes that a server **MAY**,
+   and the gateway publishes the value without policing the client's rate. And at expiry a record
+   is **deleted** rather than marked `failed` and retained: `tasks.md:340` permits either, deletion
+   is what releases the capacity the caps count, and not-found is the whole of what the owner then
+   observes. The earlier draft justified this by AC `.11`'s byte-identical not-found; that
+   justification was wrong and is cut (grok, 2026-09-06). `.11` is a cross-principal invariant and
+   the principal check fires first, so a stranger is answered not-found whether the expired record
+   was deleted or retained as `failed` — `.11` holds either way and cannot decide this. What
+   decides it is the pair above: a retained record still occupies a slot the §11.2 caps count, and
+   it makes the owner's view of expiry a status transition rather than a disappearance.
+
+   *On the line numbers.* Citations into `tasks.md` and `schema.ts` are stable because §1 pins the
+   blob (`5d6a202eacbaab3444f9d0727ce6587598e7e077`, re-fetched and re-hashed 2026-09-06, 34,148
+   bytes). They are not a relapse from §8's symbol-anchor rule, which governs anchors into this
+   repository's own moving source.*
+
+3. **Capability gating is wiring, not construction.** `KEY_CLIENT_CAPABILITIES`
+   (`meta.rs:44`), `classify_request` (`meta.rs:117`) and `ExtensionSet::from_capabilities`
+   already read the per-request `_meta` envelope. The spec's MUST — never return a
+   `CreateTaskResult` to a client that did not declare the extension *on that request,
+   regardless of prior declarations* — maps onto a per-request read the gateway already
+   performs. Non-declaring client, task-only path: `MISSING_REQUIRED_CLIENT_CAPABILITY` with
+   `data.requiredCapabilities.extensions["io.modelcontextprotocol/tasks"]`.
+
+   *Amended by §11.2 (gpt, MEDIUM): the gate is per **request**, not per method-family. This
+   piece as written gates task **creation** and says nothing about `subscriptions/listen`
+   carrying `taskIds`. Any request whose params reach into the tasks extension is gated, that one
+   included. Do not implement from this paragraph alone.*
+
+4. **Method registration.** `ADDED_IN_2026_07_28` gains `tasks/cancel` and
+   `notifications/tasks`; `handlers.rs` gains **three inbound arms** — `tasks/get|update|cancel`.
+   `notifications/tasks` is server-to-client and is emitted by the §5 subscription emitter, not
+   dispatched as a fourth arm (corrected 2026-09-06, §11.3: an earlier revision said "the four
+   arms" and would have sent an implementer looking for an inbound handler that must not exist);
+   `mcp_name_body_field` gains three entries mirroring `taskId`.
+
+   *Amended by §11.2 (grok, MEDIUM; stamped here in the confirmation pass because the handler is
+   written from this piece and AC `.3` is only reached when the tests are): the `tasks/update`
+   arm MUST refuse an `inputResponses` key that matches no outstanding input request rather than
+   ignore it, MUST define the empty `resultType: "complete"` acknowledgement it returns, and MUST
+   say that `tasks/cancel` is cooperative — it marks the task cancelled and does not abort a
+   backend call already in flight. Do not implement from this paragraph alone.*
+
+5. **Declaration.** *Corrected after designB2's EXT.1 note
+   (`docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md`, anchored `5c7e64f4`).* An
+   earlier revision of this note said `gateway_declares()` "is called from `server/discover`".
+   That named a call site narrower than the real one and skipped a prior problem: at the time,
+   there was **nowhere to put the declaration** — `ServerCapabilities` had seven fields and no
+   `extensions` among them.
+
+   *Corrected again on 2026-09-06, second-opinion round (§11): EXT.1 HAS LANDED and the tree has
+   moved under this paragraph.* `ServerCapabilities.extensions` now exists
+   (`src/protocol/types.rs:255-256`, `HashMap<String, Value>`, `#[serde(default,
+   skip_serializing_if = "HashMap::is_empty")]`), and `build_server_capabilities(...)` is wired
+   into the handshake at `src/gateway/meta_mcp_helpers.rs:190`. The one thing still empty is the
+   honouring list: `implemented_extensions()` (`:147-150`) returns an empty map, deliberately —
+   its own comment says advertising the identifier without the behaviour "would advertise a
+   mechanism the gateway does not honour."
+
+   **So TASK.1's declaration work is exactly one edit**: insert
+   `io.modelcontextprotocol/tasks` into `implemented_extensions()`, in the same change that
+   serves `tasks/get|update|cancel`. Not a new field, not a second populate path, not a call into
+   `gateway_declares()` from the handshake. An implementer reading the superseded paragraph would
+   have built a second declaration path and could have advertised the extension while the
+   honouring list stayed empty — which is the precise failure `implemented_extensions()` exists
+   to prevent.
+
+   That one edit reaches both handshake surfaces, checked here rather than taken:
+   `rg -n 'build_initialize_result\(' src/` finds two production callers — `handle_initialize`
+   (`src/gateway/meta_mcp/mod.rs:1204`) and `discover_document` (`:1119`) — and discovery emits
+   `"capabilities": handshake.capabilities` (`:1153`), the whole struct as it stands. So the
+   single `build_server_capabilities(implemented_extensions())` call at
+   `meta_mcp_helpers.rs:190` serves `initialize` and `server/discover` alike, and the second
+   surface needs no code of its own.
+
+   One seam, two consumers, and EXT.1 has closed its half: it owned the field and the call site,
+   TASK.1 supplies the entry `io.modelcontextprotocol/tasks` to `implemented_extensions()`.
+   TASK.1 does not need a second site.
+
+### The two non-spec tasks capability structs
+
+`src/protocol/types.rs` defines `ServerTasksCapability` (`:262`, reached from
+`ServerCapabilities.tasks` at `:250`) and `ClientTasksCapability` (`:373`, from
+`ClientCapabilities.tasks` at `:346`). Neither appears in the 2026-07-28 core schema, whose
+`ServerCapabilities` has seven properties and `ClientCapabilities` five, with no `tasks` in
+either.
+
+**TASK.1 does not read, write or depend on either type**, and this note is correct whether they
+are retired or kept. `rg -n 'ServerTasksCapability|ClientTasksCapability' -g '!target' .` returns
+four matches, all four inside `types.rs` itself: the two definitions and the two struct fields.
+No production code, no test, no serialisation path outside the derive. They are unreachable
+today, so nothing TASK.1 builds can collide with them.
+
+Their provenance is worth recording before the retire-or-keep call is made, because "locally
+invented" would be the wrong reason to delete them. Both carry a `list` field — and the pinned
+2026-07-28 extension text says there is deliberately no `tasks/list`, calling its absence "an
+improvement over the `2025-11-25` tasks specification, in which a poorly-scoped list could expose
+unrelated task IDs". A `tasks` capability advertising `cancel`, `list` and augmentable request
+types is the **2025-11-25** shape. So the decision is not "delete a mistake" but "drop a
+superseded revision's declaration surface", which is a different question with a different
+answer if anything still speaks 2025-11-25 — and nothing here does, since the types have no
+readers at all.
+
+**Kept, on that reading.** Unread types cost nothing to leave in place, and deleting a public wire
+type is an API break this release has no reason to take. The retire question survives as a
+scheduled unknown in §6 rather than an open one here; it is owned, and nothing in TASK.1 waits on
+its answer.
+
+6. **Every task-related request is authorised against the task's owner.** The pinned text makes
+   this a MUST in its own right, *beside* the entropy requirement and not satisfied by it: a
+   server "MUST perform authentication and authorization checks on each task-related request to
+   ensure that the client has permission to access a task". Unguessable IDs stop enumeration;
+   they do not stop a caller who legitimately holds someone else's ID from reading it back. So
+   the store record carries the authenticated principal that created the task, and the three
+   retrieval methods compare the caller's principal against it before answering — returning the
+   same not-found shape either way, because a distinguishable "exists but forbidden" turns an
+   authorisation check back into an enumeration oracle.
+
+   *Amended by §11.2 (gpt, CRITICAL): "the three retrieval methods" is not the whole surface.
+   Subscription **admission** is a task-related request too, and this piece does not cover it. A
+   `subscriptions/listen` whose `taskIds` name another principal's task must be refused exactly
+   as an unknown id is, and the acknowledgement MUST NOT echo it back. Do not implement from this
+   paragraph alone.*
+
+   The principal is the one cluster E is making authoritative (`principal_window.rs`,
+   `tenant_guard.rs` under the firewall module; TENANT.1: "keyed on authenticated principal, not
+   session"). TASK.1 reads that key; it does not define a second notion of caller identity. If
+   cluster E has not landed when TASK.1 is implemented, the check binds to whatever the request's
+   authenticated principal is at that point and is revisited when cluster E lands — the ordering
+   is the implementer's, the requirement is not optional either way. The spec's own reasoning
+   supports the narrow read: it notes there is deliberately no `tasks/list`, "so a server cannot
+   inadvertently leak the existence of one caller's tasks to another". Cross-caller leakage is a
+   threat the extension designed against, and a gateway serving many principals is precisely
+   where it reappears.
+
+### Options considered
+
+| option | rejected because |
+|---|---|
+| **Pass through a backend's own tasks** rather than originating | no backend speaks the extension; the criterion says "long-running *backend* calls", and pass-through would close it for zero real backends. Kept as a later addition, not a 4.0.0 shape. |
+| **Reuse `subscriptions/listen` as the only retrieval path**, skip `tasks/get` | the criterion names `tasks/get` polling explicitly, and the spec requires `tasks/get` to be resolvable *before* a `CreateTaskResult` is returned. A stream-only design cannot satisfy the durability MUST. |
+| **Derive `taskId` deterministically from the idempotency key** — elegant dedupe, no second index | violates the spec's entropy requirement: task IDs MAY act as bearer tokens, and a task ID derivable from `(server, tool, arguments)` is guessable by anyone who can guess the call. |
+| **Let the response cache hold the `CreateTaskResult`** | it cannot: `is_final` (`cacheable.rs:99-101`) is false for `resultType: "task"`. Making it cacheable would replay a *handle* as an *answer*. Verified, and the reason the existing guards need no change. |
+| **A fresh distributed task store designed here** | the continuation ledger has the same requirement and is being built in cluster A. Two stores, two consistency stories, one of them wrong. |
+
+### Explicitly out of scope
+
+- Backend-originated tasks (gateway relaying a backend's `CreateTaskResult`).
+- Task augmentation on anything but `tools/call`. The spec says only `tools/call` supports it
+  today and to design for more later; designing for more *now* is the speculative half.
+- `input_required` task flows end-to-end. The status and its `inputRequests` shape are modelled
+  so `tasks/get` can return them, but the elicitation round-trip belongs to cluster A (MRTR) and
+  cluster H, and building a second continuation mechanism here is the mistake §P0 exists to stop.
+- Persisting tasks across gateway restarts.
+- The `dod-check.md` edit (§0) and the `server/discover` call site (EXT.1) — both scheduled, both
+  owned elsewhere.
+
+## 4. Coexistence with SUB.4 — one owner per call, not two mechanisms
+
+SUB.4 (`docs/design/2026-08-31-sub-4-idempotency-wiring.md`) is being implemented now in another
+session. The criterion it serves reads "idempotency key **or** the tasks extension", so a
+task-augmented call satisfies it by the second branch. The plan
+(`RELEASE-4.0.0-plan.md:605-606` — "the operator directed the full scope on 2026-08-31, so TASK.1
+ships in v4.0.0 and SUB.4 keeps both routes") records both as shipping. `:48-50` is the
+unassessed-rows sweep and `:110-112` is `NFR.COMPAT.1`; neither carries this claim, and the
+confirmation pass caught that §11.4 retargeted the same wrong pointer everywhere except here. The question is therefore not
+which wins but **who owns re-issue safety when both are available**.
+
+The failure mode is concrete, and *narrower than an earlier revision of this section claimed*
+(corrected 2026-09-06, §11). There is no `resolve_idempotency_key` in the tree and no automatic
+derivation: `idempotency_key_for` (`src/gateway/meta_mcp/support.rs:35-44`) returns `None` unless
+the client supplied a key — **client key or nothing**. A keyless call is therefore never deduped
+at all, which is what `MIK-7272.SUB.4` decided it wanted: two deliberate identical side-effecting
+calls must both run.
+
+The collision that remains is real but conditional: a request carrying **both** a client-supplied
+idempotency key **and** a task-augmented `tools/call`. There, two mechanisms would independently
+decide the same call is a duplicate — and they can disagree, because the idempotency entry can
+never be marked completed (`is_final` is false for `resultType: "task"`), so it would sit
+in-flight until TTL while the task itself finished.
+
+**Rule: when the tasks extension is negotiated on a request, the task store owns re-issue
+safety. The idempotency cache is neither consulted nor written for that call.** The task store
+carries a secondary index on the *same* derived key `(server, tool, arguments)`, so a retried
+identical call resolves to the same `taskId` and the backend runs once. One structure decides;
+the second cannot disagree with it because it is not asked. This is elimination, not a check
+that detects the disagreement.
+
+*Amended by §11.2 (gpt, CRITICAL): the secondary index as written above has no principal term
+and no client-key condition, so two tenants issuing the same call would share a handle and a
+deliberate keyless repeat would be silently collapsed. The key is
+`(authenticated principal, client idempotency key)` and it applies **only** when the client
+supplied one; a keyless repeat gets a new task. The request fingerprint is *stored beside* the
+entry, not keyed on: a second call carrying the same key and a different body is **rejected**, not
+served the first task. Keying on the fingerprint instead — as the §11.2 stamp first said, and the
+paragraph above still implies — collapses two deliberate mutations that differ only by their
+idempotency keys into one, and silently skips the second backend call (gpt, confirmation pass,
+HIGH). Do not implement from the paragraph above alone.*
+
+The existing guards need no change, and that is a verified result rather than a hope:
+`ResponseCache::set` and `IdempotencyCache::mark_completed` both gate on `is_final`, and
+`result_type_of` returns `"task"`, so a `CreateTaskResult` cannot enter either. The change is
+the *skip on the way in*, not a new guard on the way out.
+
+**Scheduled** — SUB.4's note currently declares TASK.1 out of scope and says it "neither builds
+it nor depends on it". That sentence is now wrong in one direction: SUB.4 does not depend on
+TASK.1, but TASK.1 changes when SUB.4's auto-derivation runs. Owner: the sibling session
+implementing SUB.4. What resolves it: one paragraph in that note recording the skip condition.
+When: before SUB.4's implementation merges. If it resolves badly: SUB.4 ships auto-derivation
+unconditionally, and the first task-augmented call leaves a permanent in-flight idempotency
+entry — a duplicate-suppression deadlock for that exact `(server, tool, arguments)` until TTL.
+
+## 5. Coexistence with SUB.2 — the listen stream
+
+`subscriptions/listen` already returns a real multiplexed SSE body (`handlers.rs:842`). The spec
+forbids `notifications/progress` and `notifications/message` on a *task's* stream. So the filter
+is not a TASK.1 detail bolted on later: `subscriptions/listen` with `taskIds` present is a
+task-scoped stream and carries `notifications/tasks` only. SUB.2's design owns request-
+scoped notification routing; this is a constraint on it, recorded here because TASK.1 is what
+makes it reachable.
+
+*Amended by §11.2: this section specifies what the stream **emits** and nothing about who may
+open it. Two gates are missing here and must land with it. First, admission is authorised against
+the task's owner, so a `taskIds` entry naming another principal's task is refused exactly as an
+unknown id is, and the acknowledgement MUST NOT echo it back (gpt, CRITICAL). Second, a
+`subscriptions/listen` carrying `taskIds` from a client that did not declare the extension **on
+that request** gets `MISSING_REQUIRED_CLIENT_CAPABILITY` (gpt, MEDIUM). Without the first, a
+caller who guesses an id has the full status and result pushed to them — the leak AC `.11` was
+written for, through a door AC `.11` does not cover.*
+
+## 6. Unknowns
+
+**Resolved.**
+
+- *Where is the tasks extension specified?* — `nab fetch` against four paths under
+  `modelcontextprotocol.io/specification/...` and the `main` schema tree — all four 404
+  (`.../2026-07-28/extensions/tasks` returned a 4-byte `null`); `nab fetch
+  https://tasks.extensions.modelcontextprotocol.io/specification/draft/tasks` returned 200 OK,
+  163,394 bytes — the 404s were wrong paths, not a missing document, and the real text
+  invalidated the gap count written at `extensions.rs:52-56`. *Re-asked the same day, because
+  that answer named a draft:* `nab fetch
+  https://tasks.extensions.modelcontextprotocol.io/specification` — **404**, so the published site
+  is not the artifact; then the extension's own repository —
+  `modelcontextprotocol/ext-tasks`, tree `0d0a6bd4`, `specification/2026-07-28/tasks.md`, blob
+  `5d6a202e`, 911 lines. The versioned text exists in git. That changed §1 from "no versioned
+  normative artifact" to a pinned blob, and it changed the answer below.
+- *Does the core 2026-07-28 schema define the task types?* — `rg -io 'task[A-Za-z]*'` over the
+  181,834-byte core schema — exactly one hit, at line 3145, an example key in a description —
+  the extension is versioned separately from the core revision, which is why the core schema
+  cannot be the source and the search had to continue.
+- *Can a `CreateTaskResult` be swallowed by the response cache or the idempotency cache?* — read
+  `cacheable.rs:99-101` and the two call sites — `is_final` is `resultType == "complete"`, and
+  `"task"` is not — no change needed to either guard, which is why §4's rule is a skip on entry
+  rather than a new gate. This one changed nothing in those two files; saying so is the point.
+- *Does `-32003` exist in this tree?* — `rg -n '32003' src/` — `era.rs` defines
+  `MISSING_REQUIRED_CLIENT_CAPABILITY = -32021` with the comment "(was `-32003`)" — the draft's
+  number is the *pre-renumbering* one.
+
+- *So which number does a non-declaring client get — the draft's `-32003` or this tree's
+  `-32021`?* — read the pinned blob's error table: "Missing required client capabilities:
+  `-32021` (Missing Required Client Capability)". The versioned text agrees with `era.rs`'s `MISSING_REQUIRED_CLIENT_CAPABILITY`;
+  the draft is stale on this point. That closed what an earlier revision of this note deferred to
+  the implementer with an upstream question attached — there is no divergence to record and
+  nobody to ask.
+
+- *Is this design pinned to the artifact that is actually normative, or to a stale copy of it?* —
+  re-fetched the pinned blob on 2026-09-06 with `gh api` against the `ext-tasks` repository's
+  contents endpoint for the versioned specification path — 911 lines / 34,148 bytes, blob
+  `5d6a202e`, unchanged — so §1's pin holds. It changed nothing in §1 and one method name in §2,
+  §3, §5 and §8 (§10.2): the notification is `notifications/tasks`, not the name those four
+  sections had been using.
+
+Two questions this section previously deferred are answered above. Both were deferred on the
+reading that no versioned text existed, so pinning one artifact closed both. Two rows remain, and
+the first of them is new: the two non-spec capability structs were recorded above as somebody's
+decision without being scheduled, which is an assumption with better manners. Scheduled here.
+
+**Deferred.**
+
+| open question | owner | what would resolve it | when | if it resolves badly |
+|---|---|---|---|---|
+| Whether `ServerTasksCapability` and `ClientTasksCapability` are retired. Kept for now: no readers, so they cost nothing, and deleting a public wire type is an API break this release has no reason to take | team lead | an operator answer on whether clients speaking the 2025-11-25 `tasks` shape are still served | when NFR.COMPAT.1 is audited. `docs/requirements/RELEASE-4.0.0-requirements.md:261` (NFR.COMPAT.1) already requires that 2025-11-25 be served, which settles that such clients exist but not that these two structs serve them, since nothing reads either | deletion becomes a separate API-break change carrying its own migration note, not a line in this one. Nothing here waits on it: TASK.1 reads neither type, so this design is correct under either answer |
+| Where the task store lives when the gateway runs multi-replica. | cluster A (MIK-7212), via the shared insert-if-absent store `dod-check.md` finding #1 already gates BEFORE-PRODUCTION | cluster A landing a shared ledger this can reuse | before production, not before merge | single-replica-only tasks: a `tasks/get` routed to another replica reports the task as missing while it is running. Same failure the continuation ledger has, same gate, deliberately not a second design |
+
+## 7. MIK-7311 — reconciled, not routed around
+
+`dod-check.md:857-858` names MIK-7311 as owner of the conformant implementation, already filed,
+carrying seven acceptance criteria; `:674-675`, under "What is honestly NOT finished", records
+that those criteria "were derived from the overview and inherit these errors" and are "corrected
+against the schema before that ticket is worked". Two passages, not one: the earlier `:557-584`
+this paragraph cited is the continuation-ledger repairs table and names neither.
+
+**MIK-7311 stays the implementation ticket. This note is the correction.** The criteria below
+supersede the seven derived-from-overview ones; MIK-7311's description is updated to point here
+rather than a second ticket being filed (§P0 disposal: fix it in this change — the correction is
+smaller than a ticket describing the correction would be).
+
+## 8. Acceptance criteria and test plan
+
+> **The TASK.1 test plan lives in `docs/design/2026-09-06-task-1-tasks-extension-test-plan.md`.**
+> That file is its sole owner: the thirteen criteria decompose into 33 clause rows, and it carries
+> the fixture hazards, the assertion rules and the per-row "can this fail today?" verdict.
+>
+> This section held a per-criterion copy of that table until 2026-09-06. Two artefacts claiming one
+> job drift the moment either is edited, so the copy is gone rather than trimmed — the team-lead
+> ruling of the same day allowed a standalone file **only** if this section became a pointer to it,
+> and this is that pointer. What remains below is what the plan does not carry: the criteria's
+> release status, and the open question the plan defers here.
+>
+> `docs/requirements/RELEASE-4.0.0-test-plan.md:409` lists TASK.1 in its phase-10 row. That is a
+> phase *ordering*, not a per-criterion table, so it neither satisfies nor rivals the plan.
+>
+> Row order `.1`-`.9`, `.11`, `.10`, `.12`, `.13` is **deliberate**. Identifiers are stable
+> references; renumbering desynchronises every citation in the ledger, the review record and two
+> commits. Do not "fix" it.
+
+Citations in this document are **symbol anchors, not `file:line`** (2026-09-06). Every line number
+this section carried had drifted or was wrong: `headers.rs:36-52` for a function now at `:59`,
+`extensions.rs:52-56` for one at `:65`, `invoke.rs:1291` for a `cache.set` at `:1804`,
+`meta.rs:247` for a constant at `:244`, and `era.rs:40` for `MISSING_REQUIRED_CLIENT_CAPABILITY`,
+which is at `era.rs:58` — the file was right, the line was stale.
+(Re-measured 2026-09-06: an earlier draft of this note claimed the constant never lived in
+`era.rs`. It does. What lives in `handlers.rs:804` is a **bare literal** `-32021` that does not
+reference the constant — a separate finding, recorded in the test plan's `.4b` row.)
+Re-patching the numbers would buy one commit of accuracy; naming the symbol removes the drift
+class. Do not "helpfully" restore line numbers.
+
+
+Six criteria out of thirteen cannot fail for a behavioural reason today (the plan's coverage
+map is the authority on the per-clause count; this is the criterion-level summary). That is the finding: TASK.1 is
+mostly new surface, and the tests that constrain it are the five that assert against *existing*
+code (`.13` reaches them partially: its gate exists, its call path does not) — `ADDED_IN_2026_07_28`, `mcp_name_body_field`, the `Task` shape, the `is_final` guards, and
+the per-request capability read. Those five are where the failing-tests step (§P2) has real work
+on day one; the rest wait on the dispatcher and must be written against the spec text, not
+against whatever the dispatcher turns out to do.
+
+`MIK-7272.TASK.1.12` and `MIK-7272.TASK.1.13` are **blocking for 4.0.0** (team-lead ruling,
+2026-09-06, recorded in §11.6). They are separate criteria on purpose: folding a distinct
+authorisation surface into `.11` is what produced RL.5's "MET (narrowed)".
+
+**What `.11` and `.12` are MET *as tested*, after the unattributed-caller guard (2026-09-07).**
+The guard refuses every task method reaching the tasks extension when the caller presented no
+credential *and* the operator declared distinct principals. That closes one half of `.12` — the
+pooled empty owner key, where every credential-less caller owned every other credential-less
+caller's tasks — and it is covered by the test plan's `.18`, `.19` and `.20` rows. It closes
+**none** of `.11`: the between-principals check still waits on the dispatcher, and the `.11` case
+is green today only because both calls receive the same method-level refusal, which is the reason
+its own doc comment gives. Reading either criterion as MET because these rows pass would repeat
+exactly the RL.5 mistake named above, one level down: a criterion marked met by the surface that
+happened to be built first.
+
+`.12`'s remaining half is the authorisation decision on a task whose owner *is* known. It cannot
+be written honestly until `tasks/get` answers a real id, and it is not in this change's scope.
+
+**Open question, owned elsewhere:** whether `.2` asserts a status shape 4.0.0 does not ship —
+`input_required` is out of scope per §11.2, and the plan's `.2d` row is red for a reason no
+implementation of the agreed scope can clear. The question, its two readings and a
+recommendation are the test plan's §8 Q1; it is not restated here. It is for the requester,
+because narrowing an acceptance criterion needs their recorded agreement, and it must be
+answered before the `TaskStatus` variant list is written — that list is the decision.
+
+## 8a. The existing `ac_task_1_*` cases do not cover the criterion
+
+Asked by the team lead after designB2 found two MIK-7272 AC cases that cannot go red. The five
+`ac_task_1_*` cases in `tests/mik_7272_exploit_acs.rs:157-211` are a different failure from those
+two, and the difference matters.
+
+They are **not** tautologies. Each asserts real behaviour of `Task`: that a fresh task is
+`Working` with a non-empty id, that `result()` is `None` before completion rather than a default,
+that `fail()` records an error distinguishable from "not finished", that a second `complete()`
+does not overwrite the first. Break any of those in `tasks.rs` and the case goes red. As unit
+tests of that struct they are honest.
+
+What they do not do is cover the criterion. `rg -n 'protocol::tasks' -g '!target' src/ tests/`
+returns exactly one match — the `use` at `:153` of that test file. **`protocol::tasks` has no
+production consumer at all**, so nothing these cases assert is reachable from a request. Read
+against the criterion's own words:
+
+| criterion clause | what the five cases exercise |
+|---|---|
+| "supported for long-running **backend** calls" | no backend, no gateway, no request in any body |
+| "`tasks/get` polling" | `ac_task_1_a_task_is_polled_not_awaited` and `..._polling_a_working_task_yields_no_result` call `complete()` and read a field in-process; no method, no dispatch, no poll |
+| "`tasks/update`" | not mentioned in any of the five, and `Task` has no update method to mention |
+
+So the answer to "what would have to break in production for this to go red" is: **nothing can,
+because none of it runs in production.** Only an edit to `tasks.rs` turns them red. TASK.1's
+evidence is smaller than the status doc's coverage implies — the criterion is uncovered, and the
+gap is not one an extra assertion closes.
+
+One of the five is worse than uncovered. `ac_task_1_a_failed_task_reports_its_failure_rather_than_an_absence`
+asserts `task.error() == Some("upstream refused")` — a string. §2 records that the spec requires
+the failure payload to be a JSON-RPC error **object**, and §3.1 changes the field accordingly.
+That case therefore goes red when TASK.1 is implemented *correctly*: it pins the defect. It is
+not a test to preserve through the change; it is a test to rewrite against the object shape, and
+a reviewer who sees it fail should read it as the change working.
+
+Disposition (§P0): recorded here, not filed. The §8 table already specifies what replaces these
+five, and the replacement is part of TASK.1's own work rather than a separate ticket. The wider
+question — whether the same inertness runs beyond these cases — is already being swept by the
+audit running against every test file in the tree, so this note points at that rather than opening
+a second one.
+
+That sweep separates two shapes, and the distinction decides the repair. A case asserting an
+invariant that cannot vary is a bad test and is deleted. A case asserting real behaviour in a
+module production never reaches is a *good* test waiting for its production caller, and deleting
+it would destroy the specification it carries. Four of these five are the second kind: they hold
+the shape `Task` is supposed to have, written down, and TASK.1's job is to build the caller that
+makes them reachable — not to remove them. The fifth is the `error()` case above, which is neither:
+it records the shape the spec forbids, so it is rewritten rather than kept or deleted.
+
+## 9. Documents this change makes untrue
+
+- `docs/requirements/RELEASE-4.0.0-dod-check.md:829-858` — scheduled in §0.
+- `docs/requirements/RELEASE-4.0.0-criteria-status.md:160` — TASK.1 moves off ABSENT when the
+  implementation lands, not when this note lands.
+- `src/protocol/extensions.rs:52-56` — the gap count in the doc comment is wrong (§2), and the
+  "Wire this up as part of MIK-7311, not before" sentence stays correct.
+- `docs/design/2026-08-31-sub-4-idempotency-wiring.md` — scheduled in §4, owned by the sibling
+  session.
+- `RELEASE-4.0.0-plan.md:605-606` — already correct; it records the 2026-08-31 full-scope
+  direction under which TASK.1 ships and SUB.4 keeps both routes, and §4 is that coexistence.
+  (Was cited as `:48-50`, which is the unassessed-rows sweep and says none of this — retargeted
+  in the confirmation pass.)
+- `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md` — not made untrue; consumed.
+  It owns the `extensions` field, the `build_initialize_result` call site and the retire-or-keep
+  question on the two non-spec capability structs. §3.5 cites those decisions rather than
+  restating them, and this note holds under either answer to the retire question. TASK.1 touches
+  no correlation or trace surface, so that note's three-trace-surfaces finding does not reach
+  this design.
+
+---
+
+## 10. Verification pass, 2026-09-06 — spec conformance re-checked against the pinned artifacts
+
+Appended, not replaced (H2 UPDATE>CREATE). A separate `2026-09-06-task1-tasks-extension.md`
+was commissioned this session; it was NOT written, because this file already exists and
+`RELEASE-4.0.0-readiness-board.md:45` says in terms that "a fifth design would be an
+H1/H2/H3 triple-fail; the missing artifact is code." The commission's premise — that no
+TASK.1 design exists because prior owners hit 404s on the core spec repo — is wrong. §1
+above already corrected that on 2026-08-31.
+
+What this section adds: an independent re-fetch of the authoritative artifacts, a
+conformance table against §2/§3, and the feasibility verdict for 4.0.0 that no section
+above states.
+
+### 10.1 Artifacts re-fetched (V)
+
+Fetched 2026-09-06 via `gh api repos/modelcontextprotocol/ext-tasks/contents/<path> --jq .content | base64 -d`:
+
+| artifact | size | what it is |
+|---|---|---|
+| `schema/2026-07-28/schema.ts` | 8,708 B, 350 lines | the tasks-only TypeScript delta; source of truth for wire types |
+| `specification/2026-07-28/tasks.md` | 34,148 B, 911 lines | normative prose; matches the blob §1 pinned byte-for-byte on size and line count |
+
+`modelcontextprotocol/modelcontextprotocol @ schema/2026-07-28/schema.ts` (3,197 lines) has
+zero task types and zero `tasks/*` methods — three case-insensitive matches, all comments
+referencing the extension. §1's conclusion holds: tasks are versioned separately from the core
+revision.
+
+### 10.2 CORRECTION — the notification method is `notifications/tasks`, not `notifications/tasks/status`
+
+§2's "Correction to the tree" paragraph names the missing notification
+`notifications/tasks/status`. That name does not exist in either artifact.
+
+- `schema.ts` `TaskStatusNotification`: `method: "notifications/tasks"` (V, schema.ts type
+  `TaskStatusNotification`).
+- `tasks.md` L896: "The `tasks/` method prefix and `notifications/tasks/` notification **prefix**
+  are reserved for this extension."
+
+The reserved *prefix* is `notifications/tasks/`; the *method* is `notifications/tasks`, with no
+trailing segment. Confusing the reserved prefix for the method name is what produced the wrong
+name, and naming that distinction here is what stops it recurring. `rg -n 'notifications/tasks'`
+over the prose returns 22 hits, none of them `notifications/tasks/status`.
+
+Code consequence, not edited here: `ADDED_IN_2026_07_28` (`src/protocol/meta.rs`) is short by
+`tasks/cancel` and by `notifications/tasks` — under the correct name. §2 already flags the list
+as short; this fixes what it is short *of*.
+
+The five in-body occurrences are corrected **in place** (§2 table row, §2 prose, §3 piece 4, §5,
+AC `MIK-7272.TASK.1.9`) rather than only annotated here — a correction section sitting under five
+uncorrected uses is the two-documents-disagree failure §0 was written about. The wrong name now
+appears in this file only inside this subsection, as a quotation.
+
+Corroboration (V, second independent in-tree source): `RELEASE-4.0.0-dod-check.md:670` already
+names the notification `notifications/tasks`. The design was the outlier, not the tree.
+
+### 10.3 Conformance of §3 against the pinned artifacts
+
+Every row checked against `schema.ts` and `tasks.md` this session.
+
+**Two verdicts in this table are SUPERSEDED by §11.2 and §12 — read those, not these rows.** The
+`tasks/update` key-matching MUST with its empty-ack shape, and the cooperative-cancel licence, are
+now stamped on piece 4 and AC `.3`. The rows below still read "design is silent" because they
+record what this conformance pass found; leaving them unmarked would re-teach a closed defect.
+
+**The two MAY-change rows — `ttlMs` and `pollIntervalMs` — were the last open finding here, and
+they are CLOSED as of 2026-09-06 by the amendment to piece 2 in §3.** No review round raised them;
+they came from this conformance pass, and an admission cap on `ttlMs` was never the same rule as
+"this field may change over the task's life and the store must not treat it as write-once". Both
+rows are answered by one ownership rule — the record is where either value lives and its single
+writer is the only thing that writes it — so the reaper cannot hold a deadline the record has
+since changed. The rows below are left as written: they record what the pass found, and a repaired
+row teaches nothing to the next pass.
+
+| spec fact | §3 | verdict |
+|---|---|---|
+| 5 statuses `working\|input_required\|completed\|failed\|cancelled` | piece 1 | matches |
+| `taskId: string`, `createdAt`/`lastUpdatedAt` ISO 8601 required | piece 1 | matches |
+| `ttlMs: number \| null` REQUIRED and `@nullable`, and it MAY change over the task's life (`schema.ts:76-82`) | piece 1 ("present-and-nullable, not absent") | matches on the shape, and the distinction is the one the schema draws; the MAY-change clause is not stated, and it is the same defect as the `pollIntervalMs` row below — a reaper that pins the TTL it read at creation reaps a task the server has since extended. **Resolved 2026-09-06** by the piece-2 amendment in §3 |
+| `pollIntervalMs?: number`, integer ms, MAY change over the task's life | piece 1 | matches; the MAY-change clause is not stated, and the store must not treat it as write-once. Same clause and same omission as the `ttlMs` row above — one rule for both mutable fields, not two. **Resolved 2026-09-06** by the piece-2 amendment in §3 — and it is one rule, as this row asked |
+| `failed` carries `error` as a JSON-RPC error **object** | piece 1, AC `.6` | matches |
+| `completed` carries `result`, shape = the original request's result type; `isError: true` is still `completed` | AC `.6` | matches the terminal-state MUST at `tasks.md:890-891` |
+| `CreateTaskResult = Result & Task & {resultType: "task"}`, flat | §3 opening, AC `.1` | matches |
+| `tasks/get` -> `Result & DetailedTask & {resultType: "complete"}` | AC `.2` | matches |
+| `tasks/update` / `tasks/cancel` -> empty ack, `resultType: "complete"`; each `inputResponses` key MUST match an outstanding `inputRequest` | piece 4, AC `.3` | **design is silent** on the key-matching MUST and on the empty-ack shape. Neither changes the design; both belong in the AC `.3` case, which today says only "advances `lastUpdatedAt`" |
+| cancellation is cooperative and eventually consistent | — | **design is silent.** Worth one line: it licenses `tasks/cancel` returning before the backend call actually stops, which is the only implementable behaviour here anyway |
+| no `tasks/list`, deliberately, for cross-caller correlation (`tasks.md:904`) | §3 "two non-spec structs", §3 piece 6 | matches, and is load-bearing in both places |
+| negotiation: client per-request `_meta["io.modelcontextprotocol/clientCapabilities"].extensions`; server `result.capabilities.extensions`; empty object = support | pieces 3 and 5 | matches |
+| creation is **server-directed** per request | §3 opening | matches |
+| `-32021` + `data.requiredCapabilities.extensions` | piece 3, AC `.4` | matches; §6 already proved `-32021` against `era.rs`'s `MISSING_REQUIRED_CLIENT_CAPABILITY` |
+| task IDs MAY be bearer tokens -> entropy requirement | piece 1 (v4 UUID) | matches |
+| auth MUST be checked on **each** task-related request | piece 6, AC `.11` | matches; the criterion is `MIK-7272.TASK.1.11` (cross-principal retrieval answered as not-found), not `.9`, which is the notification-filter row. It is dispositioned for *retrieval*, and NOT for subscription admission — see §11 |
+| `notifications/tasks` is optional; clients subscribe via `subscriptions/listen` | §5, AC `.9` | matches after §10.2's rename |
+| `TaskSubscriptionNotifications{taskIds?}` / `TaskSubscriptionAcknowledgedNotifications{taskIds?}` | §5 | matches |
+| reserved: `tasks/` prefix, `notifications/tasks/` prefix, `resultType: "task"`, the label itself | — | **design is silent.** No action: the gateway defines nothing under those prefixes |
+
+Three silences, no contradictions. None of them moves the design. Two — the `inputResponses` key
+MUST and the cooperative-cancel licence — were closed in §11.2 and, after the §12 confirmation
+pass found the stamp had landed on AC `.3` alone, on piece 4 as well. The third (the reserved
+`tasks/` prefixes) needs no action: the gateway defines no method in that namespace.
+
+### 10.4 Verdict — the disposition already recorded stands; this session did not reopen it
+
+**The feasibility question was already decided, and not by this design.** §0 records the operator's
+full-scope direction of 2026-08-31, which overturned `dod-check.md:829-858`'s "4.0.0 does not
+advertise the tasks extension". `RELEASE-4.0.0-plan.md:605-606` carries the overturn. Re-issuing a
+GO/DEFER verdict here would be a fourth status document on one question — the exact failure §0
+describes. So: **GO, confirmed, not re-decided.**
+
+What the re-fetch adds is that the *middle* option does not exist, which is worth stating because it
+is the option a reader under schedule pressure reaches for. Advertise-only — declaring
+`extensions["io.modelcontextprotocol/tasks"] = {}` without serving `tasks/get` — is not a
+reduced-scope landing, it is a false declaration. Creation is server-directed per request (the
+client signals support; "the server decides on a per-request basis whether to materialize a task"),
+so a server that advertises and never materialises anything is conformant only trivially; and a
+server that *returns* a `CreateTaskResult` whose `taskId` no method resolves violates the durability
+MUST behind AC `.1`. The choice is binary: land the three methods plus the lifecycle, or defer the
+whole criterion. There is no half.
+
+**A defer would strand `MIK-7272.SUB.4`, and this is where that is recorded.** SUB.4
+(`criteria-status.md:220`) requires a re-issued side-effecting call to be protected "by an
+idempotency key **or** the tasks extension". Both halves are dead today:
+`MetaMcp::idempotency_cache` initialises `None` (`meta_mcp/mod.rs:393`), `MetaMcp::enable_idempotency`
+(`:580`) carries `#[allow(dead_code)]` with zero callers, the enforcement site
+(`meta_mcp/invoke.rs:801-803`) always takes the `None` branch, and `POST /mcp/{name}` bypasses
+`invoke_tool_traced` by ADR-008 rung-2 design (`backend_handlers.rs:724`). If TASK.1 defers, SUB.4's
+"or" collapses and the idempotency half stops being an alternative and becomes mandatory. A defer
+that does not say so is a handoff wearing a verdict.
+
+### 10.5 Unknowns after this pass
+
+**Six resolved, two deferred.** One more than §6 previously carried, resolved by re-fetch —
+*is the design pinned to the artifact that is actually normative?* — command: `gh api` against the
+`ext-tasks` repository's contents endpoint for the versioned specification path; answer: yes, 911
+lines / 34,148 B, matching pinned blob `5d6a202e`; what it changed: nothing in §1, and one method
+name in §2, §3, §5 and §8 (see §10.2). It is recorded as the sixth bullet in §6, where the other
+five live, rather than only here. It adds no new deferred unknown.
+
+The two deferred rows are unchanged and still carry all four fields: the two non-spec capability
+structs, and where the task store lives multi-replica. The §0 disposition of the superseded
+`dod-check.md` paragraph is owned by the first TASK.1 code commit and tracked in §0 — a
+documentation correction with a named owner, not an open question about the design, so it is
+deliberately not a third row here.
+
+### 10.6 What this pass did NOT do
+
+No implementation code was written; TASK.1 remains ABSENT in
+`RELEASE-4.0.0-criteria-status.md:226`. `src/protocol/meta.rs` is **not** edited here — the
+`ADDED_IN_2026_07_28` correction is a code consequence recorded for the implementing commit, and
+§P0 keeps it out of a design-only change. No fifth design file was created.
+
+---
+
+## 11. Second-opinion review — 2026-09-06
+
+DoD §12 requires two independent vendors on identical material before this note is final. Both ran
+against the whole note plus the pinned `schema.ts`, with the §P0 scope statement and the canonical
+DoR/DoD criteria transmitted **in the payload** — handoff is per-vendor and mechanical, and an
+isolated reviewer cannot read a rules file it has no filesystem for.
+
+| leg | vendor | verdict |
+|---|---|---|
+| 1 | `~/.claude/bin/gpt-review` (Codex/GPT-5.x) | **SHIP-WITH-FIXES** — "task identity, subscription authorization, and lifecycle routing are not yet safely specified" |
+| 2 | `~/.claude/bin/grok-review` | **SHIP-WITH-FIXES** — "the verification pass left the EXT.1 seam and the SUB.4 keying premise describing a tree that no longer exists, and it dismissed a `tasks/update` MUST that does change the handler" |
+
+Neither verdict is evidence. Every finding below was verified at source before anything was
+written; the ones that died on inspection are recorded as dead, not quietly dropped.
+
+### 11.1 Confirmed and repaired in this commit
+
+| finding | leg | verified how | repair |
+|---|---|---|---|
+| **§3.5 says `ServerCapabilities` has no `extensions` field and EXT.1 must add it. EXT.1 has landed.** (HIGH, CERTAIN) | grok | `src/protocol/types.rs:255-256` carries `pub extensions: HashMap<String, Value>`; `build_server_capabilities(implemented_extensions())` is wired at `src/gateway/meta_mcp_helpers.rs:190`; `implemented_extensions()` (`:147-150`) returns an EMPTY map on purpose | §3.5 rewritten. TASK.1's declaration work is now stated as exactly one edit — insert the identifier into `implemented_extensions()` in the same change that serves the methods. An implementer following the superseded text would have built a second declaration path and could have advertised the extension while the honouring list stayed empty, which is the one failure that function exists to prevent |
+| **§2 and §4 specify `resolve_idempotency_key` auto-deriving a key for every keyless call. That function is not in the tree and its replacement does the opposite.** (MEDIUM, CERTAIN) | grok | `rg` finds no `resolve_idempotency_key`; `idempotency_key_for` (`src/gateway/meta_mcp/support.rs:35-44`) returns `None` unless the client supplied a key | both passages corrected to *client key or nothing*. The two-mechanism collision narrows to a request carrying **both** a client key and a task-augmented call — the only case where they can disagree |
+| **AC `.10` says the declaration is "not TASK.1's to close".** (HIGH, same root as the first row) | grok | same reading | half of it is: the field and the populate path landed, the honouring entry did not. Row revised |
+| **§10.3's authorisation row named AC `.9`** (LOW/improvement) | both | §8 lists `.11` as the cross-principal row; `.9` is notification filtering | corrected. §8's rows are out of order (`.11` before `.10`) and stay that way, deliberately — renumbering a criterion other documents cite costs more than the disorder does. Recorded so it is a decision, not an oversight |
+
+### 11.2 Confirmed as design deltas — the specification changes, and it changes before code
+
+Each of these moves what the thing should BE, so per §P0 the disposal is *write it into the
+design*, not *file it*. They land as acceptance-criteria edits in the TASK.1 implementing change,
+and they are listed here so that change cannot start without them.
+
+**Each one is also stamped at the place an implementer reads.** A finding recorded only in a
+review section is a finding nobody reaches: §3 pieces 2, 3 and 6, §4's dedupe rule and AC rows
+`.3`, `.8` and `.11` each now carry an *Amended by §11.2* line naming the gap and saying "do not
+implement from this paragraph alone". The renumbering question — whether these become new
+criteria `.12`/`.13` or extend `.11` — is the team lead's, and is open; the hazard is closed
+either way, because no reader of the old text can now miss it.
+
+- **Subscription admission is unauthorised** (gpt, CRITICAL). Ownership is checked on
+  `tasks/get|update|cancel` and on nothing else. AC `.11` covers a *retrieval* call; AC `.9`
+  asserts *emission* filtering. Neither covers a `subscriptions/listen` carrying `taskIds`. The
+  spec's MUST is per-request auth on **each** task-related request, and admission is one. AC `.11`
+  extends: a `taskIds` entry naming another principal's task is refused exactly as an unknown id
+  is, and the acknowledgement MUST NOT echo it back. Without this, a caller who guesses an id has
+  the full status **and result** pushed to them — the same leak `.11` was written for, through a
+  door `.11` does not cover.
+- **The `-32021` gate is per request, not per method-family** (gpt, MEDIUM). §3 piece 3 gates task
+  *creation* on the per-request declaration and says nothing about the subscription path. Any
+  request whose params reach into the tasks extension is gated, `subscriptions/listen` with
+  `taskIds` included.
+- **Dedupe must be principal-bound** (gpt, CRITICAL). Independently corroborated by the tree:
+  `idempotency_key_for` already refuses to invent a key. The design's secondary index takes
+  `(authenticated principal, request fingerprint)` and applies only when the client supplied a
+  key. Two tenants issuing the same call must never share a handle; a keyless repeat gets a new
+  task.
+- **`ttlMs: null` with no admission bound** (gpt, HIGH). A finite default TTL, a global active-task
+  cap and a per-principal cap, all enforced **before** the backend call starts. The extension is
+  what makes an authenticated flood cheap.
+- **`tasks/update` must reject unmatched `inputResponses` keys** (grok, MEDIUM, LIKELY). §10.3
+  recorded the spec MUST and then called the silence harmless. It is not: AC `.3` as written ships
+  a timestamp bump that accepts unmatched keys, which the pinned schema forbids, and with
+  `input_required` out of scope there are never outstanding keys to match — so any non-empty map is
+  refused until elicitation is in scope. AC `.3` also gains the empty `resultType: "complete"`
+  acknowledgement shape and the cooperative, eventually-consistent cancel licence.
+- **`ttlMs` and `pollIntervalMs` are both mutable** (grok improvement; already half-applied in the
+  preceding commit). One rule for both: the store must not treat either as write-once, and a reaper
+  that pins the TTL it read at creation reaps a task the server has since extended.
+- **Wire field is `taskId`, struct field is `id`** (grok improvement). Named in piece 1 beside the
+  entropy rule, so the `CreateTaskResult` shape §10.3 calls a match is actually specified.
+
+### 11.3 Confirmed, already dispositioned — no change
+
+- **`notifications/tasks` is server-to-client, so it is not a fourth inbound dispatcher arm** (gpt,
+  HIGH, CERTAIN). §5 already routes it through the subscription emitter. Three inbound arms plus
+  one emitter; §3 piece 4's "the four arms" phrasing was the sloppy half and is corrected in
+  place — it now names three inbound arms and points at the emitter for the fourth method.
+- **Restart persistence excluded** (gpt, HIGH, BEFORE-PRODUCTION). Already the second deferred row
+  in §6 with all four fields and the same gate the reviewer assigns. Deferred, not missed — which
+  is why the reviewer's own gate is not `NOW`.
+
+### 11.4 Citation repairs — applied in this commit
+
+The GO confirmation in §10.4, the same pointers in §0 and §9, and the MIK-7311 reconciliation in
+§7 cited passages that do not carry what they were cited for: `RELEASE-4.0.0-plan.md:110-112` is `NFR.COMPAT.1` (checked: it is the
+`server.modern_protocol` flip) and `dod-check.md:557-584` is the continuation-ledger repairs table
+(checked: HIGH/MEDIUM/LOW rows about token decoding and lock contention). Retargeted to
+`RELEASE-4.0.0-plan.md:605-606` — "the operator directed the full scope on 2026-08-31, so TASK.1
+ships in v4.0.0" — and `RELEASE-4.0.0-dod-check.md:829-858`, the "Disposition of 3 and 4 — the
+extension ships not implemented" section whose first line is the "does not advertise" sentence
+and whose last content line is `:858` (the next heading opens at `:860`, so the range does not
+overrun the section). §7's two quotations were retargeted separately, to `:857-858` and `:674-675`
+— they were never in one passage.
+The GO claim itself survives; only its evidence pointers were wrong. The deferred-row citation for
+"2025-11-25 must be served" moves from `RELEASE-4.0.0-requirements.md:210` to `:261`, which is
+`NFR.COMPAT.1` in the requirements table. **A citation that lands
+on the wrong paragraph is indistinguishable from a fabricated one to the reader who checks it**,
+which is why these are listed rather than waved through as typos.
+
+### 11.5 A finding about the tree, not the design — and it falsifies a claim in §10.6
+
+**A second TASK.1 design exists.** `docs/design/2026-09-05-tasks-extension.md`, committed as
+`3a26aaf6` ("docs(tasks): design the tasks extension against the 2026-07-28 spec"), authored by
+another session the day before this pass. Same criterion (`MIK-7311 / TASK.1`), narrower scope: it
+excludes the `subscriptions/listen` notification stream, the MRTR payload shapes, persistence and
+TTL sweeping, and the `gateway_declares()` wiring — all of which this note covers.
+
+§10.6's "no fifth design file was created" was true of *this pass* and **wrong about the tree**: a
+fifth already existed when the sentence was written. Corrected here rather than deleted, because
+the correction is the useful half.
+
+Disposition — **file it; owner = team lead** (§P0: a human must decide, and the decision is *which
+document survives*). Not this session's call. Deleting or rewriting another session's committed
+work is what LOOP-CLEAN forbids, and the two notes disagree about scope in a way only whoever owns
+the release scope can settle. What is not in doubt: two live design notes for one criterion is the
+exact failure §0 of this note was written about, and it reproduced within six days.
+
+**Ruled 2026-09-06.** The team lead named this note the survivor and directed that
+`docs/design/2026-09-05-tasks-extension.md` be deleted as part of this change; it is gone in
+`cb00805a`. The file was committed and clean at deletion time — checked, because the ruling
+carried an explicit exception for a session still editing it. This was a release-scope decision by
+its owner, not the housekeeping LOOP-CLEAN forbids.
+
+### 11.6 What is NOT yet done
+
+The confirmation pass required by §12 — *are the gaps closed* — has RUN; §12 below records it.
+This list is rewritten 2026-09-06 to carry only what is still owed, because three of the items it
+carried are settled and a list of closed items is a list nobody reads.
+
+**Closed, recorded so they are not re-opened.** The criterion numbering is the lead's, and the lead
+ruled: the two new authorisation criteria are `.12` and `.13`, not an extension of `.11`. The
+out-of-order `.11`/`.10` rows above are deliberate and stay. Whether `.12` and `.13` become rows in
+`docs/requirements/RELEASE-4.0.0-criteria-status.md` is settled too, and settled by that file: it
+carries exactly one TASK.1 row (`docs/requirements/RELEASE-4.0.0-criteria-status.md:233`), so
+`.12` and `.13` are criteria underneath it, never ledger rows beside it. And the
+`ttlMs` / `pollIntervalMs` MAY-change clauses that §10.3 found unstated are answered by the
+amendment to piece 2 in §3 — one ownership rule for both fields.
+
+**Reviewed as of 2026-09-06, with the boundary stated.** The `ttlMs`/`pollIntervalMs` ownership
+amendment and the plan rows `.14`–`.17` that descend from it went through a full adversarial round
+and then a confirmation pass, and both vendors returned **SHIP** on the confirmation: grok, ledger
+run `grok-20260906T063048Z-57193`; kimi, run `synthetic-20260906T063051Z-57626`. Both processes
+exited 0. §PA makes the verdict that row and that exit status — this sentence is a pointer to them,
+never the verdict itself.
+
+What is still owed is narrower than it was, and naming it is the point. **Four** repairs were
+applied *after* those SHIPs and are therefore unreviewed, and they do not share one provenance.
+The last row is written without a hash on purpose: a paragraph that names the commit editing it can
+never be correct, because the naming is itself an edit.
+
+| commit | what | who asked |
+|---|---|---|
+| `ad49fc1b` | conditional delete moved onto piece 2's store primitive | kimi's HIGH finding, **relocated on the team-lead's instruction** — the finding is a vendor's, the placement is not |
+| `a66a65ff` | the AC file's stale scope carve-out | grok, LOW, applied verbatim |
+| `2932de0b` | `.17` rewritten in `.14`'s polling terms; the plan's own review-boundary paragraph | grok SMALL for `.17`; the paragraph is a §P4a re-read of my own |
+| *(no hash)* | this paragraph, including whichever commit last corrected it | a §P4a re-read of my own |
+
+Two are a reviewer's confirmation finding applied verbatim, which is why no fourth round was spent
+on them. The other two are documents corrected because this change made them untrue, which §P4a
+requires and no reviewer asked for. That distribution is a judgement, recorded so it can be
+disagreed with, not a claim that any of the four were reviewed. **No verdict trailer is stamped
+anywhere in this file**: a trailer would read as covering the file, and what was reviewed is the
+amendment inside it.
+
+The functional leg (D6:E2E) is **N/A: this change has no running surface** — it is a design note;
+nothing was built, so there is nothing to drive.
+
+## 12. Confirmation pass — 2026-09-06
+
+Not a fresh review. Each vendor was handed back **its own** findings from §11 and the amended
+passages, and asked one question per finding: *is the gap closed, as you stated it?* That is
+repair-protocol step 6 — closure re-check returns to the finder, because a second vendor judges
+materiality on its own line and re-opens what it never raised.
+
+| finding | vendor | verdict | what happened |
+|---|---|---|---|
+| subscription admission is unauthorised (CRITICAL) | gpt | **CLOSED** | §3 ¶6 and §5 now authorise the `subscriptions/listen` stream on the same principal check as retrieval |
+| `-32021` gate is per method-family, must be per request (MEDIUM) | gpt | **CLOSED** | the gate is stated per request, so `subscriptions/listen` carrying `taskId`s is gated |
+| `ttlMs` has no admission bound (HIGH) | gpt | **NOT CLOSED** | the stamp said "global active-task cap". A terminal record is retained until its TTL expires, so a flood of fast-finishing tasks exhausts memory while an active-only counter reads zero. Repaired: caps count every **unreaped** record, released on deletion or expiry |
+| dedupe key is not principal-bound (CRITICAL) | gpt | **NOT CLOSED** | principal-binding landed, but the stamp keyed on `(principal, request fingerprint)`. That collapses two deliberate mutations differing only by idempotency key into one task and skips the second backend call. Repaired: key is `(principal, client idempotency key)`, fingerprint stored beside the entry, same-key/different-body **rejected**. AC `.8` inherits it |
+| `tasks/update` under-specified (MEDIUM) | grok | **NOT CLOSED** | the three MUSTs were stamped on AC `.3` only. An implementer writes the handler from piece 4 and reaches the criterion only when writing tests. Repaired: piece 4 carries them |
+| citations land on passages that do not carry the claim | grok | **PARTIAL** | §0, §7, §9 and §10.4 verified at source and correct. §4 and §9 still cited `plan.md:48-50,110-112` for "both ship"; the claim is at `:605-606`. Repaired — §11.4 had retargeted this same pointer everywhere except here |
+
+**Both legs: SHIP-WITH-FIXES.** The two CLOSED findings were fixed before this pass ran, in
+`55467540` and `a4748f63`. The four this pass sent back are repaired in `8ab52da8`, which precedes
+the commit carrying this section — the verdicts and their repairs are separate commits on purpose,
+so the record of what came back open survives independently of the fix.
+
+**Closure re-check — 2026-09-06.** Repair-protocol step 6 applied to the four NOT CLOSED/PARTIAL
+rows above, against `8ab52da8` only — the diff that carries each row's `Repaired: ...` text. gpt was
+usage-limited past the 12h SLA on its own two findings, so those two closures were delegated to
+kimi under the narrower confirm-or-refuse mandate (repair protocol step 6, finder-unavailable
+clause) rather than reassigned silently; grok re-checked its own two directly, no delegation needed.
+
+| finding | re-checked by | verdict |
+|---|---|---|
+| `ttlMs` has no admission bound (HIGH) | kimi, delegate for gpt (SLA expired) | **CLOSED** — caps count every unreaped record, released on deletion or expiry, not just active tasks |
+| dedupe key is not principal-bound (CRITICAL) | kimi, delegate for gpt (SLA expired) | **CLOSED** — key is `(principal, client idempotency key)`; same key with a different body is rejected, not collapsed into the first call |
+| `tasks/update` under-specified (MEDIUM) | grok (self) | **CLOSED** — the three MUSTs sit on piece 4 itself, where the handler is written from |
+| citations land on passages that do not carry the claim | grok (self) | **CLOSED** — §4 and §9 now cite `plan.md:605-606`, with a note on why `:48-50`/`:110-112` don't carry it |
+
+All four confirmed closed on the commit's own text. This pass's verdict revises from
+SHIP-WITH-FIXES to **SHIP**.
+
+Two IMPROVEMENTs were **disposed, not fixed** (§P0 disposal, named so the default of filing a
+ticket does not reassert itself):
+
+- *renumber the acceptance criteria so the amended ones read in order* — **filed to the lead**: a
+  human decides the numbering, and this note says so in §11.6.
+- *add AC cases for subscription admission* — **was "write it into the implementing change";
+  OVERRULED by the team lead on 2026-09-06 and written into §8 instead**, as two criteria rather
+  than one: `MIK-7272.TASK.1.12` (subscription admission enforces the same ownership check as
+  `tasks/get|update|cancel` — a caller guessing a task id currently gets status *and* result
+  pushed) and `MIK-7272.TASK.1.13` (the `-32021` gate is per request, not per method family, so an
+  undeclared client cannot reach the extension through the subscription path). Both BLOCKING for
+  4.0.0. The reason they are separate and neither extends `.11`: folding a distinct authorisation
+  surface into an existing criterion is what produced RL.5's "MET (narrowed)". The disposal was
+  wrong in the way §P0 warns about — deferring a criterion to the change that implements it hands
+  the implementer the job of deciding what the criterion says.
+
+**Ruled by the team lead, 2026-09-06:** `.12` and `.13` stay criteria of this note under the
+existing `MIK-7272.TASK.1` row and do **not** become rows in
+`docs/requirements/RELEASE-4.0.0-criteria-status.md`. The reason is consistency, not effort:
+that file carries one `MIK-7272.TASK.1` row (`:226`, verdict ABSENT) and no per-sub-criterion
+rows at all, so `.9`, `.10` and `.11` have never been rows either, and promoting only the two
+newest would make the ledger's granularity a function of when a criterion was written rather
+than of what it is. The parent row is ABSENT and therefore blocking, so nothing is concealed by
+leaving them here.
+
+The ruling carried one requirement, applied in the same commit: the parent row's verdict text at
+`:226` now names `.12` and `.13` explicitly, with one clause each on what they assert, so a
+reader working the ledger finds them without opening this note. A criterion nobody can reach from
+the ledger is a criterion nobody checks. The blocking total is whatever
+`scripts/release/count-release-criteria.py --check` derives and was not hand-typed; the ruling's
+own earlier figure of 37 was withdrawn by its author, and the file's `:11` line said 36 before
+this edit and says whatever the script recounts after it.

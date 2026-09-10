@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+use crate::gateway::meta_mcp_tool_defs::MetaToolGates;
 use crate::ranking::SearchResult;
 
 #[path = "meta_mcp_helpers_tests/response.rs"]
@@ -122,20 +123,32 @@ const TEST_INSTRUCTIONS: &str = "test instructions";
 
 #[test]
 fn build_initialize_result_has_correct_version() {
-    let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2025-11-25",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert_eq!(result.protocol_version, "2025-11-25");
 }
 
 #[test]
 fn build_initialize_result_has_tools_capability() {
-    let result = build_initialize_result("2024-11-05", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2024-11-05",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert!(result.capabilities.tools.is_some());
     assert!(result.capabilities.tools.unwrap().list_changed);
 }
 
 #[test]
 fn build_initialize_result_has_resources_capability() {
-    let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2025-11-25",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     let resources = result.capabilities.resources.unwrap();
     assert!(resources.subscribe);
     assert!(resources.list_changed);
@@ -143,20 +156,32 @@ fn build_initialize_result_has_resources_capability() {
 
 #[test]
 fn build_initialize_result_has_prompts_capability() {
-    let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2025-11-25",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     let prompts = result.capabilities.prompts.unwrap();
     assert!(prompts.list_changed);
 }
 
 #[test]
 fn build_initialize_result_has_logging_capability() {
-    let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2025-11-25",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert!(result.capabilities.logging.is_some());
 }
 
 #[test]
 fn build_initialize_result_advertises_four_capabilities() {
-    let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2025-11-25",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert!(result.capabilities.tools.is_some(), "missing tools");
     assert!(result.capabilities.resources.is_some(), "missing resources");
     assert!(result.capabilities.prompts.is_some(), "missing prompts");
@@ -165,7 +190,11 @@ fn build_initialize_result_advertises_four_capabilities() {
 
 #[test]
 fn build_initialize_result_has_server_info() {
-    let result = build_initialize_result("2024-11-05", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2024-11-05",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert_eq!(result.server_info.name, "mcp-gateway");
     assert!(result.server_info.title.is_some());
     assert!(result.server_info.description.is_some());
@@ -174,7 +203,11 @@ fn build_initialize_result_has_server_info() {
 #[test]
 fn build_initialize_result_passes_instructions_through() {
     let instructions = "custom routing guide";
-    let result = build_initialize_result("2024-11-05", instructions);
+    let result = build_initialize_result(
+        "2024-11-05",
+        instructions,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert_eq!(result.instructions.as_deref(), Some(instructions));
 }
 
@@ -182,7 +215,7 @@ fn build_initialize_result_passes_instructions_through() {
 
 #[test]
 fn discovery_preamble_contains_all_four_meta_tools() {
-    let preamble = build_discovery_preamble(10, 2);
+    let preamble = build_discovery_preamble(10, 2, &MetaToolExposure::expose_all());
     assert!(preamble.contains("gateway_search_tools"));
     assert!(preamble.contains("gateway_list_tools"));
     assert!(preamble.contains("gateway_list_servers"));
@@ -194,7 +227,7 @@ fn discovery_preamble_contains_first_keyword() {
     // GIVEN: any tool/server counts
     // WHEN: building the preamble
     // THEN: "FIRST" appears to emphasize search-before-invoke pattern
-    let preamble = build_discovery_preamble(0, 0);
+    let preamble = build_discovery_preamble(0, 0, &MetaToolExposure::expose_all());
     assert!(
         preamble.contains("FIRST"),
         "preamble must include FIRST to guide agent behavior"
@@ -204,7 +237,7 @@ fn discovery_preamble_contains_first_keyword() {
 #[test]
 fn discovery_preamble_includes_tool_count() {
     // GIVEN: 42 tools across 3 backends
-    let preamble = build_discovery_preamble(42, 3);
+    let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
     // THEN: the count appears in the text
     assert!(
         preamble.contains("42 tools"),
@@ -215,7 +248,7 @@ fn discovery_preamble_includes_tool_count() {
 #[test]
 fn discovery_preamble_includes_server_count() {
     // GIVEN: 42 tools across 3 backends
-    let preamble = build_discovery_preamble(42, 3);
+    let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
     assert!(
         preamble.contains("3 backends"),
         "preamble must include backend/server count"
@@ -225,7 +258,7 @@ fn discovery_preamble_includes_server_count() {
 #[test]
 fn discovery_preamble_with_zero_counts_is_valid() {
     // GIVEN: no tools or backends yet (empty gateway)
-    let preamble = build_discovery_preamble(0, 0);
+    let preamble = build_discovery_preamble(0, 0, &MetaToolExposure::expose_all());
     assert!(preamble.contains("0 tools"));
     assert!(preamble.contains("0 backends"));
 }
@@ -469,7 +502,16 @@ fn routing_instructions_uses_general_for_empty_category() {
 
 #[test]
 fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_webhooks() {
-    let tools = build_meta_tools(false, false, false, false, 0, 0);
+    let tools = build_meta_tools(
+        MetaToolGates {
+            stats: false,
+            reload: false,
+            cost_report: false,
+            webhook_status: false,
+        },
+        0,
+        0,
+    );
     // 4 base + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 13
     assert_eq!(tools.len(), 13);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -488,14 +530,31 @@ fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_w
     assert!(!names.contains(&"gateway_reload_config"));
 }
 
+/// The stats-enabled surface with no webhook registry attached.
+///
+/// This is the stdio shape: `run_stdio` never calls `set_webhook_registry`, so
+/// the tool is absent from the listing there however `webhooks.enabled` is set.
+/// The attached case is swept in `meta_mcp_tool_defs_tests.rs`.
 #[test]
-fn build_meta_tools_returns_all_tools_with_stats_and_webhooks() {
-    let tools = build_meta_tools(true, true, false, false, 0, 0);
-    // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 15
-    assert_eq!(tools.len(), 15);
+fn build_meta_tools_with_stats_enumerates_everything_but_webhook_status() {
+    let tools = build_meta_tools(
+        MetaToolGates {
+            stats: true,
+            reload: false,
+            cost_report: false,
+            webhook_status: false,
+        },
+        0,
+        0,
+    );
+    // 4 base + 1 stats + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 14
+    assert_eq!(tools.len(), 14);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_get_stats"));
-    assert!(names.contains(&"gateway_webhook_status"));
+    assert!(
+        !names.contains(&"gateway_webhook_status"),
+        "webhook status must stay off the enumerated surface (NFR.PERF.4)"
+    );
     assert!(names.contains(&"gateway_run_playbook"));
     assert!(names.contains(&"gateway_kill_server"));
     assert!(names.contains(&"gateway_revive_server"));
@@ -506,22 +565,18 @@ fn build_meta_tools_returns_all_tools_with_stats_and_webhooks() {
 }
 
 #[test]
-fn build_meta_tools_webhooks_only_without_stats() {
-    // GIVEN: webhooks enabled but stats disabled
-    // WHEN: building tool list
-    // THEN: webhook tool present, stats tool absent
-    let tools = build_meta_tools(false, true, false, false, 0, 0);
-    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"gateway_webhook_status"));
-    assert!(names.contains(&"gateway_list_disabled_capabilities"));
-    assert!(names.contains(&"gateway_list_profiles"));
-    assert!(!names.contains(&"gateway_get_stats"));
-}
-
-#[test]
 fn build_meta_tools_includes_reload_when_enabled() {
     // GIVEN: reload context enabled
-    let tools = build_meta_tools(false, false, true, false, 0, 0);
+    let tools = build_meta_tools(
+        MetaToolGates {
+            stats: false,
+            reload: true,
+            cost_report: false,
+            webhook_status: false,
+        },
+        0,
+        0,
+    );
     // 4 base + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state + 1 reload-capabilities = 14
     assert_eq!(tools.len(), 14);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -534,14 +589,22 @@ fn build_meta_tools_includes_reload_when_enabled() {
 
 #[test]
 fn build_meta_tools_all_enabled_includes_reload() {
-    // GIVEN: all optional tools enabled
-    let tools = build_meta_tools(true, true, true, false, 0, 0);
-    // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state + 1 reload-capabilities = 16
-    assert_eq!(tools.len(), 16);
+    // GIVEN: stats and reload enabled
+    let tools = build_meta_tools(
+        MetaToolGates {
+            stats: true,
+            reload: true,
+            cost_report: false,
+            webhook_status: false,
+        },
+        0,
+        0,
+    );
+    // 4 base + 1 stats + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state + 1 reload-capabilities = 15
+    assert_eq!(tools.len(), 15);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_reload_config"));
     assert!(names.contains(&"gateway_get_stats"));
-    assert!(names.contains(&"gateway_webhook_status"));
     assert!(names.contains(&"gateway_set_profile"));
     assert!(names.contains(&"gateway_get_profile"));
     assert!(names.contains(&"gateway_list_disabled_capabilities"));
@@ -720,6 +783,38 @@ fn ranked_results_to_json_converts_correctly() {
 }
 
 #[test]
+fn ranked_results_to_json_prunes_the_constant_signals() {
+    // MIK-7084.SURFACE.1b. The code-mode emitter pruned; this one, which
+    // serves the ordinary `gateway_search` path, shipped all sixteen signals.
+    // Asserted on the emitter rather than on the pruner, because a pruner that
+    // prunes proves nothing about a caller that never calls it.
+    let results = vec![SearchResult {
+        server: "s1".to_string(),
+        tool: "t1".to_string(),
+        description: "desc1".to_string(),
+        score: 0.95,
+        ..SearchResult::new("s1", "t1", "desc1")
+    }];
+    let shown = ranked_results_to_json(results, true);
+    let signals = shown[0]["ranking"]["signals"]
+        .as_object()
+        .expect("explain carries the signals object");
+    for constant in ["safety", "trust", "policy_fit", "risk", "latency"] {
+        assert!(
+            !signals.contains_key(constant),
+            "{constant} is the same for every tool in every response and must \
+             not be emitted: {:?}",
+            signals.keys().collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        signals.contains_key("relevance"),
+        "pruning must not take the signals that vary: {:?}",
+        signals.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn ranked_results_to_json_omits_ranking_unless_explain() {
     let results = vec![SearchResult {
         server: "s1".to_string(),
@@ -739,4 +834,72 @@ fn ranked_results_to_json_omits_ranking_unless_explain() {
 fn ranked_results_to_json_empty_input() {
     let json_results = ranked_results_to_json(vec![], false);
     assert!(json_results.is_empty());
+}
+
+#[test]
+fn expose_all_reproduces_the_unfiltered_preamble() {
+    // The conditional assembly must be byte-identical to the single `format!`
+    // it replaced. Every other assertion here is `contains`, so a dropped line
+    // or a lost newline on the default path would pass all of them.
+    let expected = "This server manages 42 tools across 3 backends.\n\
+         Use gateway_search_tools FIRST to find relevant tools by keyword before invoking.\n\
+         Tool schemas are not listed directly so the prompt stays compact.\n\
+         \n\
+         Discovery pattern:\n\
+         1. gateway_search_tools(query=\"your keyword\") -- find tools matching your need\n\
+         2. gateway_invoke(server=\"X\", tool=\"Y\", arguments={...}) -- call the tool\n\
+         \n\
+         Direct listing (when you know the backend):\n\
+         - gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n\
+         - gateway_list_servers -- list all backends with status\n";
+
+    assert_eq!(
+        build_discovery_preamble(42, 3, &MetaToolExposure::expose_all()),
+        expected
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Extensions capability (`io.modelcontextprotocol/extensions`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn extensions_reach_the_wire_when_the_gateway_implements_one() {
+    // `build_server_capabilities` takes the extension source as a parameter for
+    // exactly this assertion: perturb the input, observe the serialized value.
+    // Without it, a capabilities struct left at its `Default` is indistinguishable
+    // from one that is correctly populated, because both are empty today.
+    let mut implemented = std::collections::HashMap::new();
+    implemented.insert(
+        "io.modelcontextprotocol/tasks".to_string(),
+        serde_json::json!({}),
+    );
+
+    let wire = serde_json::to_value(build_server_capabilities(implemented)).unwrap();
+
+    assert_eq!(
+        wire.get("extensions")
+            .and_then(|e| e.get("io.modelcontextprotocol/tasks")),
+        Some(&serde_json::json!({})),
+        "an implemented extension must appear in the serialized capabilities; \
+         it is how a client learns the mechanism is honoured"
+    );
+}
+
+#[test]
+fn empty_extensions_are_omitted_so_discovery_stays_additive() {
+    // MIK-7217 AC discover-3 requires the initialize result to be unchanged for a
+    // client asking for an already-supported revision. An always-present
+    // `"extensions": {}` breaks that: a key that appears for every client is a
+    // handshake change, not an additive one. Serializing it unconditionally is
+    // what turned that AC red, so this pins the omission rather than the default.
+    let wire = serde_json::to_value(build_server_capabilities(initialize_extensions(
+        crate::protocol::meta::Era::Legacy,
+    )))
+    .unwrap();
+
+    assert!(
+        wire.get("extensions").is_none(),
+        "capabilities must not carry an extensions key while none is implemented, got: {wire}"
+    );
 }
