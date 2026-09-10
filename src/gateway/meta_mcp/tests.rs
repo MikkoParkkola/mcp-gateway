@@ -2964,6 +2964,12 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         input_capabilities: declaring(&json!({"elicitation": {}})),
         verified_identity: Some(&NAMED_CALLER),
+        // Stated, not inherited: `allow_all_ctx_named` defaults to `Legacy`
+        // because its callers declare nothing, but this one declares. The era
+        // has to match the declaration's source -- `classify_request` reads
+        // that same `_meta` block as `Modern` -- or the fixture sends a 2025
+        // client down the legacy bridge and never reaches the transform.
+        era: crate::protocol::meta::Era::Modern,
         ..allow_all_ctx_named(Some("alice"), Some("agent-1"))
     };
     let result = meta
@@ -3411,9 +3417,24 @@ fn allow_all_ctx_declaring(
         input_capabilities: declared,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
-        // Fail-closed: a helper that declared nothing is a 2025 client, the
-        // same reasoning that puts `Declared::NONE` on the line above.
-        era: crate::protocol::meta::Era::Legacy,
+        // Matched to the declaration's source, not defaulted. Most call sites
+        // pass a `declaring()` result, directly or through
+        // [`form_only_client`], and `declaring()` builds a `_meta` block
+        // carrying `2026-07-28` in both the body and the header before handing
+        // it to `classify_request`; `RequestShape::era` reads that shape back
+        // as `Modern`. Pinning `Legacy` here claimed a wire shape the fixture
+        // never sent -- a 2025 client that somehow declared 2026 input
+        // capabilities -- and took the legacy input bridge, which this
+        // context's `NoClientChannel` then refuses.
+        //
+        // The call sites that pass `Declared::NONE` are unaffected either way,
+        // and this field is not making a claim on their behalf: `invoke_tool`
+        // refuses an undeclared input request (MRTR.9,
+        // `src/gateway/meta_mcp/invoke.rs`) before it reads `era`, so those
+        // tests never reach the branch this field selects. The `Legacy`
+        // default on [`allow_all_ctx_named`] stands for callers that declare
+        // nothing at all.
+        era: crate::protocol::meta::Era::Modern,
         channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
