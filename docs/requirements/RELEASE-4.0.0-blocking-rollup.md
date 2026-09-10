@@ -187,18 +187,21 @@ Clusters A, D, F, G, H and I have cleared, and the residue emptied on 2026-09-10
 
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
-| C | MIK-7272 revision surface | `SUB.2` (own-stream clause), `SUB.4` | 2 | two half-wirings. `SUB.2b` is absent on the outbound leg only: the inbound legs now capture rather than discard (`parse_sse_response` returns `Result<SseExchange>`, `src/transport/http/mod.rs:312`; progress-token match, `src/transport/stdio.rs:416-431`). It stays blocking because the captured notifications have no production consumer, and the inbound scaffold does not merge alone. `SUB.4` is no longer unwired — all three routes reach a guard as of `5dd2b48c` — but it is PARTIAL rather than MET: the direct `POST /mcp/{name}` route RELEASES the client's key when the backend call fails (`backend_handlers.rs:862-867`, `idempotency.rs:562-571`), which is the broken-stream case the criterion is written about. What it now waits on is a decision about uncertain execution, not more wiring. `EXT.1`, `OTEL.1`, `TASK.1` and `MRTR.10` left this cluster as their wiring landed, and `ORDER.2` left it on 2026-09-08 |
+| C | MIK-7272 revision surface | `SUB.2` (own-stream clause) | 1 | one half-wiring. `SUB.2b` is absent on the outbound leg only: the inbound legs now capture rather than discard (`parse_sse_response` returns `Result<SseExchange>`, `src/transport/http/mod.rs:312`; progress-token match, `src/transport/stdio.rs:416-431`). It stays blocking because the captured notifications have no production consumer, and the inbound scaffold does not merge alone. `SUB.4` left this cluster on 2026-09-11: the release-versus-settle decision it was waiting on is made and wired — a failure the transport can prove never left the origin releases the key, and every other shape settles terminally (`Error::TransportConnect` via `safe_request_error_for`, `src/security/http_diagnostics.rs:88`, on the redirect evidence the dispatch site samples). Scored by `tests/mik_7272_sub4_adr012_acs.rs`, 15 passed / 0 failed. `EXT.1`, `OTEL.1`, `TASK.1` and `MRTR.10` left this cluster as their wiring landed, and `ORDER.2` left it on 2026-09-08 |
 
-Cluster C carries one prerequisite that is not visible in its row. `SUB.4`'s activation is
-blocked on the idempotency key binding the calling principal: `identity_suffix`
-(`src/gateway/meta_mcp/invoke.rs:1128-1132`) is empty whenever identity propagation is off, which
-is the shipped default, so two authenticated callers derive one KEY — not one fingerprint, which
-is the same for both because the calls genuinely are the same `(server, tool, arguments)` — and the
-second is served the first's stored response. Three moves are needed, not one: the fallback chain
-`caller_principal` already uses (`:1140-1142`); the relocation into `derive_key` that SUB.4's own
-"Constraints, measured" already decided; and a suffix that is hashed or length-prefixed rather than
-concatenated raw after a client-supplied key, since without that third move the second one hands a
-forgeable binding to the population it just started binding. Provenance and the full derivation:
+Cluster C's `SUB.4` prerequisite — the idempotency key binding the calling principal — closed, and
+all three moves it named are in source (re-verified 2026-09-11). It was recorded because
+`identity_suffix` was empty whenever identity propagation is off, which is the shipped default, so
+two authenticated callers derived one KEY — not one fingerprint, which is the same for both because
+the calls genuinely are the same `(server, tool, arguments)` — and the second was served the first's
+stored response. Move 1, the fallback chain: `retry_identity_suffix`
+(`src/gateway/meta_mcp/support.rs:80-89`) selects the propagated binding, else the verified subject,
+and is empty only for a caller with neither. Move 2, one composition site: `idempotency_key_for`
+(`:48-62`) is where the suffix meets the key. Move 3, the forgeability guard: the client key is
+LENGTH-PREFIXED, `{len}:{key}{projection}{identity}{step}` (`:59-61`), so a client that supplies
+`mykey|sub:victim` derives `19:mykey|sub:victim` and cannot reach the victim's `5:mykey|sub:victim`.
+The two arms are tagged (`idp:` vs `sub:`) so a binding cannot collide with an actor id that reads
+the same. Provenance and the original derivation:
 `docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.md`, which found it while
 withdrawing its own duplicate of this wiring on 2026-09-06.
 
