@@ -13,15 +13,14 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::json;
 
 use mcp_gateway::Error;
 use mcp_gateway::failsafe::{RetryPolicy, with_retry};
 use mcp_gateway::idempotency::{
-    CheckOutcome, GuardOutcome, IN_FLIGHT_TIMEOUT, IdempotencyCache, IdempotencyReservation,
-    IdempotencyState, enforce,
+    CheckOutcome, GuardOutcome, IdempotencyCache, IdempotencyReservation, enforce,
 };
 
 /// The reservation a dispatched call holds, admitted exactly as
@@ -111,29 +110,42 @@ async fn pre_dispatch_failure_releases_its_key() {
 }
 
 /// Row 3 — an unannotated `tools/call` failing with `BackendTimeout` reaches
-/// the backend exactly once, while a `readOnlyHint`-annotated call still
-/// retries.
+/// the backend exactly once.
 ///
-/// `src/backend/ops.rs:218` hands `with_retry` no annotation at all, so both
-/// halves take the same path: three deliveries of a mutation the guard still
-/// considers one in-flight call. Per amendment A1 resend permission comes only
+/// `src/backend/ops.rs:218` hands `with_retry` no annotation at all, and a
+/// timeout is not provably pre-dispatch, so today the call is delivered three
+/// times inside one reservation. Per amendment A1 resend permission comes only
 /// from an explicit backend `readOnlyHint`/`idempotentHint` of `true`; absent
-/// means deny.
+/// means deny, which is a property of the resend decision itself and is stated
+/// here the way rows 8 and 9 state it.
 #[tokio::test]
 async fn unannotated_backend_timeout_reaches_the_backend_once() {
-    let annotated = deliveries_under_with_retry(|| Error::BackendTimeout("slow".into())).await;
-    assert_eq!(
-        annotated, 3,
-        "a call the backend annotates read-only must still be resent"
-    );
+    let deliveries = deliveries_under_with_retry(|| Error::BackendTimeout("slow".into())).await;
 
-    let unannotated = deliveries_under_with_retry(|| Error::BackendTimeout("slow".into())).await;
     assert_eq!(
-        unannotated, 1,
+        deliveries, 1,
         "a `tools/call` carrying no explicit read-only or idempotent hint must \
          not be resent beneath the guard (ADR-012 consequence 2); the transport \
-         delivered it {unannotated} times inside one reservation"
+         delivered it {deliveries} times inside one reservation"
     );
+}
+
+/// Row 3b — the permission the deny default is a default *for*: a call the
+/// backend annotates `readOnlyHint: true` is still resent.
+///
+/// Separated from row 3 because it cannot be stated yet. `with_retry` takes a
+/// policy and a closure and no annotation, and nothing captures an explicit
+/// hint before normalization overwrites it — `src/backend/annotations.rs`
+/// exposes only `prepare_tool_metadata` (`:152`). Asserting three deliveries
+/// through today's helper would feed the same inputs as row 3 and demand the
+/// opposite answer, which no implementation can satisfy; asserting it against
+/// `with_retry` directly would demand the primitive ignore its own policy.
+#[tokio::test]
+#[ignore = "waits on the ADR-012 A1 explicit-hint capture: no surface carries a \
+            backend `readOnlyHint`/`idempotentHint` to the resend decision, so \
+            the annotated and unannotated cases are the same call"]
+async fn an_explicitly_read_only_call_is_still_resent() {
+    unimplemented!("needs the explicit-hint capture of ADR-012 amendment A1");
 }
 
 /// Row 4a — a second caller arriving on a key whose reservation passed
@@ -153,20 +165,20 @@ async fn live_owner_past_the_timeout_is_told_in_flight() {
 /// `decide_check_plan`: `evict_expired` (`src/idempotency.rs:398`) retains on
 /// `!entry.state.is_expired()`, and staleness for an in-flight entry is a bare
 /// clock reading (`:84`) rather than a liveness question.
+///
+/// Gated for the same reason as row 4a, and it is the reason the row cannot
+/// simply be asserted: `IdempotencyState::InFlight` carries a start instant and
+/// nothing else, so "whose owner is still running" is not expressible. Demanding
+/// `!is_expired()` of an aged in-flight entry built from that state would demand
+/// it of *every* aged in-flight entry, including one whose owner died — which
+/// removes the eviction that consequence 3 depends on. The requirement is that
+/// liveness decide the sweep, not that the sweep stop deciding.
 #[tokio::test]
+#[ignore = "waits on the ADR-012 A2 liveness token: `IdempotencyState::InFlight` \
+            carries only a start instant, so a live owner and a dead one are the \
+            same value to `evict_expired`"]
 async fn a_live_reservation_survives_an_evict_expired_sweep() {
-    let started = Instant::now()
-        .checked_sub(IN_FLIGHT_TIMEOUT + Duration::from_secs(1))
-        .expect("the monotonic clock is far enough from boot");
-    let aged = IdempotencyState::InFlight(started);
-
-    assert!(
-        !aged.is_expired(),
-        "an in-flight entry whose owner is still running must not be reported \
-         stale (ADR-012 consequence 3); `evict_expired` sweeps on this exact \
-         predicate, so the entry is removed and the next caller is admitted \
-         fresh against a running mutation"
-    );
+    unimplemented!("needs the liveness token from ADR-012 amendment A2");
 }
 
 /// Row 5 — a dispatched call answered with a well-formed `input_required`
