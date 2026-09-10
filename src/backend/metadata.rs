@@ -136,7 +136,9 @@ impl Backend {
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
         self.get_cached_list_shared(&self.tools_cache, "tools/list", "tools", |result| {
             let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
-            prepare_tool_metadata(&self.name, &mut tools);
+            // Discovery is where the explicit annotations are still readable,
+            // and it always precedes a `tools/call` (ADR-012 A1).
+            *self.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
             Ok(tools)
         })
         .await

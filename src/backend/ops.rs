@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::Backend;
 use super::registry::{BackendLifecycle, BackendRuntimeState, BackendRuntimeStatus, BackendStatus};
 use crate::config::TransportConfig;
-use crate::failsafe::with_retry;
+use crate::failsafe::{RetryPolicy, with_retry};
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::{Error, Result};
@@ -134,6 +134,39 @@ impl Backend {
         headers
     }
 
+    /// The retry policy this request may be resent under.
+    ///
+    /// ADR-012 consequence 2: a `tools/call` is resent only where the backend
+    /// granted permission explicitly, because a failure that is not provably
+    /// pre-dispatch may have left the side effect committed. The decision is
+    /// made here rather than in `is_retryable` because only this level knows
+    /// the method and the tool: the primitive is shared with
+    /// `send_with_retry`, whose callers must keep retrying.
+    ///
+    /// Every other method keeps the configured policy. `tools/list` and the
+    /// handshake carry no side effect to duplicate.
+    fn resend_policy(
+        &self,
+        configured: &RetryPolicy,
+        method: &str,
+        params: Option<&Value>,
+    ) -> RetryPolicy {
+        if method != "tools/call" {
+            return configured.clone();
+        }
+        let permitted = params
+            .and_then(|params| params.get("name"))
+            .and_then(Value::as_str)
+            .is_some_and(|name| self.resend_permitted.read().contains(name));
+        if permitted {
+            return configured.clone();
+        }
+        RetryPolicy {
+            enabled: false,
+            ..configured.clone()
+        }
+    }
+
     /// Send a request, adding per-request outbound headers (e.g. a propagated
     /// end-user identity credential -- MIK-6704). The headers are forwarded by
     /// value to the transport's `request_with_headers`, never stored on the
@@ -215,7 +248,9 @@ impl Backend {
         // attempt) can hand a borrow to each attempt's future without tying the
         // closure to the caller's borrow lifetime (MIK-6784).
         let identity_key = identity_key.map(str::to_string);
-        let result = with_retry(&entry.failsafe.retry_policy, &name, || {
+        let resend_policy =
+            self.resend_policy(&entry.failsafe.retry_policy, method, params.as_ref());
+        let result = with_retry(&resend_policy, &name, || {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();

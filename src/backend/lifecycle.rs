@@ -133,6 +133,7 @@ impl Backend {
             failsafe_config: failsafe_config.clone(),
             era: Arc::new(crate::protocol::era::EraCache::for_backend(name)),
             tools_cache: CachedMetadata::new(),
+            resend_permitted: parking_lot::RwLock::default(),
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),

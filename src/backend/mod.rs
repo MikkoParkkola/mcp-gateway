@@ -58,6 +58,14 @@ pub struct Backend {
     era: Arc<crate::protocol::era::EraCache>,
     /// Cached tools
     tools_cache: CachedMetadata<Vec<Tool>>,
+    /// Tools this backend declared an explicit `readOnlyHint` or
+    /// `idempotentHint` of `true` for, as of the last `tools/list`.
+    ///
+    /// Membership is the only thing that grants a `tools/call` permission to
+    /// be resent (ADR-012 amendment A1). Absent means deny, so an empty set —
+    /// a backend that has not been discovered yet, or one that annotates
+    /// nothing — denies every resend, which is the safe direction.
+    resend_permitted: parking_lot::RwLock<std::collections::HashSet<String>>,
     /// Cached resources
     resources_cache: CachedMetadata<Vec<Resource>>,
     /// Cached resource templates
