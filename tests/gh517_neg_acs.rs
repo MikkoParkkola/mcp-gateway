@@ -19,6 +19,27 @@ use serde_json::{Value, json};
 
 use mcp_gateway::backend::Backend;
 use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
+use mcp_gateway::protocol::PROTOCOL_VERSION;
+
+/// A version the gateway speaks that is deliberately NOT the one it proposes.
+///
+/// The whole point of these tests is that the gateway proposes one version and
+/// the server picks another. If the gateway's own proposal ever moves onto this
+/// value the tests would still pass while asserting nothing, so every test that
+/// uses it goes through [`differs_from_our_proposal`] first.
+const SERVER_SELECTS: &str = "2025-06-18";
+
+/// A version no gateway release speaks.
+const UNSUPPORTED: &str = "1999-01-01";
+
+/// Guard against a silently vacuous test after a `PROTOCOL_VERSION` bump.
+fn differs_from_our_proposal(version: &'static str) -> &'static str {
+    assert_ne!(
+        version, PROTOCOL_VERSION,
+        "the mock must select a version the gateway did not propose, or the test asserts nothing"
+    );
+    version
+}
 
 /// How the mock backend answers `initialize`.
 #[derive(Clone, Copy)]
@@ -32,8 +53,12 @@ enum Selects {
 
 struct Mock {
     selects: Selects,
-    /// Headers of the first request that was not `initialize`.
-    after_handshake: Option<HeaderMap>,
+    /// How many `initialize` requests arrived. NEG.3 asserts on this: a
+    /// negotiation that never had to happen proves nothing about negotiation.
+    initialize_attempts: usize,
+    /// Method and headers of every request after the handshake, so an
+    /// assertion can name the method rather than trusting arrival order.
+    after_handshake: Vec<(String, HeaderMap)>,
 }
 
 async fn mcp_handler(
@@ -49,7 +74,11 @@ async fn mcp_handler(
         .to_string();
 
     if method == "initialize" {
-        let selects = mock.lock().expect("mock mutex poisoned").selects;
+        let selects = {
+            let mut slot = mock.lock().expect("mock mutex poisoned");
+            slot.initialize_attempts += 1;
+            slot.selects
+        };
         let proposed = body["params"]["protocolVersion"].as_str().unwrap_or("");
         let selected = match selects {
             Selects::Version(version) => version,
@@ -83,12 +112,10 @@ async fn mcp_handler(
         .into_response();
     }
 
-    {
-        let mut slot = mock.lock().expect("mock mutex poisoned");
-        if slot.after_handshake.is_none() {
-            slot.after_handshake = Some(headers);
-        }
-    }
+    mock.lock()
+        .expect("mock mutex poisoned")
+        .after_handshake
+        .push((method.clone(), headers));
 
     if method == "tools/list" {
         return Json(json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}})).into_response();
@@ -99,7 +126,8 @@ async fn mcp_handler(
 async fn start_mock(selects: Selects) -> (String, Arc<Mutex<Mock>>) {
     let mock = Arc::new(Mutex::new(Mock {
         selects,
-        after_handshake: None,
+        initialize_attempts: 0,
+        after_handshake: Vec::new(),
     }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -142,15 +170,41 @@ fn backend_for(url: &str) -> Backend {
     )
 }
 
-fn header_after_handshake(mock: &Arc<Mutex<Mock>>, name: &str) -> Option<String> {
+/// Every distinct value of `name` seen on a post-handshake request, paired with
+/// the method that carried it. A partial fix that stamps the version onto
+/// `tools/list` but not onto the `initialized` notification shows up here.
+fn headers_after_handshake(mock: &Arc<Mutex<Mock>>, name: &str) -> Vec<(String, Option<String>)> {
     let slot = mock.lock().expect("mock mutex poisoned");
-    let headers = slot
-        .after_handshake
-        .as_ref()
-        .expect("no post-handshake request reached the mock");
-    headers
-        .get(name)
-        .map(|value| value.to_str().expect("header not ASCII").to_string())
+    assert!(
+        !slot.after_handshake.is_empty(),
+        "no post-handshake request reached the mock"
+    );
+    slot.after_handshake
+        .iter()
+        .map(|(method, headers)| {
+            (
+                method.clone(),
+                headers
+                    .get(name)
+                    .map(|value| value.to_str().expect("header not ASCII").to_string()),
+            )
+        })
+        .collect()
+}
+
+fn assert_every_request_announces(mock: &Arc<Mutex<Mock>>, version: &str) {
+    let seen = headers_after_handshake(mock, "MCP-Protocol-Version");
+    assert!(
+        seen.iter().any(|(method, _)| method == "tools/list"),
+        "the tools/list request must be among those checked, got: {seen:?}"
+    );
+    for (method, value) in &seen {
+        assert_eq!(
+            value.as_deref(),
+            Some(version),
+            "{method} must announce the version the backend selected"
+        );
+    }
 }
 
 /// NEG.1 — the version the server selected governs every later request.
@@ -160,7 +214,8 @@ fn header_after_handshake(mock: &Arc<Mutex<Mock>>, name: &str) -> Option<String>
 /// selection was discarded.
 #[tokio::test]
 async fn server_selected_version_governs_later_requests() {
-    let (url, mock) = start_mock(Selects::Version("2025-06-18")).await;
+    let selected = differs_from_our_proposal(SERVER_SELECTS);
+    let (url, mock) = start_mock(Selects::Version(selected)).await;
     let backend = backend_for(&url);
 
     backend
@@ -168,27 +223,29 @@ async fn server_selected_version_governs_later_requests() {
         .await
         .expect("a server-selected supported version must not fail the handshake");
 
-    assert_eq!(
-        header_after_handshake(&mock, "MCP-Protocol-Version").as_deref(),
-        Some("2025-06-18"),
-        "the gateway must address the backend with the version the backend selected"
-    );
+    assert_every_request_announces(&mock, selected);
 }
 
 /// NEG.2 — a selection the gateway cannot speak fails the backend.
 #[tokio::test]
 async fn unsupported_server_selection_fails_the_backend() {
-    let (url, _mock) = start_mock(Selects::Version("1999-01-01")).await;
+    let (url, _mock) = start_mock(Selects::Version(UNSUPPORTED)).await;
     let backend = backend_for(&url);
 
     let error = backend
         .get_tools()
         .await
-        .expect_err("a version the gateway does not speak must not be accepted silently")
-        .to_string();
+        .expect_err("a version the gateway does not speak must not be accepted silently");
 
+    // Kind as well as text: a transport blip that happened to echo the version
+    // would satisfy a substring check alone.
     assert!(
-        error.contains("1999-01-01"),
+        matches!(error, mcp_gateway::Error::Protocol(_)),
+        "an unsupported selection is a protocol failure, not a transport one, got: {error:?}"
+    );
+    let error = error.to_string();
+    assert!(
+        error.contains(UNSUPPORTED),
         "the diagnostic must name the version the server selected, got: {error}"
     );
 }
@@ -196,10 +253,8 @@ async fn unsupported_server_selection_fails_the_backend() {
 /// NEG.3 — negotiation covers a rejection delivered as an HTTP status.
 #[tokio::test]
 async fn http_status_rejection_negotiates_a_supported_version() {
-    let (url, mock) = start_mock(Selects::RejectingWith {
-        accepts: "2025-06-18",
-    })
-    .await;
+    let accepts = differs_from_our_proposal(SERVER_SELECTS);
+    let (url, mock) = start_mock(Selects::RejectingWith { accepts }).await;
     let backend = backend_for(&url);
 
     backend
@@ -207,9 +262,14 @@ async fn http_status_rejection_negotiates_a_supported_version() {
         .await
         .expect("an HTTP-status version rejection must be negotiated, not fatal");
 
-    assert_eq!(
-        header_after_handshake(&mock, "MCP-Protocol-Version").as_deref(),
-        Some("2025-06-18"),
-        "the negotiated version must govern later requests"
+    // Without this the test would pass on a gateway that simply guessed right
+    // on its first proposal, having negotiated nothing.
+    assert!(
+        mock.lock()
+            .expect("mock mutex poisoned")
+            .initialize_attempts
+            >= 2,
+        "the first initialize must have been rejected, or negotiation was never exercised"
     );
+    assert_every_request_announces(&mock, accepts);
 }
