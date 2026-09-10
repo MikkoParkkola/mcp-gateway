@@ -9,8 +9,8 @@
 # on every licensor-owned source file, not mere absence.
 #
 # Model (see LICENSES.md):
-#   - Files under .mit-core-allowlist  -> MIT.
-#   - Every other first-party source   -> PolyForm-Noncommercial-1.0.0.
+#   Every first-party source -> PolyForm-Noncommercial-1.0.0. There is no
+#   second license and no allowlist.
 # Both get the copyright line. Third-party/generated files are out of scope and
 # must be listed in .license-scope-exclude (none today; the repo has no vendored
 # or generated .rs — verified: no @generated markers, no build.rs).
@@ -24,9 +24,7 @@ APPLY=false; [ "${1:-}" = "--apply" ] && APPLY=true
 # Comment prefix is per-file: '//' for Rust, '#' for shell. The SPDX tag bodies
 # are prefix-agnostic; the leading token is chosen per extension below.
 CR='SPDX-FileCopyrightText: 2026 Mikko Parkkola'
-MIT_ID='SPDX-License-Identifier: MIT'
 NC_ID='SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0'
-ALLOW=.mit-core-allowlist
 EXCLUDE=.license-scope-exclude   # third-party/generated paths, one per line (optional)
 
 in_list() {
@@ -45,7 +43,7 @@ while IFS= read -r f; do
   if in_list "$f" "$EXCLUDE"; then skipped=$((skipped+1)); continue; fi
   case "$f" in *.sh) c='#' ;; *) c='//' ;; esac
   COPYR="$c $CR"
-  if in_list "$f" "$ALLOW"; then id="$c $MIT_ID"; else id="$c $NC_ID"; fi
+  id="$c $NC_ID"
 
   # Split optional shebang from the body. A shebang is '#!/...' or '#! ...';
   # Rust inner attributes ('#![...]') are NOT shebangs and must stay in the body.

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! The multi-round-trip continuation envelope.
 //!

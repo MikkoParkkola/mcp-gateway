@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Downloads](https://img.shields.io/crates/d/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Rust](https://img.shields.io/badge/rust-1.95+-blue.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-PolyForm--NC%20%2B%20MIT%20core-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
+[![License](https://img.shields.io/badge/license-PolyForm--NC-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
 [![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
@@ -22,7 +22,7 @@ MCP Gateway is a single Rust binary that sits between an AI client and all of it
 
 ![demo](demo.gif)
 
-Personal and noncommercial use is free, including running the full gateway. Running it commercially needs a [commercial license](#license), and only a small MIT core of generic building blocks is MIT-licensed.
+Personal and noncommercial use is free, including running the full gateway. Running it commercially needs a [commercial license](#license).
 
 ## The problem this removes
 
