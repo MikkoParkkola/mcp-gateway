@@ -144,6 +144,38 @@ impl Backend {
         .await
     }
 
+    /// Record the tools whose backend-declared annotations grant resend
+    /// permission explicitly (ADR-012 A1).
+    ///
+    /// The internal discovery path writes this from `get_tools_shared`, but the
+    /// direct `/mcp/{name}` route forwards `tools/list` itself and never goes
+    /// through it. A client that only ever uses that route therefore left the
+    /// set empty, and `resend_policy_for` denied retries to explicitly
+    /// retry-safe tools. The permitted set must be captured before
+    /// `normalize_tool_annotations` runs, which is why the caller passes the
+    /// return value of `prepare_tool_metadata` rather than the tools.
+    pub(crate) fn set_resend_permitted(&self, permitted: std::collections::HashSet<String>) {
+        *self.resend_permitted.write() = permitted;
+    }
+
+    /// Snapshot of the tools currently recorded as explicitly resend-permitted.
+    ///
+    /// Clones under the read lock, like [`Self::get_cached_tools_snapshot`], so
+    /// the caller never holds a guard. The dispatch-path reader
+    /// (`Backend::resend_decision`) deliberately does NOT use this: it passes the
+    /// guard straight to `resend_permission`, which is cheaper and runs on every
+    /// dispatched request.
+    ///
+    /// This exists so a route that writes the set can prove it wrote it, which
+    /// is a test's job: the production readers all take the guard directly, so
+    /// under `--all-targets` the lib target compiles this away rather than
+    /// carrying an accessor nothing calls.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn resend_permitted_snapshot(&self) -> std::collections::HashSet<String> {
+        self.resend_permitted.read().clone()
+    }
+
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the tools request fails.

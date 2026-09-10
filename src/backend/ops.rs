@@ -13,6 +13,7 @@ use crate::config::TransportConfig;
 use crate::failsafe::{RetryPolicy, with_retry};
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
+use crate::transport::{ResendPermission, resend_permission};
 use crate::{Error, Result};
 
 impl Backend {
@@ -134,37 +135,36 @@ impl Backend {
         headers
     }
 
-    /// The retry policy this request may be resent under.
+    /// This request's resend decision: the permission the transport carries,
+    /// and the retry policy this layer may resend under.
     ///
-    /// ADR-012 consequence 2: a `tools/call` is resent only where the backend
-    /// granted permission explicitly, because a failure that is not provably
+    /// ADR-012 consequence 2: a call is retried only where the resend
+    /// predicate grants permission, because a failure that is not provably
     /// pre-dispatch may have left the side effect committed. The decision is
     /// made here rather than in `is_retryable` because only this level knows
     /// the method and the tool: the primitive is shared with
     /// `send_with_retry`, whose callers must keep retrying.
     ///
-    /// Every other method keeps the configured policy. `tools/list` and the
-    /// handshake carry no side effect to duplicate.
-    fn resend_policy(
+    /// The permission comes from [`resend_permission`], the same predicate the
+    /// transport's session-expiry recovery uses, so the two resend sites cannot
+    /// drift apart. Both halves come out of ONE derivation, so the retry policy
+    /// and the recovery beneath it cannot disagree about one request.
+    fn resend_decision(
         &self,
-        configured: &RetryPolicy,
+        failsafe: &crate::failsafe::Failsafe,
         method: &str,
         params: Option<&Value>,
-    ) -> RetryPolicy {
-        if method != "tools/call" {
-            return configured.clone();
-        }
-        let permitted = params
-            .and_then(|params| params.get("name"))
-            .and_then(Value::as_str)
-            .is_some_and(|name| self.resend_permitted.read().contains(name));
-        if permitted {
-            return configured.clone();
-        }
-        RetryPolicy {
-            enabled: false,
-            ..configured.clone()
-        }
+    ) -> (ResendPermission, RetryPolicy) {
+        let permission = resend_permission(method, params, &self.resend_permitted.read());
+        let configured = &failsafe.retry_policy;
+        let policy = match permission {
+            ResendPermission::Permitted => configured.clone(),
+            ResendPermission::Denied => RetryPolicy {
+                enabled: false,
+                ..configured.clone()
+            },
+        };
+        (permission, policy)
     }
 
     /// Send a request, adding per-request outbound headers (e.g. a propagated
@@ -248,16 +248,16 @@ impl Backend {
         // attempt) can hand a borrow to each attempt's future without tying the
         // closure to the caller's borrow lifetime (MIK-6784).
         let identity_key = identity_key.map(str::to_string);
-        let policy = self.resend_policy(&entry.failsafe.retry_policy, method, params.as_ref());
+        let (perm, policy) = self.resend_decision(&entry.failsafe, method, params.as_ref());
         let result = with_retry(&policy, &name, || {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();
-            let extra_headers = extra_headers.clone();
-            let identity_key = identity_key.clone();
+            let hdrs = extra_headers.clone();
+            let id = identity_key.clone();
             async move {
                 transport
-                    .request_with_headers(&method, params, &extra_headers, identity_key.as_deref())
+                    .request_with_headers(&method, params, &hdrs, id.as_deref(), perm)
                     .await
             }
         })

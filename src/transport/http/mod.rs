@@ -23,7 +23,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use super::Transport;
+use super::{ResendPermission, Transport, resend_permission};
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
 use crate::protocol::era::Era;
@@ -34,7 +34,8 @@ use crate::protocol::{
     negotiate_best_version, parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
-    SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
+    RedirectEvidence, SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
+    safe_request_error_for,
 };
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
@@ -235,6 +236,22 @@ pub struct HttpTransport {
 
     /// Request ID counter
     request_id: AtomicU64,
+    /// Redirect hops this client has followed, ever (MIK-7272.SUB.4).
+    ///
+    /// Incremented by the redirect policy closure on the `Follow` arm, which
+    /// reqwest runs before it dials the next hop. The JSON-RPC dispatch site
+    /// samples it either side of `send()`: an unchanged count proves the
+    /// request never left the origin it was addressed to, which is what makes
+    /// a connect failure there provably pre-dispatch. A 307 re-submits the
+    /// body, so a connect failure *after* a hop says nothing about whether the
+    /// redirecting origin already executed the call.
+    ///
+    /// Client-global, not per-request: a concurrent peer request's hop inflates
+    /// the delta and the sampling request degrades to the coarse
+    /// `Error::Transport`, i.e. today's terminal settlement. That is the
+    /// fail-safe direction -- the counter can only ever cost a retry, never
+    /// license one.
+    redirects_followed: Arc<AtomicU64>,
     /// Connected flag
     connected: AtomicBool,
     /// Request timeout (used in client builder)
@@ -532,6 +549,8 @@ impl HttpTransport {
         if oauth_client.is_some() {
             require_secure_oauth_target(&base_origin)?;
         }
+        let redirects_followed = Arc::new(AtomicU64::new(0));
+        let redirect_counter = Arc::clone(&redirects_followed);
         let client = Client::builder()
             .timeout(timeout)
             .pool_max_idle_per_host(10)
@@ -546,7 +565,10 @@ impl HttpTransport {
                 ) {
                     RedirectDecision::Stop => attempt.stop(),
                     RedirectDecision::Reject(msg) => attempt.error(msg),
-                    RedirectDecision::Follow => attempt.follow(),
+                    RedirectDecision::Follow => {
+                        redirect_counter.fetch_add(1, Ordering::SeqCst);
+                        attempt.follow()
+                    }
                 },
             ))
             .build()
@@ -561,6 +583,7 @@ impl HttpTransport {
             sessions: RwLock::new(HashMap::new()),
             single_tenant_hint: AtomicBool::new(false),
             request_id: AtomicU64::new(1),
+            redirects_followed,
             connected: AtomicBool::new(false),
             timeout,
             streamable_http,
@@ -1249,6 +1272,11 @@ impl HttpTransport {
             finalise_modern_headers(&mut headers, &request.method, request.params.as_ref())?;
         }
 
+        // Sample the redirect counter either side of the send: an unchanged
+        // count is the proof that a connect failure here is pre-dispatch
+        // (MIK-7272.SUB.4). Sampled as late as possible so a peer request's
+        // hop has the narrowest window to inflate the delta.
+        let redirects_before = self.redirects_followed.load(Ordering::SeqCst);
         let response = self
             .client
             .post(&message_url)
@@ -1256,7 +1284,15 @@ impl HttpTransport {
             .json(request)
             .send()
             .await
-            .map_err(|e| safe_request_error("Request failed", &e))?;
+            .map_err(|e| {
+                let evidence = if self.redirects_followed.load(Ordering::SeqCst) == redirects_before
+                {
+                    RedirectEvidence::NoRedirectFollowed
+                } else {
+                    RedirectEvidence::MayHaveRedirected
+                };
+                safe_request_error_for("Request failed", &e, evidence)
+            })?;
 
         // Extract session ID from response headers if this caller's bucket is
         // empty (MIK-6784: store under the caller's identity key, never a shared
@@ -1437,7 +1473,15 @@ impl HttpTransport {
 #[async_trait]
 impl Transport for HttpTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        self.request_with_headers(method, params, &[], None).await
+        // This entry point carries no tool context, so it runs the shared
+        // predicate against an EMPTY permitted set: every `tools/call` is
+        // denied, while the side-effect-free methods that actually reach here
+        // (metadata discovery's `tools/list`, lifecycle's `ping`) keep the
+        // session recovery MIK-5982/MIK-6040 added for them.
+        let permission =
+            resend_permission(method, params.as_ref(), &std::collections::HashSet::new());
+        self.request_with_headers(method, params, &[], None, permission)
+            .await
     }
 
     async fn request_with_headers(
@@ -1446,6 +1490,7 @@ impl Transport for HttpTransport {
         params: Option<Value>,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
+        resend: ResendPermission,
     ) -> Result<JsonRpcResponse> {
         // Read the era once, here, and carry it into the send. Reading it
         // inside the header builder instead would leave the body half of the
@@ -1495,13 +1540,43 @@ impl Transport for HttpTransport {
             Ok(resp) => is_session_expired_response(resp),
         };
         if had_session && session_expired {
+            // Heal the session on BOTH branches: it really is dead, and leaving
+            // the stale bucket in place poisons every later call through this
+            // identity — including the ones that ARE allowed to be resent.
+            self.sessions.write().remove(bucket);
+            if self.initialize().await.is_err() {
+                // The caller asked about their request, not about our
+                // handshake; surfacing the re-initialization's error instead
+                // would hide what actually failed.
+                return result;
+            }
+            if resend == ResendPermission::Denied {
+                let tool = request
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("-");
+                warn!(
+                    url = %sanitize_url_for_diagnostics(&self.base_url),
+                    method = %method,
+                    tool = %tool,
+                    reason = "no explicit readOnlyHint/idempotentHint annotation",
+                    "Backend session expired; session healed but the call was NOT resent"
+                );
+                telemetry_metrics::counter!(
+                    "mcp_resend_denied_total",
+                    "site" => "http_session_expiry",
+                    "method" => method.to_string()
+                )
+                .increment(1);
+                return result;
+            }
             warn!(
                 url = %sanitize_url_for_diagnostics(&self.base_url),
                 method = %method,
                 "Backend session expired; re-initializing and retrying once"
             );
-            self.sessions.write().remove(bucket);
-            self.initialize().await?;
             return self
                 .send_request_with_headers(&request, extra_headers, identity_key, era)
                 .await;
