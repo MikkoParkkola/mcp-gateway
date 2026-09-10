@@ -736,12 +736,12 @@ impl Gateway {
         // effects back on. Bounds are the constants in `crate::idempotency`.
         // This is the only production construction site of `MetaMcp`, and both
         // `run` and `run_stdio` reach it, so the cache is `Some` on every boot.
-        // That covers ONE of the criterion's three routes: generic `tools/call`.
-        // stdio discards the retry fields before dispatch (`:2633`, `:3671`) and
-        // the direct `POST /mcp/{name}` bypass never calls `idempotency_key_for`
-        // (`backend_handlers.rs:338-353`), so both are still unprotected. SUB.4
-        // is MET only when all three are covered — see
-        // `docs/design/2026-08-31-sub-4-idempotency-wiring.md`.
+        // All three of the criterion's routes reach a guard from here: generic
+        // `tools/call` through `meta_mcp/invoke.rs`, stdio through the real
+        // `RetryFields` `dispatch_single_with_sink` builds (`:1886`), and the
+        // direct `POST /mcp/{name}` bypass through its own local re-enforcement
+        // (`meta_mcp/direct_route.rs`, called at `backend_handlers.rs:781`) —
+        // see `docs/design/2026-08-31-sub-4-idempotency-wiring.md`.
         Arc::get_mut(&mut meta_mcp)
             .expect("no other Arc references at this point")
             .enable_idempotency(

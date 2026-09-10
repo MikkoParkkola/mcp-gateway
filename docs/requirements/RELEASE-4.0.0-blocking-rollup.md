@@ -186,7 +186,7 @@ Clusters A, D, F, G and H have cleared: every row they named is met or non-block
 
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
-| C | MIK-7272 revision surface | `SUB.2` (own-stream clause), `SUB.4` | 2 | two half-wirings. `SUB.2b` is absent on both legs, and the client leg is the sharper of the two: it parses the negotiated revision and then discards it (`parse_sse_response`, `src/transport/http/mod.rs:286-298`). `SUB.4` is unwired: the idempotency cache is never enabled, and the key has to cover three routes where one is covered today — see the prerequisite paragraph below. `EXT.1`, `OTEL.1`, `TASK.1` and `MRTR.10` left this cluster as their wiring landed, and `ORDER.2` left it on 2026-09-08 |
+| C | MIK-7272 revision surface | `SUB.2` (own-stream clause) | 1 | one half-wiring left. `SUB.2b` is absent on both legs, and the client leg is the sharper of the two: it parses the negotiated revision and then discards it (`parse_sse_response`, `src/transport/http/mod.rs:286-298`). `SUB.4` left this cluster on 2026-09-10: the idempotency cache is enabled unconditionally at the sole production construction site, and the third route — the direct `POST /mcp/{name}` bypass — gained its own guard at `5dd2b48c`, so all three routes the criterion names are covered. `EXT.1`, `OTEL.1`, `TASK.1` and `MRTR.10` left as their wiring landed, and `ORDER.2` left on 2026-09-08 |
 | — | residue | `CONFIRM.2` | 1 | one row, and it waits on the continuation path rather than on a decision. `HEADER.9a`/`9b`, `CONTROL.4`, `NFR.SEC.1`, `NFR.PERF.4`, `MIK-6865.SCHEMA.1c` and `MIK-7215.CONTROL.3b` all left the residue as their evidence landed |
 
 Cluster C carries one prerequisite that is not visible in its row. `SUB.4`'s activation is
