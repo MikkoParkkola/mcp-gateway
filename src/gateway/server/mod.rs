@@ -1885,6 +1885,22 @@ impl Gateway {
 
                 let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
 
+                // MIK-7272.SUB.4 §P3: the same -32602 refusal route 1 gives at
+                // `router/handlers.rs:1223`. An unusable retry field must not
+                // run on as an unprotected fresh call: the caller believes it
+                // has replay protection it does not have, and for a destructive
+                // tool that is the duplicate side effect it asked to be spared.
+                if retry.is_malformed() {
+                    return Some(
+                        JsonRpcResponse::error(
+                            Some(id),
+                            -32602,
+                            format!("malformed request fields: {}", retry.malformed.join(", ")),
+                        )
+                        .to_value_lossy(),
+                    );
+                }
+
                 meta_mcp
                     .handle_tools_call(
                         id,
@@ -2763,6 +2779,52 @@ mod tests {
         assert!(
             !ingested.confirmation_refusal,
             "a caller must not be able to mint the marker by naming it"
+        );
+    }
+
+    /// SUB.4.MALFORMED.1, stdio leg. The §P3 design event: a retry field the
+    /// parser cannot use is REFUSED with -32602 rather than run on as an
+    /// unprotected fresh call. Before this the key was simply dropped and the
+    /// caller kept believing it had replay protection.
+    #[tokio::test]
+    async fn stdio_refuses_a_malformed_idempotency_key() {
+        let meta = test_meta_mcp();
+        let response = Gateway::dispatch_single(
+            &meta,
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_list_servers",
+                    "arguments": {},
+                    // A non-string key: present, unusable, and therefore
+                    // recorded in `RetryFields::malformed`.
+                    "_meta": { crate::protocol::mrtr::IDEMPOTENCY_KEY_META: 42 }
+                }
+            }),
+            "stdio-session",
+        )
+        .await
+        .expect("a tools/call carrying an id must return a response");
+
+        assert_eq!(
+            response
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_i64),
+            Some(-32602),
+            "an unusable idempotency key must be refused as an invalid param, \
+             not silently dropped: {response}"
+        );
+        assert!(
+            response
+                .pointer("/error/message")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|m| m.starts_with("malformed request fields:")),
+            "the refusal must name the malformed fields, the same wording the \
+             HTTP route uses: {response}"
         );
     }
 

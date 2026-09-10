@@ -567,6 +567,22 @@ pub(super) async fn backend_handler(
     // For requests, id is guaranteed to exist
     let id = id.expect("id should exist for non-notification requests");
 
+    // MIK-7272.SUB.4 §P3: an unusable retry field is refused with -32602 here,
+    // the same answer route 1 gives at `router/handlers.rs:1223`. Refused after
+    // the notification branch above, which has no id to answer with. Silently
+    // ignoring it would leave the caller believing it has replay protection it
+    // does not have — a fail-open on the exact guarantee, and for a destructive
+    // tool that fail-open IS the duplicate side effect it asked to be spared.
+    let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
+    if retry.is_malformed() {
+        return build_http_error_response(
+            Some(id.clone()),
+            -32602,
+            format!("malformed request fields: {}", retry.malformed.join(", ")),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
     // End-user identity propagation for the direct backend route (MIK-6704 /
     // ADR-007). Parity with the meta dispatch path: for a propagation-configured
     // backend, resolve the per-user credential and forward it via
@@ -756,6 +772,38 @@ pub(super) async fn backend_handler(
         );
     }
 
+    // MIK-7272.SUB.4: the bypass re-enforces the idempotency guard locally, the
+    // same shape as the isolation guard above. A broken stream forces re-issue
+    // with a NEW request id, so without this the duplicate side effect lands
+    // twice on the one route that never reaches `invoke_tool_traced`.
+    let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
+    if method == "tools/call" {
+        match state.meta_mcp.direct_route_idempotency(
+            retry.idempotency_key.as_deref(),
+            &name,
+            identity_key.as_deref(),
+            verified_identity.as_ref(),
+            params.as_ref(),
+        ) {
+            Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
+                let response = JsonRpcResponse::success(id.clone(), cached);
+                return build_http_response(&response, StatusCode::OK);
+            }
+            Ok(Some(crate::idempotency::GuardOutcome::Proceed(reservation))) => {
+                idem_reservation = Some(reservation);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let code = e.to_rpc_code();
+                let status = u16::try_from(code)
+                    .ok()
+                    .and_then(|c| StatusCode::from_u16(c).ok())
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                return build_http_error_response(Some(id.clone()), code, e.to_string(), status);
+            }
+        }
+    }
+
     // SECURITY: apply tool policy, name validation, and input sanitization to
     // tools/call requests unless the backend explicitly opts into pass-through
     // mode (passthrough: true in config — only for fully-trusted internals).
@@ -808,6 +856,7 @@ pub(super) async fn backend_handler(
                             client.as_ref(),
                             &mut response,
                         );
+                        settle_direct_idempotency(idem_reservation.as_mut(), &response);
                         build_http_response(&response, StatusCode::OK)
                     }
                     Err(e) => {
@@ -866,6 +915,7 @@ pub(super) async fn backend_handler(
                     &mut response,
                 );
             }
+            settle_direct_idempotency(idem_reservation.as_mut(), &response);
             build_http_response(&response, StatusCode::OK)
         }
         Err(e) => {
@@ -874,6 +924,25 @@ pub(super) async fn backend_handler(
             let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
             build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
         }
+    }
+}
+
+/// Store the direct route's result under the client's idempotency key so a
+/// re-issue after a broken stream replays it instead of invoking the backend a
+/// second time. Called after the response scan and provenance stamp so the
+/// replay is byte-identical to what the first caller received.
+///
+/// Only a successful result settles. On an error the reservation's `Drop`
+/// releases the key, which is what keeps the failed call retryable.
+fn settle_direct_idempotency(
+    reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    response: &JsonRpcResponse,
+) {
+    if let Some(reservation) = reservation
+        && response.error.is_none()
+        && let Some(result) = response.result.as_ref()
+    {
+        reservation.complete(result);
     }
 }
 
