@@ -131,6 +131,19 @@ pub enum Error {
     #[error("Protocol error: {0}")]
     Protocol(String),
 
+    /// A backend refused the proposed protocol version at the HTTP layer.
+    ///
+    /// A distinct variant rather than a flattened `Transport` string, for the
+    /// reason `Forbidden` is one: `initialize` has to ask "was this a version
+    /// rejection?" without matching on backend-controlled message text. Only
+    /// the version tokens parsed out of the body travel here — never the body,
+    /// which is backend-controlled and routinely quotes credentials back.
+    #[error("Backend rejected the proposed protocol version; it supports: {}", supported.join(", "))]
+    ProtocolVersionRejected {
+        /// Versions the backend said it speaks.
+        supported: Vec<String>,
+    },
+
     /// OAuth client error — token acquisition, refresh, or callback failure.
     ///
     /// Use this instead of `Internal` for all errors originating in the

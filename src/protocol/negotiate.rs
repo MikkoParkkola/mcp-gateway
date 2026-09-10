@@ -22,15 +22,31 @@ pub fn parse_supported_versions_from_error(error_msg: &str) -> Option<Vec<String
 
     for pattern in &patterns {
         if let Some(start) = lower.find(pattern) {
-            let rest = &error_msg[start + pattern.len()..];
+            // Sliced out of `lower`, not `error_msg`: `to_lowercase` is not
+            // length-preserving (`\u{130}` grows by a byte), so an offset found
+            // in one string can land inside a character of the other and panic.
+            // Nothing is lost -- only ASCII digits and hyphens survive the
+            // filter below, and those are unchanged by lowercasing.
+            let rest = &lower[start + pattern.len()..];
 
             // Extract until closing paren or end of string
             let rest = rest.find(')').map_or(rest, |end| &rest[..end]);
 
+            // Shape-filtered, not merely non-empty. Everything here is
+            // backend-controlled text: without a closing paren `rest` runs to
+            // the end of the body, so a token can be trailing JSON syntax, an
+            // error page, or a credential the gateway itself sent and the
+            // backend quoted back. A caller that puts these in a diagnostic
+            // must be handed version tokens or nothing.
             let versions: Vec<String> = rest
                 .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
+                // Trimmed to digits at both ends: a version at the end of a
+                // JSON body arrives wearing the object's syntax
+                // (`2025-06-18"}`), and whatever survives the trim can still
+                // only be the version characters themselves.
+                .map(|s| s.trim_matches(|c: char| !c.is_ascii_digit()))
+                .filter(|s| is_version_token(s))
+                .map(str::to_string)
                 .collect();
 
             if !versions.is_empty() {
@@ -40,6 +56,22 @@ pub fn parse_supported_versions_from_error(error_msg: &str) -> Option<Vec<String
     }
 
     None
+}
+
+/// Is this a protocol version as the spec writes them -- a four-digit year,
+/// month and day, hyphen separated?
+///
+/// Deliberately structural rather than a membership test against
+/// `SUPPORTED_VERSIONS`: a backend naming a version this gateway does not speak
+/// is information the operator needs, while a backend naming anything that is
+/// not a version at all is text nobody may repeat.
+#[must_use]
+pub fn is_version_token(token: &str) -> bool {
+    token.len() == 10
+        && token.bytes().enumerate().all(|(index, byte)| match index {
+            4 | 7 => byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
 }
 
 /// Find the highest protocol version supported by both gateway and server.
@@ -94,6 +126,59 @@ mod tests {
     fn parse_short_format() {
         let msg = "supported: 2025-06-18";
         let versions = parse_supported_versions_from_error(msg).unwrap();
+        assert_eq!(versions, vec!["2025-06-18"]);
+    }
+
+    /// A JSON rejection body with no closing paren: the scan runs to the end
+    /// of the body, so the last token arrives wearing the object's syntax.
+    #[test]
+    fn json_syntax_after_the_last_version_is_not_a_version() {
+        let msg = r#"{"error":{"message":"Unsupported protocol version. supported versions: 2025-06-18"},"id":null}"#;
+        let versions = parse_supported_versions_from_error(msg).expect("a version list");
+        assert_eq!(versions, vec!["2025-06-18"]);
+    }
+
+    /// Why the filter exists: everything past the marker is backend-controlled
+    /// text, and a backend has been known to quote back material the gateway
+    /// sent it. A caller may repeat version tokens and nothing else.
+    #[test]
+    fn backend_text_after_the_marker_is_not_carried() {
+        let msg = "Unsupported protocol version. supported: 2025-06-18, whatever-the-backend-chose-to-echo";
+        let versions = parse_supported_versions_from_error(msg).expect("a version list");
+        assert_eq!(versions, vec!["2025-06-18"]);
+    }
+
+    /// A body that names no version at all yields nothing, so a proxy error
+    /// page cannot be mistaken for a negotiation invitation.
+    #[test]
+    fn a_marker_with_no_version_yields_nothing() {
+        let msg = "Gateway timeout. supported: please contact your administrator";
+        assert!(parse_supported_versions_from_error(msg).is_none());
+    }
+
+    /// The body GH #517 reported, byte for byte. Every signal the transport
+    /// gates its retry on has to fire on the payload that was actually
+    /// observed, not on an approximation of it.
+    #[test]
+    fn the_body_reported_in_gh_517_negotiates() {
+        let msg = r#"{"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)"},"id":null}"#;
+        assert!(is_version_mismatch_error(msg));
+        let versions = parse_supported_versions_from_error(msg).expect("a version list");
+        assert_eq!(
+            versions,
+            vec!["2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
+        );
+        assert_eq!(negotiate_best_version(&versions), Some("2025-06-18"));
+    }
+
+    /// `to_lowercase` is not length-preserving, so a marker found in the
+    /// lowercased body is at a different offset in the original -- and slicing
+    /// the original there lands inside a character. A backend must not be able
+    /// to panic the gateway with its rejection text.
+    #[test]
+    fn a_body_that_changes_length_when_lowercased_does_not_panic() {
+        let msg = "\u{130} Unsupported protocol version. supported: 2025-06-18, \u{e9}";
+        let versions = parse_supported_versions_from_error(msg).expect("a version list");
         assert_eq!(versions, vec!["2025-06-18"]);
     }
 
