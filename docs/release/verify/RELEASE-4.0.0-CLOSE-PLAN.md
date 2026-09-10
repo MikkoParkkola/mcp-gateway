@@ -138,10 +138,24 @@ in two targets:
 guard in `src/gateway/meta_mcp/invoke.rs` so that an interim carrying no questions is not
 treated as an exchange to bridge. Verified independently, not taken from the commit
 message: a detached worktree at `14744d72` with a scratch `CARGO_TARGET_DIR` runs
-`cargo test --test mik_7212_mrtr_component_acs` to **19 passed / 0 failed, exit 0**. The
-branch tip is one commit ahead of what CI last saw, which is the whole of this failure.
+`cargo test --test mik_7212_mrtr_component_acs` to **19 passed / 0 failed, exit 0**.
 
-**R1b — `mik_7215_acs`, 24 passed / 2 failed. Fix in flight, uncommitted.**
+**Correction, 18:20 — that commit was not one push away, and the number above was
+measured on the wrong base.** `fix/mrtr2-continuation-handle` as checked out in
+`/Users/mikko/github/.worktrees/mcp-2026-protocol` is **70 commits behind origin** and one
+ahead: `git rev-list --left-right --count origin/fix/mrtr2-continuation-handle...fix/mrtr2-continuation-handle`
+returns `70	1`, and `git merge-base --is-ancestor origin/fix/mrtr2-continuation-handle 14744d72`
+is false. Pushing that branch tip is a non-fast-forward that would drop 70 commits of
+origin. **Do not push that worktree's branch.** The 19/0 above was measured at `14744d72`,
+i.e. on the 70-behind base, so it said nothing about whether the fix holds at origin tip.
+
+Resolved by cherry-pick, not by push. `src/gateway/meta_mcp/invoke.rs` has zero origin
+commits since the merge-base `6f745477`, and so does `tests/mik_7212_mrtr_component_acs.rs`,
+so the pick was textually clean. Re-measured on the new base — `a43ea83d`, the cherry-pick
+on top of origin tip — the same command returns **19 passed / 0 failed, exit 0** again.
+That is the number that counts. Pushed as `77f564f8..a43ea83d`.
+
+**R1b — `mik_7215_acs`, 24 passed / 2 failed. LANDED as `3f50cf62`, 26/0.**
 `http::ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused` and
 `http::ac_confirm_1a_a_refusal_is_excluded_from_both_accounting_arms` assert
 `/error/code == -32001`. The gateway returns `resultType: "input_required"` carrying
@@ -222,10 +236,16 @@ can substitute for it.
 
 ## Order of work
 
-1. Push `14744d72`. One commit, verified 19/0 locally, removes 16 of the 18 red tests.
-   Push the explicit ref — a peer's commit must not ride out under this authorisation.
-2. `rustfmt --edition 2024 tests/mik_7215_acs.rs`, commit the retarget with
-   `git commit -o`, push. Removes the other 2.
+1. ~~Push `14744d72`.~~ **Done, by cherry-pick.** That branch was 70 commits behind
+   origin and could not be pushed; see the correction under R1a. The fix is on origin as
+   `a43ea83d`, re-verified 19/0 on the new base. `.worktrees/mcp-2026-protocol` still has
+   the stale branch checked out at `14744d72` — its commit is redundant now, and its
+   branch must not be pushed.
+2. ~~`rustfmt --edition 2024 tests/mik_7215_acs.rs`, commit the retarget, push.~~
+   **Done as `3f50cf62`.** The owning lane went unreachable with the pair uncommitted, so
+   merge-integration landed it: rustfmt with the edition flag, `git commit -o` on the two
+   paths, rebase onto `FETCH_HEAD`, re-measure. `cargo test --test mik_7215_acs` returns
+   **26 passed / 0 failed, exit 0** on the rebased base, up from 24/2.
 3. Re-run `Tests` on #473 and confirm green rather than assuming it.
 4. Triage the five CodeQL alerts: split branch from `main`, read the three library hits
    at source, fix what is real, propose dismissal for what is not. Dismissal is the
@@ -238,5 +258,12 @@ can substitute for it.
    own rule is that it must be empty at RC.
 8. Operator review and merge of #473, then unstack the 16.
 
-Steps 1-2 and 4 and 5 and 6 are independent and can run concurrently. Steps 3, 7, 8 are
-strictly ordered after them.
+Steps 4, 5 and 6 are independent and can run concurrently. Steps 3, 7, 8 are strictly
+ordered after them.
+
+**Branch state as of 18:22.** `origin/fix/mrtr2-continuation-handle` is `3f50cf62`, four
+commits past the `482746c1` that CI last measured: two release docs (`811ed56d`,
+`77f564f8`), the mrtr bridge fix (`a43ea83d`), and the CONFIRM.1a retarget (`3f50cf62`).
+Both causes of the red `Tests` run are addressed at source and measured on that base, so
+step 3 — re-running `Tests` on #473 — is now the next action, and it decides whether R1
+is closed rather than assumed. `CodeQL` is untouched and still red.
