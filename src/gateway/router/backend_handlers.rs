@@ -789,6 +789,11 @@ pub(super) async fn backend_handler(
                 let response = JsonRpcResponse::success(id.clone(), cached);
                 return build_http_response(&response, StatusCode::OK);
             }
+            Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
+                let (code, message) = crate::idempotency::cached_error_parts(&error);
+                let response = JsonRpcResponse::error(Some(id.clone()), code, message);
+                return build_http_response(&response, StatusCode::OK);
+            }
             Ok(Some(crate::idempotency::GuardOutcome::Proceed(reservation))) => {
                 idem_reservation = Some(reservation);
             }
@@ -864,6 +869,11 @@ pub(super) async fn backend_handler(
                         error!(backend = %name, error = %e, "Backend request failed");
                         let response =
                             JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+                        // The request was dispatched, so this settles as a
+                        // terminal failure rather than releasing: a transport
+                        // failure after the backend acted is indistinguishable
+                        // from one before it (ADR-012 consequence 1).
+                        settle_direct_idempotency(idem_reservation.as_mut(), &response);
                         build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
                     }
                 };
@@ -932,16 +942,25 @@ pub(super) async fn backend_handler(
 /// second time. Called after the response scan and provenance stamp so the
 /// replay is byte-identical to what the first caller received.
 ///
-/// Only a successful result settles. On an error the reservation's `Drop`
-/// releases the key, which is what keeps the failed call retryable.
+/// Both terminal outcomes settle. A JSON-RPC error from a call that was
+/// dispatched is an outcome, not an absence of one: the backend answered, so
+/// the side effect may have landed, and releasing the key would hand the
+/// caller's retry a clean slate for a mutation that may already have committed
+/// (ADR-012 consequence 1). The retry is served the same error instead.
 fn settle_direct_idempotency(
     reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
     response: &JsonRpcResponse,
 ) {
-    if let Some(reservation) = reservation
-        && response.error.is_none()
-        && let Some(result) = response.result.as_ref()
-    {
+    let Some(reservation) = reservation else {
+        return;
+    };
+    if let Some(error) = response.error.as_ref() {
+        if let Ok(error) = serde_json::to_value(error) {
+            reservation.fail(&error);
+        }
+        return;
+    }
+    if let Some(result) = response.result.as_ref() {
         reservation.complete(result);
     }
 }

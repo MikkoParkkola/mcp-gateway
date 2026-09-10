@@ -3109,13 +3109,15 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_batch_returns_invalid_request_for_empty_batch() {
-        let responses = Gateway::dispatch_batch(
+        // Boxed: the dispatch future carries the whole request path and sits
+        // just over the `large_futures` threshold on the test stack.
+        let responses = Box::pin(Gateway::dispatch_batch(
             &test_meta_mcp(),
             &test_tool_policy(),
             &test_mtls_policy(),
             json!([]),
             "stdio-session",
-        )
+        ))
         .await;
 
         assert_eq!(responses.len(), 1);

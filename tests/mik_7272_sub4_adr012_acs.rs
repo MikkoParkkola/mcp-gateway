@@ -252,43 +252,52 @@ fn admit(cache: &Arc<IdempotencyCache>, key: &str) -> IdempotencyReservation {
     match enforce(cache, key, "backend:charge_card|{}").expect("first admission proceeds") {
         GuardOutcome::Proceed(reservation) => reservation,
         GuardOutcome::CachedResult(value) => panic!("unexpected cached result: {value}"),
+        GuardOutcome::CachedError(error) => panic!("unexpected cached error: {error}"),
     }
 }
 
-/// Row 1 — a dispatched direct-route call answered with a backend error keeps
-/// its key, and the retry is served that error rather than reaching the
-/// backend again.
+/// Row 1 — settling a dispatched call that errored stores a terminal outcome,
+/// and the retry of that key is served the stored error rather than readmitted.
 ///
-/// The error exit at `src/gateway/router/backend_handlers.rs:862-867` never
-/// calls `settle_direct_idempotency`, so the reservation drops into
-/// `OnDrop::Release` and the key is removed.
+/// A transport failure after the backend performed the side effect is
+/// indistinguishable from one before it, so the guard treats a dispatched
+/// error as an outcome (ADR-012 consequence 1). This row pins the primitive;
+/// the wiring is pinned at the route by
+/// `direct_route_keeps_the_key_of_a_dispatched_call_that_errored` in
+/// `tests/mik_7272_sub4_three_routes.rs`, which counts backend deliveries.
 ///
-/// Two negations rather than one: a key left wedged as in-flight would satisfy
-/// "not admitted" while stranding every retry until `IN_FLIGHT_TIMEOUT`, and
-/// that is a different failure, not a pass. They stay negations because
-/// `Failed` is a terminal alongside `Completed` (ADR-012:84) and this row must
-/// not presuppose which `CheckOutcome` variant carries it.
+/// `Proceed` and `InFlight` are both refused: a key left wedged in flight also
+/// keeps the retry away from the backend, but it strands the caller until
+/// `IN_FLIGHT_TIMEOUT` instead of answering, and that is a different failure,
+/// not a pass.
 #[tokio::test]
-async fn dispatched_direct_route_error_keeps_its_key() {
+async fn a_settled_dispatched_error_keeps_its_key() {
     let cache = Arc::new(IdempotencyCache::new());
-    let reservation = admit(&cache, "key-dispatched-error");
+    let mut reservation = admit(&cache, "key-dispatched-error");
 
-    // The backend answered, and the answer was an error: the request left, the
-    // side effect may have landed. The direct route's `Err(e)` arm builds the
-    // JSON-RPC error envelope and returns, settling nothing.
+    reservation.fail(&json!({ "code": -32000, "message": "backend refused" }));
     drop(reservation);
 
     let outcome = cache.check("key-dispatched-error");
     assert!(
         !matches!(outcome, CheckOutcome::Proceed),
         "a dispatched call answered with a backend error must keep its key \
-         (ADR-012 consequence 1); the guard released it and admitted the retry \
-         as a first attempt against a mutation that may already have committed"
+         (ADR-012 consequence 1); the guard released it and would admit the \
+         retry as a first attempt against a mutation that may already have \
+         committed"
     );
     assert!(
         !matches!(outcome, CheckOutcome::InFlight),
         "the owner has dropped: the retry must be served the settled error, \
          not told to wait out `IN_FLIGHT_TIMEOUT` on a call nobody is running"
+    );
+    let CheckOutcome::Failed(error) = outcome else {
+        panic!("a settled dispatched error must be served as a failed terminal");
+    };
+    assert_eq!(
+        error.get("message").and_then(Value::as_str),
+        Some("backend refused"),
+        "the served value must carry the error the caller would otherwise have seen"
     );
 }
 

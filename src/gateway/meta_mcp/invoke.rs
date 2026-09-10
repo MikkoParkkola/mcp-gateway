@@ -1403,6 +1403,17 @@ impl MetaMcp {
             (&self.idempotency_cache, &idem_key, &idem_fingerprint)
         {
             match enforce(idem_cache, key, fingerprint)? {
+                // A dispatched call that failed is terminal: serving the stored
+                // error is what stops the retry re-running a side effect that
+                // may already have committed (ADR-012 consequence 1).
+                GuardOutcome::CachedError(error) => {
+                    let (code, message) = crate::idempotency::cached_error_parts(&error);
+                    debug!(
+                        server,
+                        tool, key, trace_id, "Idempotency cache hit (failed)"
+                    );
+                    return Err(Error::json_rpc(code, message));
+                }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(server, tool, key, trace_id, "Idempotency cache hit");
                     if let Some(ref stats) = self.stats {

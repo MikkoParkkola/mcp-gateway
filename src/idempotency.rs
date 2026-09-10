@@ -74,6 +74,16 @@ pub enum IdempotencyState {
     InFlight(Instant),
     /// Tool call completed successfully.  Holds the result and when it was stored.
     Completed(Value, Instant),
+    /// Tool call was dispatched and answered with an error.  Holds the JSON-RPC
+    /// error object (`{"code", "message"}`) and when it was stored.
+    ///
+    /// A terminal alongside [`Completed`](Self::Completed), not a variant of
+    /// in-flight: once a call has been dispatched, an error answer is an
+    /// outcome, and a transport failure after the backend acted is
+    /// indistinguishable from one before it. Releasing the key on failure would
+    /// hand the caller's retry a clean key for a mutation that may already have
+    /// committed (ADR-012).
+    Failed(Value, Instant),
 }
 
 impl IdempotencyState {
@@ -82,7 +92,9 @@ impl IdempotencyState {
     pub fn is_expired(&self) -> bool {
         match self {
             Self::InFlight(started) => started.elapsed() > IN_FLIGHT_TIMEOUT,
-            Self::Completed(_, stored) => stored.elapsed() > COMPLETED_TTL,
+            Self::Completed(_, stored) | Self::Failed(_, stored) => {
+                stored.elapsed() > COMPLETED_TTL
+            }
         }
     }
 
@@ -161,6 +173,8 @@ pub enum CheckOutcome {
     InFlight,
     /// A completed entry exists — return cached result.
     Completed(Value),
+    /// A failed entry exists — return the cached JSON-RPC error object.
+    Failed(Value),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +184,8 @@ pub(crate) enum CacheEntryStatus {
     StaleInFlight,
     LiveCompleted,
     ExpiredCompleted,
+    LiveFailed,
+    ExpiredFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +193,7 @@ pub(crate) enum CheckPlan {
     Proceed,
     InFlight,
     Completed,
+    Failed,
 }
 
 #[must_use]
@@ -188,6 +205,8 @@ pub(crate) fn decide_check_plan(status: CacheEntryStatus) -> (CheckPlan, bool) {
             (CheckPlan::Proceed, true)
         }
         CacheEntryStatus::LiveCompleted => (CheckPlan::Completed, false),
+        CacheEntryStatus::LiveFailed => (CheckPlan::Failed, false),
+        CacheEntryStatus::ExpiredFailed => (CheckPlan::Proceed, true),
     }
 }
 
@@ -200,6 +219,8 @@ pub(crate) enum AdmitOutcome {
     InFlight,
     /// A completed entry exists — return the cached result.
     Completed(Value),
+    /// A failed entry exists — return the cached JSON-RPC error object.
+    Failed(Value),
     /// The cache is at [`MAX_ENTRIES`] and this key is not tracked yet.
     AtCapacity,
     /// The key is tracked, but for a different request.
@@ -217,6 +238,10 @@ fn classify(state: &IdempotencyState) -> CacheEntryStatus {
             CacheEntryStatus::LiveCompleted
         }
         IdempotencyState::Completed(_, _) => CacheEntryStatus::ExpiredCompleted,
+        IdempotencyState::Failed(_, stored) if stored.elapsed() <= COMPLETED_TTL => {
+            CacheEntryStatus::LiveFailed
+        }
+        IdempotencyState::Failed(_, _) => CacheEntryStatus::ExpiredFailed,
     }
 }
 
@@ -240,7 +265,9 @@ impl IdempotencyCache {
             return match plan {
                 CheckPlan::Proceed => CheckOutcome::Proceed,
                 CheckPlan::InFlight => CheckOutcome::InFlight,
-                CheckPlan::Completed => unreachable!("missing entries cannot be completed"),
+                CheckPlan::Completed | CheckPlan::Failed => {
+                    unreachable!("missing entries cannot be terminal")
+                }
             };
         };
 
@@ -262,6 +289,12 @@ impl IdempotencyCache {
                     unreachable!("live completed status must hold a completed value");
                 };
                 CheckOutcome::Completed(value.clone())
+            }
+            CheckPlan::Failed => {
+                let IdempotencyState::Failed(error, _) = &entry.value().state else {
+                    unreachable!("live failed status must hold a failed value");
+                };
+                CheckOutcome::Failed(error.clone())
             }
         }
     }
@@ -296,6 +329,12 @@ impl IdempotencyCache {
                             unreachable!("live completed status must hold a completed value");
                         };
                         AdmitOutcome::Completed(value.clone())
+                    }
+                    CheckPlan::Failed => {
+                        let IdempotencyState::Failed(error, _) = &occupied.get().state else {
+                            unreachable!("live failed status must hold a failed value");
+                        };
+                        AdmitOutcome::Failed(error.clone())
                     }
                     CheckPlan::Proceed => {
                         debug_assert!(evict, "an occupied entry only proceeds after eviction");
@@ -381,6 +420,20 @@ impl IdempotencyCache {
         true
     }
 
+    /// Store `error` as the terminal outcome for `key`, bound to the admitting
+    /// request's `fingerprint`.
+    ///
+    /// Unlike [`mark_completed_bound`](Self::mark_completed_bound) there is no
+    /// finality test: an error answer is already terminal, and the `is_final`
+    /// rule exists to keep an `input_required` interim retryable, which is a
+    /// result and never reaches here.
+    pub(crate) fn mark_failed_bound(&self, key: &str, error: Value, fingerprint: &str) {
+        self.entries.insert(
+            key.to_string(),
+            Entry::new(IdempotencyState::Failed(error, Instant::now()), fingerprint),
+        );
+    }
+
     /// Remove `key` entirely (used when a call fails and should be retryable).
     pub fn remove(&self, key: &str) {
         self.entries.remove(key);
@@ -422,11 +475,13 @@ mod verification {
     use super::*;
 
     fn any_entry_status() -> CacheEntryStatus {
-        match kani::any::<u8>() % 5 {
+        match kani::any::<u8>() % 7 {
             0 => CacheEntryStatus::Missing,
             1 => CacheEntryStatus::LiveInFlight,
             2 => CacheEntryStatus::StaleInFlight,
             3 => CacheEntryStatus::LiveCompleted,
+            4 => CacheEntryStatus::LiveFailed,
+            5 => CacheEntryStatus::ExpiredFailed,
             _ => CacheEntryStatus::ExpiredCompleted,
         }
     }
@@ -454,6 +509,14 @@ mod verification {
                 assert!(!evict);
             }
             CacheEntryStatus::ExpiredCompleted => {
+                assert_eq!(plan, CheckPlan::Proceed);
+                assert!(evict);
+            }
+            CacheEntryStatus::LiveFailed => {
+                assert_eq!(plan, CheckPlan::Failed);
+                assert!(!evict);
+            }
+            CacheEntryStatus::ExpiredFailed => {
                 assert_eq!(plan, CheckPlan::Proceed);
                 assert!(evict);
             }
@@ -488,7 +551,10 @@ pub fn derive_key(tool_name: &str, arguments: &Value) -> String {
 /// state depends on whether the side effect has run: before
 /// [`commit`](Self::commit) a drop releases the key so the call can be retried;
 /// after it, a drop stores the committed result, because once the backend has
-/// acted a retry must not execute it again.
+/// acted a retry must not execute it again. A call that was dispatched and
+/// answered with an error settles through [`fail`](Self::fail) instead — the
+/// backend may have acted, and from here that is indistinguishable from not
+/// having acted (ADR-012).
 #[derive(Debug)]
 pub struct IdempotencyReservation {
     cache: Arc<IdempotencyCache>,
@@ -552,6 +618,19 @@ impl IdempotencyReservation {
         }
     }
 
+    /// Settle by storing `error` as the terminal outcome, so a retry of the
+    /// same key is served the same JSON-RPC error rather than readmitted.
+    ///
+    /// `error` is the error object the caller would otherwise have seen
+    /// (`{"code", "message"}`). Use this — not [`release`](Self::release) — for
+    /// any failure after dispatch: the backend may already have acted, and the
+    /// two cases are indistinguishable from here (ADR-012 consequence 1).
+    pub fn fail(&mut self, error: &Value) {
+        self.settled = true;
+        self.cache
+            .mark_failed_bound(&self.key, error.clone(), &self.fingerprint);
+    }
+
     /// Settle by releasing the key so the call can be retried.
     pub fn release(&mut self) {
         self.settled = true;
@@ -593,6 +672,10 @@ pub enum GuardOutcome {
     Proceed(IdempotencyReservation),
     /// Return the cached result — no execution needed.
     CachedResult(Value),
+    /// Return the cached JSON-RPC error object — no execution needed. The key
+    /// belongs to a dispatched call that failed, and re-executing it could
+    /// duplicate a side effect that already committed.
+    CachedError(Value),
 }
 
 /// Check the idempotency cache and either return a cached result or register
@@ -625,6 +708,7 @@ pub fn enforce(
             format!("Duplicate request in progress for key: {key}"),
         )),
         AdmitOutcome::Completed(value) => Ok(GuardOutcome::CachedResult(value)),
+        AdmitOutcome::Failed(error) => Ok(GuardOutcome::CachedError(error)),
         AdmitOutcome::Mismatch => Err(Error::json_rpc(
             409,
             format!(
@@ -640,6 +724,27 @@ pub fn enforce(
             ),
         )),
     }
+}
+
+/// Split the payload of a [`GuardOutcome::CachedError`] into its JSON-RPC code
+/// and message.
+///
+/// Falls back to an internal error when the stored value is not the
+/// `{"code", "message"}` object [`IdempotencyReservation::fail`] writes, so a
+/// malformed entry is served as an error rather than replayed as a success.
+#[must_use]
+pub fn cached_error_parts(error: &Value) -> (i32, String) {
+    let code = error
+        .get("code")
+        .and_then(Value::as_i64)
+        .and_then(|c| i32::try_from(c).ok())
+        .unwrap_or(-32603);
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("Idempotent request previously failed")
+        .to_owned();
+    (code, message)
 }
 
 /// Spawn a background tokio task that periodically evicts stale idempotency
@@ -958,7 +1063,7 @@ mod tests {
         cache.mark_completed("k2", expected.clone());
         match enforce(&cache, "k2", "fp2").expect("should not fail") {
             GuardOutcome::CachedResult(v) => assert_eq!(v, expected),
-            GuardOutcome::Proceed(_) => panic!("expected CachedResult"),
+            other => panic!("expected CachedResult, got {other:?}"),
         }
     }
 
