@@ -736,21 +736,26 @@ impl HttpTransport {
                     negotiated_version = %negotiated,
                     "Backend rejected protocol version by HTTP status, retrying with negotiated version"
                 );
+                // The proposal is edited, not rebuilt: a second construction
+                // site drifts from the first the moment either grows a field,
+                // and this retry is the one path that must present the same
+                // client as the attempt that was refused.
+                let mut retry = request.clone();
+                if let Some(params) = retry.params.as_mut() {
+                    params["protocolVersion"] = Value::String(negotiated.to_string());
+                }
+                // Set before the send because the header is built from it, and
+                // restored if the retry fails: a transport that never completed
+                // a handshake must not go on claiming a version.
+                let previous = self.protocol_version.read().clone();
                 *self.protocol_version.write() = Some(negotiated.to_string());
-                let retry = JsonRpcRequest {
-                    jsonrpc: "2.0".to_string(),
-                    id: RequestId::Number(0),
-                    method: "initialize".to_string(),
-                    params: Some(serde_json::json!({
-                        "protocolVersion": negotiated,
-                        "capabilities": {},
-                        "clientInfo": {
-                            "name": "mcp-gateway",
-                            "version": env!("CARGO_PKG_VERSION")
-                        }
-                    })),
-                };
-                self.send_request(&retry).await?
+                match self.send_request(&retry).await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        *self.protocol_version.write() = previous;
+                        return Err(error);
+                    }
+                }
             }
             Err(other) => return Err(other),
         };
@@ -1286,7 +1291,17 @@ impl HttpTransport {
             // Flattening that to a transport string here is what made the
             // negotiation below unreachable for them: the body carrying the
             // supported-version list was dropped before anyone could read it.
-            if let Some(supported) = parse_supported_versions_from_error(&body) {
+            // Three signals together, because this parser was written for
+            // JSON-RPC error payloads and now sees every non-2xx body: the
+            // status a version refusal actually uses, the phrasing the in-band
+            // branch keys on, and a parseable list. A proxy error page that
+            // merely contains a date must not provoke a second handshake.
+            if matches!(
+                status,
+                reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UPGRADE_REQUIRED
+            ) && is_version_mismatch_error(&body)
+                && let Some(supported) = parse_supported_versions_from_error(&body)
+            {
                 return Err(Error::ProtocolVersionRejected { supported });
             }
             return Err(safe_http_status_error(status, &body));
