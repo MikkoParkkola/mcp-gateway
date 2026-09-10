@@ -59,15 +59,17 @@ releases granted what.
 - The CI gate simplifies to one identifier. `scripts/ci/check-license-headers.sh`
   no longer needs to reconcile an allowlist against headers, and there is no
   second list to keep in sync.
-- Package metadata is left as it stands for now: root `Cargo.toml` on
-  `license-file = "LICENSES.md"`, npm on `SEE LICENSE IN LICENSES.md`. ADR-011's
-  reason for `license-file` — that the `license` field cannot express per-file
-  mixed licensing — no longer applies, so whether the root crate should now
-  carry `license = "LicenseRef-PolyForm-Noncommercial-1.0.0"` is open and not
-  decided here. The `gateway-core` crate already spells it out: a workspace
-  member cannot point at a root file it does not package, so it moves from
-  `license = "MIT"` to
-  `license = "LicenseRef-PolyForm-Noncommercial-1.0.0"`, which is a valid SPDX
+- Package metadata now names the license instead of pointing at a file.
+  ADR-011 chose `license-file = "LICENSES.md"` because the `license` field
+  cannot express per-file mixed licensing; with one license that reason is void.
+  `PolyForm-Noncommercial-1.0.0` is a registered SPDX short identifier (verified
+  against the SPDX license list, which also carries
+  `PolyForm-Small-Business-1.0.0`), so the root crate and `crates/gateway-core`
+  both carry `license = "PolyForm-Noncommercial-1.0.0"`, matching the file
+  headers. An earlier revision of this decision used
+  `LicenseRef-PolyForm-Noncommercial-1.0.0`; that prefix is reserved for licenses
+  absent from the SPDX list and would have hidden the license from any tool that
+  resolves identifiers. npm stays on `SEE LICENSE IN LICENSES.md`, which is a
   `LicenseRef` and names the same license the headers do. The
   misread-by-badges problem accepted in ADR-011 remains, but it is now a single
   wrong-looking label rather than a mixed model that badges cannot express at

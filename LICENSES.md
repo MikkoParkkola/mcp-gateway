@@ -50,12 +50,15 @@ explicit if third-party material is ever added.
 
 ## Package metadata
 
-`Cargo.toml` uses `license-file = "LICENSES.md"` and npm uses
-`"SEE LICENSE IN LICENSES.md"`, because PolyForm Noncommercial 1.0.0 is not an
-OSI-approved license; the
-`crates/gateway-core` crate spells it out as
-`license = "LicenseRef-PolyForm-Noncommercial-1.0.0"`. Package license badges
-that understand only OSI identifiers will render this as non-standard; the file
+`PolyForm-Noncommercial-1.0.0` is a registered SPDX short identifier, so both
+crates carry it directly: `license = "PolyForm-Noncommercial-1.0.0"` in the root
+`Cargo.toml` and in `crates/gateway-core/Cargo.toml`, matching the identifier in
+every file header. npm uses `"SEE LICENSE IN LICENSES.md"`, because npm resolves
+identifiers against the OSI-approved set rather than the full SPDX list.
+
+The license is not OSI-approved, so badges and scanners that equate
+"OSI-approved" with "recognised" will flag it as non-standard. That is a
+statement about openness, not about whether the identifier is valid. The file
 headers, `LICENSE-NONCOMMERCIAL`, and this document are authoritative.
 
 ## History
