@@ -201,6 +201,26 @@ impl Error {
         }
     }
 
+    /// True only for failures the gateway can prove it raised *before* the
+    /// request reached the backend.
+    ///
+    /// ADR-012 consequence 1 settles a dispatched failure as terminal, because
+    /// a transport failure after the backend acted is indistinguishable from
+    /// one before it. That reasoning does not extend to a request that never
+    /// left: caching it would deny the caller a retry of work that provably
+    /// never ran.
+    ///
+    /// The allowlist is deliberately tight and the default is "dispatched".
+    /// Misjudging a pre-dispatch failure as dispatched costs a retry;
+    /// misjudging the reverse admits a second execution of a side effect.
+    #[must_use]
+    pub fn is_pre_dispatch(&self) -> bool {
+        matches!(
+            self,
+            Self::CircuitOpen(_) | Self::BackendNotFound(_) | Self::ToolNotFound(_)
+        )
+    }
+
     /// Convert to JSON-RPC error code
     #[must_use]
     pub fn to_rpc_code(&self) -> i32 {

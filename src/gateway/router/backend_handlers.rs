@@ -790,8 +790,7 @@ pub(super) async fn backend_handler(
                 return build_http_response(&response, StatusCode::OK);
             }
             Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
-                let (code, message) = crate::idempotency::cached_error_parts(&error);
-                let response = JsonRpcResponse::error(Some(id.clone()), code, message);
+                let response = cached_error_response(Some(id.clone()), &error);
                 return build_http_response(&response, StatusCode::OK);
             }
             Ok(Some(crate::idempotency::GuardOutcome::Proceed(reservation))) => {
@@ -869,11 +868,12 @@ pub(super) async fn backend_handler(
                         error!(backend = %name, error = %e, "Backend request failed");
                         let response =
                             JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-                        // The request was dispatched, so this settles as a
-                        // terminal failure rather than releasing: a transport
+                        // Dispatched failures settle as terminal: a transport
                         // failure after the backend acted is indistinguishable
-                        // from one before it (ADR-012 consequence 1).
-                        settle_direct_idempotency(idem_reservation.as_mut(), &response);
+                        // from one before it (ADR-012 consequence 1). A failure
+                        // the gateway raised before dispatch is the exception —
+                        // see `settle_direct_failure`.
+                        settle_direct_failure(idem_reservation.as_mut(), &e, &response);
                         build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
                     }
                 };
@@ -932,6 +932,10 @@ pub(super) async fn backend_handler(
             record_client_failure(&state, client.as_ref());
             error!(backend = %name, error = %e, "Backend request failed");
             let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+            // Without this the reservation is dropped unsettled, which releases
+            // the key and lets a retry re-execute a side effect the backend may
+            // already have performed (ADR-012 consequence 1).
+            settle_direct_failure(idem_reservation.as_mut(), &e, &response);
             build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -962,6 +966,45 @@ fn settle_direct_idempotency(
     }
     if let Some(result) = response.result.as_ref() {
         reservation.complete(result);
+    }
+}
+
+/// Settle a failed direct-route call, releasing the key when the gateway can
+/// prove the request never reached the backend.
+///
+/// ADR-012 consequence 1 caches a dispatched failure so a retry cannot duplicate
+/// a side effect that may already have committed. A refusal the gateway raised
+/// itself — an open circuit, an unknown backend or tool — carries no such
+/// ambiguity: nothing ran, so caching it for the entry's whole lifetime would
+/// deny the caller a retry of work that provably never happened. See
+/// [`crate::Error::is_pre_dispatch`] for why that allowlist stays tight.
+fn settle_direct_failure(
+    reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    error: &crate::Error,
+    response: &JsonRpcResponse,
+) {
+    if error.is_pre_dispatch() {
+        if let Some(reservation) = reservation {
+            reservation.release();
+        }
+        return;
+    }
+    settle_direct_idempotency(reservation, response);
+}
+
+/// Rebuild the JSON-RPC error response stored under an idempotency key.
+///
+/// `data` is lifted back out of the stored error object because a backend puts
+/// the machine-readable half of its refusal there — a retry-after hint, a
+/// validation path. [`crate::idempotency::cached_error_parts`] returns only the
+/// code and message, so a replay that used it alone answered the retry with a
+/// strictly poorer error than the first caller received, which defeats the
+/// point of replaying it at all.
+fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcResponse {
+    let (code, message) = crate::idempotency::cached_error_parts(error);
+    match error.get("data") {
+        Some(data) => JsonRpcResponse::error_with_data(id, code, message, data.clone()),
+        None => JsonRpcResponse::error(id, code, message),
     }
 }
 
@@ -1169,3 +1212,96 @@ pub(super) async fn costs_handler(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod idempotency_settlement_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::{cached_error_response, settle_direct_failure};
+    use crate::Error;
+    use crate::idempotency::{GuardOutcome, IdempotencyCache, enforce};
+    use crate::protocol::JsonRpcResponse;
+
+    fn reserve(cache: &Arc<IdempotencyCache>) -> crate::idempotency::IdempotencyReservation {
+        match enforce(cache, "key", "fingerprint").expect("a fresh key is admitted") {
+            GuardOutcome::Proceed(reservation) => reservation,
+            other => panic!("expected Proceed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pre_dispatch_failure_frees_the_key_for_a_retry() {
+        // GIVEN a reserved key whose call the circuit breaker refused outright.
+        let cache = Arc::new(IdempotencyCache::new());
+        let mut reservation = reserve(&cache);
+        let error = Error::CircuitOpen("backend".to_string());
+        let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
+
+        // WHEN the failure is settled.
+        settle_direct_failure(Some(&mut reservation), &error, &response);
+
+        // THEN the key is admissible again. Asserted while the reservation is
+        // still alive on purpose: `Drop` releases an unsettled reservation too,
+        // so an assertion after the drop passes without the explicit release.
+        assert!(
+            matches!(
+                enforce(&cache, "key", "fingerprint"),
+                Ok(GuardOutcome::Proceed(_))
+            ),
+            "a refusal raised before dispatch must not consume the key"
+        );
+    }
+
+    #[test]
+    fn dispatched_failure_is_cached_as_terminal() {
+        // GIVEN a reserved key whose call reached the backend and failed.
+        let cache = Arc::new(IdempotencyCache::new());
+        let mut reservation = reserve(&cache);
+        let error = Error::Transport("connection reset".to_string());
+        let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
+
+        // WHEN the failure is settled.
+        settle_direct_failure(Some(&mut reservation), &error, &response);
+
+        // THEN a retry replays the error instead of re-running the side effect.
+        assert!(
+            matches!(
+                enforce(&cache, "key", "fingerprint"),
+                Ok(GuardOutcome::CachedError(_))
+            ),
+            "ADR-012 consequence 1: a dispatched failure settles as terminal"
+        );
+    }
+
+    #[test]
+    fn replayed_error_carries_the_stored_data_field() {
+        // GIVEN a stored error whose machine-readable half lives in `data`.
+        let stored =
+            json!({"code": -32000, "message": "rate limited", "data": {"retry_after": 30}});
+
+        // WHEN the replay response is rebuilt.
+        let response = cached_error_response(None, &stored);
+
+        // THEN the retry sees the same error the first caller did.
+        let error = response.error.expect("a stored error replays as an error");
+        assert_eq!(error.code, -32000);
+        assert_eq!(error.message, "rate limited");
+        assert_eq!(error.data, Some(json!({"retry_after": 30})));
+    }
+
+    #[test]
+    fn replayed_error_without_data_stays_data_free() {
+        // GIVEN a stored error that carried no `data` (the field is skipped when
+        // `None`, so it is absent rather than null).
+        let stored = json!({"code": -32603, "message": "boom"});
+
+        // WHEN the replay response is rebuilt.
+        let response = cached_error_response(None, &stored);
+
+        // THEN no `data` key is invented.
+        let error = response.error.expect("a stored error replays as an error");
+        assert_eq!(error.data, None);
+    }
+}

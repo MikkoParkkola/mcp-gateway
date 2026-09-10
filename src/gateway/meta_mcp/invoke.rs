@@ -1645,7 +1645,22 @@ impl MetaMcp {
                 }
             }
             Err(e) => {
-                if let Some(reservation) = idem_reservation.as_mut() {
+                // ADR-012 consequence 1: a reservation may be released only
+                // when the backend cannot have acted, because a released key
+                // readmits the retry that would execute the side effect a
+                // second time. `is_pre_dispatch()` is that allowlist, and it
+                // is deliberately tight (`src/error.rs`); every other dispatch
+                // error is a call that may already have acted, so its
+                // reservation stays live and is settled as a terminal failure
+                // by the commit below.
+                //
+                // `take()` is load-bearing rather than stylistic: a released
+                // reservation left in the `Option` would be picked up by that
+                // commit and re-inserted as a completed entry, which makes the
+                // release a no-op and the key permanently wrong.
+                if e.is_pre_dispatch()
+                    && let Some(mut reservation) = idem_reservation.take()
+                {
                     reservation.release();
                 }
                 // Classify the error and convert to a structured tool-level
@@ -1664,7 +1679,8 @@ impl MetaMcp {
                     },
                 );
                 // Still record the error budget failure (already done above via
-                // `record_error_budget`).  Idempotency key was cleaned up above.
+                // `record_error_budget`).  The idempotency reservation is left
+                // for the commit below unless the refusal was pre-dispatch.
                 attach_recovery(
                     json!({
                         "isError": true,
@@ -1687,9 +1703,11 @@ impl MetaMcp {
         // The backend has acted. Every early return below this point must settle
         // the idempotency key as completed rather than release it: a released key
         // readmits the retry that would execute the side effect a second time.
-        // `release()` on the dispatch-error path above has already settled, so
-        // this is a no-op there. The stored value withholds the response body on
-        // purpose — a gate below may be about to block it.
+        // The dispatch-error path above releases only a refusal that provably
+        // never reached the backend, and takes the reservation when it does, so
+        // a dispatched failure arrives here still live and is settled by this
+        // commit. The stored value withholds the response body on purpose — a
+        // gate below may be about to block it.
         //
         // An interim result is excluded because there the backend has said it
         // did *not* act: it stopped to ask. Settling one would be false and

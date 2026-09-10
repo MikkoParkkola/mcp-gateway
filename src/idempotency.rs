@@ -15,7 +15,7 @@
 //!    - `Completed` → return cached result immediately (no re-execution).
 //! 4. A background task periodically evicts stale entries to bound memory usage.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
@@ -88,6 +88,12 @@ pub enum IdempotencyState {
 
 impl IdempotencyState {
     /// Return `true` when this entry is stale and should be evicted.
+    ///
+    /// A clock reading, and only that. Staleness of an *in-flight* entry is a
+    /// liveness question rather than a clock one (ADR-012 amendment A2), and a
+    /// state cannot see the owner that decides it: the cache classifies entries
+    /// against their owner token instead, so neither admission nor the
+    /// background sweep consults this method.
     #[must_use]
     pub fn is_expired(&self) -> bool {
         match self {
@@ -135,7 +141,25 @@ pub struct IdempotencyCache {
     entries: DashMap<String, Entry>,
 }
 
-/// One tracked key: its state, and the request it was minted for.
+/// The liveness token an in-flight entry is judged against.
+///
+/// ADR-012 amendment A2: *"Liveness must therefore be a token held strongly
+/// from before the admission is published until settlement has finished, not
+/// the reservation's own refcount."* A `Weak<IdempotencyReservation>` cannot
+/// express that rule — `Arc` drops the strong count to zero *before* running the
+/// inner value's `Drop`, so the handle is already dead while `Drop` is still
+/// storing the terminal state, and a sweep landing in that window frees a key
+/// whose mutation may have committed.
+///
+/// A separate token closes the window by construction rather than by timing: it
+/// is a *field* of [`IdempotencyReservation`], and a struct's fields are dropped
+/// only once its `Drop::drop` body has returned, so the token outlives
+/// settlement.
+#[derive(Debug)]
+pub(crate) struct OwnerToken;
+
+/// One tracked key: its state, the request it was minted for, and a handle to
+/// the reservation that owns it.
 ///
 /// The fingerprint is stored beside the state rather than mixed into the key,
 /// because a mismatch has to be *refused*. Folding it into the key would make
@@ -148,6 +172,10 @@ struct Entry {
     /// [`IdempotencyCache::mark_in_flight`], which has no request to bind to.
     /// An empty fingerprint binds nothing and matches anything.
     fingerprint: String,
+    /// The owner whose liveness decides whether an aged in-flight entry is
+    /// stale. Dangling for every entry not published by a reservation — a
+    /// terminal state ages out on the clock and never consults it.
+    owner: Weak<OwnerToken>,
 }
 
 impl Entry {
@@ -155,7 +183,25 @@ impl Entry {
         Self {
             state,
             fingerprint: fingerprint.to_string(),
+            owner: Weak::new(),
         }
+    }
+
+    /// An in-flight entry published on behalf of a live reservation.
+    fn in_flight(fingerprint: &str, owner: &Arc<OwnerToken>) -> Self {
+        Self {
+            state: IdempotencyState::InFlight(Instant::now()),
+            fingerprint: fingerprint.to_string(),
+            owner: Arc::downgrade(owner),
+        }
+    }
+
+    /// Whether the reservation that published this entry is still running.
+    ///
+    /// `strong_count` rather than `upgrade` because the answer is the same and
+    /// nothing here needs the value back.
+    fn owner_is_live(&self) -> bool {
+        self.owner.strong_count() > 0
     }
 
     /// Whether `fingerprint` is the request this entry was admitted for.
@@ -200,13 +246,21 @@ pub(crate) enum CheckPlan {
 pub(crate) fn decide_check_plan(status: CacheEntryStatus) -> (CheckPlan, bool) {
     match status {
         CacheEntryStatus::Missing => (CheckPlan::Proceed, false),
-        CacheEntryStatus::LiveInFlight => (CheckPlan::InFlight, false),
-        CacheEntryStatus::StaleInFlight | CacheEntryStatus::ExpiredCompleted => {
-            (CheckPlan::Proceed, true)
+        // Both in-flight statuses refuse, which is half of the fix. ADR-012
+        // consequence 3: "`decide_check_plan` maps `StaleInFlight` to
+        // `CheckPlan::InFlight`, so the retry is told the call is still
+        // running." A stale entry is one whose owner is *gone*, and reclaiming
+        // it is the sweep's job alone — an admission that frees a key here is
+        // the second execution on one key this ADR exists to stop.
+        CacheEntryStatus::LiveInFlight | CacheEntryStatus::StaleInFlight => {
+            (CheckPlan::InFlight, false)
         }
         CacheEntryStatus::LiveCompleted => (CheckPlan::Completed, false),
         CacheEntryStatus::LiveFailed => (CheckPlan::Failed, false),
-        CacheEntryStatus::ExpiredFailed => (CheckPlan::Proceed, true),
+        // A terminal entry ages out on the clock; no owner can still be using it.
+        CacheEntryStatus::ExpiredCompleted | CacheEntryStatus::ExpiredFailed => {
+            (CheckPlan::Proceed, true)
+        }
     }
 }
 
@@ -227,10 +281,26 @@ pub(crate) enum AdmitOutcome {
     Mismatch,
 }
 
+/// The single staleness predicate, shared by admission and the sweep.
+///
+/// ADR-012 consequence 3 requires the two to agree: *"`evict_expired`
+/// (`src/idempotency.rs:398`) sweeps on the same predicate, so a call running
+/// past the timeout keeps its entry through the background cleanup as well as
+/// through admission."* They differ in what they *do* with a stale entry — one
+/// refuses, the other reclaims — but a second copy of the rule deciding *which*
+/// entries are stale is the defect, so both route through here.
+///
+/// The direction, stated because it is exactly invertible: an aged in-flight
+/// entry whose owner is still alive is **not** stale. The ADR mandates that
+/// `is_expired` "reports an in-flight entry stale only once that handle is
+/// dead". Aged *and* ownerless is stale; the timeout then "does what it was
+/// introduced for — reclaiming entries whose owner is gone — and nothing else".
 #[must_use]
-fn classify(state: &IdempotencyState) -> CacheEntryStatus {
-    match state {
-        IdempotencyState::InFlight(started) if started.elapsed() <= IN_FLIGHT_TIMEOUT => {
+fn classify(entry: &Entry) -> CacheEntryStatus {
+    match &entry.state {
+        IdempotencyState::InFlight(started)
+            if entry.owner_is_live() || started.elapsed() <= IN_FLIGHT_TIMEOUT =>
+        {
             CacheEntryStatus::LiveInFlight
         }
         IdempotencyState::InFlight(_) => CacheEntryStatus::StaleInFlight,
@@ -245,6 +315,18 @@ fn classify(state: &IdempotencyState) -> CacheEntryStatus {
     }
 }
 
+/// Whether `status` names an entry no live owner can still be settling, and
+/// which the sweep may therefore reclaim.
+#[must_use]
+fn is_reclaimable(status: CacheEntryStatus) -> bool {
+    matches!(
+        status,
+        CacheEntryStatus::StaleInFlight
+            | CacheEntryStatus::ExpiredCompleted
+            | CacheEntryStatus::ExpiredFailed
+    )
+}
+
 impl IdempotencyCache {
     /// Create a new, empty cache.
     #[must_use]
@@ -256,8 +338,10 @@ impl IdempotencyCache {
 
     /// Check the cache state for `key` and return what the caller should do.
     ///
-    /// Stale in-flight entries (exceeded [`IN_FLIGHT_TIMEOUT`]) are evicted and
-    /// treated as `Proceed` so a fresh execution can start.
+    /// An in-flight entry answers `InFlight` for as long as its owner is
+    /// running, past [`IN_FLIGHT_TIMEOUT`] included; only expired *terminal*
+    /// entries are evicted here and treated as `Proceed`. Reclaiming an
+    /// in-flight entry whose owner is gone is left to `evict_expired`.
     pub fn check(&self, key: &str) -> CheckOutcome {
         let Some(entry) = self.entries.get(key) else {
             let (plan, evict) = decide_check_plan(CacheEntryStatus::Missing);
@@ -271,7 +355,7 @@ impl IdempotencyCache {
             };
         };
 
-        let status = classify(&entry.value().state);
+        let status = classify(entry.value());
 
         let (decision, evict) = decide_check_plan(status);
         if evict {
@@ -306,7 +390,12 @@ impl IdempotencyCache {
     /// operations, so two concurrent retries of one key could both observe
     /// `Proceed` and both execute. Holding a single entry guard across the
     /// inspect and the write closes that window.
-    pub(crate) fn admit(&self, key: &str, fingerprint: &str) -> AdmitOutcome {
+    pub(crate) fn admit(
+        &self,
+        key: &str,
+        fingerprint: &str,
+        owner: &Arc<OwnerToken>,
+    ) -> AdmitOutcome {
         // `DashMap::len` read-locks every shard, so it must be read *before*
         // the entry guard below takes a shard write lock — reading it inside
         // the guard's scope deadlocks. The count can therefore grow by at most
@@ -318,7 +407,7 @@ impl IdempotencyCache {
                 // Before the state: a live entry for another request must be
                 // refused whether it is in flight or already completed, and a
                 // stale one is replaced by this request anyway.
-                let (plan, evict) = decide_check_plan(classify(&occupied.get().state));
+                let (plan, evict) = decide_check_plan(classify(occupied.get()));
                 if !matches!(plan, CheckPlan::Proceed) && !occupied.get().matches(fingerprint) {
                     return AdmitOutcome::Mismatch;
                 }
@@ -340,10 +429,7 @@ impl IdempotencyCache {
                         debug_assert!(evict, "an occupied entry only proceeds after eviction");
                         // Replacing in place keeps the entry count flat, so a
                         // stale entry never costs a caller its admission.
-                        occupied.insert(Entry::new(
-                            IdempotencyState::InFlight(Instant::now()),
-                            fingerprint,
-                        ));
+                        occupied.insert(Entry::in_flight(fingerprint, owner));
                         debug!(key, "Replaced stale idempotency entry");
                         AdmitOutcome::Proceed
                     }
@@ -353,10 +439,7 @@ impl IdempotencyCache {
                 if at_capacity {
                     return AdmitOutcome::AtCapacity;
                 }
-                vacant.insert(Entry::new(
-                    IdempotencyState::InFlight(Instant::now()),
-                    fingerprint,
-                ));
+                vacant.insert(Entry::in_flight(fingerprint, owner));
                 AdmitOutcome::Proceed
             }
         }
@@ -450,11 +533,36 @@ impl IdempotencyCache {
     /// being narrowed.
     pub fn evict_expired(&self) {
         let before = self.entries.len();
-        self.entries.retain(|_, entry| !entry.state.is_expired());
+        self.entries
+            .retain(|_, entry| !is_reclaimable(classify(entry)));
         let count = before.saturating_sub(self.entries.len());
         if count > 0 {
             debug!(count, "Evicted stale idempotency entries");
         }
+    }
+
+    /// Age the in-flight entry for `key` by `by`, as though its call had been
+    /// running that much longer. Returns whether an in-flight entry was aged.
+    ///
+    /// A test seam, and the only one: staleness is measured against the process
+    /// clock, so the aged state the ADR-012 acceptance rows are stated against
+    /// is otherwise reachable only by waiting out [`IN_FLIGHT_TIMEOUT`] in real
+    /// time. It moves the start instant and touches nothing else — in
+    /// particular not the owner handle — so it cannot change which rule those
+    /// rows observe.
+    #[doc(hidden)]
+    pub fn age_in_flight(&self, key: &str, by: Duration) -> bool {
+        let Some(mut entry) = self.entries.get_mut(key) else {
+            return false;
+        };
+        let IdempotencyState::InFlight(started) = &mut entry.state else {
+            return false;
+        };
+        let Some(aged) = started.checked_sub(by) else {
+            return false;
+        };
+        *started = aged;
+        true
     }
 
     /// Current number of tracked entries.
@@ -501,8 +609,10 @@ mod verification {
                 assert!(!evict);
             }
             CacheEntryStatus::StaleInFlight => {
-                assert_eq!(plan, CheckPlan::Proceed);
-                assert!(evict);
+                // ADR-012 consequence 3: a stale in-flight entry is refused,
+                // not readmitted, and the sweep is what reclaims it.
+                assert_eq!(plan, CheckPlan::InFlight);
+                assert!(!evict);
             }
             CacheEntryStatus::LiveCompleted => {
                 assert_eq!(plan, CheckPlan::Completed);
@@ -564,6 +674,11 @@ pub struct IdempotencyReservation {
     fingerprint: String,
     settled: bool,
     on_drop: OnDrop,
+    /// The liveness token this reservation keeps alive. Held, never read: the
+    /// cache entry's weak handle goes dead when this field is dropped, which
+    /// happens only after `Drop::drop` has finished settling the key
+    /// (ADR-012 A2).
+    _owner: Arc<OwnerToken>,
 }
 
 /// What an unsettled [`IdempotencyReservation`] does when it is dropped.
@@ -577,13 +692,19 @@ enum OnDrop {
 }
 
 impl IdempotencyReservation {
-    fn new(cache: Arc<IdempotencyCache>, key: &str, fingerprint: &str) -> Self {
+    fn new(
+        cache: Arc<IdempotencyCache>,
+        key: &str,
+        fingerprint: &str,
+        owner: Arc<OwnerToken>,
+    ) -> Self {
         Self {
             cache,
             key: key.to_string(),
             fingerprint: fingerprint.to_string(),
             settled: false,
             on_drop: OnDrop::Release,
+            _owner: owner,
         }
     }
 
@@ -697,11 +818,16 @@ pub fn enforce(
     key: &str,
     fingerprint: &str,
 ) -> Result<GuardOutcome> {
-    match cache.admit(key, fingerprint) {
+    // Minted before `admit` publishes the entry that points at it, and moved
+    // into the reservation immediately after, so a published in-flight entry is
+    // never momentarily ownerless — the window ADR-012 A2 closes.
+    let owner = Arc::new(OwnerToken);
+    match cache.admit(key, fingerprint, &owner) {
         AdmitOutcome::Proceed => Ok(GuardOutcome::Proceed(IdempotencyReservation::new(
             Arc::clone(cache),
             key,
             fingerprint,
+            owner,
         ))),
         AdmitOutcome::InFlight => Err(Error::json_rpc(
             409,
@@ -900,52 +1026,149 @@ mod tests {
         }
     }
 
+    /// An aged in-flight entry whose owner is gone is refused at admission and
+    /// reclaimed by the sweep — the two halves of ADR-012 consequence 3.
     #[test]
-    fn check_evicts_stale_in_flight_and_returns_proceed() {
-        // GIVEN: an in-flight entry whose timestamp is older than IN_FLIGHT_TIMEOUT
-        // WHEN: checking the key
-        // THEN: Proceed (stale entry evicted)
+    fn check_refuses_an_ownerless_aged_entry_and_the_sweep_reclaims_it() {
+        // GIVEN: an in-flight entry older than IN_FLIGHT_TIMEOUT whose owner
+        // never existed, so its handle is dead
         let cache = IdempotencyCache::new();
-        // Insert an entry with a timestamp in the distant past
-        cache.entries.insert(
-            "stale".to_string(),
-            Entry::new(
-                IdempotencyState::InFlight(
-                    Instant::now()
-                        .checked_sub(IN_FLIGHT_TIMEOUT)
-                        .unwrap()
-                        .checked_sub(Duration::from_secs(1))
-                        .unwrap(),
-                ),
-                "",
-            ),
-        );
-        assert!(matches!(cache.check("stale"), CheckOutcome::Proceed));
-        assert_eq!(cache.len(), 0, "stale entry must be removed");
+        cache.mark_in_flight("stale");
+        assert!(cache.age_in_flight("stale", IN_FLIGHT_TIMEOUT + Duration::from_secs(1)));
+
+        // WHEN: a second caller checks the key
+        // THEN: it is told in flight rather than readmitted, and the entry is
+        // still there — admission never frees a key, the sweep does
+        assert!(matches!(cache.check("stale"), CheckOutcome::InFlight));
+        assert_eq!(cache.len(), 1, "admission must not reclaim the entry");
+
+        cache.evict_expired();
+        assert_eq!(cache.len(), 0, "the sweep reclaims an ownerless entry");
     }
 
+    // ── ADR-012 amendment A2: liveness, not the clock ─────────────────────────
+
+    /// Spin `work` on a new thread until `stop` is set.
+    ///
+    /// Both A2 race harnesses need a concurrent spinner and they must observe
+    /// the same `stop`, so the loop lives once here.
+    fn spawn_until(
+        stop: &Arc<std::sync::atomic::AtomicBool>,
+        mut work: impl FnMut() + Send + 'static,
+    ) -> std::thread::JoinHandle<()> {
+        let stop = Arc::clone(stop);
+        std::thread::spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                work();
+            }
+        })
+    }
+
+    /// Row 4a — a live owner past the timeout is told in-flight, not admitted.
     #[test]
-    fn check_evicts_expired_completed_and_returns_proceed() {
-        // GIVEN: a completed entry whose TTL has elapsed
-        // WHEN: checking the key
-        // THEN: Proceed (expired entry evicted)
-        let cache = IdempotencyCache::new();
-        cache.entries.insert(
-            "old".to_string(),
-            Entry::new(
-                IdempotencyState::Completed(
-                    json!(null),
-                    Instant::now()
-                        .checked_sub(COMPLETED_TTL)
-                        .unwrap()
-                        .checked_sub(Duration::from_secs(1))
-                        .unwrap(),
-                ),
-                "",
-            ),
+    fn an_aged_entry_with_a_live_owner_refuses_a_second_caller() {
+        // GIVEN: a reservation whose call has been running past the timeout
+        let cache = Arc::new(IdempotencyCache::new());
+        let GuardOutcome::Proceed(_reservation) = enforce(&cache, "k", "fp").unwrap() else {
+            panic!("first caller must be admitted");
+        };
+        assert!(cache.age_in_flight("k", IN_FLIGHT_TIMEOUT + Duration::from_secs(1)));
+
+        // WHEN: a second caller arrives on the same key
+        // THEN: it is refused, because staleness is a liveness question
+        assert!(matches!(cache.check("k"), CheckOutcome::InFlight));
+        assert!(enforce(&cache, "k", "fp").is_err());
+    }
+
+    /// Row 4b — that same entry survives an explicit `evict_expired` sweep.
+    ///
+    /// Separate from row 4a because the sweep does not consult
+    /// `decide_check_plan`; it is the second place the predicate has to hold.
+    #[test]
+    fn an_aged_entry_with_a_live_owner_survives_a_sweep() {
+        // GIVEN: the same aged-but-owned entry
+        let cache = Arc::new(IdempotencyCache::new());
+        let GuardOutcome::Proceed(_reservation) = enforce(&cache, "k", "fp").unwrap() else {
+            panic!("first caller must be admitted");
+        };
+        assert!(cache.age_in_flight("k", IN_FLIGHT_TIMEOUT + Duration::from_secs(1)));
+
+        // WHEN: the background cleanup runs
+        cache.evict_expired();
+
+        // THEN: the entry is still there
+        assert_eq!(cache.len(), 1, "a running call must keep its entry");
+    }
+
+    /// Row 4c — a sweep landing while a reservation's settlement is in
+    /// progress does not evict its entry.
+    ///
+    /// The race A2 exists for. A liveness rule built on
+    /// `Weak<IdempotencyReservation>` passes rows 4a and 4b and still loses the
+    /// entry here: `Arc` zeroes the strong count before running `Drop`, so the
+    /// sweep sees an ownerless aged entry while `Drop` is still storing the
+    /// terminal state, and the next caller is admitted fresh against a key whose
+    /// mutation may have committed. The token is a *field* of the reservation,
+    /// dropped only after the `Drop` body returns, so that window does not exist.
+    ///
+    /// A race has no honest single-shot failing test, so this follows the repro
+    /// harness above: a one-sided invariant that holds under any interleaving —
+    /// from the moment a key is admitted until its reservation has settled, no
+    /// concurrent caller is ever told the key is free.
+    #[test]
+    fn a_sweep_during_settlement_never_readmits_a_settling_key() {
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        // GIVEN: aged reservations settling while the background sweep runs
+        let cache = Arc::new(IdempotencyCache::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let outstanding: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let readmitted = Arc::new(AtomicUsize::new(0));
+
+        let sweeper = spawn_until(&stop, {
+            let cache = Arc::clone(&cache);
+            move || cache.evict_expired()
+        });
+        let checker = spawn_until(&stop, {
+            let cache = Arc::clone(&cache);
+            let outstanding = Arc::clone(&outstanding);
+            let readmitted = Arc::clone(&readmitted);
+            move || {
+                let key = outstanding.lock().unwrap().clone();
+                // A stale read can only name a key that has since settled, and a
+                // settled key answers `Completed`, so this cannot false-positive.
+                if let Some(key) = key
+                    && matches!(cache.check(&key), CheckOutcome::Proceed)
+                {
+                    readmitted.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+
+        // WHEN: each one ages past the timeout and then settles
+        for i in 0..500 {
+            let key = format!("k{i}");
+            let GuardOutcome::Proceed(mut reservation) = enforce(&cache, &key, "fp").unwrap()
+            else {
+                panic!("first caller must be admitted");
+            };
+            *outstanding.lock().unwrap() = Some(key.clone());
+            assert!(cache.age_in_flight(&key, IN_FLIGHT_TIMEOUT + Duration::from_secs(1)));
+            reservation.commit(&json!({"ok": true}));
+            drop(reservation);
+            *outstanding.lock().unwrap() = None;
+        }
+        stop.store(true, Ordering::Relaxed);
+        sweeper.join().unwrap();
+        checker.join().unwrap();
+
+        // THEN: no caller was ever handed a key that was still settling
+        assert_eq!(
+            readmitted.load(Ordering::Relaxed),
+            0,
+            "a sweep during settlement freed a key whose side effect had committed"
         );
-        assert!(matches!(cache.check("old"), CheckOutcome::Proceed));
-        assert_eq!(cache.len(), 0, "expired entry must be removed");
     }
 
     // ── evict_expired ─────────────────────────────────────────────────────────

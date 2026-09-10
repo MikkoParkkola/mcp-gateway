@@ -244,3 +244,23 @@ must not license each other; BOTH expiry shapes (transport `Err`, and `Ok` with
 an expiry `error` member) must honour the permission; and a failed
 re-initialization must surface the original error rather than the
 re-initialization's.
+
+## Residual risk: a pre-dispatch refusal outside the allowlist
+
+Reported during implementation, deliberately not fixed here.
+`Error::BackendUnavailable("Concurrency limit reached")` (`src/backend/ops.rs:233`
+and `:412`) is raised when the semaphore acquire fails, so no request is sent —
+genuinely pre-dispatch. It is absent from `Error::is_pre_dispatch`'s allowlist,
+so the direct route settles it as a terminal cached error and denies a
+legitimate retry for the cache TTL.
+
+The allowlist is not widened to the variant, for the same reason Amendment 2
+replaced "every other method is permitted": `BackendUnavailable` carries a
+free-form `String` and is constructed at eight sites
+(`src/backend/lifecycle.rs:240,322,426,1050`, `src/gateway/server/warmstart.rs:502,514`,
+`src/backend/ops.rs:27,233,412`). Admitting the variant admits every future site
+by default, and here a wrong `true` means a retry re-executes a side effect.
+
+The failure direction as it stands is the safe one — a retry is refused for work
+that never ran, which costs availability, not correctness. Closing it needs a
+signal narrower than the variant, which is a separate change with its own design.
