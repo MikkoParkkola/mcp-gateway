@@ -162,6 +162,22 @@ published until settlement has finished, not the reservation's own refcount.
 Acceptance gains: a sweep run while a reservation's settlement is in progress
 does not evict its entry.
 
+**A3 — the acceptance suite never pins the boundary the rule is stated in terms
+of.** Consequence 2 confines automatic resending to "failures provably raised
+before dispatch (connection establishment)". Nothing below tests that boundary.
+Every acceptance row exercises a failure either well before it (backend
+unreachable) or well after it (a backend error came back), so an implementation
+that resends a request-write failure — after the connection is up and the bytes
+may already be on the wire — passes the whole suite while re-breaking the
+criterion. The boundary is the load-bearing part of the rule and it is the one
+thing unasserted.
+
+Two additions close it. The suite gains a failure injected after connection
+establishment and before any backend answer, asserting the unannotated call
+reaches the backend once. And the flag's default is stated rather than implied:
+**deny at both resend sites**, because HTTP session recovery resends traffic
+that is not a `tools/call` at all and therefore carries no annotation to consult.
+
 ## Consequences
 
 **What the client sees.** A retry after an uncertain failure gets the recorded
@@ -205,4 +221,9 @@ One test per defect, each failing against the current tree:
 - a backend session expiry does not resend an unannotated `tools/call` through
   the HTTP recovery path, while an annotated read-only call still recovers;
 - a retry served a `Failed` terminal receives a JSON-RPC error envelope carrying
-  its own request id, not the original's.
+  its own request id, not the original's;
+- an unannotated `tools/call` whose transport fails *after* connection
+  establishment and before any backend answer reaches the backend exactly once —
+  the dispatch boundary the resend rule is phrased against;
+- a resend site handling a request that carries no annotation at all resends
+  nothing, at both `with_retry` and the HTTP recovery path.
