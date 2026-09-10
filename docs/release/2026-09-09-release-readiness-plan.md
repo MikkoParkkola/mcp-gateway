@@ -809,3 +809,49 @@ fails, and `scripts/release/count-release-criteria.py --check` reports zero
 blocking against a ledger whose cited evidence that run reproduced. Today none of
 those four conditions is met, and the ledger's `180 met or non-blocking, 3
 blocking` is a count the pipeline has never once reproduced end to end.
+
+## J. `ran=0` has three causes, and only two of them are a flag
+
+A second lane closed the run-history question and reported a union across "all 34
+CI runs" on this branch: 76 distinct binaries ever executed against 88 in the
+tree, so twelve have never run in CI of any colour. That twelve matches the list
+this document derived from ledger citations, name for name, by an independent
+route — log lines rather than criteria rows. Two legs, one answer.
+
+**The conclusion survives; the denominator does not.** `gh run list --workflow CI`
+returns **90 CI runs** on this branch, `46 success, 44 failure`, back to
+2026-09-01. Thirty-four is what a 100-run page yields once `Docker` and
+`Dependabot auto-merge` are interleaved with `CI` at roughly one apiece — a
+window over the last four days, not the branch's history. It is worth being
+precise about why the twelve are unaffected by that: the twelve test files were
+added after `5cb4f4e9` on 2026-09-08, and every run since that commit falls
+inside the sampled window, so no unsampled run could have executed a file that
+did not exist when it ran. The sample happens to cover the whole lifetime of the
+things being counted. That is what makes the union safe to use, and it is a
+different argument from "we looked at every run".
+
+**The `ran=0` finding is real and its cause is not single.** The same report
+notes that most sampled runs executed no integration binary at all, and reads
+that as this branch dying before integration testing. Three job logs, read
+directly, show three distinct shapes behind that one number:
+
+| Shape | Evidence | Does `--no-fail-fast` fix it? |
+| --- | --- | --- |
+| The lib does not compile | `error: could not compile 'mcp-gateway' (lib) due to 1 previous error`, `exit code 101`, run `34345016352` @ 11:20 | **No.** Nothing is built, so nothing can run. |
+| Lib unit tests fail | `test result: FAILED. 4155 passed; 2 failed`, zero `Running tests/` lines, run `34361905129` @ 14:10 | Yes. The abort is one stage earlier than the one section E describes. |
+| An integration binary fails | abort at `mik_7212_mrtr_component_acs`, `ran=33`, runs `cbd224f0` and `9ff75b16` | Yes. This is the shape already tracked. |
+
+The two lib tests that abort the middle shape are
+`block_1_gateway_execute_interim_fields_reach_the_result` and
+`block_1_gateway_invoke_interim_fields_reach_the_result` — the same pair a peer
+lane measured as stale rather than substantive, which is consistent with them
+being fixed already, but nothing in CI has yet shown that.
+
+**What this changes in section I.** Item 2 is worth more than it was written to
+be: one flag converts two of the three red shapes into full coverage, not one.
+It also cannot stand alone — a run in the first shape produces zero binaries with
+the flag on, so item 4 (a tree that compiles) genuinely precedes it rather than
+merely accompanying it. The observable for item 2 is unchanged but its
+precondition is sharper: all 88 `Running tests/…` lines are only reachable from a
+commit whose lib compiles and whose lib tests pass, because both stages sit ahead
+of the first integration binary in the same test invocation.
