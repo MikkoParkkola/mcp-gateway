@@ -10,8 +10,9 @@ ledger — one such regex found 10 of the 28.
 Whatever the blocking count is on the day, it is not that many decisions. The ledger's own
 evidence cells say so — `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all read
 "same envelope", and `NFR.OBS.3` observes the era detection MIK-7217.DISCOVER.4-5 built. Grouping on those
-clauses collapses them into **the clusters tabled below and one residue**, of which five are unbuilt
-mechanisms and two are measurements nobody has run.
+clauses collapses them into **the clusters tabled below**. The residue that once sat outside them
+is empty: every id still blocking belongs to a cluster, and the clusters that emptied out were
+struck rather than left as rows of zeroes.
 
 This document exists so the shape of the remaining work survives outside one session's
 context. It adds no verdicts: every row below is quoted from the ledger, and the ledger
