@@ -61,26 +61,63 @@ releases the key.**
 |---|---|---|
 | `Complete(result)` | the side effect committed and its result is known | settled; retries served the cached result |
 | `Release` | the request never left for the backend | freed; a retry is a first attempt |
-| `Failed(error)` | the request was dispatched and its outcome is not known | settled as a terminal error; retries served that error |
+| `Failed(error)` | the request was dispatched and the backend has not said whether it acted | settled as a terminal error; retries served that error |
 
-`Release` becomes reachable only before dispatch. The reservation is marked
-dispatched at the point the request bytes are handed to the backend transport;
-after that mark, a drop that is neither completed nor committed settles as
-`Failed`, carrying the error the caller would otherwise have seen.
+The discriminator is not "did the request leave" but "did the backend say it
+acted". Three cases, in order:
+
+1. **The request never left.** Release. A retry is a first attempt.
+2. **The backend answered that it did not act.** Release. A well-formed
+   `input_required` interim is the backend stopping to ask a question, not a
+   side effect. Route 1 already implements exactly this rule and says why
+   (`meta_mcp/invoke.rs:1676-1695`), and `mark_completed` refuses a non-final
+   result for the same reason (`src/idempotency.rs:531-539`). This ADR does not
+   disturb it; a rule phrased purely as "release only before dispatch" would,
+   and would wedge the key of a call that asked a question and got an answer.
+   It also carries MIK-7212.MRTR.10b, which forbids caching an `InputRequired`
+   result as completed.
+3. **Anything else after dispatch.** `Failed`, carrying the error the caller
+   would otherwise have seen. This is the case the guard has no arm for today.
+
+### The `Failed` state, enumerated
+
+`Failed` is a terminal alongside `Completed`, not a variant of in-flight, and
+every place that spells out the state machine gains an arm: a live and an
+expired `CacheEntryStatus`, a `CheckPlan`, and an `AdmitOutcome` carrying the
+error. It ages out on `COMPLETED_TTL` under the same expiry rule as `Completed`,
+so a failed key is never reclaimed by the in-flight path being changed below.
+The served value keeps its JSON-RPC error envelope and adopts the retry's
+request id, exactly as a served `Completed` does; a dispatched call cancelled
+before any backend answer settles with a defined outcome-not-established error
+rather than an absence.
 
 Three consequences follow, one per defect:
 
 1. The direct route's error exit settles rather than releases. A JSON-RPC error
    from a dispatched call is a terminal outcome, not an absence of one.
-2. **A side-effecting `tools/call` is not retried by the transport.** Automatic
-   retry is confined to calls the backend annotates `readOnlyHint` or
+2. **A side-effecting `tools/call` is not resent below the guard.** Automatic
+   resending is confined to calls the backend annotates `readOnlyHint` or
    `idempotentHint`, and to failures provably raised before dispatch (connection
    establishment). Retrying an unannotated mutation is a duplicate the guard
-   cannot see, so the guard cannot be the place it is fixed.
-3. A stale in-flight entry never becomes a second admission. `StaleInFlight`
-   yields `CheckPlan::InFlight` — the retry is told the call is still running.
-   The timeout keeps its memory-reclamation role for entries whose owner is
-   gone, which is the only case it was introduced for.
+   cannot see, so the guard cannot be the place it is fixed. Retryability is
+   decided at the invoke layer, where the tool's metadata is already resolved,
+   and passed down as a flag; the transport does not acquire a dependency on the
+   tool registry and does not look an annotation up per attempt. There are two
+   resend sites, not one: `with_retry` at `src/backend/ops.rs:218`, and HTTP
+   session recovery at `src/transport/http/mod.rs:1400-1410`, which re-runs
+   `initialize()` and resends the same request outside `with_retry` entirely.
+   Both take the flag.
+3. A stale in-flight entry never becomes a second admission, and is never swept
+   while its call is still running. Two changes, because either alone leaves the
+   defect: `decide_check_plan` maps `StaleInFlight` to `CheckPlan::InFlight`, so
+   the retry is told the call is still running; and staleness itself becomes a
+   liveness question rather than a clock reading. The entry holds a weak handle
+   to its `IdempotencyReservation`, and `is_expired` reports an in-flight entry
+   stale only once that handle is dead. `evict_expired` (`src/idempotency.rs:398`)
+   sweeps on the same predicate, so a call running past the timeout keeps its
+   entry through the background cleanup as well as through admission. The
+   timeout then does what it was introduced for — reclaiming entries whose owner
+   is gone — and nothing else.
 
 ## Consequences
 
@@ -116,4 +153,13 @@ One test per defect, each failing against the current tree:
 - an unannotated `tools/call` failing with `BackendTimeout` reaches the backend
   exactly once, while a `readOnlyHint` call still retries;
 - a second caller arriving on a key whose reservation passed `IN_FLIGHT_TIMEOUT`
-  while its owner is alive is told in-flight, not admitted.
+  while its owner is alive is told in-flight, not admitted — and the same entry
+  survives an explicit `evict_expired` sweep, which is a separate assertion
+  because the sweep does not consult `decide_check_plan`;
+- a dispatched call answered with a well-formed `input_required` interim
+  releases its key, and the client's answer under the same key reaches the
+  backend rather than being served a cached sentence;
+- a backend session expiry does not resend an unannotated `tools/call` through
+  the HTTP recovery path, while an annotated read-only call still recovers;
+- a retry served a `Failed` terminal receives a JSON-RPC error envelope carrying
+  its own request id, not the original's.
