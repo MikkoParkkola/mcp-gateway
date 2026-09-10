@@ -128,7 +128,8 @@ jobs:
           jq --arg version "$VERSION" --arg image "$IMAGE" \
             '.version = $version
              | del(.packages[0].version)
-             | .packages[0].identifier = $image' \
+             | .packages[0].identifier = $image
+             | (.packages[] | select(.registryType == "cargo") | .version) = $version' \
             server.json > server.tmp
           mv server.tmp server.json
 
