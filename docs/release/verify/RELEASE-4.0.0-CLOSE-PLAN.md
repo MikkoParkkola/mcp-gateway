@@ -264,6 +264,17 @@ ordered after them.
 **Branch state as of 18:22.** `origin/fix/mrtr2-continuation-handle` is `3f50cf62`, four
 commits past the `482746c1` that CI last measured: two release docs (`811ed56d`,
 `77f564f8`), the mrtr bridge fix (`a43ea83d`), and the CONFIRM.1a retarget (`3f50cf62`).
-Both causes of the red `Tests` run are addressed at source and measured on that base, so
-step 3 — re-running `Tests` on #473 — is now the next action, and it decides whether R1
-is closed rather than assumed. `CodeQL` is untouched and still red.
+Both causes of the red `Tests` run are addressed at source, but **R1 is not closed and
+must not be read as closed.** What was measured is narrower than what CI runs, in two
+ways worth stating so nobody mistakes the local numbers for the verdict:
+
+- The two runs are `cargo test --test mik_7212_mrtr_component_acs` (19/0 at `a43ea83d`)
+  and `cargo test --test mik_7215_acs` (26/0 at `3f50cf62`). Neither saw the other's
+  commit, and neither ran at `db828e0e`. The `unfinished_round` guard is now upstream of
+  the mrtr bridge fix and no run has exercised the two together.
+- CI runs `cargo test --all-features --no-fail-fast`. Both local runs used the default
+  feature set, so `spec-preview` and `runtime-substrate` are unexercised.
+
+Step 3 — the `Tests` job on `db828e0e` — is what decides R1, and it is already running.
+`CodeQL` is untouched; read its alerts from this run, not from the run on `482746c1`,
+because the branch has moved four commits and one of them edits `router/handlers.rs`.
