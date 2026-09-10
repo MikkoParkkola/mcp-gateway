@@ -282,10 +282,7 @@ impl StdioSession {
     /// Returns every line consumed on the way, in order. The order is the
     /// assertion in every `S-02` row: a notification that arrives after the
     /// result is a different line in this vector, not a different value.
-    async fn read_until(
-        &mut self,
-        wanted: impl Fn(&Value) -> bool,
-    ) -> (Vec<Value>, Option<Value>) {
+    async fn read_until(&mut self, wanted: impl Fn(&Value) -> bool) -> (Vec<Value>, Option<Value>) {
         let mut seen = Vec::new();
         loop {
             let Ok(Ok(Some(line))) = timeout(READ_TIMEOUT, self.stdout.next_line()).await else {
@@ -355,7 +352,7 @@ fn initialize_request(id: i64) -> Value {
 /// `request_meta` is merged into `params._meta`: it carries the
 /// request-scoped declaration — a `progressToken`, a `logLevel`, or both —
 /// which ADR-014 makes the condition for a request-scoped response.
-fn invoke(id: i64, tool: &str, arguments: Value, request_meta: Value) -> Value {
+fn invoke(id: i64, tool: &str, arguments: &Value, request_meta: &Value) -> Value {
     let mut meta = json!({
         "io.modelcontextprotocol/protocolVersion": CLIENT_PROTOCOL_VERSION,
     });
@@ -418,8 +415,8 @@ async fn s02_stdio_progress_reaches_its_own_call_before_the_result() {
         .send(&invoke(
             2,
             SLOW_TOOL,
-            json!({}),
-            json!({"progressToken": client_token}),
+            &json!({}),
+            &json!({"progressToken": client_token}),
         ))
         .await;
     let (before_notification, notification) = session
@@ -434,7 +431,7 @@ async fn s02_stdio_progress_reaches_its_own_call_before_the_result() {
     // Only now — the fixture cannot return until this lands, so reaching the
     // result at all proves the notification preceded it.
     session
-        .send(&invoke(3, RELEASE_TOOL, json!({}), json!({})))
+        .send(&invoke(3, RELEASE_TOOL, &json!({}), &json!({})))
         .await;
     let (_, result) = session.read_until(|frame| has_id(frame, 2)).await;
 
@@ -443,7 +440,10 @@ async fn s02_stdio_progress_reaches_its_own_call_before_the_result() {
         !before_notification.iter().any(|frame| has_id(frame, 2)),
         "the response for the call arrived before its own notification: {before_notification:?}"
     );
-    assert!(result.is_some(), "the released call never returned a result");
+    assert!(
+        result.is_some(),
+        "the released call never returned a result"
+    );
     let notification = notification.expect("checked above");
     assert_eq!(
         progress_token_of(&notification),
@@ -488,8 +488,8 @@ async fn s02_stdio_message_reaches_its_own_call_before_the_result() {
         .send(&invoke(
             2,
             SLOW_TOOL,
-            json!({"message_marker": marker}),
-            json!({"logLevel": "info"}),
+            &json!({"message_marker": marker}),
+            &json!({"logLevel": "info"}),
         ))
         .await;
     let (before_notification, notification) = session
@@ -500,7 +500,7 @@ async fn s02_stdio_message_reaches_its_own_call_before_the_result() {
         "no notifications/message reached the client before the read bound"
     );
     session
-        .send(&invoke(3, RELEASE_TOOL, json!({}), json!({})))
+        .send(&invoke(3, RELEASE_TOOL, &json!({}), &json!({})))
         .await;
     let (_, result) = session.read_until(|frame| has_id(frame, 2)).await;
 
@@ -509,7 +509,10 @@ async fn s02_stdio_message_reaches_its_own_call_before_the_result() {
         !before_notification.iter().any(|frame| has_id(frame, 2)),
         "the response arrived before its own notification: {before_notification:?}"
     );
-    assert!(result.is_some(), "the released call never returned a result");
+    assert!(
+        result.is_some(),
+        "the released call never returned a result"
+    );
     assert_eq!(
         notification
             .as_ref()
@@ -537,15 +540,17 @@ async fn stdio_without_request_scoped_meta_delivers_no_notification() {
 
     // WHEN — no progressToken and no logLevel.
     session
-        .send(&invoke(2, RELEASE_TOOL, json!({}), json!({})))
+        .send(&invoke(2, RELEASE_TOOL, &json!({}), &json!({})))
         .await;
     let (seen, result) = session.read_until(|frame| has_id(frame, 2)).await;
 
     // THEN
     assert!(result.is_some(), "the plain call must still answer");
     assert!(
-        !seen.iter().any(|frame| is_method(frame, "notifications/message")
-            || is_method(frame, "notifications/progress")),
+        !seen
+            .iter()
+            .any(|frame| is_method(frame, "notifications/message")
+                || is_method(frame, "notifications/progress")),
         "a request that declared nothing request-scoped received a \
          notification: {seen:?}"
     );
@@ -570,10 +575,20 @@ async fn s03_progress_stdio_each_call_sees_only_its_own_token() {
 
     // WHEN
     session
-        .send(&invoke(2, SLOW_TOOL, json!({}), json!({"progressToken": "token-A"})))
+        .send(&invoke(
+            2,
+            SLOW_TOOL,
+            &json!({}),
+            &json!({"progressToken": "token-A"}),
+        ))
         .await;
     session
-        .send(&invoke(3, SLOW_TOOL, json!({}), json!({"progressToken": "token-B"})))
+        .send(&invoke(
+            3,
+            SLOW_TOOL,
+            &json!({}),
+            &json!({"progressToken": "token-B"}),
+        ))
         .await;
     let (mut seen, first) = session
         .read_until(|frame| is_method(frame, "notifications/progress"))
@@ -581,7 +596,7 @@ async fn s03_progress_stdio_each_call_sees_only_its_own_token() {
     assert!(first.is_some(), "no notification reached the client");
     seen.extend(first);
     session
-        .send(&invoke(4, RELEASE_TOOL, json!({}), json!({})))
+        .send(&invoke(4, RELEASE_TOOL, &json!({}), &json!({})))
         .await;
     let (tail, _) = session.read_until(|frame| has_id(frame, 3)).await;
     seen.extend(tail);
@@ -594,12 +609,18 @@ async fn s03_progress_stdio_each_call_sees_only_its_own_token() {
         .filter_map(progress_token_of)
         .collect();
     assert_eq!(
-        tokens.iter().filter(|token| **token == &json!("token-A")).count(),
+        tokens
+            .iter()
+            .filter(|token| **token == &json!("token-A"))
+            .count(),
         1,
         "call A's token must appear exactly once: {tokens:?}"
     );
     assert_eq!(
-        tokens.iter().filter(|token| **token == &json!("token-B")).count(),
+        tokens
+            .iter()
+            .filter(|token| **token == &json!("token-B"))
+            .count(),
         1,
         "call B's token must appear exactly once: {tokens:?}"
     );
