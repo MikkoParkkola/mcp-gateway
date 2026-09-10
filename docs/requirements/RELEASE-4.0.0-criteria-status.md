@@ -8,7 +8,7 @@ stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB
 the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
 in `RELEASE-4.0.0-requirements.md` now has a row, functional and non-functional alike.
 
-Coverage: 146 criteria, 183 rows, 181 met or non-blocking, 2 blocking.
+Coverage: 146 criteria, 186 rows, 181 met or non-blocking, 5 blocking.
 
 That line is the only place in this file that states totals, and it is not maintained by hand.
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
@@ -506,3 +506,23 @@ wrong, because they are scoring different criteria under similar names. Two ledg
 schemes and no mapping between them is not redundancy, it is a release with no single answer to
 "how much is done". Reconciling them onto the requirement IDs is a prerequisite for calling the
 release ready, not a tidying task to do afterwards.
+
+## GH517 (NEG) — streamable-HTTP protocol-version negotiation, cluster I
+
+Promoted 2026-09-10 from GH [#517](https://github.com/MikkoParkkola/mcp-gateway/issues/517)
+(luochen1990), against `mcp.docs.astro.build`. The reporter filed one analysis, reproduced it
+against a debug build, and retracted it for a second one; both turned out to be real and
+independent defects, so all three rows below are blocking rather than the one the issue title
+names. The 3.5.1 fallback these rows supersede is not evidence for any of them: it is the code
+NEG.3 reports as unreachable.
+
+| ID | criterion | status | evidence | blocking |
+|---|---|---|---|---|
+| GH517.NEG.1 | a successful `initialize` MUST adopt the server-selected `result.protocolVersion` and use it for the transport's lifetime | ABSENT | `src/transport/http/mod.rs:721` tests `response.error` and, absent one, falls through to `notifications/initialized` (`:797`) and `connected.store(true)` (`:803`). No statement between them reads `result.protocolVersion`, so `self.protocol_version` stays `None` and `build_mcp_headers` (`:820`) resolves `MCP-Protocol-Version` through `.unwrap_or_else(\|\| PROTOCOL_VERSION.to_string())` — the gateway's own latest — on every later request. The gateway proposes, the server selects, and the gateway then ignores the selection | yes |
+| GH517.NEG.2 | a server-selected version the gateway does not support MUST fail that backend with a diagnostic naming both versions | ABSENT | there is no comparison to fail: `:721`-`:803` accepts any successful `initialize` result whatever version it carries. The mismatch surfaces later as backend-specific errors on individual methods, or not at all | yes |
+| GH517.NEG.3 | version negotiation MUST cover a rejection carried at the HTTP status layer, not only an in-band JSON-RPC error | ABSENT | `send_request_with_headers` returns `Err(safe_http_status_error(...))` for any non-2xx (`:1226-1228`), so the `?` on `let response = self.send_request(&request).await?` (`:719`) propagates before the `response.error` branch (`:721`) is evaluated. The retry at `:729` is therefore unreachable for a backend that rejects with 400 plus a supported-version list in the body, which is what the reported backend does | yes |
+
+The order matters for the fix: NEG.1 alone makes the reported backend work, because that server
+accepts the proposal at HTTP 200 and downgrades in the result. NEG.3 alone does not, because
+nothing rejects. Neither is sufficient, because a backend that rejects at 400 and a backend that
+downgrades in the result are different servers.
