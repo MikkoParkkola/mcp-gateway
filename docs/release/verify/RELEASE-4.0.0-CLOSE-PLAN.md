@@ -264,8 +264,11 @@ ordered after them.
 **Branch state as of 18:22.** `origin/fix/mrtr2-continuation-handle` is `3f50cf62`, four
 commits past the `482746c1` that CI last measured: two release docs (`811ed56d`,
 `77f564f8`), the mrtr bridge fix (`a43ea83d`), and the CONFIRM.1a retarget (`3f50cf62`).
-Both causes of the red `Tests` run are addressed at source, but **R1 is not closed and
-must not be read as closed.** What was measured is narrower than what CI runs, in two
+**R1 is closed.** The `Tests` job — `cargo test --all-features --no-fail-fast`, the same
+job that was red — succeeded on `db828e0e` in CI run `34501035875` (job window
+16:16:37Z–16:18:17Z, 2026-09-10), and the whole `CI` workflow is green on that commit and
+on the current tip `c0486097`. The local runs recorded below are narrower than that job in
+two ways, which is why the CI verdict is the one that counts: What was measured is narrower than what CI runs, in two
 ways worth stating so nobody mistakes the local numbers for the verdict:
 
 - The two runs are `cargo test --test mik_7212_mrtr_component_acs` (19/0 at `a43ea83d`)
@@ -275,6 +278,6 @@ ways worth stating so nobody mistakes the local numbers for the verdict:
 - CI runs `cargo test --all-features --no-fail-fast`. Both local runs used the default
   feature set, so `spec-preview` and `runtime-substrate` are unexercised.
 
-Step 3 — the `Tests` job on `db828e0e` — is what decides R1, and it is already running.
-`CodeQL` is untouched; read its alerts from this run, not from the run on `482746c1`,
+Step 3 is therefore done. What remains before merge is `Analyze (rust)`, still running, and
+the CodeQL alerts; read its alerts from this run, not from the run on `482746c1`,
 because the branch has moved four commits and one of them edits `router/handlers.rs`.
