@@ -119,6 +119,49 @@ Three consequences follow, one per defect:
    timeout then does what it was introduced for — reclaiming entries whose owner
    is gone — and nothing else.
 
+## Amendments from review (2026-09-10)
+
+Two defects in the mechanism above, both raised by independent review and both
+verified at source. Neither changes the decision; both change how it must be
+built, which is why they are recorded here rather than discovered in code.
+
+**A1 — a hint that was guessed is indistinguishable from one the backend
+declared.** Consequence 2 says automatic resending is confined to calls the
+backend annotates `readOnlyHint` or `idempotentHint`. That is unimplementable
+against resolved metadata. `src/backend/annotations.rs:17` writes the inferred
+value back into the same field as a declared one:
+
+```rust
+let read_only = annotations.read_only_hint.unwrap_or(inferred_read_only);
+annotations.read_only_hint = Some(read_only);
+```
+
+and `idempotent_hint` is filled the same way from `infer_idempotent_tool`
+(`:24-27`), which reads the tool's *name* (`:70`, `:95-98`). An unannotated
+mutation whose name happens to match — `get_and_increment` against the
+`get` prefix — resolves to read-only and stays retry-eligible, which is exactly
+the duplicate the criterion forbids.
+
+The flag must therefore be derived from *explicit* backend annotations, captured
+before normalization overwrites them, and only an explicit `true` grants
+resend permission. Absent, false, and inferred all mean no resend. Acceptance
+gains: an unannotated tool with a read-only-looking name is not resent.
+
+**A2 — a weak handle is dead before the value it points at has settled.** The
+liveness rule in consequence 3 has the reservation's cache entry hold a weak
+handle, reporting the entry stale once that handle is dead. `Arc` decrements the
+strong count to zero *before* running the inner value's `Drop`. So there is a
+window in which `Weak::upgrade` already returns `None` while the reservation's
+`Drop` is still storing `Failed`. A concurrent `evict_expired` sweep landing in
+that window removes the entry, and the next caller is admitted fresh against a
+key whose mutation may have committed — the defect this ADR exists to close,
+reintroduced by its own fix.
+
+Liveness must therefore be a token held strongly from before the admission is
+published until settlement has finished, not the reservation's own refcount.
+Acceptance gains: a sweep run while a reservation's settlement is in progress
+does not evict its entry.
+
 ## Consequences
 
 **What the client sees.** A retry after an uncertain failure gets the recorded
