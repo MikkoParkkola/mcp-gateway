@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-6865 fail-fast probe (MCPGW.SCHEMA.1).
 //!
 //! Opus 4.8 / Sonnet 5 invent trailing keys on nested-object-in-array schemas.
