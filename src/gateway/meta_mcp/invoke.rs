@@ -3424,7 +3424,7 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
             (ErrorCategory::NotFound, format!("Not found: '{name}'"))
         }
         Error::BackendTimeout(msg) => (ErrorCategory::Timeout, msg.clone()),
-        Error::BackendUnavailable(msg) | Error::Transport(msg) => {
+        Error::BackendUnavailable(msg) | Error::Transport(msg) | Error::TransportConnect(msg) => {
             (ErrorCategory::BackendError, msg.clone())
         }
         // Protocol errors carry upstream HTTP failures as their message
@@ -4361,6 +4361,7 @@ mod identity_propagation_enforcement_tests {
             _params: Option<Value>,
             extra_headers: &[(String, String)],
             identity_key: Option<&str>,
+            _resend: crate::transport::ResendPermission,
         ) -> crate::Result<crate::protocol::JsonRpcResponse> {
             *self.captured.lock() = extra_headers.to_vec();
             self.captured_identity

@@ -96,7 +96,11 @@ where
 fn is_retryable(error: &Error) -> bool {
     matches!(
         error,
-        Error::Transport(_) | Error::BackendTimeout(_) | Error::Http(_) | Error::Io(_)
+        Error::Transport(_)
+            | Error::TransportConnect(_)
+            | Error::BackendTimeout(_)
+            | Error::Http(_)
+            | Error::Io(_)
     )
 }
 

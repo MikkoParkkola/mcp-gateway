@@ -40,8 +40,9 @@ pub use data_flow::{
     hash_argument,
 };
 pub use http_diagnostics::{
-    SESSION_EXPIRED_MARKER, diagnostic_url, request_error_category, safe_http_status_error,
-    safe_oauth_http_error, safe_request_error, safe_reqwest_message, summarize_stdio_command,
+    RedirectEvidence, SESSION_EXPIRED_MARKER, diagnostic_url, request_error_category,
+    safe_http_status_error, safe_oauth_http_error, safe_request_error, safe_request_error_for,
+    safe_reqwest_message, summarize_stdio_command,
 };
 pub use policy::{ToolPolicy, ToolPolicyConfig};
 pub use remote_provenance::{

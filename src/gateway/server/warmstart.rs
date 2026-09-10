@@ -102,7 +102,13 @@ fn is_readiness_error(error: &Error) -> bool {
     // the configuration cannot work, so retrying respawns a typo once a minute
     // forever. It falls through to the catch-all below.
     match error {
-        Error::Transport(_) | Error::BackendTimeout(_) | Error::BackendUnavailable(_) => true,
+        // `TransportConnect` is a narrowing of `Transport`, so it classifies
+        // identically here: a backend that cannot yet be connected to is the
+        // canonical "not up yet".
+        Error::Transport(_)
+        | Error::TransportConnect(_)
+        | Error::BackendTimeout(_)
+        | Error::BackendUnavailable(_) => true,
         Error::Io(e) => is_transient_io(e.kind()),
         // A response arrived, so the backend is up; only connect/timeout shapes
         // mean "not yet". A 4xx is the operator's configuration talking back.

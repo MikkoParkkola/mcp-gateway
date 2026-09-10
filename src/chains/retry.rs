@@ -180,10 +180,16 @@ fn is_retryable(error: &Error) -> bool {
     // `TransportPermanent` is deliberately absent: it is the transport saying
     // the configuration cannot work, and a retry loop is the wrong answer to
     // that. Plain `Transport` stays retryable, because it means "failed, cause
-    // unknown".
+    // unknown". `TransportConnect` is a narrowing of `Transport`, not a new
+    // class -- it must stay retryable or splitting the variant would silently
+    // stop retrying the one failure that is provably safe to retry.
     matches!(
         error,
-        Error::Transport(_) | Error::BackendTimeout(_) | Error::Http(_) | Error::Io(_)
+        Error::Transport(_)
+            | Error::TransportConnect(_)
+            | Error::BackendTimeout(_)
+            | Error::Http(_)
+            | Error::Io(_)
     )
 }
 

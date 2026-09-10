@@ -127,6 +127,45 @@ pub enum Error {
     #[error("Transport error (permanent): {0}")]
     TransportPermanent(String),
 
+    /// A transport failure the gateway can prove happened *before* any byte of
+    /// the request reached the backend.
+    ///
+    /// `Transport` conflates two failures ADR-012 must keep apart: "could not
+    /// connect" and "the stream died after the request was written". The
+    /// second may have executed a side effect, so consequence 1 settles it as
+    /// terminal. The first provably did not, and settling it terminal denies a
+    /// caller a retry of work that never ran.
+    ///
+    /// Constructed at exactly one site --
+    /// [`crate::security::safe_request_error_for`] -- and only when reqwest
+    /// reports `is_connect()` AND the caller supplies
+    /// [`crate::security::RedirectEvidence::NoRedirectFollowed`], which the
+    /// transport derives from a redirect counter sampled either side of the
+    /// send. A request that followed a redirect stays `Transport`: a 307
+    /// re-submits the body, so the side effect may already have run at the
+    /// origin that redirected.
+    ///
+    /// The counter, not `reqwest::Error::url()`, is what carries this. An
+    /// earlier revision compared the error's URL against the posted URL; that
+    /// comparison is equal whether or not a hop was taken, because reqwest
+    /// back-fills the original URL on the error path and only advances it on
+    /// the success path. Do not reintroduce it.
+    ///
+    /// The narrow construction is the point. This variant is on the
+    /// `is_pre_dispatch` allowlist, where a wrong `true` licenses a second
+    /// execution of a side effect, so it must not grow the free-form
+    /// construction surface that keeps `BackendUnavailable` off that list.
+    ///
+    /// Its `Display` is byte-identical to [`Error::Transport`]'s, deliberately:
+    /// this is an internal classification and the wire contract must not
+    /// change. The cost is that no log line and no assertion message can tell
+    /// the two apart -- only the variant can. That is how an earlier revision
+    /// shipped the classifier with no production caller and a green suite
+    /// underneath it, so a behavioural row, not a unit test that inspects the
+    /// variant, is what pins this distinction.
+    #[error("Transport error: {0}")]
+    TransportConnect(String),
+
     /// Protocol error
     #[error("Protocol error: {0}")]
     Protocol(String),
@@ -213,11 +252,19 @@ impl Error {
     /// The allowlist is deliberately tight and the default is "dispatched".
     /// Misjudging a pre-dispatch failure as dispatched costs a retry;
     /// misjudging the reverse admits a second execution of a side effect.
+    ///
+    /// `TransportConnect` earns its place by construction, not by variant: it
+    /// exists only where reqwest proved the connection was never established
+    /// on an unredirected request. See its doc comment for why a redirected
+    /// request is excluded.
     #[must_use]
     pub fn is_pre_dispatch(&self) -> bool {
         matches!(
             self,
-            Self::CircuitOpen(_) | Self::BackendNotFound(_) | Self::ToolNotFound(_)
+            Self::CircuitOpen(_)
+                | Self::BackendNotFound(_)
+                | Self::ToolNotFound(_)
+                | Self::TransportConnect(_)
         )
     }
 
@@ -233,6 +280,9 @@ impl Error {
             | Self::CircuitOpen(_)
             | Self::BackendTimeout(_)
             | Self::Transport(_)
+            // A connect failure is the same class on the wire; the variant
+            // exists for settlement, not for the caller.
+            | Self::TransportConnect(_)
             // Same class as `Transport` to a JSON-RPC caller: a backend-side
             // failure, not a gateway fault. Omitting it reported a missing
             // backend command as an internal error.
