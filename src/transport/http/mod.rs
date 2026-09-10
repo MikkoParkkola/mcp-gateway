@@ -30,7 +30,7 @@ use crate::protocol::era::Era;
 use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
-    RequestId, is_version_mismatch_error, negotiate_best_version,
+    RequestId, SUPPORTED_VERSIONS, is_version_mismatch_error, negotiate_best_version,
     parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
@@ -717,7 +717,43 @@ impl HttpTransport {
             })),
         };
 
-        let response = self.send_request(&request).await?;
+        // A status-level rejection carries the server's supported list and
+        // nothing else the gateway may repeat. Negotiate from it and retry
+        // once, which is the same move the JSON-RPC-error branch below makes
+        // for backends that reject in band.
+        let response = match self.send_request(&request).await {
+            Ok(response) => response,
+            Err(Error::ProtocolVersionRejected { supported }) => {
+                let Some(negotiated) = negotiate_best_version(&supported) else {
+                    return Err(Error::Protocol(format!(
+                        "Backend rejected protocol version {version} and shares none this gateway speaks; it supports: {}",
+                        supported.join(", ")
+                    )));
+                };
+                warn!(
+                    url = %sanitize_url_for_diagnostics(&self.base_url),
+                    rejected_version = %version,
+                    negotiated_version = %negotiated,
+                    "Backend rejected protocol version by HTTP status, retrying with negotiated version"
+                );
+                *self.protocol_version.write() = Some(negotiated.to_string());
+                let retry = JsonRpcRequest {
+                    jsonrpc: "2.0".to_string(),
+                    id: RequestId::Number(0),
+                    method: "initialize".to_string(),
+                    params: Some(serde_json::json!({
+                        "protocolVersion": negotiated,
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "mcp-gateway",
+                            "version": env!("CARGO_PKG_VERSION")
+                        }
+                    })),
+                };
+                self.send_request(&retry).await?
+            }
+            Err(other) => return Err(other),
+        };
 
         // Check for protocol version mismatch error
         if let Some(ref error) = response.error {
@@ -779,6 +815,26 @@ impl HttpTransport {
                     error.code
                 )));
             }
+        }
+
+        // The client proposes and the server selects. Whatever it selected
+        // governs the `MCP-Protocol-Version` header from here on; without this
+        // the gateway kept announcing its own latest to a backend that had
+        // already told it otherwise, which is the gateway violating the
+        // negotiation it opened.
+        if let Some(selected) = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("protocolVersion"))
+            .and_then(Value::as_str)
+        {
+            if !SUPPORTED_VERSIONS.contains(&selected) {
+                return Err(Error::Protocol(format!(
+                    "Backend selected protocol version {selected}, which this gateway does not speak; it speaks: {}",
+                    SUPPORTED_VERSIONS.join(", ")
+                )));
+            }
+            *self.protocol_version.write() = Some(selected.to_string());
         }
 
         // Some Streamable HTTP backends either close the initialize request
@@ -1225,6 +1281,14 @@ impl HttpTransport {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            // Several deployed servers refuse a protocol version they do not
+            // speak with a status rather than a JSON-RPC error object.
+            // Flattening that to a transport string here is what made the
+            // negotiation below unreachable for them: the body carrying the
+            // supported-version list was dropped before anyone could read it.
+            if let Some(supported) = parse_supported_versions_from_error(&body) {
+                return Err(Error::ProtocolVersionRejected { supported });
+            }
             return Err(safe_http_status_error(status, &body));
         }
 
