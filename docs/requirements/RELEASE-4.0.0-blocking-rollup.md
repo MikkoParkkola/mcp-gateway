@@ -182,12 +182,11 @@ raised them, judged all four closed, and raised nothing new.
 How far each cluster has actually got — design, test plan, review, code, owner —
 is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
 
-Clusters A, D, F, G and H have cleared: every row they named is met or non-blocking in the ledger, so they no longer appear here. What each of them was, and how it closed, is kept in the ownership table and the notes below. This table names only what still blocks.
+Clusters A, D, F, G and H have cleared, and the residue emptied on 2026-09-10: every row they named is met or non-blocking in the ledger, so they no longer appear here. What each of them was, and how it closed, is kept in the ownership table and the notes below. This table names only what still blocks.
 
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
-| C | MIK-7272 revision surface | `SUB.2` (own-stream clause), `SUB.4` | 2 | two half-wirings. `SUB.2b` is absent on both legs, and the client leg is the sharper of the two: it parses the negotiated revision and then discards it (`parse_sse_response`, `src/transport/http/mod.rs:286-298`). `SUB.4` is no longer unwired — all three routes reach a guard as of `5dd2b48c` — but it is PARTIAL rather than MET: the direct `POST /mcp/{name}` route RELEASES the client's key when the backend call fails (`backend_handlers.rs:862-867`, `idempotency.rs:562-571`), which is the broken-stream case the criterion is written about. What it now waits on is a decision about uncertain execution, not more wiring. `EXT.1`, `OTEL.1`, `TASK.1` and `MRTR.10` left this cluster as their wiring landed, and `ORDER.2` left it on 2026-09-08 |
-| — | residue | `CONFIRM.2` | 1 | one row, and it waits on the continuation path rather than on a decision. `HEADER.9a`/`9b`, `CONTROL.4`, `NFR.SEC.1`, `NFR.PERF.4`, `MIK-6865.SCHEMA.1c` and `MIK-7215.CONTROL.3b` all left the residue as their evidence landed |
+| C | MIK-7272 revision surface | `SUB.2` (own-stream clause), `SUB.4` | 2 | two half-wirings. `SUB.2b` is absent on the outbound leg only: the inbound legs now capture rather than discard (`parse_sse_response` returns `Result<SseExchange>`, `src/transport/http/mod.rs:312`; progress-token match, `src/transport/stdio.rs:416-431`). It stays blocking because the captured notifications have no production consumer, and the inbound scaffold does not merge alone. `SUB.4` is no longer unwired — all three routes reach a guard as of `5dd2b48c` — but it is PARTIAL rather than MET: the direct `POST /mcp/{name}` route RELEASES the client's key when the backend call fails (`backend_handlers.rs:862-867`, `idempotency.rs:562-571`), which is the broken-stream case the criterion is written about. What it now waits on is a decision about uncertain execution, not more wiring. `EXT.1`, `OTEL.1`, `TASK.1` and `MRTR.10` left this cluster as their wiring landed, and `ORDER.2` left it on 2026-09-08 |
 
 Cluster C carries one prerequisite that is not visible in its row. `SUB.4`'s activation is
 blocked on the idempotency key binding the calling principal: `identity_suffix`
@@ -231,7 +230,7 @@ two names and four. `MRTR.4`, `MRTR.5`, `MRTR.6` and `MRTR.9` have all left the 
 as they were met, which is why what was once one span is now two single names and a pair.
 Read the names as a key to which cluster a row belongs to, never as its size. The counts here
 are derived from the ledger by prefix, not transcribed from a previous revision of this file:
-every blocking row lands in exactly one cluster and the eight totals — the seven letters plus residue — sum to the ledger's, which
+every blocking row lands in exactly one cluster and the cluster totals sum to the ledger's, which
 is the only reason this table can be trusted to be complete. The last revision covered 37 of
 the blocking rows and read as though it covered all of them.
 
@@ -244,8 +243,13 @@ the blocking rows and read as though it covered all of them.
 - `MIK-7214.HEADER.9b` — the same absent branch: header values are not derived from the
   negotiated envelope either. Two ledger rows, one workstream — the evidence for 9a and 9b is
   byte-identical, which is why the residue above counts them once.
-- `MIK-7246.CONFIRM.2` — the confirmation path is `elicitation/create` over SSE, a different
-  mechanism from the one the criterion names.
+- `MIK-7246.CONFIRM.2` — closed on 2026-09-10 and the last row to leave the residue, which is
+  now empty. The finding above stands as history: the confirmation path is `elicitation/create`
+  over SSE, a different mechanism from the one the criterion names. It closed measured rather
+  than argued — both halves of the continuation path were already committed, and the tests that
+  read them are green at HEAD `482746c1`. `HEADER.9a`/`9b`, `CONTROL.4`, `NFR.SEC.1`,
+  `NFR.PERF.4`, `MIK-6865.SCHEMA.1c` and `MIK-7215.CONTROL.3b` all left the residue the same
+  way, as their evidence landed.
 - `NFR.SEC.1` — closed on 2026-09-09 and no longer residue. All 15 controls enumerated in
   `docs/requirements/nfr-sec1-control-inventory.md` now carry a refusal test, which is what
   `each` asks for: row 5's is `control_5_a_modern_caller_whose_circuit_is_open_is_refused`

@@ -254,9 +254,9 @@ The row's PASS rests on `ac_confirm_1_a_modern_destructive_call_with_nobody_to_a
 modern admin call. Four facts at `HEAD` say that assertion can no longer hold:
 
 1. The era split is **committed**, not in-flight. `HEAD`'s `handlers.rs` holds two
-   `ConfirmationChannel::InBand` sites and two `Elicit` sites, and the file has no uncommitted
-   changes at all (V: `git show HEAD:...handlers.rs | rg -c`, `git status --short`). A modern
-   request takes `InBand`.
+   `ConfirmationChannel::InBand` sites and two `Elicit` sites (V: re-run 2026-09-10,
+   `git show HEAD:src/gateway/router/handlers.rs | rg -n 'InBand|Elicit'`). Read HEAD, not the
+   worktree: concurrent lanes hold hunks in this file. A modern request takes `InBand`.
 2. `state.continuation` is `Arc<ContinuationState>`, not an `Option` (`router/mod.rs:95`), so
    the channel always carries one.
 3. `ContinuationState::new()` configures a working keyring — `Keyring::new(&[(1, key)])` with
@@ -278,9 +278,14 @@ of 4157 (two failures) is consistent with this but does not identify which tests
 
 **Consequence for CONFIRM.2, this lane's own row.** The same four facts predict that the ask
 half is already live at `HEAD`, which is what
-`tests/mik_7246_confirm2_acs.rs::modern_destructive_call_asks_in_band` asserts. That row may be
-closer to met than `ABSENT` records. It stays `ABSENT`: an unmeasured row is not a met row, and
-the second test in that file (the decline branch) additionally needs the redemption wired,
-which is the 141 uncommitted lines this lane is holding under ruling (c).
+`tests/mik_7246_confirm2_acs.rs::modern_destructive_call_asks_in_band` asserts.
+
+Superseded 2026-09-10: the redemption half is committed. `redeem_retry` under
+`ContinuationPurpose::GatewayConfirmation` is at `src/gateway/meta_mcp/mod.rs:2101-2103,2167`
+in `HEAD`, with the `confirmed_in_band` guard at `:1709,1730` (V:
+`git show HEAD:src/gateway/meta_mcp/mod.rs | rg -n 'GatewayConfirmation|redeem_retry'`). The
+"141 uncommitted lines" this entry described are no longer uncommitted, so the decline branch
+no longer waits on them. The row moved `ABSENT` -> `PARTIAL`; what it now waits on is a test
+run, not a missing mechanism.
 
 Everything in this entry is source reading. Nothing was compiled or run; the disk floor stands.
