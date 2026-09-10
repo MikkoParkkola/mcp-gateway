@@ -136,7 +136,10 @@ all visible at source:
 **So the gateway mints, and translates back.** For each outbound backend request
 that carries progress, the gateway mints a fresh token in a namespace of its own
 — a non-numeric string, `gw-<uuid>` — registers **that**, and holds one entry
-mapping minted → the caller's own token for the life of the call. On capture the
+for the life of the call. **The entry is `minted → (the caller's token, the
+request's bounded sender)`** — both halves are needed at capture, one to
+translate the token back and one to deliver it; an entry holding only the token
+would leave §3 with nothing to send on. On capture the
 minted token is translated back before the notification reaches the caller, so
 **the token the client sees is byte-identical to the one it sent**. That
 identity is the property option (i) existed to protect, and it survives intact;
@@ -317,8 +320,10 @@ the unbounded buffer.
 share a task, or they share a task-local and the sink stops being per-request.
 This is a premise the whole design rests on and the spawn sweep does not check
 — the sweep asks whether work *moves* tasks, not whether two requests *start*
-on one. It holds today because axum drives each connection's request future
-independently, and it is listed so a future sweep knows both halves to check.
+on one. It is *believed* to hold because axum drives each connection's request future
+independently, but **that mechanism was not traced to a conclusion in this
+session: unverified.** It is listed so a future sweep knows both halves to
+check, and so the premise is falsifiable rather than assumed.
 
 *No spawn between the sink scope and the transport read.* A `tokio::spawn`
 there silently empties the sink, and no unit test built on a hand-made channel
@@ -359,9 +364,13 @@ gateway already negotiates — it sets exactly this on its own outbound requests
 at `src/transport/http/mod.rs:911,915`), **and** the request declared something
 request-scoped in `_meta` (a `logLevel`, or a progress token). Otherwise the
 response is byte-identical to today's and captured notifications are dropped
-with a debug line. This is also the shape the test plan already states: row S-01 is *"POST
+with a debug line. This **narrows** the test plan rather than restating it. Row S-01 says *"POST
 `tools/call` honours `Accept`: JSON when no stream offered, SSE when
-offered"* (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:57`).
+offered"* (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:57`)
+— negotiation on `Accept` alone, with nothing said about `_meta`. The extra
+condition is deliberate: an `Accept`-yes / `_meta`-nothing request would get a
+stream that can never carry anything, so it keeps today's JSON body instead.
+Anyone reading S-01 literally should read this paragraph as the amendment.
 It matches the posture the repo already takes on optional
 features — *"payloads stay byte-identical with the feature off"*
 (`src/gateway/meta_mcp/invoke.rs:991-992`).
@@ -415,8 +424,10 @@ task-local has no such failure mode because its destructor is the request's.
 
 ## Acceptance
 
-Thirteen rows. Eleven must fail against the current tree; rows 2 and 9 are
-marked and pass today.
+Thirteen rows. Ten must fail against the current tree; rows 2, 7 and 9 are
+marked and pass today. The three that pass are controls, and each says so in
+its own text: a row that asserts only an absence cannot distinguish a correct
+implementation from an empty one, so it is labelled rather than counted.
 
 1. **Emitter exists.** A successful `tools/call` over HTTP with `Accept:
    text/event-stream` and `_meta` `logLevel: "info"` receives the `"tool
@@ -456,7 +467,8 @@ marked and pass today.
    `notifications/progress` reaches that call **carrying the client's original
    token, byte-identical**. Fails today twice over: no code outside
    `src/transport` mentions a progress token at all, and nothing mints.
-7. **Negative control — no invented owner, through the real path.** A backend
+7. **Negative control — no invented owner, through the real path.** *Passes
+   today, like row 2, and for the same reason: it asserts an absence.* A backend
    `notifications/progress` carrying a token no caller supplied reaches no
    caller's stream and fails no call. The unit-level form is already green
    (`src/transport/stdio.rs:1148`); this row runs it end to end through
@@ -475,10 +487,13 @@ marked and pass today.
    *Regression guard: this row passes today and must keep passing; it is listed
    because the easiest way to make rows 1-8 green is to publish into the
    subscription registry, which this ADR forbids.*
-10. **Negotiation prerequisite.** A POST `tools/call` returns JSON when no
-    stream is offered and an event-stream when one is — test-plan row S-01
-    (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:57`).
-    This is the row that pins the default staying byte-identical.
+10. **Negotiation prerequisite, as narrowed.** A POST `tools/call` returns JSON
+    when no stream is offered, and an event-stream when one is offered **and
+    the request declared something request-scoped in `_meta`** — test-plan row
+    S-01 (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:57`)
+    with the narrowing above. The third case is the one that matters here:
+    `Accept` offers a stream, `_meta` declares nothing, and the body is still
+    byte-identical JSON. This is the row that pins the default not changing.
 11. **Late notification.** A notification arriving after the response has been
     written is dropped and **the drop counter advances by exactly one**, and it
     is not delivered to whatever occupies the slot next — test-plan row S-04
@@ -486,11 +501,15 @@ marked and pass today.
     the sink is ever hoisted out of the task.
 12. **A reused token does not cross requests.** Call A supplies token `t` and
     completes. Call B then supplies the same `t`. A's backend emits a late
-    `notifications/progress` for A's *minted* token. It reaches no one, and in
-    particular reaches no part of B. Fails today by construction: with the
-    caller's token as the key, A's late notification lands in B's buffer.
-13. **Registration dies with the request.** A `tools/call` over stdio that is
-    cancelled mid-flight leaves no entry in `captured_notifications`, and a
-    subsequent backend notification for its minted token is dropped rather than
-    accumulated. This is the row that fails if the cleanup guard in §2 is
-    omitted and only the sink is dropped.
+    `notifications/progress` for A's *minted* token — it reaches no one, and in
+    particular no part of B — **and B still receives its own
+    `notifications/progress`, carrying `t`**. Both halves belong to one test:
+    the positive half is what stops the row passing on a tree that delivers
+    nothing to anyone, and the negative half is what a caller-keyed map fails.
+13. **Registration dies with the request.** For a `tools/call` over stdio, the
+    entry for its minted token is **present in `captured_notifications` while
+    the call is in flight** and **absent once the call is cancelled**, and a
+    backend notification arriving for that token afterwards is dropped rather
+    than accumulated. The before-and-after pair is the row; an absence-only
+    assertion passes on today's never-populated map. This is what fails if the
+    cleanup guard in §2 is omitted and only the sink is dropped.
