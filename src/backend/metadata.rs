@@ -154,6 +154,13 @@ impl Backend {
     /// retry-safe tools. The permitted set must be captured before
     /// `normalize_tool_annotations` runs, which is why the caller passes the
     /// return value of `prepare_tool_metadata` rather than the tools.
+    // The direct-route caller in `gateway::router::backend_handlers` is not on
+    // this branch yet. `expect` rather than `allow` so the gate errors the
+    // moment that caller lands and this marker must come off.
+    #[expect(
+        dead_code,
+        reason = "direct-route caller lands with the resend plumbing"
+    )]
     pub(crate) fn set_resend_permitted(&self, permitted: std::collections::HashSet<String>) {
         *self.resend_permitted.write() = permitted;
     }
@@ -172,6 +179,10 @@ impl Backend {
     /// carrying an accessor nothing calls.
     #[cfg(test)]
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "direct-route caller lands with the resend plumbing"
+    )]
     pub(crate) fn resend_permitted_snapshot(&self) -> std::collections::HashSet<String> {
         self.resend_permitted.read().clone()
     }
