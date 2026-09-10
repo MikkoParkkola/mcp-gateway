@@ -513,3 +513,178 @@ implementation from an empty one, so it is labelled rather than counted.
     than accumulated. The before-and-after pair is the row; an absence-only
     assertion passes on today's never-populated map. This is what fails if the
     cleanup guard in §2 is omitted and only the sink is dropped.
+
+## Amendment 1 — the client-facing stdio sink, 2026-09-10
+
+- **Status**: Proposed. Amends §2, §3 and the Acceptance list. The reviewed
+  body above is not reopened; only what this section names changes.
+- **Reviewed**: `gpt-review` and `kimi-review`, 2026-09-10, both
+  SHIP-WITH-FIXES on the first draft. Every finding is answered in place; the
+  one that changed the decision is answered in *"What S-03 can and cannot
+  discriminate over stdio"*, below.
+
+### The gap
+
+§2's correlation table has a `stdio` row and §3 has a `stdio` bullet, but both
+describe the **backend-facing** leg — the subprocess transport
+(`src/transport/stdio.rs`), where a notification *arrives from* a backend. The
+**client-facing** leg — how it then reaches an AI client that is itself
+connected to the gateway over stdin/stdout — is named nowhere in this ADR.
+Every delivery paragraph, *"The response shape, and why the default does not
+change"* included, describes an SSE body over HTTP.
+
+The two legs are independent, and this amendment governs only the second:
+
+| Client ↔ gateway | Gateway ↔ backend | Governed by |
+|---|---|---|
+| HTTP | HTTP | ADR body, unchanged |
+| HTTP | stdio subprocess | ADR body, unchanged — never enters `run_stdio` |
+| **stdio** | HTTP | **this amendment** |
+| **stdio** | stdio subprocess | **this amendment**, plus §2's minted token |
+
+The client-facing leg is `Server::run_stdio` (`src/gateway/server/mod.rs`,
+currently `:1566`). Verified by reading it: the loop reads one line
+(`reader.next_line()`), dispatches it (`dispatch_single_with_sink`, or
+`dispatch_batch_with_sink` for an array), and only then writes, through
+`Self::write_response`, to a `tokio::io::Stdout` owned by the loop frame and
+exclusively borrowed for the duration of each write.
+
+### Two consequences, both fatal to the PR bar as the ADR stands
+
+**(i) The sink has no writer, so Acceptance row 4 cannot pass over stdio.**
+Row 4 requires the assertion *"repeated over stdio and over HTTP"*, with a
+fixture that *"releases the result only after the client has read the
+notification"*. `write_response` is reached only after dispatch has returned,
+and nothing else can write to that stdout, because the loop holds it. A
+notification raised during dispatch therefore cannot precede the response.
+Row 4's own words for this shape are *"a design that buffers and flushes at
+the end deadlocks here instead of passing"*, and that is the outcome.
+
+**(ii) The loop is sequential, so no second call can be in flight.**
+Test-plan row S-03 requires *"two concurrent calls on one connection, both
+proven in flight … for both notification methods and both transports"*
+(`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:59`).
+The loop awaits each dispatch to completion before reading the next line.
+
+Both are properties of the client-facing loop alone. Neither touches the
+backend-facing discard sites the ADR body already names, and neither affects
+an HTTP client calling a stdio backend.
+
+### Decision
+
+Both are fixed rather than recorded as limitations. A `MUST` with an honest
+note explaining why it is unmet is still unmet.
+
+**1. A bounded per-request channel, drained by a writer task.** The loop's
+`tokio::io::Stdout` becomes an `Arc<tokio::sync::Mutex<Stdout>>` — the async
+mutex specifically, because the guard is held across an `.await` inside a
+spawned task. One clone stays with the loop; one reaches the §1 sink.
+
+The sink does **not** write inline. Pushing a notification is a non-blocking
+`try_send` into a channel of capacity `REQUEST_NOTIFICATION_DEPTH` (64); on a
+full channel the notification is dropped and counted, which is §5's existing
+overflow policy unchanged, and is why *"the bound of 64"* still means what
+row 8 says it means. A per-request writer task drains that channel to the
+shared stdout, one newline-delimited JSON-RPC notification object per line,
+each written and flushed under a single lock acquisition so lines never
+interleave byte-wise. No SSE and no envelope: over stdio a message is a line,
+and lines are already the protocol.
+
+Dispatch never awaits the client. When dispatch returns, the loop drops the
+sender, awaits the writer task, then writes the response line under the same
+mutex — so every notification the sink accepted is on the wire before the
+result, and (i) is closed. A wedged client stalls only its own call's
+response, which it was not reading anyway.
+
+**2. Concurrent dispatch.** Each request is spawned onto a `JoinSet` instead of
+being awaited inline, with completed tasks reaped by `join_next` on each pass
+so finished work is not retained for the life of the session, and a cap on
+concurrent in-flight requests so a client cannot spawn without bound. At EOF
+the set is drained under `self.config.server.shutdown_timeout` — the same
+bound the HTTP path already applies to its drain — and aborted if it expires,
+so shutdown latency does not hinge on the slowest backend call. Entries inside
+a **batch** line keep today's inline, ordered gathering: a batch is one line in
+and one line out, and splitting it would change the batch response contract,
+which this criterion does not ask for. This closes (ii).
+
+### What S-03 can and cannot discriminate over stdio
+
+Both reviewers found the first draft's *"this closes (ii)"* overclaimed, from
+opposite directions, and they are right. Recorded plainly rather than fixed by
+wording:
+
+Over HTTP the response body **is** the per-request stream, so *"reaches the
+provoking call's stream and no other"* is a real discriminator. Over
+client-facing stdio there is one client and one stdout. There is no other
+*caller* to leak to, so the leak S-03 names cannot occur; the failure that can
+occur is **misattribution between two in-flight calls of the same client**.
+Whether S-03 detects it depends on the notification method:
+
+- **`notifications/progress` — discriminating.** It carries the client's own
+  progress token back byte-identically (row 6). With A and B both in flight,
+  A's token present and B's absent is a genuine failure detector, and a
+  gateway that mixed the two fails it.
+- **`notifications/message` — not discriminating, and cannot be made so here.**
+  MCP defines no per-request relation on a logging notification, and this
+  repository has none: verified this session, `rg -n` over `src/protocol/`
+  returns no `relatedRequestId` and no `progressToken`. A bare
+  `notifications/message` line on a shared stdout carries nothing a client
+  could attribute to one of its two calls. Inventing a `_meta` key would be an
+  unrequested protocol extension of exactly the kind this ADR already declines
+  for gateway-originated progress.
+
+**Therefore, stated as a limitation and not as a pass: the
+`notifications/message` half of S-03 is UNMET over client-facing stdio.** The
+mechanism is the absence of a linkage field in the protocol, not a gap in the
+implementation. Over stdio that half asserts liveness and per-request level
+filtering — real properties, and the ones §4 cares about — but not isolation.
+The discriminating instance of S-03 for `notifications/message` is **HTTP
+only**, and the test must be named and commented so that no later reader
+mistakes the stdio instance for evidence of isolation. S-02 is unaffected: it
+asserts arrival before the result, which is discriminating on both transports.
+
+### Cost
+
+The first draft claimed the change was *"confined to `run_stdio`,
+`write_response`, and the sink's writer field"*. That was wrong, and both
+reviewers caught it. Traced, the surface is:
+
+- `dispatch_single_with_sink` takes `&Arc<MetaMcp>`, `&Arc<ToolPolicy>` and
+  `&Arc<MtlsPolicy>` (`src/gateway/server/mod.rs:1832-1835`), so spawning
+  costs three `Arc::clone`s and no ownership rework. That part held.
+- `protocol_telemetry_sink` is threaded as `&mut` (`:1628`, `:1743`, `:2038`)
+  and did not. Putting it behind a lock held across dispatch would re-serialise
+  exactly what step 2 parallelises. It does not need to be: its only use inside
+  dispatch is `record` plus `persist_global` at the **top** of the function
+  (`:1863-1884`), before any tool execution. The observation is therefore
+  hoisted into the loop and recorded before the spawn, and the spawned task
+  never touches the sink. That removes the parameter from
+  `dispatch_single_with_sink` and from `dispatch_batch_with_sink`'s forwarding
+  at `:2038`, and touches the two in-file test call sites.
+
+So: `run_stdio`, `write_response`, the two dispatch helpers' signatures, their
+test call sites, and the sink's writer field. Larger than the first draft said,
+still confined to one file plus §1's sink type.
+
+### Correction to Acceptance row 1
+
+Row 1 cites the `"tool invoked"` emission site as `invoke.rs:1502`. It is
+**`src/gateway/meta_mcp/invoke.rs:1518`** as of this amendment, verified by
+reading the file — the ADR's reference has drifted sixteen lines. The refusal
+site at `invoke.rs:1330` and the sink scope at `invoke.rs:981`, inside
+`invoke_tool` (`:972`), are correct as written. Line numbers throughout this
+ADR are perishable in the same way; where this amendment cites one it names
+the symbol beside it, and a reader should trust the symbol.
+
+### What does not change
+
+The HTTP leg in whole: negotiation on `Accept` plus `_meta`, the SSE response
+shape, and the byte-identical default when neither is present. §2's websocket
+exclusion. The out-of-scope list. §5's bound of 64 and its drop-and-count
+overflow policy. Acceptance rows 2, 7 and 9 remain controls.
+
+Rows 10-13 are **not** extended to the client-facing stdio leg by this
+amendment. Row 13 in particular assumes a cancellation path, and the stdio
+dispatcher has none — it does not act on `notifications/cancelled`. Building
+one is a separate increment; claiming row 13 over stdio without it would be
+the precise failure this amendment exists to avoid.
