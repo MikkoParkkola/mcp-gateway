@@ -873,3 +873,34 @@ running and regain 14G with no build finishing is not a machine whose free space
 is a stable input. Treat the headroom as borrowed. `target/debug/incremental` was
 7.2Gi at last measurement and an incremental run spends back into exactly this
 budget.
+
+### J-update: the twelve rest on tree membership, not on dates
+
+The lane that produced the union re-derived its own denominator and confirmed 90
+CI runs, 46 success and 44 failure, earliest 2026-09-01 09:02 — its sample ran
+09-05 23:15 to 09-09 18:27 and missed 56 runs.
+
+More usefully, it replaced the survival argument above with a stronger one. This
+document justified the twelve by *when* the files were added, which is an
+inference: a file can be added, deleted and re-added, and the dates would still
+read the same. The lane instead asked the tree directly at the last green commit:
+
+```
+git cat-file -e 5cb4f4e9:tests/<f>.rs   ->   present=0  absent=12
+```
+
+None of the twelve existed at `5cb4f4e9`, and the check discriminates rather than
+always answering absent — `mik_7272_task_1_acs` comes back present. So the twelve
+stand on all 90 runs, not on the sampled 34, and they stand on membership rather
+than on chronology. Prefer that formulation to the dated one.
+
+**Two claims withdrawn by their author, recorded here because both appear above.**
+"No red run has ever executed more than 33 targets" and "25 of 34 runs scored
+`ran=0`" are sound about the four-day sample and unverified about the branch: in
+the unsampled 09-01 to 09-05 stretch the tree held roughly 66 targets and a red
+run there could have aborted later than 33. Neither claim can touch the twelve.
+Both are being closed rather than scoped — a full 90-run scan is in flight,
+classifying every run by the three shapes in the table above, which will replace
+the sampled counts with branch-complete ones and answer the question section J
+leaves open: whether the compile-failure shape, the one no flag rescues, is rare
+or routine.
