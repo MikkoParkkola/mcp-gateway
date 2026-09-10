@@ -32,6 +32,12 @@ const SERVER_SELECTS: &str = "2025-06-18";
 /// A version no gateway release speaks.
 const UNSUPPORTED: &str = "1999-01-01";
 
+/// A third supported version, older than both the gateway's proposal and the
+/// one a negotiation retry proposes. A server that answers the retry with this
+/// has made a selection nobody proposed, which is exactly the case a retry path
+/// that reads the rejection instead of the retry gets wrong.
+const SERVER_DOWNGRADES_TO: &str = "2024-11-05";
+
 /// Guard against a silently vacuous test after a `PROTOCOL_VERSION` bump.
 fn differs_from_our_proposal(version: &'static str) -> &'static str {
     assert_ne!(
@@ -49,6 +55,13 @@ enum Selects {
     /// Reject anything but `accepts` at the HTTP layer, the way several
     /// deployed servers do, listing the versions it speaks in the body.
     RejectingWith { accepts: &'static str },
+    /// Reject anything but `accepts` in band, as a JSON-RPC error on a 200,
+    /// then answer the retry by selecting `then_selects` -- which is not what
+    /// the retry proposed.
+    RejectingInBand {
+        accepts: &'static str,
+        then_selects: &'static str,
+    },
 }
 
 struct Mock {
@@ -83,6 +96,23 @@ async fn mcp_handler(
         let selected = match selects {
             Selects::Version(version) => version,
             Selects::RejectingWith { accepts } if proposed == accepts => accepts,
+            Selects::RejectingInBand {
+                accepts,
+                then_selects,
+            } if proposed == accepts => then_selects,
+            Selects::RejectingInBand { accepts, .. } => {
+                return Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32000,
+                        "message": format!(
+                            "Unsupported protocol version. Supported versions: {accepts}"
+                        )
+                    }
+                }))
+                .into_response();
+            }
             Selects::RejectingWith { accepts } => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -272,4 +302,37 @@ async fn http_status_rejection_negotiates_a_supported_version() {
         "the first initialize must have been rejected, or negotiation was never exercised"
     );
     assert_every_request_announces(&mock, accepts);
+}
+
+/// NEG.1 on the in-band rejection path — the retry is the handshake that
+/// succeeded, so the selection it carries governs later requests.
+///
+/// Reading the selection off the rejection instead leaves the transport
+/// announcing what the retry *proposed*, which is the same wrong-version header
+/// this change exists to remove, one negotiation later.
+#[tokio::test]
+async fn a_selection_made_on_the_negotiation_retry_governs_later_requests() {
+    let accepts = differs_from_our_proposal(SERVER_SELECTS);
+    let then_selects = differs_from_our_proposal(SERVER_DOWNGRADES_TO);
+    assert_ne!(
+        accepts, then_selects,
+        "the server must select something other than what the retry proposed"
+    );
+    let (url, mock) = start_mock(Selects::RejectingInBand {
+        accepts,
+        then_selects,
+    })
+    .await;
+    let backend = backend_for(&url);
+
+    backend.get_tools().await.expect("tools/list");
+
+    assert!(
+        mock.lock()
+            .expect("mock mutex poisoned")
+            .initialize_attempts
+            >= 2,
+        "the backend must have been made to negotiate, or the test proves nothing"
+    );
+    assert_every_request_announces(&mock, then_selects);
 }

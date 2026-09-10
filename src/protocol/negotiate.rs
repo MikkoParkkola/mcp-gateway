@@ -22,7 +22,12 @@ pub fn parse_supported_versions_from_error(error_msg: &str) -> Option<Vec<String
 
     for pattern in &patterns {
         if let Some(start) = lower.find(pattern) {
-            let rest = &error_msg[start + pattern.len()..];
+            // Sliced out of `lower`, not `error_msg`: `to_lowercase` is not
+            // length-preserving (`\u{130}` grows by a byte), so an offset found
+            // in one string can land inside a character of the other and panic.
+            // Nothing is lost -- only ASCII digits and hyphens survive the
+            // filter below, and those are unchanged by lowercasing.
+            let rest = &lower[start + pattern.len()..];
 
             // Extract until closing paren or end of string
             let rest = rest.find(')').map_or(rest, |end| &rest[..end]);
@@ -60,7 +65,8 @@ pub fn parse_supported_versions_from_error(error_msg: &str) -> Option<Vec<String
 /// `SUPPORTED_VERSIONS`: a backend naming a version this gateway does not speak
 /// is information the operator needs, while a backend naming anything that is
 /// not a version at all is text nobody may repeat.
-fn is_version_token(token: &str) -> bool {
+#[must_use]
+pub fn is_version_token(token: &str) -> bool {
     token.len() == 10
         && token.bytes().enumerate().all(|(index, byte)| match index {
             4 | 7 => byte == b'-',
@@ -148,6 +154,32 @@ mod tests {
     fn a_marker_with_no_version_yields_nothing() {
         let msg = "Gateway timeout. supported: please contact your administrator";
         assert!(parse_supported_versions_from_error(msg).is_none());
+    }
+
+    /// The body GH #517 reported, byte for byte. Every signal the transport
+    /// gates its retry on has to fire on the payload that was actually
+    /// observed, not on an approximation of it.
+    #[test]
+    fn the_body_reported_in_gh_517_negotiates() {
+        let msg = r#"{"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)"},"id":null}"#;
+        assert!(is_version_mismatch_error(msg));
+        let versions = parse_supported_versions_from_error(msg).expect("a version list");
+        assert_eq!(
+            versions,
+            vec!["2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
+        );
+        assert_eq!(negotiate_best_version(&versions), Some("2025-06-18"));
+    }
+
+    /// `to_lowercase` is not length-preserving, so a marker found in the
+    /// lowercased body is at a different offset in the original -- and slicing
+    /// the original there lands inside a character. A backend must not be able
+    /// to panic the gateway with its rejection text.
+    #[test]
+    fn a_body_that_changes_length_when_lowercased_does_not_panic() {
+        let msg = "\u{130} Unsupported protocol version. supported: 2025-06-18, \u{e9}";
+        let versions = parse_supported_versions_from_error(msg).expect("a version list");
+        assert_eq!(versions, vec!["2025-06-18"]);
     }
 
     #[test]

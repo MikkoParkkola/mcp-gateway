@@ -30,8 +30,8 @@ use crate::protocol::era::Era;
 use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
-    RequestId, SUPPORTED_VERSIONS, is_version_mismatch_error, negotiate_best_version,
-    parse_supported_versions_from_error,
+    RequestId, SUPPORTED_VERSIONS, is_version_mismatch_error, is_version_token,
+    negotiate_best_version, parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
     SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
@@ -721,6 +721,13 @@ impl HttpTransport {
         // nothing else the gateway may repeat. Negotiate from it and retry
         // once, which is the same move the JSON-RPC-error branch below makes
         // for backends that reject in band.
+        // Both rejection branches write `protocol_version` before their retry,
+        // because the outbound header is built from it. A handshake that then
+        // fails must not leave the transport claiming a version no backend ever
+        // agreed to, so the negotiation runs inside one block whose single
+        // error exit restores what was there before.
+        let previous_version = self.protocol_version.read().clone();
+        let negotiated: Result<JsonRpcResponse> = async {
         let response = match self.send_request(&request).await {
             Ok(response) => response,
             Err(Error::ProtocolVersionRejected { supported }) => {
@@ -744,83 +751,85 @@ impl HttpTransport {
                 if let Some(params) = retry.params.as_mut() {
                     params["protocolVersion"] = Value::String(negotiated.to_string());
                 }
-                // Set before the send because the header is built from it, and
-                // restored if the retry fails: a transport that never completed
-                // a handshake must not go on claiming a version.
-                let previous = self.protocol_version.read().clone();
+                // Set before the send because the outbound header is built
+                // from it; the block's error exit restores it if this fails.
                 *self.protocol_version.write() = Some(negotiated.to_string());
-                match self.send_request(&retry).await {
-                    Ok(response) => response,
-                    Err(error) => {
-                        *self.protocol_version.write() = previous;
-                        return Err(error);
-                    }
-                }
+                self.send_request(&retry).await?
             }
             Err(other) => return Err(other),
         };
 
         // Check for protocol version mismatch error
-        if let Some(ref error) = response.error {
-            let error_msg = &error.message;
-
-            // If server rejected our protocol version, try to negotiate
-            if is_version_mismatch_error(error_msg) {
-                // Try to extract supported versions from error message
-                if let Some(negotiated_version) = self.negotiate_protocol_version(error_msg).await {
-                    warn!(
-                        url = %sanitize_url_for_diagnostics(&self.base_url),
-                        rejected_version = %version,
-                        negotiated_version = %negotiated_version,
-                        "Server rejected protocol version, retrying with negotiated version"
-                    );
-
-                    // Update our protocol version
-                    *self.protocol_version.write() = Some(negotiated_version.clone());
-
-                    // Retry initialize with new version
-                    let retry_request = JsonRpcRequest {
-                        jsonrpc: "2.0".to_string(),
-                        id: RequestId::Number(0),
-                        method: "initialize".to_string(),
-                        params: Some(serde_json::json!({
-                            "protocolVersion": negotiated_version,
-                            "capabilities": {},
-                            "clientInfo": {
-                                "name": "mcp-gateway",
-                                "version": env!("CARGO_PKG_VERSION")
-                            }
-                        })),
-                    };
-
-                    let retry_response = self.send_request(&retry_request).await?;
-
-                    if let Some(err) = &retry_response.error {
-                        return Err(Error::Protocol(format!(
-                            "Initialize failed with negotiated version {}: backend error code {}",
-                            negotiated_version, err.code
-                        )));
-                    }
-
-                    // Success with negotiated version
-                    info!(url = %sanitize_url_for_diagnostics(&self.base_url), version = %negotiated_version, "Successfully negotiated protocol version");
-                } else {
-                    return Err(Error::Protocol(format!(
-                        // Code only. `error_msg` is the backend's own text and may
-                        // quote back a credential the gateway sent it.
-                        "Protocol version negotiation failed: backend error code {}",
-                        error.code
-                    )));
-                }
-            } else {
-                // Code only. The message and data are backend-controlled and may
-                // quote back credentials the gateway sent.
-                return Err(Error::Protocol(format!(
-                    "Initialize failed: backend error code {}",
-                    error.code
-                )));
-            }
+        let Some(error) = response.error.as_ref() else {
+            return Ok(response);
+        };
+        let error_msg = &error.message;
+        if !is_version_mismatch_error(error_msg) {
+            // Code only. The message and data are backend-controlled and may
+            // quote back credentials the gateway sent.
+            return Err(Error::Protocol(format!(
+                "Initialize failed: backend error code {}",
+                error.code
+            )));
         }
+        let Some(negotiated_version) = self.negotiate_protocol_version(error_msg).await else {
+            return Err(Error::Protocol(format!(
+                // Code only. `error_msg` is the backend's own text and may
+                // quote back a credential the gateway sent it.
+                "Protocol version negotiation failed: backend error code {}",
+                error.code
+            )));
+        };
+        warn!(
+            url = %sanitize_url_for_diagnostics(&self.base_url),
+            rejected_version = %version,
+            negotiated_version = %negotiated_version,
+            "Server rejected protocol version, retrying with negotiated version"
+        );
+
+        // Set before the send because the outbound header is built from it;
+        // the block's error exit restores it if the retry fails.
+        *self.protocol_version.write() = Some(negotiated_version.clone());
+
+        // Retry initialize with new version
+        let retry_request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::Number(0),
+            method: "initialize".to_string(),
+            params: Some(serde_json::json!({
+                "protocolVersion": negotiated_version,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "mcp-gateway",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            })),
+        };
+
+        let retry_response = self.send_request(&retry_request).await?;
+
+        if let Some(err) = &retry_response.error {
+            return Err(Error::Protocol(format!(
+                "Initialize failed with negotiated version {}: backend error code {}",
+                negotiated_version, err.code
+            )));
+        }
+
+        info!(url = %sanitize_url_for_diagnostics(&self.base_url), version = %negotiated_version, "Successfully negotiated protocol version");
+        // The retry is the handshake that succeeded, so it carries the
+        // selection to adopt. Reading the rejection instead would leave the
+        // server's choice on the retry neither validated nor adopted.
+        Ok(retry_response)
+        }
+        .await;
+
+        let response = match negotiated {
+            Ok(response) => response,
+            Err(error) => {
+                *self.protocol_version.write() = previous_version;
+                return Err(error);
+            }
+        };
 
         // The client proposes and the server selects. Whatever it selected
         // governs the `MCP-Protocol-Version` header from here on; without this
@@ -834,8 +843,17 @@ impl HttpTransport {
             .and_then(Value::as_str)
         {
             if !SUPPORTED_VERSIONS.contains(&selected) {
+                // `selected` is backend-controlled text that failed the
+                // membership check, so it is named only when it is shaped like
+                // a version: a backend must not be able to echo a credential
+                // the gateway sent it into this diagnostic.
+                let named = if is_version_token(selected) {
+                    selected
+                } else {
+                    "a value that is not a protocol version"
+                };
                 return Err(Error::Protocol(format!(
-                    "Backend selected protocol version {selected}, which this gateway does not speak; it speaks: {}",
+                    "Backend selected protocol version {named}, which this gateway does not speak; it speaks: {}",
                     SUPPORTED_VERSIONS.join(", ")
                 )));
             }
