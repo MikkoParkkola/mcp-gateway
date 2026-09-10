@@ -104,3 +104,139 @@ release's own no-unreviewed-code requirement and has been withdrawn — see B3.)
 
 Is this the fastest correct order, or does it serialise something that could run
 concurrently? Attack the sequencing, not the prose.
+
+---
+
+# Re-measured 2026-09-10 — what is left, and in what order
+
+Everything in this section was measured this session; the command that produced each
+number is inline. The section above is the 2026-09-08 record and is left intact — its
+counts (21 blocking, a clippy red in `tests/common/mod.rs`, an untriaged CodeQL run) have
+all been overtaken.
+
+## The shape has changed: the gate is no longer the constraint
+
+| fact | evidence |
+|---|---|
+| criteria gate passes | `python3 scripts/release/count-release-criteria.py --check` exits 0: "146 criteria, 183 rows, 181 met or non-blocking, 2 blocking" |
+| 2 blocking rows, both owned | `--blocking` prints exactly `MIK-7272.SUB.2b` and `MIK-7272.SUB.4` |
+| the release PR is #473 into `main` | `gh pr list --base main` — the only non-dependabot PR targeting `main` |
+| 16 further PRs are stacked behind it | every other open PR has `baseRefName: fix/mrtr2-continuation-handle` |
+| #473 is MERGEABLE but BLOCKED | `gh pr view 473 --json mergeable,mergeStateStatus` |
+| two red checks on #473 | `Tests` (run `34488524723`) and `CodeQL` (check run `102909138871`) |
+
+So the release is gated on four things, not on the criteria ledger: two red checks, one
+approving human review, and the two remaining blocking rows.
+
+## R1 — `Tests` is red for two independent reasons, one already fixed
+
+Run `34488524723` on head `482746c1` fails `cargo test --all-features --no-fail-fast`
+in two targets:
+
+**R1a — `mik_7212_mrtr_component_acs`, 3 passed / 16 failed. FIXED, unpushed.**
+`14744d72` on `fix/mrtr2-continuation-handle` adds one condition to the Legacy-era bridge
+guard in `src/gateway/meta_mcp/invoke.rs` so that an interim carrying no questions is not
+treated as an exchange to bridge. Verified independently, not taken from the commit
+message: a detached worktree at `14744d72` with a scratch `CARGO_TARGET_DIR` runs
+`cargo test --test mik_7212_mrtr_component_acs` to **19 passed / 0 failed, exit 0**. The
+branch tip is one commit ahead of what CI last saw, which is the whole of this failure.
+
+**R1b — `mik_7215_acs`, 24 passed / 2 failed. Fix in flight, uncommitted.**
+`http::ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused` and
+`http::ac_confirm_1a_a_refusal_is_excluded_from_both_accounting_arms` assert
+`/error/code == -32001`. The gateway returns `resultType: "input_required"` carrying
+`inputRequests["io.mcp-gateway.destructive-confirmation.v1"]`. Reproduced at `14744d72`
+on a clean tree, so it is not another lane's dirty state.
+
+This is not a regression. It is the contradiction `confirm2-blocker.md` predicted in
+advance: CONFIRM.2's in-band ask and CONFIRM.1a's HTTP refusal assert opposite outcomes
+for the same request, and CONFIRM.2 landing made the ask the real one. The `CONFIRM.1a`
+ledger row already carries the resolution — the refusal is conditional, it binds where
+confirmation genuinely cannot be obtained, and it stays witnessed by
+`ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm`
+(`src/gateway/server/mod.rs:2835`) and `tests/mik_7246_confirm_1a_unconfirmable_producers.rs`.
+What has not landed is the corresponding edit to the two HTTP tests.
+
+That edit exists, uncommitted, in `tests/mik_7215_acs.rs` (+87/-41): it renames the first
+test to `..._is_asked_in_band_and_not_run` and retargets both to the in-band outcome,
+asserting the extension key rather than the method alone. It needs
+`rustfmt --edition 2024` (three diffs, lines 755/765/1028) before commit. `cargo fmt` on
+single files drops the edition and invents errors.
+
+**Consequence worth stating: a `PASS` row's own acceptance tests are red.** The verdict
+survives on the stdio witnesses, but until the retarget lands the ledger and the test
+suite disagree in public.
+
+## R2 — `CodeQL` is red on five alerts the existing triage does not cover
+
+`gh api repos/.../check-runs/102909138871/annotations` (the `code-scanning/alerts`
+endpoint returns 404 for this token):
+
+| level | location | rule |
+|---|---|---|
+| failure | `src/config/mod.rs:275` | Hard-coded cryptographic value |
+| failure | `src/config/mod.rs:283` | Hard-coded cryptographic value |
+| failure | `src/gateway/meta_mcp/support.rs:407` | Weak cryptographic hashing on sensitive data |
+| failure | `src/gateway/webhooks/tests.rs:471` | Hard-coded cryptographic value |
+| failure | `src/gateway/webhooks/tests.rs:508` | Hard-coded cryptographic value |
+
+`pr473-codeql.md` triages check run `101939020717` — a different rule family
+(path-injection, cleartext-transmission) — so the actionable set here is untriaged.
+The first step is the `most_recent_instance.ref` separation that pass already
+established: the check's own caveat is that a large diff pulls in alerts belonging to
+`main`, and last time that accounted for three of five. Two of these five are in a
+`tests/` target that ships in no release artifact. The three library hits are the ones
+that matter, and a genuine hard-coded key or weak hash on a sensitive value in `src/`
+is stop-the-line, not triage-and-move-on.
+
+## R3 — the two blocking criteria
+
+**`MIK-7272.SUB.2b`, ABSENT.** The outbound leg has now been written (a per-request
+notification sink, the stdio production registration the inbound leg never had, and a
+request-scoped event stream). The library compiles; the new tests are unverified because
+the disk guard tripped mid-lane. The guard has since cleared — 11.0 GB free by
+`statvfs('/')`, against a 5 GB threshold — so the remaining work is running the gate, not
+writing code. The standing merge constraint holds: the inbound scaffold lands with the
+outbound leg or not at all.
+
+**`MIK-7272.SUB.4`, PARTIAL.** Three known holes, all verified at source, all of which
+duplicate a side effect:
+- the backend-error exit at `backend_handlers.rs:862-867` never settles the reservation,
+  so `impl Drop for IdempotencyReservation` (`src/idempotency.rs:562-571`) takes the
+  `Release` arm and hands the caller's retry a clean key. `settle_direct_idempotency`
+  completes only when `response.error.is_none()`, so a JSON-RPC error releases it too.
+  A transport failure after the side effect landed is indistinguishable from one before.
+  The fix is a terminal `Failed` state instead of release-on-error.
+- `src/backend/ops.rs:218` wraps the caller's `tools/call` in `with_retry`, so the
+  backend's own transport retry re-sends beneath the guard with no client retry involved.
+- `identity_suffix` (`src/gateway/meta_mcp/invoke.rs:1128-1132`) is empty when identity
+  propagation is off, which is the shipped default, so two authenticated callers derive
+  one key.
+
+## R4 — the delivery chain, which no amount of green fixes
+
+`reviewDecision` is empty on #473. Its three bot reviews are all `COMMENTED`, never
+`APPROVED`. Nothing in the 16-PR stack can reach `main` until #473 merges, and #473
+cannot merge without an approving human review. This is an operator action and no lane
+can substitute for it.
+
+## Order of work
+
+1. Push `14744d72`. One commit, verified 19/0 locally, removes 16 of the 18 red tests.
+   Push the explicit ref — a peer's commit must not ride out under this authorisation.
+2. `rustfmt --edition 2024 tests/mik_7215_acs.rs`, commit the retarget with
+   `git commit -o`, push. Removes the other 2.
+3. Re-run `Tests` on #473 and confirm green rather than assuming it.
+4. Triage the five CodeQL alerts: split branch from `main`, read the three library hits
+   at source, fix what is real, propose dismissal for what is not. Dismissal is the
+   operator's call.
+5. Run the SUB.2b gate now the disk has recovered; land inbound and outbound together.
+6. Close SUB.4's three holes, `Failed` state first — it is the one that duplicates a
+   mutation on the exact path the criterion names.
+7. Empty the expected-red register. It has one entry
+   (`mik_7215_control4_reap_count_acs`, owner control4-lifecycle, PR #516 open) and its
+   own rule is that it must be empty at RC.
+8. Operator review and merge of #473, then unstack the 16.
+
+Steps 1-2 and 4 and 5 and 6 are independent and can run concurrently. Steps 3, 7, 8 are
+strictly ordered after them.
