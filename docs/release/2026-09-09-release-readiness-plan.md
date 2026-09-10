@@ -855,3 +855,21 @@ merely accompanying it. The observable for item 2 is unchanged but its
 precondition is sharper: all 88 `Running tests/…` lines are only reachable from a
 commit whose lib compiles and whose lib tests pass, because both stages sit ahead
 of the first integration binary in the same test invocation.
+
+### H-update, 2026-09-10: the headroom came back, from outside this session
+
+Free space on `/` went 3.9G → 2G → **18.2G** within the same evening, and a
+`cargo --version` probe now passes the MIK-4777 guard instead of being refused.
+Nothing in this session deleted anything; the recovery freeze held throughout, and
+the operator question in section H was never answered. So roughly 14G was
+reclaimed by something outside this lane.
+
+Two things follow, and only one of them is good news. Builds are legal again, so
+the local-side work that was frozen — the sixteen component ACs, the RED baseline,
+the two `MIK-7246.CONFIRM.2` rows — can run, and the owning lane has been told the
+slot is theirs. But the underlying question section H raised is still open and is
+now better evidenced rather than closed: a machine that can lose 2G with no build
+running and regain 14G with no build finishing is not a machine whose free space
+is a stable input. Treat the headroom as borrowed. `target/debug/incremental` was
+7.2Gi at last measurement and an incremental run spends back into exactly this
+budget.
