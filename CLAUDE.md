@@ -104,7 +104,7 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 
 # mcp-gateway
 
-Universal MCP Gateway | Rust 1.88+ | Edition 2024 | ~101K LOC | PolyForm Noncommercial default, MIT core
+Universal MCP Gateway | Rust 1.95+ | Edition 2024 | ~101K LOC | PolyForm Noncommercial 1.0.0
 
 ## Product Vision
 
@@ -116,7 +116,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 ## Current Status
 
-- **v4.0.0** · Rust 1.95+ · Edition 2024 · ~101K LOC · MIT core + PolyForm Noncommercial EE
+- **v4.0.0** · Rust 1.95+ · Edition 2024 · ~101K LOC · PolyForm Noncommercial 1.0.0 across the whole repository
 - Published on crates.io + Homebrew + npm + ghcr.io container images + Glama + VS Code + Cursor one-click install
 - **Meta-MCP surface**: 14-17 tools in production scenarios (README benchmark scenario)
 - **Capability backends**: 110+ REST capabilities + MCP backends routed via the same surface
@@ -144,7 +144,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 | **Dual MCP + A2A transport** | Cross-provider agent messaging (#145, MIK-2970) | Treat A2A as an afterthought; avoid compiling it out of default builds |
 | **Capability definitions public (mcp-gateway) / private (mcp-gateway-private)** | Public catalog for community; private API credentials / deploy configs | Mix private capabilities into the public catalog |
 | **`cargo clippy --all-targets -- -D warnings` + `cargo fmt --check`** gates | Zero-debt discipline in Rust source | Ship code with lints suppressed ad hoc |
-| **Mixed per-file licensing: MIT core + PolyForm Noncommercial 1.0.0 EE** | Core gateway stays MIT for adoption; security firewall, agent-identity, data-flow, message-signing, policy, response-inspect/scanner, scope-collision, tool-integrity, cost-accounting, key-server, and transparency-log paths require commercial terms for commercial use (see [LICENSE-EE.md](LICENSE-EE.md), v2.11.0+) | Collapse package metadata back to plain MIT |
+| **One license: PolyForm Noncommercial 1.0.0 for the whole repository** | v4.0.0 retires the MIT core and the `.mit-core-allowlist` that enumerated it; one license means one source of truth, and commercial use goes through a commercial license (see [ADR-013](docs/adr/ADR-013-single-noncommercial-license.md), [LICENSES.md](LICENSES.md), [COMMERCIAL.md](COMMERCIAL.md)) | Reintroduce an MIT carve-out or any second per-file license |
 
 ## Anti-Patterns (things agents get wrong in this repo)
 
