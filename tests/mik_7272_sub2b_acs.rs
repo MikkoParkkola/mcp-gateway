@@ -606,7 +606,7 @@ async fn s03_progress_stdio_each_call_sees_only_its_own_token() {
     assert!(
         tokens
             .iter()
-            .all(|token| **token == &json!("token-A") || **token == &json!("token-B")),
+            .all(|token| **token == json!("token-A") || **token == json!("token-B")),
         "a notification carried a token no caller supplied — the gateway's \
          minted token leaked to the client: {tokens:?}"
     );
