@@ -543,7 +543,7 @@ The two legs are independent, and this amendment governs only the second:
 | **stdio** | stdio subprocess | **this amendment**, plus §2's minted token |
 
 The client-facing leg is `Server::run_stdio` (`src/gateway/server/mod.rs`,
-currently `:1566`). Verified by reading it: the loop reads one line
+currently `:1614`). Verified by reading it: the loop reads one line
 (`reader.next_line()`), dispatches it (`dispatch_single_with_sink`, or
 `dispatch_batch_with_sink` for an array), and only then writes, through
 `Self::write_response`, to a `tokio::io::Stdout` owned by the loop frame and
@@ -656,7 +656,7 @@ reviewers caught it. Traced, the surface is:
   and did not. Putting it behind a lock held across dispatch would re-serialise
   exactly what step 2 parallelises. It does not need to be: its only use inside
   dispatch is `record` plus `persist_global` at the **top** of the function
-  (`:1863-1884`), before any tool execution. The observation is therefore
+  (`:1877-1884`), before any tool execution. The observation is therefore
   hoisted into the loop and recorded before the spawn, and the spawned task
   never touches the sink. That removes the parameter from
   `dispatch_single_with_sink` and from `dispatch_batch_with_sink`'s forwarding
@@ -688,3 +688,553 @@ amendment. Row 13 in particular assumes a cancellation path, and the stdio
 dispatcher has none — it does not act on `notifications/cancelled`. Building
 one is a separate increment; claiming row 13 over stdio without it would be
 the precise failure this amendment exists to avoid.
+
+## Amendment 2 — the SSE read on both legs, 2026-09-11
+
+- **Status**: amends Amendment 1's Cost and §1's implementation status. Reviewed
+  three times by two external reviewers (SHIP-WITH-FIXES each round); revised
+  2026-09-11 to carry their fixes and to re-verify every line cite against this
+  tree — (a) is restated as landed, (d)'s rationale is corrected from loss to
+  liveness and its read specified at byte level, the shared layer is narrowed to
+  framing with JSON-RPC classification kept above it, the byte bound is moved
+  from the incomplete tail to the whole pending event, (e) is widened to the four
+  rows its own test file scopes, **(f) is added** because two of those rows
+  cannot pass while the client-facing leg stays batched — row 4's "over HTTP"
+  being the client leg is established from the test plan and from the Acceptance
+  section's own row split, and (f) is specified down to the status-before-stream
+  cut it has to make — and Acceptance row 5 is
+  resolved rather than held both ways.
+
+### The gap Amendment 1's Cost leaves
+
+Amendment 1's Cost ends "and the sink's writer field", presuming §1's sink
+exists in `src/`. SUB.2b is **six** pieces, not two.
+
+**(a) The sink — landed, and in the shape §1 asks for.** An earlier draft of
+this amendment claimed `rg 'notification_sink|task_local!' src/` finds only
+`src/gateway/trace.rs`. That is false against this tree and is corrected here.
+`src/transport/notification_sink.rs` exists — 182 lines, untracked, not in
+`HEAD` — and it is wired, not greenfield: exported at `src/transport/mod.rs:6`,
+scoped in production by `meta_mcp_handler` (`src/gateway/router/handlers.rs:599`),
+feeding `request_scoped_event_stream` (`src/gateway/streaming.rs:604`), and
+published to from `forward_sse_exchange` (`src/transport/http/mod.rs:368`) and
+`StdioTransport` (`src/transport/stdio.rs:621`). The re-shape this amendment
+first prescribed has already happened: the payload is `tokio::task_local!` over
+`mpsc::Sender<JsonRpcNotification>` (`:34-35`) at `REQUEST_NOTIFICATION_DEPTH`
+= 64 (`:32`), `scope` hands back the receiver so a caller can drain while the
+future still runs (`:48`), and `publish` does per-notification `try_send` with
+a dropped-counter and a warn (`:87`) — §5's drop-and-count, not the salvaged
+`Arc<Mutex<Vec<_>>>` collected after completion. Four tests, not the salvaged
+two: `publish_outside_a_scope_is_dropped_not_panicked`,
+`concurrent_scopes_do_not_cross`,
+`a_notification_is_readable_before_its_request_finishes` (`:146`) and
+`an_overfull_sink_drops_and_counts_instead_of_blocking` (`:168`) — §1 and §5
+respectively.
+
+**The sink being the right shape is not the whole path being the right shape.**
+`collect` survives (`:64`) as a compatibility drain over the receiver — "not a
+return to collect-then-emit" in its own doc — and `handlers.rs:599` is a
+`collect`, handing `request_scoped_event_stream` a completed
+`Vec<JsonRpcNotification>` (`streaming.rs:604-607`). That leg therefore still
+delivers after the future finishes. **Decision:** (d) changes the
+backend-facing producer only; the client-facing leg is component **(f)**
+below. `collect`, the `handlers.rs:599` scope and `request_scoped_event_stream`
+stand unchanged *under (d)* — but not across the amendment, because two of
+(e)'s four rows cannot pass while that leg stays batched. (f) is therefore a
+prerequisite of (e), not a later increment.
+
+**(b)** Amendment 1 step 1, reviewed, unchanged. **(c)** Amendment 1 step 2,
+reviewed, unchanged; `JoinSet` confirmed absent from `src/gateway/server/mod.rs`.
+Neither is optional for any existing row: all four acceptance tests in
+`tests/mik_7272_sub2b_acs.rs` spawn the shipped binary with `--stdio`
+(`StdioSession::spawn`, `:240`) against an SSE fixture backend (`slow_stream`,
+`:161`), and none is `#[ignore]`d — so (b), (c) and (d) all sit on the critical
+path of `s02_stdio_progress_reaches_its_own_call_before_the_result` (`:405`),
+`s02_stdio_message_reaches_its_own_call_before_the_result` (`:478`),
+`stdio_without_request_scoped_meta_delivers_no_notification` (`:534`) and
+`s03_progress_stdio_each_call_sees_only_its_own_token` (`:569`).
+
+### (d) The backend-facing SSE read
+
+**The defect is liveness, not loss.** An earlier draft of this section said the
+backend-facing read discards the notifications. It does not.
+`send_request_with_headers` calls `forward_sse_exchange(&text)`
+(`src/transport/http/mod.rs:1392`), and `forward_sse_exchange` (`:366-371`)
+publishes them to the ambient sink before handing back the response. Nothing is
+thrown away. What is wrong is *when*: on the SSE branch
+(`content_type.contains("text/event-stream")`, `:1385`) the whole body is read
+to its end by `response.text().await` (`:1386-1388`) before `parse_sse_response`
+(`:329`) sees a byte of it, so every notification is published after the result
+it is required to precede. Amendment 1's "the HTTP leg in whole" covers the
+*client*-facing leg; this is a fourth surface it does not reach.
+
+That is Acceptance row 5's property in row 5's own words — "the assertion is
+that the notification arrives before the body has been read to its end"
+(`:458-462`) — which makes row 5, in substance, the acceptance row for (d). The
+claim is not academic: `tests/mik_7272_sub2b_acs.rs` gates
+`slow_notifier`'s result on `Semaphore::new(0)`, released only by a second call
+the client makes after reading the notification. Under `text()` the
+notification surfaces after the body ends, so nothing releases the gate and the
+row dies at `READ_TIMEOUT` (15s) instead of asserting — row 4's "deadlocks here
+instead of passing", reached by the transport rather than by the design.
+
+Replace the `text()` branch (`:1385-1392`) with an incremental scan of
+`response.bytes_stream()`. The handshake scan in `establish_sse_connection`
+(`:1089`; scan body `:1111-1176`) is the shape to follow, **not** the code to
+copy: four of its choices are harmless for an ASCII endpoint URL and wrong for
+arbitrary `data:` payloads.
+
+**Bytes, not lossy strings.** `buffer.push_str(&String::from_utf8_lossy(&chunk))`
+(`:1126`) decodes each *raw chunk*, so a multi-byte codepoint straddling a chunk
+boundary becomes U+FFFD. The handshake carries an ASCII URL and never sees it;
+tool results carry arbitrary Unicode. Accumulate raw `Bytes` in a `Vec<u8>`,
+split on `b'\n'`, and decode each **complete line** with `String::from_utf8` — a
+split codepoint then always lands intact inside one line. Required test: a
+fixture containing non-ASCII (e.g. `é`) fed in fragments split at *every* byte
+boundary, asserting results byte-identical to the whole-body feed.
+
+**Bound the whole pending event, after the drain — not the accumulated buffer
+before it, and not the partial line alone.** The 64 KiB cap (`:1128`) is
+checked *before* the complete-line loop (`:1135`), so one chunk coalescing many
+small complete events trips it although nothing retained is large; its own
+comment sizes it for "a single short SSE line", i.e. the handshake's endpoint
+event. But moving the check after the drain and applying it to the leftover
+bytes is **not sufficient**, and this is the subtler half: every completed
+`data:` line *leaves* the byte buffer and joins the pending event's
+accumulating string, so a backend sending a million short `data:` lines and
+never a blank line stays under a leftover-bytes bound forever while the pending
+event grows without limit. The quantity to bound is the **whole retained
+pending event — joined data lines plus the partial line — enforced before the
+join allocates, and reset when an event dispatches.** Nothing in the tree
+protects this today: `a_long_stream_of_small_events_never_exceeds_the_pending_bound`
+(`src/transport/http/sse_decoder_tests.rs:53`) measures *completed* events and
+cannot see it, so the fixture that proves it is a stream of `data:` lines with
+no blank line at all.
+
+No max-message or max-frame constant exists in `src/` to inherit — there is
+none to name. **The constant is `MAX_PENDING_SSE_BYTES`** (`sse_decoder.rs:33`,
+10 MiB), whose name is the right one now that the quantity is the pending event
+rather than a frame. Its rationale, however, is settled here against its own
+doc comment: it does **not** mirror `ServerConfig::max_body_size`
+(`src/config/mod.rs:1267`, default 10 MiB `:1304`). That value is an
+operator-tunable limit on the gateway's own inbound listener, so a backend's
+response frame bound to it breaks the moment an operator lowers it — the
+scaffold's comment already half-concedes this by calling it "an analogue rather
+than the same budget". The ADR's rationale is simpler and does not decay: a
+fixed bound, chosen at the same order of magnitude so no legitimate payload is
+newly refused, independent of configuration. It is generous on purpose — a
+legitimate JSON-RPC response frame is **one long line**, so while it arrives it
+*is* the pending event, and a bound tightened toward "a pending event should be
+small" reintroduces the bug this finding names.
+
+**Framing: take the decoder.** The handshake scan splits only on `'\n'` and
+classifies each `data:` line on its own, so bare-CR streams never dispatch and
+SSE-legal multi-line `data:` frames fail as a JSON parse error. A third count
+is easier to miss and (d) would inherit it unaddressed: `parse_sse_response`
+hands *every* `data:` payload to `serde_json::from_str` and converts any
+failure into a hard transport error (`:335-336`), so an empty `data:` line or a
+keep-alive — both SSE-legal, both ordinary on a stream held open — kills the
+call. The decoder must therefore skip what carries no message before it parses:
+comment lines (`:`-prefixed) and frames whose joined data is empty. A
+*non-empty* payload that will not parse stays an error; silence there would
+hide real corruption, which is the defect above in the other direction.
+
+The cost is one helper, so specify a stateful event decoder handling LF, CRLF
+and CR, joining a frame's `data:` fields with `\n` and classifying only at the
+terminating blank line — **and at EOF, which terminates a pending event exactly
+as a blank line does**. That clause is load-bearing: both parsers classify
+immediately today (`parse_sse_response` iterates `text.lines()` with no
+blank-line dependency, `:329`), so a blank-line-only decoder would silently
+drop the final frame of any body ending `data: {...}\n` — the handshake
+included. Fixtures: fragmented across chunk boundaries, multi-line `data:`,
+CRLF and CR framing, and a keep-alive comment plus an empty `data:` line
+interleaved with real frames.
+
+**A cursor, not a reallocation per line.**
+`buffer = buffer[newline_pos + 1..].to_string()` (`:1137`) rebuilds the whole
+remaining buffer once per line, which is quadratic in the number of lines a
+chunk carries. A handshake that ends on its first event never pays it; a
+response stream carrying many short events does. Advance a cursor index and
+compact the buffer occasionally instead.
+
+**One framer, three consumers — and the framer does not know what JSON-RPC
+is.** Line splitting, chunk-boundary handling and event assembly are factored
+into a single helper serving the handshake scan, the new request scan, and the
+ported unit tests, so those semantics are fixed in exactly one place and two SSE
+readers cannot drift apart again. **The shared layer stops at framing.** What it
+yields is an event — an optional `event` name plus the joined `data` lines
+(`SseEvent`, `src/transport/http/sse_decoder.rs:37`) — and nothing more. It must
+not attempt JSON-RPC classification, because its two callers do not agree that
+an event carries JSON-RPC at all: the handshake's `endpoint` event carries a
+**bare URL**, not a JSON document, and a framer that parses every event as
+JSON-RPC turns the handshake's normal case into a parse error. The handshake
+consumes the endpoint URL on its own terms; JSON-RPC classification belongs to
+the request reader alone (`decode_sse_exchange`, `:81`). The scaffold is already
+built this way — sans-io framing below, classification above — and this
+paragraph is the specification it already satisfies, not a change to it.
+
+Classification, in the request reader only, dispatches as follows — Response:
+return it, dropping the rest of the stream; Notification: `publish` to the
+ambient sink and `debug!(method = %notification.method, "Notification on
+response stream")`; Request: `Err(Error::Transport(format!("Peer sent request
+'{}' on the response stream", request.method)))`. EOF with no response frame is
+`Error::Transport("No data in SSE response")`.
+
+**Resolution of Acceptance row 5.** This amendment first held two incompatible
+positions: its limitation 1 kept both `#[allow(dead_code)]` and the
+accumulating `Vec` while calling row 5 satisfied "by removal from the live
+path", and "What does not change" asserted that every Acceptance row's text
+stands. Row 5 (`:458-462`) and §1 (`:196-198`) each say the attribute is
+*deleted* and that the accumulating `Vec` goes with it. Both positions cannot
+be true. The resolution is **deletion, not reinterpretation** — amending a
+reviewed acceptance row is a design change and would have to be written as one.
+
+"Removal from the live path" is in any case no longer available as a reading:
+the live path *reads* that field now (`forward_sse_exchange`, `:366-371`), so
+removing it from there would re-orphan a field currently consumed — a
+regression wearing the word cleanup. (d) instead deletes `SseExchange`, its
+`#[allow(dead_code)]` (`:314`), `parse_sse_response` (`:329`) and the
+`forward_sse_exchange` shim that wraps it (`:366-371`) outright — the streaming
+decoder publishes as it classifies, so the shim has nothing left to do — and
+ports their five unit tests (`src/transport/http/tests.rs:1642, 1658, 1828,
+1864, 1894`), plus the three `forward_sse_exchange` tests, onto the production
+decoder. Two whole-text SSE parsers in one crate is the divergence this
+amendment exists to prevent. Until that port lands row 5 is **not met**, and
+nothing may report it as met.
+
+**Row 5's own citations have drifted**, and a reader will take them literally.
+It cites `SseExchange` at `:298` (now `:300`), the attribute at `:297` (now
+`:314`), and a discard "at `:1345`" — nothing is discarded anywhere any more.
+(`forward_sse_response` no longer exists in `src/` either.) The symbols are the
+durable part; the numbers are this tree's.
+
+**The doc comment above the attribute is stale, and stale is worse than
+absent.** `SseExchange.notifications` still reads "SCAFFOLD, and labelled one:
+no production path reads this yet. The only caller of `parse_sse_response` —
+`send_request_with_headers` — maps it away" (`:303-313`), with a trailing note
+offering the attribute as "evidence that SUB.2b is still half-built". The
+consumer has landed. A reader who trusts that comment concludes the opposite of
+the truth, so it is not merely obsolete prose but a false input to the next
+reader. It goes with the struct under (d); until then it describes a tree that
+no longer exists.
+
+**Posture, not a priced regression — connection reuse.** Returning on the first
+response frame abandons the remainder of the body where today's `text()` reads
+to its end. **Decision: close the connection; reuse is not guaranteed.** The
+response frame is protocol-terminal, and a bounded drain after it reintroduces
+the very wait row 4 exists to detect. Against the case that motivates the worry
+the early return is the *repair*, not the cost: a backend that holds its stream
+open past the terminal frame hangs `text()` until the peer closes, while the
+early return answers at once. What it costs is a connection that a
+promptly-closing backend might have let us reuse — and the asymmetry is
+protocol-dependent, since an abandoned body forecloses reuse on HTTP/1.1 but is
+only a stream reset on HTTP/2. Unmeasured either way: no magnitude is claimed
+here and none should be read in.
+
+### (e) The HTTP instance of S-03, message half, does not exist — nor do the other three HTTP rows
+
+Amendment 1 records the `notifications/message` half of S-03 as unmet over
+client-facing stdio on the correct ground that MCP defines no per-request
+linking field for it, and discharges that by asserting the discriminating
+instance is HTTP-only. The HTTP instance was never written.
+`rg 's03_message_http_isolates_by_stream' tests/ src/` returns exactly two
+hits, both doc comments inside `tests/mik_7272_sub2b_acs.rs` itself — the
+module doc (`:11`) and the note above `message_frame` (`:97`), which says in
+so many words that the stdio row "does not exist" and forwards to the HTTP one.
+Both are intra-doc links to an item that is not defined anywhere, so the
+forward reference resolves to nothing and must resolve once (e) lands.
+
+With no instance on either transport, that half of S-03 has no discriminating
+test at all: a stated limit against a MUST is an unmet requirement, not a
+priced one. (e) is the row itself — two concurrent `tools/call` POSTs on the
+client-facing HTTP leg, each with its own `text/event-stream` response, a
+`notifications/message` raised by the backend during call A read off A's
+stream and **never** off B's. It is the only row in the file that would
+exercise the client-facing HTTP leg; today no row does, which is the same hole
+as the backend-facing one (d) closes.
+
+**(e) is four rows, not one.** S-03 has four method×transport cells:
+progress×stdio exists
+(`s03_progress_stdio_each_call_sees_only_its_own_token`, `:569`),
+message×stdio is protocol-impossible for Amendment 1's reason, message×HTTP is
+the row above — and **progress×HTTP belonged to nobody**. Nor is S-03 the whole
+gap: Acceptance row 4 requires S-02 repeated over stdio *and* over HTTP, and
+only the stdio half has tests. `tests/mik_7272_sub2b_acs.rs` states the scope
+in its own words at `:666-670` — "Four rows belong here: the progress and
+message halves of `S-02`, and both halves of `S-03`" — and both S-03 halves
+have since been written there against the harness that follows it. (e) is
+those four rows and the harness they share, not the single message×HTTP row it
+first named.
+
+**Residual, inherited rather than introduced.** S-03's wording demands
+isolation for both notification methods and both transports. (e) discharges the
+HTTP instance only: the client-facing stdio instance of the message half is
+protocol-impossible for the reason Amendment 1 gives, so even with (e) green
+S-03 as written stays unsatisfied for that half. The residual comes from
+Amendment 1, not from this amendment — but it has gone unstated, and an
+unstated residual is how a row goes green over an open gap. The stake is
+concrete, and the ledger row makes it worse by stating its own flip condition
+twice in two different widths: `docs/requirements/RELEASE-4.0.0-criteria-status.md:230`
+says both that SUB.2b "flips on S-02/S-03 going green" and, narrowed later in
+the same row, that it flips on "S-02 plus the `notifications/progress` half of
+S-03". The second excludes `notifications/message` isolation on every
+transport. A later reader will use whichever half they reach first, and under
+the narrow one SUB.2b flips to MET while the gap it names stays open. That
+contradiction is the ledger's to fix, not this ADR's, but (e) is what makes the
+wide reading achievable.
+
+**Two of the four rows are blocked on (f), not merely unwritten.** The two
+S-03×HTTP isolation rows are observable in a fully buffered body: the assertion
+is *which* stream a notification landed on, and that reads the same whether the
+bytes arrive early or all at once at the end — which is why the two landed
+rows (`s03_message_http_isolates_by_stream`,
+`tests/mik_7272_sub2b_acs.rs:1011`, and
+`s03_progress_http_isolates_by_stream`, `:1065`)
+pass against today's batched consumer. The two S-02×HTTP rows are not. The test
+file draws the same conclusion independently at `:672-686`, citing
+`handlers.rs:599` and `streaming.rs:604` and naming the same four-step
+deadlock.
+Acceptance row 4's fixture releases the result only after the client has read
+the notification, and on HTTP that is a deadlock with the current shape: the
+client waits for a notification, the gateway waits for the dispatch future to
+finish before emitting a byte, the dispatch waits for the backend, and the
+backend waits for the client. No test authored under (e) can break that cycle;
+only (f) can.
+
+**Row 4's "over HTTP" is the client leg, and the Acceptance section settles it
+by construction.** The deadlock above depends on that reading, so it is cited
+rather than assumed. Test-plan row S-02
+(`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:58`)
+requires that the backend's notification "reaches that call's response stream,
+before the result, over **stdio** and over **HTTP**" — the call is the client's
+`tools/call` and its response stream is the client leg. The section's own
+vocabulary agrees: row 1 says "its own response stream" under `Accept:
+text/event-stream` and row 3 says "each with its own event-stream response",
+both unambiguously client-facing, and a row cannot switch senses mid-section.
+And the two legs are split **by row**: row 5 is separately titled "Backend
+pass-through, HTTP" and is the backend half, which leaves row 4 as the client
+half. So `handlers.rs:599` collecting the whole dispatch before
+`streaming.rs:604` sees a finished `Vec` does block row 4 over HTTP. (f) is in
+scope.
+
+**The S-02×HTTP rows must gate the result on the assertion, or they do not
+discriminate.** A row that requires only an incremental read passes against a
+gateway that buffers the entire backend response, provided the backend closes
+having sent notification-then-result in client-facing order — which is to say
+it passes without (d) and without (f), and is therefore evidence for neither.
+The acceptance text for both S-02×HTTP rows carries the gate explicitly: **the
+backend fixture withholds the result until the assertion on the notification
+has run**. Row 4 already says exactly this (`:454-457`) — "the fixture releases
+the result only after the client has read the notification… a design that
+buffers and flushes at the end deadlocks here instead of passing" — but says it
+once, in a row whose stdio instance is the one that exists. The HTTP instances
+inherit the gate rather than settling for an incremental read. Under it a
+batching implementation deadlocks instead of passing, which is the row's
+purpose.
+
+### (f) The client-facing HTTP consumer streams
+
+**The defect is the same one as (d)'s, on the other leg.** `handlers.rs:599`
+wraps the *entire* dispatch in `notification_sink::collect(...)`, so the
+`Vec<JsonRpcNotification>` that reaches `request_scoped_event_stream`
+(`streaming.rs:604-607`) is complete before the response body begins. Every
+notification a backend raised during the call is therefore delivered after the
+call it belongs to has already produced its result. For the progress
+notifications S-02 exists to cover, a progress report that arrives only once
+the work is done is not a progress report.
+
+**Shape.** Replace collect-then-frame with a body that emits each notification
+as it is published while the dispatch is still in flight: keep the
+`task_local!` sink scope around the dispatch future, but hold the *receiver*
+outside it and drive dispatch and body together. **The dispatch future is
+polled by the body, not spawned.** The distinction is load-bearing rather than
+stylistic: a spawned dispatch outlives the client that asked for it, so a
+client disconnect leaves the backend call running against a receiver nobody
+reads, and §5's deadline stops governing the work it was written to govern.
+Polled from inside the stream, the dispatch is dropped when the body is
+dropped, client disconnect cancels the call, and socket backpressure propagates
+into the dispatch rather than accumulating behind it. The SSE body therefore
+yields each `JsonRpcNotification` off the receiver as it arrives and the
+response frame when the polled dispatch resolves.
+`REQUEST_NOTIFICATION_DEPTH = 64`
+(`src/transport/notification_sink.rs:32`) already gives the channel its bound,
+and `publish` (`:87`) already does the per-request routing; what changes is
+only who reads the receiver and when. `collect` (`:64`) stays for callers that
+genuinely want a finished `Vec` — the stdio path and the existing tests — so
+this is an added consumer of the same sink, not a rewrite of it.
+
+**The status is computed from the finished response, so streaming must not
+begin before the refusals have run.** This is the component's central problem,
+not a detail of it. `refusal_status(&response).unwrap_or(StatusCode::OK)`
+(`src/gateway/router/handlers.rs:1883`) derives the HTTP status *from the
+completed dispatch response*, and `:1890` refines it again — 404 rather than
+200-with-error for an unimplemented method on the modern era. `handlers.rs:599`
+computes `offers_event_stream` from `Accept` up front but branches on it only
+after `collect(...)` resolves (`:605-611`), precisely because a request that
+offers `text/event-stream` may still resolve to a refusal, a 404, or a non-JSON
+response. The comment at `:1878-1882` names the stake: a refusal only the
+dispatch chokepoint can see "arrives here as a JSON-RPC error, and answering it
+200 tells every caller and intermediary the call succeeded". Committing a
+status line before that code has run would surrender it.
+
+**Resolution: split preparation from execution — and the cut exists.** Every
+phase that can refuse runs to completion and yields the status; only then are
+headers committed and the stream started, with the backend call — the sole
+phase that emits notifications — running inside the body. `meta_mcp_dispatch`
+admits this cut, verified at source rather than assumed:
+
+- All pre-method refusals precede the method dispatch. `let response = match
+  method.as_str()` is `handlers.rs:1095`; auth, body limit, in-flight permit,
+  session, era and task-extension checks all early-return above it.
+- Within the `tools/call` arm (`:1212`), every refusal precedes the only
+  notification-emitting call. `handle_tools_call` is invoked at `:1610` on the
+  direct path and `:1478` on the task path; the authorization chokepoint and
+  its audit sit above both.
+- The refusals that carry a status carry it structurally, not positionally:
+  `refusal_status` (`:2003`) reads `authz::HTTP_STATUS_DATA_KEY` out of the
+  error's `data`, and that key is set by the authorization layer, which runs
+  pre-invocation. The `-32601` 404 is likewise decided by the method match, not
+  by the backend.
+- The pattern already exists in this function. `subscriptions/listen`
+  (`:1096`) returns **early with an SSE body** instead of falling through to
+  the ordinary response builder, for the same reason (f) needs to.
+
+So (f) does not require carving a preparation phase out of the whole
+lint-exempt function (`#[allow(clippy::too_many_lines)]`, `:613`). It requires
+the `tools/call` arm to commit its own stream and return early, as
+`subscriptions/listen` does, leaving every other arm's status path untouched.
+**The cost this does carry** is the tail an early return skips: `:1868-1876`
+records client success/failure against the breaker and the response tail counts
+every JSON-RPC answer, and the function already documents that hazard in its
+own words at `:1059-1064` — "the early return skips the tail that counts every
+other JSON-RPC answer, so the refusal is counted here or it is invisible". A
+streaming arm must replicate that bookkeeping or it silently stops counting
+`tools/call`.
+
+**Rejected: commit 200 on any streaming request and carry late refusals
+in-band.** The smaller shape — since `offers_event_stream` is known before
+dispatch, answer 200 immediately and deliver any refusal as a JSON-RPC error
+frame on the stream — is rejected. It surrenders exactly the property
+`:1878-1882` was written to protect: a chokepoint refusal would reach every
+caller and every intermediary as a successful call, and the `-32601` 404 that
+distinguishes "this server lacks that method" from "this is not a modern
+endpoint" would collapse to 200 for streaming callers only, making the status a
+function of the `Accept` header. It would save perhaps 40 lines. It is not
+available at that price, and it is named here so it is not re-proposed as an
+optimisation.
+
+**Ordering guarantee to pin.** A notification published before the response
+must be framed before the response frame, and no notification published after
+the response resolves may be framed at all; the response frame ends the body.
+Two fixtures state it: one backend that publishes, then answers — the client
+must see the notification frame before the response frame — and one that
+answers, then publishes, where the late notification is dropped rather than
+appended after the terminal frame. A third fixture pins the race the first two
+leave open: a queued notification and the dispatch's completion become ready in
+the **same poll**, and the notification must still be framed first. Without it
+a body that checks the dispatch before draining the receiver passes both
+ordering fixtures and truncates under load. The fixture asserts on a
+notification that was accepted by the channel, so it does not conflict with
+§5's deliberate drops — an overflow past `REQUEST_NOTIFICATION_DEPTH` stays a
+legal drop-and-count; a notification the channel accepted and the body then
+raced past does not.
+
+**Size, re-derived.** The earlier ~80–120 line figure is withdrawn: it was
+computed before the status problem above was on the table. The work is the
+handler seam (`handlers.rs:599-611`), an early-returning streaming branch in
+the `tools/call` arm modelled on `subscriptions/listen` (`:1096`), the
+bookkeeping that branch must replicate from the skipped tail (`:1868-1876` and
+the answer counter), the body constructor replacing
+`request_scoped_event_stream` (`streaming.rs:604-607`), and three fixtures.
+Call it **~180–230 lines** of source and test.
+
+That is the same order as (d)'s ~200, not materially above it, so (f) stays
+priced inside this amendment and sequenced before (e)'s two S-02×HTTP rows. The
+figure assumes the cut point holds as verified — refusals above
+`handle_tools_call` (`:1478`, `:1610`), status carried structurally by
+`refusal_status` (`:2003`). If an implementer finds a refusal that only the
+backend call can raise *and* that must set a non-200 status, the cut moves and
+the number moves with it.
+
+### Cost
+
+(a) is **spent, not pending**: `src/transport/notification_sink.rs` is in-tree
+with four tests (`publish_outside_a_scope_is_dropped_not_panicked`,
+`concurrent_scopes_do_not_cross`,
+`a_notification_is_readable_before_its_request_finishes`,
+`an_overfull_sink_drops_and_counts_instead_of_blocking`), and three
+`forward_sse_exchange` tests sit in `src/transport/http/tests.rs`
+(`http_forwards_both_notification_methods_to_the_callers_sink`,
+`http_never_crosses_a_notification_between_two_calls_in_flight`,
+`http_leaves_the_sink_empty_when_the_backend_raises_nothing`). Nothing remains
+to price on the sink itself. What is **not** spent is the client-facing
+consumer: `handlers.rs:599` still `collect`s. That re-shape is component (f),
+priced below rather than left unpriced. (b) and (c)
+are as Amendment 1 priced them.
+
+(d) grew past its first estimate. Roughly 80 lines of streaming read in
+`src/transport/http/mod.rs`, plus the single shared helper — line splitting,
+LF/CRLF/CR framing and per-frame classification — plus reworking
+`establish_sse_connection`'s scan (`:1111-1176`) onto that helper, cursor and
+compaction replacing the per-line reallocation at `:1137`, plus deleting
+`SseExchange`, `parse_sse_response` and the `forward_sse_exchange` shim and
+porting their eight unit tests — the five whole-text ones plus the three sink
+ones — onto the decoder, plus the new fixtures: non-ASCII split at every byte
+boundary, multi-line `data:`, CR and CRLF framing, a keep-alive comment and an
+empty `data:` line, a retained pending event bounded after the drain, a stream
+of `data:` lines with no blank line at all (which a completed-event bound
+cannot see), EOF dispatching a pending event that never got its blank line, and
+a terminal response frame followed by a stream that stays open indefinitely —
+the read must return on the response, not on the close. Call it ~200
+lines of source and test, not 80. The shared helper and the port are the
+growth, and they are what keeps a second SSE parser from surviving to diverge.
+
+(e) is **four** acceptance rows, not one — the progress and message halves of
+S-02 and both halves of S-03. Two of the four have since landed, so what (e)
+owes has shrunk and the inventory is restated against the current file
+(1098 lines): `s03_message_http_isolates_by_stream` (`:1011`) and
+`s03_progress_http_isolates_by_stream` (`:1065`) both exist and pass. The cost
+estimate that called the client-facing HTTP harness
+"new work, not a variant of the existing one" and "the larger half of (e)'s
+cost" **no longer holds: that harness is in the tree.** `write_http_config`
+(`:690`) starts the child in HTTP mode, `post_sse` (`:811`) issues the POST
+carrying `Accept: text/event-stream`, `sse_frames` (`:837`) reads the body into
+frames and `parked_slow_calls` (`:848`) holds calls open.
+
+**What (e) still owes is the two S-02×HTTP rows and two harness capabilities**,
+and the test file has already reached the same conclusion in its own words
+(`:678-686`): "the two `S-02` × HTTP rows land when the consumer streams…
+`post_sse` below reads the body to its end. When the two `S-02` rows land they
+will need an incremental-read variant of it, which this harness does not have."
+The first capability is that incremental read, so that "the notification
+arrived before the body was read to its end" is an observation rather than an
+assumption — `sse_frames` takes a `&str` body and splits `data: ` lines out of
+it, so by construction it runs only after the body is complete, which is why
+it can carry the
+S-03 isolation rows and not the S-02 ordering ones. The second is the
+result-gating backend fixture row 4 specifies (`:454-457`) — a plain
+incremental read passes against a buffering gateway and so proves nothing about
+(d) or (f). `parked_slow_calls` is the nearest existing piece, but it parks the
+*call*, not the result behind an
+assertion. Both increments are small,
+but they are (f)'s prerequisite twins: without a streaming body on the gateway
+side there is nothing for an incremental reader to observe.
+
+(f) is the smallest of the three unspent components: one handler seam
+(`handlers.rs:599`), one body constructor (`streaming.rs:604-607`), and two
+ordering fixtures — roughly 80–120 lines, against (d)'s ~200 and (e)'s three
+rows plus the incremental-read capability. The deferral question the size might
+have raised does not arise; (f) is sequenced before (e)'s two S-02×HTTP rows
+because those rows deadlock without it.
+
+Line numbers here are this tree's and perish on the next edit; the symbols
+beside them do not.
+
+### What does not change
+
+§4's precedence, §5's bound of 64, and every
+Acceptance row's text. Amendment 1's Correction to row 1 stands. The
+client-facing HTTP leg is no longer on this list: (f) re-shapes it, because two
+of (e)'s rows cannot pass while it stays batched. Row 5 is
+discharged as written rather than reworded, so that claim holds — but its line
+numbers have drifted and the Resolution above supplies the current ones.
