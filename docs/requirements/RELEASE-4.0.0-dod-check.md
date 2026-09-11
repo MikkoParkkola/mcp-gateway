@@ -116,11 +116,11 @@ commit rather than from the truncated log, because a truncated log is not eviden
 | D19 BACKUP | N/A | no production state to snapshot at this stage |
 | D20 ROLLBACK | PARTIAL | `docs/UPGRADING-4.0.md` §Rolling back documents the 3.x downgrade path and why it does not re-prompt. The gate asks for a *tested* procedure and nothing was exercised, so execution is NOT EVALUATED |
 | D21 CANARY | NOT MET | the gate is "feature flag/gradual for high-risk" and this release changes the shared transport, routing and idempotency paths, which is high-risk by that standard. The mechanism is absent, not merely unassessed: the diff against `738c7cee` adds no feature gate or config toggle for the new behaviour — the only added `#[cfg(feature = ...)]` lines are four pre-existing `firewall` gates, and the added `enabled:` literals are fixture values, not a rollout switch. `0a009d6f feat(backend): gate outbound health probes on the peer's era` gates on a *protocol era*, not on exposure. Nor is there a pre-release channel to stage through: `git tag --list` carries no `rc`/`beta`/`alpha`/`pre` tag in the project's history, and `.github/workflows/release.yml` has no prerelease path. The gradual-exposure mechanism actually available to a client-installed binary is the major-version boundary itself — users opt in by upgrading — but that is an argument, not the flag the gate asks for |
-| D22 TELEMETRY (structured) | NOT EVALUATED | no log-shape audit on this branch |
-| D23 ALERTING | NOT EVALUATED | no threshold or routing review |
+| D22 TELEMETRY (structured) | PASS | the gate asks for structured, queryable telemetry and the binary emits it on two channels. `setup_tracing` at `src/lib.rs:113` takes a format argument and installs `fmt::layer().json()` when it is `"json"` (`src/lib.rs:118-122`), driven by `--log-format` / `MCP_GATEWAY_LOG_FORMAT` (`src/cli/mod.rs:143-146`); events carry named fields rather than interpolated prose — `audit_refusal` at `src/gateway/authz.rs:139` emits `transport`, `caller`, `server`, `tool`, `reason` as fields, and dedicated targets exist for machine consumers (`mcp_gateway::observed`, `projection_ab` at `src/gateway/meta_mcp/invoke.rs:358`). Independently, the firewall writes one NDJSON line per invocation (`src/security/firewall/audit.rs`). Bounded statement: JSON is opt-in, the default remains human-readable text, and logs go to stderr by design — stdout carries JSON-RPC frames (`src/lib.rs:105-107`) |
+| D23 ALERTING | PARTIAL | thresholds exist and are configurable on both paths: cost governance ships three tiers — 50% `Log`, 80% `Notify`, 100% `Block` (`src/cost_accounting/config.rs:48`, asserted at `:121-129`), and the firewall carries `anomaly_threshold` defaulting to 0.7 with an opt-in `anomaly_block_threshold` (`src/security/firewall/mod.rs:84-103`). The routing half is what falls short. `AlertAction::Notify` appends a string to the response's `warnings` vector (`src/cost_accounting/enforcer.rs:229-233`) and `Log` emits a `tracing` warning; both terminate in-process. A search for an outbound alert destination — webhook, pager, mail — found none: `src/gateway/webhooks/` is an *inbound* receiver (`src/gateway/webhooks/mod.rs:101`), not a notifier. So failures do raise alerts, and an operator supervising stderr or reading the response sees them, but there is no configurable route to an operations channel |
 | D24 ENFORCEMENT | PASS | the scope check is enforced in three workflows, not documented only |
 | D25 SESSION | N/A | no agent-session persistence change |
-| D26 SEC-MONITOR | NOT EVALUATED | no security-channel audit at this head |
+| D26 SEC-MONITOR | PARTIAL | three of the gate's four requirements are met in code. **Distinct channel**: the firewall's `AuditLogger` opens an append-only NDJSON file (`src/security/firewall/audit.rs:62-70`), a sink separate from the stderr tracing stream that carries ops logs, and `firewall` is a *default* feature (`Cargo.toml:178`). **Sanitized input logging**: `AuditEntry` records `args_hash`, a SHA-256 of the arguments, and the module states raw argument values are never logged (`src/security/firewall/audit.rs:11-13, 44-45`). **Anomaly thresholds**: `anomaly_score` is carried on every entry and compared against the configured threshold (`src/security/firewall/mod.rs:84-103`). Auth and permission refusals are recorded by a helper an authorizer cannot suppress (`src/gateway/authz.rs:128-147`). Two gaps: the channel is **opt-in** — `audit_log` defaults to `None` (`src/security/firewall/mod.rs:62, 133`), so an operator who sets no path gets no separate security log, and the `stderr()` fallback (`:326`) applies only when an explicitly configured path fails to open. And **immutable** is met only as append-only file mode; a search for hash chaining, signing or tamper-evidence in the audit modules returned nothing, so a writer with file access can still rewrite history |
 | D27 COUPLING | PASS | the dependency count is unchanged — no crate added, lockfile untouched. A top-level module graph built from every `crate::` reference in `src/` at `738c7cee` and at this head is **identical in shape**: 55 modules both sides, one strongly-connected component of 30 modules both sides, and **no module newly inside it**. The cycle is pre-existing and this change neither widens nor enters it. Five module-level edges are added and none removed (`backend`→`error`, `error`→`security`, `transport`→`backend`, `transport`→`error`, `transport`→`failsafe`); read at source, three are doc-comment links (`src/error.rs:140` and `:142`, `src/transport/stdio.rs:441`), one is confined to a test module (`src/transport/http/tests.rs:2215`), and the only compile-time addition is `use crate::error::{Error, Result}` at `src/transport/http/sse_decoder.rs:40` — transport depending on error, the conventional direction. No inversion. Limitation: the graph is built from textual `crate::` references, so it over-counts doc links and test code, which is why each new edge was read individually |
 | D28 API-SURFACE | PASS | `git diff 738c7cee..HEAD -- src` adds **11 bare-`pub` items and removes 0**, plus 28 `pub(crate)`. The additions sit in `src/error.rs` (1), `src/idempotency.rs` (3), `src/protocol/meta.rs` (1), `src/security/firewall/mod.rs` (2), `src/security/http_diagnostics.rs` (2) and `src/transport/mod.rs` (2); **all five modules are exported from `src/lib.rs`** — `error:47`, `idempotency:53`, `protocol:65`, `security:76`, `transport:89` — so all 11 additions are externally reachable, not a crate-internal subset. Additive only — no removal, no signature change, no breaking public-API change |
 | D29 DEBT-TRAJ | PARTIAL | clippy is clean at `-D warnings`, which bounds but does not measure the trajectory. The dependency-graph comparison D27 records *was* run — 55 modules and one 30-module cycle on both sides of `738c7cee`, identical in shape — so the coupling half is not the gap. What is unmeasured is trajectory over time: this branch has no debt figure from a prior release to move away from |
@@ -173,7 +173,7 @@ one-line summary plus the supplemental scope contract.
 
 **Not every gate that was run is green, and the count of what remains is larger than one blocker.**
 Two operator acts hold the release — the NFR.SEC.7 deploy and the #528 merge. Behind them sit
-six wholly unevaluated rows and a larger set of unevaluated halves inside PARTIAL rows, both
+three wholly unevaluated rows and a much larger set of unevaluated halves inside PARTIAL rows, both
 inventoried below — thirty `pending` rows in the supplemental contract
 (`RELEASE-4.0.0-scope-status.json`), and one gate that ran three rounds across four launches without reaching its own threshold:
 the dual-vendor review never recorded the two distinct approvals D12 requires. The baseline ledger's
@@ -201,18 +201,23 @@ driven until that deploy exists, and **D18** is the merge itself.
 above rather than a remembered number, two different things are outstanding and should not be added
 together.
 
-**Six rows carry no evaluation at all**: D22 (structured-telemetry shape), D23 (alerting thresholds
-and routing), D26 (security-channel audit), §9–§10, §11 and §13.
+**Three rows carry no evaluation at all**: §9–§10, §11 and §13.
 
-**Fourteen more rows are PARTIAL and hold an unevaluated half** that no count above reaches: H6, H8
-and H9 in file hygiene; D3, D4, D5, D7, D8, D10, D11, D15, D20 and D29 among the D-gates; §2, §4
-(mutation), §5–§7 (§5's changed-line leg, and §6), §8 (DAST) and §12 among the SSOT rows; and B3.
+**Twenty-three rows are PARTIAL and hold an unevaluated half** that no count above reaches — H6, H8
+and H9 in file hygiene; D1, D3, D4, D5, D7, D8, D10, D11, D12, D15, D20, D23, D26 and D29 among the
+D-gates; §2, §4 (mutation), §5–§7 (§5's changed-line leg, and §6), §8 (DAST) and §12 among the SSOT
+rows; and B3. Two further rows are **NOT MET** rather than unassessed — D13b and D21 — and two are
+**OUTSTANDING** on an operator act: D6 and D18. Every number in this paragraph is counted off the
+tables above; the previous revision said "fourteen" while listing nineteen.
 
 **Most of what is outstanding is agent-runnable, and calling it deploy-blocked was wrong.** A
 previous revision of this section filed D22, D23, D26 and DAST behind the NFR.SEC.7 deploy. Three of
-those four do not need it: D22 is an audit of the shape of what the code emits, D23 of threshold and
-routing configuration, D26 of the security channel's configuration, and all three are readable at
-this head. They are unrun, not blocked, and the distinction is the whole point of this section.
+those four never needed it, and all three have now been run at this head rather than merely
+reclassified: D22 is **PASS** (JSON tracing layer plus the firewall's NDJSON stream), D23 is
+**PARTIAL** (thresholds configurable on both paths, but no outbound alert route exists) and D26 is
+**PARTIAL** (a distinct, sanitized, threshold-carrying security channel that is opt-in and only
+append-only rather than tamper-evident). Each verdict cites source, and each is a read of the code
+in this working tree — no deployed process was involved.
 
 **What genuinely needs the deployed build** is narrower: D6's end-to-end pass, the *live* half of
 §8's DAST — its configuration half is as readable as the other three — and D20's rollback
