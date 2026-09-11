@@ -10,6 +10,165 @@ the head, that is said in the same line rather than rounded up.
 
 ---
 
+# DoD re-check at `a148c94e` — 2026-09-11
+
+**Head**: `a148c94e` (`fix(release): record scope evidence as repository paths`) ·
+**Merge-base with `main`**: `origin/main` at `738c7cee`, 0 behind / 209 ahead ·
+**Branch**: `feat/sub2b-outbound-mint` · **PR**: [#528](https://github.com/mikkoparkkola/mcp-gateway/pull/528) (draft) ·
+**SSOT**: `~/.claude/rules-source/workflows/quality-gates-dod.md` (cited by full path deliberately —
+two copies of that file exist on disk and have drifted; the bare filename resolves to the stale one)
+
+This is the release-readiness re-check for 4.0.0. It supersedes nothing: the 2026-09-03 re-check
+below is the record at `c3083368`, and the 2026-08-30 assessment under it is the record at
+`edfd020a`. Verdict words carry the same meanings as in the section below — **PASS** / **FAIL**
+mean the gate was run, **N/A** carries its reason, **NOT EVALUATED** means the gate applies and was
+not run, and **OUTSTANDING** means only an operator act can satisfy it.
+
+## How this was measured
+
+The cargo gates were run on Spark in a detached worktree at `5e42f9b3`
+(`/home/mikko/github/.worktrees/dod-4.0.0`), under the compute-routing rule that keeps heavy builds
+off the Mac. `a148c94e` is one commit above that tree and changes a single JSON document
+(`docs/requirements/RELEASE-4.0.0-scope-status.json`), so no cargo verdict below is affected by the
+difference. The Python release gates and the secret scan were run on the Mac at `a148c94e` itself.
+The working tree was clean at measurement time (`git status --porcelain` empty), so every verdict
+belongs to the commit rather than to an in-flight edit.
+
+One difference from the 2026-09-03 run is worth naming rather than rounding up: clippy was run as
+`--all-targets -- -D warnings`, **not** `--all-targets --all-features`. Code behind the non-default
+`spec-preview` feature was therefore not linted in this pass.
+
+**Change under check**: 80 files, +15,248 / −660 against the merge-base — 39 under `src/`, 26 under
+`docs/`, 3 new test files.
+
+## H1–H11 — file hygiene
+
+| gate | verdict | evidence |
+|---|---|---|
+| H1 SEARCH FIRST | PASS | `ls docs/requirements/` located this file; the section was appended rather than filed separately |
+| H2 UPDATE > CREATE | PASS | third section of `RELEASE-4.0.0-dod-check.md`; no new file |
+| H3 CONSOLIDATE | PASS | gate definitions cited by path, never restated |
+| H4 RIGHT LOCATION | PASS | `docs/requirements/`, beside the criteria ledger it reports on |
+| H5 NAMING | PASS | existing filename unchanged |
+| H6 no orphans | PARTIAL | `clippy --all-targets -- -D warnings` promotes rustc's `dead_code`, so a clean run rules out crate-internal orphans. `dead_code` does not fire on `pub` items reachable from the library surface; no per-symbol reachability sweep was run over the 39 changed `src/` files, so orphans there are NOT EVALUATED |
+| H7 no redundant docs | NOT EVALUATED | 26 documentation files changed against the merge-base; no de-duplication sweep was run |
+| H8 no temp files | PASS | `git status --porcelain` empty in the working tree and in the Spark measurement worktree |
+| H9 no duplicate functions | NOT EVALUATED | no duplication detector was run; clippy does not answer this |
+| H10 dir conventions | PASS | evidence document under `docs/requirements/` with its siblings |
+| H11 untracked tracked-or-ignored | PASS | `git status --porcelain` empty |
+
+## §3 / §4 / D9 — static gates and the suite
+
+Every row below was run; none is asserted.
+
+| gate | command | verdict | evidence |
+|---|---|---|---|
+| formatter | `cargo fmt --check` | PASS | exit 0, no diff |
+| linter / SAST | `cargo clippy --all-targets -- -D warnings` | PASS | exit 0, zero warnings. `--all-features` not run — see above |
+| suite | `cargo test --quiet` | PASS | exit 0 · **5,470 passing, 0 failing, 30 ignored** across 96 test targets including doctests |
+| SCA | `cargo audit` | PASS with one allowed warning | exit 0. `chacha20 0.10.0` is **yanked**, reached through `rand 0.10.2` from `uuid`, `tungstenite` and the crate directly. A yank is not an advisory; no HIGH finding |
+| secret scan | `trufflehog --results=verified` | PASS | 0 verified findings |
+| log-leak lint | `scripts/dev/cwe532-leak-lint.py src crates` | PASS | 418 files scanned, 0 findings |
+| release ledger | `scripts/release/count-release-criteria.py --check` | PASS | 149 criteria, 189 rows, 188 met or non-blocking, **1 blocking** |
+| scope contract | `scripts/release/check_scope_acceptance.py --publish-check` | PASS | 31 criteria, 30 pending, 1 baseline blocking row |
+| release gate self-tests | `test_scope_acceptance.py`, `test_scope_contract_interface.py` | PASS | 44 + 12 tests, both OK |
+
+The first three rows on Spark were captured through `tail -60`, which truncated the suite output to
+its last twelve targets. The gate verdict was never in doubt — the runner records `PIPESTATUS[0]`,
+not the tail's status — but the *counts* above come from a second, untruncated run at the same
+commit rather than from the truncated log, because a truncated log is not evidence of a total.
+
+## D1–D30 + T1c
+
+| gate | verdict | evidence |
+|---|---|---|
+| D1 TESTED | PASS | 5,470 passing, 0 failing. Coverage was NOT re-measured at this head |
+| D2 COMPATIBLE | PASS | four behavioral changes are breaking and each carries a migration note in `docs/UPGRADING-4.0.md`, plus a one-time startup notice |
+| D3 MEASURED | PARTIAL | `RELEASE-4.0.0-performance.md` carries the before/after for the workload rows: 47 shared cases, none dropped, worst regression `session_sandbox/check_tool_denied` +6.07% `[+5.05%, +7.11%]` (86.27ns → 94.18ns), best gain 67% on `input_scanner/scan_clean_args_5_fields`. Ranking has no frozen baseline — that is criterion `MIK-3274.RANKING.3`, recorded NEEDS-MEASUREMENT |
+| D4 DRY | PASS | the evidence fix edited one document; the checker and its 44 tests were left alone deliberately |
+| D5 CONTRACTS | PASS | no public API change in the evidence fix; the branch's API changes are covered by the criteria ledger |
+| D6 E2E | OUTSTANDING | the FUNCTIONAL PASS gate needs a driven user journey against a deployed build. Blocked on the same operator deploy as NFR.SEC.7 |
+| D7 WIRED | PASS | `check_scope_acceptance.py` runs unconditionally in `ci.yml`, `docker.yml` and `release.yml`; both previously-red jobs read the same step |
+| D8 OBSERVABLE | NOT EVALUATED | no correlation-ID propagation sweep was run on this branch |
+| D9 STATIC | PASS | see the matrix above |
+| D10 0-BUG | PARTIAL | 0 debt markers in `src/`. One new lint suppression lands on this branch — `#[allow(clippy::too_many_lines)]` at `src/gateway/router/handlers.rs:620`. It suppresses a length lint, not a correctness lint, and it is the only `#[allow]` the diff adds |
+| D11 OPTIMIZED | PARTIAL | criterion benchmarks ran on Spark 2026-09-03; no profiling pass at this head |
+| D12 REVIEWED | NOT EVALUATED | no dual-vendor review has been run against the current head. This is the largest open process gate |
+| D13 TRACKED | PASS | committed, pushed, and carried by PR #528 |
+| D13a ISSUE-CLOSED | N/A | nothing may close before D18, and D18 is outstanding |
+| D13b EFFORT-LOGGED | NOT EVALUATED | no effort figure recorded |
+| D13c DEPS-UNBLOCKED | PASS | the 13 held `codex/v4-*` drafts each carry an explicit held-disposition comment naming the condition for revisiting |
+| D13d LABELED | NOT EVALUATED | PR labels not audited |
+| D14 DOCUMENTED | PASS | `docs/UPGRADING-4.0.md`, `CHANGELOG.md` 4.0.0 section, release-notes draft, criteria ledger |
+| D15 CLEAN | PASS | clean tree; the evidence fix removes a CI failure and adds no file |
+| D16 TELEMETRY | N/A | no savings-emitting change on this branch |
+| D17 LEARNINGS | PASS | recorded to memory |
+| D18 MERGED | OUTSTANDING | PR #528 is a draft, `mergeable: MERGEABLE`, state `BLOCKED`, review empty. Merge is the operator's act |
+| D19 BACKUP | N/A | no production state to snapshot at this stage |
+| D20 ROLLBACK | PASS | `docs/UPGRADING-4.0.md` §Rolling back states the 3.x downgrade path and why it does not re-prompt |
+| D21 CANARY | N/A | release-gating change, not a runtime high-risk path |
+| D22 TELEMETRY (structured) | NOT EVALUATED | no log-shape audit on this branch |
+| D23 ALERTING | NOT EVALUATED | no threshold or routing review |
+| D24 ENFORCEMENT | PASS | the scope check is enforced in three workflows, not documented only |
+| D25 SESSION | N/A | no agent-session persistence change |
+| D26 SEC-MONITOR | NOT EVALUATED | no security-channel audit at this head |
+| D27 COUPLING | PASS | no dependency added on this branch |
+| D28 API-SURFACE | NOT EVALUATED | no symbol count run against the merge-base |
+| D29 DEBT-TRAJ | PARTIAL | clippy is clean at `-D warnings`, which bounds but does not measure the trajectory; no dependency-graph comparison run |
+| D30 SUPPLY-CHAIN | PASS | `cargo audit` clean of advisories; no new dependency; lockfile unchanged by this commit |
+| T1c MOAT-MEASURED | NOT EVALUATED | flagged unanswered rather than guessed, as in the 2026-09-03 section |
+
+## Acceptance criteria for 4.0.0
+
+The criteria ledger (`RELEASE-4.0.0-criteria-status.md`) is the authority; this table is its
+one-line summary plus the supplemental scope contract.
+
+| # | Acceptance criterion | Status | Evidence |
+|---|---|---|---|
+| AC1 | Every release criterion is graded, none silently absent | MET | 149 criteria, 189 rows; `count-release-criteria.py --check` passes |
+| AC2 | At most one blocking criterion remains, and it is named | MET | NFR.SEC.7, `RELEASE-4.0.0-criteria-status.md:411`, `blocking: yes` |
+| AC3 | Static gates green at head | MET | fmt, clippy, audit, secret scan, log-leak lint — all exit 0 |
+| AC4 | Suite green at head | MET | 5,470 passing, 0 failing, 30 ignored |
+| AC5 | Breaking changes carry a migration path | MET | `docs/UPGRADING-4.0.md`, five items, each with the action needed |
+| AC6 | Performance contract measured, no regression past the freeze | MET (non-blocking PARTIAL on ranking) | worst case +6.07%, inside the <10% band; ranking baseline recorded as NEEDS-MEASUREMENT |
+| AC7 | Supplemental scope contract validates in CI | MET | `check_scope_acceptance.py --publish-check` green; both previously-red jobs read this step |
+| AC8 | Out-of-scope work is held with a stated condition, not abandoned | MET | 13 `codex/v4-*` drafts, each commented with its held disposition |
+| AC9 | Origin/Host enforcement proven against a deployed build | **NOT MET — blocking** | needs an operator deploy of a build carrying `5d25f104`; the listening process is `3.4.0-f30539af`, which predates it |
+| AC10 | A driven end-to-end journey passes against that build | **NOT MET — blocked by AC9** | D6 FUNCTIONAL PASS |
+| AC11 | Dual-vendor review of the release head | **NOT MET** | no review run at `a148c94e` |
+| AC12 | Merged to `main` | **NOT MET — operator act** | PR #528 draft, state `BLOCKED` |
+
+## Verdict
+
+**4.0.0 is gate-green on everything an agent can close, and is held by three things that need a
+human: a deploy, a review, and a merge.**
+
+The code-facing picture is clean and was run rather than asserted. Formatter, linter-as-SAST, the
+full 5,470-test suite, dependency audit, secret scan and the log-leak lint all pass at this head.
+The release ledger validates, the scope contract validates, and the two CI jobs that were red are
+red no longer — their single cause was this branch writing `path:line` citations into a JSON field
+whose contract is a repository path, which the acceptance checker resolves with `is_file()`. The
+fix put the data back into the format the contract and its 44 tests specify and moved the line
+numbers into each row's `note`, where they are still readable and nothing validates them. Widening
+the checker was the alternative and was rejected: a gate that resolves `scoring.rs:190` by
+discarding `:190` also accepts `scoring.rs:99999`, and this is the gate whose output says the
+release is shippable.
+
+What remains is not code. **NFR.SEC.7** is the single blocking criterion and is terminal for an
+agent: a listening process answers a foreign `Origin`/`Host` with the full tool list, and proving
+the fix requires the operator to deploy a build carrying `5d25f104`. Its second half — drift
+between merged and listening controls — was met on 2026-09-11 by `scripts/dev/check-control-drift.py`
+against `security-controls.toml`. **D6** cannot be driven until that deploy exists. **D12** needs a
+dual-vendor review at this head. **D18** is the operator's merge.
+
+Twelve gates are NOT EVALUATED and are listed as such rather than folded into N/A: observability,
+API surface, coupling trajectory beyond clippy, telemetry shape, alerting, security monitoring,
+effort, labels, documentation de-duplication, duplicate-function detection, `pub`-item reachability,
+and T1c. None of them is a discovered defect; each is an analysis pass nobody has run on this
+branch, and the difference between that and a clean bill of health is the reason this table exists.
+
+---
+
 # DoD re-check at `c3083368` — 2026-09-03
 
 **Head**: `c3083368` (`docs(criteria): record the row-6 elimination and the row-9a red test`) ·
