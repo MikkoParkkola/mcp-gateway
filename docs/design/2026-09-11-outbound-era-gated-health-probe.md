@@ -136,11 +136,16 @@ trip a breaker, never rebuild, and its only trace would be a counter nobody read
 3. **Three consecutive** (30s at the default interval) escalate to the fault arm: trip the
    breaker and `force_restart()`.
 
-Three is the smallest count that cannot be reached without a completed re-classification
-in the refusal case: probe (refuse, invalidate) -> probe (re-classified era, refuse) ->
-probe (refuse again). A peer that will not serve the liveness method of the era it was
-*just* re-classified into is not serving. The threshold is a constant, not a config knob -
-no requirement asks for one, and an unbounded arm is the defect, not a tuning surface.
+Three is justified twice over, once per half of the arm. **For a refusal** it is the
+smallest count that cannot be reached without a completed re-classification: probe
+(refuse, invalidate) -> probe (re-classified era, refuse) -> probe (refuse again). A peer
+that will not serve the liveness method of the era it was *just* re-classified into is not
+serving. **For every other error code** there is no re-classification to wait for, so the
+count carries the whole argument on its own: three consecutive unserved answers span 30s
+at the default interval, which separates a handler that threw once from one that is
+wedged, and the reset on a served result means a backend that flaps between errors and
+results never escalates at all. The threshold is a constant, not a config knob - no
+requirement asks for one, and an unbounded arm is the defect, not a tuning surface.
 
 **This requires the HTTP transport to stop flattening a refusal into a string.** A non-2xx
 response whose body is a JSON-RPC error is currently `Err(safe_http_status_error(..))`
@@ -187,7 +192,7 @@ evidence that the fix did anything; only the regression rows are evidence it bro
 | 3 | unreachable/unclassified backend takes the legacy arm | no - regression guard | same; pins `classify`'s "silence is not modern" rule at this call site |
 | 4 | in-band `-32601` (stdio): tripped breaker **unchanged**, counter increments, no restart | **yes** | HEAD reads `Ok(Ok(_))` as success and resets the breaker (`:1054-1061`) |
 | 5 | `-32601` carried as an HTTP 404 body: same three assertions | **yes** | HEAD reads `Ok(Err(_))` as a fault and calls `force_restart()` (`:1064-1066`) |
-| 6 | `-32603` on a tripped breaker: breaker **unchanged**, no restart | **yes** | HEAD resets on any in-band answer; this is the row that pins §3's widened middle arm, and the one an implementation narrowing it back to `-32601` would break |
+| 6 | `-32603` on a tripped breaker: breaker **unchanged**, no restart, **and the cached era unchanged** | **yes** | HEAD resets on any in-band answer; this is the row that pins §3's widened middle arm, and the one an implementation narrowing it back to `-32601` would break. The era assertion is what stops the widened arm from widening invalidation with it: only method-not-found is evidence about era, so an implementation wiring invalidation to "any unserved answer" must fail here |
 | 7 | closed socket / timeout still trips and restarts | no - regression guard | current behaviour; guards against fixing 4-6 by making everything healthy |
 | 8 | a valid `server/discover` result on a tripped breaker resets it | no - regression guard | current behaviour for a result; guards against fixing 4-6 by making nothing healthy |
 | 9 | after a `-32601`, the cached era for that backend is no longer `Modern`, and the **next tick** re-probes | **yes** | no invalidation and no re-classification path exists on this call site |
