@@ -117,7 +117,21 @@ jobs:
         # First, so a tag/manifest mismatch stops the run before anything is
         # built, let alone published. On workflow_dispatch GITHUB_REF_NAME is
         # the dispatch branch, so the input has to be passed explicitly.
-        run: python3 scripts/release/check_tag_manifest.py --tag "${{ inputs.tag }}"
+        #
+        # The input reaches the shell as an environment value, never as
+        # interpolated script text: `${{ inputs.tag }}` expanded inside `run:`
+        # is substituted before bash parses the line, so a dispatch tag
+        # containing shell metacharacters would execute as code on the runner
+        # that holds the publishing credentials.
+        # https://docs.github.com/en/actions/concepts/security/script-injections
+        #
+        # On a tag push `inputs.tag` renders empty and the gate falls back to
+        # $GITHUB_REF_NAME, which is the tag. That fallback is keyed on
+        # emptiness rather than on the argument being absent, so passing `""`
+        # here is the normal release path, not a degenerate one.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: python3 scripts/release/check_tag_manifest.py --tag "$INPUT_TAG"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -370,16 +384,17 @@ jobs:
     runs-on: avrea-ubuntu-latest-4-vcpu
 
     steps:
-      - name: Compute version and download checksums
+      - name: Download checksums for the verified tag
         id: meta
+        # Tag and version come from `verify`, which already derived and
+        # validated them against the manifest. Re-deriving them here would give
+        # this job two sources of truth: the channel decision above reads
+        # verify's classification while the artifacts read a local expansion, so
+        # a divergence would fetch one release's checksums under another's
+        # channel rule.
         env:
-          TAG_REF: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ needs.verify.outputs.tag }}
         run: |
-          TAG="${TAG_REF}"
-          VERSION="${TAG#v}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
           curl --fail --location --silent --show-error \
             "https://github.com/MikkoParkkola/mcp-gateway/releases/download/${TAG}/SHA256SUMS.txt" \
             -o SHA256SUMS.txt
@@ -404,8 +419,8 @@ jobs:
 
       - name: Rewrite formula
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
-          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          TAG: ${{ needs.verify.outputs.tag }}
           SHA_DARWIN_ARM64: ${{ steps.meta.outputs.sha_darwin_arm64 }}
           SHA_DARWIN_X86_64: ${{ steps.meta.outputs.sha_darwin_x86_64 }}
           SHA_LINUX_AARCH64: ${{ steps.meta.outputs.sha_linux_aarch64 }}
@@ -487,7 +502,7 @@ jobs:
       - name: Commit and push formula bump
         working-directory: homebrew-tap
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.verify.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -143,6 +143,15 @@ class EffectiveTag(unittest.TestCase):
             code, _ = run(root, tag="v4.0.0-rc.1", env={"GITHUB_REF_NAME": "main"})
         self.assertEqual(code, 0)
 
+    def test_empty_tag_falls_back_to_ref_name(self):
+        # release.yml passes `--tag "$INPUT_TAG"` unconditionally, and
+        # inputs.tag renders empty on a tag push. The fallback therefore has to
+        # be keyed on emptiness, not on the argument being absent: keyed on
+        # absence, the main release path would exit 2 and block every publish.
+        with repo("4.0.0") as root:
+            code, _ = run(root, tag="", env={"GITHUB_REF_NAME": "v4.0.0"})
+        self.assertEqual(code, 0)
+
     def test_empty_tag_and_ref_name_is_unusable(self):
         with repo("4.0.0") as root:
             code, stderr = run(root, tag="")
