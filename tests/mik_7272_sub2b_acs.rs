@@ -468,15 +468,20 @@ async fn stdio_session(home: &Path) -> StdioSession {
 /// token.
 ///
 /// GIVEN a fixture that emits a progress notification and then blocks,
-/// WHEN the client releases it with a second call made only after the
-/// notification has been read off stdout,
+/// WHEN the client releases it through the fixture's own gate, and only after
+/// the notification has been read off stdout,
 /// THEN the notification line precedes the response line and carries the
 /// client's token byte-identically.
 ///
-/// The release is what makes this liveness rather than ordering: a gateway
-/// that buffered notifications and flushed them with the response would never
-/// reach the release, and this row would time out — ADR-014 row 4's
-/// *"deadlocks here instead of passing"*.
+/// The ORDER of those two steps is what makes this liveness rather than
+/// ordering: the release is withheld until the notification has actually been
+/// read, so a gateway that buffered notifications and flushed them with the
+/// response would never reach the release and this row would time out —
+/// ADR-014 row 4's *"deadlocks here instead of passing"*.
+///
+/// The release is a semaphore permit rather than a second JSON-RPC call
+/// because `Gateway::run_stdio` awaits each dispatch inline: a release sent as
+/// id 3 is not read until the call it releases has already returned.
 #[tokio::test]
 async fn s02_stdio_progress_reaches_its_own_call_before_the_result() {
     // GIVEN
@@ -551,6 +556,11 @@ async fn s02_stdio_progress_reaches_its_own_call_before_the_result() {
 /// One call is in flight, so attribution is unambiguous even without a
 /// linkage field. That is exactly why this row exists over stdio and its
 /// `S-03` counterpart does not.
+///
+/// The row steps over the gateway's OWN audit line to find the backend's, then
+/// asserts that line was delivered too. Without that second assertion a stdio
+/// setter that never classified the request would still pass here, and the
+/// classify-and-set seam would be proven on HTTP only.
 #[tokio::test]
 async fn s02_stdio_message_reaches_its_own_call_before_the_result() {
     // GIVEN
@@ -580,12 +590,22 @@ async fn s02_stdio_message_reaches_its_own_call_before_the_result() {
     // `Gateway::run_stdio` awaits each dispatch inline, so an id-3 release
     // would not be read until the call it is meant to release had returned.
     gate.add_permits(1);
-    let (_, result) = session.read_until(|frame| has_id(frame, 2)).await;
+    let (after_notification, result) = session.read_until(|frame| has_id(frame, 2)).await;
 
     // THEN
     assert!(
         !before_notification.iter().any(|frame| has_id(frame, 2)),
         "the response arrived before its own notification: {before_notification:?}"
+    );
+    assert!(
+        before_notification
+            .iter()
+            .chain(after_notification.iter())
+            .any(|frame| is_method(frame, "notifications/message") && is_gateway_own(frame)),
+        "the gateway's own audit line never reached the stdio client, so the \
+         declaration was never classified on this transport; both sides are \
+         checked because the audit line may land before or after the \
+         backend's own notification"
     );
     assert!(
         result.is_some(),

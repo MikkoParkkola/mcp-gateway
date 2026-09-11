@@ -648,12 +648,12 @@ impl Transport for StdioTransport {
         let message = serde_json::to_string(&request)?;
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id.to_string(), tx);
-        // Removing the entry is the guard's job now: on the success path the
-        // reader task has already routed the response, on an internal timeout
-        // this block removes it explicitly, and on CANCELLATION (an outer
-        // timeout or task abort dropping this future mid-await) the guard's
-        // Drop removes it — without it a stranded entry would leak here for
-        // the transport's lifetime.
+        // Removing the entry is the guard's job on every path: on success the
+        // reader task has already routed the response and the removal is a
+        // no-op, and on an error, an internal timeout or CANCELLATION (an
+        // outer timeout or task abort dropping this future mid-await) the
+        // guard's Drop is the only thing that removes it — without it a
+        // stranded entry would leak here for the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
         // Both guards drop after this value is produced, which is where the
