@@ -1997,7 +1997,11 @@ pub(in crate::gateway) async fn era_removed_method(
     if !crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method) {
         return false;
     }
-    tracing::warn!(
+    // `debug!`, not `warn!`: the refusal is triggered by whatever method a
+    // client asks for, so at `warn!` a client polling a removed method sets
+    // the gateway's log volume. The counter below carries the same event at a
+    // volume an operator controls.
+    tracing::debug!(
         backend = %backend.name,
         method,
         "Refusing a method the backend's protocol revision removed"

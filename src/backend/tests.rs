@@ -1525,10 +1525,16 @@ async fn row_10c_a_tick_landing_during_a_probe_is_skipped_not_counted() {
         tokio::spawn(async move { backend.health_probe(Duration::from_secs(5)).await })
     };
     // The mock records the method before it waits, so one recorded method is
-    // the proof that the first probe is on the wire.
-    while mock.methods().is_empty() {
-        tokio::task::yield_now().await;
-    }
+    // the proof that the first probe is on the wire. Bounded: if the spawned
+    // probe never records, this row's failure belongs in the report, not in a
+    // CI job that hangs until its own timeout kills the whole suite.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while mock.methods().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first probe never reached the mock");
 
     let skipped = backend.health_probe(Duration::from_secs(5)).await;
     assert!(
