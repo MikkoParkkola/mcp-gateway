@@ -517,6 +517,13 @@ mod cli {
             .current_dir(home)
             .stdin(Stdio::null())
             .kill_on_drop(true);
+        // The child is instrumented under cargo-llvm-cov, and env_clear() above
+        // removes the profile path it writes to. Without it the child falls back
+        // to `default_*.profraw` in its cwd -- which is the directory these tests
+        // snapshot -- and its coverage is discarded with the tempdir.
+        if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+            command.env("LLVM_PROFILE_FILE", profile);
+        }
         if setup {
             command
                 .args(["setup", "wizard", "--yes", "--output"])
