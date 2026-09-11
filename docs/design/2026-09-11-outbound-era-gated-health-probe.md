@@ -253,10 +253,13 @@ is recovered today and would stop being recovered under the rule as written. Row
 code to still re-initialize.
 
 **The classifier grows an `Error::JsonRpc` arm; the transport keeps parsing 404 bodies.**
-The arm matches a session code or a session message and nothing else - `-32015`, or a
-case-insensitive `session not found` in the message, the same two signals
-`is_session_expired_response` already reads from a 200-carried error
-(`src/transport/http/mod.rs:186-192`). Three constraints fix this shape:
+The arm matches a session code or a session message and nothing else - `-32015`, a
+case-insensitive `session not found`, or the `SESSION_EXPIRED_MARKER` string
+`session expired` (`src/security/http_diagnostics.rs:15`). The first two are the signals
+`is_session_expired_response` already reads from a 200-carried error; the third is not
+one of those - it mirrors the `Transport` arm immediately above so a peer that words its
+expiry as "session expired" reaches the same verdict on both carriages
+(`src/transport/http/mod.rs:186-194`). Three constraints fix this shape:
 
 - *`-32600` does not come along.* `is_session_expired_response` accepts it because a
   200-carried `Invalid Request` was observed to mean session-not-found on real remotes,
