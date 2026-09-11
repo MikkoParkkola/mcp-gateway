@@ -116,10 +116,12 @@ def _health_version(endpoint):
             else http.client.HTTPConnection
         )
         conn = conn_class(parts.netloc, timeout=TIMEOUT_SECONDS)
-        conn.request("GET", "/health")
-        response = conn.getresponse()
-        payload = json.loads(response.read() or b"{}")
-        conn.close()
+        try:
+            conn.request("GET", "/health")
+            response = conn.getresponse()
+            payload = json.loads(response.read() or b"{}")
+        finally:
+            conn.close()
         return payload.get("version")
     except (OSError, http.client.HTTPException, ValueError):
         return None
@@ -142,14 +144,18 @@ def _provenance(commit, version, repo_root):
             ["git", "-C", str(repo_root), *args],
             capture_output=True,
             text=True,
+            timeout=TIMEOUT_SECONDS,
         )
 
-    if git("rev-parse", "--verify", f"{tag}^{{commit}}").returncode != 0:
-        return f"provenance unavailable: {tag} is not a tag in this repository"
-    if git("rev-parse", "--verify", f"{commit}^{{commit}}").returncode != 0:
-        return f"provenance unavailable: {commit} is not a commit in this repository"
-    if git("merge-base", "--is-ancestor", commit, tag).returncode == 0:
-        return f"provenance: {commit} is in {tag}"
+    try:
+        if git("rev-parse", "--verify", f"{tag}^{{commit}}").returncode != 0:
+            return f"provenance unavailable: {tag} is not a tag in this repository"
+        if git("rev-parse", "--verify", f"{commit}^{{commit}}").returncode != 0:
+            return f"provenance unavailable: {commit} is not a commit in this repository"
+        if git("merge-base", "--is-ancestor", commit, tag).returncode == 0:
+            return f"provenance: {commit} is in {tag}"
+    except subprocess.TimeoutExpired:
+        return "provenance unavailable: git did not answer within the timeout"
     return f"provenance: {commit} is NOT in {tag} -- the build predates the control"
 
 
@@ -185,6 +191,13 @@ def run(manifest_path=DEFAULT_MANIFEST, endpoint=None, version=None, repo_root=R
         if negative < 400:
             failures += 1
             verdicts.append(f"FAIL: the refused request was answered {negative}")
+        elif negative >= 500:
+            failures += 1
+            verdicts.append(
+                f"FAIL: the refused request errored {negative}"
+                " -- a broken handler answers every request that way; it is not"
+                " evidence the control refused"
+            )
         else:
             verdicts.append(f"refused {negative}")
         if positive >= 400:

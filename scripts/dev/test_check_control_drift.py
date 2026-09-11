@@ -56,15 +56,20 @@ class _Stub(BaseHTTPRequestHandler):
             return self._send(403, {"error": "no"})
         if mode == "refuses-nothing":
             return self._send(200, {"result": {"tools": []}})
-        # "control-present": refuse a foreign Origin or a foreign Host.
+        # "control-present" and "errors-on-foreign" both single out the request
+        # the control exists to refuse; they differ only in how they answer it.
         origin = self.headers.get("Origin")
         host = self.headers.get("Host", "")
         allowed_host = f"127.0.0.1:{self.server.server_address[1]}"
-        if origin is not None and origin not in (f"http://{allowed_host}",):
-            return self._send(403, {"error": "origin"})
-        if host != allowed_host:
-            return self._send(403, {"error": "host"})
-        return self._send(200, {"result": {"tools": []}})
+        if origin is not None and origin != f"http://{allowed_host}":
+            reason = "origin"
+        elif host != allowed_host:
+            reason = "host"
+        else:
+            return self._send(200, {"result": {"tools": []}})
+        if mode == "errors-on-foreign":
+            return self._send(500, {"error": reason})
+        return self._send(403, {"error": reason})
 
     def _send(self, status, payload):
         body = json.dumps(payload).encode()
@@ -183,6 +188,14 @@ class TestControlDrift(unittest.TestCase):
             code, report = drift.run(_manifest(BOTH_PROBES), stub.endpoint)
         self.assertNotEqual(code, 0)
         self.assertIn("legitimate request", report)
+
+    # Row 6: a handler that errors on the request the control should refuse
+    # answers >= 400 without refusing anything. Only 4xx counts as a refusal.
+    def test_server_error_on_the_refusable_request_fails(self):
+        with _StubServer("errors-on-foreign") as stub:
+            code, report = drift.run(_manifest(BOTH_PROBES), stub.endpoint)
+        self.assertNotEqual(code, 0)
+        self.assertIn("errored 500", report)
 
     def test_unreachable_endpoint_fails_distinctly(self):
         # Port 1 on loopback: nothing listens, and binding it needs root.
