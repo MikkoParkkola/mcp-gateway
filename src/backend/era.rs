@@ -87,6 +87,16 @@ impl Backend {
         self.era.observation().await
     }
 
+    /// Test-only reach-through to [`Backend::resolve_era`] for rows that live
+    /// outside `crate::backend`: the section 4 gate rows exercise gateway call
+    /// sites and still need a peer whose era came from its own answer rather
+    /// than from a setter. A `#[cfg(test)]` wrapper rather than widening
+    /// `resolve_era` itself, so the production visibility stays `pub(super)`.
+    #[cfg(test)]
+    pub(crate) async fn resolve_era_for_test(&self, transport: &Arc<dyn Transport>) {
+        self.resolve_era(transport).await;
+    }
+
     /// Resolve the era of a freshly started peer, probing at most once.
     ///
     /// Awaited on the start path so the first request already knows which

@@ -1062,10 +1062,10 @@ impl Transport for ProbeMock {
 /// else, so losing the slot is the probe's restart observable. Counting
 /// `close()` calls is not: the probe holds an internal-activity lease for its
 /// whole duration, so `force_restart` always takes its busy branch and defers
-/// the close to a task that waits for every other owner of the `Arc` to let go
-/// - and a test that keeps `mock` to assert on is one of those owners, so the
-/// count cannot move in any row here. Row 7 is the control that proves this
-/// observable does.
+/// the close to a task that waits for every other owner of the `Arc` to let
+/// go, and a test that keeps `mock` to assert on is one of those owners, so
+/// the count cannot move in any row here. Row 7 is the control that proves
+/// this observable does.
 fn still_wired(backend: &Backend, mock: &Arc<ProbeMock>) -> bool {
     backend
         .pooled_transport_for_test(&crate::backend::pool::PoolKey::Shared)
@@ -1341,6 +1341,32 @@ async fn row_9_method_not_found_to_discover_invalidates_the_cached_era() {
     );
 }
 
+/// Row 9e — the status-carried twin of row 9, and the one row that pins the
+/// only new plumbing section 3 adds: a `-32601` arriving as `Err(Error::JsonRpc)`
+/// is the same evidence about era as the in-band one. Row 9 is in-band only and
+/// row 5 starts from a legacy cache, so without this row an HTTP peer that
+/// refuses `server/discover` with a 404 keeps a `Modern` cache and is probed
+/// forever with the method it just refused.
+#[tokio::test]
+async fn row_9e_a_status_carried_method_not_found_also_invalidates_the_era() {
+    let mock = Arc::new(ProbeMock::modern_then(vec![ProbeAnswer::StatusError(
+        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+    )]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+    assert_eq!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern)
+    );
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert_ne!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern),
+        "a refusal carried by the status line is the same evidence as an in-band one"
+    );
+}
+
 /// Row 9c — re-classification comes only from positive evidence, never from an
 /// absence. A served `ping` says nothing about the era, and an implementation
 /// reading any successful probe as "the peer is fine, restore what we thought"
@@ -1364,9 +1390,10 @@ async fn row_9c_a_served_ping_is_not_evidence_of_modernity() {
 
 /// Row 9b — re-classification works in both directions, and the evidence
 /// arrives **off the probe path**. The start path's `resolve_era` is what
-/// returns a peer to `Era::Modern`; the health tick never sends
-/// `server/discover` to a backend it has just reclassified as legacy, which is
-/// the mirror-image OUTBOUND.1 defect.
+/// returns a peer to `Era::Modern`, and the tick that follows must select the
+/// modern method again. Restoring the verdict without restoring the method
+/// selection is the mirror-image OUTBOUND.1 defect, so the row asserts the
+/// method of one controlled tick rather than the accessor alone.
 #[tokio::test]
 async fn row_9b_positive_evidence_off_the_probe_path_reclassifies_the_peer() {
     let mock = Arc::new(
@@ -1394,6 +1421,17 @@ async fn row_9b_positive_evidence_off_the_probe_path_reclassifies_the_peer() {
         backend.cached_era().await,
         Some(crate::protocol::era::Era::Modern),
         "positive evidence must be able to restore the modern verdict"
+    );
+
+    // One controlled tick after the restoration. Snapshotting first is what
+    // makes it controlled: `resolve_era` and any detached probe have already
+    // written their methods, so the tail below belongs to this tick alone.
+    let before = mock.methods().len();
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+    assert_eq!(
+        mock.methods()[before..],
+        ["server/discover".to_string()],
+        "a peer restored to Modern is probed with the modern method again"
     );
 }
 

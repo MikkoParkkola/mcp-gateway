@@ -2192,8 +2192,12 @@ async fn request_through_retry(
 
 /// Row 16 - a non-probe caller receiving a status-carried JSON-RPC error sees
 /// the peer's own refusal, and is not retried. The assertions read the variant
-/// and the ask count, never the rendered string: `Error::JsonRpc` and
-/// `Error::Transport` render identically on purpose (`src/error.rs:159`).
+/// and the ask count, never the rendered string. What this row separates is a
+/// classification, and the error type has a rendering collision by design:
+/// `Error::TransportConnect`'s `Display` is byte-identical to
+/// `Error::Transport`'s (`src/error.rs:158-167`), so a string assertion cannot
+/// say which transport variant it caught, and the message this row does read -
+/// the peer's own text - would survive a wrong variant intact.
 ///
 /// The status is 405 and not 404 deliberately. A 404 is the one status already
 /// entangled with session recovery - `is_session_expired_error`
@@ -2238,6 +2242,55 @@ async fn row_16_a_status_carried_json_rpc_error_reaches_the_caller_as_json_rpc()
         hits.load(Ordering::Relaxed),
         1,
         "a refusal is terminal: retrying it asks a peer that already answered"
+    );
+
+    server.abort();
+}
+
+/// Row 16e - the referee for section 3's ruling 2b, which rows 16 and 16d
+/// cannot settle between them: 16 uses a 405 and 16d a session-shaped 404, so
+/// neither forces a 404 *refusal* to become `Error::JsonRpc`. A design that
+/// exempted 404 from body parsing to protect session recovery would keep both
+/// green while making the status-carried arm unreachable on the real HTTP path,
+/// because 404 is the refusal carriage `STATELESS.5b` names.
+///
+/// The stale session is planted deliberately. Without it the 404 branch of
+/// `is_session_expired_error` (`src/transport/http/mod.rs:164`) has nothing to
+/// recover and the row would pass for the wrong reason; with it, one hit proves
+/// the refusal neither re-initialized nor retried.
+#[tokio::test]
+async fn row_16e_a_404_carrying_a_refusal_is_terminal_and_does_not_reinitialize() {
+    let (addr, hits, server) = spawn_fixed_response_server(
+        axum::http::StatusCode::NOT_FOUND,
+        r#"{"jsonrpc":"2.0","id":{id},"error":{"code":-32601,"message":"Method not found: tools/list"}}"#,
+    )
+    .await;
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+    transport
+        .sessions
+        .write()
+        .insert(String::new(), "stale-session".to_string());
+
+    let err = request_through_retry(&transport, "tools/list")
+        .await
+        .expect_err("a refused call must not report success");
+
+    match &err {
+        Error::JsonRpc { code, .. } => assert_eq!(
+            *code,
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            "a 404 is the spec's refusal carriage; the peer's code must survive it"
+        ),
+        other => panic!(
+            "a 404 carrying a refusal must reach the caller as Error::JsonRpc, got: {other:?}"
+        ),
+    }
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        1,
+        "a refusal is terminal even under 404: no retry and no re-initialize"
     );
 
     server.abort();
