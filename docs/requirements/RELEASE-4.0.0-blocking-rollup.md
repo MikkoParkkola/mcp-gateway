@@ -1407,8 +1407,16 @@ reason that `v4.0.0` is not yet a tag here — which is the same sentence as "th
 being released, not one already released".
 
 **What this changes.** `NFR.SEC.7` is two facts, and only one of them was ever a code
-question. The control is merged, enabled by default configuration, and enforcing on the wire
-in a v4.0.0 build — measured, not inferred. What remains is that the install on 39401 has not
+question. The control is merged, unconditional, and enforcing on the wire in a v4.0.0 build —
+measured, not inferred. "Unconditional" is a source fact rather than a probe result, and it is
+the stronger of the two: `src/gateway/router/mod.rs:312-315` attaches the middleware to the
+fully merged router with no enabling flag, and `OriginPolicy::from_live`
+(`src/gateway/router/origin_guard.rs:76`) reads configuration only to decide *which* origins
+are allowed — there is no setting that switches the gate off. That matters because the probed
+instance was not running on the written YAML alone: its startup log shows 196 capabilities
+loaded from `~/github/mcp-gateway-private/capabilities`, a path the probe config never named,
+so an ambient config layer was in force during the measurement. It could not have enabled or
+disabled the guard, because nothing can. What remains is that the install on 39401 has not
 been rebuilt from it, and rebuilding it means restarting the gateway that other sessions are
 holding MCP connections to. That is an operator action with a blast radius outside this lane,
 not an engineering gap, and the release-readiness question it leaves is "when is the install
@@ -1416,3 +1424,18 @@ cut over", not "does the control exist".
 
 The local instance was stopped after the probe and the install on 39401 was re-checked
 afterwards: still `3.4.0`, still healthy, 32 backends, untouched.
+
+## 2026-09-11 — what this lane verified, and the one suite it did not run
+
+The absence-clears-the-slot repair (`e8c941ca`) and the registration drop guard
+(`903bc41e`) were verified with: the library unit suite (4229 passed, 0 failed, 3 ignored),
+clippy at `--all-targets --all-features -- -D warnings` (exit 0), and a format check
+(exit 0). The repair's own test was checked against a restored early return — it failed with
+the inherited level present in the delivered frame, and passed once the repair was back.
+
+The acceptance binary `tests/mik_7272_sub2b_acs.rs` was **not** re-run in this lane. It is the
+test target closest to the change, exercising the classify-and-set seam on both transports, so
+its absence is a real gap in this lane's evidence rather than a formality. Its last recorded
+result stands from earlier the same day at `364f4373`: 7 passed, 0 failed, 3 ignored — which
+predates both commits above. The file is owned by a concurrent lane and is not edited from
+here; that lane holds the current result.
