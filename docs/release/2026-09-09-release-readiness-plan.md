@@ -1195,3 +1195,40 @@ only a measurement can answer; the fix then reached for a measurement that had g
 and used it the same way. A captured run file is evidence about the tree it ran against. It
 carries a commit, and if the quote does not carry one too, it is not yet evidence about
 now.
+
+### 2026-09-11, ruling: ADR-014 governs the correlation half, and its owner just died
+
+`b9e1fb95` ("docs(adr): mint stdio progress tokens instead of the caller's", +181/-55) is
+the design of record for the correlation half. It decides the mint, the
+`minted → (caller token, sender)` entry and the translate-back, and at `:158` it already
+requires the drop guard to cover "cancellation alike", for the stated reason that the
+registration would otherwise outlive the sink. A second design document written today
+(`docs/design/2026-09-11-sub2b-stdio-minted-progress-token.md`) is **subordinate**: it is an
+implementation plan, not a competing design, and it is deliberately not going through an
+independent design review. One criterion carrying two separately-reviewed documents is
+several rounds spent reconciling two texts that are each individually correct.
+
+Two things in it are worth keeping, because the ADR does not decide them at that
+granularity. Store the caller's original `Value` rather than its string form — that is what
+makes the translate-back byte-identical across the `Number`/`String` collapse the ADR names
+as reason (1). And generalise the existing `PendingRequestGuard` over its value type instead
+of adding a second near-identical guard. Both are implementation choices and belong at the
+call site, not in a document.
+
+The subordinate doc's drop-guard section is worth reading as what it actually found: not a
+gap in the ADR, but a gap in *today's code* against what the ADR already demands. The
+release after `outcome` is a plain statement, so it covers `Ok`, transport error and
+timeout, and does not cover the future being dropped mid-await. That path leaks one entry
+and holds the caller's sink open. A panicked reader task costs one `request_timeout` per
+in-flight call and no map growth, because the guard still drops on that path.
+
+**Ownership is now uncertain.** `row6-mint-2` answered that it was working the row and that
+no new design was needed — correct — and then failed on the 32000-token output ceiling,
+which lands no writes. `row6-mint` has not answered. The half may be unowned; a status
+request is out to `row6-mint`, and the lane that wrote the subordinate doc is next in line
+with the analysis already done. Whoever takes it cannot start until `stdio-concurrent`
+commits the emitter, because the work lands in the same file.
+
+One operational note, since it cost an owner: an agent killed by the output ceiling
+persists nothing. On a criterion this long-running, commit each piece as it works rather
+than reporting a large result at the end.
