@@ -388,9 +388,9 @@ the suite. Found by adversarial review, 2026-09-11.
 | 8 | a `ping` result on the legacy arm resets a tripped breaker | no - regression guard | current behaviour for a result; guards against fixing rows 4 to 6 by making nothing healthy |
 | 8b | a valid `server/discover` result on the modern arm resets a tripped breaker too | **yes** | HEAD never sends `server/discover` from the probe, so this half cannot pass today and marking it a regression guard alongside row 8 gave one row two before-states. It stops an implementation from wiring the reset into the legacy branch only. Found by adversarial review, 2026-09-11 |
 | 9 | after a `-32601` to `server/discover`, **`cached_era()` is no longer `Some(Era::Modern)`** - the accessor alone | **yes** | no invalidation path exists on this call site, and naming the method is what makes the re-classification rule falsifiable rather than implied. The accessor is the fail-first half and the method is not: HEAD sends `ping` unconditionally, so "the next tick sends `ping`" is already true at HEAD and would mark this row fail-first on an assertion that is green before any fix. It becomes a real pin only once row 1 lands, and it is then a re-observation of rows 1 and 2, which already pin method selection as a function of the era - so the row drops it rather than carrying a duplicate. It could not be observed cleanly in any case: the invalidation spawns a **detached** classification probe, and that probe's own `server/discover` reaches the same mock at a time no test controls, so an assertion over the recorded methods would be racing it. The judgment itself lives in `reprobe_if_contradicted`, which the probe must be wired to rather than reimplement. Found by adversarial review, 2026-09-11; narrowed while writing the row, same day |
-| 9b | re-classification is possible in both directions, **and the evidence arrives off the probe path**: after the row 9 invalidation, the start path's `resolve_era` answers `server/discover` with a document naming a modern revision, `cached_era()` returns to `Some(Era::Modern)`, and the following health tick sends `server/discover` again - with **no probe-side `server/discover` on the wire between the invalidation and the re-classification** | **yes** | the invalidation path does not exist at HEAD, so neither does its inverse. The driver is named because the obvious fixture - re-probing through the health tick - contradicts row 9 and would teach the suite the mirror-image OUTBOUND.1 defect. Found by adversarial review, 2026-09-11. Without this row an implementation that invalidates and never re-classifies leaves every peer permanently legacy and still passes rows 1 through 9 |
+| 9b | re-classification is possible in both directions, **and the evidence arrives off the probe path**: after the row 9 invalidation, the start path's `resolve_era` answers `server/discover` with a document naming a modern revision, `cached_era()` returns to `Some(Era::Modern)`, and the following health tick sends `server/discover` again - with **no probe-side `server/discover` on the wire between the invalidation and the re-classification** | **yes** | the invalidation path does not exist at HEAD, so neither does its inverse. The driver is named because the obvious fixture - re-probing through the health tick - contradicts row 9 and would teach the suite the mirror-image OUTBOUND.1 defect. Found by adversarial review, 2026-09-11. Without this row an implementation that invalidates and never re-classifies leaves every peer permanently legacy and still passes rows 1 through 9. The re-classification half is a **second-stage pin**: the row fails at HEAD on the invalidation assertion - row 9's defect - and only starts discriminating once invalidation lands. Recorded from the fail-first run, 2026-09-11 |
 | 9c | a served `ping` after the row 9 invalidation leaves `cached_era()` not `Some(Era::Modern)` - the accessor alone, for the reason row 9 gives | **yes** | §3 rules that re-classification comes only from positive evidence and never from an absence. A `ping` result is an absence of evidence about the era, and an implementation reading any successful probe as "the peer is fine, restore what we thought" sends the modern liveness method to a peer just reclassified as legacy. No row otherwise closes it. Found by adversarial review, 2026-09-11 |
-| 9d | the escalation sequence §3 uses to justify the bound, end to end: `server/discover` refused `-32601` (era invalidated, count 1), `ping` refused (count 2), `ping` refused (count 3, trip and `force_restart()`) | **yes** | the bound's own worked example, and the one sequence that crosses an era invalidation. An implementation that resets the unserved count when it invalidates the era leaves a refuse-everything backend permanently wedged and green, and passes rows 10 through 11b unchanged. Found by adversarial review, 2026-09-11 |
+| 9d | the escalation sequence §3 uses to justify the bound, end to end: `server/discover` refused `-32601` (era invalidated, count 1), `ping` refused (count 2), `ping` refused (count 3, trip and `force_restart()`) | **yes** | the bound's own worked example, and the one sequence that crosses an era invalidation. An implementation that resets the unserved count when it invalidates the era leaves a refuse-everything backend permanently wedged and green, and passes rows 10 through 11b unchanged. Found by adversarial review, 2026-09-11. The crossing-an-invalidation half is a **second-stage pin**: at HEAD the row fails on `is_circuit_tripped()` being false because the probe never records a failure at all (`lifecycle.rs:1053`, whose doc comment says the breaker is left for organic traffic to trip), which is the same undifferentiated state rows 10 through 11b own. The count-survives-invalidation half only starts discriminating once the counter and its accessor land. Recorded from the fail-first run, 2026-09-11 |
 | 10 | escalation: unserved answers 1 and 2 leave the breaker unchanged, the third trips and restarts | **yes** | no counter exists |
 | 10b | `force_restart()` resets the count: after an escalation, two further unserved answers must **not** trip a second time | **yes** | no counter exists. §3 rule 2 makes "a rebuilt backend starts from zero" load-bearing for the three-count arithmetic, and an implementation that never clears the counter restarts every tick after the first escalation |
 | 10c | a probe whose answer is delayed past one full interval: exactly one request is in flight on the wire, the tick that lands during it is skipped, and the escalation count advances by one - not two | **yes** | no counter and no in-flight guard exist. §3 rule 2 defines "consecutive" over answers rather than ticks, and an implementation counting ticks escalates a healthy-but-slow backend to a restart every 30s |
@@ -410,3 +410,47 @@ Rows 1, 4, 5, 6, 6b, 8b, 9, 9b, 9c, 9d, 10, 10b, 10c, 11, 11b, 13, 14, 15, 15b a
 implementation lands - a test that passes before the fix is testing something else, see
 `a-test-first-suite-can-encode-an-inverted-oracle`. Rows 2, 3, 7, 8, 12, 15c and 16b must pass both
 before and after.
+
+## 7. Fail-first record
+
+Fourteen of the twenty-eight rows are written and have been observed against `HEAD`.
+The rest are listed below as outstanding, with what each is waiting on. This section
+records verdicts only - it is not an implementation report, and no production code has
+changed.
+
+Command: `cargo test --lib backend::tests::row_`. Result: **4 passed, 10 failed**, on
+`a0b1e5db`, 2026-09-11.
+
+| row | observed | line | the assertion that decided it |
+| --- | --- | --- | --- |
+| 1 | **failed** | `tests.rs:1107` | recorded methods were `["ping"]`, expected `["server/discover"]` |
+| 2 | passed | - | regression guard, as designed |
+| 3 | passed | - | regression guard, as designed |
+| 4 | **failed** | `tests.rs:1174` | "an unserved answer is not evidence of health and must not reset the breaker" |
+| 5 | **failed** | `tests.rs:1197` | "a status-carried decline is still a decline, not a fault" |
+| 6 | **failed** | `tests.rs:1223` | `backend.is_circuit_tripped()` - row 4's defect, as the cell predicts |
+| 6b | **failed** | `tests.rs:1245` | "a status-carried -32603 is still a decline, not a fault" |
+| 7 | passed | - | regression guard, as designed |
+| 8 | passed | - | regression guard, as designed |
+| 8b | **failed** | `tests.rs:1304` | recorded methods were `["ping"]`, expected `["server/discover"]` |
+| 9 | **failed** | `tests.rs:1337` | "a peer that does not know server/discover is not modern, whatever the probe said" |
+| 9b | **failed** | `tests.rs:1378` | "the -32601 to server/discover must drop the cached verdict" - row 9's defect |
+| 9c | **failed** | `tests.rs:1358` | "an answered ping is an absence of evidence about the era, not positive evidence" |
+| 9d | **failed** | `tests.rs:1416` | `is_circuit_tripped()` false - the probe records no failures at all |
+
+Every must-fail row that is written failed, and every must-pass row passed. Three rows
+(6, 9b, 9d) failed on a **sibling row's defect** rather than on the half they exist to
+pin; each cell now says so, and each names the landing that turns it into a real
+discriminator. The distinction matters because a row failing for the wrong reason is
+evidence about the row above it, not about itself - counting it as fail-first evidence
+would overstate the coverage by three.
+
+### Outstanding
+
+| rows | waiting on |
+| --- | --- |
+| 10, 10b, 10c, 11, 11b | the consecutive-unserved counter and an accessor for it. These rows also carry the counter assertions deferred out of rows 4 to 6b, and they are what turns rows 6, 9b and 9d into discriminating pins |
+| 12 | the HTTP body-parsing branch at `src/transport/http/mod.rs:1275-1295` |
+| 13, 14, 15, 15b, 15c | the four §4 gate sites |
+| 16, 16b | the shared transport change, observed from a non-probe caller |
+| M | the per-probe wall-time and response-size measurement §2's load claim rests on |
