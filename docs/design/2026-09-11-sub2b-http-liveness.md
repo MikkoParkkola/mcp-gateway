@@ -17,10 +17,18 @@ that buffers and flushes at the end deadlocks here instead of passing."* Row 5
 notification arrives before the body has been read to its end."*
 
 Test-plan row **S-02** (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:58`)
-requires that assertion over stdio **and** over HTTP. Over stdio it already holds:
-`Gateway::dispatch_with_notifications` streams, and
-`src/gateway/server/mod.rs:4097` asserts a notification reaches stdout before its
-own dispatch resolves. Over HTTP nothing does, because the path buffers **twice**:
+requires that assertion over stdio **and** over HTTP, and **neither holds today**.
+An earlier reading of this document claimed stdio already did, on the strength of
+`Gateway::dispatch_with_notifications` and the assertion at
+`src/gateway/server/mod.rs:4097`. That assertion is a `#[tokio::test]` driving the
+sink directly; it proves the client leg streams and says nothing about where the
+notification comes from. Measured end to end at `66d1fc23`, three of the six
+`mik_7272_sub2b_acs` rows fail and **all three are stdio** — including the `S-03`
+isolation row, which needs no liveness at all. The child's own logs show why: the
+backend's headers arrive, then nothing until the fixture releases, because the
+gateway is inside `response.text().await`.
+
+The path buffers **twice**, and gap A sits on the leg both transports share:
 
 | # | Leg | Site | What buffers |
 |---|-----|------|--------------|
@@ -34,8 +42,13 @@ waits on the client. **This is why the two `S-02` × HTTP rows cannot pass, and
 why `MIK-7272.SUB.2b` cannot flip without this work.** It is an implementation
 gap, not a harness limitation.
 
-`S-03` (isolation) is unaffected: which stream carried which notification is
-fully observable in a buffered body. Buffering breaks liveness, not isolation.
+`S-03` (isolation) is unaffected **over HTTP**, and both its HTTP rows pass:
+which stream carried which notification is fully observable in a buffered body.
+Its stdio row fails for a different reason — the shared fixture withholds its
+result behind the same gate, so a buffered backend leg never yields a
+notification for the isolation assertion to read. Fixing gap A is expected to
+take that row with it; that expectation is checked by re-running the file, not
+asserted here.
 
 ## Gap A — backend leg
 
@@ -56,6 +69,15 @@ mapping `reqwest::Error` to `Error::Transport` at the call site as the doc at
 `:98-99` specifies, and drop the three `#[expect(dead_code)]` attributes.
 
 No new contract is invented here: the contract is read from the module doc.
+
+Once the stream drives the decoder, the buffered path it replaces has no
+production caller: `SseExchange`, `parse_sse_response` and `forward_sse_exchange`
+go with it rather than being gated behind `#[cfg(test)]`. Two implementations of
+one contract is the shape where a fixture proves a behaviour the shipped path
+does not have, so the eight rows that exercised the buffered parse are
+retargeted at `decode_sse_exchange` instead of deleted: the same acceptance,
+asserted against the code that runs. Capture becomes a sink assertion there,
+because publishing is now what the caller observes.
 
 ## Gap B — client leg, and the one real tension
 
@@ -153,3 +175,6 @@ notification, so dispatch cannot resolve first.
    remains in `sse_decoder.rs`.
 4. A request that publishes nothing produces a byte-identical response to today,
    JSON and SSE alike.
+5. No buffered SSE parse survives beside the decoder, and the lib build carries
+   no new dead-code warning — the evidence that the replacement is a replacement
+   and not an addition.
