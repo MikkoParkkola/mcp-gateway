@@ -517,11 +517,17 @@ the same date.
 That is not the same as covering the requirements document. Section 4 of
 `docs/requirements/RELEASE-4.0.0-requirements.md` (lines 204-253) carries 22 non-functional
 requirements, each with its own verification method, and until 2026-09-01 not one of them had a row
-anywhere in this file. They now have rows, below. Thirteen of the 22 are blocking, recounted from the table 2026-09-06: nine ABSENT, one
-UNTESTED (`NFR.SEC.1` — implemented with nothing asserting it; `NFR.SEC.6` left this count on 2026-09-06, its
-assertions found at source and mutation-probed), and three PARTIAL
-(`NFR.PERF.1`, plus `NFR.OBS.1` and `NFR.OBS.2`, recorded on HTTP and silent on stdio, which is the
-other transport the gateway serves MCP over).
+anywhere in this file. They now have rows, below. Recounted from the table on 2026-09-11, and stated as a
+derivation rather than a remembered figure: 23 rows cover the 22 requirements plus
+`NFR.SEC.7`, added that day to govern MIK-7265. Nineteen are MET, `NFR.SEC.1` is MET
+with a recorded caveat, `NFR.COMPAT.3` is N/A, `NFR.PERF.1` is PARTIAL on a stale
+measurement rather than a missing one, and `NFR.SEC.7` is ABSENT and is the group's
+only blocking row. The figure this paragraph replaced read "thirteen of the 22 are
+blocking … nine ABSENT … three PARTIAL", recounted 2026-09-06 and stale within days;
+it over-reported the gap by twelve rows. The authority for any number quoted from this
+file is the table and `scripts/release/count-release-criteria.py --check`, never a
+sentence in the prose — including this one.
+
 What also remains uncovered is reconciliation: the identifier-scheme conflict described at the end of
 this section.
 

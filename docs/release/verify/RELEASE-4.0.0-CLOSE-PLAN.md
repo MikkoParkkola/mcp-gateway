@@ -554,3 +554,18 @@ than the ancestry comparison the criterion's wording invites, because a control
 can be merged into a build and still disabled, shadowed or unwired — an ancestry
 check would be green while the listening build serves exactly the request the
 criterion says it must refuse.
+
+**Item 10, Gap E — the stale summary: repaired.** The paragraph in the ledger that
+read "thirteen of the 22 are blocking" now states a derivation recounted 2026-09-11:
+19 MET, one MET with a caveat, one N/A, `NFR.PERF.1` PARTIAL on a stale measurement,
+and `NFR.SEC.7` ABSENT and the group's only blocking row. It over-reported the gap by
+twelve rows, four more than this plan estimated, because it was written before
+`NFR.SEC.7` existed. The replacement names the table and the counting script as the
+authority and says so of itself, which is the only version of this fix that does not
+go stale the same way.
+
+**Item 5 — coverage: running.** `cargo llvm-cov --all-features --no-fail-fast
+--summary-only --json` is measuring on spark against a dedicated worktree at
+`origin/main`, so the figure lands at a named commit rather than at whatever a
+shared checkout happened to hold. The operator's install and the peer checkouts on
+that host are untouched.
