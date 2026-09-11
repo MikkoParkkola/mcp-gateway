@@ -1301,3 +1301,74 @@ everything that will ever arrive" holds only while no sink sender can outlive th
 invariant that belongs at `notification_sink::scope` rather than in a comment beside the
 loop. The fifth, a suspected duplicate forwarding rule in the SSE transport, was raised
 without tree access and is not confirmed here.
+
+### The second reviewer on both passes, and the NOW finding it found
+
+Until this point each pass carried **one** reviewer. The gate this document sets is two
+independent non-Claude reviewers, so neither pass was closed by the paragraphs above:
+`kimi-review`'s SHIP on the emitter and its SHIP on `0a477a4b` were one half each.
+`grok-review` is the second half, and it did not agree.
+
+**Pass one, `grok-review`: SHIP-WITH-FIXES**, output at
+`~/.claude/data/reviews/runs/grok-20260911T145630Z-290.md`. One FINDING, gated NOW:
+`set_request_log_level` returned early when the declaration was absent, leaving whatever the
+previous caller wrote in the task-local slot. Verified at source before acting on it, and the
+path is real rather than theoretical:
+
+- `dispatch_batch_with_sink` (`src/gateway/server/mod.rs:2047`) loops the items of a JSON-RPC
+  batch sequentially, and every item runs `dispatch_single_with_sink`, which calls
+  `set_request_log_level` at `:1925`.
+- The whole batch is wrapped in **one** `notification_sink::scope` at `:1788`, and `scope`
+  mints exactly one `LEVEL` slot (`src/transport/notification_sink.rs:72`).
+- So a batch whose first item declared `debug` and whose second declared nothing left the
+  second item reading `debug`. ADR-014 §4 gives absence a defined meaning — silence — and for
+  every item after the first it did not hold.
+
+The unparseable path already wrote `None` into the slot; only the absent path skipped the
+write, which is what made the omission easy to miss. Fixed by making absence overwrite like
+every other outcome, with a test that performs the two sequential sets inside one scope
+(`a_second_declaration_of_nothing_clears_the_first`). The function is not on the peer's
+in-flight list, so the repair was taken here rather than handed over.
+
+**Pass two, `grok-review`: SHIP**, output at
+`~/.claude/data/reviews/runs/grok-20260911T150156Z-15632.md`. It reached the registration
+drain gap independently and graded it HIGH rather than MEDIUM — but it also supplied the
+reachability the section above left open: the gap **cannot fire on the sequential `run_stdio`
+loop this change serves**, because nothing there drops the future. The trigger it names is a
+cancellable caller, an HTTP client disconnect being the likely one. That keeps the finding
+before-production rather than release-blocking and tells the peer which caller the guard has
+to survive. It also names a second entry point the earlier pass missed: the `?` on
+`serde_json::to_string` sits after the registration insert, so that error return leaves the
+entry behind as well.
+
+Three further SMALL improvements from the same pass, recorded and not taken:
+`dispatch_streaming_notifications` reimplements `notification_sink::collect`'s
+select-then-`try_recv` loop instead of sharing one driver, so a later cancellation or
+close-order fix can land in only one copy; `Box::pin` is written at both stdio dispatch arms
+(`src/gateway/server/mod.rs:1675,1696`) where pinning once inside the helper would stop a
+third arm forgetting it; and `write_response` issues the JSON and its trailing newline as two
+`write_all` calls, which a future concurrent stdout handle could split.
+
+Two more, from pass one, on the acceptance suite itself: the stdio S-02 row skips the gateway
+audit line without ever asserting it was delivered, so a broken stdio setter would still pass
+the row, and the S-02 documentation still describes releasing the parked call with a second
+JSON-RPC call, which the fixture-gate change replaced. Both live in
+`tests/mik_7272_sub2b_acs.rs`, the peer's file, and are handed over rather than edited here.
+
+### What the NOW finding cost, and the flake it uncovered
+
+The repair is eight lines: absence now falls through the same `and_then` the parse uses, so
+every outcome — a level, a typo, nothing at all — writes the slot instead of two of the three
+writing it. The test was checked the only way a test of a removed early return can be
+checked: the early return was put back, the row was run against it, and it failed with the
+inherited level in the delivered frame. Then the repair was restored and the module went
+green at twelve.
+
+Putting a row between two existing ones also tripped a race that had been sitting there:
+`DROPPED` is a process-wide counter, `a_policy_drop_is_not_counted_as_an_overflow` reads a
+baseline from it and `an_overfull_sink_drops_and_counts_instead_of_blocking` adds exactly
+eight to it, and nothing made the two take turns. The full suite had been passing on an
+ordering that happened to keep them apart. They now share the repo's own async-serialisation
+idiom (`tests/nfr_obs_records.rs:39`), which is the right lock because the guard has to be
+held across the scope's awaits. The counter stays global: it is an operator-facing total, and
+making it per-request to settle a test would change what it means.
