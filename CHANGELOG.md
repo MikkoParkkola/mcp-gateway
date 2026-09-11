@@ -99,8 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - unreleased
 
-> Not yet tagged; the latest release is 3.5.1, which was cut from a maintenance branch after
-> this section was started and therefore appears above it.
+> Not yet tagged. The latest release is 3.5.1 (2026-09-04), which was tagged after this
+> section was started and therefore appears above it.
 >
 > Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). `gateway.yaml` loads
 > unchanged; the strict `env_files` parsing is the one change that refuses a start rather than
