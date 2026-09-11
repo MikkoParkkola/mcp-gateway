@@ -611,7 +611,8 @@ pub(super) async fn meta_mcp_handler(
         // Still scoped, and still drained alongside: `publish` sheds on a full
         // sink, and a client that did not offer a stream must not make a
         // backend's notifications count against that depth.
-        let (response, _notifications) = crate::transport::notification_sink::collect(dispatch).await;
+        let (response, _notifications) =
+            crate::transport::notification_sink::collect(dispatch).await;
         response
     }
 }
