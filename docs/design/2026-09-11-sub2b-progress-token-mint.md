@@ -159,13 +159,49 @@ Each must fail at HEAD and pass after.
 7. Unit, `notification_sink`: a notification whose token matches no mapping is forwarded
    unchanged, not dropped. Pins the miss policy in D3.
 
+## Sequencing — what lands against HEAD, and what does not
+
+The mint has a live consumer at `HEAD`. `notification_sink::scope` is installed on the
+client-facing HTTP dispatch path (`src/gateway/router/handlers.rs:608`, with `collect`
+at `:614`), so a call arriving over HTTP reaches `invoke.rs:3018-3024` inside a scope and
+mints. D1, D2 and D3 site 1 are therefore reachable behaviour on the branch, not code
+waiting for another lane.
+
+What does **not** land with them is the client-facing forward path for stdio —
+`notification_sink::current_sender` and `send`, which D3 site 2 calls. That work is
+uncommitted in the shared worktree and on no branch. Until it lands,
+`s02_stdio_progress_reaches_its_own_call_before_the_result` cannot pass, because nothing
+delivers a notification to a stdio client at all.
+
+So this design closes the outbound half: the gateway stops handing a backend the
+client's own token, and translates its own token back on the path that can observe it.
+The ledger row `MIK-7272.SUB.2b` moves off `ABSENT` only when both halves are on the
+branch and the acceptance binary is green. Landing the mint alone is progress on the
+row, not closure of it.
+
+## Review status
+
+The design review that produced the fixes above ran on `synthetic-review`, the fallback
+reviewer. `gpt-review` was credit-exhausted and `grok-review` returned a preamble with no
+verdict. Two runs of one fallback vendor are one opinion, not the two independent
+non-Claude reviewers the delivery process asks for. The findings were acted on; the gate
+is recorded as unmet rather than treated as satisfied.
+
 ## Risks
 
 - **The mint leaks to the client.** If D3 misses a path, the client sees `gw-<uuid>` and
   cannot match it to its own call. Test 1 asserts the client side explicitly
-  (`:501-506`), but only inside the window before the result — a notification arriving
-  after eviction takes the pass-through branch and would carry the minted token. The
-  debug log on a miss is what makes that case visible; it is accepted, not prevented.
+  (`:501-506`), but only inside the window before the result. On stdio, a notification
+  arriving after eviction takes the pass-through branch and would carry the minted
+  token; the debug log on a miss is what makes that case visible. It is accepted, not
+  prevented.
+- **A backend emits progress after its result frame, on HTTP.** This is legal SSE and
+  the gateway never sees it. `drain_events` returns as soon as it parses a
+  `JsonRpcMessage::Response` (`src/transport/http/sse_decoder.rs:261`) and
+  `decode_sse_exchange` returns with it (`:290`), abandoning the rest of the body —
+  including any event later in the same chunk. Such a frame is not a translate-back
+  miss; it is never decoded. Out of scope here: closing it means changing when the
+  decoder stops reading, which is a separate decision about request lifetime.
 - **A backend echoes the minted token in its result body** rather than a notification.
   Out of scope and untranslated; the gateway does not rewrite result payloads.
 - **Two translate-back sites can drift apart.** Mitigated by both calling one shared
