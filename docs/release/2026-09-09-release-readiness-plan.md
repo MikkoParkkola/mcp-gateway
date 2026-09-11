@@ -1232,3 +1232,31 @@ commits the emitter, because the work lands in the same file.
 One operational note, since it cost an owner: an agent killed by the output ceiling
 persists nothing. On a criterion this long-running, commit each piece as it works rather
 than reporting a large result at the end.
+
+### 2026-09-11, amendment: the guard change is two files, and two doc comments ride on it
+
+The ruling above called the `PendingRequestGuard` generalisation an implementation choice
+that "belongs at the call site". That understated where it lands, and the corrected scope is
+verified here at `HEAD`. The guard is declared at `src/transport/mod.rs:180` with `Drop` at
+`:199`, and it has two existing construction sites: `src/transport/stdio.rs:619` and
+`src/transport/websocket.rs:515`. Adding a value-type parameter edits the declaration in
+`transport/mod.rs`; the websocket site infers it and compiles unchanged. Both of those files
+are clean in this worktree — only `stdio.rs` is dirty — so the change crosses no other
+lane's in-flight work.
+
+Two doc comments describe that guard from outside the transport module and must be re-read
+rather than assumed: `src/gateway/proxy.rs:96` and `src/gateway/input_bridge.rs:291`, the
+first of which says in as many words that the guard "is typed to the …". A generic parameter
+is exactly the kind of change that leaves such a sentence quietly false, and a stale comment
+is model input for the next agent to read the file.
+
+The generalisation is still the right call rather than a second near-identical struct, and
+the codebase says so itself: the comment at `websocket.rs:511-514` already gives the guard's
+purpose as keeping "a request future dropped by an OUTER timeout or task abort" from
+stranding its entry — the same cancellation case the correlation half needs. The motivation
+is not new; only the second map is.
+
+Related correction from the same lane, recorded because the earlier reasoning is quoted
+above: the reader-panic path is bounded by the existing release statement after `outcome`
+and needs no guard. RAII is for cancellation alone — the future dropped mid-await, where
+that statement is never reached.
