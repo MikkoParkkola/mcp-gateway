@@ -544,11 +544,14 @@ information rather than reconcile it.
 What the comparison does show is that the requirement rows are a **sample** of each ticket's
 obligations, not a cover, and that the sampling is uneven:
 
-- **Two open release tickets have no row anywhere.** `MIK-7320` and `MIK-7265` appear zero times
-  in `RELEASE-4.0.0-requirements.md` and zero times in this file, while the triage carries them as
-  `FIXTURE.1-3` and `DRIFT.1-2`. The requirements document names fifteen tickets and these are not
-  among them, so "every functional requirement ID has a row" is true and still leaves two tickets
-  ungoverned.
+- **Two open release tickets had no row anywhere — closed 2026-09-11.** `MIK-7320` and `MIK-7265`
+  appeared zero times in `RELEASE-4.0.0-requirements.md` and zero times in this file, while the
+  triage carried them as `FIXTURE.1-3` and `DRIFT.1-2`. The requirements document names fifteen
+  tickets and neither was among them, so "every functional requirement ID has a row" was true and
+  still left two tickets ungoverned. Both now have a gate: `NFR.SEC.7` governs MIK-7265's
+  merged-versus-listening drift, and DoD item 8 governs MIK-7320's substance by defining "full
+  suite" as `--all-features`. The lesson survives the fix: a coverage claim scoped to requirement
+  IDs says nothing about tickets that never became one.
 - **A same-name collision is the dangerous case.** This file grades `MIK-7217.DISCOVER` 11 of 11
   MET; the triage grades MIK-7217 at 1 of 8, because `MCP728.DISCOVER.1-8` is a different list that
   happens to share the word. A reader who takes `DISCOVER 11/11 MET` as "the discovery ticket is
@@ -558,8 +561,8 @@ obligations, not a cover, and that the sampling is uneven:
   triage records 0 FAIL but 17 of its 26 ACs with no verifying test. Both gradings are defensible
   and they answer different questions.
 
-So release readiness needs a per-ticket mapping between the two namespaces, plus requirement rows
-for the two ungoverned tickets — not a merge of the files, which would lose the ticket-level view
+So release readiness needs a per-ticket mapping
+between the two namespaces — not a merge of the files, which would lose the ticket-level view
 that is the only place the MIK-7217 and MIK-7256 gaps are visible at all.
 
 ## GH517 (NEG) — streamable-HTTP protocol-version negotiation, cluster I

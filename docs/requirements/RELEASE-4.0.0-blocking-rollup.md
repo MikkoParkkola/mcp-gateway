@@ -339,19 +339,23 @@ dual-vendor gate. Commit is not merge, so nothing is violated yet — the review
 push, and its material is the diff, not the design documents.
 
 
-### A second one: two open tickets that no requirement row governs (2026-09-11)
+### A second one: two open tickets that no requirement row governed — closed 2026-09-11
 
-`MIK-7320` and `MIK-7265` appear zero times in `RELEASE-4.0.0-requirements.md`, zero times in
-`RELEASE-4.0.0-criteria-status.md`, and zero times in this file. Both are carried as open release
+`MIK-7320` and `MIK-7265` appeared zero times in `RELEASE-4.0.0-requirements.md`, zero times in
+`RELEASE-4.0.0-criteria-status.md`, and zero times in this file. Both were carried as open release
 work by `RELEASE-4.0.0-near-done-triage.md` — MIK-7320 at 3 of 3 ACs with an evidence comment and
 PR #464 outstanding, MIK-7265 correctly Blocked with its own deliverable, the drift-check script,
-unbuilt. The requirements document names fifteen tickets and neither is among them, so the
-criteria ledger's "every functional requirement ID has a row" is true and still leaves these two
-outside every gate that counts rows.
+unbuilt. The requirements document names fifteen tickets and neither was among them, so the
+criteria ledger's "every functional requirement ID has a row" was true and still left these two
+outside every gate that counts rows. A release declared ready on the criteria count would have
+shipped with one unmerged PR and one unbuilt deliverable, and nothing in the count would have
+gone red.
 
-Neither is large. What makes them a blocker is that no amount of closing criteria reaches them:
-a release declared ready on the criteria count would ship with one unmerged PR and one unbuilt
-deliverable, and nothing in the count would have gone red.
+Both are now gated. `NFR.SEC.7` (cluster K, blocking) governs MIK-7265's merged-versus-listening
+drift. DoD item 8 governs MIK-7320's substance, by defining "full suite" as `--all-features` —
+the feature set under which its fixture red appears at all. What does **not** follow is that the
+class is closed: the gap was found by comparing two documents by hand, and nothing runs that
+comparison.
 
 The same 2026-09-11 comparison found the reverse failure too, and it is the more dangerous of the
 two. This file and the triage both use the label `DISCOVER`, for different lists: the criteria
