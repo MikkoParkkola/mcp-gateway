@@ -189,7 +189,7 @@ the grade and its citations now in the note rather than "not yet graded".
 | MIK-3274.RANKING.1 | ABSENT | `score_text_relevance` is substring plus a 20-group synonym table (`src/ranking/scoring.rs:190`, `:17`); no edit distance, acronym or word-boundary matching in `src/ranking/`, and none of the 56 ranking tests covers abbreviation, word boundary, Unicode or Code Mode glob |
 | MIK-3274.RANKING.2 | UNTESTED | Both invariants are implemented and citable — authorization filters before collection (`search.rs:200`), ranking precedes truncation (`:763`), usage is multiplicative so 0.0 stays 0.0 (`ranking/mod.rs:396`) — but no test asserts either ordering |
 | MIK-3274.RANKING.3 | NEEDS-MEASUREMENT | No corpus, baseline or frozen threshold exists; the performance contract freezes the workload rows only. The freeze was never recorded, and cannot now be produced as written because ranking already shipped |
-| MIK-7332.DISCOVERY.1 | ABSENT | Tiered disclosure exists (`search_disclosure.rs:40`) but neither positive control from the test row does; `discovery_tests.rs` covers auto-discovery and shadow scan only |
+| MIK-7332.DISCOVERY.1 | ABSENT | Tiered disclosure exists (`src/gateway/search_disclosure.rs:40`) but neither positive control from the test row does; `discovery_tests.rs` covers auto-discovery and shadow scan only |
 | MIK-7334.CATALOGUE.1 | ABSENT | `tools_cache` is one `CachedMetadata<Vec<Tool>>` per backend with no identity key (`src/backend/mod.rs:81`), beside a pool that *is* per-identity (`:47`) |
 
 The grades are static evidence: every citation is a read line, no test was run. That is enough to
@@ -204,6 +204,32 @@ measured fact rather than an assumption, so the lineage question is no longer "d
 have this" but "does the codex stack deliver any of the five, and at what merge cost" — the same
 grading, run against `codex/v4-next-integration`. Nothing about the 13 held drafts changes until
 that second grading exists.
+
+## Step 3 outcome: the codex lineage delivers none of the five — 2026-09-11
+
+Step 2 established that the release line does not meet the discovery package. Step 3 asked the
+only question that could still justify merging 1,963 commits: does `origin/codex/v4-next-integration`
+deliver any of them? Graded the same way, against the construct rather than the ticket id.
+
+| ID | codex grade | vs release line | decisive evidence |
+|---|---|---|---|
+| MIK-3274.RANKING.1 | ABSENT | EQUAL | `src/ranking/{scoring.rs,mod.rs,tests.rs}` are byte-identical on both refs (blobs `a5d786ac`, `e351b088`, `e55c15fe`); the fuzzy/abbreviation/word-boundary grep is empty on both. The only `levenshtein` on either ref is the invoke-time "did you mean" at `src/gateway/meta_mcp_helpers.rs:47` |
+| MIK-3274.RANKING.2 | UNTESTED | **BEHIND** | Same implementation sites (`search.rs:200` filter, `:762` rank, `:767` truncate) and still no test — `git grep -ln backend_allowed origin/codex/v4-next-integration -- tests/` is empty. The file differs by 2 insertions and 6 deletions, all of them codex dropping the release line's step-index argument on `invoke_tool` |
+| MIK-3274.RANKING.3 | NEEDS-MEASUREMENT | EQUAL | The `benchmarks/` tree object is identical on both refs; its only content is one unrelated live-agent result file |
+| MIK-7332.DISCOVERY.1 | ABSENT | EQUAL | `src/gateway/search_disclosure.rs`, its tests, the e2e file, `tests/discovery_tests.rs` and `tests/tool_list_tests.rs` are byte-identical on both refs. Codex covers tiers only, never the four conjuncts together |
+| MIK-7334.CATALOGUE.1 | ABSENT | EQUAL | Codex has the same construction at `src/backend/mod.rs:64` — `tools_cache: CachedMetadata<Vec<Tool>>` with no identity key, beside a per-identity `pool` at `:51`. No `CachedMetadata` keyed by any identity type anywhere on the branch |
+
+**Nothing to salvage for this package, and one regression to avoid.** Four of five rows rest on
+blob-identity rather than on a search, which is the stronger evidence: a matcher cannot hide in a
+file whose bytes are equal. The fifth is behind. The codex-only work is real but it is elsewhere —
+`personal_accounts/`, `task_service/`, `message_signing/`, `idempotency/`, `admission/`, `openwebui`,
+roughly 160 codex-only files under `src/`, none under ranking, discovery or disclosure.
+
+**Disposition of the 13 held `codex/v4-*` drafts.** They stay open and stay out of 4.0.0. Closing
+them would discard the accounts and task-service work they carry, which no ruling has rejected —
+it is simply not in this release's scope, and `#512` alone holds all 44 `src/personal_accounts/`
+files. They are held, not abandoned: the condition for revisiting is a scope decision about
+accounts for a later release, not anything about the discovery package, which they do not affect.
 
 ## What this does not change
 

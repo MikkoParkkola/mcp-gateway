@@ -153,7 +153,7 @@
       "id": "MIK-7332.DISCOVERY.1",
       "status": "pending",
       "evidence": [
-        "src/gateway/meta_mcp/search_disclosure.rs:40",
+        "src/gateway/search_disclosure.rs:40",
         "tests/discovery_tests.rs",
         "tests/tool_list_tests.rs:13"
       ],
