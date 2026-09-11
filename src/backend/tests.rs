@@ -946,7 +946,6 @@ enum ProbeAnswer {
 struct ProbeMock {
     methods: std::sync::Mutex<Vec<String>>,
     answers: std::sync::Mutex<std::collections::VecDeque<ProbeAnswer>>,
-    closes: AtomicUsize,
     connected: AtomicBool,
 }
 
@@ -955,7 +954,6 @@ impl ProbeMock {
         Self {
             methods: std::sync::Mutex::new(Vec::new()),
             answers: std::sync::Mutex::new(answers.into()),
-            closes: AtomicUsize::new(0),
             connected: AtomicBool::new(true),
         }
     }
@@ -966,6 +964,16 @@ impl ProbeMock {
     fn modern_then(mut rest: Vec<ProbeAnswer>) -> Self {
         let mut answers = vec![ProbeAnswer::InBandError(
             crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION,
+        )];
+        answers.append(&mut rest);
+        Self::scripted(answers)
+    }
+
+    /// The mirror of `modern_then`: `-32601` to `server/discover` is the
+    /// honest legacy answer, so this leaves the cache `Probed`/`Legacy`.
+    fn legacy_then(mut rest: Vec<ProbeAnswer>) -> Self {
+        let mut answers = vec![ProbeAnswer::InBandError(
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
         )];
         answers.append(&mut rest);
         Self::scripted(answers)
@@ -1022,10 +1030,25 @@ impl Transport for ProbeMock {
     }
 
     async fn close(&self) -> Result<()> {
-        self.closes.fetch_add(1, Ordering::SeqCst);
         self.connected.store(false, Ordering::Relaxed);
         Ok(())
     }
+}
+
+/// Whether the shared pool slot still holds `mock`.
+///
+/// `force_restart` takes the transport out of that slot before it does anything
+/// else, so losing the slot is the probe's restart observable. Counting
+/// `close()` calls is not: the probe holds an internal-activity lease for its
+/// whole duration, so `force_restart` always takes its busy branch and defers
+/// the close to a task that waits for every other owner of the `Arc` to let go
+/// - and a test that keeps `mock` to assert on is one of those owners, so the
+/// count cannot move in any row here. Row 7 is the control that proves this
+/// observable does.
+fn still_wired(backend: &Backend, mock: &Arc<ProbeMock>) -> bool {
+    backend
+        .pooled_transport_for_test(&crate::backend::pool::PoolKey::Shared)
+        .is_some_and(|t| std::ptr::addr_eq(Arc::as_ptr(&t), Arc::as_ptr(mock)))
 }
 
 /// A backend wired to `mock`, with its era resolved from the mock's first
@@ -1107,4 +1130,122 @@ async fn row_3_unclassified_backend_takes_the_legacy_arm() {
     let _ = backend.health_probe(Duration::from_secs(5)).await;
 
     assert_eq!(mock.methods(), vec!["ping".to_string()]);
+}
+
+/// Row 4 — an in-band `-32601` is an *unserved* answer, not a healthy one: the
+/// peer answered, so nothing is broken, but it did not serve the probe. HEAD
+/// reads any `Ok(Ok(_))` as success and resets the breaker.
+///
+/// The row's third assertion in section 6, "counter increments", is not made
+/// here: the consecutive-unserved count does not exist at HEAD, and a test that
+/// fails to compile records no fail-first evidence. Rows 10 to 11b pin the
+/// counter once it exists.
+#[tokio::test]
+async fn row_4_in_band_method_not_found_is_unserved_not_healthy() {
+    let mock = Arc::new(ProbeMock::legacy_then(vec![ProbeAnswer::InBandError(
+        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+    )]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+    backend.trip_circuit_breaker_for_test();
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert!(
+        backend.is_circuit_tripped(),
+        "an unserved answer is not evidence of health and must not reset the breaker"
+    );
+    assert!(
+        still_wired(&backend, &mock),
+        "an unserved answer is not a fault and must not restart the backend"
+    );
+}
+
+/// Row 5 — the same `-32601`, carried as an HTTP 404 with a JSON-RPC error
+/// body. HEAD sees `Ok(Err(_))` and calls `force_restart()`, so a peer that
+/// merely declines the probe is torn down. Same counter caveat as row 4.
+#[tokio::test]
+async fn row_5_status_carried_method_not_found_is_unserved_not_a_fault() {
+    let mock = Arc::new(ProbeMock::legacy_then(vec![ProbeAnswer::StatusError(
+        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+    )]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+    backend.trip_circuit_breaker_for_test();
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert!(
+        still_wired(&backend, &mock),
+        "a status-carried decline is still a decline, not a fault"
+    );
+    assert!(backend.is_circuit_tripped());
+}
+
+/// Row 6 — the widened middle arm. `-32603` is not method-not-found, and the
+/// era assertion is what stops an implementation from widening *invalidation*
+/// along with the unserved arm: only method-not-found is evidence about era.
+///
+/// That era assertion is a second-stage pin, not part of this row's fail-first
+/// evidence: at HEAD the row stops on the breaker assertion, which is row 4's
+/// defect, and HEAD has no invalidation path that could move the era at all.
+/// It begins to discriminate once the widened arm lands. Row 6b is the same
+/// shape, stopping on the restart instead.
+#[tokio::test]
+async fn row_6_in_band_internal_error_is_unserved_and_leaves_the_era_alone() {
+    let mock = Arc::new(ProbeMock::modern_then(vec![ProbeAnswer::InBandError(
+        crate::error::rpc_codes::INTERNAL_ERROR,
+    )]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+    backend.trip_circuit_breaker_for_test();
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert!(backend.is_circuit_tripped());
+    assert!(still_wired(&backend, &mock));
+    assert_eq!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern),
+        "only method-not-found is evidence about era; -32603 says nothing"
+    );
+}
+
+/// Row 6b — where the two halves of section 3 meet: the widened arm *and* the
+/// status carriage. An implementation that faults on any parsed code except
+/// `-32601` passes every other row while restarting backends it must not.
+#[tokio::test]
+async fn row_6b_status_carried_internal_error_is_unserved_and_leaves_the_era_alone() {
+    let mock = Arc::new(ProbeMock::modern_then(vec![ProbeAnswer::StatusError(
+        crate::error::rpc_codes::INTERNAL_ERROR,
+    )]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+    backend.trip_circuit_breaker_for_test();
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert!(
+        still_wired(&backend, &mock),
+        "a status-carried -32603 is still a decline, not a fault"
+    );
+    assert!(backend.is_circuit_tripped());
+    assert_eq!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern),
+        "a status-carried -32603 is not evidence about era either"
+    );
+}
+
+/// Row 7 — regression guard, and the control for every `still_wired` assertion
+/// above: a transport fault still restarts the backend. If this row ever passes
+/// while reporting the mock still wired, rows 5 and 6b are green because the
+/// observable is dead, not because the probe stopped restarting.
+#[tokio::test]
+async fn row_7_a_transport_fault_still_restarts() {
+    let mock = Arc::new(ProbeMock::legacy_then(vec![ProbeAnswer::Fault]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert!(
+        !still_wired(&backend, &mock),
+        "a closed socket is a fault and must still rebuild the transport"
+    );
 }
