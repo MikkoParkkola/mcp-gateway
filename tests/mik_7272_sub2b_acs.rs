@@ -74,6 +74,12 @@ struct FixtureState {
     /// `Notify`: a release that arrives before the slow call parks must still
     /// release it, and `notify_waiters` would drop that wakeup.
     gate: Arc<Semaphore>,
+    /// One permit **per** release call, for the two-gate body.
+    ///
+    /// Separate from `gate` because that one opens wide (64 permits) so a
+    /// batch of parked calls all resume on one release. Counting releases is
+    /// the whole point here: two gates need two of them.
+    releases: Arc<Semaphore>,
 }
 
 /// The token the gateway minted for this call, read back off the wire.
@@ -97,10 +103,16 @@ fn tool_name(request: &Value) -> Option<String> {
 
 /// A `notifications/progress` for the call the gateway is making right now.
 fn progress_frame(token: &Value) -> Value {
+    numbered_progress_frame(token, 1)
+}
+
+/// The same, at a caller-chosen step. Two gated notifications must be
+/// distinguishable, or reading the first one twice would pass the row.
+fn numbered_progress_frame(token: &Value, progress: u64) -> Value {
     json!({
         "jsonrpc": "2.0",
         "method": "notifications/progress",
-        "params": {"progressToken": token, "progress": 1, "total": 2},
+        "params": {"progressToken": token, "progress": progress, "total": 2},
     })
 }
 
@@ -155,6 +167,7 @@ fn unary_answer(request: &Value, state: &FixtureState) -> Value {
         _ => {
             if tool_name(request).as_deref() == Some(RELEASE_TOOL) {
                 state.gate.add_permits(64);
+                state.releases.add_permits(1);
                 ok_result(&id, "released")
             } else {
                 ok_result(&id, "ok")
@@ -174,14 +187,34 @@ fn slow_stream(request: &Value, state: &FixtureState, message: Option<String>) -
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let token = minted_token(request);
     let gate = Arc::clone(&state.gate);
+    let releases = Arc::clone(&state.releases);
+    let gates = request
+        .pointer("/params/arguments/gates")
+        .and_then(Value::as_u64);
     let body = async_stream::stream! {
         let first = match &message {
             Some(marker) => message_frame(marker),
             None => progress_frame(&token),
         };
         yield Ok::<_, std::io::Error>(format!("event: message\ndata: {first}\n\n"));
-        // Held until a *second* call releases it. Nothing else can.
-        let _permit = gate.acquire().await;
+        if gates == Some(3) {
+            // A timed second notification: no client call in between.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let second = numbered_progress_frame(&token, 2);
+            yield Ok(format!("event: message\ndata: {second}\n\n"));
+            let _release = releases.acquire().await;
+        } else if gates == Some(2) {
+            // The second notification does not exist until a release arrives,
+            // and the client only releases once it has read the first. A
+            // consumer that flushes one buffer at the end never gets here.
+            let _first_release = releases.acquire().await;
+            let second = numbered_progress_frame(&token, 2);
+            yield Ok(format!("event: message\ndata: {second}\n\n"));
+            let _second_release = releases.acquire().await;
+        } else {
+            // Held until a *second* call releases it. Nothing else can.
+            let _permit = gate.acquire().await;
+        }
         let result = ok_result(&id, "slow done");
         yield Ok(format!("event: message\ndata: {result}\n\n"));
     };
@@ -197,6 +230,7 @@ async fn spawn_fixture_backend() -> (String, Received) {
     let state = FixtureState {
         received: Arc::new(Mutex::new(Vec::new())),
         gate: Arc::new(Semaphore::new(0)),
+        releases: Arc::new(Semaphore::new(0)),
     };
     let received = Arc::clone(&state.received);
     let app = axum::Router::new().route(
@@ -904,8 +938,6 @@ impl SseReader {
         session: &str,
         message: Value,
     ) -> (u16, String, Self) {
-        use futures::StreamExt as _;
-
         let version = message
             .pointer("/params/_meta/io.modelcontextprotocol~1protocolVersion")
             .and_then(Value::as_str)
@@ -1393,6 +1425,165 @@ async fn s02_message_http_reaches_its_own_call_before_the_result() {
     assert!(
         has_id(&result, 2),
         "the last frame is not this call's result: {result}"
+    );
+    session.shutdown().await;
+}
+
+/// Release every parked call; the two-gate body counts one release per call.
+async fn release(session: &HttpSession, id: i64) {
+    let (status, _, body) = post_sse(
+        &session.client,
+        &session.url,
+        &session.session,
+        invoke(id, RELEASE_TOOL, &json!({}), &json!({})),
+    )
+    .await;
+    assert_eq!(status, 200, "the release call failed: {body}");
+}
+
+/// `S-02`, HTTP: each notification reaches the caller as it decodes, not
+/// batched into one write at the end.
+///
+/// GIVEN a backend that emits its second notification only after a release,
+/// WHEN the client reads the first notification and releases,
+/// THEN the second notification arrives before the result.
+///
+/// One gate proves a flush happened; two prove the flushing is per-event. The
+/// frame that prompts the second release does not exist until the first has
+/// been read and acted on, so a consumer that drains one buffer at the end
+/// never reaches it. The PROBE labels localise a failure: which one fires says
+/// whether the release was serviced, whether the frame followed it, and
+/// whether the result ever came.
+#[tokio::test]
+#[ignore = "reproduction for the open client-leg defect; un-ignore with the fix"]
+async fn s02_http_flushes_each_notification_rather_than_one_buffer() {
+    // GIVEN
+    let (backend_url, received) = spawn_fixture_backend().await;
+    let home = tempfile::tempdir().expect("temp home");
+    let session = HttpSession::spawn(home.path(), &backend_url).await;
+
+    // WHEN
+    let (first, second, result) = timeout(READ_TIMEOUT * 10, async {
+        let (status, content_type, mut reader) = SseReader::post(
+            &session.client,
+            &session.url,
+            &session.session,
+            invoke(
+                2,
+                SLOW_TOOL,
+                &json!({"gates": 2}),
+                &json!({"progressToken": "client-token"}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status, 200,
+            "the two-gate call was refused before it streamed"
+        );
+        assert!(
+            content_type.contains("text/event-stream"),
+            "the gateway answered {content_type}, so it never committed to a \
+             stream and nothing below can arrive early"
+        );
+
+        let first = reader
+            .next_frame()
+            .await
+            .expect("the body ended before the first notification");
+        assert!(
+            parked_slow_calls(&received, 1).await,
+            "the frame arrived but the call is not parked, so it proves no \
+             liveness: {first}"
+        );
+
+        timeout(READ_TIMEOUT, release(&session, 3))
+            .await
+            .expect("PROBE-A: the release call never returned while the first call streamed");
+        let second = timeout(READ_TIMEOUT, reader.next_frame())
+            .await
+            .expect("PROBE-B: the release landed but no second frame followed")
+            .expect("the body ended before the second notification");
+
+        timeout(READ_TIMEOUT, release(&session, 4))
+            .await
+            .expect("PROBE-C: the second release call never returned");
+        let mut result = timeout(READ_TIMEOUT, reader.next_frame())
+            .await
+            .expect("PROBE-D: no frame followed the second release");
+        while result.as_ref().is_some_and(|frame| !has_id(frame, 2)) {
+            result = timeout(READ_TIMEOUT, reader.next_frame())
+                .await
+                .expect("PROBE-E: the stream stalled before the result frame");
+        }
+        (
+            first,
+            second,
+            result.expect("the body ended before the result frame"),
+        )
+    })
+    .await
+    .expect("the row deadlocked, which is one buffered flush answering");
+
+    // THEN
+    assert_eq!(
+        first.pointer("/params/progress"),
+        Some(&json!(1)),
+        "the first frame is not the first notification: {first}"
+    );
+    assert!(
+        is_method(&second, "notifications/progress"),
+        "the second gated frame is not a notification: {second}"
+    );
+    assert_eq!(
+        second.pointer("/params/progress"),
+        Some(&json!(2)),
+        "the second frame repeats the first, so no second flush is proven: {second}"
+    );
+    assert_eq!(
+        progress_token_of(&second),
+        Some(&json!("client-token")),
+        "the client must see its own token back on every frame: {second}"
+    );
+    assert!(
+        has_id(&result, 2),
+        "the last frame is not this call's result: {result}"
+    );
+    session.shutdown().await;
+}
+
+/// The discriminator: identical to the two-gate row except the second
+/// notification is emitted on a timer, with no client call in between. It
+/// separates "the client leg forwards only one notification" from "the second
+/// notification is never produced while a stream is open".
+#[tokio::test]
+#[ignore = "discriminator for the row above; runs with it"]
+async fn s02_http_forwards_a_second_notification_with_no_call_between() {
+    let (backend_url, _received) = spawn_fixture_backend().await;
+    let home = tempfile::tempdir().expect("temp home");
+    let session = HttpSession::spawn(home.path(), &backend_url).await;
+
+    let (_status, _ct, mut reader) = SseReader::post(
+        &session.client,
+        &session.url,
+        &session.session,
+        invoke(
+            2,
+            SLOW_TOOL,
+            &json!({"gates": 3}),
+            &json!({"progressToken": "client-token"}),
+        ),
+    )
+    .await;
+    let first = reader.next_frame().await.expect("first frame");
+    assert_eq!(first.pointer("/params/progress"), Some(&json!(1)));
+    let second = timeout(READ_TIMEOUT, reader.next_frame())
+        .await
+        .expect("no second frame followed the timer")
+        .expect("the body ended before the second notification");
+    assert_eq!(
+        second.pointer("/params/progress"),
+        Some(&json!(2)),
+        "the timed second notification did not reach the client: {second}"
     );
     session.shutdown().await;
 }
