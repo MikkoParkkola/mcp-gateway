@@ -144,7 +144,7 @@
         "docs/requirements/RELEASE-4.0.0-performance-contract.md",
         "src/ranking/mod.rs"
       ],
-      "note": "Graded 2026-09-11: NEEDS-MEASUREMENT. No ranking corpus, baseline or frozen threshold exists: benchmarks/results/ holds one unrelated file and the performance contract freezes only the workload rows. The freeze was never recorded, and cannot now be produced as specified because ranking already shipped. evaluate_offline is a fixture comparator, not the obligation. Static evidence only; no test run. Lines: src/ranking/mod.rs:421."
+      "note": "Graded 2026-09-11: NEEDS-MEASUREMENT. No ranking corpus, baseline or frozen threshold exists: benchmarks/results/ holds one unrelated file, mik-6977-live-agent-2026-09-04.json, cited here as inventory evidence for that absence rather than as a baseline and the performance contract freezes only the workload rows. The freeze was never recorded, and cannot now be produced as specified because ranking already shipped. evaluate_offline is a fixture comparator, not the obligation. Static evidence only; no test run. Lines: src/ranking/mod.rs:421."
     },
     {
       "id": "MIK-7332.DISCOVERY.1",

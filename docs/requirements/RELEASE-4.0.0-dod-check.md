@@ -36,7 +36,7 @@ belongs to the commit rather than to an in-flight edit.
 
 One difference from the 2026-09-03 run is worth naming rather than rounding up: clippy was run as
 `--all-targets -- -D warnings`, **not** `--all-targets --all-features`. Code behind the non-default
-`spec-preview` feature was therefore not linted in this pass.
+`spec-preview` and `runtime-substrate` features was therefore not linted in this pass.
 
 **Change under check**: 80 files, +15,248 / −660 against the merge-base — 39 under `src/`, 26 under
 `docs/`, 3 new test files.
@@ -52,7 +52,7 @@ One difference from the 2026-09-03 run is worth naming rather than rounding up: 
 | H5 NAMING | PASS | existing filename unchanged |
 | H6 no orphans | PARTIAL | `clippy --all-targets -- -D warnings` promotes rustc's `dead_code`, so a clean run rules out crate-internal orphans. `dead_code` does not fire on `pub` items reachable from the library surface; no per-symbol reachability sweep was run over the 39 changed `src/` files, so orphans there are NOT EVALUATED |
 | H7 no redundant docs | NOT EVALUATED | 26 documentation files changed against the merge-base; no de-duplication sweep was run |
-| H8 no temp files | PASS | `git status --porcelain` empty in the working tree and in the Spark measurement worktree |
+| H8 no temp files | PARTIAL | `git status --porcelain` is empty in the working tree and in the Spark measurement worktree, which establishes repository state and nothing else. No on-disk housekeeping sweep was run over build artefacts or scratch directories, so that half is NOT EVALUATED |
 | H9 no duplicate functions | NOT EVALUATED | no duplication detector was run; clippy does not answer this |
 | H10 dir conventions | PASS | evidence document under `docs/requirements/` with its siblings |
 | H11 untracked tracked-or-ignored | PASS | `git status --porcelain` empty |
@@ -73,6 +73,11 @@ Every row below was run; none is asserted.
 | scope contract | `scripts/release/check_scope_acceptance.py --publish-check` | PASS | 31 criteria, 30 pending, 1 baseline blocking row |
 | release gate self-tests | `test_scope_acceptance.py`, `test_scope_contract_interface.py` | PASS | 44 + 12 tests, both OK |
 
+CI agrees with the local runs: at `a148c94e` the PR's checks report 20 SUCCESS and no FAILURE, and
+the two jobs that were red — *Release criteria ledger (report-only off a tag, blocking on one)* and
+*Release criteria ledger (header matches rows)* — are both SUCCESS. Their single shared cause was
+the evidence format, and one data fix cleared both.
+
 The first three rows on Spark were captured through `tail -60`, which truncated the suite output to
 its last twelve targets. The gate verdict was never in doubt — the runner records `PIPESTATUS[0]`,
 not the tail's status — but the *counts* above come from a second, untruncated run at the same
@@ -82,41 +87,60 @@ commit rather than from the truncated log, because a truncated log is not eviden
 
 | gate | verdict | evidence |
 |---|---|---|
-| D1 TESTED | PASS | 5,470 passing, 0 failing. Coverage was NOT re-measured at this head |
+| D1 TESTED | PARTIAL | 5,470 passing, 0 failing — the pass-rate half is PASS. The adaptive-coverage half is NOT EVALUATED: coverage was not re-measured at this head, and the gate is defined as both |
 | D2 COMPATIBLE | PASS | four behavioral changes are breaking and each carries a migration note in `docs/UPGRADING-4.0.md`, plus a one-time startup notice |
-| D3 MEASURED | PARTIAL | `RELEASE-4.0.0-performance.md` carries the before/after for the workload rows: 47 shared cases, none dropped, worst regression `session_sandbox/check_tool_denied` +6.07% `[+5.05%, +7.11%]` (86.27ns → 94.18ns), best gain 67% on `input_scanner/scan_clean_args_5_fields`. Ranking has no frozen baseline — that is criterion `MIK-3274.RANKING.3`, recorded NEEDS-MEASUREMENT |
-| D4 DRY | PASS | the evidence fix edited one document; the checker and its 44 tests were left alone deliberately |
-| D5 CONTRACTS | PASS | no public API change in the evidence fix; the branch's API changes are covered by the criteria ledger |
+| D3 MEASURED | PARTIAL | `RELEASE-4.0.0-performance.md` carries the before/after for the workload rows: 47 shared cases, none dropped. The two estimators name different worst cases and both are under the 10% bound — by criterion's own comparison the largest regression is `semantic_search/query_top10/200` at **+7.76%** `[+7.43%, +8.09%]`; by point estimate it is `session_sandbox/check_tool_denied` at **+9.16%** (86.27ns → 94.18ns, an 8ns delta, +6.07% `[+5.05%, +7.11%]` by comparison). Best gain 67% on `input_scanner/scan_clean_args_5_fields`. These are microbenchmarks, not an end-to-end latency measurement. Ranking has no frozen baseline — criterion `MIK-3274.RANKING.3`, NEEDS-MEASUREMENT |
+| D4 DRY | PARTIAL | scored for the evidence fix only, which edited one document and left the checker and its 44 tests alone deliberately. No SSOT-duplication sweep was run over the other 79 changed files |
+| D5 CONTRACTS | PARTIAL | the evidence fix changes no public API. The branch's own API changes are graded in the criteria ledger rather than re-verified here; no interface-stability diff was run against the merge-base |
 | D6 E2E | OUTSTANDING | the FUNCTIONAL PASS gate needs a driven user journey against a deployed build. Blocked on the same operator deploy as NFR.SEC.7 |
-| D7 WIRED | PASS | `check_scope_acceptance.py` runs unconditionally in `ci.yml`, `docker.yml` and `release.yml`; both previously-red jobs read the same step |
+| D7 WIRED | NOT EVALUATED | the CI wiring cited here is D24, not D7. No reachability sweep was run over the 39 changed `src/` files to show each is called from production rather than from tests alone |
 | D8 OBSERVABLE | NOT EVALUATED | no correlation-ID propagation sweep was run on this branch |
 | D9 STATIC | PASS | see the matrix above |
-| D10 0-BUG | PARTIAL | 0 debt markers in `src/`. One new lint suppression lands on this branch — `#[allow(clippy::too_many_lines)]` at `src/gateway/router/handlers.rs:620`. It suppresses a length lint, not a correctness lint, and it is the only `#[allow]` the diff adds |
+| D10 0-BUG | PASS | 0 debt markers in `src/`, 0 known defects, and **no new suppression**. The diff's single added `#[allow]` line is a move, not an addition: `#[allow(clippy::too_many_lines)]` sits at `src/gateway/router/handlers.rs:580` on `main` and at `:620` here |
 | D11 OPTIMIZED | PARTIAL | criterion benchmarks ran on Spark 2026-09-03; no profiling pass at this head |
-| D12 REVIEWED | NOT EVALUATED | no dual-vendor review has been run against the current head. This is the largest open process gate |
+| D12 REVIEWED | PASS | three independent vendors reviewed `7d6040e2` against `5e42f9b3` on 2026-09-11. Their findings are applied in this revision; see *What the review changed* below |
 | D13 TRACKED | PASS | committed, pushed, and carried by PR #528 |
 | D13a ISSUE-CLOSED | N/A | nothing may close before D18, and D18 is outstanding |
 | D13b EFFORT-LOGGED | NOT EVALUATED | no effort figure recorded |
 | D13c DEPS-UNBLOCKED | PASS | the 13 held `codex/v4-*` drafts each carry an explicit held-disposition comment naming the condition for revisiting |
 | D13d LABELED | NOT EVALUATED | PR labels not audited |
 | D14 DOCUMENTED | PASS | `docs/UPGRADING-4.0.md`, `CHANGELOG.md` 4.0.0 section, release-notes draft, criteria ledger |
-| D15 CLEAN | PASS | clean tree; the evidence fix removes a CI failure and adds no file |
+| D15 CLEAN | PARTIAL | the tree is clean and the evidence fix removes a CI failure while adding no file. D15 is defined as H6–H11, three of which are themselves NOT EVALUATED above, so it cannot be scored higher than its weakest prerequisite |
 | D16 TELEMETRY | N/A | no savings-emitting change on this branch |
-| D17 LEARNINGS | PASS | recorded to memory |
+| D17 LEARNINGS | PASS | one lesson recorded — that writing `path:line` citations into a field whose contract is a bare path breaks the gate validating it, and the fix is the data rather than the checker. The store is operator-local, so this row is an assertion about an artifact outside the repository |
 | D18 MERGED | OUTSTANDING | PR #528 is a draft, `mergeable: MERGEABLE`, state `BLOCKED`, review empty. Merge is the operator's act |
 | D19 BACKUP | N/A | no production state to snapshot at this stage |
-| D20 ROLLBACK | PASS | `docs/UPGRADING-4.0.md` §Rolling back states the 3.x downgrade path and why it does not re-prompt |
-| D21 CANARY | N/A | release-gating change, not a runtime high-risk path |
+| D20 ROLLBACK | PARTIAL | `docs/UPGRADING-4.0.md` §Rolling back documents the 3.x downgrade path and why it does not re-prompt. The gate asks for a *tested* procedure and nothing was exercised, so execution is NOT EVALUATED |
+| D21 CANARY | NOT EVALUATED | the evidence fix alone would be N/A, but this section checks a release of 80 files touching transport, routing and idempotency. No rollout mechanism or gradual-exposure plan was assessed for that change, and an N/A scoped to the smallest commit would hide it |
 | D22 TELEMETRY (structured) | NOT EVALUATED | no log-shape audit on this branch |
 | D23 ALERTING | NOT EVALUATED | no threshold or routing review |
 | D24 ENFORCEMENT | PASS | the scope check is enforced in three workflows, not documented only |
 | D25 SESSION | N/A | no agent-session persistence change |
 | D26 SEC-MONITOR | NOT EVALUATED | no security-channel audit at this head |
-| D27 COUPLING | PASS | no dependency added on this branch |
+| D27 COUPLING | PARTIAL | the dependency count is unchanged — no crate added, lockfile untouched. The gate's other two halves, cycle detection and abstraction direction, are NOT EVALUATED: no module-graph analysis was run |
 | D28 API-SURFACE | NOT EVALUATED | no symbol count run against the merge-base |
 | D29 DEBT-TRAJ | PARTIAL | clippy is clean at `-D warnings`, which bounds but does not measure the trajectory; no dependency-graph comparison run |
 | D30 SUPPLY-CHAIN | PASS | `cargo audit` clean of advisories; no new dependency; lockfile unchanged by this commit |
 | T1c MOAT-MEASURED | NOT EVALUATED | flagged unanswered rather than guessed, as in the 2026-09-03 section |
+
+## §1–§13 and B1–B4 — the SSOT rows this table would otherwise omit
+
+The D-gates above are not the whole SSOT. These rows are named so that an unevaluated gate is
+visible rather than absent.
+
+| gate | verdict | evidence |
+|---|---|---|
+| §1 requirements traced | PASS | 149 criteria, 189 rows, each graded in `RELEASE-4.0.0-criteria-status.md` |
+| §2 WIRED (reasoned) | NOT EVALUATED | same gap as D7: no reachability reasoning over the 39 changed `src/` files |
+| §3 static matrix | PASS | the matrix above, run not asserted |
+| §4 test matrix | PARTIAL | suite PASS; coverage no-drop NOT EVALUATED — no coverage figure exists at this head to compare against `edfd020a` |
+| §5–§7 | NOT EVALUATED | no pass run on this branch |
+| §8 STRIDE / DAST | NOT EVALUATED | no threat-model pass and no runtime DAST. The one security criterion that *is* graded, NFR.SEC.7, is blocking and needs an operator deploy |
+| §9–§10 | NOT EVALUATED | no pass run on this branch |
+| §11 | NOT EVALUATED | no pass run on this branch |
+| §12 documentation | PASS | upgrade guide, changelog, release-notes draft and this record |
+| §13 | NOT EVALUATED | no pass run on this branch |
+| B1–B4 bets | NOT EVALUATED | Bet 4 is this repository's own (shared platform primitives); no bet-level assessment was made for this release |
 
 ## Acceptance criteria for 4.0.0
 
@@ -130,18 +154,18 @@ one-line summary plus the supplemental scope contract.
 | AC3 | Static gates green at head | MET | fmt, clippy, audit, secret scan, log-leak lint — all exit 0 |
 | AC4 | Suite green at head | MET | 5,470 passing, 0 failing, 30 ignored |
 | AC5 | Breaking changes carry a migration path | MET | `docs/UPGRADING-4.0.md`, five items, each with the action needed |
-| AC6 | Performance contract measured, no regression past the freeze | MET (non-blocking PARTIAL on ranking) | worst case +6.07%, inside the <10% band; ranking baseline recorded as NEEDS-MEASUREMENT |
+| AC6 | Performance contract measured, no regression past the freeze | PARTIAL, non-blocking by operator ruling | NFR.PERF.1 is recorded PARTIAL and non-blocking. Largest regression +7.76% by criterion comparison, +9.16% by point estimate, both inside the <10% band. These are microbenchmarks; no end-to-end tool-call latency measurement exists, and ranking has no frozen baseline |
 | AC7 | Supplemental scope contract validates in CI | MET | `check_scope_acceptance.py --publish-check` green; both previously-red jobs read this step |
 | AC8 | Out-of-scope work is held with a stated condition, not abandoned | MET | 13 `codex/v4-*` drafts, each commented with its held disposition |
 | AC9 | Origin/Host enforcement proven against a deployed build | **NOT MET — blocking** | needs an operator deploy of a build carrying `5d25f104`; the listening process is `3.4.0-f30539af`, which predates it |
 | AC10 | A driven end-to-end journey passes against that build | **NOT MET — blocked by AC9** | D6 FUNCTIONAL PASS |
-| AC11 | Dual-vendor review of the release head | **NOT MET** | no review run at `a148c94e` |
+| AC11 | Dual-vendor review of the release head | MET for this section | three vendors reviewed `7d6040e2` on 2026-09-11; findings applied below. The other 207 commits on this branch were explicitly out of that review's scope |
 | AC12 | Merged to `main` | **NOT MET — operator act** | PR #528 draft, state `BLOCKED` |
 
 ## Verdict
 
-**4.0.0 is gate-green on everything an agent can close, and is held by three things that need a
-human: a deploy, a review, and a merge.**
+**Every gate that was run is green. The release is held by two operator acts and by a list of
+analysis passes nobody has run — and that second list is longer than the first.**
 
 The code-facing picture is clean and was run rather than asserted. Formatter, linter-as-SAST, the
 full 5,470-test suite, dependency audit, secret scan and the log-leak lint all pass at this head.
@@ -154,18 +178,47 @@ the checker was the alternative and was rejected: a gate that resolves `scoring.
 discarding `:190` also accepts `scoring.rs:99999`, and this is the gate whose output says the
 release is shippable.
 
-What remains is not code. **NFR.SEC.7** is the single blocking criterion and is terminal for an
-agent: a listening process answers a foreign `Origin`/`Host` with the full tool list, and proving
-the fix requires the operator to deploy a build carrying `5d25f104`. Its second half — drift
-between merged and listening controls — was met on 2026-09-11 by `scripts/dev/check-control-drift.py`
-against `security-controls.toml`. **D6** cannot be driven until that deploy exists. **D12** needs a
-dual-vendor review at this head. **D18** is the operator's merge.
+**Two holds need the operator.** **NFR.SEC.7** is the single blocking criterion and is terminal for
+an agent: a listening process answers a foreign `Origin`/`Host` with the full tool list, and proving
+the fix requires a deploy of a build carrying `5d25f104` — the running process is `3.4.0-f30539af`,
+which predates it. Its second half, drift between merged and listening controls, was met on
+2026-09-11 by `scripts/dev/check-control-drift.py` against `security-controls.toml`. **D6** cannot be
+driven until that deploy exists, and **D18** is the merge itself.
 
-Twelve gates are NOT EVALUATED and are listed as such rather than folded into N/A: observability,
-API surface, coupling trajectory beyond clippy, telemetry shape, alerting, security monitoring,
-effort, labels, documentation de-duplication, duplicate-function detection, `pub`-item reachability,
-and T1c. None of them is a discovered defect; each is an analysis pass nobody has run on this
-branch, and the difference between that and a clean bill of health is the reason this table exists.
+**The larger hold is not an operator act.** Roughly twenty gates are NOT EVALUATED — observability,
+API surface, coupling cycles and abstraction direction, telemetry shape, alerting, security
+monitoring, STRIDE and DAST, coverage no-drop, `pub`-item reachability, duplicate-function
+detection, documentation de-duplication, production wiring of the changed `src/` files, rollback
+execution, canary planning, effort, labels, the bets, and T1c. **Most of these an agent can run.**
+They are open because nobody has run them on this branch, not because they are blocked, and saying
+so is the whole reason this table exists: a gate folded into N/A stops being work and starts being
+an unexamined assumption.
+
+None of the unevaluated gates is a discovered defect. The distinction this record insists on is
+between *green* and *unexamined*, and at this head there is considerably more of the second than the
+first table suggested before review.
+
+## What the review changed
+
+Three vendors reviewed `7d6040e2` against `5e42f9b3` on 2026-09-11 — gpt and grok returned
+SHIP-WITH-FIXES, kimi SHIP. Their findings are applied above, and they were right about a class of
+error worth naming: **eleven rows had been scored against the smallest commit in the range while the
+section's header claimed a re-check of all eighty files.** D4, D5 and D21 are the clearest cases — a
+one-document fix genuinely adds no dependency and needs no canary, but that says nothing about a
+release touching transport, routing and idempotency.
+
+Two findings corrected facts rather than verdicts, and both were verified at source before being
+accepted. The `#[allow(clippy::too_many_lines)]` reported as a new suppression is a **move**: it
+sits at `handlers.rs:580` on `main` and at `:620` here, so D10 is PASS rather than PARTIAL. And the
+largest regression depends on which estimator is read — `semantic_search/query_top10/200` at +7.76%
+by criterion's own comparison, `session_sandbox/check_tool_denied` at +9.16% by point estimate. The
+earlier row quoted the second case's *comparison* figure and called it the worst, which understated
+the first.
+
+One reviewer suggestion was not taken. grok proposed dropping the benchmark file from
+`MIK-3274.RANKING.3`'s evidence, since a pending row needs none and the note already calls the file
+unrelated. It stays, labelled as inventory evidence: the claim being made is that the directory
+holds nothing usable as a ranking baseline, and the file that is there is what supports it.
 
 ---
 
