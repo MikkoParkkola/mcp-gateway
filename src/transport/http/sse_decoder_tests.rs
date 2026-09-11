@@ -81,13 +81,11 @@ fn many_short_data_lines_without_a_blank_line_exceed_the_bound() {
     let line = format!("data: {}\n", "z".repeat(64));
     let mut rejected = false;
     for _ in 0..512 {
-        match decoder.push(line.as_bytes()) {
-            Ok(events) => assert!(events.is_empty(), "no blank line, so no event completes"),
-            Err(_) => {
-                rejected = true;
-                break;
-            }
-        }
+        let Ok(events) = decoder.push(line.as_bytes()) else {
+            rejected = true;
+            break;
+        };
+        assert!(events.is_empty(), "no blank line, so no event completes");
     }
     assert!(
         rejected,
