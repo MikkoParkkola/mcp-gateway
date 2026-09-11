@@ -51,7 +51,7 @@ One difference from the 2026-09-03 run is worth naming rather than rounding up: 
 | H4 RIGHT LOCATION | PASS, documentation only | `docs/requirements/`, beside the criteria ledger it reports on. Says nothing about where the change's new source files landed |
 | H5 NAMING | PASS, documentation only | existing filename unchanged. Naming across the change's new modules is NOT EVALUATED |
 | H6 no orphans | PARTIAL | `clippy --all-targets -- -D warnings` promotes rustc's `dead_code`, so a clean run rules out crate-internal orphans **except where a marker suppresses the check** — and this change adds two, at `src/backend/metadata.rs:160` and `:182` (see D10), which are exactly two crate-internal items the clean run cannot speak for. `dead_code` does not fire on `pub` items reachable from the library surface; no per-symbol reachability sweep was run over the 39 changed `src/` files, so orphans there are NOT EVALUATED |
-| H7 no redundant docs | NOT EVALUATED | 26 documentation files changed against the merge-base; no de-duplication sweep was run |
+| H7 no redundant docs | PASS | `jscpd -f markdown` over the 29 changed Markdown files (6,534 lines) finds **0 clones at 12 lines / 70 tokens** and, loosened to 5 lines / 30 tokens, exactly **one — 10 lines, 0.14%**: the release-criteria cluster table repeated at `docs/release/v4.0.0-release-notes-DRAFT.md:172` and `docs/requirements/RELEASE-4.0.0-gap-assessment-2026-09-11.md:46`. Read at source, it is a data table each document legitimately needs to stand alone, and it is the only restatement in the change |
 | H8 no temp files | PARTIAL | `git status --porcelain` is empty in the working tree and in the Spark measurement worktree, which establishes repository state and nothing else. No on-disk housekeeping sweep was run over build artefacts or scratch directories, so that half is NOT EVALUATED |
 | H9 no duplicate functions | PARTIAL | `jscpd -f rust -l 15 -k 60` over the 39 changed `src/` files at `252da51a`: **3 clones, 60 duplicated lines of 10,223 (0.59%)**. One is genuine — `src/backend/ops.rs:318` and `:456` repeat a 17-line error/metrics tail between the request path and the notification path, and it is extractable. The other two are boilerplate: a `BackendConfig` test fixture (`src/gateway/meta_mcp/protocol.rs:487` / `:535`) and the parallel subscribe/unsubscribe parameter extraction (`src/gateway/meta_mcp/resources.rs:370` / `:416`). PARTIAL because the `ops.rs` duplication is real and unfixed, not because the measurement is missing |
 | H10 dir conventions | PASS, documentation only | evidence document under `docs/requirements/` with its siblings. Directory conventions across the 39 changed `src/` files are NOT EVALUATED |
@@ -166,7 +166,7 @@ one-line summary plus the supplemental scope contract.
 
 **Not every gate that was run is green, and the count of what remains is larger than one blocker.**
 Two operator acts hold the release — the NFR.SEC.7 deploy and the #528 merge. Behind them sit
-sixteen unevaluated analysis passes — the count below, not an exhaustive inventory of
+fifteen unevaluated analysis passes — the count below, not an exhaustive inventory of
 unexamined work, since several PARTIAL rows carry unevaluated halves of their own — thirty `pending` rows in the supplemental contract
 (`RELEASE-4.0.0-scope-status.json`), and one gate that ran twice without reaching its own threshold:
 the dual-vendor review never recorded the two distinct approvals D12 requires. The baseline ledger's
@@ -190,14 +190,13 @@ which predates it. Its second half, drift between merged and listening controls,
 2026-09-11 by `scripts/dev/check-control-drift.py` against `security-controls.toml`. **D6** cannot be
 driven until that deploy exists, and **D18** is the merge itself.
 
-**The larger hold is not an operator act.** Sixteen gates carry no evaluation at all, and they
+**The larger hold is not an operator act.** Fifteen gates carry no evaluation at all, and they
 divide into two groups that should not be read as one. They are not the whole of what is unexamined:
 PARTIAL rows such as H8 (disk housekeeping), D5 (interface comparison) and D11 (profiling) each hold
 an unevaluated half that is counted nowhere below.
 
-**Eleven an agent can run at this head today**, each with a command or a reasoning pass behind it:
-correlation-ID propagation (D8), STRIDE, coverage no-drop (§4), `pub`-item reachability (H6),
-documentation de-duplication (H7), production wiring of the changed `src/` files
+**Ten an agent can run at this head today**, each with a command or a reasoning pass behind it:
+correlation-ID propagation (D8), STRIDE, coverage no-drop (§4), `pub`-item reachability (H6), production wiring of the changed `src/` files
 (D7/§2), canary planning (D21), effort (D13b), PR labels (D13d), the bet assessment (B1–B4), and
 T1c. None is blocked. They are open because nobody has run them on this branch.
 
