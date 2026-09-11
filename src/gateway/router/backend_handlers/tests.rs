@@ -611,7 +611,7 @@ mod era_gate {
     async fn dispatch_in_scope_refuses_a_removed_method_to_a_modern_backend() {
         let (backend, mock) = backend_with_era("modern", true).await;
 
-        let response = dispatch_in_scope(&backend, "ping", None, &[], None)
+        let response = dispatch_in_scope(&backend, "ping", &RequestId::Number(7), None, &[], None)
             .await
             .expect("the gateway answers the refusal itself; the transport call does not error");
 
@@ -622,6 +622,11 @@ mod era_gate {
         assert_eq!(
             error.code, METHOD_NOT_FOUND_CODE,
             "the gateway's refusal carries the code the peer would have sent"
+        );
+        assert_eq!(
+            response.id.as_ref(),
+            Some(&RequestId::Number(7)),
+            "a refusal the gateway answers itself must still be correlatable: {response:?}"
         );
         assert!(
             !mock.saw("ping"),
@@ -637,7 +642,7 @@ mod era_gate {
     async fn dispatch_in_scope_still_forwards_a_removed_method_to_a_legacy_backend() {
         let (backend, mock) = backend_with_era("legacy", false).await;
 
-        let response = dispatch_in_scope(&backend, "ping", None, &[], None)
+        let response = dispatch_in_scope(&backend, "ping", &RequestId::Number(7), None, &[], None)
             .await
             .expect("legacy peer answers");
 

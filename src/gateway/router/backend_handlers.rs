@@ -441,6 +441,7 @@ async fn resolve_notification_identity_key(
 async fn dispatch_in_scope(
     backend: &crate::backend::Backend,
     method: &str,
+    id: &RequestId,
     params: Option<Value>,
     propagated_headers: &[(String, String)],
     identity_key: Option<&str>,
@@ -449,11 +450,13 @@ async fn dispatch_in_scope(
     // method), `method` here is client-chosen: this is the one place every
     // direct-route request funnels through, so it is the one place that must
     // refuse whatever the peer's era removed before it reaches the wire
-    // (MIK-7217, OUTBOUND.1). The id is restored by both callers after this
-    // returns, so `None` here is never seen by the client.
+    // (MIK-7217, OUTBOUND.1). The refusal carries the caller's own id rather
+    // than relying on the callers to restamp it: a refusal never reaches the
+    // transport, so there is no gateway correlation id here to replace, and an
+    // `id: null` error is one a direct-route client cannot correlate at all.
     if crate::gateway::meta_mcp::era_removed_method(backend, method).await {
         return Ok(JsonRpcResponse::error(
-            None,
+            Some(id.clone()),
             crate::protocol::era::METHOD_NOT_FOUND_CODE,
             format!("{method} was removed in protocol revision 2026-07-28"),
         ));
@@ -871,6 +874,7 @@ pub(super) async fn backend_handler(
                 let forward = dispatch_in_scope(
                     &backend,
                     &method,
+                    &id,
                     Some(sanitized_params),
                     &propagated_headers,
                     identity_key.as_deref(),
@@ -925,6 +929,7 @@ pub(super) async fn backend_handler(
     let forward = dispatch_in_scope(
         &backend,
         &method,
+        &id,
         params.clone(),
         &propagated_headers,
         identity_key.as_deref(),
@@ -1402,6 +1407,7 @@ mod direct_route_scope_tests {
         dispatch_in_scope(
             &backend,
             "tools/call",
+            &RequestId::Number(1),
             Some(json!({ "name": "t", "_meta": { "progressToken": 7 } })),
             &[],
             None,
