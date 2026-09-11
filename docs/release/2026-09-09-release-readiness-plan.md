@@ -904,3 +904,68 @@ classifying every run by the three shapes in the table above, which will replace
 the sampled counts with branch-complete ones and answer the question section J
 leaves open: whether the compile-failure shape, the one no flag rescues, is rare
 or routine.
+
+## 2026-09-11: where the release stands now, and the ordered path out
+
+Re-derived today against the worktree, not against the sections above. The count
+moved and the red set shrank; both are recorded here rather than edited into the
+09-09 prose, so the earlier state stays readable.
+
+**Ledger.** `scripts/release/count-release-criteria.py --check` exits 0 and reports
+**146 criteria, 186 rows, 184 met or non-blocking, 2 blocking**. `--blocking` names
+them: `MIK-7272.SUB.2b` and `GH475.RL.5`. Of the three that blocked on 09-09,
+`MIK-7272.SUB.4` is MET (corrected 2026-09-10 from a flip two reviewers had rejected)
+and `MIK-7246.CONFIRM.2` no longer carries a blocking flag. `GH475.RL.5` is new to the
+blocking set and is not code: the predicate's `throttled` arm is deliberate and
+recorded, and whether the criterion text or the predicate moves is a question already
+with the requester at [#482](https://github.com/MikkoParkkola/mcp-gateway/issues/482).
+
+**CI.** The last run on `fix/gh517-protocol-negotiation` (`34541872175`, 2026-09-11
+01:26Z) is red on the Tests job with **three** rows, not sixteen: `s02_stdio_progress_*`,
+`s02_stdio_message_*` and `s03_progress_stdio_*` — `1 passed; 3 failed` in that binary.
+All three are the stdio outbound leg of `SUB.2b`. Section D's sixteen are therefore
+closed; what remains is the emitter the `SUB.2b` row has described as missing since it
+was written. Twenty commits are unpushed, so CI has not seen the newest work at all.
+
+**A gap the machine check cannot see.** The ledger's own rule is "a criterion is
+BLOCKING unless it is MET or N/A", and the counter enforces vocabulary on the blocking
+column only — `MET`, `PARTIAL`, `ABSENT` and the rest are never matched against a
+pattern. Two rows exploit that without meaning to: `MIK-7246.CONFIRM.1a:247` and
+`MIK-7246.CONFIRM.2:249` both read status `PASS`, a token the vocabulary block does not
+define, and both are flagged `no`. Under the stated rule neither is MET and neither is
+N/A, so both should be blocking; under the script both are silently fine. The evidence
+in those two cells is substantive — the risk is the token, not the criterion. The repair
+is a status-column regex in `count-release-criteria.py` beside the existing blocking-column
+guard, and a restatement of the two rows by whoever owns their evidence. Until that runs,
+"2 blocking" is a count over rows whose status words were never checked.
+
+**The HTTP half of `SUB.2b` has an open defect with no measurement.** Recorded in
+`docs/design/2026-09-11-sub2b-http-liveness.md`: a fixture whose second notification
+exists only after an intervening client call yields one notification and stalls, while
+the same row with the second notification on a timer passes. The stream leg therefore
+forwards two notifications and the layer that drops the gated one is unidentified. The
+two reproduction rows in `tests/mik_7272_sub2b_acs.rs` are `#[ignore]`d and unrun; their
+`PROBE-A`/`PROBE-B` labels separate "the intervening call was never serviced" from "it
+was serviced and no frame followed", which is the measurement that names the layer.
+
+**Order of work, from here.**
+
+1. Run the two `#[ignore]`d PROBE rows and read which label fires. Everything about the
+   HTTP half is speculation until one of them does.
+2. Build the stdio outbound emitter. It is the single cause of all three red CI rows and
+   the thing `SUB.2b` flips on, together with the `notifications/progress` half of S-03.
+   The `notifications/message` half of S-03 stays UNMET over client-facing stdio by
+   ADR-014 Amendment 1 and is not part of this.
+3. Add the status-column guard to the counter and restate `CONFIRM.1a` and `CONFIRM.2` in
+   the ledger's own vocabulary. Cheap, and it is what makes step 5's number mean anything.
+4. Close `GH475.RL.5` by decision at [#482](https://github.com/MikkoParkkola/mcp-gateway/issues/482).
+   No code moves until the requester answers which side gives.
+5. Push and let CI run. Twenty unpushed commits are twenty commits of unmeasured surface;
+   a green local suite on a shared, dirty worktree is not the same observation.
+6. Cluster F last: `NFR.COMPAT.1` is a default change the board sequences behind clusters
+   A and C, and `NFR.PERF.1`'s residual stands — no P50 or P99 may be quoted publicly for
+   this release until an end-to-end harness produces one.
+
+Steps 1 and 2 are independent of 3 and 4 and can run in parallel across lanes. Nothing
+here reopens a decision the release owner has made; the `NFR.PERF.1` headroom ruling and
+the ADR-014 narrowing both stand as recorded.
