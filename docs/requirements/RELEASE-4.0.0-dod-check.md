@@ -45,16 +45,16 @@ One difference from the 2026-09-03 run is worth naming rather than rounding up: 
 
 | gate | verdict | evidence |
 |---|---|---|
-| H1 SEARCH FIRST | PASS | `ls docs/requirements/` located this file; the section was appended rather than filed separately |
-| H2 UPDATE > CREATE | PASS | third section of `RELEASE-4.0.0-dod-check.md`; no new file |
-| H3 CONSOLIDATE | PASS | gate definitions cited by path, never restated |
-| H4 RIGHT LOCATION | PASS | `docs/requirements/`, beside the criteria ledger it reports on |
-| H5 NAMING | PASS | existing filename unchanged |
-| H6 no orphans | PARTIAL | `clippy --all-targets -- -D warnings` promotes rustc's `dead_code`, so a clean run rules out crate-internal orphans. `dead_code` does not fire on `pub` items reachable from the library surface; no per-symbol reachability sweep was run over the 39 changed `src/` files, so orphans there are NOT EVALUATED |
+| H1 SEARCH FIRST | PASS, documentation only | `ls docs/requirements/` located this file; the section was appended rather than filed separately. Scored against this document's own placement, not against the 80-file change |
+| H2 UPDATE > CREATE | PASS, documentation only | third section of `RELEASE-4.0.0-dod-check.md`; no new file. Whether the 39 changed `src/` files preferred extension over creation is NOT EVALUATED |
+| H3 CONSOLIDATE | PASS, documentation only | gate definitions cited by path, never restated. Consolidation across the changed source is NOT EVALUATED; see H9 |
+| H4 RIGHT LOCATION | PASS, documentation only | `docs/requirements/`, beside the criteria ledger it reports on. Says nothing about where the change's new source files landed |
+| H5 NAMING | PASS, documentation only | existing filename unchanged. Naming across the change's new modules is NOT EVALUATED |
+| H6 no orphans | PARTIAL | `clippy --all-targets -- -D warnings` promotes rustc's `dead_code`, so a clean run rules out crate-internal orphans **except where a marker suppresses the check** — and this change adds two, at `src/backend/metadata.rs:160` and `:182` (see D10), which are exactly two crate-internal items the clean run cannot speak for. `dead_code` does not fire on `pub` items reachable from the library surface; no per-symbol reachability sweep was run over the 39 changed `src/` files, so orphans there are NOT EVALUATED |
 | H7 no redundant docs | NOT EVALUATED | 26 documentation files changed against the merge-base; no de-duplication sweep was run |
 | H8 no temp files | PARTIAL | `git status --porcelain` is empty in the working tree and in the Spark measurement worktree, which establishes repository state and nothing else. No on-disk housekeeping sweep was run over build artefacts or scratch directories, so that half is NOT EVALUATED |
 | H9 no duplicate functions | NOT EVALUATED | no duplication detector was run; clippy does not answer this |
-| H10 dir conventions | PASS | evidence document under `docs/requirements/` with its siblings |
+| H10 dir conventions | PASS, documentation only | evidence document under `docs/requirements/` with its siblings. Directory conventions across the 39 changed `src/` files are NOT EVALUATED |
 | H11 untracked tracked-or-ignored | PASS | `git status --porcelain` empty |
 
 ## §3 / §4 / D9 — static gates and the suite
@@ -96,9 +96,9 @@ commit rather than from the truncated log, because a truncated log is not eviden
 | D7 WIRED | NOT EVALUATED | the CI wiring cited here is D24, not D7. No reachability sweep was run over the 39 changed `src/` files to show each is called from production rather than from tests alone |
 | D8 OBSERVABLE | NOT EVALUATED | no correlation-ID propagation sweep was run on this branch |
 | D9 STATIC | PASS | see the matrix above |
-| D10 0-BUG | PASS | 0 debt markers in `src/`, 0 known defects, and **no new suppression**. The diff's single added `#[allow]` line is a move, not an addition: `#[allow(clippy::too_many_lines)]` sits at `src/gateway/router/handlers.rs:580` on `main` and at `:620` here |
+| D10 0-BUG | PARTIAL | 0 debt markers in `src/` and 0 known defects. The **no new suppression** claim was wrong and is withdrawn. Against the merge-base `738c7cee`, `src/backend/metadata.rs` gains two `#[expect(dead_code, ...)]` markers, at `:160` on `set_resend_permitted` and `:182` on `resend_permitted_snapshot`; both are deliberate (`expect` rather than `allow`, so the gate errors when the direct-route caller lands) but both are new. The third added `#[allow]` line is a move rather than an addition: `#[allow(clippy::too_many_lines)]` sits at `src/gateway/router/handlers.rs:580` on `main` and at `:620` here |
 | D11 OPTIMIZED | PARTIAL | criterion benchmarks ran on Spark 2026-09-03; no profiling pass at this head |
-| D12 REVIEWED | PASS | three independent vendors reviewed `7d6040e2` against `5e42f9b3` on 2026-09-11. Their findings are applied in this revision; see *What the review changed* below |
+| D12 REVIEWED | PARTIAL | two rounds ran and **neither reached the gate**, which requires `MIN_DISTINCT_APPROVALS` = 2. Round 1 on `7d6040e2` against `5e42f9b3`: kimi SHIP, gpt SHIP-WITH-FIXES, grok SHIP-WITH-FIXES — recorded as `1 of 2 required distinct vendors approved`. Round 2 on `f903b854`: gpt SHIP-WITH-FIXES, grok returned no verdict, kimi returned an empty run file. Both rounds' findings are applied; see *What the review changed* below. What is PARTIAL is the approval count, not the review effort |
 | D13 TRACKED | PASS | committed, pushed, and carried by PR #528 |
 | D13a ISSUE-CLOSED | N/A | nothing may close before D18, and D18 is outstanding |
 | D13b EFFORT-LOGGED | NOT EVALUATED | no effort figure recorded |
@@ -150,7 +150,7 @@ one-line summary plus the supplemental scope contract.
 | # | Acceptance criterion | Status | Evidence |
 |---|---|---|---|
 | AC1 | Every release criterion is graded, none silently absent | MET | 149 criteria, 189 rows; `count-release-criteria.py --check` passes |
-| AC2 | At most one blocking criterion remains, and it is named | MET | NFR.SEC.7, `RELEASE-4.0.0-criteria-status.md:411`, `blocking: yes` |
+| AC2 | At most one blocking criterion remains, and it is named | MET for the baseline ledger only | the baseline criteria ledger has exactly one: NFR.SEC.7, `RELEASE-4.0.0-criteria-status.md:411`, "blocking until the live endpoint passes". This does **not** clear the release. The supplemental contract `RELEASE-4.0.0-scope-status.json` carries **30 rows at `pending`** against 1 `met` and 1 `resolved`, and those 30 are obligations this row's count never covered |
 | AC3 | Static gates green at head | MET | fmt, clippy, audit, secret scan, log-leak lint — all exit 0 |
 | AC4 | Suite green at head | MET | 5,470 passing, 0 failing, 30 ignored |
 | AC5 | Breaking changes carry a migration path | MET | `docs/UPGRADING-4.0.md`, five items, each with the action needed |
@@ -159,13 +159,17 @@ one-line summary plus the supplemental scope contract.
 | AC8 | Out-of-scope work is held with a stated condition, not abandoned | MET | 13 `codex/v4-*` drafts, each commented with its held disposition |
 | AC9 | Origin/Host enforcement proven against a deployed build | **NOT MET — blocking** | needs an operator deploy of a build carrying `5d25f104`; the listening process is `3.4.0-f30539af`, which predates it |
 | AC10 | A driven end-to-end journey passes against that build | **NOT MET — blocked by AC9** | D6 FUNCTIONAL PASS |
-| AC11 | Dual-vendor review of the release head | MET for this section | three vendors reviewed `7d6040e2` on 2026-09-11; findings applied below. The other 207 commits on this branch were explicitly out of that review's scope |
+| AC11 | Dual-vendor review of the release head | NOT MET | two rounds ran on this section and neither recorded the two distinct vendor approvals the gate requires (see D12). Scope was this section, never the release head: the other 207 commits on this branch were explicitly excluded from both rounds |
 | AC12 | Merged to `main` | **NOT MET — operator act** | PR #528 draft, state `BLOCKED` |
 
 ## Verdict
 
-**Every gate that was run is green. The release is held by two operator acts and by a list of
-analysis passes nobody has run — and that second list is longer than the first.**
+**Not every gate that was run is green, and the count of what remains is larger than one blocker.**
+Two operator acts hold the release — the NFR.SEC.7 deploy and the #528 merge. Behind them sit
+nineteen unevaluated analysis passes, thirty `pending` rows in the supplemental contract
+(`RELEASE-4.0.0-scope-status.json`), and one gate that ran twice without reaching its own threshold:
+the dual-vendor review never recorded the two distinct approvals D12 requires. The baseline ledger's
+"one blocking criterion" is true and is not the whole number.
 
 The code-facing picture is clean and was run rather than asserted. Formatter, linter-as-SAST, the
 full 5,470-test suite, dependency audit, secret scan and the log-leak lint all pass at this head.
