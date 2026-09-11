@@ -700,19 +700,6 @@ impl Firewall {
 pub const BLOCKED_RESPONSE_MESSAGE: &str =
     "Security firewall blocked this response: backend content failed a content scan";
 
-/// The value that replaces a blocked response payload.
-///
-/// Shaped as an MCP tool result carrying `isError: true` so a caller that
-/// forwards it unchanged still reports a failure rather than a success, and
-/// nothing of the original backend content survives.
-pub(crate) fn blocked_response_value(verdict: &FirewallVerdict) -> Value {
-    serde_json::json!({
-        "content": [{ "type": "text", "text": BLOCKED_RESPONSE_MESSAGE }],
-        "isError": true,
-        "_meta": { "firewall": { "action": "block", "findings": verdict.findings.len() } },
-    })
-}
-
 impl FirewallVerdict {
     /// Construct an unconditional allow verdict (used when scanning is disabled).
     fn allow() -> Self {
