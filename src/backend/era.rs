@@ -236,4 +236,25 @@ mod tests {
             UNSUPPORTED_PROTOCOL_VERSION
         ));
     }
+
+    /// Whichever method the probe chooses for an era, HTTP session recovery
+    /// must be allowed to resend it. The recovery path re-initializes the
+    /// session and then asks [`resend_permission`] whether it may repeat the
+    /// request; a `Denied` there hands the caller back the original error, and
+    /// the probe reads that as a fault and rebuilds a working backend's
+    /// transport. `ping` was on the allowlist, so swapping the modern probe to
+    /// `server/discover` silently took that recovery away from exactly the
+    /// peers OUTBOUND.1 was written for (MIK-7217, OUTBOUND.1).
+    #[test]
+    fn every_liveness_method_survives_a_session_resend() {
+        use crate::transport::{ResendPermission, resend_permission};
+        let no_tools = std::collections::HashSet::<String>::new();
+        for method in [PING_METHOD, DISCOVER_METHOD] {
+            assert_eq!(
+                resend_permission(method, None, &no_tools),
+                ResendPermission::Permitted,
+                "the probe sends {method}, so session recovery must be able to resend it"
+            );
+        }
+    }
 }

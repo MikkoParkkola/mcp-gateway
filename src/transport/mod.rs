@@ -42,6 +42,11 @@ const SIDE_EFFECT_FREE_METHODS: &[&str] = &[
     "initialize",
     "ping",
     "tools/list",
+    // The modern-era liveness probe (`Backend::liveness_method`). Read-only in
+    // the same sense as `tools/list`: it asks the peer what it is, changes
+    // nothing, and the probe depends on session recovery being able to resend
+    // it the way `ping` always could (MIK-7217, OUTBOUND.1).
+    "server/discover",
     "resources/list",
     "resources/read",
     "prompts/list",
