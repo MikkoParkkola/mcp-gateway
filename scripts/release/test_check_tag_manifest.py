@@ -5,6 +5,7 @@
 import contextlib
 import importlib.util
 import io
+import os
 import pathlib
 import re
 import tempfile
@@ -237,7 +238,12 @@ class WorkflowOutputs(unittest.TestCase):
             self.assertEqual(path.read_text(), "")
 
 
-WORKFLOWS = pathlib.Path(__file__).parents[2] / ".github" / "workflows"
+# Overridable so the mutation harness can point these assertions at a copy of
+# the workflows instead of editing the ones in the working tree.
+WORKFLOWS = pathlib.Path(
+    os.environ.get("MCPGW_WORKFLOWS_DIR")
+    or pathlib.Path(__file__).parents[2] / ".github" / "workflows"
+)
 JOB_HEADER = re.compile(r"^  ([A-Za-z][\w-]*):\s*$")
 
 
@@ -261,41 +267,85 @@ def needs_of(body):
     return None
 
 
+def uncommented(line):
+    """`line` with a trailing YAML comment removed, quoting respected.
+
+    A `#` opens a comment only outside quotes and after whitespace, which is
+    what YAML itself requires. Both directions matter: a trailing comment
+    naming a command satisfies an assertion the executable part no longer
+    does, and a harmless `# v3` pin comment makes an exact-value assertion
+    fail on a step that is wired correctly.
+    """
+    quote = None
+    for index, char in enumerate(line):
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (index == 0 or line[index - 1].isspace()):
+            return line[:index].rstrip()
+    return line
+
+
 def live_lines(workflow):
-    """A workflow's lines with whole-line comments dropped.
+    """A workflow's executable lines, comments dropped.
 
     Every assertion here is textual, so a rule commented out rather than
     deleted would still satisfy an `assertIn` against the raw file. That is
     the shape a regression takes: a step disabled during debugging and
     committed. Reading only executable lines makes the mutation fail.
     """
-    return [
-        line
-        for line in (WORKFLOWS / workflow).read_text(encoding="utf-8").splitlines()
-        if not line.strip().startswith("#")
-    ]
+    text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
+    return [line for line in (uncommented(raw) for raw in text.splitlines()) if line.strip()]
 
 
-def commands(workflow):
-    """A workflow's executable lines with `\\` continuations joined.
+def joined(lines):
+    """`lines` with `\\` continuations joined into one command each.
 
     Assertions about a cosign invocation have to see the whole command. Read
     line by line, a flag on a continuation line looks like a separate
     statement, and a check for it can be satisfied by a different command
     further down the file.
     """
-    joined, buffer = [], ""
-    for line in live_lines(workflow):
+    commands, buffer = [], ""
+    for line in lines:
         stripped = line.strip()
         buffer = f"{buffer} {stripped}".strip() if buffer else stripped
         if buffer.endswith("\\"):
             buffer = buffer[:-1].strip()
             continue
-        joined.append(buffer)
+        commands.append(buffer)
         buffer = ""
     if buffer:
-        joined.append(buffer)
-    return joined
+        commands.append(buffer)
+    return commands
+
+
+def commands(workflow):
+    """A workflow's executable lines as whole commands."""
+    return joined(live_lines(workflow))
+
+
+def steps(workflow):
+    """A workflow's step blocks, each as a list of its executable lines.
+
+    An assertion about a command and the environment it runs in has to read
+    one step at a time. A `DIGEST` bound in a neighbouring step does not reach
+    this one, so checking the file for any binding at all passes a signing
+    step that lost its own.
+    """
+    blocks, current = [], None
+    for line in live_lines(workflow):
+        if line.lstrip().startswith("- name:") or JOB_HEADER.match(line):
+            if current:
+                blocks.append(current)
+            current = [line] if not JOB_HEADER.match(line) else None
+        elif current is not None:
+            current.append(line)
+    if current:
+        blocks.append(current)
+    return blocks
 
 
 def jobs(workflow):
@@ -323,6 +373,14 @@ class WorkflowWiring(unittest.TestCase):
     release publishes correctly — only CI on a real tag does that — but they
     catch the rewiring mistakes that are silent at author time and only visible
     once a release has already gone to the wrong channel.
+
+    Textual, deliberately: the gate runs on stdlib alone in three workflows, so
+    a YAML parser is a dependency it does not get to have. The cost is that
+    equivalence is handled case by case — comments stripped, optional quotes,
+    folded conditions, continuations joined, step blocks scoped — rather than
+    decided by a parser. Every case here is pinned by
+    `test_workflow_wiring_mutations.py`, which is what keeps the list honest:
+    a spelling nobody thought of fails loudly instead of passing silently.
     """
 
     def test_every_reader_of_verify_outputs_needs_verify_directly(self):
@@ -335,9 +393,11 @@ class WorkflowWiring(unittest.TestCase):
                 continue
             declared = needs_of(body)
             self.assertIsNotNone(declared, f"{name} reads verify's outputs with no needs:")
-            self.assertRegex(
-                declared,
-                r"\bverify\b",
+            # Exact membership, not a substring: a comment naming verify, or a
+            # job called verify-something, is not a dependency on verify.
+            self.assertIn(
+                "verify",
+                re.findall(r"[\w-]+", declared),
                 f"{name} reads verify's outputs without naming verify in needs:",
             )
 
@@ -346,25 +406,39 @@ class WorkflowWiring(unittest.TestCase):
         # none can read another's job outputs, so each has to run the gate
         # itself. Dropping it from one leaves that workflow's publishes
         # ungated while the other two stay green.
+        # Read executable commands, not the file: an invocation commented out
+        # still satisfies a search of the raw text.
         for workflow in ("release.yml", "ci.yml", "docker.yml"):
-            text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
-            self.assertIn("scripts/release/check_tag_manifest.py", text, workflow)
-            self.assertIn("scripts/release/test_check_tag_manifest.py", text, workflow)
+            live = commands(workflow)
+            for script in ("check_tag_manifest.py", "test_check_tag_manifest.py"):
+                self.assertTrue(
+                    [c for c in live if f"scripts/release/{script}" in c],
+                    f"{workflow} never runs scripts/release/{script}",
+                )
 
     def test_prerelease_skips_are_declared_where_they_are_claimed(self):
         # The three stable-only surfaces. Each is skipped by an expression
         # rather than by a comment; losing the expression publishes a candidate
         # to a channel nobody opted into.
+        # Whitespace is collapsed first so a condition folded across lines —
+        # `if: >` — still reads as one expression. The `if:` anchor stays, so a
+        # condition that drifts into an unrelated key still fails.
+        def condition(workflow, job):
+            return " ".join(jobs(workflow)[job].split())
+
+        def skip(job):
+            # A condition may legitimately carry other clauses — the tag-ref
+            # guard does — so a prefix is allowed, but only one holding no
+            # colon: that keeps the match inside this `if:` instead of letting
+            # it drift into a later key.
+            return (
+                r"if: (?:[>|][-+]?\s)?[^:]*?needs\." + job + r"\.outputs\.is_prerelease != 'true'"
+            )
+
+        self.assertRegex(condition("release.yml", "homebrew-update"), skip("verify"))
+        self.assertRegex(condition("docker.yml", "publish-mcp-registry"), skip("build"))
         self.assertRegex(
-            jobs("release.yml")["homebrew-update"],
-            r"if:.*needs\.verify\.outputs\.is_prerelease != 'true'",
-        )
-        self.assertRegex(
-            jobs("docker.yml")["publish-mcp-registry"],
-            r"if:.*needs\.build\.outputs\.is_prerelease != 'true'",
-        )
-        self.assertRegex(
-            jobs("ci.yml")["docker"],
+            condition("ci.yml", "docker"),
             r"is_prerelease != 'true' && 'ghcr\.io/[^']*:latest'",
         )
 
@@ -375,36 +449,56 @@ class WorkflowWiring(unittest.TestCase):
         # signing workflow's own verify-by-digest still passes.
         for workflow in ("ci.yml", "docker.yml"):
             live = commands(workflow)
-            # Sign the digest the build step produced, not a tag: a tag is a
-            # mutable pointer the other publisher can move, and a signature is
-            # over a digest.
-            # Word-bounded: a trailing comment reading "cosign signing" is
-            # prose, not an invocation.
-            # Both verbs, checked separately: an attestation is not a
-            # signature, so finding one must not excuse the absence of the
-            # other.
-            for verb in ("sign", "attest"):
-                found = [c for c in live if re.search(rf"\bcosign {verb}\b", c)]
+            # Each verb separately, and `verify` bounded so it cannot be
+            # satisfied by `verify-attestation`: an attestation is not a
+            # signature, and deleting either step has to fail.
+            for verb in ("sign", "attest", "verify", "verify-attestation"):
+                pattern = rf"\bcosign {re.escape(verb)}(?![-\w])"
+                found = [c for c in live if re.search(pattern, c)]
                 self.assertTrue(found, f"{workflow} never runs cosign {verb}")
                 for command in found:
+                    # Sign and verify the digest the build step produced, not a
+                    # tag: a tag is a mutable pointer the other publisher can
+                    # move, and a signature is over a digest.
                     self.assertRegex(command, r"@\$\{DIGEST\}\"", f"{workflow}: {command}")
-            # Every binding of DIGEST, not merely one of them: a step left
-            # pointing at some other value signs something nobody pulled.
-            bindings = [c for c in live if c.startswith("DIGEST:")]
-            self.assertTrue(bindings, f"{workflow} never binds DIGEST")
-            for binding in bindings:
-                self.assertEqual(
-                    binding,
-                    "DIGEST: ${{ steps.build.outputs.digest }}",
-                    f"{workflow} binds DIGEST to something other than the build step",
+            # Read the binding per step, not per file. `DIGEST` is step-scoped
+            # env, so a step that lost its own binding expands it to the empty
+            # string and signs a bare repository name.
+            digest = re.compile(r"^DIGEST: \"?\$\{\{ steps\.build\.outputs\.digest \}\}\"?$")
+            identity = re.compile(
+                r"^IDENTITY: \"?https://github\.com/MikkoParkkola/mcp-gateway"
+                rf"/\.github/workflows/{re.escape(workflow)}@\$\{{\{{ github\.ref \}}\}}\"?$"
+            )
+            signing = 0
+            for block in steps(workflow):
+                block = joined(block)
+                if not any(re.search(r"\bcosign \w", c) for c in block):
+                    continue
+                signing += 1
+                name = block[0]
+                self.assertTrue(
+                    any(digest.match(c) for c in block),
+                    f"{workflow}: {name} runs cosign without binding DIGEST to the build digest",
                 )
-            # Every verification must pin an identity, not just the first one:
-            # an unpinned `cosign verify` accepts a signature from any
-            # workflow that can mint an OIDC token.
-            verified = [c for c in live if re.search(r"\bcosign verify", c)]
-            self.assertTrue(verified, f"{workflow} never runs cosign verify")
-            for command in verified:
-                self.assertIn("--certificate-identity", command, f"{workflow}: {command}")
+                if not any(re.search(r"\bcosign verify(-attestation)?(?![-\w])", c) for c in block):
+                    continue
+                # An identity is what makes a signature mean something: an
+                # unpinned verify, or one relaxed to a regexp, accepts a
+                # signature from any workflow that can mint an OIDC token.
+                self.assertTrue(
+                    any(identity.match(c) for c in block),
+                    f"{workflow}: {name} verifies without pinning this workflow's identity",
+                )
+                for command in block:
+                    if re.search(r"\bcosign verify(-attestation)?(?![-\w])", command):
+                        self.assertIn(
+                            '--certificate-identity "${IDENTITY}"',
+                            command,
+                            f"{workflow}: {command}",
+                        )
+            # Non-vacuity: if the step scan found nothing, the per-step
+            # assertions above never ran and the whole loop is decoration.
+            self.assertTrue(signing, f"{workflow}: no step containing a cosign command was read")
 
     def test_the_dispatch_tag_is_not_interpolated_into_a_shell_command(self):
         # A dispatch input expanded inside `run:` is substituted before bash
@@ -413,12 +507,18 @@ class WorkflowWiring(unittest.TestCase):
         # Checking only lines that start with `run:` would miss the body of a
         # `run: |` block, which is where an interpolation would actually sit.
         # Invert it: every executable mention of the input must be an `env:`
-        # assignment, so any other placement fails whatever its indentation.
-        env_assignment = re.compile(r"^[A-Z][A-Z0-9_]*: \$\{\{ inputs\.tag \}\}$")
+        # assignment or an `if:` condition, so any other placement fails
+        # whatever its indentation. An `if:` is evaluated by the expression
+        # engine and never reaches a shell, so banning it would block a safe
+        # construct; a `run:` placement is the one that executes.
+        permitted = re.compile(
+            r"^(?:[A-Z][A-Z0-9_]*: \"?\$\{\{ inputs\.tag \}\}\"?"
+            r"|if: (?:[>|][-+]?\s)?\$\{\{ [^}]*inputs\.tag[^}]*\}\})$"
+        )
         for line in live_lines("release.yml"):
             if "inputs.tag" not in line:
                 continue
-            self.assertRegex(line.strip(), env_assignment, line)
+            self.assertRegex(line.strip(), permitted, line)
 
 
 if __name__ == "__main__":

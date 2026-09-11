@@ -272,6 +272,12 @@ jobs:
         run: python3 scripts/release/test_scope_acceptance.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
+      # Proves the workflow-wiring assertions still discriminate: each case
+      # breaks one rule, or restates it in an equivalent spelling, and the
+      # suite has to return the stated verdict. Runs against a copy of the
+      # workflows, so nothing here edits this file.
+      - name: Test that the workflow-wiring assertions catch their mutations
+        run: python3 scripts/release/test_workflow_wiring_mutations.py
       - name: Validate supplemental scope (pending work is reported)
         run: python3 scripts/release/check_scope_acceptance.py --check
       - name: Require completed acceptance in publishing context
