@@ -23,11 +23,10 @@
       "id": "MIK-7334.CATALOGUE.1",
       "status": "pending",
       "evidence": [
-        "src/backend/mod.rs:81",
-        "src/backend/mod.rs:47",
-        "src/backend/metadata.rs:137"
+        "src/backend/mod.rs",
+        "src/backend/metadata.rs"
       ],
-      "note": "Graded 2026-09-11: ABSENT. tools_cache is one CachedMetadata<Vec<Tool>> per Backend with no identity key, beside a pool that is per-identity. MIK-6735 isolated transport sessions and left tool metadata shared, so an identity-dependent catalogue crosses callers by construction rather than by race. No revocation-during-fill or two-identity differing-schema test. Static evidence only; no test run."
+      "note": "Graded 2026-09-11: ABSENT. tools_cache is one CachedMetadata<Vec<Tool>> per Backend with no identity key, beside a pool that is per-identity. MIK-6735 isolated transport sessions and left tool metadata shared, so an identity-dependent catalogue crosses callers by construction rather than by race. No revocation-during-fill or two-identity differing-schema test. Static evidence only; no test run. Lines: src/backend/mod.rs:81, src/backend/mod.rs:47, src/backend/metadata.rs:137."
     },
     {
       "id": "MIK-7387.STDIO.1",
@@ -123,41 +122,39 @@
       "id": "MIK-3274.RANKING.1",
       "status": "pending",
       "evidence": [
-        "src/ranking/scoring.rs:190",
-        "src/ranking/scoring.rs:17",
+        "src/ranking/scoring.rs",
         "src/ranking/tests.rs"
       ],
-      "note": "Graded 2026-09-11: ABSENT. score_text_relevance is substring plus a 20-group synonym table; no edit distance, acronym or word-boundary matching anywhere in src/ranking/. 56 ranking tests, none covering abbreviation, word boundary, Unicode or Code Mode glob. No held-out corpus. Static evidence only; no test run."
+      "note": "Graded 2026-09-11: ABSENT. score_text_relevance is substring plus a 20-group synonym table; no edit distance, acronym or word-boundary matching anywhere in src/ranking/. 56 ranking tests, none covering abbreviation, word boundary, Unicode or Code Mode glob. No held-out corpus. Static evidence only; no test run. Lines: src/ranking/scoring.rs:190, src/ranking/scoring.rs:17."
     },
     {
       "id": "MIK-3274.RANKING.2",
       "status": "pending",
       "evidence": [
-        "src/gateway/meta_mcp/search.rs:200",
-        "src/gateway/meta_mcp/search.rs:763",
-        "src/ranking/mod.rs:396"
+        "src/gateway/meta_mcp/search.rs",
+        "src/ranking/mod.rs"
       ],
-      "note": "Graded 2026-09-11: UNTESTED (implementation present). Both invariants are implemented and citable: authorization filters before collection, ranking precedes truncation, and the usage boost is multiplicative so a 0.0 relevance stays 0.0. No test asserts either ordering; the criterion's test row needs a low limit, poisoned feedback and a forbidden-but-used versus allowed-but-relevant pairing, and nothing pits those against each other. Static evidence only; no test run."
+      "note": "Graded 2026-09-11: UNTESTED (implementation present). Both invariants are implemented and citable: authorization filters before collection, ranking precedes truncation, and the usage boost is multiplicative so a 0.0 relevance stays 0.0. No test asserts either ordering; the criterion's test row needs a low limit, poisoned feedback and a forbidden-but-used versus allowed-but-relevant pairing, and nothing pits those against each other. Static evidence only; no test run. Lines: src/gateway/meta_mcp/search.rs:200, src/gateway/meta_mcp/search.rs:763, src/ranking/mod.rs:396."
     },
     {
       "id": "MIK-3274.RANKING.3",
       "status": "pending",
       "evidence": [
-        "benchmarks/results/",
+        "benchmarks/results/mik-6977-live-agent-2026-09-04.json",
         "docs/requirements/RELEASE-4.0.0-performance-contract.md",
-        "src/ranking/mod.rs:421"
+        "src/ranking/mod.rs"
       ],
-      "note": "Graded 2026-09-11: NEEDS-MEASUREMENT. No ranking corpus, baseline or frozen threshold exists: benchmarks/results/ holds one unrelated file and the performance contract freezes only the workload rows. The freeze was never recorded, and cannot now be produced as specified because ranking already shipped. evaluate_offline is a fixture comparator, not the obligation. Static evidence only; no test run."
+      "note": "Graded 2026-09-11: NEEDS-MEASUREMENT. No ranking corpus, baseline or frozen threshold exists: benchmarks/results/ holds one unrelated file and the performance contract freezes only the workload rows. The freeze was never recorded, and cannot now be produced as specified because ranking already shipped. evaluate_offline is a fixture comparator, not the obligation. Static evidence only; no test run. Lines: src/ranking/mod.rs:421."
     },
     {
       "id": "MIK-7332.DISCOVERY.1",
       "status": "pending",
       "evidence": [
-        "src/gateway/search_disclosure.rs:40",
+        "src/gateway/search_disclosure.rs",
         "tests/discovery_tests.rs",
-        "tests/tool_list_tests.rs:13"
+        "tests/tool_list_tests.rs"
       ],
-      "note": "Graded 2026-09-11: ABSENT. Tiered disclosure exists and L0 drops disabled tools, but no test exercises the four conjuncts together. discovery_tests.rs covers auto-discovery and shadow scan only; tool_list_tests.rs holds one test. Neither positive control from the test row exists. Static evidence only; no test run."
+      "note": "Graded 2026-09-11: ABSENT. Tiered disclosure exists and L0 drops disabled tools, but no test exercises the four conjuncts together. discovery_tests.rs covers auto-discovery and shadow scan only; tool_list_tests.rs holds one test. Neither positive control from the test row exists. Static evidence only; no test run. Lines: src/gateway/search_disclosure.rs:40, tests/tool_list_tests.rs:13."
     },
     {
       "id": "MIK-7235.PIN.1",
