@@ -196,9 +196,8 @@ PARTIAL rows such as H8 (disk housekeeping), D5 (interface comparison) and D11 (
 an unevaluated half that is counted nowhere below.
 
 **Five an agent can run at this head today**, each with a command or a reasoning pass behind it:
-STRIDE, coverage no-drop (§4),
-canary planning (D21), the bet assessment (B1–B4), and
-T1c. None is blocked. They are open because nobody has run them on this branch.
+STRIDE, coverage no-drop (§4), canary
+planning (D21), the bet assessment (B1–B4), and T1c. None is blocked. They are open because nobody has run them on this branch.
 
 **Five need the same deployed build NFR.SEC.7 is waiting on**: structured-telemetry shape (D22),
 alerting thresholds and routing (D23), the security-channel audit (D26), DAST (§8), and rollback
