@@ -3,6 +3,7 @@
 //! Transport implementations for MCP backends
 
 mod http;
+pub(crate) mod notification_sink;
 mod stdio;
 pub mod websocket;
 

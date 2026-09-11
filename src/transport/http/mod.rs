@@ -356,6 +356,20 @@ fn parse_sse_response(text: &str) -> Result<SseExchange> {
     Err(Error::Transport("No data in SSE response".to_string()))
 }
 
+/// Hand the caller its result and its notifications: the response goes back up
+/// the `Transport` return, the notifications go sideways into the sink.
+///
+/// **Unfiltered by token, deliberately.** Per-request framing IS the
+/// correlation on this transport -- every frame on this stream belongs to the
+/// request just sent -- which is why a token-less `notifications/message`
+/// survives here and cannot over stdio. `MIK-7272.SUB.2b`.
+pub(crate) fn forward_sse_exchange(text: &str) -> Result<JsonRpcResponse> {
+    parse_sse_response(text).map(|exchange| {
+        crate::transport::notification_sink::publish(exchange.notifications);
+        exchange.response
+    })
+}
+
 /// Re-assert on a modern peer's request what the revision requires of it.
 ///
 /// Runs at the LAST writer on each outbound path rather than inside
@@ -1375,10 +1389,7 @@ impl HttpTransport {
                 .await
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e))?;
 
-            // ponytail: caller still wants only the response. The captured
-            // notifications are dropped HERE and nowhere else, so the outbound
-            // consumer lands by changing this one line. `MIK-7272.SUB.2b`.
-            parse_sse_response(&text).map(|e| e.response)
+            forward_sse_exchange(&text)
         } else {
             // Parse JSON response
             response
@@ -1675,5 +1686,10 @@ impl Drop for HttpTransport {
     }
 }
 
+mod sse_decoder;
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sse_decoder_tests;

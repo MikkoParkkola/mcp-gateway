@@ -658,11 +658,303 @@ async fn s03_progress_stdio_each_call_sees_only_its_own_token() {
 
 // ── S-02 and S-03 over HTTP ─────────────────────────────────────────────────
 //
-// NOT YET WRITTEN — the next piece of this file, not a decision to omit them.
-// The HTTP client rows need a harness this file does not yet have: the child
-// spawned in HTTP mode, a POST carrying `Accept: text/event-stream`, and the
-// response body read incrementally so that "the notification arrived before
-// the body was read to its end" is an observation rather than an assumption.
-// Four rows land here: the progress and message halves of `S-02`, and both
-// halves of `S-03` — the message half being the *discriminating* instance of
-// `S-03`, which is why HTTP carries it and stdio does not.
+// Four rows belong here: the progress and message halves of `S-02`, and both
+// halves of `S-03`. The message half of `S-03` — the *discriminating*
+// instance, which is why HTTP carries it and stdio does not — is written
+// below, on the harness that follows. The other three are NOT YET WRITTEN;
+// that is the next piece of this file, not a decision to omit them.
+
+// ── Client harness: HTTP ────────────────────────────────────────────────────
+
+fn write_http_config(home: &Path, backend_url: &str, port: u16) {
+    std::fs::write(
+        home.join("gateway.yaml"),
+        format!(
+            "server:\n  host: \"127.0.0.1\"\n  port: {port}\n\
+             backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n"
+        ),
+    )
+    .expect("write gateway.yaml");
+}
+
+struct HttpSession {
+    child: Child,
+    client: reqwest::Client,
+    url: String,
+}
+
+impl HttpSession {
+    /// Spawn the gateway in HTTP mode and wait until it answers `initialize`.
+    async fn spawn(home: &Path, backend_url: &str) -> Self {
+        // Ask the OS for a free port and hand it straight to the child. The
+        // listener is dropped before the child binds, so the port is briefly
+        // unclaimed; the readiness loop below is what makes that safe, and a
+        // timeout there names this race.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("reserve a port")
+            .local_addr()
+            .expect("reserved port")
+            .port();
+        write_http_config(home, backend_url, port);
+
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        command.arg("serve").current_dir(home).env("HOME", home);
+        // The developer's own environment must not decide what this child
+        // connects to.
+        for (name, _) in std::env::vars() {
+            if name.starts_with("MCP_GATEWAY_") {
+                command.env_remove(name);
+            }
+        }
+        let child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn gateway over http");
+
+        let url = format!("http://127.0.0.1:{port}/mcp");
+        let client = reqwest::Client::new();
+        let ready = timeout(READ_TIMEOUT, async {
+            loop {
+                let posted = client
+                    .post(&url)
+                    .header("Accept", "application/json, text/event-stream")
+                    .json(&initialize_request(1))
+                    .send()
+                    .await;
+                if posted.is_ok_and(|response| response.status() == reqwest::StatusCode::OK) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        assert!(
+            ready.is_ok(),
+            "the gateway never answered initialize on 127.0.0.1:{port} — either \
+             it failed to start, or another process took the reserved port \
+             between the probe bind and the child's own bind"
+        );
+
+        Self { child, client, url }
+    }
+
+    async fn shutdown(mut self) {
+        let _ = self.child.kill().await;
+    }
+}
+
+/// POST one JSON-RPC message, offering a stream. Returns status, content type
+/// and body; every failure message in the HTTP rows quotes the body, because a
+/// refusal is a body and not a status.
+async fn post_sse(client: &reqwest::Client, url: &str, message: Value) -> (u16, String, String) {
+    let response = client
+        .post(url)
+        .header("Accept", "application/json, text/event-stream")
+        .json(&message)
+        .send()
+        .await
+        .expect("POST to the gateway");
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let body = response.text().await.expect("read the response body");
+    (status, content_type, body)
+}
+
+/// The JSON frames of an SSE body, in order.
+fn sse_frames(body: &str) -> Vec<Value> {
+    body.lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .collect()
+}
+
+/// Wait until `count` slow calls have reached the fixture and parked there.
+///
+/// This is the concurrency precondition of the isolation rows: two streams
+/// cannot be shown to be separate unless both are open at once.
+async fn parked_slow_calls(received: &Received, count: usize) -> bool {
+    timeout(READ_TIMEOUT, async {
+        loop {
+            let parked = received
+                .lock()
+                .expect("fixture sink poisoned")
+                .iter()
+                .filter(|request| tool_name(request).as_deref() == Some(SLOW_TOOL))
+                .count();
+            if parked >= count {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+// ── S-03 over HTTP: the discriminating instance ─────────────────────────────
+
+/// `S-03`, message half, HTTP: two `tools/call` POSTs in flight at once each
+/// receive their own backend `notifications/message` and no other's.
+///
+/// GIVEN two concurrent calls to the slow tool, each declaring `logLevel` and
+/// each carrying a marker only its own backend leg echoes,
+/// WHEN both have reached the fixture and parked there — so both response
+/// streams are open at the same time — and a third call releases them,
+/// THEN each response body carries its own result id and exactly its own
+/// marker.
+///
+/// This is the row stdio cannot have (see "why there is no stdio row here"
+/// above): a logging notification carries no request linkage, so the only
+/// discriminator is
+/// *which stream it was written to*, and over HTTP the response body is that
+/// stream. ADR-014 row 14.
+///
+/// The release differs from the stdio rows: it is a third POST rather than a
+/// second message on one connection, because two parked calls hold two
+/// connections and neither can be used to send anything.
+#[tokio::test]
+async fn s03_message_http_isolates_by_stream() {
+    // GIVEN
+    let (backend_url, received) = spawn_fixture_backend().await;
+    let home = tempfile::tempdir().expect("temp home");
+    let session = HttpSession::spawn(home.path(), &backend_url).await;
+
+    // WHEN
+    let marker_a = "sub2b-http-message-A";
+    let marker_b = "sub2b-http-message-B";
+    let call_a = tokio::spawn({
+        let (client, url) = (session.client.clone(), session.url.clone());
+        async move {
+            post_sse(
+                &client,
+                &url,
+                invoke(
+                    2,
+                    SLOW_TOOL,
+                    &json!({"message_marker": marker_a}),
+                    &json!({"logLevel": "info"}),
+                ),
+            )
+            .await
+        }
+    });
+    let call_b = tokio::spawn({
+        let (client, url) = (session.client.clone(), session.url.clone());
+        async move {
+            post_sse(
+                &client,
+                &url,
+                invoke(
+                    3,
+                    SLOW_TOOL,
+                    &json!({"message_marker": marker_b}),
+                    &json!({"logLevel": "info"}),
+                ),
+            )
+            .await
+        }
+    });
+
+    let both_parked = parked_slow_calls(&received, 2).await;
+    let reached_fixture: Vec<String> = received
+        .lock()
+        .expect("fixture sink poisoned")
+        .iter()
+        .map(|request| {
+            tool_name(request).unwrap_or_else(|| {
+                request
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?")
+                    .to_owned()
+            })
+        })
+        .collect();
+    if !both_parked {
+        // Release whatever did park, so the two bodies below are answers and
+        // not a second timeout, and report them: a row that fails here fails
+        // because of what the gateway said, and the message must carry it.
+        let _ = post_sse(
+            &session.client,
+            &session.url,
+            invoke(4, RELEASE_TOOL, &json!({}), &json!({})),
+        )
+        .await;
+        let answered_a = timeout(READ_TIMEOUT, call_a).await;
+        let answered_b = timeout(READ_TIMEOUT, call_b).await;
+        panic!(
+            "both calls must be in flight at once for this row to observe \
+             isolation. The fixture saw {reached_fixture:?}; call A answered \
+             {answered_a:?}; call B answered {answered_b:?}"
+        );
+    }
+    assert!(
+        !call_a.is_finished() && !call_b.is_finished(),
+        "a slow call answered before it was released"
+    );
+
+    let (release_status, _, release_body) = post_sse(
+        &session.client,
+        &session.url,
+        invoke(4, RELEASE_TOOL, &json!({}), &json!({})),
+    )
+    .await;
+    assert_eq!(
+        release_status, 200,
+        "the release call failed, so nothing below can run: {release_body}"
+    );
+
+    let answered_a = timeout(READ_TIMEOUT, call_a).await;
+    let answered_b = timeout(READ_TIMEOUT, call_b).await;
+
+    // THEN
+    let (status_a, content_type_a, body_a) =
+        answered_a.expect("call A never returned").expect("call A");
+    let (status_b, content_type_b, body_b) =
+        answered_b.expect("call B never returned").expect("call B");
+    for (label, status, content_type, body) in [
+        ("A", status_a, &content_type_a, &body_a),
+        ("B", status_b, &content_type_b, &body_b),
+    ] {
+        assert_eq!(status, 200, "call {label} was refused: {body}");
+        assert!(
+            content_type.contains("text/event-stream"),
+            "call {label} answered {content_type}, not a stream: {body}"
+        );
+    }
+    assert!(
+        sse_frames(&body_a).iter().any(|frame| has_id(frame, 2)),
+        "call A's body carries no result of its own: {body_a}"
+    );
+    assert!(
+        sse_frames(&body_b).iter().any(|frame| has_id(frame, 3)),
+        "call B's body carries no result of its own: {body_b}"
+    );
+
+    let markers = |body: &str| -> Vec<Value> {
+        sse_frames(body)
+            .into_iter()
+            .filter(|frame| is_method(frame, "notifications/message"))
+            .filter_map(|frame| frame.pointer("/params/data").cloned())
+            .collect()
+    };
+    assert_eq!(
+        markers(&body_a),
+        vec![json!(marker_a)],
+        "call A's stream must carry its own message and only its own: {body_a}"
+    );
+    assert_eq!(
+        markers(&body_b),
+        vec![json!(marker_b)],
+        "call B's stream must carry its own message and only its own: {body_b}"
+    );
+    session.shutdown().await;
+}

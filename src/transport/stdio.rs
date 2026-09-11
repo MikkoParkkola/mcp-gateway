@@ -433,18 +433,15 @@ impl StdioTransport {
     /// Until a token is registered nothing carrying it is kept: the gateway
     /// passes a backend's own token through only when it matches one the caller
     /// supplied, and never mints one (MIK-7272.SUB.2b, §II.6 option (i)).
-    // SCAFFOLD, labelled: the consumer that registers and drains is the
-    // `Accept`-negotiated event-stream body, the outbound half of SUB.2b, which
-    // lands next. Until then only the unit tests reach these, so the lib build
-    // cannot see them called — and this attribute is the evidence of that.
-    #[allow(dead_code)]
+    // Registered from `Transport::request` below, before the request is
+    // written: the reader task can route a notification back before the write
+    // returns, and an unregistered token is dropped.
     pub(crate) fn register_progress_token(&self, token: &str) {
         self.captured_notifications
             .insert(token.to_string(), Vec::new());
     }
 
     /// Take everything captured for a token, ending its registration.
-    #[allow(dead_code)]
     pub(crate) fn take_captured_notifications(&self, token: &str) -> Vec<JsonRpcNotification> {
         self.captured_notifications
             .remove(token)
@@ -461,15 +458,14 @@ impl StdioTransport {
     // over stdio; a per-request stream is what would carry them, and stdio has
     // none. Named as a design event in the SUB.2b note rather than papered over.
     fn capture_notification(&self, notification: JsonRpcNotification) {
+        // Note the asymmetry with the outgoing side: a request carries the
+        // token under `params._meta`, a `notifications/progress` carries it as
+        // a direct member of `params`.
         let token = notification
             .params
             .as_ref()
             .and_then(|p| p.get("progressToken"))
-            .and_then(|t| match t {
-                serde_json::Value::String(s) => Some(s.clone()),
-                serde_json::Value::Number(n) => Some(n.to_string()),
-                _ => None,
-            });
+            .and_then(progress_token_string);
 
         match token.and_then(|t| self.captured_notifications.get_mut(&t)) {
             Some(mut entry) => {
@@ -555,6 +551,29 @@ impl StdioTransport {
     }
 }
 
+/// A progress token is a string or a number on the wire; the capture map is
+/// keyed by its string form so both spellings of one token agree.
+fn progress_token_string(token: &Value) -> Option<String> {
+    match token {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// The caller's progress token as an outgoing request carries it.
+///
+/// Note the asymmetry with `capture_notification`: a request carries the token
+/// under `params._meta`, while an incoming `notifications/progress` carries it
+/// as a direct member of `params`. Reading the wrong shape here leaves the
+/// stdio leg dead while the HTTP one still looks green.
+fn request_progress_token(params: Option<&Value>) -> Option<String> {
+    params
+        .and_then(|p| p.get("_meta"))
+        .and_then(|meta| meta.get("progressToken"))
+        .and_then(progress_token_string)
+}
+
 #[async_trait]
 impl Transport for StdioTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
@@ -565,6 +584,14 @@ impl Transport for StdioTransport {
             method: method.to_string(),
             params,
         };
+
+        // Register before the write: the reader task can route a notification
+        // back before `write_message` returns. Never minted here -- only a
+        // token the caller supplied is honoured (MIK-7272.SUB.2b, option (i)).
+        let progress_token = request_progress_token(request.params.as_ref());
+        if let Some(token) = &progress_token {
+            self.register_progress_token(token);
+        }
 
         let message = serde_json::to_string(&request)?;
         let (tx, rx) = oneshot::channel();
@@ -577,14 +604,23 @@ impl Transport for StdioTransport {
         // the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
-        self.write_message(&message).await?;
+        let outcome = match self.write_message(&message).await {
+            Err(e) => Err(e),
+            // Wait for response with timeout
+            Ok(()) => match tokio::time::timeout(self.request_timeout, rx).await {
+                Ok(Ok(response)) => Ok(response),
+                Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
+                Err(_) => Err(Error::BackendTimeout("Request timed out".to_string())),
+            },
+        };
 
-        // Wait for response with timeout
-        match tokio::time::timeout(self.request_timeout, rx).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
-            Err(_) => Err(Error::BackendTimeout("Request timed out".to_string())),
+        // Drain on every exit path. `register_progress_token` inserts and only
+        // this drains, so an error return that skipped it would strand the
+        // entry for the transport's lifetime.
+        if let Some(token) = &progress_token {
+            crate::transport::notification_sink::publish(self.take_captured_notifications(token));
         }
+        outcome
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
@@ -1140,6 +1176,87 @@ done
             "the other call in flight must see nothing"
         );
         assert_eq!(t.take_captured_notifications("tok-b").len(), 1);
+    }
+
+    /// The production request path reads the token from `params._meta`, which
+    /// is where a caller puts it. Pinned separately from the capture side
+    /// because the two shapes differ and a mismatch fails quietly.
+    #[test]
+    fn stdio_reads_the_callers_progress_token_from_request_meta() {
+        let params = serde_json::json!({
+            "name": "t",
+            "_meta": { "progressToken": "tok-live" }
+        });
+        assert_eq!(
+            request_progress_token(Some(&params)).as_deref(),
+            Some("tok-live")
+        );
+        // A numeric token is the same token.
+        let numeric = serde_json::json!({ "_meta": { "progressToken": 7 } });
+        assert_eq!(request_progress_token(Some(&numeric)).as_deref(), Some("7"));
+        // No token offered, none invented.
+        assert!(request_progress_token(Some(&serde_json::json!({ "name": "t" }))).is_none());
+        assert!(request_progress_token(None).is_none());
+    }
+
+    /// S-02 over stdio, end to end through the sink: register as the request
+    /// path does, capture as the reader task does, drain as the request path
+    /// does -- and the caller's sink holds the notification.
+    #[tokio::test]
+    async fn stdio_drains_a_captured_notification_into_the_callers_sink() {
+        let t = make_transport("cat");
+        let params = serde_json::json!({ "_meta": { "progressToken": "tok-live" } });
+
+        let ((), drained) = crate::transport::notification_sink::collect(async {
+            let token = request_progress_token(Some(&params)).expect("token");
+            t.register_progress_token(&token);
+            t.handle_response(&progress_line("tok-live", 3)).unwrap();
+            crate::transport::notification_sink::publish(t.take_captured_notifications(&token));
+        })
+        .await;
+
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].method, "notifications/progress");
+    }
+
+    /// Negative control for stdio: a notification whose token nobody registered
+    /// reaches no sink, even with a call in flight that has one.
+    #[tokio::test]
+    async fn stdio_never_attributes_a_stray_token_to_an_open_call() {
+        let t = make_transport("cat");
+
+        let ((), drained) = crate::transport::notification_sink::collect(async {
+            t.register_progress_token("tok-mine");
+            t.handle_response(&progress_line("tok-stray", 1)).unwrap();
+            crate::transport::notification_sink::publish(t.take_captured_notifications("tok-mine"));
+        })
+        .await;
+
+        assert!(
+            drained.is_empty(),
+            "a stray token must not be attributed to whichever call is open"
+        );
+    }
+
+    /// `register_progress_token` inserts and only the drain removes, so an
+    /// error return that skipped the drain would strand the entry for the
+    /// transport's lifetime. The request path drains on every exit.
+    #[tokio::test]
+    async fn stdio_request_drains_its_registration_even_when_the_write_fails() {
+        let t = make_transport("cat"); // never connected: the write fails
+        let params = serde_json::json!({ "_meta": { "progressToken": "tok-leak" } });
+
+        let (result, drained) = crate::transport::notification_sink::collect(async {
+            t.request("tools/call", Some(params)).await
+        })
+        .await;
+
+        assert!(result.is_err(), "precondition: the write must fail");
+        assert!(drained.is_empty());
+        assert!(
+            !t.captured_notifications.contains_key("tok-leak"),
+            "the registration must not outlive the failed request"
+        );
     }
 
     /// Condition 2 of the correlation rule: a token no caller supplied is never

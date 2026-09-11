@@ -1997,3 +1997,93 @@ async fn an_unredirected_connect_failure_is_pre_dispatch_end_to_end() {
         "a refused connection wrote no bytes, so the key must be released: {err}"
     );
 }
+
+// =============================================================================
+// MIK-7272.SUB.2b — the outbound half over HTTP.
+//
+// Plan rows: docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md
+// :58 (S-02, "over stdio and over HTTP") and :59 (S-03, per-request isolation).
+// The correlation here is the framing, not a token: every frame on a response
+// stream belongs to the request that opened it.
+// =============================================================================
+
+fn sse_body(notifications: &[&str], id: u64) -> String {
+    use std::fmt::Write as _;
+    let mut body = String::new();
+    for note in notifications {
+        body.push_str("data: ");
+        body.push_str(note);
+        body.push_str("\n\n");
+    }
+    let _ = write!(
+        body,
+        "data: {{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"ok\":true}}}}\n\n"
+    );
+    body
+}
+
+const PROGRESS: &str = r#"{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"tok-a","progress":1}}"#;
+const MESSAGE: &str = r#"{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"working"}}"#;
+
+/// S-02 over HTTP, both methods. The token-less `notifications/message` is the
+/// half stdio cannot carry: here the stream itself names the owner.
+#[tokio::test]
+async fn http_forwards_both_notification_methods_to_the_callers_sink() {
+    let body = sse_body(&[PROGRESS, MESSAGE], 1);
+
+    let (response, notifications) =
+        crate::transport::notification_sink::collect(async { forward_sse_exchange(&body) }).await;
+
+    assert!(response.is_ok(), "the caller still gets its result");
+    assert_eq!(notifications.len(), 2);
+    assert_eq!(notifications[0].method, "notifications/progress");
+    assert_eq!(
+        notifications[1].method, "notifications/message",
+        "a token-less notification is attributable over HTTP, and only here"
+    );
+}
+
+/// S-03 over HTTP, the negative control. Two calls in flight; a notification on
+/// one response stream must not cross into the other's sink. The isolation is
+/// structural -- two calls are two tasks, so two sinks -- and the identical
+/// progress token in both bodies is there to prove the token is not what does
+/// the routing on this transport.
+#[tokio::test]
+async fn http_never_crosses_a_notification_between_two_calls_in_flight() {
+    let mine = sse_body(&[PROGRESS], 1);
+    let theirs = sse_body(
+        &[
+            r#"{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"not yours"}}"#,
+        ],
+        2,
+    );
+
+    let left = tokio::spawn(crate::transport::notification_sink::collect(async move {
+        tokio::task::yield_now().await;
+        forward_sse_exchange(&mine).map(|_| ())
+    }));
+    let right = tokio::spawn(crate::transport::notification_sink::collect(async move {
+        forward_sse_exchange(&theirs).map(|_| ())
+    }));
+
+    let (_, l) = left.await.unwrap();
+    let (_, r) = right.await.unwrap();
+
+    assert_eq!(l.len(), 1);
+    assert_eq!(l[0].method, "notifications/progress");
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].method, "notifications/message");
+}
+
+/// A backend that raises nothing still answers, and the sink stays empty --
+/// the `Accept`-negotiated stream is a conforming answer either way.
+#[tokio::test]
+async fn http_leaves_the_sink_empty_when_the_backend_raises_nothing() {
+    let (response, notifications) = crate::transport::notification_sink::collect(async {
+        forward_sse_exchange(&sse_body(&[], 1))
+    })
+    .await;
+
+    assert!(response.is_ok());
+    assert!(notifications.is_empty());
+}
