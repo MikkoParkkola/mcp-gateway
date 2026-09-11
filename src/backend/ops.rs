@@ -610,6 +610,27 @@ impl Backend {
         self.shared_entry().failsafe.circuit_breaker.stats()
     }
 
+    /// Drive this backend's canonical Shared-slot circuit breaker open.
+    ///
+    /// The counterpart to [`Self::reset_circuit_breaker`], for the one caller
+    /// that has decided a backend is failing without having a failed request to
+    /// show for it: the health probe's unserved escalation (MIK-7217,
+    /// OUTBOUND.2), whose evidence is a run of complete answers that served
+    /// nothing. Expressed as the configured number of failures rather than a
+    /// state write, so the breaker's own accounting - open event, failure
+    /// count, the half-open timer - stays the single description of why it is
+    /// open.
+    pub(crate) fn trip_circuit_breaker(&self, reason: &str) {
+        let entry = self.shared_entry();
+        let threshold = entry.failsafe.circuit_breaker.stats().failure_threshold;
+        for _ in 0..threshold {
+            entry
+                .failsafe
+                .circuit_breaker
+                .record_failure(reason, std::time::Duration::ZERO);
+        }
+    }
+
     /// Force this backend's canonical Shared-slot circuit breaker back to
     /// `Closed` (MIK-5983; slot-scoped per MIK-6735 fix 1).
     ///

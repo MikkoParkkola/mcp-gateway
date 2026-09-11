@@ -56,6 +56,27 @@ pub struct Backend {
     /// probe and shared with the detached re-probe task, which outlives the
     /// request that triggered it — hence `Arc`.
     era: Arc<crate::protocol::era::EraCache>,
+    /// Consecutive health-probe answers this peer declined to serve
+    /// (MIK-7217, OUTBOUND.2).
+    ///
+    /// A refusal is neither health nor a fault: the peer answered, so nothing
+    /// is broken, but it did not serve the probe. Counting them is what lets
+    /// the probe leave a declining peer alone without leaving a peer that
+    /// declines *everything* wedged and green for ever. Reset by a served
+    /// answer and by the fault and timeout arms, which restart on their own
+    /// terms and so start the count afresh against a new transport.
+    unserved_consecutive: AtomicU64,
+    /// Lifetime unserved answers, the in-process value behind
+    /// `mcp_health_probe_unserved_total` for this backend.
+    unserved_total: AtomicU64,
+    /// Set while a health probe is on the wire (MIK-7217, OUTBOUND.2).
+    ///
+    /// "Consecutive unserved" counts answers, not ticks, and a peer that is
+    /// slow rather than broken would otherwise have a second probe sent at it
+    /// while the first is still outstanding - inflating the count toward a
+    /// restart the peer never earned, and doubling the traffic to a backend
+    /// already struggling to answer.
+    probe_in_flight: std::sync::atomic::AtomicBool,
     /// Cached tools
     tools_cache: CachedMetadata<Vec<Tool>>,
     /// Tools this backend declared an explicit `readOnlyHint` or

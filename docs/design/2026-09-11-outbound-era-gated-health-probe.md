@@ -527,9 +527,47 @@ section did before two reviews put the number right.
 
 | rows | waiting on |
 | --- | --- |
-| 10, 10b, 10c, 11, 11b | the consecutive-unserved counter and an accessor for it. These rows also carry the counter assertions deferred out of rows 4 to 6b, and they are what turns rows 6, 9b and 9d into discriminating pins |
+| ~~10, 10b, 10c, 11, 11b~~ | **written 2026-09-11**, once `unserved_counts_for_test` existed to name. Row 10b was the only one of the five that failed against the landed mechanism rather than against `HEAD`: the escalation tripped and rebuilt the transport without clearing the count it had just acted on, so the count stood at the threshold and every subsequent answer escalated again - the tolerance spent once and never again. Observed `left: 3, right: 0` at `tests.rs:1639`, fixed at `lifecycle.rs:1187`. These rows also carried the counter assertions deferred out of rows 4 to 6b, and they are what turn rows 6, 9b and 9d into discriminating pins. Original entry: the consecutive-unserved counter and an accessor for it. These rows also carry the counter assertions deferred out of rows 4 to 6b, and they are what turns rows 6, 9b and 9d into discriminating pins |
 | 15b | a caller-era parameter these three handlers do not take. `handle_logging_set_level`, `handle_resources_subscribe` and `handle_resources_unsubscribe` receive an id and params and no caller context, so the meta-MCP client era (`src/gateway/meta_mcp/mod.rs:177`) is not reachable from the call site - and that field has no production reader yet, by its own doc comment. The row's discriminator, "an implementation that gates on the client era instead of the backend's passes 13 to 15 and is still wrong", therefore cannot be expressed as a test today: a wrong implementation has nothing to read. Recorded as unwritable-at-this-entry-point rather than deferred, because the thing it would pin is currently unreachable, not merely unbuilt. Found while writing rows 13 to 15c, 2026-09-11 |
 | M | the per-probe wall-time and response-size measurement §2's load claim rests on |
+
+### Post-implementation run
+
+`cargo test --lib row_`: **43 passed, 0 failed** - every row that must fail at `HEAD`
+passes against the landed mechanism, and every regression guard stayed green. The run
+reports 43 rather than 32 because `row_` is a substring filter that also matches unrelated
+tests elsewhere in the crate. The progression across the implementation, same command:
+22 passed / 16 failed at `HEAD`, 33 / 5 after the probe arms landed, 35 / 3 after the
+transport parse, 38 / 0 after the three gateway gates, 43 / 0 with rows 10 to 11b written.
+
+Row 15b stays outstanding and unwritable for the reason its cell gives: the discriminator
+it would pin has nothing to read at these call sites. Measurement M stays outstanding.
+
+### Implementation review
+
+Reviewed against the landed implementation, not the design: the whole diff on stdin,
+plus the rows that pin it. `gpt-review` is credit-exhausted until 2026-09-15, so the
+non-Claude pair for this round is kimi and grok.
+
+kimi: **ship**, with one behavioural narrowing to repair before production and one
+asymmetry to carry.
+
+F1, repaired in this change. Converting a non-2xx whose body is the peer's own
+JSON-RPC error into `Error::JsonRpc` moved that answer off the transport arm of
+`is_session_expired_error`, and the new arm tested only the `-32015` code and the
+words "session not found". A peer that words its expiry as "session expired" used to
+match as a bare `HTTP 404` and matched nothing afterwards, so it lost session
+recovery by the accident of having sent a body that parses. The two arms now read the
+same marker set, and `session_expired_detection_matches_known_signatures` asserts both
+directions: the worded expiry matches, an ordinary method-not-found refusal does not.
+
+F2, carried as a residual. The start-path probe maps every `Err` to
+`ProbeOutcome::NoAnswer`, so a status-carried method-not-found classifies as no answer
+there while its in-band twin classifies `Legacy`. The repair is to route
+`Err(Error::JsonRpc)` through `refusal_code` before the fallback, and it belongs with
+a row that pins the two carriages against each other rather than bolted onto this
+change. The consequence today is bounded: a start-path probe that cannot classify
+falls through to the same unserved accounting every other unanswered probe takes.
 
 ## 8. Stage state
 

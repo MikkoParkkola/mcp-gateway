@@ -144,6 +144,10 @@ fn evaluate_redirect(base: &Url, target: &Url, previous_hops: usize) -> Redirect
     RedirectDecision::Follow
 }
 
+/// `Session not found`, as the rust-mcp-sdk and the remotes that copied it
+/// report an invalidated MCP session. Both carriages key on it.
+const SESSION_NOT_FOUND_CODE: i32 = -32015;
+
 /// Detect the session-expiry signature in a transport error (MIK-5982).
 ///
 /// Matches the safe markers emitted at the HTTP boundary:
@@ -162,11 +166,61 @@ fn evaluate_redirect(base: &Url, target: &Url, previous_hops: usize) -> Redirect
 /// instead returns HTTP 200 with the expiry encoded as a JSON-RPC `error`
 /// member, use [`is_session_expired_response`] (MIK-6040, #247).
 fn is_session_expired_error(err: &Error) -> bool {
-    let Error::Transport(msg) = err else {
-        return false;
-    };
-    let lower = msg.to_lowercase();
-    lower.contains(SESSION_EXPIRED_MARKER) || lower.starts_with("http 404")
+    match err {
+        Error::Transport(msg) => {
+            let lower = msg.to_lowercase();
+            lower.contains(SESSION_EXPIRED_MARKER) || lower.starts_with("http 404")
+        }
+        // A non-2xx whose body was the peer's own JSON-RPC error no longer
+        // reaches this classifier as a status string: [`peer_refusal`] hands the
+        // caller the peer's code instead. Without this arm the parse would have
+        // taken session recovery away from every remote that invalidates a
+        // session with a JSON body - the marker path above can only see errors
+        // that stayed opaque. The membership test is the same one
+        // [`is_session_expired_response`] applies to the 200 carriage, minus
+        // `-32600`: on this path a malformed-request refusal is what it says it
+        // is, and treating it as an expiry would re-initialize and retry every
+        // one of them.
+        Error::JsonRpc { code, message, .. } => {
+            let lower = message.to_lowercase();
+            // The marker set is the Transport arm's, mirrored: a peer that words
+            // its expiry as "session expired" reaches one arm or the other
+            // depending only on whether its body happened to parse, and the two
+            // carriages must not disagree about what the peer said.
+            *code == SESSION_NOT_FOUND_CODE
+                || lower.contains("session not found")
+                || lower.contains(SESSION_EXPIRED_MARKER)
+        }
+        _ => false,
+    }
+}
+
+/// The peer's own JSON-RPC error, if that is what this non-2xx body is.
+///
+/// The MCP HTTP binding lets a peer refuse with a status rather than a 200, so
+/// a body that parses as a JSON-RPC error *answering this request* is an answer
+/// and not a fault: retrying it asks a peer that has already replied, and
+/// restarting the transport tears down a connection that is working. The
+/// `id` test is what keeps that narrow. A proxy's error page, a gateway's own
+/// JSON, or an error correlated to some other call are none of them this call's
+/// answer, and each stays [`safe_http_status_error`]'s opaque transport fault.
+///
+/// The peer's `message` does reach the caller here, which the surrounding
+/// status-error path deliberately avoids for untrusted bodies. The exposure is
+/// the one the 200 carriage already accepts: a JSON-RPC error member is the
+/// peer's own text about its own refusal, and it is surfaced verbatim when the
+/// same refusal arrives with a 200.
+fn peer_refusal(body: &str, id: &RequestId) -> Option<Error> {
+    let response: JsonRpcResponse = serde_json::from_str(body).ok()?;
+    if response.id.as_ref() != Some(id) {
+        return None;
+    }
+    let error = response.error?;
+    Some(Error::JsonRpc {
+        code: error.code,
+        message: error.message,
+        data: error.data,
+    })
 }
 
 /// Detect the session-expiry signature in a *successful-transport* JSON-RPC
@@ -186,7 +240,7 @@ fn is_session_expired_error(err: &Error) -> bool {
 /// the stale `MCP-Session-Id`, send a fresh `InitializeRequest`, and retry once.
 fn is_session_expired_response(resp: &JsonRpcResponse) -> bool {
     resp.error.as_ref().is_some_and(|e| {
-        e.code == -32015
+        e.code == SESSION_NOT_FOUND_CODE
             || e.code == -32600
             || e.message.to_lowercase().contains("session not found")
     })
@@ -1291,6 +1345,9 @@ impl HttpTransport {
                 && let Some(supported) = parse_supported_versions_from_error(&body)
             {
                 return Err(Error::ProtocolVersionRejected { supported });
+            }
+            if let Some(refusal) = peer_refusal(&body, &request.id) {
+                return Err(refusal);
             }
             return Err(safe_http_status_error(status, &body));
         }

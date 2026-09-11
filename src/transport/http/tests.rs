@@ -1071,6 +1071,22 @@ fn session_expired_detection_matches_known_signatures() {
     assert!(!is_session_expired_error(&Error::Protocol(
         "session expired".to_string()
     )));
+
+    // The status-carried carriage: a peer that words its expiry rather than
+    // coding it used to match as `HTTP 404`, and now arrives parsed. Both arms
+    // read the same marker set, or a peer loses session recovery by the
+    // accident of having sent a body that parses.
+    assert!(is_session_expired_error(&Error::JsonRpc {
+        code: -32001,
+        message: "Session expired".to_string(),
+        data: None,
+    }));
+    // ...and the narrowness holds: an ordinary refusal is not an expiry.
+    assert!(!is_session_expired_error(&Error::JsonRpc {
+        code: crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        message: "Method not found: tools/list".to_string(),
+        data: None,
+    }));
 }
 
 #[test]

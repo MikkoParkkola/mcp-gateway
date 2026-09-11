@@ -10,12 +10,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::Backend;
+use crate::Result;
+use crate::error::Error;
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::era::{Era, EraObservation, METHOD_NOT_FOUND_CODE, ProbeOutcome, classify};
 use crate::transport::Transport;
 
 /// Method a modern peer answers with its discovery document.
 const DISCOVER_METHOD: &str = "server/discover";
+
+/// Liveness method of every revision before 2026-07-28, removed by that one.
+const PING_METHOD: &str = "ping";
 
 /// Upper bound on how long a start waits for the probe to come back.
 ///
@@ -33,6 +38,22 @@ async fn probe(transport: &Arc<dyn Transport>, timeout: Duration) -> ProbeOutcom
     match tokio::time::timeout(timeout, transport.request(DISCOVER_METHOD, None)).await {
         Ok(Ok(response)) => outcome_of(response),
         Ok(Err(_)) | Err(_) => ProbeOutcome::NoAnswer,
+    }
+}
+
+/// The JSON-RPC error code in an answer, whichever way the peer carried it.
+///
+/// A refusal is a refusal whether it arrives in-band, as an error object in a
+/// 200 response, or status-carried, as a non-2xx whose body the HTTP transport
+/// parsed into [`Error::JsonRpc`]. The two carriages are one wire fact and the
+/// probe must judge them the same, or a peer that declines over HTTP is torn
+/// down while the same peer over stdio is left alone. `None` means the answer
+/// is not a refusal: either the peer served it, or the transport itself broke.
+pub(super) fn refusal_code(answer: &Result<JsonRpcResponse>) -> Option<i32> {
+    match answer {
+        Ok(response) => response.error.as_ref().map(|error| error.code),
+        Err(Error::JsonRpc { code, .. }) => Some(*code),
+        Err(_) => None,
     }
 }
 
@@ -79,6 +100,20 @@ impl Backend {
     /// what is known.
     pub async fn cached_era(&self) -> Option<Era> {
         self.era.cached().await
+    }
+
+    /// Which liveness method this peer's era answers.
+    ///
+    /// `ping` was removed in the 2026-07-28 revision, so a peer known to speak
+    /// it is asked for its discovery document instead. Every other state -
+    /// legacy, or an era never resolved - keeps `ping`: silence is not evidence
+    /// of modernity, so an unresolved peer must not be sent a method only a
+    /// modern peer answers.
+    pub(super) async fn liveness_method(&self) -> &'static str {
+        match self.cached_era().await {
+            Some(Era::Modern) => DISCOVER_METHOD,
+            Some(Era::Legacy) | None => PING_METHOD,
+        }
     }
 
     /// Everything an operator can see about this backend's era, for
@@ -134,14 +169,28 @@ impl Backend {
         let Some(error) = response.error.as_ref() else {
             return;
         };
+        self.reprobe_if_code_contradicts(method, error.code, transport)
+            .await;
+    }
+
+    /// [`Self::reprobe_if_contradicted`] keyed on the code alone, for callers
+    /// that hold a refusal which never arrived as a [`JsonRpcResponse`] - a
+    /// status-carried error from the HTTP transport reaches its caller as
+    /// [`Error::JsonRpc`], with the same code and the same evidentiary weight.
+    pub(super) async fn reprobe_if_code_contradicts(
+        &self,
+        method: &str,
+        code: i32,
+        transport: &Arc<dyn Transport>,
+    ) {
         // Judging the verdict and dropping it are one locked step, and only the task that
         // dropped it probes. Reading the era and clearing it separately would let two answers
         // arriving at once both find the stale verdict and each fan out a detached probe.
         let discarded = self
             .era
             .discard_if(|era| match era {
-                Era::Legacy => contradicts_legacy(error.code),
-                Era::Modern => contradicts_modern(method, error.code),
+                Era::Legacy => contradicts_legacy(code),
+                Era::Modern => contradicts_modern(method, code),
             })
             .await;
         if !discarded {

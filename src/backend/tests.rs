@@ -953,6 +953,8 @@ struct ProbeMock {
     /// answer makes every row that outlives its script deterministic.
     default_answer: std::sync::Mutex<ProbeAnswer>,
     connected: AtomicBool,
+    /// Set by [`ProbeMock::gated`]: every answer waits for it.
+    gate: std::sync::Mutex<Option<Arc<tokio::sync::Notify>>>,
 }
 
 impl ProbeMock {
@@ -962,6 +964,7 @@ impl ProbeMock {
             answers: std::sync::Mutex::new(answers.into()),
             default_answer: std::sync::Mutex::new(ProbeAnswer::Result(json!({}))),
             connected: AtomicBool::new(true),
+            gate: std::sync::Mutex::new(None),
         }
     }
 
@@ -1000,6 +1003,13 @@ impl ProbeMock {
         self
     }
 
+    /// Hold every answer until the returned gate is notified, so a test can
+    /// keep one probe outstanding across a tick.
+    fn gated(self, gate: Arc<tokio::sync::Notify>) -> Self {
+        *self.gate.lock().expect("gate lock") = Some(gate);
+        self
+    }
+
     fn methods(&self) -> Vec<String> {
         self.methods.lock().expect("methods lock").clone()
     }
@@ -1017,6 +1027,10 @@ impl Transport for ProbeMock {
             .lock()
             .expect("methods lock")
             .push(method.to_string());
+        let gate = self.gate.lock().expect("gate lock").clone();
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
         let answer = self
             .answers
             .lock()
@@ -1459,4 +1473,189 @@ async fn row_9d_three_unserved_answers_across_an_invalidation_still_escalate() {
         !still_wired(&backend, &mock),
         "the third unserved answer escalates to a restart"
     );
+}
+
+/// Row 10 — the escalation itself, one answer at a time. The first two
+/// unserved answers leave the backend exactly as they found it; the third is
+/// the one that has stopped being a decline and started being a failure.
+#[tokio::test]
+async fn row_10_the_third_unserved_answer_trips_and_restarts() {
+    let mock = Arc::new(
+        ProbeMock::legacy_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
+    );
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+
+    for tick in 1..=2 {
+        let _ = backend.health_probe(Duration::from_secs(5)).await;
+        assert!(
+            !backend.is_circuit_tripped(),
+            "unserved answer {tick} must leave the breaker where it was"
+        );
+        assert!(
+            still_wired(&backend, &mock),
+            "and must not restart anything"
+        );
+        assert_eq!(backend.unserved_counts_for_test(), (tick, tick));
+    }
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert!(backend.is_circuit_tripped());
+    assert!(!still_wired(&backend, &mock));
+}
+
+/// Row 10c — "consecutive" counts answers, not ticks. A probe still waiting on
+/// a slow peer holds the wire, and the tick that lands while it is outstanding
+/// is skipped rather than sent: an implementation counting ticks escalates a
+/// backend that is answering, just slowly, to a restart.
+#[tokio::test]
+async fn row_10c_a_tick_landing_during_a_probe_is_skipped_not_counted() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let mock = Arc::new(
+        ProbeMock::legacy_then(vec![])
+            .refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE)
+            .gated(Arc::clone(&gate)),
+    );
+    // The era resolve runs before the gate is armed by way of the script, so
+    // wire the backend first and hold only the probe.
+    let backend = probe_backend(Arc::clone(&mock), false).await;
+
+    let slow = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.health_probe(Duration::from_secs(5)).await })
+    };
+    // The mock records the method before it waits, so one recorded method is
+    // the proof that the first probe is on the wire.
+    while mock.methods().is_empty() {
+        tokio::task::yield_now().await;
+    }
+
+    let skipped = backend.health_probe(Duration::from_secs(5)).await;
+    assert!(
+        skipped.is_ok(),
+        "a skipped tick is not a failure: {skipped:?}"
+    );
+    assert_eq!(
+        mock.methods().len(),
+        1,
+        "exactly one probe may be in flight, saw: {:?}",
+        mock.methods()
+    );
+
+    gate.notify_waiters();
+    let _ = slow.await.expect("the held probe must finish");
+
+    assert_eq!(
+        backend.unserved_counts_for_test(),
+        (1, 1),
+        "one answer is one unserved answer, however many ticks passed"
+    );
+}
+
+/// Row 11 — a served answer is what resets the consecutive count, and the
+/// lifetime counter is a different value that never resets. Without the
+/// counter assertions the row is vacuous: a probe that never escalates at all
+/// also never trips.
+#[tokio::test]
+async fn row_11_a_served_result_resets_the_consecutive_count() {
+    let mock = Arc::new(
+        ProbeMock::legacy_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
+    );
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+
+    for _ in 0..2 {
+        let _ = backend.health_probe(Duration::from_secs(5)).await;
+    }
+    mock.set_default(ProbeAnswer::Result(json!({})));
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+    mock.set_default(ProbeAnswer::InBandError(
+        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+    ));
+    for _ in 0..2 {
+        let _ = backend.health_probe(Duration::from_secs(5)).await;
+    }
+
+    assert!(
+        !backend.is_circuit_tripped(),
+        "four unserved answers with a served one between them are not three in a row"
+    );
+    assert_eq!(
+        backend.unserved_counts_for_test(),
+        (2, 4),
+        "the consecutive count restarts at the served answer; the lifetime count does not"
+    );
+}
+
+/// Row 11b — the other two reset paths. A transport fault restarts on its own
+/// terms (row 7), and the count belongs to the transport that earned it: the
+/// rebuilt one starts from zero, so two further unserved answers still do not
+/// trip.
+#[tokio::test]
+async fn row_11b_a_transport_fault_also_resets_the_consecutive_count() {
+    let mock = Arc::new(
+        ProbeMock::legacy_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
+    );
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+
+    for _ in 0..2 {
+        let _ = backend.health_probe(Duration::from_secs(5)).await;
+    }
+    mock.set_default(ProbeAnswer::Fault);
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+    assert_eq!(
+        backend.unserved_counts_for_test().0,
+        0,
+        "a fault restarts the backend, so the run of refusals it ended is over"
+    );
+
+    mock.set_default(ProbeAnswer::InBandError(
+        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+    ));
+    backend.set_transport_for_test(Arc::clone(&mock) as Arc<dyn Transport>);
+    for _ in 0..2 {
+        let _ = backend.health_probe(Duration::from_secs(5)).await;
+    }
+
+    assert_eq!(
+        backend.unserved_counts_for_test(),
+        (2, 4),
+        "the rebuilt transport starts its own run; the lifetime count keeps counting"
+    );
+}
+
+/// Row 10b — the escalation restarts the backend, and §3 rule 2 makes "a
+/// rebuilt backend starts from zero" load-bearing for the three-count
+/// arithmetic. An implementation that trips without clearing its own count
+/// escalates on every single answer afterwards, so the patience the constant
+/// buys is spent once and never again.
+#[tokio::test]
+async fn row_10b_an_escalation_clears_the_count_it_acted_on() {
+    let mock = Arc::new(
+        ProbeMock::legacy_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
+    );
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+
+    for _ in 0..3 {
+        let _ = backend.health_probe(Duration::from_secs(5)).await;
+    }
+    assert!(
+        backend.is_circuit_tripped(),
+        "row 10's escalation must fire"
+    );
+    assert_eq!(
+        backend.unserved_counts_for_test().0,
+        0,
+        "the count the escalation acted on is spent; the rebuilt transport starts from zero"
+    );
+
+    backend.set_transport_for_test(Arc::clone(&mock) as Arc<dyn Transport>);
+    for _ in 0..2 {
+        let _ = backend.health_probe(Duration::from_secs(5)).await;
+    }
+
+    assert!(
+        still_wired(&backend, &mock),
+        "two answers after a restart are not three, so nothing may restart again"
+    );
+    assert_eq!(backend.unserved_counts_for_test(), (2, 5));
 }

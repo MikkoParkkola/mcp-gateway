@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -21,6 +22,25 @@ use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
 use crate::transport::{HttpTransport, StdioTransport, Transport};
 use crate::{Error, Result};
+
+/// Consecutive unserved probe answers the gateway tolerates before it treats
+/// the peer as faulty (MIK-7217, OUTBOUND.2).
+///
+/// Three rather than one because a single refusal is the normal answer of a
+/// peer whose era the cache has just got wrong, and that case corrects itself
+/// on the next tick. Three rather than many because the escalation is the only
+/// thing standing between "declines the probe" and "declines everything".
+const UNSERVED_ESCALATION: u64 = 3;
+
+/// Clears [`Backend::probe_in_flight`] however the probe leaves - the arms
+/// return from five places and a flag left set would stop every later tick.
+struct ProbeInFlight<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for ProbeInFlight<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 
 /// Compile the runtime profile selected by a backend into a live-start plan.
 #[must_use]
@@ -132,6 +152,9 @@ impl Backend {
             },
             failsafe_config: failsafe_config.clone(),
             era: Arc::new(crate::protocol::era::EraCache::for_backend(name)),
+            unserved_consecutive: AtomicU64::new(0),
+            unserved_total: AtomicU64::new(0),
+            probe_in_flight: std::sync::atomic::AtomicBool::new(false),
             tools_cache: CachedMetadata::new(),
             resend_permitted: parking_lot::RwLock::default(),
             resources_cache: CachedMetadata::new(),
@@ -1011,8 +1034,9 @@ impl Backend {
     /// # Errors
     ///
     /// Returns an error if the backend cannot be started, the probe times out,
-    /// or the `ping` call fails. The breaker is left for organic traffic to
-    /// trip -- this probe never records failures, only recoveries.
+    /// or the liveness call fails. A refused answer is neither: the peer is
+    /// reachable and said so, and only the third consecutive refusal escalates
+    /// (MIK-7217, OUTBOUND.2).
     pub async fn health_probe(&self, timeout: Duration) -> Result<()> {
         // Hold the transport for the whole probe WITHOUT claiming client activity.
         // Without this the reaper can close the transport between the health
@@ -1050,8 +1074,42 @@ impl Backend {
             return Err(Error::BackendUnavailable(self.name.clone()));
         };
 
-        match tokio::time::timeout(timeout, transport.request("ping", None)).await {
-            Ok(Ok(_)) => {
+        // A tick that lands while the previous probe is still outstanding is
+        // skipped rather than queued: see `probe_in_flight`.
+        if self.probe_in_flight.swap(true, Ordering::SeqCst) {
+            debug!(backend = %self.name, "Health probe already in flight; skipping this tick");
+            return Ok(());
+        }
+        let _in_flight = ProbeInFlight(&self.probe_in_flight);
+
+        // OUTBOUND.1: which method is a property of the peer's era, not of the
+        // gateway. `ping` on a 2026-07-28 peer is a call to a method that
+        // revision removed, so the probe would be asking a healthy peer a
+        // question it is right to refuse.
+        let method = self.liveness_method().await;
+
+        let answer = match tokio::time::timeout(timeout, transport.request(method, None)).await {
+            Ok(answer) => answer,
+            Err(_elapsed) => {
+                warn!(
+                    backend = %self.name,
+                    method,
+                    timeout_ms = timeout.as_millis(),
+                    "Health probe timed out; rebuilding transport"
+                );
+                self.unserved_consecutive.store(0, Ordering::SeqCst);
+                let _ = self.force_restart().await;
+                return Err(Error::BackendTimeout(self.name.clone()));
+            }
+        };
+
+        if let Some(code) = super::era::refusal_code(&answer) {
+            return self.record_unserved_probe(method, code, &transport).await;
+        }
+
+        match answer {
+            Ok(_) => {
+                self.unserved_consecutive.store(0, Ordering::SeqCst);
                 if self.is_circuit_tripped() {
                     info!(
                         backend = %self.name,
@@ -1061,20 +1119,82 @@ impl Backend {
                 }
                 Ok(())
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 warn!(backend = %self.name, error = %e, "Health probe failed; rebuilding transport");
+                self.unserved_consecutive.store(0, Ordering::SeqCst);
                 let _ = self.force_restart().await;
                 Err(e)
             }
-            Err(_elapsed) => {
-                warn!(
-                    backend = %self.name,
-                    timeout_ms = timeout.as_millis(),
-                    "Health probe timed out; rebuilding transport"
-                );
-                let _ = self.force_restart().await;
-                Err(Error::BackendTimeout(self.name.clone()))
-            }
         }
+    }
+
+    /// Record one probe answer the peer declined to serve, and escalate on the
+    /// third in a row.
+    ///
+    /// The two things a refusal is not are what this arm exists to encode. It
+    /// is not health: the peer answering "I do not serve that" says nothing
+    /// about whether it serves anything, so the breaker stays as it was. It is
+    /// not a fault: the transport carried a complete answer, so tearing it down
+    /// would restart a working process every ten seconds.
+    ///
+    /// Refusing is still not free. A peer that refuses every probe is
+    /// indistinguishable from a wedged one after long enough, so the count
+    /// bounds the patience: [`UNSERVED_ESCALATION`] consecutive refusals are
+    /// treated as the fault they have become. The count deliberately survives
+    /// an era invalidation - `server/discover` refused, then `ping` refused
+    /// twice is three refusals, not one and two - or a peer that answers
+    /// nothing would reset the escalation by changing which method it refuses.
+    async fn record_unserved_probe(
+        &self,
+        method: &str,
+        code: i32,
+        transport: &Arc<dyn Transport>,
+    ) -> Result<()> {
+        self.unserved_total.fetch_add(1, Ordering::SeqCst);
+        telemetry_metrics::counter!(
+            "mcp_health_probe_unserved_total",
+            "backend" => self.name.clone(),
+            "code" => code.to_string()
+        )
+        .increment(1);
+
+        // Only `method not found` against discovery is evidence about era, and
+        // the call is made before the escalation check so a peer that is merely
+        // older than the cache believes is reclassified on the same tick that
+        // noticed.
+        self.reprobe_if_code_contradicts(method, code, transport)
+            .await;
+
+        let consecutive = self.unserved_consecutive.fetch_add(1, Ordering::SeqCst) + 1;
+        if consecutive < UNSERVED_ESCALATION {
+            warn!(
+                backend = %self.name,
+                method,
+                code,
+                consecutive,
+                "Health probe was not served"
+            );
+            return Ok(());
+        }
+
+        warn!(
+            backend = %self.name,
+            method,
+            code,
+            consecutive,
+            "Health probe unserved {consecutive} times in a row; tripping breaker and rebuilding transport"
+        );
+        // The run this escalation acted on is spent: the transport below is
+        // rebuilt, and a rebuilt backend starts its own count from zero.
+        // Leaving the count at the threshold would escalate on every answer
+        // afterwards, spending the tolerance once and never again.
+        self.unserved_consecutive.store(0, Ordering::SeqCst);
+        self.trip_circuit_breaker("health probe unserved");
+        let _ = self.force_restart().await;
+        Err(Error::JsonRpc {
+            code,
+            message: format!("health probe to {method} was not served"),
+            data: None,
+        })
     }
 }
