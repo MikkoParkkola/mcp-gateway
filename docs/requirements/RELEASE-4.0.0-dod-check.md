@@ -185,14 +185,23 @@ which predates it. Its second half, drift between merged and listening controls,
 2026-09-11 by `scripts/dev/check-control-drift.py` against `security-controls.toml`. **D6** cannot be
 driven until that deploy exists, and **D18** is the merge itself.
 
-**The larger hold is not an operator act.** Roughly twenty gates are NOT EVALUATED — observability,
-API surface, coupling cycles and abstraction direction, telemetry shape, alerting, security
-monitoring, STRIDE and DAST, coverage no-drop, `pub`-item reachability, duplicate-function
-detection, documentation de-duplication, production wiring of the changed `src/` files, rollback
-execution, canary planning, effort, labels, the bets, and T1c. **Most of these an agent can run.**
-They are open because nobody has run them on this branch, not because they are blocked, and saying
-so is the whole reason this table exists: a gate folded into N/A stops being work and starts being
-an unexamined assumption.
+**The larger hold is not an operator act.** Nineteen gates are NOT EVALUATED, and they divide into
+two groups that should not be read as one.
+
+**Fourteen an agent can run at this head today**, each with a command or a reasoning pass behind it:
+correlation-ID propagation (D8), API-surface symbol count (D28), dependency cycles and abstraction
+direction (D27), STRIDE, coverage no-drop (§4), `pub`-item reachability (H6), duplicate-function
+detection (H9), documentation de-duplication (H7), production wiring of the changed `src/` files
+(D7/§2), canary planning (D21), effort (D13b), PR labels (D13d), the bet assessment (B1–B4), and
+T1c. None is blocked. They are open because nobody has run them on this branch.
+
+**Five need the same deployed build NFR.SEC.7 is waiting on**: structured-telemetry shape (D22),
+alerting thresholds and routing (D23), the security-channel audit (D26), DAST (§8), and rollback
+*execution* as opposed to its documentation (D20).
+
+Naming which is which is the point. A gate folded into N/A stops being work and starts being an
+unexamined assumption, and a gate filed under "needs the operator" when an agent could run it today
+is the same mistake wearing a better excuse.
 
 None of the unevaluated gates is a discovered defect. The distinction this record insists on is
 between *green* and *unexamined*, and at this head there is considerably more of the second than the
