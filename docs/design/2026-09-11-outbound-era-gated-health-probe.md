@@ -138,9 +138,10 @@ exists to close. Found by adversarial review, 2026-09-11. Re-classification back
 modern comes only from positive evidence on the ordinary path (a discovery document, or
 one of the three recognised modern error codes), never from an absence, which is
 `classify`'s existing rule and not one this design may relax. Every middle-row
-outcome also emits a `warn!` and a `mcp_health_probe_unserved_total{backend,code}` counter
-carrying the JSON-RPC code and the era the gateway believed, so the new state is
-triageable per backend without log archaeology.
+outcome also emits a `warn!` and a
+`mcp_health_probe_unserved_total{backend,code,era,carriage}` counter carrying the
+JSON-RPC code, the era the gateway believed, and the carriage - in-band error or HTTP
+status - so the new state is triageable per backend without log archaeology.
 
 **The invalidation is an existing mechanism, not a new one.**
 `Backend::reprobe_if_contradicted` (`src/backend/era.rs:110-145`) already does exactly what
@@ -419,9 +420,10 @@ differ only in a label; rows 6
 through 12 use the in-band (stdio) carriage unless the row names HTTP, and their
 fail-first half is the counter assertion, which no carriage satisfies at HEAD.
 **Observability:** every row asserting a middle-arm outcome also asserts the `warn!` and
-the `mcp_health_probe_unserved_total{backend,code}` labels the outcome is supposed to
-carry, including the era the gateway believed; row 13 asserts §4's per-skipped-backend
-`warn!` and row 15b the `mcp_gateway_removed_method_refused_total` labels. A counter
+the `mcp_health_probe_unserved_total{backend,code,era,carriage}` labels the outcome is
+supposed to carry, including the era the gateway believed and the carriage; row 13
+asserts §4's per-skipped-backend `warn!` and row 15b the
+`mcp_gateway_removed_method_refused_total` labels. A counter
 without its labels is not the triage surface §3 and §4 promise, and would otherwise pass
 the suite. Found by adversarial review, 2026-09-11.
 
