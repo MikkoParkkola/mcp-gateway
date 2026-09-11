@@ -16,7 +16,7 @@ one of them.
 
 | ticket | ACs met/total | what remains (one line) | size |
 |---|---|---|---|
-| MIK-7320 | 3/3 (1 wording nit) | Evidence comment + merge PR #464; code is green | XS |
+| MIK-7320 | 3/3 (1 wording nit) | Evidence comment on the ticket; code is green and the fixtures are on `main` | XS |
 | MIK-7272 | 4/4 | Nothing but merging the branch | XS |
 | MIK-7256 | 0 FAIL / 9 PASS / 6 PARTIAL / 11 NO TEST of 26 | Mechanism fully built; 17 ACs lack a verifying test — operator must decide write-tests vs accept-residual | M |
 | MIK-7265 | Blocked correctly | Drift-check script (its own deliverable) unbuilt; guard code it depends on predates the ticket | S |

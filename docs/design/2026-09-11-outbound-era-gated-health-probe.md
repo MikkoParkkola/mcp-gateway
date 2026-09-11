@@ -195,7 +195,13 @@ while three removed methods still reach modern backends ungated. Found by advers
 review, 2026-09-11.
 
 `REMOVED_IN_2026_07_28` (`src/protocol/meta.rs:253-261`) lists five methods.
-`notifications/roots/list_changed` the gateway never sends outbound. The other four all do:
+`notifications/roots/list_changed` has no outbound sender: the one function that builds it,
+`Proxy::broadcast_roots_changed` (`src/gateway/proxy.rs:457`), hands it to
+`StreamingManager::broadcast`, which iterates *client* sessions, not backends
+(`src/gateway/streaming.rs`), and the whole repository contains no caller of it outside its
+own unit test. Its doc comment says "to all backends" and is wrong about its own
+behaviour - worth correcting when someone next touches that file, but not a send. The other
+four methods are all genuinely sent to backends:
 
 | method | outbound call site | shape today | with the gate |
 | --- | --- | --- | --- |
