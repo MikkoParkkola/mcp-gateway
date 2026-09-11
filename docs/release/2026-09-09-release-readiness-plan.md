@@ -1115,9 +1115,11 @@ above told whoever picks up the stdio work that the row "needs an `#[ignore]` ca
 ADR reference, not an implementation". The ADR reasoning behind that is sound — ADR-014 §2
 does leave a backend `notifications/message` unattributable over stdio, and the row's own
 doc comment says it tests exactly that case — but the conclusion was never measured against
-the suite. It has been now: the last full run of the SUB.2b acceptance binary reported
-`6 passed; 2 failed; 0 ignored` across the eight rows then present, and the two failures
-were the stdio and the HTTP progress rows. The message row was among the six. It is out of
+the suite. It has been now. The HTTP lane ran the whole binary at `6fc9471b`, unfiltered:
+`7 passed; 1 failed; 2 ignored`, the sole failure being
+`s02_stdio_progress_reaches_its_own_call_before_the_result` and the two ignored being the
+parked PROBE rows. `s02_stdio_message_reaches_its_own_call_before_the_result` is listed
+`ok`. It is out of
 scope for the criterion *and* green, which owes no test edit at all. An `#[ignore]` applied
 to it would have parked a passing row on the strength of a document.
 
@@ -1168,3 +1170,28 @@ One worktree-specific trap, found while checking that: `git status --porcelain` 
 fully committed in `d6087aca`. That is a stale stat entry in the shared index, not content.
 In a worktree this busy, confirm a reported modification with `git diff` on the path before
 treating it as somebody's in-flight work.
+
+### 2026-09-11, correction: the run quoted above was a stale capture
+
+The `6 passed; 2 failed; 0 ignored` cited in the correction section — and repeated in the
+`SUB.2b` ledger row — was read out of a captured run file from earlier in the day, before
+the HTTP leg was measured clean. It was quoted as if current. It is not, and it named
+`s02_progress_http_reaches_its_own_call_before_the_result` as a failure. That row passes,
+and has passed in every run the HTTP lane has recorded; a reader taking the number at face
+value would have gone hunting an HTTP defect that three independent measurements say does
+not exist.
+
+The current figure, whole binary at `6fc9471b`, unfiltered: `7 passed; 1 failed; 2 ignored`.
+The sole failure is `s02_stdio_progress_reaches_its_own_call_before_the_result`, the
+correlation row this plan documents as genuinely unbuilt. The two ignored are the parked
+PROBE rows. Every HTTP row is green, and so is
+`s02_stdio_message_reaches_its_own_call_before_the_result` — which is the row the
+withdrawal above turns on, so that conclusion is unaffected and now rests on a current
+measurement rather than an old one.
+
+The failure mode is worth naming, because it is the same one the correction section was
+written to fix, one level down. That section faulted a document for answering a question
+only a measurement can answer; the fix then reached for a measurement that had gone stale
+and used it the same way. A captured run file is evidence about the tree it ran against. It
+carries a commit, and if the quote does not carry one too, it is not yet evidence about
+now.
