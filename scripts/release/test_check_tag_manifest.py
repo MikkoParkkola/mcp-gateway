@@ -6,6 +6,7 @@ import contextlib
 import importlib.util
 import io
 import pathlib
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -216,3 +217,105 @@ class WorkflowOutputs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+WORKFLOWS = pathlib.Path(__file__).parents[2] / ".github" / "workflows"
+JOB_HEADER = re.compile(r"^  ([A-Za-z][\w-]*):\s*$")
+NEEDS = re.compile(r"^    needs:\s*(\S.*)$", re.MULTILINE)
+
+
+def jobs(workflow):
+    """Split a workflow's `jobs:` mapping into {name: body text}."""
+    lines = (WORKFLOWS / workflow).read_text(encoding="utf-8").splitlines()
+    start = lines.index("jobs:") + 1
+    found, name, body = {}, None, []
+    for line in lines[start:]:
+        header = JOB_HEADER.match(line)
+        if header:
+            if name:
+                found[name] = "\n".join(body)
+            name, body = header.group(1), []
+        elif name:
+            body.append(line)
+    if name:
+        found[name] = "\n".join(body)
+    return found
+
+
+class WorkflowWiring(unittest.TestCase):
+    """The gate is only worth what the workflows calling it are wired to do.
+
+    These read the workflow text rather than run it. They cannot prove a
+    release publishes correctly — only CI on a real tag does that — but they
+    catch the rewiring mistakes that are silent at author time and only visible
+    once a release has already gone to the wrong channel.
+    """
+
+    def test_every_reader_of_verify_outputs_needs_verify_directly(self):
+        # `needs` exposes direct dependencies only. A job that reads
+        # needs.verify.outputs.is_prerelease while reaching verify transitively
+        # gets the empty string, which is not 'true', so a release candidate
+        # publishes down every stable path. Nothing fails at author time.
+        for name, body in jobs("release.yml").items():
+            if "needs.verify.outputs." not in body:
+                continue
+            declared = NEEDS.search(body)
+            self.assertIsNotNone(declared, f"{name} reads verify's outputs with no needs:")
+            self.assertRegex(
+                declared.group(1),
+                r"\bverify\b",
+                f"{name} reads verify's outputs without naming verify in needs:",
+            )
+
+    def test_all_three_tag_triggered_workflows_run_the_gate(self):
+        # release.yml, ci.yml and docker.yml each fire on the same `v*` tag and
+        # none can read another's job outputs, so each has to run the gate
+        # itself. Dropping it from one leaves that workflow's publishes
+        # ungated while the other two stay green.
+        for workflow in ("release.yml", "ci.yml", "docker.yml"):
+            text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
+            self.assertIn("scripts/release/check_tag_manifest.py", text, workflow)
+            self.assertIn("scripts/release/test_check_tag_manifest.py", text, workflow)
+
+    def test_prerelease_skips_are_declared_where_they_are_claimed(self):
+        # The three stable-only surfaces. Each is skipped by an expression
+        # rather than by a comment; losing the expression publishes a candidate
+        # to a channel nobody opted into.
+        self.assertRegex(
+            jobs("release.yml")["homebrew-update"],
+            r"if:.*needs\.verify\.outputs\.is_prerelease != 'true'",
+        )
+        self.assertRegex(
+            jobs("docker.yml")["publish-mcp-registry"],
+            r"if:.*needs\.build\.outputs\.is_prerelease != 'true'",
+        )
+        self.assertRegex(
+            jobs("ci.yml")["docker"],
+            r"is_prerelease != 'true' && 'ghcr\.io/[^']*:latest'",
+        )
+
+    def test_both_ghcr_publishers_sign_what_they_push(self):
+        # Both push :VERSION from the same commit on the same tag with no
+        # ordering between them, so the name resolves to whichever pushed last.
+        # If only one signs, that name can carry no signature at all while the
+        # signing workflow's own verify-by-digest still passes.
+        for workflow in ("ci.yml", "docker.yml"):
+            text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
+            self.assertIn("cosign sign --yes", text, workflow)
+            # Match the flag, not the line continuation: folding the flags onto
+            # one line must not turn this red.
+            self.assertRegex(
+                text,
+                r"cosign verify(?![-\w])[\s\\]*--certificate-identity",
+                workflow,
+            )
+
+    def test_the_dispatch_tag_is_not_interpolated_into_a_shell_command(self):
+        # A dispatch input expanded inside `run:` is substituted before bash
+        # parses the line, so shell metacharacters in a tag would execute on the
+        # runner holding the publishing credentials.
+        for line in (WORKFLOWS / "release.yml").read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or not stripped.startswith("run:"):
+                continue
+            self.assertNotIn("inputs.tag", stripped, line)
