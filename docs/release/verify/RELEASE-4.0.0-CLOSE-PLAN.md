@@ -510,3 +510,47 @@ decisions taken, not questions parked:
 - **`MIK-7243` stays deferred** — it is the one item the backlog triage records
   as deferred from 4.0.0. `MIK-7116` is *not* deferred; it sits in bucket A and
   moves to Done when its branch merges.
+
+## Progress, 2026-09-11
+
+**Item 1 — `MIK-7217.OUTBOUND.1` + `.2`: done.** Committed as `0a009d6f`, twelve
+files. `cargo test --lib row_` is 43 passed / 0 failed against the landed
+mechanism, from 22 passed / 16 failed at the branch point; `cargo fmt --check` is
+clean. Row 10b failed against the landed mechanism rather than against the branch
+point and found a real defect in it: the escalation tripped the breaker and
+rebuilt the transport without clearing the count it had just acted on, so the
+tolerance was spent once and never again. The implementation review pair was kimi
+and grok, `gpt-review` being credit-exhausted until 2026-09-15; kimi returned
+ship, with one behavioural narrowing repaired in the same commit — both error
+carriages now read the same session-expiry marker set, so a peer that words its
+expiry no longer loses session recovery by the accident of having sent a body
+that parses.
+
+**Item 2 — `GH475.RL.5`: closed by ruling, and this plan's step 2 was wrong.**
+Step 2 above says to add a `throttling` arm to the predicate. The predicate needs
+no such arm: it has never matched `throttling`, and the case the published test
+plan named is already asserted. The half that failed was the past participle, and
+building step 2 as written would have made "request throttled by upstream" count
+as a circuit-breaker failure — the behaviour #475 was opened to remove.
+
+The clause moved instead of the predicate, because the clause has no source in
+the issue it is named after: #475 never uses the word, and both the clause and its
+test case were authored in our own test plan, alongside a case narrower than the
+clause itself. The amended clause still forbids a `throttling` phrase and the two
+literal negations from exempting, the boundary of those two negations is now
+asserted rather than left to a doc comment, and the capacity-failure residual is
+recorded in the ledger cell rather than hidden by the grade. The ruling was
+reviewed adversarially before it was written down and narrowed in response: the
+first draft claimed "unless negated", which would have certified a
+natural-language negation the predicate does not implement.
+
+`count-release-criteria.py --check` now reports 149 criteria, 189 rows, 185 met
+or non-blocking, **4 blocking**. Cluster J is cleared in the rollup.
+
+**Item 3 — `NFR.SEC.7` / `MIK-7265`: design written, not yet reviewed.**
+`docs/design/2026-09-11-merged-versus-listening-drift-check.md`. It rules for a
+behavioural probe as the verdict with build provenance as corroboration, rather
+than the ancestry comparison the criterion's wording invites, because a control
+can be merged into a build and still disabled, shadowed or unwired — an ancestry
+check would be green while the listening build serves exactly the request the
+criterion says it must refuse.

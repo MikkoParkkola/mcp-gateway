@@ -532,4 +532,22 @@ mod tests {
             "not throttled earlier, but request throttled by upstream"
         ));
     }
+
+    // The boundary of the two literal negations, asserted rather than left to
+    // the doc comment: a negation with a word in between, or any other wording,
+    // still matches and so is still exempted. GH475.RL.5's clause names those
+    // two forms for this reason -- a clause that said "unless negated" would
+    // claim a natural-language negation this predicate does not implement.
+    #[test]
+    fn rate_limit_predicate_negation_covers_two_literal_forms_only() {
+        for s in [
+            "the backend was never throttled, it timed out",
+            "is not currently throttled, connection reset",
+        ] {
+            assert!(
+                is_rate_limited(s),
+                "the stripped forms are literal; {s:?} must still match"
+            );
+        }
+    }
 }
