@@ -293,12 +293,13 @@ fn a_byte_order_mark_after_the_first_event_stays_in_the_data() {
     );
 }
 
-/// The scan cursor resumes at the first unexamined byte, not at the start of
-/// the partial line. A single `data:` line delivered one byte at a time is the
-/// shape that made the old cursor quadratic; this asserts the framing survives
-/// the change, one push per byte.
+/// Framing survives the smallest possible chunks on the shape that drove the
+/// scan cursor: one `data:` line longer than any chunk, pushed a byte at a
+/// time. The cursor's cost is not asserted here -- bytes scanned are not
+/// observable from outside -- only that moving where a scan resumes did not
+/// move what it finds.
 #[test]
-fn a_single_long_line_delivered_one_byte_at_a_time_decodes_once() {
+fn a_single_long_line_delivered_one_byte_at_a_time_still_frames() {
     let payload = "x".repeat(4096);
     let body = format!("data: {payload}\r\n\r\n").into_bytes();
     let mut decoder = SseDecoder::new(MAX_PENDING_SSE_BYTES);
