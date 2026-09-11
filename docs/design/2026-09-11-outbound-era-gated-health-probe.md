@@ -480,3 +480,23 @@ would overstate the coverage by three.
 | 10, 10b, 10c, 11, 11b | the consecutive-unserved counter and an accessor for it. These rows also carry the counter assertions deferred out of rows 4 to 6b, and they are what turns rows 6, 9b and 9d into discriminating pins |
 | 13, 14, 15, 15b, 15c | the four §4 gate sites |
 | M | the per-probe wall-time and response-size measurement §2's load claim rests on |
+
+## 8. Stage state
+
+Fail-first test writing is complete to the extent `HEAD` allows: nineteen rows written and
+observed, eleven outstanding because the symbols they would name do not exist yet (§7).
+
+The gate now is review, not more rows. The design was amended after the review that passed
+earlier - §3 gained the open ruling, §7 gained rows 16c and 16d and the second-stage-pin
+admissions - so that review does not cover the current text, and the tests have never been
+reviewed as tests. The pair is grok and kimi; `gpt-review` is credit-exhausted until
+2026-09-15. Scope handed to them: the §3 ruling first, then the tests as tests, then whether
+deferring the eleven unwritable rows forfeits their fail-first guarantee. Payload is the whole
+of this document plus `src/backend/tests.rs:980-1430`, `src/transport/http/tests.rs:2120-2400`
+and `src/gateway/meta_mcp/invoke.rs:3645-3685`.
+
+Implementation stays blocked until the §3 ruling is resolved. It is not an operator question:
+the operator pre-authorised deciding it with the advisor models. The two candidate resolutions
+are named in §3 - keep the session signature on the `Transport` side, or teach
+`is_session_expired_error` the `JsonRpc` variant - and rows 16 and 16d together will referee
+whichever lands, which is why both exist.
