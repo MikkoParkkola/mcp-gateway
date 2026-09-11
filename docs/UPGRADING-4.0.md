@@ -16,7 +16,7 @@ change rather than a runtime one and therefore has no startup notice.
 |---|---|---|
 | 1 | OAuth credentials are stored per issuer | Re-authorize each OAuth backend once |
 | 2 | A malformed `env_files` line fails startup | Fix the line the error names |
-| 3 | Protocol `2024-10-07` is no longer advertised | Upgrade clients that speak only that version |
+| 3 | Protocol `2024-10-07` is no longer advertised | None for conforming clients — see below |
 | 4 | Rate-limited responses no longer trip the breaker | None — this removes a failure mode |
 | 5 | One license across the repository | Commercial users need a commercial license |
 
@@ -45,12 +45,22 @@ during a deploy window is not.
 
 ## 3. Protocol version `2024-10-07` is no longer advertised
 
-The gateway negotiates `2025-11-25` by default and supports the versions between. A client that
-speaks only `2024-10-07` now receives an unsupported-protocol-version error
-(`-32022`) instead of a downgraded session.
+`2024-10-07` is not a revision the MCP specification has ever defined. It was listed in the
+gateway's supported set from the first negotiation commit until 4.0.0, where it was removed
+(`src/protocol/mod.rs:32-37`).
 
-`2025-03-26` and every later version are unaffected. If you maintain a client pinned to
-`2024-10-07`, upgrade it before the gateway.
+The removal changes what the gateway *claims*, not how it answers. `server/discover` publishes
+the supported set as the gateway's own statement of what it speaks, so an invented revision in
+that list was a false claim. Negotiation itself was never affected: `negotiate_version` matches
+exactly, and no conforming client can request a revision that does not exist.
+
+Nothing is rejected. A client naming `2024-10-07` in `initialize` gets `2025-11-25` back —
+the same fallback any unrecognized version string gets, before and after this release
+(`tests/integration.rs:37`). There is no error and no refused session.
+
+`2024-11-05` and every later revision negotiate exactly as before. The startup notice advises
+upgrading a client that speaks only `2024-10-07`; in practice such a client would have been
+getting the fallback all along.
 
 ## 4. Rate-limited backend responses no longer count as failures
 
@@ -79,7 +89,7 @@ is the change to route past whoever approves your licensing, not a runtime conce
 
 - Confirm the version stamp advanced: the notice prints once and not again.
 - Re-authorize OAuth backends at a time you choose rather than on a user's first call.
-- If startup is refused, read the error — items 2 and 3 are the two that refuse rather than warn.
+- If startup is refused, read the error — item 2 is the one that refuses rather than warns.
 
 ## Rolling back
 

@@ -97,10 +97,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search results do not advertise tools the operator turned off.
   ([#470](https://github.com/MikkoParkkola/mcp-gateway/pull/470))
 
-## [4.0.0] - 2026-08-29
+## [4.0.0] - unreleased
 
+> Not yet tagged; the latest release is 3.5.1, which was cut from a maintenance branch after
+> this section was started and therefore appears above it.
+>
 > Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). `gateway.yaml` loads
-> unchanged; two of the changes below refuse a start rather than warn.
+> unchanged; the strict `env_files` parsing is the one change that refuses a start rather than
+> warns.
 
 ### Changed
 
