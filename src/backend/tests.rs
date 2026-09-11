@@ -920,3 +920,191 @@ async fn ordinary_dispatch_failure_still_counts() {
     assert_eq!(backend.health_metrics().failure_count, 1);
     assert_eq!(backend.health_metrics().success_count, 0);
 }
+
+// ── MIK-7217 OUTBOUND.1/.2 — era-gated health probe ─────────────────────
+//
+// Rows from section 6 of
+// `docs/design/2026-09-11-outbound-era-gated-health-probe.md`. Each test names
+// the row it pins. Rows marked fail-first there must fail against HEAD; a row
+// that passes today is pinning something other than the defect it names.
+
+/// One scripted answer from the peer, in the shape the probe actually receives
+/// it. The two error shapes are not interchangeable: an in-band JSON-RPC error
+/// is `Ok(JsonRpcResponse)` with `error` set (stdio, WebSocket), a
+/// status-carried one is `Err(Error::JsonRpc)` (HTTP). An implementation that
+/// covers only the first restarts every HTTP peer that declines a probe.
+#[derive(Clone)]
+enum ProbeAnswer {
+    Result(Value),
+    InBandError(i32),
+    StatusError(i32),
+    Fault,
+}
+
+/// Records the method of every request and answers from a script, so a row can
+/// pin *which* method reached the wire rather than only how many did.
+struct ProbeMock {
+    methods: std::sync::Mutex<Vec<String>>,
+    answers: std::sync::Mutex<std::collections::VecDeque<ProbeAnswer>>,
+    closes: AtomicUsize,
+    connected: AtomicBool,
+}
+
+impl ProbeMock {
+    fn scripted(answers: Vec<ProbeAnswer>) -> Self {
+        Self {
+            methods: std::sync::Mutex::new(Vec::new()),
+            answers: std::sync::Mutex::new(answers.into()),
+            closes: AtomicUsize::new(0),
+            connected: AtomicBool::new(true),
+        }
+    }
+
+    /// The era classification probe answers `server/discover` with a code only
+    /// a modern peer knows, which is what leaves the cache `Probed`/`Modern`.
+    /// `-32601` would do the opposite: `classify` reads it as legacy evidence.
+    fn modern_then(mut rest: Vec<ProbeAnswer>) -> Self {
+        let mut answers = vec![ProbeAnswer::InBandError(
+            crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION,
+        )];
+        answers.append(&mut rest);
+        Self::scripted(answers)
+    }
+
+    fn methods(&self) -> Vec<String> {
+        self.methods.lock().expect("methods lock").clone()
+    }
+
+    /// Methods seen after the era classification probe consumed the first one.
+    fn probed_methods(&self) -> Vec<String> {
+        self.methods().into_iter().skip(1).collect()
+    }
+}
+
+#[async_trait]
+impl Transport for ProbeMock {
+    async fn request(&self, method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        self.methods
+            .lock()
+            .expect("methods lock")
+            .push(method.to_string());
+        let answer = self
+            .answers
+            .lock()
+            .expect("answers lock")
+            .pop_front()
+            .unwrap_or(ProbeAnswer::Result(json!({})));
+        match answer {
+            ProbeAnswer::Result(value) => Ok(JsonRpcResponse::success_serialized(
+                RequestId::Number(1),
+                value,
+            )),
+            ProbeAnswer::InBandError(code) => Ok(JsonRpcResponse::error(
+                Some(RequestId::Number(1)),
+                code,
+                "declined",
+            )),
+            ProbeAnswer::StatusError(code) => Err(Error::JsonRpc {
+                code,
+                message: "declined".to_string(),
+                data: None,
+            }),
+            ProbeAnswer::Fault => Err(Error::BackendUnavailable("socket closed".to_string())),
+        }
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    async fn close(&self) -> Result<()> {
+        self.closes.fetch_add(1, Ordering::SeqCst);
+        self.connected.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+/// A backend wired to `mock`, with its era resolved from the mock's first
+/// scripted answer when `classify` is asked to run.
+async fn probe_backend(mock: Arc<ProbeMock>, resolve_era: bool) -> Arc<Backend> {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let transport = mock as Arc<dyn Transport>;
+    backend.set_transport_for_test(Arc::clone(&transport));
+    if resolve_era {
+        backend.resolve_era(&transport).await;
+    }
+    backend
+}
+
+/// Row 1 — a modern peer is asked the modern liveness method. `ping` was
+/// removed in the 2026-07-28 revision, so putting it on a modern wire is the
+/// outbound defect OUTBOUND.1 names.
+#[tokio::test]
+async fn row_1_modern_backend_is_probed_with_server_discover() {
+    let mock = Arc::new(ProbeMock::modern_then(vec![ProbeAnswer::Result(json!({}))]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+    assert_eq!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern),
+        "precondition: the fixture must construct a modern peer"
+    );
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert_eq!(
+        mock.probed_methods(),
+        vec!["server/discover".to_string()],
+        "a modern peer is probed with server/discover"
+    );
+    assert!(
+        !mock.methods().contains(&"ping".to_string()),
+        "ping must never reach a modern peer"
+    );
+}
+
+/// Row 2 — regression guard. It passes at HEAD, which sends `ping` to
+/// everything; it exists to catch the mirror-image defect once row 1 lands.
+#[tokio::test]
+async fn row_2_legacy_backend_is_probed_with_ping() {
+    let mock = Arc::new(ProbeMock::scripted(vec![
+        ProbeAnswer::InBandError(crate::protocol::era::METHOD_NOT_FOUND_CODE),
+        ProbeAnswer::Result(json!({})),
+    ]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+    assert_eq!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Legacy),
+        "precondition: -32601 to server/discover classifies the peer legacy"
+    );
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert_eq!(mock.probed_methods(), vec!["ping".to_string()]);
+}
+
+/// Row 3 — regression guard. An era that was never resolved is not modern:
+/// `classify`'s rule is that silence is never evidence of modernity, and this
+/// pins that rule at the probe's call site rather than at `classify`'s.
+#[tokio::test]
+async fn row_3_unclassified_backend_takes_the_legacy_arm() {
+    let mock = Arc::new(ProbeMock::scripted(vec![ProbeAnswer::Result(json!({}))]));
+    let backend = probe_backend(Arc::clone(&mock), false).await;
+    assert_eq!(
+        backend.cached_era().await,
+        None,
+        "precondition: the era was never resolved"
+    );
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert_eq!(mock.methods(), vec!["ping".to_string()]);
+}
