@@ -1095,3 +1095,44 @@ Release-ready means all four, not the gate's count of 2. Two of the four can pro
 now: the outbound emitter and the operator deployment. The other two each wait on something
 outside the code -- bookkeeping on the push hold, review on a second non-Claude reviewer
 being available.
+
+### Corrections from the 2026-09-11 review of this document
+
+Reviewed by `grok-review` and `kimi-review`. `gpt-review` was unavailable, so the second
+independent reviewer was substituted rather than waited for -- see the last item below for
+what that does to the dated gate. Both reviews were scoped to commits `c74c56a6` and
+`1b83de13`, this file only; the peer's transport work was declared out of scope.
+
+**The `urlparse` mechanism given for the `check-control-drift.py` gotcha is wrong for the
+example it uses.** The paragraph above says that passing a bare `127.0.0.1:39401` makes
+`urlparse` read `127.0.0.1` as the scheme. It does not. A URL scheme may not begin with a
+digit, so `urlparse('127.0.0.1:39401')` returns `scheme=''` with the whole string in `path`.
+The scheme misreading is real but needs a *hostname*: `urlparse('localhost:39401')` returns
+`scheme='localhost'`, `path='39401'`. Verified by running both. The operational advice is
+unchanged and still necessary -- pass a full URL -- but the reason a bare authority fails is
+that it has no netloc at all, not that the address is mistaken for a scheme.
+
+**`MIK-7272.SUB.2b` is recorded `MET (caveat)` in the ledger while its acceptance binary is
+red at `HEAD`.** Commit `f14e6954` flipped the verdict cell from `ABSENT` to `MET (caveat)`.
+Against a clean tree at `1b83de13`, `cargo test --test mik_7272_sub2b_acs` reports
+`5 passed; 3 failed; 2 ignored`. The three failures are
+`s02_stdio_message_reaches_its_own_call_before_the_result`,
+`s02_stdio_progress_reaches_its_own_call_before_the_result` and
+`s03_progress_stdio_each_call_sees_only_its_own_token`, the last asserting
+`call B's token must appear exactly once: [String("token-A")]`, left `0`, right `1` --
+a correlation failure, not a delivery one. The row's own evidence cell was not rewritten to
+match the new verdict and still contains the sentence *"The verdict stays ABSENT because
+`SseExchange.notifications` has NO production consumer"*, so the cell now argues against its
+own grade. This is recorded here rather than fixed in `criteria-status.md` because the row is
+a peer's in-flight work and the ledger is frozen; whoever lands the next SUB.2b commit owns
+reconciling the two. Until then the gate's `187 met or non-blocking` counts a row whose
+acceptance tests do not pass.
+
+**The review gate is not date-bound; it is bound to `gpt-review` specifically.** The
+requirement is two independent non-Claude reviewers. This document's own text records that
+the release owner may either wait for 2026-09-15 or substitute a second reviewer, and the
+substitution has now been exercised: `grok-review` and `kimi-review` both ran against
+`c74c56a6`/`1b83de13`. So the closing summary above is too pessimistic about that workstream
+-- it waits only if the release owner requires that the second reviewer be `gpt-review`
+rather than any non-Claude reviewer. That is a standards question for the release owner, not
+a blocked dependency, and it is the last open question in this document.
