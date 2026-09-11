@@ -139,8 +139,9 @@ pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
 ///
 /// Absence overwrites. A stdio JSON-RPC batch dispatches every item inside one
 /// scope, so the slot outlives the item that set it; leaving it untouched would
-/// hand an item that declared nothing the level its predecessor declared, and
-/// §4's absence-is-silence would stop holding for every item after the first.
+/// hand an item that declared nothing the level its predecessor declared. The
+/// case §4's absence-is-silence stops holding for is exactly that one -- an
+/// undeclared item following a declared one -- not every item after the first.
 ///
 /// A no-op outside a request scope, which is every backend call with no client
 /// behind it.
@@ -345,17 +346,32 @@ mod tests {
     async fn a_second_declaration_of_nothing_clears_the_first() {
         let ((), delivered) = collect(async {
             set_request_log_level(Some("debug"));
+            publish(vec![JsonRpcNotification {
+                params: Some(json!({ "level": "error", "data": "first" })),
+                ..note("notifications/message")
+            }]);
             set_request_log_level(None);
             publish(vec![JsonRpcNotification {
-                params: Some(json!({ "level": "error", "data": "x" })),
+                params: Some(json!({ "level": "error", "data": "second" })),
                 ..note("notifications/message")
             }]);
         })
         .await;
 
-        assert!(
-            delivered.is_empty(),
-            "the second item declared no level, so nothing it produced may pass: {delivered:?}"
+        // Both halves are asserted by one vector: an empty one would mean the
+        // declaration never wrote, and a two-element one would mean the absence
+        // did not clear it.
+        assert_eq!(
+            delivered
+                .iter()
+                .map(|n| n
+                    .params
+                    .as_ref()
+                    .map_or("-", |p| p["data"].as_str().unwrap_or("-")))
+                .collect::<Vec<_>>(),
+            vec!["first"],
+            "the first item declared `debug` so its message passes; the second declared \
+             nothing, so nothing it produced may: {delivered:?}"
         );
     }
 
