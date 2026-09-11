@@ -538,3 +538,37 @@ regression either way and cannot referee this. Row 16d is the row that does, and
 its JSON-RPC error body for that reason. A row for the 502-carried signature does not exist and
 should be added when this lands - it is the half that only becomes reachable after the change,
 so it is not a fail-first row for §3 and cannot be written as one.
+
+#### 8.1.1 The shared predicate must be narrowed on the `Err` side
+
+The factoring in §8.1 is not safe as a straight lift, and the reason is `-32600`.
+
+`is_session_expired_response` (`src/transport/http/mod.rs:187`) matches three signals:
+`code == -32015`, `code == -32600`, or a message containing `"session not found"`. The middle
+one is the standard JSON-RPC "Invalid request" code - by far the most general code in the
+protocol - and today it can only reach session recovery from a **200** body, which is a
+deliberate choice a peer had to make: encoding a protocol-level refusal inside a success.
+That carriage is what makes `-32600` credible as an expiry signal rather than as noise.
+
+§3's change removes that constraint without meaning to. A non-2xx carrying `-32600` currently
+becomes `Error::Transport` and is inert; afterwards it becomes `Error::JsonRpc` and, under a
+naive lift, would drop the session and force a re-handshake. This is reachable, not theoretical:
+the version-mismatch branch at `:1288-1291` requires **three** conditions together - a
+`BAD_REQUEST` or `UPGRADE_REQUIRED` status, the version phrasing, *and* a parseable supported
+list - so a plain `400` carrying `-32600` and no version list falls straight through to
+`safe_http_status_error` at `:1295` and into the new variant. A 500 or 502 carrying `-32600`
+does the same. The result would be a gateway that re-initializes its session on an ordinary
+malformed-request error, which is a worse defect than the one §3 set out to fix.
+
+So the `Err`-side arm takes the narrow signature only - `code == -32015`, or the message
+containing `"session not found"` - and leaves `-32600` to the 200-carried classifier where its
+carriage justifies it. The shared helper therefore has to be parameterised by carriage rather
+than being one predicate both sides call unchanged, and that is a change to the §8.1 shape, not
+a detail of it.
+
+Two consequences for the rows. Row 16 already uses **405** and a `-32601`, so it is unaffected
+and stays as written. The row this earns is a new one: a non-2xx carrying `-32600` must reach
+the caller as `Error::JsonRpc` **and leave the session bucket intact** - the assertion that
+separates the narrow signature from the naive lift. It cannot be written fail-first, because at
+`HEAD` the variant it asserts does not occur; it lands with the implementation, and §7's
+outstanding list gains it.
