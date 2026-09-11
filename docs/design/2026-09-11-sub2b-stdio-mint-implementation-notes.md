@@ -15,9 +15,11 @@ change to `PendingRequestGuard` in `src/transport/mod.rs` (note 2).
 The map value must hold the caller's progress token as the `serde_json::Value`
 it arrived as. Translate-back then restores `params.progressToken` byte-
 identically, including the `Number`/`String` distinction that
-`src/transport/stdio.rs:469-471` collapses. Storing the stringified form makes
+the `Number`/`String` arm of `capture_notification`
+(`src/transport/stdio.rs`) collapses. Storing the stringified form makes
 a numeric `3` come back as `"3"` — a token the client never sent, which is the
-invented owner `:455-462` exists to prevent.
+invented owner that `register_progress_token` /
+`release_progress_token` exist to prevent.
 
 ADR-014:152-154 settles the *key* side of that collapse (minted keys are never
 numeric, so they cannot alias). The *value* side is what this note covers, and
@@ -27,11 +29,11 @@ the ADR does not state it at this granularity.
 
 ADR-014:157-161 requires a guard that removes its own key on drop —
 "completion, error, timeout, cancellation alike". The existing
-`PendingRequestGuard` (`src/transport/mod.rs:180`) is typed to the `pending`
+`PendingRequestGuard` (`PendingRequestGuard`, `src/transport/mod.rs`) is typed to the `pending`
 map's value. Make it generic over the value type instead of adding a
 near-identical second struct: one `Drop`, two maps.
 
-`src/transport/websocket.rs:515` is the other call site. The parameter is
+`websocket.rs`'s `request` is the other construction site. The parameter is
 inferred there, so it compiles unchanged.
 
 The motivation is not new and need not be argued: `websocket.rs:511-514`
@@ -72,5 +74,13 @@ in-flight call, zero map growth, guard or no guard.
 ## 4. Acceptance
 
 `s02_stdio_progress_reaches_its_own_call_before_the_result`
-(`tests/mik_7272_sub2b_acs.rs:481`) asserts both halves and is the acceptance
+(`tests/mik_7272_sub2b_acs.rs`) asserts both halves and is the acceptance
 proof for this work. Not edited from this lane.
+
+## 5. Cite by symbol, not by line
+
+Every reference above names a symbol. `stdio.rs` is about to be edited by this
+row and is already dirty in another lane, so any line number written into a
+document or a comment is stale before it is read — which is exactly the defect
+recorded against `input_bridge.rs:291-295` in note 2. Line numbers that remain
+here point only at files this row does not touch.
