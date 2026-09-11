@@ -1920,9 +1920,13 @@ async fn sse_decode_preserves_the_order_two_notifications_arrived_in() {
     );
 
     // WHEN: the transport decodes it
-    let (_, notifications) = crate::transport::notification_sink::collect(
-        sse_decoder::decode_sse_exchange(sse_stream(body)),
-    )
+    let (_, notifications) = crate::transport::notification_sink::collect(async {
+        // ADR-014 §4: a relayed `notifications/message` reaches the caller
+        // only if the caller declared a level, so the request this row is
+        // about declares one. What the row asserts is unchanged.
+        crate::transport::notification_sink::set_request_log_level(Some("debug"));
+        sse_decoder::decode_sse_exchange(sse_stream(body)).await
+    })
     .await;
 
     // THEN: both are delivered, in arrival order
@@ -2089,9 +2093,13 @@ const MESSAGE: &str = r#"{"jsonrpc":"2.0","method":"notifications/message","para
 async fn http_forwards_both_notification_methods_to_the_callers_sink() {
     let body = sse_body(&[PROGRESS, MESSAGE], 1);
 
-    let (response, notifications) = crate::transport::notification_sink::collect(
-        sse_decoder::decode_sse_exchange(sse_stream(body)),
-    )
+    let (response, notifications) = crate::transport::notification_sink::collect(async {
+        // ADR-014 §4: a relayed `notifications/message` reaches the caller
+        // only if the caller declared a level, so the request this row is
+        // about declares one. What the row asserts is unchanged.
+        crate::transport::notification_sink::set_request_log_level(Some("debug"));
+        sse_decoder::decode_sse_exchange(sse_stream(body)).await
+    })
     .await;
 
     assert!(response.is_ok(), "the caller still gets its result");
@@ -2119,12 +2127,20 @@ async fn http_never_crosses_a_notification_between_two_calls_in_flight() {
     );
 
     let left = tokio::spawn(crate::transport::notification_sink::collect(async move {
+        // ADR-014 §4: a relayed `notifications/message` reaches the caller
+        // only if the caller declared a level, so the request this row is
+        // about declares one. What the row asserts is unchanged.
+        crate::transport::notification_sink::set_request_log_level(Some("debug"));
         tokio::task::yield_now().await;
         sse_decoder::decode_sse_exchange(sse_stream(mine))
             .await
             .map(|_| ())
     }));
     let right = tokio::spawn(crate::transport::notification_sink::collect(async move {
+        // ADR-014 §4: a relayed `notifications/message` reaches the caller
+        // only if the caller declared a level, so the request this row is
+        // about declares one. What the row asserts is unchanged.
+        crate::transport::notification_sink::set_request_log_level(Some("debug"));
         sse_decoder::decode_sse_exchange(sse_stream(theirs))
             .await
             .map(|_| ())

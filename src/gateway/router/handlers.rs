@@ -876,6 +876,13 @@ async fn meta_mcp_dispatch(
     // is built.
     let declared_capabilities = shape.declared_capabilities();
 
+    // ADR-014 §4. Set here, beside the other shape-derived facts and above
+    // every early return below, so a later reordering cannot silently darken
+    // the emitter: the dispatch this scopes is already inside the sink opened
+    // by `meta_mcp_handler`, and a request that never reaches the checks below
+    // still declared what it declared.
+    crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
+
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
     if let crate::protocol::meta::RequestShape::Modern(ref fields) = shape {

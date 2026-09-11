@@ -30,6 +30,11 @@ use crate::provider::transforms::ResponseTransform;
 use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
+/// `logger` field on every `notifications/message` this module raises
+/// (ADR-014 §3). One name for both sites: a caller filtering on the logger
+/// wants the tool-invocation channel, not one name per outcome.
+const GATEWAY_INVOKE_LOGGER: &str = "gateway.invoke";
+
 /// The per-user identity-propagation credential resolved once for a single
 /// dispatch (MIK-6704 / ADR-007). Carries the headers to put on the wire and
 /// the cache binding to isolate cached results by user+audience. The default
@@ -1332,6 +1337,20 @@ impl MetaMcp {
                 "refused: multi-user gateway would serve a gateway-held OAuth token \
                  that is not isolated per user (ADR-008 INV-2)"
             );
+            // ADR-014 §3: the same fact, on the caller's own stream. A refusal
+            // the client can see beats one it has to ask an operator to read
+            // out of a log, and the `-32001` below carries the remedy but not
+            // the severity.
+            crate::transport::notification_sink::emit_log(
+                crate::protocol::LoggingLevel::Warning,
+                GATEWAY_INVOKE_LOGGER,
+                &serde_json::json!({
+                    "message": "refused: multi-user gateway would serve a gateway-held \
+                                OAuth token that is not isolated per user (ADR-008 INV-2)",
+                    "server": server,
+                    "tool": tool,
+                }),
+            );
             return Err(Error::json_rpc(
                 -32001,
                 format!(
@@ -1516,6 +1535,21 @@ impl MetaMcp {
             tool     = %tool,
             trace_id = %trace_id,
             "tool invoked"
+        );
+        // ADR-014 §3: the audit line, on the stream of the request that asked
+        // for it. Same fields as the `tracing` call above, deliberately -- a
+        // caller correlating its own invocations should not have to map one
+        // vocabulary onto another.
+        crate::transport::notification_sink::emit_log(
+            crate::protocol::LoggingLevel::Info,
+            GATEWAY_INVOKE_LOGGER,
+            &serde_json::json!({
+                "message": "tool invoked",
+                "agent_id": agent_label,
+                "server": server,
+                "tool": tool,
+                "trace_id": trace_id,
+            }),
         );
         debug!(server, tool, trace_id, "Invoking tool");
 

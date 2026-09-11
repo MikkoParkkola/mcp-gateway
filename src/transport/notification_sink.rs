@@ -27,8 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use crate::protocol::JsonRpcNotification;
-use crate::protocol::types::LoggingLevel;
+use crate::protocol::{JsonRpcNotification, LoggingLevel};
 
 /// Notifications one in-flight request may have outstanding before the sink
 /// starts shedding them (ADR-014 §5 overflow policy).
@@ -162,7 +161,7 @@ pub(crate) fn set_request_log_level(declared: Option<&str>) {
 /// reconstruct the request scope from a span, and §3 rejects that.
 ///
 /// The payload is MCP's own logging shape: `level`, `logger`, `data`.
-pub(crate) fn emit_log(level: LoggingLevel, logger: &str, data: Value) {
+pub(crate) fn emit_log(level: LoggingLevel, logger: &str, data: &Value) {
     publish(vec![JsonRpcNotification {
         jsonrpc: "2.0".to_string(),
         method: "notifications/message".to_string(),
@@ -195,9 +194,7 @@ fn passes_level_filter(notification: &JsonRpcNotification) -> bool {
         .and_then(|params| params.get("level"))
         .and_then(|level| serde_json::from_value::<LoggingLevel>(level.clone()).ok());
     let Some(raised) = raised else {
-        tracing::debug!(
-            "notifications/message carries no level this request can judge; dropping"
-        );
+        tracing::debug!("notifications/message carries no level this request can judge; dropping");
         return false;
     };
     raised >= declared
@@ -297,6 +294,60 @@ mod tests {
         publish(vec![note("notifications/progress")]);
     }
 
+    /// Everything the level filter has to decide, on one axis: only the method
+    /// carrying a level is judged, and only against the level the request
+    /// declared.
+    #[tokio::test]
+    async fn the_level_filter_judges_messages_and_nothing_else() {
+        let levelled = |level: &str| JsonRpcNotification {
+            params: Some(json!({ "level": level, "data": "x" })),
+            ..note("notifications/message")
+        };
+
+        let ((), delivered) = collect(async {
+            set_request_log_level(Some("notice"));
+            publish(vec![
+                note("notifications/progress"),
+                levelled("debug"),
+                levelled("notice"),
+                levelled("error"),
+                note("notifications/message"),
+            ]);
+        })
+        .await;
+
+        assert_eq!(
+            delivered
+                .iter()
+                .map(|n| n
+                    .params
+                    .as_ref()
+                    .map_or("-", |p| p["level"].as_str().unwrap_or("-")))
+                .collect::<Vec<_>>(),
+            vec!["-", "notice", "error"],
+            "progress passes unjudged, `debug` is below the declared level, and a \
+             message carrying no level at all cannot be judged so it does not pass"
+        );
+    }
+
+    /// Overflow and policy are different facts about a request. A message the
+    /// filter drops must not read as sink pressure on a 64-deep channel.
+    #[tokio::test]
+    async fn a_policy_drop_is_not_counted_as_an_overflow() {
+        let before = DROPPED.load(Ordering::Relaxed);
+
+        let ((), delivered) = collect(async {
+            publish(vec![JsonRpcNotification {
+                params: Some(json!({ "level": "error" })),
+                ..note("notifications/message")
+            }]);
+        })
+        .await;
+
+        assert!(delivered.is_empty(), "no level was declared, so: silence");
+        assert_eq!(DROPPED.load(Ordering::Relaxed), before);
+    }
+
     /// S-03 in miniature: the isolation is structural, so two concurrent
     /// scopes cannot see each other's notifications even under the same
     /// progress token.
@@ -376,9 +427,16 @@ mod tests {
     #[tokio::test]
     async fn a_token_on_another_notification_method_is_not_rewritten() {
         let ((), drained) = collect(async {
+            // The level filter is not the subject of this row -- translation
+            // is -- so the request declares a level and the frame carries one,
+            // and the only thing left to fail is the rewrite.
+            set_request_log_level(Some("debug"));
             let minted = mint_progress_token(&serde_json::json!(7)).expect("inside a scope");
             let mut other = progress(&Value::String(minted.clone()));
             other.method = "notifications/message".to_string();
+            if let Some(Value::Object(params)) = other.params.as_mut() {
+                params.insert("level".to_string(), json!("info"));
+            }
             publish(vec![other]);
         })
         .await;

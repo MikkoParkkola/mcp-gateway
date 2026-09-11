@@ -1844,6 +1844,35 @@ impl Gateway {
 
     /// Dispatch one stdio request, durably recording its inbound observation
     /// before any handler can await, fail, or terminate the process.
+    /// NFR.OBS.1's stdio half: record one inbound observation and flush it.
+    ///
+    /// Its own function so the dispatcher below reads as dispatch; the two
+    /// calls are the same either way.
+    fn observe_stdio_inbound(
+        request: &serde_json::Value,
+        params: Option<&serde_json::Value>,
+        method: &str,
+        session_id: &str,
+        sink: Option<&mut crate::protocol_revision_telemetry::DurableTelemetrySink>,
+    ) {
+        crate::protocol_revision_telemetry::observe_inbound_request(
+            request,
+            params,
+            method,
+            None,
+            Some(session_id),
+            crate::protocol_revision_telemetry::Transport::Stdio,
+        );
+        if let Some(sink) = sink
+            && let Err(error) = sink.persist_global()
+        {
+            warn!(
+                %error,
+                "failed to persist inbound stdio protocol-revision observation; measurement window is incomplete"
+            );
+        }
+    }
+
     async fn dispatch_single_with_sink(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
@@ -1881,22 +1910,19 @@ impl Gateway {
             // keeps the pre-handshake record at `absent`/`none`.
             crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
         );
-        crate::protocol_revision_telemetry::observe_inbound_request(
+        Self::observe_stdio_inbound(
             request,
             params.as_ref(),
             &method,
-            None,
-            Some(session_id),
-            crate::protocol_revision_telemetry::Transport::Stdio,
+            session_id,
+            protocol_telemetry_sink,
         );
-        if let Some(sink) = protocol_telemetry_sink
-            && let Err(error) = sink.persist_global()
-        {
-            warn!(
-                %error,
-                "failed to persist inbound stdio protocol-revision observation; measurement window is incomplete"
-            );
-        }
+
+        // ADR-014 §4, the stdio half. Stdio classifies the same body HTTP does,
+        // so it declares a level the same way and gets the same filter -- one
+        // policy, not one per transport. This runs inside the sink installed by
+        // `dispatch_streaming_notifications`.
+        crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
 
         // Notifications have no id — send no response
         if method.starts_with("notifications/") {

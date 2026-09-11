@@ -377,6 +377,19 @@ fn progress_token_of(frame: &Value) -> Option<&Value> {
     frame.pointer("/params/progressToken")
 }
 
+/// The gateway's own audit line rides the caller's stream alongside the
+/// backend's whenever the request declared a level (ADR-014 §4,
+/// `MIK-7272.SUB.2b`). The `S-02` and `S-03` rows below are about the
+/// *backend's* notifications reaching the right caller, so they step over it;
+/// the audit line itself is asserted in
+/// `gateway::meta_mcp::outbound_log_tests`.
+fn is_gateway_own(frame: &Value) -> bool {
+    frame
+        .pointer("/params/logger")
+        .and_then(Value::as_str)
+        .is_some_and(|logger| logger.starts_with("gateway."))
+}
+
 fn initialize_request(id: i64) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -542,11 +555,11 @@ async fn s02_stdio_message_reaches_its_own_call_before_the_result() {
             2,
             SLOW_TOOL,
             &json!({"message_marker": marker}),
-            &json!({"logLevel": "info"}),
+            &json!({"io.modelcontextprotocol/logLevel": "info"}),
         ))
         .await;
     let (before_notification, notification) = session
-        .read_until(|frame| is_method(frame, "notifications/message"))
+        .read_until(|frame| is_method(frame, "notifications/message") && !is_gateway_own(frame))
         .await;
     assert!(
         notification.is_some(),
@@ -881,13 +894,12 @@ async fn post_sse(
             .and_then(Value::as_str)
             .unwrap_or_default();
         request = request.header("Mcp-Method", method);
-        if let Some(field) = mcp_name_body_field(method) {
-            if let Some(name) = message
+        if let Some(field) = mcp_name_body_field(method)
+            && let Some(name) = message
                 .pointer(&format!("/params/{field}"))
                 .and_then(Value::as_str)
-            {
-                request = request.header("Mcp-Name", encode_header_value(name));
-            }
+        {
+            request = request.header("Mcp-Name", encode_header_value(name));
         }
     }
     let response = request
@@ -952,13 +964,12 @@ impl SseReader {
             .header("Mcp-Session-Id", session)
             .header("MCP-Protocol-Version", version)
             .header("Mcp-Method", method);
-        if let Some(field) = mcp_name_body_field(method) {
-            if let Some(name) = message
+        if let Some(field) = mcp_name_body_field(method)
+            && let Some(name) = message
                 .pointer(&format!("/params/{field}"))
                 .and_then(Value::as_str)
-            {
-                request = request.header("Mcp-Name", encode_header_value(name));
-            }
+        {
+            request = request.header("Mcp-Name", encode_header_value(name));
         }
         let response = request
             .json(&message)
@@ -993,10 +1004,10 @@ impl SseReader {
         loop {
             if let Some(split) = self.pending.find("\n\n") {
                 let frame: String = self.pending.drain(..split + 2).collect();
-                if let Some(data) = frame.lines().find_map(|l| l.strip_prefix("data: ")) {
-                    if let Ok(value) = serde_json::from_str::<Value>(data) {
-                        return Some(value);
-                    }
+                if let Some(data) = frame.lines().find_map(|l| l.strip_prefix("data: "))
+                    && let Ok(value) = serde_json::from_str::<Value>(data)
+                {
+                    return Some(value);
                 }
                 continue;
             }
@@ -1152,8 +1163,21 @@ async fn concurrent_slow_bodies(
 fn notified(body: &str, method: &str, field: &str) -> Vec<Value> {
     sse_frames(body)
         .into_iter()
-        .filter(|frame| is_method(frame, method))
+        .filter(|frame| is_method(frame, method) && !is_gateway_own(frame))
         .filter_map(|frame| frame.pointer(field).cloned())
+        .collect()
+}
+
+/// The trace ids of the gateway's own audit lines carried by one response
+/// body. Exactly the frames `notified` steps over, so that the rows below can
+/// assert the audit line is stream-isolated too, and emitted once — the two
+/// `set_request_log_level` call sites make double emission a live risk that
+/// the single-sink unit tests cannot see.
+fn gateway_own_trace_ids(body: &str) -> Vec<Value> {
+    sse_frames(body)
+        .into_iter()
+        .filter(is_gateway_own)
+        .filter_map(|frame| frame.pointer("/params/data/trace_id").cloned())
         .collect()
 }
 
@@ -1190,11 +1214,11 @@ async fn s03_message_http_isolates_by_stream() {
         &received,
         (
             json!({"message_marker": marker_a}),
-            json!({"logLevel": "info"}),
+            json!({"io.modelcontextprotocol/logLevel": "info"}),
         ),
         (
             json!({"message_marker": marker_b}),
-            json!({"logLevel": "info"}),
+            json!({"io.modelcontextprotocol/logLevel": "info"}),
         ),
     )
     .await;
@@ -1209,6 +1233,24 @@ async fn s03_message_http_isolates_by_stream() {
         notified(&body_b, "notifications/message", "/params/data"),
         vec![json!(marker_b)],
         "call B's stream must carry its own message and only its own: {body_b}"
+    );
+    let (audit_a, audit_b) = (
+        gateway_own_trace_ids(&body_a),
+        gateway_own_trace_ids(&body_b),
+    );
+    assert_eq!(
+        audit_a.len(),
+        1,
+        "call A's own audit line must appear exactly once on its stream: {body_a}"
+    );
+    assert_eq!(
+        audit_b.len(),
+        1,
+        "call B's own audit line must appear exactly once on its stream: {body_b}"
+    );
+    assert_ne!(
+        audit_a, audit_b,
+        "each call's audit line must carry its own trace id, not the other call's"
     );
     session.shutdown().await;
 }
@@ -1296,10 +1338,16 @@ async fn notification_then_result(
     // The first frame must arrive while the call is still parked at the
     // fixture. Nothing has released it, so a buffered consumer would deadlock
     // here and this read is what proves the gateway does not.
-    let notification = reader
+    let mut notification = reader
         .next_frame()
         .await
         .expect("the body ended before any frame");
+    while is_gateway_own(&notification) {
+        notification = reader
+            .next_frame()
+            .await
+            .expect("the body ended after the gateway's own audit line");
+    }
     assert!(
         parked_slow_calls(received, 1).await,
         "the frame arrived but the call is not parked, so it proves no \
@@ -1405,7 +1453,7 @@ async fn s02_message_http_reaches_its_own_call_before_the_result() {
             &session,
             &received,
             json!({"message_marker": marker}),
-            json!({"logLevel": "info"}),
+            json!({"io.modelcontextprotocol/logLevel": "info"}),
         ),
     )
     .await

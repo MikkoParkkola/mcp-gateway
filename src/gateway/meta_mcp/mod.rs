@@ -1968,6 +1968,10 @@ mod search_disclosure_e2e;
 #[path = "trace_correlation_tests.rs"]
 mod trace_correlation_tests;
 
+#[cfg(test)]
+#[path = "outbound_log_tests.rs"]
+mod outbound_log_tests;
+
 /// Whether the peer behind `backend` has had `method` removed from under it
 /// (MIK-7217, OUTBOUND.1).
 ///
