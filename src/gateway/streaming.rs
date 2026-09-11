@@ -1115,4 +1115,56 @@ mod request_scoped_stream_tests {
             "a subscription stream must not absorb request-scoped traffic (SUB.2a)"
         );
     }
+
+    /// One frame at a time, so a test can act between them -- `body_text`
+    /// buffers, which cannot tell "framed on arrival" from "framed at the end".
+    async fn next_frame<S>(body: &mut S) -> String
+    where
+        S: futures::Stream<Item = std::result::Result<axum::body::Bytes, axum::Error>> + Unpin,
+    {
+        use futures::StreamExt;
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+            .await
+            .expect("no frame arrived: a notification was held behind the result")
+            .expect("the stream ended early")
+            .unwrap();
+        String::from_utf8(chunk.to_vec()).unwrap()
+    }
+
+    /// The mid-stream arm of [`first_event_wins_stream`]: a notification
+    /// raised *after* the stream has already committed to SSE is framed when
+    /// it arrives, not held behind the result.
+    ///
+    /// The HTTP acceptance rows read one notification and then release the
+    /// call, so the loop's `rx.recv()` arm -- every notification after the
+    /// first -- is unreachable from them. `MIK-7272.SUB.2b`.
+    #[tokio::test]
+    async fn a_notification_raised_after_the_first_frame_is_framed_before_the_result() {
+        // GIVEN a dispatch parked on a gate, one notification already published
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let dispatch_gate = Arc::clone(&gate);
+        tx.send(note("notifications/progress")).await.unwrap();
+        let response = first_event_wins_stream(
+            async move {
+                let _permit = dispatch_gate.acquire().await.unwrap();
+                json_response(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
+            },
+            rx,
+        )
+        .await;
+        let mut body = response.into_body().into_data_stream();
+
+        // WHEN the second notification is raised only after the first is read
+        let first = next_frame(&mut body).await;
+        tx.send(note("notifications/message")).await.unwrap();
+        let second = next_frame(&mut body).await;
+        gate.add_permits(1);
+        let last = next_frame(&mut body).await;
+
+        // THEN each is framed as it arrives, and this call's result is last
+        assert!(first.contains("notifications/progress"), "{first}");
+        assert!(second.contains("notifications/message"), "{second}");
+        assert!(last.contains(r#""result""#), "{last}");
+    }
 }
