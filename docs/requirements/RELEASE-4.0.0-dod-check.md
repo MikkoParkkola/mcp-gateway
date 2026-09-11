@@ -135,7 +135,7 @@ visible rather than absent.
 | §3 static matrix | PASS | the matrix above, run not asserted |
 | §4 test matrix | PARTIAL | suite PASS; coverage no-drop NOT EVALUATED — no coverage figure exists at this head to compare against `edfd020a` |
 | §5–§7 | NOT EVALUATED | no pass run on this branch |
-| §8 STRIDE / DAST | NOT EVALUATED | no threat-model pass and no runtime DAST. The one security criterion that *is* graded, NFR.SEC.7, is blocking and needs an operator deploy |
+| §8 STRIDE / DAST | PARTIAL | **STRIDE run at this head over the changed surface; DAST still NOT EVALUATED.** The release adds one genuinely new caller-visible channel — the gateway's own `notifications/message` on the requesting stream — and that is where the pass concentrated. **S**: no new authentication surface; `agent_id` is a label read from the caller's own context and defaults to `"anonymous"` (`src/gateway/meta_mcp/invoke.rs:1531`), so it identifies without authenticating, as before. **T**: the new per-request state is `tokio::task_local!` — `SINK`, `TRANSLATIONS`, `LEVEL` at `src/transport/notification_sink.rs:36-51` — which no other task can reach, so the channel adds no cross-request mutable state. **R**: the repudiation gap is the one D8 records and this change does not close it; the new `trace_id` is caller-visible but the backend spans still mint fresh UUIDs. **I**: the emitted payloads carry `agent_id`, `server`, `tool`, `trace_id` (`:1543-1553`) and a refusal naming ADR-008 INV-2 (`:1344-1353`) — every field is either supplied by the caller in the same request or is the caller's own label, so nothing crosses a tenant boundary, and delivery is per-request by construction. The process-wide `DROPPED` counter is operator-facing and logged, never returned to a caller (`:120`). **D**: the sink is a per-request bounded channel, `mpsc::channel(REQUEST_NOTIFICATION_DEPTH)` with depth 64 (`:34`, `:70`), and sheds via `try_send` rather than stalling the call (ADR-014 §5), so a chatty backend cannot stall its own caller or reach another's queue. **E**: the release *reduces* privilege surface — `25d00554` refuses era-removed methods on the direct backend route, which previously served them. **Not covered**: runtime DAST, which needs the same deployed build NFR.SEC.7 waits on |
 | §9–§10 | NOT EVALUATED | no pass run on this branch |
 | §11 | NOT EVALUATED | no pass run on this branch |
 | §12 documentation | PASS | upgrade guide, changelog, release-notes draft and this record |
@@ -193,16 +193,15 @@ which predates it. Its second half, drift between merged and listening controls,
 2026-09-11 by `scripts/dev/check-control-drift.py` against `security-controls.toml`. **D6** cannot be
 driven until that deploy exists, and **D18** is the merge itself.
 
-**The larger hold is not an operator act.** Seven gates carry no evaluation at all, and they
+**The larger hold is not an operator act.** Six gates carry no evaluation at all, and they
 divide into two groups that should not be read as one. They are not the whole of what is unexamined:
 PARTIAL rows such as H8 (disk housekeeping), D5 (interface comparison) and D11 (profiling) each hold
 an unevaluated half that is counted nowhere below.
 
-**Two an agent can run at this head today**, each with a command or a reasoning pass behind it:
-STRIDE and coverage no-drop (§4). Neither is blocked. They are open because nobody has run them on
-this branch; §4 additionally needs a coverage build, which belongs on Spark rather than this machine.
-The three that were in this group — D21, T1c and the bet assessment — have since been scored above:
-D21 NOT MET, T1c N/A, and B1–B4 as N/A, N/A, PARTIAL and PASS respectively.
+**One an agent can run at this head today**: coverage no-drop (§4). It is not blocked, but it needs a
+coverage build, which belongs on Spark rather than this machine. The four that were in this group have
+since been scored above — D21 NOT MET, T1c N/A, B1–B4 as N/A, N/A, PARTIAL and PASS, and the §8 STRIDE
+pass run over the changed surface, leaving DAST as that row's remaining half.
 
 **Five need the same deployed build NFR.SEC.7 is waiting on**: structured-telemetry shape (D22),
 alerting thresholds and routing (D23), the security-channel audit (D26), DAST (§8), and rollback
