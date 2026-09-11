@@ -1319,3 +1319,49 @@ and the lane has been given the failing names, the serial-run result, and the mo
 pointer. The number to quote in a readiness verdict is the one measured after that file is
 committed; `34 passed; 4 failed` is evidence about a work-in-progress tree and says nothing
 about the product.
+
+## The uncommitted SUB.2b outbound work implements the rule ADR-014 supersedes
+
+`MIK-7272.SUB.2b` is one of the two rows still blocking. The ledger grades its
+outbound leg `ABSENT`. That grade is right about the criterion and wrong about the
+disk: 129 uncommitted insertions across `src/transport/stdio.rs` and
+`src/transport/notification_sink.rs` are work on this row, frozen since 02:52 UTC
+on 2026-09-11 with the rest of the worktree.
+
+What is there: `notification_sink::current_sender` and `notification_sink::send`,
+`Transport::release_progress_token`, an `async fn registered(...)`, and five tests —
+`stdio_routes_a_progress_notification_to_the_call_that_supplied_its_token`, the
+`..._to_only_the_call_that_supplied_the_token` variant,
+`..._a_notification_to_the_caller_before_its_call_finishes`,
+`stdio_request_releases_its_registration_even_when_the_write_fails` and
+`stdio_drops_a_progress_notification_no_caller_asked_for`.
+
+What is not there: a mint. Every added line greps clean for `mint`, `uuid`, `gw-`,
+`next_id` and any counter, and `src/transport/mod.rs` is unmodified, so
+`PendingRequestGuard` carries no generic parameter. The scheme on disk registers the
+caller's own token and passes a backend's token through when it matches.
+
+`docs/adr/ADR-014-request-scoped-notifications.md:116-132` retires exactly that rule,
+under the heading *"Superseded: the gateway never mints a token"*, with three defects
+cited at source: `capture_notification` folds `Value::Number(n)` through
+`n.to_string()` into the same `String` key as `Value::String(s)`; `register_progress_token`
+is a bare `insert` that overwrites a live owner when two in-flight calls supply the same
+token; and a reused token outlives its request.
+
+The tests are blind to all three. The only token literals in the diff are `"tok-a"`,
+`"tok-b"` and `"tok-stray"` — every case uses distinct tokens, so none exercises the
+collision the ADR is about, and none varies the JSON type. A green suite here is not
+evidence about the criterion; it is evidence about the cases chosen.
+
+Consequence for the release gate: `ABSENT` stands. Closing this row needs the minted
+token and the translate-back, not a commit of what is on disk. The uncommitted diff is
+snapshotted at `~/github/.agent-snapshots/2026-09-11-sub2b-outbound-uncommitted.patch`
+so the parked lane's work survives, and the owning lane has been asked to commit it
+under an honest subject — the routing half landing, not the criterion closing.
+
+Related routing correction: the HTTP correlation half does not exist. `ADR-014:113`
+gives HTTP as "none needed — the connection is the key", because the backend's
+notifications arrive interleaved on the response body of the request that opened it,
+and `:192-195` names the incremental-decoder work instead, which shipped in
+`fbca1bc9`, `416d7cbc` and `958b2659`. Minting is a stdio answer to stdio's multiplexed
+stdout. The correlation half lives in `src/transport/stdio.rs` and nowhere else.
