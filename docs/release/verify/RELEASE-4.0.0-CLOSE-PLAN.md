@@ -281,3 +281,194 @@ ways worth stating so nobody mistakes the local numbers for the verdict:
 Step 3 is therefore done. What remains before merge is `Analyze (rust)`, still running, and
 the CodeQL alerts; read its alerts from this run, not from the run on `482746c1`,
 because the branch has moved four commits and one of them edits `router/handlers.rs`.
+
+---
+
+# Post-#473 gap assessment and closure plan — 2026-09-11
+
+The goal at the head of this document ("PR #473 merged and 4.0.0 shippable") is
+half satisfied: **#473 merged 2026-09-10T16:37 as squash `0f04a179`** onto
+`c3626cf8`, and `feat/mcp-2026-protocol` is deleted. This section is the state
+after that merge and the sequence from here to shippable at full scope.
+
+## State, measured
+
+| fact | evidence |
+|---|---|
+| `origin/main` = `ed796575` | `fix(protocol): negotiate and adopt the backend's protocol version (GH #517) (#520)` |
+| main is green | `gh run list --branch main`: CI, Docker, Push on main all `success` at `ed796575`, 2026-09-10 21:52 |
+| the green run is the DoD's "full suite" | `.github/workflows/ci.yml:198` runs `cargo test --all-features --no-fail-fast`, which is DoD item 8's definition |
+| the 14 failures recorded on 2026-09-03 are closed | they were in three branch-new binaries (`mik_7212_acs`, `mik_7212_mrtr_component_acs`, `mik_7272_conformance`) that merged inside #473; the merged state passes the same command |
+| **5** criteria still block | `scripts/release/count-release-criteria.py --check` → 149 criteria, 189 rows, 184 met or non-blocking, 5 blocking |
+
+## Gap A — the five blocking criteria
+
+| id | requirement | owner | where it stands |
+|---|---|---|---|
+| `MIK-7272.SUB.2b` | request-scoped notifications MUST flow on the response stream of their own request | peer session (`sse-decoder`) | inbound leg built; **ABSENT on the outbound leg** |
+| `MIK-7217.OUTBOUND.1` | no method in `REMOVED_IN_2026_07_28` reaches an `Era::Modern` backend, on any of the four outbound call sites | this session | fail-first suite red (11 of 32 in `src/backend/tests.rs` + `src/transport/http/tests.rs`); design reviewed twice, both SHIP-WITH-FIXES; **zero production code changed** |
+| `MIK-7217.OUTBOUND.2` | only a result resets the breaker, only a fault trips it, an unserved answer escalates | this session | same increment; `health_probe` still matches on the transport result alone (`src/backend/lifecycle.rs:1053`) |
+| `NFR.SEC.7` | the listening build carries every merged security control, and merged-versus-listening drift is detected automatically | **unowned** | governs MIK-7265, which is Blocked because its own deliverable — the drift-check script — is unbuilt |
+| `GH475.RL.5` | the `throttl` stem does not exempt | **unowned** | re-read at source 2026-09-11: holds for `throttling`, because the predicate has no `throttling` arm |
+
+## Gap B — obligations no criterion row reaches
+
+The ledger states the limit in its own words: the rows are *a sample of each
+ticket's obligations, not a cover, and the sampling is uneven*. Four consequences
+are load-bearing for this release:
+
+- **`MIK-7217` AC.2 (`MCP728.DISCOVER.2`)** requires `server/discover` on five
+  *other* repositories. No ledger row reaches it. This is the largest unscoped
+  item in the release and the only one that leaves this repository.
+- **`MIK-7256`** carries 26 ACs and is graded through a single row (`NFR.SEC.6`,
+  on mechanism). The triage reads the ACs directly: 0 FAIL / 9 PASS / 6 PARTIAL
+  / 11 NO TEST — **17 ACs with no verifying test**.
+- **`MIK-7320`** and **`MIK-7265`** had no requirement row at all until
+  2026-09-11; they are now governed by DoD item 8 and `NFR.SEC.7` respectively,
+  each by one gate.
+- **Name collision.** `MIK-7217.DISCOVER` is 11/11 MET in the ledger;
+  `MCP728.DISCOVER.1-8` is a different list at 1/8 in the triage. Reading the
+  first as "the discovery ticket is done" is wrong by seven criteria.
+
+## Gap C — DoD gates that apply and were never run
+
+`RELEASE-4.0.0-dod-check.md` measured the full gate set at `c3083368` and found
+that **21 applicable gates were never run** — invisible rather than open until
+that table existed. They fall in three buckets:
+
+| bucket | gates | runnable now? |
+|---|---|---|
+| analysis nobody has done on this branch | H7 (redundant docs), H9 / D4 (duplication), D5 (contract diff), D7 `pub` half, D28 (API surface), D29 (debt trajectory) | yes |
+| needs a deployed system | §9 ops, D8 / D22 (observability emission), D20 rollback, D21 canary, D23 alerting, D26 sec-monitor, B3 durable resume | no — operator's call |
+| bookkeeping | D13b effort, D13c deps, D13d labels, D17 learnings | yes |
+| unanswered on purpose | T1c post-quantum readiness — flagged rather than guessed, because a wrong N/A is the hole the gate exists to close | yes, one decision |
+
+Two numeric gates carry **stale figures, not passes**:
+
+- **Coverage** was measured at `edfd020a` and found **below the floor**. It was
+  not re-measured at `c3083368` and has not been measured since #473 merged.
+  This is an open blocker wearing an old date.
+- **Mutation ≥75% on new code** passed at `edfd020a` on `src/protocol` only. No
+  figure exists for the rest of the changed surface.
+- **`NFR.PERF.1`** is PARTIAL: latency measured on `spark` 2026-09-03, `v3.5.0`
+  (`32f135a6`) against a head that predates the merge. Needs a re-run at the
+  release head.
+
+One gate is blocked outside the code: the dual-vendor review gate, because the
+second vendor returns `402 Payment Required`.
+
+## Gap D — merge and forge debt, and its single cause
+
+16 open PRs, every one based on `main`; **14 of them CONFLICTING**.
+
+The squash is the cause. Each `codex/v4-*` branch and
+`fix/mik-7215-control4-reaper` forks from release history that `main` now
+carries as one commit, so each reports 1699–1963 commits "ahead" and conflicts
+wholesale. Measured against the squashed release tree (`0f04a179`) rather than
+against `main`, the real deltas separate cleanly:
+
+| PR | branch | real `src/` delta vs `0f04a179` | disposition |
+|---|---|---|---|
+| #522 | `fix/windows-stdio-appdata` | none in `src/` | MERGEABLE — cheapest merge on the board |
+| #521 | `fix/gh517-protocol-negotiation` | 19 files, +1517/−166 | GH #517 landed as #520; re-cut the remaining idempotency half on `main` |
+| #516 | `fix/mik-7215-control4-reaper` | 83 files, +539/**−4376** | **behind, not ahead**; its criterion `MIK-7215.CONTROL.4` already reads MET ("wired end to end") on `main` |
+| #499–#513 (13 drafts) | `codex/v4-*` | 35K–64K insertions each, stacked on one another | v4 accounts / OpenWebUI / task signing — **none maps to a blocking row or a 4.0.0 ticket** |
+
+Behind the PRs: **82 remote branches unmerged into `origin/main`** and **46
+worktrees**. The fan-out is itself the readiness problem. Everything below
+converges — merge, close, or park — and opens no new branch that is not required
+by a blocking row.
+
+## Gap E — the ledger's own summary contradicts its table
+
+`RELEASE-4.0.0-criteria-status.md` still carries prose (~line 520, dated
+2026-09-06) reading *"thirteen of the 22 are blocking … nine ABSENT … three
+PARTIAL (`NFR.PERF.1`, plus `NFR.OBS.1` and `NFR.OBS.2`)"*. The live table and
+`count-release-criteria.py` both say **5 blocking**, and `NFR.OBS.1` is MET with
+its stdio half landed at `d306c7e8` and its falsifier probe recorded. A reader
+who quotes the prose over-reports the release gap by eight criteria. The prose
+is stale; the table and the script are the authority. Fixing it is a
+release-readiness item in its own right, because the release note will quote a
+number.
+
+## The plan
+
+Ordered by dependency, not by size. One item in flight at a time; an item is
+done when its gate is *run*, not when its code is written.
+
+**1 — Finish the in-flight increment (`MIK-7217.OUTBOUND.1` + `.2`).**
+Two independent reviews landed SHIP-WITH-FIXES and converge on the same open
+ruling. Fold all five fixes in *before* any production code is written, because
+the suite is the fail-first evidence and editing it after the mechanism lands
+forfeits that:
+
+- close §3 by teaching `is_session_expired_error` an `Error::JsonRpc` arm that
+  matches `-32015` or a "session not found" message **only** — do not lift
+  `-32600` onto the `Err` arm, and keep parsing 404 bodies (404 is the
+  `STATELESS.5b` refusal carriage, so exempting it would make the status-carried
+  arm unreachable on the real HTTP path);
+- add the referee row rows 16 and 16d cannot adjudicate: a 404 carrying `-32601`
+  with an echoing id is `Error::JsonRpc` and is not retried;
+- record rows 6b, 8b and 9c as second-stage pins beside 6/9b/9d, and correct
+  §7's count — coverage is overstated by five re-observations, not three;
+- give row 9b the follow-tick assertion its own cell writes;
+- fix row 16's comment: `error.rs:159` is `TransportConnect`, not `JsonRpc`.
+
+Then implement against the red suite. **Closes 2 of the 5.**
+
+**2 — `GH475.RL.5`.** Add the `throttling` arm to the rate-limit exemption
+predicate, plus a test that a `throttling`-stemmed method is not exempt.
+Smallest blocking row on the board and currently unowned. **Closes 1 of 5.**
+
+**3 — `NFR.SEC.7` / `MIK-7265`.** Build the merged-versus-listening drift check:
+enumerate the security controls merged to `main`, compare against what the
+listening build actually exposes, fail CI on divergence. This *is* MIK-7265's
+own deliverable and the reason the ticket is Blocked, so it closes a criterion
+and unblocks a ticket in one move. **Closes 1 of 5.**
+
+**4 — `MIK-7272.SUB.2b`.** Owned by the `sse-decoder` session. Track it; do not
+duplicate the work. If that session is confirmed dead — no commit and no
+worktree mtime movement — adopt the row rather than leaving it unowned.
+**Closes the 5th.**
+
+**5 — Re-measure the two stale numbers at the release head.** Coverage (below
+floor at `edfd020a`) and `NFR.PERF.1` (spark, 2026-09-03, against `32f135a6`).
+Both belong on `spark`. Coverage below the floor is a real blocker whose staleness
+is the only reason it is not on the blocking list.
+
+**6 — `MIK-7256`'s 17 untested ACs.** Write them. Sized M in the triage.
+
+**7 — `MIK-7217` AC.2, cross-repo `server/discover` on five repositories.**
+Scope it explicitly — land it, or record a named, dated deferral. Leaving it
+unscoped is the failure mode, not leaving it undone.
+
+**8 — Forge convergence.** Merge #522. Re-cut #521's idempotency half on `main`.
+Close #516 citing the `MIK-7215.CONTROL.4` ledger row as the reason it is
+superseded. Relabel the 13 `codex/v4-*` drafts post-4.0.0 and take them off the
+release board. Then prune worktrees whose branches are merged or parked —
+checking for local-only commits first, per the delete gate.
+
+**9 — Run or reason-away the 21 unrun DoD gates.** The six analysis gates (H7,
+H9, D4, D5, D28, D29) and the four bookkeeping gates are runnable now. T1c needs
+one decision: does this release introduce a new key-agreement or signature
+primitive? The nine that need a deployed system are the operator's call and get
+a recorded N/A with its reason, never a silent skip.
+
+**10 — Repair the ledger prose (Gap E)** and take the release-note number from
+`count-release-criteria.py --check`, not from any hand-written figure.
+
+## Assumptions, stated rather than asked
+
+The standing instruction is to proceed without operator questions, so these are
+decisions taken, not questions parked:
+
+- **`MIK-7256`**: full scope means the 17 untested ACs get tests, not an accepted
+  residual. The triage defers this to the operator; full scope answers it.
+- **The `codex/v4-*` fleet is post-4.0.0.** Nothing in 13 drafts totalling
+  ~60K insertions maps to a blocking row or to any of the 12 release tickets.
+  Treating them as release scope would triple the release and close nothing.
+- **#516 closes as superseded**, on the strength of its own criterion reading MET
+  on `main` and its branch being 4376 deletions behind the merged tree.
+- **`MIK-7243` stays deferred** — it is the one item the backlog triage records
+  as deferred from 4.0.0. `MIK-7116` is *not* deferred; it sits in bucket A and
+  moves to Done when its branch merges.
