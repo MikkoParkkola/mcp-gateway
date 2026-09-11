@@ -1260,3 +1260,46 @@ Related correction from the same lane, recorded because the earlier reasoning is
 above: the reader-panic path is bounded by the existing release statement after `outcome`
 and needs no guard. RAII is for cancellation alone — the future dropped mid-await, where
 that statement is never reached.
+
+## Four stdio observation reds belong to an in-flight refactor, not to HEAD
+
+`cargo test --lib stdio_` reports `34 passed; 4 failed` in this worktree. The four:
+
+- `gateway::server::tests::stdio_initialize_records_requested_revision`
+- `stdio_observation::ac_obs_1_stdio_records_the_revision_and_that_meta_carried_it`
+- `stdio_observation::ac_obs_1_stdio_records_the_revision_the_handshake_negotiated`
+- `stdio_observation::ac_obs_1_stdio_records_the_answer_not_the_ask`
+
+All four fail the same way — `0 record(s) captured` — and the assertion message names
+the discriminator itself: empty means the tracing capture never delivered, non-empty
+means the record site ran without `protocol_revision`. Empty is what we observe.
+
+Two hypotheses were separated before anything was read as a product defect.
+
+Shared-subscriber contention is ruled out: a serial re-run
+(`cargo test --lib stdio_ -- --test-threads=1`) reproduces the same four failures with
+the same counts, so the reds are not an artefact of tests racing for a global tracing
+subscriber.
+
+Ownership is the uncommitted work, not the committed tree. All four test functions exist
+at `HEAD` (`b5e0914b`) as well as in the worktree, so they are not new red tests arriving
+with the change; what moved is the code under them. `src/gateway/server/mod.rs` is dirty
+by 528 insertions and 157 deletions, and the diff lifts the stdio observation call out of
+the dispatch body into a new `Gateway::observe_stdio_inbound`, invoked before the request
+is spawned. The deleted lines are the old site — `classify_and_observe`,
+`session_negotiated_revision`, `observe_inbound_request` inside the per-request dispatch;
+the added lines are the same three calls inside the extracted function, reached from two
+call sites in the read loop. A capture that sees zero records is what a half-landed move
+of exactly that site produces.
+
+Evidence class: inferred from the diff, one source. Confirming it as verified would need
+a run against a detached worktree at `HEAD`, which is a full rebuild of the crate and is
+not worth its cost while the owning lane is still editing the file — the answer would be
+stale on arrival.
+
+Consequence for the release gate: these four are not counted as a release defect and not
+attributed to any criteria row. They are the `stdio-concurrent` lane's own red, mid-edit,
+and the lane has been given the failing names, the serial-run result, and the moved-site
+pointer. The number to quote in a readiness verdict is the one measured after that file is
+committed; `34 passed; 4 failed` is evidence about a work-in-progress tree and says nothing
+about the product.
