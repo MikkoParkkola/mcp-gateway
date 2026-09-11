@@ -89,13 +89,40 @@ The only other `notification_sink::publish` call site, `src/gateway/server/mod.r
 is inside a `#[tokio::test]`. `subscriptions/listen` answers with its own stream
 and invokes no backend tool, so it never publishes.
 
-**Fail-safe.** That argument is a property of today's call graph, not an
-invariant the compiler holds, so the streaming arm does not assume it: if
-dispatch resolves to a non-JSON response after we have already committed to SSE,
-emit the notification frames already written and end the stream rather than
-framing a body we cannot parse. This is unreachable on the call graph above and
-exists so that a future publisher cannot turn a wrong assumption into a corrupt
-body.
+**Response-head policy.** Committing headers early also fixes the HTTP status,
+so the streaming arm must answer `200 text/event-stream` before it knows how
+dispatch ends. That is sound here, and for a checkable reason rather than a
+convention: every non-200 status on this path is decided in request validation
+and routing — the last of them at `src/gateway/router/handlers.rs:1371` — all of
+which precede the `tools/call` dispatch block at `:1475-1713`, and it is only
+inside that block that a backend call can publish. A request that ends non-200
+therefore never publishes, so it always takes the buffered arm and keeps its
+status exactly as today.
+
+A refusal decided *after* the backend has answered is the reachable case, and it
+is not a status at all: a response-phase firewall block builds a JSON-RPC error
+into the body (`:1704-1709`) and leaves the status alone. Carrying that under a
+200 is ordinary JSON-RPC-over-HTTP, and is what the buffered arm does today.
+
+**Fail-safe.** Those are properties of today's call graph, not invariants the
+compiler holds, so the streaming arm does not assume them. Its condition for
+framing a result is **JSON *and* 200**; if dispatch resolves to anything else
+after we have committed to SSE,
+emit a terminal JSON-RPC error frame — internal error, *"response not frameable
+over event stream"* — and end the stream, rather than framing a body we cannot
+parse. The terminal frame matters: ending the stream silently would leave the
+client with neither a result nor an error, which is a worse failure than the one
+being guarded against, and the client already parses framed results so this adds
+no machinery. Unreachable on the call graph above; it exists so that a future
+publisher cannot turn a wrong assumption into a truncated response.
+
+**No content-type ambiguity.** Both arms answer `text/event-stream` when the
+client offered it: the buffered arm reaches it through
+`request_scoped_event_stream`, which sets that header for any JSON response
+(`src/gateway/streaming.rs:641-642`). Which arm wins a race therefore changes
+liveness only, never the response's shape — and the row-4 fixture cannot take
+the buffered arm, since it withholds its result until the client has read the
+notification, so dispatch cannot resolve first.
 
 ## Risks
 
@@ -116,8 +143,13 @@ body.
 1. The four `S-03` × HTTP and `S-02` × HTTP rows in `tests/mik_7272_sub2b_acs.rs`
    pass, with the two `S-02` rows using a fixture that withholds the result until
    the client has read the notification — the row-4 liveness shape, which
-   deadlocks against today's code.
-2. `sse_decoder_tests.rs`'s three tests pass; no `#[expect(dead_code)]` remains in
-   `sse_decoder.rs`.
-3. A request that publishes nothing produces a byte-identical response to today,
+   deadlocks against today's code. Each such row carries a timeout, so the
+   deadlock it is built to detect fails the run instead of hanging it.
+2. A row with **two separately gated** notifications: the client must read the
+   first before the backend emits the second. One gate proves a flush happened;
+   two prove flushing is per-event rather than a single buffer drained once.
+3. `sse_decoder_tests.rs`'s **twelve** tests pass — nine `#[test]` and three
+   `#[tokio::test]`, not the three async ones alone — and no `#[expect(dead_code)]`
+   remains in `sse_decoder.rs`.
+4. A request that publishes nothing produces a byte-identical response to today,
    JSON and SSE alike.
