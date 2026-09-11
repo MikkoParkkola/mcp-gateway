@@ -547,7 +547,11 @@ it would pin has nothing to read at these call sites. Measurement M stays outsta
 
 Reviewed against the landed implementation, not the design: the whole diff on stdin,
 plus the rows that pin it. `gpt-review` is credit-exhausted until 2026-09-15, so the
-non-Claude pair for this round is kimi and grok.
+non-Claude pair for this round was to be kimi and grok. Only kimi returned: the
+grok run stopped after three orientation lines with no verdict and a 264-byte run
+file, which is the vendor outage already on record, not a silent pass. One vendor
+reviewed this implementation, and the second opinion the process asks for is owed
+rather than obtained.
 
 kimi: **ship**, with one behavioural narrowing to repair before production and one
 asymmetry to carry.
