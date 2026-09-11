@@ -311,6 +311,18 @@ after that merge and the sequence from here to shippable at full scope.
 | `NFR.SEC.7` | the listening build carries every merged security control, and merged-versus-listening drift is detected automatically | **unowned** | governs MIK-7265, which is Blocked because its own deliverable — the drift-check script — is unbuilt |
 | `GH475.RL.5` | the `throttl` stem does not exempt | **unowned** | re-read at source 2026-09-11: holds for `throttling`, because the predicate has no `throttling` arm |
 
+Five, not six, and the sixth candidate is the one worth naming. `NFR.PERF.1` is
+PARTIAL and is *not* on this list, while `GH475.RL.5` is PARTIAL and is. The
+grade is not the discriminator. The blocking flag is the row's **last** cell,
+which `rows()` requires to read exactly `yes` or `no`
+(`scripts/release/count-release-criteria.py:152`); read directly,
+`GH475.RL.5`'s reads `yes` and `NFR.PERF.1`'s reads `no`. That flag was
+cleared by the operator's 2026-09-05 ruling, quoted in full on its
+`RELEASE-4.0.0-criteria-status.md` row and summarised at
+`RELEASE-4.0.0-blocking-rollup.md:217` — *it did not get met, it got ruled
+non-blocking*. So the re-measurement in step 5 is hygiene against a stale
+figure, not a sixth blocker, and the release-note number stays 5.
+
 ## Gap B — obligations no criterion row reaches
 
 The ledger states the limit in its own words: the rows are *a sample of each
@@ -330,10 +342,28 @@ are load-bearing for this release:
   `MCP728.DISCOVER.1-8` is a different list at 1/8 in the triage. Reading the
   first as "the discovery ticket is done" is wrong by seven criteria.
 
+## Gap B2 — the five release tickets no gap above reaches
+
+The triage lists twelve tickets In Progress. Gaps A and B reach six of them
+(`MIK-7272`, `MIK-7217`, `MIK-7265`, `MIK-7256`, `MIK-7320`, `GH475`). The
+remaining five — **`MIK-7212`, `MIK-7213`, `MIK-7214`, `MIK-7215`,
+`MIK-7116`** — have no open engineering work: their code merged inside #473 and
+is on `main` at `ed796575`. What is outstanding for them is bookkeeping, and the
+triage is explicit about why that is not a formality: a bucket-A ticket *moves
+to Done when the branch merges, not before*, and an issue closed against an
+unmerged branch is a false green. The merge exists now, so the state move is
+owed, with `0f04a179` as its evidence. This is the same work the D13b/c/d
+bookkeeping gates in Gap C call for, and it is the only thing standing between
+these five and Done.
+
 ## Gap C — DoD gates that apply and were never run
 
-`RELEASE-4.0.0-dod-check.md` measured the full gate set at `c3083368` and found
-that **21 applicable gates were never run** — invisible rather than open until
+`RELEASE-4.0.0-dod-check.md` measured the full gate set at `c3083368` — a
+different branch, dated 2026-09-03, before the #473 squash — and found that
+**21 applicable gates were never run**. That set has not been re-enumerated at
+`ed796575`. The gates are unrun either way, but *which* gates apply may have
+moved with the 85 `src/` files the merge brought to `main`, so treat the
+buckets below as the last enumeration rather than as today's posture — invisible rather than open until
 that table existed. They fall in three buckets:
 
 | bucket | gates | runnable now? |
@@ -443,7 +473,15 @@ Scope it explicitly — land it, or record a named, dated deferral. Leaving it
 unscoped is the failure mode, not leaving it undone.
 
 **8 — Forge convergence.** Merge #522. Re-cut #521's idempotency half on `main`.
-Close #516 citing the `MIK-7215.CONTROL.4` ledger row as the reason it is
+Closing #516 is outward-facing and awkward to undo, so the supersession was
+checked at source before it was written down rather than inferred from the
+−4376: the branch's own six reaper commits (`4dd45d29`, `5ca38eaa`, `faa9b035`,
+`b1fa1585`, `7ef0f598` and `1e203cf0`) are all reflected on `main`, and
+`git diff origin/main origin/fix/mik-7215-control4-reaper -- src/gateway/session_lifecycle.rs src/gateway/streaming.rs`
+is empty. `main` carries `pub fn reap(&self, now: u64) -> usize` at
+`src/gateway/session_lifecycle.rs:152`, the reclaimed-count return the branch
+was opened to add. The residual +539 is release and CI documentation churn on
+the pre-squash base. Close #516 citing the `MIK-7215.CONTROL.4` ledger row as the reason it is
 superseded. Relabel the 13 `codex/v4-*` drafts post-4.0.0 and take them off the
 release board. Then prune worktrees whose branches are merged or parked —
 checking for local-only commits first, per the delete gate.
