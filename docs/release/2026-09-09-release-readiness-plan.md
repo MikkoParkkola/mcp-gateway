@@ -1080,3 +1080,18 @@ request that carries progress, register the minted key against the caller's toke
 sender, translate back at `capture_notification`, guard the removal, and rewrite the
 `:602-607` comment that still cites option (i) as live. Until it lands, `SUB.2b`
 stays blocking on both trees, and no count that assumes otherwise is safe.
+
+**And step 2's two parked rows have an answer, from a lane where the binary runs.**
+Both `#[ignore]`d PROBE rows were measured on 2026-09-11 by the lane holding
+`src/gateway/streaming.rs`. The timer row passes. The two-gate row fails, and not on
+the notification path: its debug log shows both notifications decoded and published,
+then the *second* `release` call answered from the response cache with no backend
+request behind it, so the fixture's second permit is never added and the result frame
+never comes. Giving that call a distinguishing argument makes the row pass in full.
+The mechanism is corroborated here at source rather than taken on report:
+`response_cache_key_for` takes `&arguments` (`src/gateway/meta_mcp/invoke.rs:1453-1468`),
+so two byte-identical calls are one cache entry. The row asks one cached call to have a
+side effect twice, which no gateway change can satisfy. A second defect in the same row:
+its PROBE labels can never fire, because the helper bounds its own read with the same
+duration the row wraps around it and always wins the race. Both are test defects; the
+rows stay parked until they are fixed, and neither is evidence about the product.
