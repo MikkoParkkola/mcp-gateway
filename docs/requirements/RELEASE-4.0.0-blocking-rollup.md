@@ -1491,12 +1491,16 @@ fails because the conformance evidence for "Multi Round-Trip Requests replace se
 requests" cites `mik_7212_acs::inflight::ac_mrtr_6_a_retry_landing_elsewhere_is_sent_to_the_holder`,
 and row 6's routing variant was deleted at `6e744936` without its citation.
 
-That citation is **still dangling at this head**: a tree-wide search for the test name returns
-three hits, all prose — this document's predecessor row, and two references in
-`docs/design/2026-09-03-cluster-a-coverage-audit.md`. No definition exists under `tests/` or
-`src/`. So the honest count is **two** blocking items, not one: `NFR.SEC.7`'s deploy half, and
-this citation. The second is a documentation repair, not a code change — either the citation
-moves to a test that exists, or the evidence row is rewritten to cite the surviving coverage.
+That citation is **repaired at this head**, and the count stays at one. The conformance binary
+runs green — 7 passed, 0 failed — with `every_cited_test_exists` among the passing rows. The
+citation at `tests/mik_7272_conformance.rs:150` now names
+`mik_7212_acs::inflight::ac_mrtr_6_a_retry_landing_on_another_replica_fails_explicitly`, which
+is defined at `tests/mik_7212_acs.rs:449`.
+
+Searching for the *deleted* test's name and finding only prose does not establish that the check
+still fails — the citation had been moved to a surviving row, so the search was answering a
+question about a name rather than about the check. The discriminator is running the binary, which
+costs one command. The dod-check's 14-failure row is stale in this respect too.
 
 ### Which dod-check rows are stale at this head
 
