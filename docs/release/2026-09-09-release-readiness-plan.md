@@ -926,40 +926,49 @@ with the requester at [#482](https://github.com/MikkoParkkola/mcp-gateway/issues
 All three are the stdio outbound leg of `SUB.2b`. Section D's sixteen are therefore
 closed. Twenty commits are unpushed, so CI has not seen the newest work at all.
 
-**Correction: the emitter is not missing.** The `SUB.2b` row has described the stdio
-outbound emitter as unbuilt since it was written, and that is no longer true of this
-tree. Every layer ADR-014 §2-§3 names is present and reachable, verified by reading the
-source rather than by relaying the row:
+**Correction: the emitter is not missing — it is uncommitted.** The `SUB.2b` row has
+described the stdio outbound emitter as unbuilt, and against `HEAD` that is still exactly
+true. Against the *worktree* it is not: a peer lane holds 682 uncommitted insertions
+across `src/transport/stdio.rs`, `src/gateway/server/mod.rs` and `src/gateway/streaming.rs`
+that build it. Both readings are correct about different trees, and conflating them is how
+this section nearly recorded the opposite verdict. Split by tree:
 
-- `take_captured_notifications` — which §3 says must be *deleted* — has no definition and
-  no call site anywhere in `src/`. The end-of-call drain is already gone.
-- `register_progress_token` (`src/transport/stdio.rs:451`) takes the request's sender from
-  the ambient sink, and `capture_notification` (`:474`) sends into it per notification
-  (`:487`). That is the per-request channel §3 asks for, not a `Vec`.
-- The client-facing stdio leg exists: `dispatch_with_notifications`
-  (`src/gateway/server/mod.rs:1970`) scopes the sink around dispatch and runs a concurrent
-  writer task onto stdout, and the scope is established *inside* the per-request spawn
-  (`:1806-1838`), so the `tokio::task_local!` at `src/transport/notification_sink.rs:34`
-  is live where the transport reads it.
-- The HTTP half is wired the same way: `decode_sse_exchange` publishes each notification
-  as its chunk decodes (`src/transport/http/sse_decoder.rs:264`), reached from the
-  incremental arm at `src/transport/http/mod.rs:1305-1317`, and the stream leg
-  (`first_event_wins_stream`, `src/gateway/streaming.rs:705`) forwards before the result.
-- The caller's `progressToken` is relayed outbound rather than dropped
-  (`src/gateway/meta_mcp/prompt_cache.rs:246-249`).
+At `HEAD` — the tree CI measured when it produced the three red rows:
 
-So the three red rows are not an unbuilt emitter. They are a defect inside a mechanism
-that exists, and **its layer is unidentified** — the same state the HTTP half is in below,
-and for the same reason: no measurement has been taken. Building an emitter on the old
-diagnosis would have duplicated working code.
+- `take_captured_notifications` (`src/transport/stdio.rs:445`) is still present and still
+  the end-of-call drain, published at `:621`. ADR-014 §3 requires it deleted.
+- `dispatch_with_notifications` does not exist in `src/gateway/server/mod.rs` at all. The
+  client-facing stdio leg — the task that writes notifications to stdout while the call is
+  still running — is absent. That single absence explains all three red rows.
 
-**And one of the three is not in scope.** ADR-014 §2 states that `notifications/message`
-*from a backend* stays unattributable over stdio, because it carries no progress token and
-therefore has no key. `s02_stdio_message_*` asserts exactly that case, so it tests
-something the ADR declined to build; it belongs `#[ignore]`d with the ADR cited, or the
-criterion moves. §3's outbound emitter carries "the backend's `notifications/progress`
-and, over HTTP, its `notifications/message`" — so `s02_stdio_progress_*` and
-`s03_progress_stdio_*` are in scope and are the real two.
+In the worktree, uncommitted, owned by another lane:
+
+- `take_captured_notifications` is gone, definition and call sites both.
+- `register_progress_token` (`:451`) takes the request's sender from the ambient sink and
+  `capture_notification` (`:474`) sends per notification (`:487`) — the per-request channel
+  §3 asks for, not a `Vec`.
+- `dispatch_with_notifications` (`src/gateway/server/mod.rs:1970`) scopes the sink around
+  dispatch and runs a concurrent stdout writer, established *inside* the per-request spawn
+  (`:1806-1838`), so the `tokio::task_local!` at `src/transport/notification_sink.rs:34` is
+  live where the transport reads it.
+
+The HTTP half is committed and needs no such split: `decode_sse_exchange` publishes each
+notification as its chunk decodes (`src/transport/http/sse_decoder.rs:264`), reached from
+the incremental arm at `src/transport/http/mod.rs:1305-1317`, and `first_event_wins_stream`
+(`src/gateway/streaming.rs:705`) forwards before the result. The caller's `progressToken`
+is relayed outbound rather than dropped (`src/gateway/meta_mcp/prompt_cache.rs:246-249`).
+
+The consequence for the plan is that nobody should build this emitter. It exists; it is
+unlanded. The blocker is a commit, not a design.
+
+**And one of the three rows is not in scope either way.** ADR-014 §2 states that
+`notifications/message` *from a backend* stays unattributable over stdio, because it
+carries no progress token and therefore has no key. `s02_stdio_message_*` asserts exactly
+that case, so it tests something the ADR declined to build; it belongs `#[ignore]`d with
+the ADR cited, or the criterion moves. §3's outbound emitter carries "the backend's
+`notifications/progress` and, over HTTP, its `notifications/message`" — so
+`s02_stdio_progress_*` and `s03_progress_stdio_*` are the real two. This reading is a
+property of the ADR and holds against both trees.
 
 **A gap the machine check cannot see.** The ledger's own rule is "a criterion is
 BLOCKING unless it is MET or N/A", and the counter enforces vocabulary on the blocking
@@ -984,19 +993,20 @@ was serviced and no frame followed", which is the measurement that names the lay
 
 **Order of work, from here.**
 
-1. Localise the `SUB.2b` defect by measurement, not by reading. The mechanism is present
-   end to end (see the correction above), so the open question is which layer drops the
-   frame, and no static read answers it. Two rows already carry the discriminator: the
-   `#[ignore]`d PROBE rows for the HTTP half, and `s02_stdio_progress_*` for stdio.
-   **Blocked in the lane that wrote this section** — the `mik_7272_sub2b_acs` integration
-   binary is denied there, so the measurement has to come from elsewhere. Whoever picks it
-   up runs that binary twice: once with the ignored rows enabled, once filtered to the
-   stdio progress row, both with captured output. Until one of those runs, every claim
-   about *which* layer is at fault is unevidenced.
-2. Fix the layer the measurement names, and only then. Two of the three red rows —
-   `s02_stdio_progress_*` and `s03_progress_stdio_*` — are what `SUB.2b` flips on. The
-   third, `s02_stdio_message_*`, is out of scope by ADR-014 §2 and needs an `#[ignore]`
-   carrying the ADR reference, not an implementation.
+1. Land the stdio outbound emitter that already exists uncommitted. This is the whole of
+   the stdio blocker and it needs no design: the peer lane holding those 682 insertions
+   commits them, with pathspec, and CI measures the result. Nothing else in this plan can
+   turn `s02_stdio_progress_*` or `s03_progress_stdio_*` green, and no other lane should
+   write into those three files while they are dirty.
+2. Measure, then fix, whatever survives that commit. The HTTP half's defect is unlocalised
+   and stays that way until the discriminating rows run: the `#[ignore]`d PROBE rows, plus
+   `s02_stdio_progress_*` once step 1 lands. **The lane that wrote this section cannot run
+   the `mik_7272_sub2b_acs` integration binary** — it is denied there — so the measurement
+   has to come from elsewhere. Whoever picks it up runs that binary twice, once with the
+   ignored rows enabled and once filtered to the stdio progress row, both with captured
+   output, and reads which `PROBE` label fires. Until then every claim about *which* layer
+   drops the frame is unevidenced. Separately, `s02_stdio_message_*` is out of scope by
+   ADR-014 §2 and needs an `#[ignore]` carrying the ADR reference, not an implementation.
 3. Add the status-column guard to the counter and restate `CONFIRM.1a` and `CONFIRM.2` in
    the ledger's own vocabulary. Cheap, and it is what makes step 5's number mean anything.
 4. Close `GH475.RL.5` by decision at [#482](https://github.com/MikkoParkkola/mcp-gateway/issues/482).
@@ -1008,6 +1018,7 @@ was serviced and no frame followed", which is the measurement that names the lay
    this release until an end-to-end harness produces one.
 
 Steps 3 and 4 are independent of 1 and 2 and are the only ones this lane can advance;
-step 1 gates step 2, and step 1 needs a lane where the integration binary runs. Nothing
+step 1 belongs to the lane holding the uncommitted emitter, and step 2 needs a lane where
+the integration binary runs. Nothing
 here reopens a decision the release owner has made; the `NFR.PERF.1` headroom ruling and
 the ADR-014 narrowing both stand as recorded.
