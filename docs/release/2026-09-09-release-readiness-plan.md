@@ -114,6 +114,15 @@ stream, ahead of the final response, and delete the `allow(dead_code)`. The row'
 evidence text needs rewriting at the same time, because a reader who trusts it
 today would go looking for a capture path that already exists.
 
+**Superseded on 2026-09-11 — read the `2026-09-11` section below before acting
+on this one.** Two findings above are no longer true. The HTTP consumer has
+since landed: `decode_sse_exchange` publishes each notification as it decodes
+(`src/transport/http/sse_decoder.rs:264`), reached from the incremental arm in
+`src/transport/http/mod.rs:1305-1317`, so "no production path reads it" holds
+for stdio only. And the stdio line numbers here are the worktree's, not
+`HEAD`'s; at `HEAD` the pair sits at `src/transport/stdio.rs:445,460`. The
+later section splits the verdict by tree, which is the one to act on.
+
 ## 2. `MIK-7272.SUB.4` — covered on two routes of three, not one
 
 A side-effecting call re-issued after a broken stream with a new request id must
