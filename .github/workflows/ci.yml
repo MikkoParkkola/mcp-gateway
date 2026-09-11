@@ -302,6 +302,20 @@ jobs:
       - name: Run CWE-532 leak lint
         run: python3 scripts/dev/cwe532-leak-lint.py src crates
 
+  control-drift-probes:
+    name: Control-drift probes (NFR.SEC.7)
+    # CI cannot detect drift — there is no listening install here, and by
+    # construction a build from this tree carries this tree's controls. What it
+    # proves is that the probes still discriminate: the rows run against stub
+    # servers that refuse everything, refuse nothing, and carry the control, so
+    # a probe that has silently stopped exercising its control fails here rather
+    # than going green against a stale install. Stdlib Python, no extra deps.
+    runs-on: avrea-ubuntu-latest-4-vcpu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test the drift probes (fail when a probe stops discriminating)
+        run: python3 scripts/dev/test_check_control_drift.py
+
   docker:
     name: Docker
     runs-on: avrea-ubuntu-latest-4-vcpu

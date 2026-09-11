@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -100,6 +102,37 @@ def _manifest(text):
     return handle.name
 
 
+def _repo_with_tag():
+    """Scratch repo: one commit tagged v3.4.0, one commit after it."""
+    root = Path(tempfile.mkdtemp())
+
+    def git(*args):
+        subprocess.run(
+            ["git", "-C", str(root), *args],
+            check=True,
+            capture_output=True,
+            env={**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"},
+        )
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "test")
+    (root / "a").write_text("a")
+    git("add", "a")
+    git("commit", "-qm", "released")
+    released = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+    git("tag", "v3.4.0")
+    (root / "b").write_text("b")
+    git("add", "b")
+    git("commit", "-qm", "after the release")
+    later = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+    return root, released, later
+
+
 BOTH_PROBES = """
 [[control]]
 id = "origin-guard"
@@ -175,16 +208,23 @@ class TestControlDrift(unittest.TestCase):
     # Row 3: provenance corroborates and never decides. A control commit that is
     # not an ancestor of the build is reported, and the passing probe still wins.
     def test_non_ancestor_commit_is_reported_but_does_not_decide(self):
-        # 5d25f104 (the origin guard) is genuinely not an ancestor of v3.4.0,
-        # which is the drift this criterion was opened for.
+        # A scratch repository rather than this one: a CI checkout is shallow
+        # and carries no tags, so an assertion about real ancestry here could
+        # only fail on the runner.
+        repo, released, later = _repo_with_tag()
+        manifest = BOTH_PROBES.replace(
+            'introduced_in = "5d25f104"', f'introduced_in = "{later}"', 1
+        ).replace('introduced_in = "5d25f104"', f'introduced_in = "{released}"', 1)
         with _StubServer("control-present") as stub:
             code, report = drift.run(
-                manifest_path=_manifest(BOTH_PROBES),
+                manifest_path=_manifest(manifest),
                 endpoint=stub.endpoint,
                 version="3.4.0",
+                repo_root=repo,
             )
         self.assertEqual(code, 0, report)
-        self.assertIn("is NOT in v3.4.0", report)
+        self.assertIn(f"{later} is NOT in v3.4.0", report)
+        self.assertIn(f"{released} is in v3.4.0", report)
 
     # The shipped manifest is the one the operator runs; it must parse and every
     # entry must name a probe the checker implements.

@@ -308,7 +308,7 @@ after that merge and the sequence from here to shippable at full scope.
 | `MIK-7272.SUB.2b` | request-scoped notifications MUST flow on the response stream of their own request | peer session (`sse-decoder`) | inbound leg built; **ABSENT on the outbound leg** |
 | `MIK-7217.OUTBOUND.1` | no method in `REMOVED_IN_2026_07_28` reaches an `Era::Modern` backend, on any of the four outbound call sites | this session | fail-first suite red (11 of 32 in `src/backend/tests.rs` + `src/transport/http/tests.rs`); design reviewed twice, both SHIP-WITH-FIXES; **zero production code changed** |
 | `MIK-7217.OUTBOUND.2` | only a result resets the breaker, only a fault trips it, an unserved answer escalates | this session | same increment; `health_probe` still matches on the transport result alone (`src/backend/lifecycle.rs:1053`) |
-| `NFR.SEC.7` | the listening build carries every merged security control, and merged-versus-listening drift is detected automatically | **unowned** | governs MIK-7265, which is Blocked because its own deliverable — the drift-check script — is unbuilt |
+| `NFR.SEC.7` | the listening build carries every merged security control, and merged-versus-listening drift is detected automatically | **automation** | drift check built and verified 2026-09-11 (`9a3d9cbe`); the remaining half is a deployment of a build that carries the guard |
 | `GH475.RL.5` | the `throttl` stem does not exempt | **unowned** | re-read at source 2026-09-11: holds for `throttling`, because the predicate has no `throttling` arm |
 
 Five, not six, and the sixth candidate is the one worth naming. `NFR.PERF.1` is
@@ -547,13 +547,30 @@ natural-language negation the predicate does not implement.
 `count-release-criteria.py --check` now reports 149 criteria, 189 rows, 185 met
 or non-blocking, **4 blocking**. Cluster J is cleared in the rollup.
 
-**Item 3 — `NFR.SEC.7` / `MIK-7265`: design written, not yet reviewed.**
-`docs/design/2026-09-11-merged-versus-listening-drift-check.md`. It rules for a
-behavioural probe as the verdict with build provenance as corroboration, rather
-than the ancestry comparison the criterion's wording invites, because a control
-can be merged into a build and still disabled, shadowed or unwired — an ancestry
-check would be green while the listening build serves exactly the request the
-criterion says it must refuse.
+**Item 3 — `NFR.SEC.7` / `MIK-7265`: check built and verified; the criterion stays
+blocking on a deployment.** Design reviewed before any code existed, then
+`security-controls.toml`, `scripts/dev/check-control-drift.py` and the probe rows in
+`scripts/dev/test_check_control_drift.py`, committed as `9a3d9cbe`; CI runs the rows in
+a new `control-drift-probes` job. The design rules for a behavioural probe as the
+verdict with build provenance as corroboration, rather than the ancestry comparison the
+criterion's wording invites, because a control can be merged into a build and still
+disabled, shadowed or unwired — an ancestry check would be green while the listening
+build serves exactly the request the criterion says it must refuse. Each probe decides
+on two halves, the refusal and a legitimate request on the same path, so a wedged or
+proxy-fronted endpoint cannot read as the control firing.
+
+Verified both ways on 2026-09-11. A gateway built from this tree: `refused 403;
+legitimate request 200` for both controls, exit 0. The listening install on
+127.0.0.1:39401: `FAIL: the refused request was answered 200` for both, exit 1, with
+the provenance note `5d25f104 is NOT in v3.4.0`. The criterion moves ABSENT → PARTIAL
+and stays blocking: its first half is an install of a build that carries the guard,
+which is a deployment and the operator's call, not a script's.
+
+**Also this session.** `cargo llvm-cov` on the 4.0.0 tree died on 18 failures in
+`tests/gh462_config_preservation.rs` — the env-cleared child had no profile path, dumped
+`default_*.profraw` into the directory those tests snapshot, and lost its coverage with
+the tempdir. Fixed in `2b1bbb0e` by forwarding `LLVM_PROFILE_FILE`; the target is 44
+passed / 0 failed locally.
 
 **Item 10, Gap E — the stale summary: repaired.** The paragraph in the ledger that
 read "thirteen of the 22 are blocking" now states a derivation recounted 2026-09-11:
