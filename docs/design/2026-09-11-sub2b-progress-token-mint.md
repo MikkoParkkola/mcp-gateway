@@ -64,41 +64,58 @@ token off frames that backend received), so the mint cannot live in a transport.
 Consequence: `docs/release/SUB2b-implementation-brief.md` §"HTTP needs nothing" is
 false as written and is corrected alongside this change.
 
-## D1 — mint site: the single outbound `_meta` writer
+## D1 — mint site: the backend request funnel
 
-`src/gateway/meta_mcp/invoke.rs:3018-3024` builds the outbound params and its comment
-already claims sole ownership: *"`_meta` is one object, so one writer owns it"*. Both
-backend transports converge here (`:3037` and `:3040`). The mint is computed in `invoke.rs`, which already sits inside the request scope, and
-the minted value is passed into `build_outbound_meta` as an argument.
-`build_outbound_meta` today merges the caller's trace context and this hop's cache key
-and reads no ambient state; it keeps that property. Minting is gateway policy — *never
-hand a backend the client's own token* — so the decision stays in the gateway layer and
-only the mapping goes into the transport-owned sink.
+`Backend::request_with_headers` (`src/backend/ops.rs:184`). `Backend::request`
+(`:47`) delegates to it, so it is the one function every outbound backend call
+passes through, and the comment already at `:193-197` says exactly that of the
+`Mcp-Param-*` mirror it already hosts: *"every tools/call — the MCP provider,
+meta-MCP invoke, the router's direct backend route — funnels through this one
+function, so a per-caller mirror would leave the siblings unmirrored."* The mint
+is the same shape of cross-cutting outbound rewrite and takes the same seat.
 
-Rule: if the caller's `_meta.progressToken` is present **and** the call is inside a
-notification scope, emit `_meta.progressToken = "gw-<uuid>"` instead of the caller's
-value and record the translation. Outside a scope (health probes, warm-up handshakes,
-the reaper) nothing is recorded and the field passes through unchanged.
+**An earlier revision put the mint at `src/gateway/meta_mcp/invoke.rs:3018-3024`**
+on the strength of that site's own comment, *"`_meta` is one object, so one
+writer owns it"*. That comment is true about how `invoke` constructs `_meta`; it
+is not true of the system. The router's direct backend route dispatches at
+`src/gateway/router/backend_handlers.rs:830,833,888,891` and the file contains no
+occurrence of `_meta` or `progressToken` at all — it forwards the caller's params
+verbatim. A mint in `invoke` would have left that route handing backends the
+client's own token. Reading a single-site ownership comment as a system-wide
+invariant is the same error this document already corrected once over ADR-014 §2's
+per-transport table.
 
-`gw-<uuid>` is a `String` by construction, which closes ADR-014 §2's three defects at
-the source rather than in the map: it cannot alias a numeric token, it cannot collide
-between two in-flight calls, and it cannot be reused by a later call.
+Placing it at the funnel also keeps `build_outbound_meta`
+(`src/gateway/meta_mcp/prompt_cache.rs:235`) a pure merge of inbound fields, with
+no scope-sensitive side effect and no signature change.
+
+Rule: if the request carries `_meta.progressToken` **and** the call is inside a
+notification scope, emit `_meta.progressToken = "gw-<uuid>"` instead of the
+caller's value and record the translation. Outside a scope (health probes,
+warm-up handshakes, the reaper) nothing is recorded and the field passes through
+unchanged.
+
+`gw-<uuid>` is a `String` by construction, which closes ADR-014 §2's three defects
+at the source rather than in the map: it cannot alias a numeric token, it cannot
+collide between two in-flight calls, and it cannot be reused by a later call.
 
 ## D2 — translation store
 
 A task-local in `notification_sink`, installed by `scope()` next to the existing sender
-task-local, holding `Option<(minted: String, client: Value)>`. The client value is kept
-as `Value`, not `String`: the test requires `7` back as `7`, never `"7"`.
+task-local, holding `RefCell<Vec<(minted: String, client: Value)>>`. The client value is
+kept as `Value`, not `String`: the test requires `7` back as `7`, never `"7"`.
 
 New API:
 - `mint_progress_token(client: &Value) -> Option<String>` — `None` outside a scope.
 - `translate_back(notification: &mut JsonRpcNotification)` — rewrites
   `params.progressToken` from the minted value to the client's.
 
-One mint per request. The gateway issues one `tools/call` per dispatch, so a second
-mint inside one scope cannot occur; rather than add an untestable reuse branch for it,
-`mint_progress_token` debug-asserts the cell is empty. If the invariant is ever broken,
-an assertion names the bug instead of a silent reuse hiding it.
+A list, not a single slot. An earlier revision assumed one mint per scope on the
+grounds that the gateway issues one `tools/call` per dispatch, and had
+`mint_progress_token` debug-assert the cell was empty. A scope wraps a whole client
+request, which may dispatch several backend calls — a JSON-RPC batch, or a meta-tool
+that fans out — so that assertion would fire on legitimate traffic. Lookup is linear
+over a list whose length is the number of progress-bearing calls in one request.
 
 ## D3 — translate-back sites
 
@@ -181,11 +198,25 @@ row, not closure of it.
 
 ## Review status
 
-The design review that produced the fixes above ran on `synthetic-review`, the fallback
-reviewer. `gpt-review` was credit-exhausted and `grok-review` returned a preamble with no
-verdict. Two runs of one fallback vendor are one opinion, not the two independent
-non-Claude reviewers the delivery process asks for. The findings were acted on; the gate
-is recorded as unmet rather than treated as satisfied.
+`grok-review` returned a verdict on this design: **SHIP-WITH-FIXES**
+(`~/.claude/data/reviews/runs/grok-20260911T055118Z-19273.md`). Two HIGH findings and
+two improvements; the disposition of each:
+
+- **Direct route bypasses the mint** (HIGH). Verified at source and **fixed**: D1 moved
+  from `invoke.rs` to the backend funnel. The finding was correct and the design's
+  single-writer premise was not.
+- **stdio registration leaks on a dropped future** (HIGH). Accepted, **not fixed here**.
+  It belongs to D3 site 2 in `src/transport/stdio.rs`, which another lane holds; the
+  design already specifies an RAII guard mirroring `PendingRequestGuard` and this
+  change does not touch that file.
+- **Keep `build_outbound_meta` pure** (improvement). **Adopted** — a consequence of the
+  D1 move, at no extra cost.
+- **Add an ADR-014 stdio acceptance row** (improvement). Accepted, deferred with D3
+  site 2.
+
+`gpt-review` was credit-exhausted for the period (`try again at Sep 15th, 2026`). The
+delivery process asks for two independent non-Claude reviewers; one returned. The gate
+is recorded as partially met rather than treated as satisfied.
 
 ## Risks
 
