@@ -973,8 +973,9 @@ unlanded. The blocker is a commit, not a design.
 **And one of the three rows is not in scope either way.** ADR-014 §2 states that
 `notifications/message` *from a backend* stays unattributable over stdio, because it
 carries no progress token and therefore has no key. `s02_stdio_message_*` asserts exactly
-that case, so it tests something the ADR declined to build; it belongs `#[ignore]`d with
-the ADR cited, or the criterion moves. §3's outbound emitter carries "the backend's
+that case, so it tests something the ADR declined to build. That reading predicted an
+`#[ignore]`; the measurement says otherwise — see the correction below, and do not act
+on the `#[ignore]` suggestion. §3's outbound emitter carries "the backend's
 `notifications/progress` and, over HTTP, its `notifications/message`" — so
 `s02_stdio_progress_*` and `s03_progress_stdio_*` are the real two. This reading is a
 property of the ADR and holds against both trees.
@@ -1014,8 +1015,9 @@ was serviced and no frame followed", which is the measurement that names the lay
    has to come from elsewhere. Whoever picks it up runs that binary twice, once with the
    ignored rows enabled and once filtered to the stdio progress row, both with captured
    output, and reads which `PROBE` label fires. Until then every claim about *which* layer
-   drops the frame is unevidenced. Separately, `s02_stdio_message_*` is out of scope by
-   ADR-014 §2 and needs an `#[ignore]` carrying the ADR reference, not an implementation.
+   drops the frame is unevidenced. (The `s02_stdio_message_*` sentence that stood here
+   recommended an `#[ignore]`; it is withdrawn — the row passes. See the correction
+   below.)
 3. Add the status-column guard to the counter and restate `CONFIRM.1a` and `CONFIRM.2` in
    the ledger's own vocabulary. Cheap, and it is what makes step 5's number mean anything.
 4. Close `GH475.RL.5` by decision at [#482](https://github.com/MikkoParkkola/mcp-gateway/issues/482).
@@ -1055,10 +1057,16 @@ late notifications. The decision it records is a minted `gw-<uuid>` registered a
 capture so the client still sees its own token byte-identically, with a drop guard
 removing the entry on every exit path.
 
-No such mint exists. A repo-wide search for a minted progress token finds only
-session ids (`src/gateway/streaming.rs:193,203`) and trace ids
-(`src/gateway/meta_mcp/tests.rs:78`); `register_progress_token` is called at one
-production site, `src/transport/stdio.rs:607`, with the caller's own token.
+No minted token reaches the registration map. The claim is made at the map's only
+entrance rather than by pattern-matching a name: `register_progress_token` has one
+production call site, `src/transport/stdio.rs:607`, and it passes
+`request_progress_token(...)`, which reads `_meta.progressToken` off the outbound
+request and substitutes nothing (`stdio.rs:584-589` in the worktree, `:570-575` at
+`HEAD` — identical on both). Whatever a mint were called, it could not be registered
+without going through that line. (A repo-wide search for the `gw-` prefix finds only
+session ids at `src/gateway/streaming.rs:193,203` and trace ids at
+`src/gateway/meta_mcp/tests.rs:78`, but a prefix search cannot carry this claim: a
+mint spelled any other way would be invisible to it.)
 
 That is why `s02_stdio_progress_reaches_its_own_call_before_the_result` is red, and
 it is red for the right reason. Its final assertion
@@ -1095,3 +1103,35 @@ side effect twice, which no gateway change can satisfy. A second defect in the s
 its PROBE labels can never fire, because the helper bounds its own read with the same
 duration the row wraps around it and always wins the race. Both are test defects; the
 rows stay parked until they are fixed, and neither is evidence about the product.
+
+### 2026-09-11, correction: the stdio message row passes, and the absence claim is narrower than it read
+
+Two claims in the sections above were stated more widely than what was checked. Both are
+corrected here rather than edited away, because the wider versions were relayed to another
+lane and someone may be acting on them.
+
+**The `#[ignore]` recommendation for `s02_stdio_message_*` is withdrawn.** Two sections
+above told whoever picks up the stdio work that the row "needs an `#[ignore]` carrying the
+ADR reference, not an implementation". The ADR reasoning behind that is sound — ADR-014 §2
+does leave a backend `notifications/message` unattributable over stdio, and the row's own
+doc comment says it tests exactly that case — but the conclusion was never measured against
+the suite. It has been now: the last full run of the SUB.2b acceptance binary reported
+`6 passed; 2 failed; 0 ignored` across the eight rows then present, and the two failures
+were the stdio and the HTTP progress rows. The message row was among the six. It is out of
+scope for the criterion *and* green, which owes no test edit at all. An `#[ignore]` applied
+to it would have parked a passing row on the strength of a document.
+
+**"No minted progress token exists anywhere in `src/`" overstated its own evidence.** The
+search behind it matched the literal `gw-` prefix. A mint assembled any other way — a
+`const` prefix, a bare `Uuid::new_v4()`, a helper in a module the search did not name —
+would not appear in it, so the sentence claimed more than a prefix search can carry. The
+claim is now made at the registration map's only entrance instead:
+`register_progress_token` has one production call site, `src/transport/stdio.rs:607`, and
+what it passes is `request_progress_token(...)`, which reads `_meta.progressToken` off the
+outbound request and substitutes nothing — `stdio.rs:584-589` in the worktree and
+`:570-575` at `HEAD`, byte-identical. However a mint were spelled, it could not reach the
+map without going through that line. The conclusion is unchanged and the correlation half
+of SUB.2b stays unbuilt; only the reach of the evidence changes.
+
+The pattern in both is the same: a document was read correctly and then allowed to answer a
+question only a measurement can answer.
