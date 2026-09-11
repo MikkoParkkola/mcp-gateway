@@ -100,7 +100,7 @@ branch is a strict ancestor of the other in content terms.
 | 3 | Accounts implementation absent from the release line | `src/personal_accounts/` exists only on the codex lineage | land, re-cut or descope |
 | 4 | `idempotency` **not** a missing module | #528's `src/idempotency.rs` is 1,426 lines to codex's 1,046 and is the newer copy; only the `mod admission` submodule is codex-only | graft `admission.rs` after grading MIK-7311; never copy codex's `idempotency.rs` over it |
 | 5 | Two ledgers, one headline | the widely-quoted "188 met, 1 blocking" omits the 30 | quote both figures together, or report the `--release` refusal instead |
-| 6 | 16 open PRs, none merged | 13 stacked `codex/v4-*` drafts plus #528, #521 and #516 | #521 is fully contained in #528; #516 is separately decidable; the codex stack follows gap 3 |
+| 6 | 16 open PRs, none merged | 13 stacked `codex/v4-*` drafts plus #528, #521 and #516 | #521 is fully contained in #528; #516 is 6 own commits on top of the codex lineage; the codex stack follows gap 3 |
 
 ## Plan
 
@@ -139,8 +139,20 @@ green, reviewable line without importing a divergent three-day-stale history, an
 the deploy in gap 1 unblocked.
 
 **4 — Close what is already decided.** PR #521 has zero commits that #528 does not have — it is
-fully contained and can close with that evidence. #516 is the other separately decidable one and
-is not part of the codex stack. The 13 `codex/v4-*` drafts stay open until step 3 rules, but the
+fully contained and can close with that evidence.
+
+#516 closes as superseded, and the commit counts are what make that hard to see. It forks from
+`main` at the same `c3626cf8` the codex line does, so it reports 1,699 commits ahead of `main` —
+but only **6** of those are its own (`origin/codex/v4-next-integration` is 270 commits ahead of it;
+it is 6 ahead of codex). Those 6 are the MIK-7215 CONTROL.4 idle-session reaper. That feature is
+already on the release line: all four `tests/mik_7215_control4_*.rs` files exist on `main` and on
+`feat/sub2b-outbound-mint`, and each is **byte-identical** to #516's copy (compared by blob SHA,
+2026-09-11). `MIK-7215.CONTROL.4` reads MET accordingly. Nothing needs re-cutting from #516; it
+closes citing its own criterion, which is the disposition
+[`RELEASE-4.0.0-CLOSE-PLAN.md:404`](../release/verify/RELEASE-4.0.0-CLOSE-PLAN.md) already
+recorded. The count is a lineage artefact, not unlanded work.
+
+The 13 `codex/v4-*` drafts stay open until step 3 rules, but the
 leaf drafts are not the only copy of the accounts work: #512 alone carries all 44
 `src/personal_accounts/` files, so the stack can be parked without losing the subsystem.
 
@@ -165,5 +177,7 @@ them rather than trust the numbers, which are true as of 2026-09-11 and not main
 | `idempotency.rs` sizes | `git show <branch>:src/idempotency.rs \| wc -l` |
 | Open PR census | `gh pr list --state open --limit 30` |
 | `codex/v4-next-integration` CI | `gh pr view 512 --json mergeable,mergeStateStatus,statusCheckRollup` |
+| #516's own commits | `git rev-list --count origin/codex/v4-next-integration..origin/fix/mik-7215-control4-reaper` |
+| #516 superseded | `git rev-parse <branch>:tests/mik_7215_control4_reap_count_acs.rs` on both branches |
 | Baseline ledger | `python3 scripts/release/count-release-criteria.py` |
 | Release readiness | `python3 scripts/release/check_scope_acceptance.py --release` |
