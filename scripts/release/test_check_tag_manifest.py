@@ -93,6 +93,28 @@ class PrereleasePredicate(unittest.TestCase):
         self.assertTrue(gate.is_prerelease("4.0.0-rc.1+build-linux"))
 
 
+class LockfileParse(unittest.TestCase):
+    def test_the_package_delimiter_inside_a_string_does_not_hide_a_crate(self):
+        # Splitting the lockfile on "[[package]]" leaves the block holding a
+        # literal occurrence unterminated, so the crate after it becomes
+        # invisible or the parse raises. Reading the document once cannot be
+        # fooled by the contents of a value.
+        text = (
+            'version = 4\n\n'
+            '[[package]]\n'
+            'name = "decoy"\n'
+            'version = "0.1.0"\n'
+            'source = "a [[package]] inside a string"\n\n'
+            '[[package]]\n'
+            'name = "mcp-gateway"\n'
+            'version = "4.0.0"\n'
+        )
+        self.assertEqual(gate.lock_version(text, "mcp-gateway"), "4.0.0")
+
+    def test_an_absent_crate_reads_as_none(self):
+        self.assertIsNone(gate.lock_version("version = 4\n", "mcp-gateway"))
+
+
 class TagManifestAgreement(unittest.TestCase):
     def test_matching_stable_tag_passes(self):
         with repo("4.0.0") as root:
@@ -215,18 +237,70 @@ class WorkflowOutputs(unittest.TestCase):
             self.assertEqual(path.read_text(), "")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 WORKFLOWS = pathlib.Path(__file__).parents[2] / ".github" / "workflows"
 JOB_HEADER = re.compile(r"^  ([A-Za-z][\w-]*):\s*$")
-NEEDS = re.compile(r"^    needs:\s*(\S.*)$", re.MULTILINE)
+
+
+def needs_of(body):
+    """A job's `needs:` declaration as text, inline or block form, else None.
+
+    Matching only the inline form would make a job that is correctly wired in
+    block form fail these tests for the wrong reason.
+    """
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
+        if not line.startswith("    needs:"):
+            continue
+        declared = line.split(":", 1)[1]
+        for following in lines[index + 1 :]:
+            if following.strip().startswith("-"):
+                declared += " " + following.strip()[1:]
+            elif following.strip():
+                break
+        return declared
+    return None
+
+
+def live_lines(workflow):
+    """A workflow's lines with whole-line comments dropped.
+
+    Every assertion here is textual, so a rule commented out rather than
+    deleted would still satisfy an `assertIn` against the raw file. That is
+    the shape a regression takes: a step disabled during debugging and
+    committed. Reading only executable lines makes the mutation fail.
+    """
+    return [
+        line
+        for line in (WORKFLOWS / workflow).read_text(encoding="utf-8").splitlines()
+        if not line.strip().startswith("#")
+    ]
+
+
+def commands(workflow):
+    """A workflow's executable lines with `\\` continuations joined.
+
+    Assertions about a cosign invocation have to see the whole command. Read
+    line by line, a flag on a continuation line looks like a separate
+    statement, and a check for it can be satisfied by a different command
+    further down the file.
+    """
+    joined, buffer = [], ""
+    for line in live_lines(workflow):
+        stripped = line.strip()
+        buffer = f"{buffer} {stripped}".strip() if buffer else stripped
+        if buffer.endswith("\\"):
+            buffer = buffer[:-1].strip()
+            continue
+        joined.append(buffer)
+        buffer = ""
+    if buffer:
+        joined.append(buffer)
+    return joined
 
 
 def jobs(workflow):
     """Split a workflow's `jobs:` mapping into {name: body text}."""
-    lines = (WORKFLOWS / workflow).read_text(encoding="utf-8").splitlines()
+    lines = live_lines(workflow)
     start = lines.index("jobs:") + 1
     found, name, body = {}, None, []
     for line in lines[start:]:
@@ -259,10 +333,10 @@ class WorkflowWiring(unittest.TestCase):
         for name, body in jobs("release.yml").items():
             if "needs.verify.outputs." not in body:
                 continue
-            declared = NEEDS.search(body)
+            declared = needs_of(body)
             self.assertIsNotNone(declared, f"{name} reads verify's outputs with no needs:")
             self.assertRegex(
-                declared.group(1),
+                declared,
                 r"\bverify\b",
                 f"{name} reads verify's outputs without naming verify in needs:",
             )
@@ -300,22 +374,52 @@ class WorkflowWiring(unittest.TestCase):
         # If only one signs, that name can carry no signature at all while the
         # signing workflow's own verify-by-digest still passes.
         for workflow in ("ci.yml", "docker.yml"):
-            text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
-            self.assertIn("cosign sign --yes", text, workflow)
-            # Match the flag, not the line continuation: folding the flags onto
-            # one line must not turn this red.
-            self.assertRegex(
-                text,
-                r"cosign verify(?![-\w])[\s\\]*--certificate-identity",
-                workflow,
-            )
+            live = commands(workflow)
+            # Sign the digest the build step produced, not a tag: a tag is a
+            # mutable pointer the other publisher can move, and a signature is
+            # over a digest.
+            # Word-bounded: a trailing comment reading "cosign signing" is
+            # prose, not an invocation.
+            # Both verbs, checked separately: an attestation is not a
+            # signature, so finding one must not excuse the absence of the
+            # other.
+            for verb in ("sign", "attest"):
+                found = [c for c in live if re.search(rf"\bcosign {verb}\b", c)]
+                self.assertTrue(found, f"{workflow} never runs cosign {verb}")
+                for command in found:
+                    self.assertRegex(command, r"@\$\{DIGEST\}\"", f"{workflow}: {command}")
+            # Every binding of DIGEST, not merely one of them: a step left
+            # pointing at some other value signs something nobody pulled.
+            bindings = [c for c in live if c.startswith("DIGEST:")]
+            self.assertTrue(bindings, f"{workflow} never binds DIGEST")
+            for binding in bindings:
+                self.assertEqual(
+                    binding,
+                    "DIGEST: ${{ steps.build.outputs.digest }}",
+                    f"{workflow} binds DIGEST to something other than the build step",
+                )
+            # Every verification must pin an identity, not just the first one:
+            # an unpinned `cosign verify` accepts a signature from any
+            # workflow that can mint an OIDC token.
+            verified = [c for c in live if re.search(r"\bcosign verify", c)]
+            self.assertTrue(verified, f"{workflow} never runs cosign verify")
+            for command in verified:
+                self.assertIn("--certificate-identity", command, f"{workflow}: {command}")
 
     def test_the_dispatch_tag_is_not_interpolated_into_a_shell_command(self):
         # A dispatch input expanded inside `run:` is substituted before bash
         # parses the line, so shell metacharacters in a tag would execute on the
         # runner holding the publishing credentials.
-        for line in (WORKFLOWS / "release.yml").read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("#") or not stripped.startswith("run:"):
+        # Checking only lines that start with `run:` would miss the body of a
+        # `run: |` block, which is where an interpolation would actually sit.
+        # Invert it: every executable mention of the input must be an `env:`
+        # assignment, so any other placement fails whatever its indentation.
+        env_assignment = re.compile(r"^[A-Z][A-Z0-9_]*: \$\{\{ inputs\.tag \}\}$")
+        for line in live_lines("release.yml"):
+            if "inputs.tag" not in line:
                 continue
-            self.assertNotIn("inputs.tag", stripped, line)
+            self.assertRegex(line.strip(), env_assignment, line)
+
+
+if __name__ == "__main__":
+    unittest.main()

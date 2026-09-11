@@ -183,12 +183,12 @@ jobs:
       # Scoped to tags. Branch and PR images are out of scope — the collision
       # being closed is on release tags, and :main has never been signed.
       #
-      # Residual: the push above lands before these steps run, so a failed or
-      # cancelled run can leave :VERSION public and unsigned. Red run, not a
-      # silent pass. Closing it needs push-by-digest plus tag promotion in both
-      # publishers (issue #529) — see the "What this does not close" section of
-      # docs/release/v4.0.0-prerelease-channel.md before moving these steps
-      # into their own job.
+      # Residual: the push above lands before these steps run, so a run that
+      # fails or is cancelled can leave :VERSION public and unsigned. Failed or
+      # cancelled, not a silent pass. Closing it needs push-by-digest plus tag
+      # promotion in both publishers (issue #529) — see the "What this does not
+      # close" section of docs/release/v4.0.0-prerelease-channel.md before
+      # moving these steps into their own job.
       - name: Install cosign
         if: startsWith(github.ref, 'refs/tags/v')
         # Pinned release, so flag behavior cannot drift under a v3 default.
