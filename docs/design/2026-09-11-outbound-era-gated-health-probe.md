@@ -87,52 +87,80 @@ the fallback is to serve the probe from the existing `EraCache` TTL and re-probe
 expiry — trading liveness freshness for load. That fallback must not be taken on
 assumption.
 
-## 3. Ruling 2 — the probe classifies the answer, not the envelope
+## 3. Ruling 2 - a reset needs positive evidence of service
 
 Replace the two-arm match at `:1053` with a three-way classification that reads the body
-on both transports:
+on both transports. The organising rule: **reviving a tripped breaker is a claim that the
+backend is serving, and only a served result is evidence for it.**
 
 | observation | verdict | breaker | transport |
 | --- | --- | --- | --- |
 | a JSON-RPC **result** | serving | reset if tripped | keep |
-| a JSON-RPC **error other than method-not-found** | serving — the peer parsed and answered | reset if tripped | keep |
-| **method-not-found** (`-32601`), in-band *or* carried as a status | **neither**: the probe is mis-specified for this peer | **unchanged** — neither reset nor tripped | keep |
+| a JSON-RPC **error**, any code, in-band *or* carried as a status | **answered, not served**: the peer parsed the request and declined to fulfil it | **unchanged** - neither reset nor tripped; counts toward the escalation bound below | keep |
 | transport fault or timeout | not serving | trip | `force_restart()` |
 
-The third row is the whole point of OUTBOUND.2. A refusal is evidence about the *probe*,
-not about the backend. Recording it as health hides a probe that can never fail;
-recording it as death restarts a working peer. It must be surfaced instead: a
-`warn!` naming the method and the era the gateway believed, plus a
-`mcp_health_probe_unsupported_total{backend,method}` counter, and — because a `-32601`
-to `server/discover` means the era classification was wrong — an invalidation of the
-cached era so the next start-path probe re-classifies.
+The middle row is the whole point of OUTBOUND.2, and it is deliberately wider than
+`-32601`. An earlier draft of this design ruled that any error *other than*
+method-not-found proved the peer was serving, on the reasoning that a peer which parses
+and answers is alive. That is the defect restated: a backend wedged into answering
+`-32603 Internal error` to every probe would revive its own tripped breaker every tick,
+and the probe would again be measuring the parser rather than the service. Found by
+adversarial review, 2026-09-11.
 
-**The third arm is bounded — a refusal cannot be permanent.** Left unbounded, the
-"neither" verdict is a new failure mode: a backend wedged into answering `-32601` to
-everything would never trip a breaker, never rebuild, and its only trace would be a
-counter nobody reads. So the refusal arm escalates:
+The opposite over-correction - trip on `-32603` - is the other half of the same defect.
+A backend whose `server/discover` handler is broken while `tools/call` works would be
+restarted every tick for a fault that never touched the traffic path. Neither reading is
+safe, which is exactly why the outcome belongs in a third arm rather than being forced
+into health or fault. Because the arm is code-agnostic, no table of JSON-RPC code ranges
+has to be maintained or re-litigated at implementation time.
 
-1. **First refusal** — record neither; warn; increment the counter; invalidate the cached
-   era so the next start-path probe re-classifies the peer.
-2. **Consecutive refusals** — count them per backend. The counter resets on any other
-   outcome, including a transport fault.
-3. **Three consecutive** (30s at the default interval), *spanning at least one
-   re-classification* — escalate to the fault arm: trip the breaker and `force_restart()`.
+**A refusal additionally invalidates the era.** `-32601` to `server/discover` is not just
+an unserved answer; it is evidence the era classification was wrong, and
+`protocol::era::classify` already reads that code as legacy evidence
+(`src/protocol/era.rs:120-126`). So the refusal case also invalidates the cached era, and
+**the re-classification happens on the next probe tick** - the probe re-runs
+`server/discover` and feeds the outcome back through `classify`, rather than waiting for a
+start-path probe that may not run again in the backend's lifetime. Every middle-row
+outcome also emits a `warn!` and a `mcp_health_probe_unserved_total{backend,code}` counter
+carrying the JSON-RPC code and the era the gateway believed, so the new state is
+triageable per backend without log archaeology.
 
-Three is chosen to be the smallest count that cannot be reached without a completed
-re-classification: probe (refuse, invalidate) -> probe (re-classified era, refuse) ->
-probe (refuse again). A peer that refuses the liveness method of the era it was *just*
-re-classified into is not serving MCP, and the health signal should say so. The threshold
-is a constant, not a config knob — no requirement asks for one, and an unbounded arm is
-the defect, not a tuning surface.
+**The middle arm is bounded - an unserved answer cannot be permanent.** Left unbounded,
+the third arm is a new failure mode: a backend wedged into answering errors would never
+trip a breaker, never rebuild, and its only trace would be a counter nobody reads. So:
 
-**This requires the HTTP transport to stop flattening a refusal into a string.** A 404
-whose body is a `-32601` JSON-RPC error is currently `Err(safe_http_status_error(..))`
+1. **Each unserved answer** - record neither; warn; increment the counter; on `-32601`,
+   invalidate the cached era so the next tick re-classifies.
+2. **Consecutive unserved answers** are counted per backend. The counter resets on a
+   served result.
+3. **Three consecutive** (30s at the default interval) escalate to the fault arm: trip the
+   breaker and `force_restart()`.
+
+Three is the smallest count that cannot be reached without a completed re-classification
+in the refusal case: probe (refuse, invalidate) -> probe (re-classified era, refuse) ->
+probe (refuse again). A peer that will not serve the liveness method of the era it was
+*just* re-classified into is not serving. The threshold is a constant, not a config knob -
+no requirement asks for one, and an unbounded arm is the defect, not a tuning surface.
+
+**This requires the HTTP transport to stop flattening a refusal into a string.** A non-2xx
+response whose body is a JSON-RPC error is currently `Err(safe_http_status_error(..))`
 (`src/transport/http/mod.rs:1275-1295`), which discards the code. The existing
 `ProtocolVersionRejected` branch immediately above is the precedent: that code path was
-added for exactly this reason — a version refusal carried as a status had its body
-dropped before anyone could read it. The same treatment, one branch wider: parse the body
-for a JSON-RPC error object before falling back to the status string.
+added for exactly this reason - a version refusal carried as a status had its body dropped
+before anyone could read it. The same treatment, one branch wider: parse the body for a
+JSON-RPC error object before falling back to the status string.
+
+**Residual (recorded, not fixed here).** Two sit outside this design's scope:
+
+- *An intermediary can forge the middle row.* A proxy or load balancer that answers a
+  non-2xx with its own JSON-RPC-shaped body would be read as the peer declining, masking a
+  dead origin behind a live intermediary. The mitigation when this is implemented is to
+  honour a parsed body only when its JSON-RPC `id` echoes the probe's request id.
+- *A modern peer that omits `server/discover` is classified legacy and then sent `ping`.*
+  That is `classify`'s existing rule (`src/protocol/era.rs:120-126`, ruled 2026-08-29 and
+  reviewed with `docs/design/2026-08-31-discover-outbound-era-probe.md`), not a rule this
+  design introduces, and §4 keeps it out of scope. The escalation bound limits the damage:
+  such a peer trips after three ticks rather than looping silently in the wrong era.
 
 ## 4. What this does not do
 
@@ -146,31 +174,28 @@ for a JSON-RPC error object before falling back to the status string.
 
 ## 5. Test plan (to be reviewed as a test plan before any implementation)
 
-1. **OUTBOUND.1, modern.** A backend classified `Era::Modern` is probed; the recorded
-   outbound method is `server/discover` and `ping` never appears on the wire.
-2. **OUTBOUND.1, legacy.** A backend classified `Era::Legacy` is probed; the outbound
-   method is `ping`. Guards the mirror-image defect.
-3. **OUTBOUND.1, unknown.** An unreachable/unclassified backend takes the legacy arm —
-   pins `classify`'s "silence is not modern" rule at this call site.
-4. **OUTBOUND.2, in-band refusal.** A stdio peer answering `-32601`: the breaker's tripped
-   state is **unchanged**, the counter increments, no restart. Fails against today's code
-   (which resets the breaker).
-5. **OUTBOUND.2, status refusal.** An HTTP peer answering 404 with a `-32601` body: same
-   three assertions. Fails against today's code (which calls `force_restart`).
-6. **OUTBOUND.2, genuine fault.** A closed socket / timeout still trips and restarts —
-   the regression guard for fixing 4 and 5 by making everything healthy.
-7. **OUTBOUND.2, served result.** A valid `server/discover` result on a tripped breaker
-   resets it, as today.
-8. **Era invalidation.** After a `-32601` to `server/discover`, the cached era for that
-   backend is no longer `Modern`.
-9. **Escalation bound.** A backend that refuses every probe: refusals 1 and 2 leave the
-   breaker unchanged; the third trips it and restarts. Guards the wedged-peer failure mode
-   the third arm would otherwise create. A companion row asserts the counter resets — two
-   refusals, one served result, then two more refusals must not trip.
-10. **Measurement (M).** Per-probe wall time and response size for `server/discover`
-   against a real backend, compared with `ping`, at the default interval. This is the
-   evidence for §2's load claim; the claim is unproven until it exists.
+The **fail-first** column records whether the row can fail against `HEAD`. A row that
+passes today guards behaviour this change must *preserve*; calling it fail-first would be
+false, and an earlier draft of this plan claimed all of rows 1-8 were - four of them were
+regression guards. Found by adversarial review, 2026-09-11. Only the fail-first rows are
+evidence that the fix did anything; only the regression rows are evidence it broke nothing.
 
-Every one of 1–9 must fail against `HEAD` before the implementation lands. A test that
-passes before the fix is testing something else — see
-`a-test-first-suite-can-encode-an-inverted-oracle`.
+| # | what it pins | fail-first against HEAD | why |
+| --- | --- | --- | --- |
+| 1 | `Era::Modern` backend is probed with `server/discover`; `ping` never reaches the wire | **yes** | HEAD sends `ping` unconditionally (`lifecycle.rs:1053`) |
+| 2 | `Era::Legacy` backend is probed with `ping` | no - regression guard | HEAD already sends `ping` to everything, so it passes for the wrong reason; it exists to catch the mirror-image defect after row 1 lands |
+| 3 | unreachable/unclassified backend takes the legacy arm | no - regression guard | same; pins `classify`'s "silence is not modern" rule at this call site |
+| 4 | in-band `-32601` (stdio): tripped breaker **unchanged**, counter increments, no restart | **yes** | HEAD reads `Ok(Ok(_))` as success and resets the breaker (`:1054-1061`) |
+| 5 | `-32601` carried as an HTTP 404 body: same three assertions | **yes** | HEAD reads `Ok(Err(_))` as a fault and calls `force_restart()` (`:1064-1066`) |
+| 6 | `-32603` on a tripped breaker: breaker **unchanged**, no restart | **yes** | HEAD resets on any in-band answer; this is the row that pins §3's widened middle arm, and the one an implementation narrowing it back to `-32601` would break |
+| 7 | closed socket / timeout still trips and restarts | no - regression guard | current behaviour; guards against fixing 4-6 by making everything healthy |
+| 8 | a valid `server/discover` result on a tripped breaker resets it | no - regression guard | current behaviour for a result; guards against fixing 4-6 by making nothing healthy |
+| 9 | after a `-32601`, the cached era for that backend is no longer `Modern`, and the **next tick** re-probes | **yes** | no invalidation and no re-classification path exists on this call site |
+| 10 | escalation: unserved answers 1 and 2 leave the breaker unchanged, the third trips and restarts | **yes** | no counter exists |
+| 11 | escalation counter resets: two unserved answers, one served result, two more unserved answers must **not** trip | **yes** | same |
+| M | per-probe wall time and response size for `server/discover` against a real backend, against `ping`, at the default interval | measurement, not a gate | the evidence for §2's load claim, which is asserted there and unproven until this exists. Emit it as a histogram rather than a one-off reading, so the claim stays verified and the `EraCache` fallback decision has data on every release |
+
+Rows 1, 4, 5, 6, 9, 10 and 11 must be observed failing against `HEAD` before the
+implementation lands - a test that passes before the fix is testing something else, see
+`a-test-first-suite-can-encode-an-inverted-oracle`. Rows 2, 3, 7 and 8 must pass both
+before and after.
