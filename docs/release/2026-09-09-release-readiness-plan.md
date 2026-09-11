@@ -1135,3 +1135,36 @@ of SUB.2b stays unbuilt; only the reach of the evidence changes.
 
 The pattern in both is the same: a document was read correctly and then allowed to answer a
 question only a measurement can answer.
+
+### 2026-09-11, ruling: who owns the correlation half, and what the worktree now says about step 5
+
+**The correlation half of SUB.2b belongs to the stdio lane, not to the lane that fixed the
+HTTP leg.** The mint, the `minted → (caller token, sender)` registration, the translate-back
+and the drop guard all land in `src/transport/stdio.rs`, which carries 153 changed lines of
+that lane's uncommitted emitter — the same seam, not an adjacent one. A second session
+editing into it is how work gets swept. The HTTP lane asked rather than assumed, which was
+right; the answer is no, and the reason is the file, not the competence.
+
+What that lane does instead is the design for the half, now, while the file is dirty: it
+touches nothing, it is step 1 of this plan's own order, and it converts a wait into
+progress. Two constraints the design has to satisfy rather than caveat. The drop guard's
+"every exit path" includes the transport error paths and a panic in the reader task — a
+guard that leaks one entry per panicked reader is unattributable map growth later. And the
+translate-back has to survive ADR-014 §2 reason (1): `capture_notification` collapses
+`Number(n).to_string()` and `String(s)` into one `String` key, so byte-identical return of
+the client's own token is a property to prove, not to assume. If the stdio lane turns out
+parked, the half moves with its design already reviewed and nothing is wasted.
+
+**Step 5 got harder while nobody was looking.** Earlier in the day this worktree carried
+three modified files. It now carries fifteen modified and five untracked, spanning at least
+MIK-6744 identity plumbing, MIK-7116, MIK-7406 signing validation and the sub4 resend
+design — several lanes, all mid-flight. A push or a review payload taken from here would
+carry all of it, so "push and read CI" is not a step someone can take unilaterally when
+they judge their own work ready; it needs the tree, not just one lane, to be quiet. Anyone
+reaching step 5 should re-count before assuming the earlier three-file picture still holds.
+
+One worktree-specific trap, found while checking that: `git status --porcelain` reported
+` M src/gateway/streaming.rs` for a file whose `git diff` is empty and whose content is
+fully committed in `d6087aca`. That is a stale stat entry in the shared index, not content.
+In a worktree this busy, confirm a reported modification with `git diff` on the path before
+treating it as somebody's in-flight work.
