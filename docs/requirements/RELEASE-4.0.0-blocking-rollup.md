@@ -1199,10 +1199,17 @@ thing you most wanted looked at.
 
 Payload: `0a477a4b` alone, src only, 2 files, 189 insertions, with the three questions the
 change actually raises stated up front: whether the boxing is correct on the hot dispatch
-path, whether the spawned writer and the main loop can interleave a partial line on the
-shared stdout, and whether stdio registration drains on every exit path including
+path, whether a concurrently-written notification and the main loop can interleave a partial
+line on the shared stdout, and whether stdio registration drains on every exit path including
 cancellation — the last being a HIGH finding from the *design* review that the
 implementation was supposed to close with an RAII guard.
+
+The payload put that second question the wrong way round and the reviewer corrected it: it
+described `run_stdio` as spawning a writer, and nothing is spawned.
+`dispatch_streaming_notifications` (`src/gateway/server/mod.rs:1694`) runs a `select!` in the
+*same* task, holding `&mut stdout` as the single owner, and every write is awaited in order.
+A partial line cannot interleave, and the notification path's lifetime is the dispatch's own.
+Verified at source: the only `tokio::spawn` calls in that file are elsewhere.
 
 ### Disposition of the three IMPROVEMENTs
 
@@ -1253,3 +1260,45 @@ other sessions are routing MCP traffic through.
 
 So the path to a green gate is two actions, both outside this lane: a ledger-cell flip that
 the acceptance evidence already supports, and one deploy.
+
+### Pass two's verdict, and the one thing it opens
+
+`kimi-review` returned **SHIP** on `0a477a4b`, output at
+`~/.claude/data/reviews/runs/synthetic-20260911T150153Z-15208.md`. Two of the three
+questions came back clean and both were checked against the tree rather than taken on the
+reviewer's word. The `Box::pin` sites are correct: one heap allocation per dispatch, in
+exchange for not carrying a tens-of-kilobyte future on the reader loop's frame, and the
+`Box::pin` + `tokio::pin!` pair is sound. The stdout question is answered by the correction
+above — single owner, ordered writes, no interleaving possible.
+
+**The third question is a real gap, and it is the design review's HIGH finding only
+half-closed.** `StdioTransport::request` registers a progress token before the write
+(`src/transport/stdio.rs:605`) and drains it after the outcome (`:629-634`). That covers a
+write error and an internal timeout, and there is a test for the write-error case
+(`stdio_request_drains_its_registration_even_when_the_write_fails`, `:1257`). It does **not**
+cover cancellation. If the future is dropped mid-`await` — an outer timeout, a task abort —
+the drain line is never reached and the `captured_notifications` entry survives for the
+transport's lifetime. The asymmetry is visible in the same function: the `pending` map *is*
+cancellation-safe, because `PendingRequestGuard` (`src/transport/mod.rs:185`) removes its
+entry on `Drop`, and the comment at `:611-617` says so in as many words. The registration
+map got the explicit drain and not the guard.
+
+Consequence is bounded and is growth, not misrouting: keys are minted `gw-<uuid>` and never
+collide, so a stranded entry cannot capture another call's notifications — it just never goes
+away. Graded MEDIUM, before-production rather than release-blocking.
+
+The fix is the pattern the file already uses: a second drop guard mirroring
+`PendingRequestGuard`, holding the token and publishing (or discarding) the captured vector
+on `Drop`, so the success path, the error path and the dropped-future path all drain through
+one place. `src/transport/stdio.rs` is the peer's in-flight file and is not edited from this
+lane; the finding has been handed over with that shape.
+
+Four SMALL improvements are recorded and not taken in this window: `write_notification`
+serializes twice (`to_value` then `to_string` inside `write_response`); the liveness test
+hangs rather than fails if the implementation regresses to drain-after-resolve, and wants a
+`tokio::time::timeout` around `next_line().await`; a `try_recv` drain loop after each `recv()`
+would batch writes under a burst; and the post-loop comment "anything still queued is
+everything that will ever arrive" holds only while no sink sender can outlive the scope, an
+invariant that belongs at `notification_sink::scope` rather than in a comment beside the
+loop. The fifth, a suspected duplicate forwarding rule in the SSE transport, was raised
+without tree access and is not confirmed here.
