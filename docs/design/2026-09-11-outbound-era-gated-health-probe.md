@@ -279,9 +279,13 @@ change.
 
 **Constructing a modern-era backend in a test.** `EraCache` has no setter - an era is
 committed only by a completed classification - so rows 13 to 15 drive the fixture rather
-than assigning to it: a mock transport that answers the classification probe with a
-`-32601`, which `classify` reads as modern evidence (`src/backend/era.rs:54`), leaves the
-cache `Probed`/`Modern`. Stated here because a row that cannot construct its own
+than assigning to it: a mock transport whose `server/discover` answer is
+positive evidence leaves the cache `Probed`/`Modern`. Two shapes qualify and both are
+cheap: a discovery document naming a modern revision in `supportedVersions`, or an error
+carrying one of `UNSUPPORTED_PROTOCOL_VERSION`, `HEADER_MISMATCH` or
+`MISSING_REQUIRED_CLIENT_CAPABILITY` (`src/protocol/era.rs:93-121`). Not `-32601`: that is
+`classify`'s legacy evidence, and a fixture built on it would classify the backend
+`Legacy` and pass rows 13 to 15 without ever exercising the gate. Stated here because a row that cannot construct its own
 precondition fails for a setup reason and reads as the gate working.
 
 ## 5. What this does not do
