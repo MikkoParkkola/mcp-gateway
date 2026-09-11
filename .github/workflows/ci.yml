@@ -270,6 +270,8 @@ jobs:
         run: python3 scripts/release/count-release-criteria.py --check
       - name: Test supplemental acceptance checks
         run: python3 scripts/release/test_scope_acceptance.py
+      - name: Test the tag/manifest publish gate
+        run: python3 scripts/release/test_check_tag_manifest.py
       - name: Validate supplemental scope (pending work is reported)
         run: python3 scripts/release/check_scope_acceptance.py --check
       - name: Require completed acceptance in publishing context
@@ -335,7 +337,14 @@ jobs:
 
       - name: Extract tag
         id: meta
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+        # This workflow cannot read release.yml's job outputs — it fires on the
+        # same tag independently — so it runs the same gate itself. Publishing a
+        # signed image for a tag whose manifest names a different version is
+        # exactly what the gate refuses. `version` here drops the leading `v`,
+        # so this publisher and docker.yml agree on the image tag; previously
+        # this pushed `:v4.0.0` while docker.yml pushed `:4.0.0`, and only this
+        # one is signed.
+        run: python3 scripts/release/check_tag_manifest.py
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
@@ -352,9 +361,13 @@ jobs:
         with:
           context: .
           push: true
+          # The version tag is always pushed; :latest moves only for a stable
+          # release, so `docker pull` with no tag cannot land on a candidate.
+          # Signing and SBOM attestation below run against the digest, so an rc
+          # adopter gets the same supply-chain guarantees either way.
           tags: |
             ghcr.io/mikkoparkkola/mcp-gateway:${{ steps.meta.outputs.version }}
-            ghcr.io/mikkoparkkola/mcp-gateway:latest
+            ${{ steps.meta.outputs.is_prerelease != 'true' && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
