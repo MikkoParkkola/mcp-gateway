@@ -195,6 +195,23 @@ fn is_session_expired_error(err: &Error) -> bool {
     }
 }
 
+/// Whether a non-2xx status is the peer saying "not now" rather than "not ever".
+///
+/// A refusal carried as a status is normally terminal: a peer that declines
+/// `resources/subscribe` with a 405 declines the retry identically, and
+/// [`peer_refusal`] hands the caller that refusal so it stops asking. The
+/// transient statuses are the exception — an overloaded peer answering 429 or
+/// 503 is asking to be asked again, and it may carry that answer in a
+/// JSON-RPC error body like any other. Converting those to `Error::JsonRpc`
+/// would make them terminal for every caller on this transport, so the parse
+/// is skipped for them and the status stays a retryable transport error.
+fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::REQUEST_TIMEOUT | reqwest::StatusCode::TOO_MANY_REQUESTS
+    ) || status.is_server_error()
+}
+
 /// The peer's own JSON-RPC error, if that is what this non-2xx body is.
 ///
 /// The MCP HTTP binding lets a peer refuse with a status rather than a 200, so
@@ -1346,7 +1363,9 @@ impl HttpTransport {
             {
                 return Err(Error::ProtocolVersionRejected { supported });
             }
-            if let Some(refusal) = peer_refusal(&body, &request.id) {
+            if !status_invites_a_retry(status)
+                && let Some(refusal) = peer_refusal(&body, &request.id)
+            {
                 return Err(refusal);
             }
             return Err(safe_http_status_error(status, &body));
