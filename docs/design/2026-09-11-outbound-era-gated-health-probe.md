@@ -431,7 +431,7 @@ before and after.
 
 ## 7. Fail-first record
 
-Nineteen of the twenty-eight rows are written and have been observed against `HEAD`.
+Nineteen of the thirty rows are written and have been observed against `HEAD`.
 The rest are listed below as outstanding, with what each is waiting on. This section
 records verdicts only - it is not an implementation report, and no production code has
 changed.
@@ -461,7 +461,7 @@ same verdicts.
 | 9c | **failed** | `tests.rs:1358` | "an answered ping is an absence of evidence about the era, not positive evidence" |
 | 9d | **failed** | `tests.rs:1416` | `is_circuit_tripped()` false - the probe records no failures at all |
 | 12 | passed | - | all four non-refusal body shapes stay `Error::Transport`, as designed |
-| 16 | **failed** | `http/tests.rs:2233` | the `other =>` arm: HEAD yields a variant other than `Error::JsonRpc`. The panic is on the VARIANT and not on the ask count, so the retry baseline this row also carries is untainted |
+| 16 | **failed** | `http/tests.rs:2233` | the `other =>` arm: HEAD yields a variant other than `Error::JsonRpc`. The panic is on the VARIANT and not on the ask count, so the retry baseline this row also carries is untainted. That baseline is not itself fail-first evidence: `assert_eq!(hits, 1)` never executes at HEAD, and once the variant changes it is satisfied for free, because `is_retryable` has no `JsonRpc` arm (`src/failsafe/retry.rs:96-105`). The no-retry half is a second-stage pin on the same footing as rows 6, 9b and 9d |
 | 16b | passed | - | an opaque 502 stays `Error::Transport` and is still asked three times |
 | 16c | passed | - | regression guard: both variants already map to `ErrorCategory::BackendError` |
 | 16d | passed | - | the session-recovery regression this row exists to catch is absent at HEAD, which is the point - it must still pass afterwards |
