@@ -166,7 +166,7 @@ one-line summary plus the supplemental scope contract.
 
 **Not every gate that was run is green, and the count of what remains is larger than one blocker.**
 Two operator acts hold the release — the NFR.SEC.7 deploy and the #528 merge. Behind them sit
-fifteen unevaluated analysis passes — the count below, not an exhaustive inventory of
+fourteen unevaluated analysis passes — the count below, not an exhaustive inventory of
 unexamined work, since several PARTIAL rows carry unevaluated halves of their own — thirty `pending` rows in the supplemental contract
 (`RELEASE-4.0.0-scope-status.json`), and one gate that ran twice without reaching its own threshold:
 the dual-vendor review never recorded the two distinct approvals D12 requires. The baseline ledger's
@@ -190,13 +190,13 @@ which predates it. Its second half, drift between merged and listening controls,
 2026-09-11 by `scripts/dev/check-control-drift.py` against `security-controls.toml`. **D6** cannot be
 driven until that deploy exists, and **D18** is the merge itself.
 
-**The larger hold is not an operator act.** Fifteen gates carry no evaluation at all, and they
+**The larger hold is not an operator act.** Fourteen gates carry no evaluation at all, and they
 divide into two groups that should not be read as one. They are not the whole of what is unexamined:
 PARTIAL rows such as H8 (disk housekeeping), D5 (interface comparison) and D11 (profiling) each hold
 an unevaluated half that is counted nowhere below.
 
-**Ten an agent can run at this head today**, each with a command or a reasoning pass behind it:
-correlation-ID propagation (D8), STRIDE, coverage no-drop (§4), `pub`-item reachability (H6), production wiring of the changed `src/` files
+**Nine an agent can run at this head today**, each with a command or a reasoning pass behind it:
+correlation-ID propagation (D8), STRIDE, coverage no-drop (§4), production wiring of the changed `src/` files
 (D7/§2), canary planning (D21), effort (D13b), PR labels (D13d), the bet assessment (B1–B4), and
 T1c. None is blocked. They are open because nobody has run them on this branch.
 
