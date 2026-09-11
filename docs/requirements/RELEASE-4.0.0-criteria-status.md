@@ -8,7 +8,7 @@ stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB
 the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
 in `RELEASE-4.0.0-requirements.md` now has a row, functional and non-functional alike.
 
-Coverage: 147 criteria, 187 rows, 184 met or non-blocking, 3 blocking.
+Coverage: 149 criteria, 189 rows, 184 met or non-blocking, 5 blocking.
 
 That line is the only place in this file that states totals, and it is not maintained by hand.
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
@@ -280,6 +280,27 @@ while OTEL.1's meta-MCP half was wired in `b130960b` and its remaining path rule
 carrying this shape is therefore two claims, and only one of them is about the code.
 DISCOVER.6 is met but is documented against the wrong file, which is worth fixing in the
 requirement rather than in the code.
+
+## MIK-7217 (OUTBOUND) — the gateway as a 2026 *client*, 0 of 2
+
+The DISCOVER rows above govern what the gateway answers and how it classifies a
+peer. Neither they nor `MIK-7215.STATELESS.6a` govern what the gateway *sends*
+once that classification exists, and the two rows here are the gap that leaves.
+Raised 2026-09-11 out of MIK-7217's own AC.5 (*"`ping` is not sent on 2026
+connections, and backend health is established without it"*), which no criterion
+in this ledger covers — the ticket is marked **Done** with all eight of its
+acceptance criteria unchecked.
+
+| criterion ID | requirement (short) | status | evidence (file:line) | blocking |
+|---|---|---|---|---|
+| MIK-7217.OUTBOUND.1 | `ping` is not sent to a backend classified `Era::Modern` | ABSENT | the probe is unconditional: `health_probe` calls `transport.request("ping", None)` at `src/backend/lifecycle.rs:1053` with no era read on the call path. The era *is* available — `lifecycle.rs:380` attaches the `EraCache` to the transport — but every consumer of `HttpTransport::outbound_era` (`src/transport/http/mod.rs:575`) shapes headers or notifications only (`:941`, `:1434`, `:1541`); none gates a method. `ping` is listed in `REMOVED_IN_2026_07_28` at `src/protocol/meta.rs:253`, and the comment two lines above names the reason it is still served inbound: *"the gateway's own backend health probe is a `ping`"*. Against a spec-conformant 2026 peer — including another mcp-gateway, which `MIK-7215.STATELESS.6a` obliges to refuse it — the gateway sends a method the revision deleted. | yes |
+| MIK-7217.OUTBOUND.2 | a refusal is not recorded as a successful probe, and does not reset a tripped breaker | ABSENT | `health_probe` matches `Ok(Ok(_))` at `src/backend/lifecycle.rs:1054` and never inspects the response body. `Transport::request` returns `Ok(response)` for a JSON-RPC error payload — it maps only transport faults and timeouts to `Err` (`src/transport/stdio.rs:620-625`). So a `-32601` refusal takes the success arm, and `:1055-1061` resets a tripped circuit breaker on the strength of it. This is the worse half of the pair: OUTBOUND.1 alone would be a conformance defect a modern peer tolerates, but with OUTBOUND.2 the health loop cannot tell "alive and serving" from "answering errors" on any modern backend, and re-closes the breaker each tick. | yes |
+
+Why this is two rows and not one: gating `ping` on era fixes the conformance
+half and leaves the probe still unable to read its own answer, because whatever
+method replaces `ping` is checked the same way. Fixing the outcome check without
+gating the method turns today's silent false-healthy into a permanent
+false-unhealthy on modern peers. Neither half is safe to ship alone.
 
 ## Out-of-scope observations (disposed, no ticket)
 
