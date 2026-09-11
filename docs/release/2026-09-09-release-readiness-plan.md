@@ -1031,3 +1031,52 @@ step 1 belongs to the lane holding the uncommitted emitter, and step 2 needs a l
 the integration binary runs. Nothing
 here reopens a decision the release owner has made; the `NFR.PERF.1` headroom ruling and
 the ADR-014 narrowing both stand as recorded.
+
+### 2026-09-11, later: landing the emitter does not close `SUB.2b`, and the last red row is faithful
+
+Step 1 above says the stdio work is a commit rather than a build. Half of that
+survives and half does not. The emitter half is real and uncommitted, as recorded.
+The *correlation* half is neither built nor merely uncommitted — what sits in the
+worktree implements the design ADR-014 §2 explicitly retired.
+
+Read at source, in the peer-held worktree copy of `src/transport/stdio.rs:602-607`:
+
+> Register before the write: the reader task can route a notification back before
+> `write_message` returns. **Never minted here** — only a token the caller supplied
+> is honoured (MIK-7272.SUB.2b, option (i)).
+
+ADR-014 §2 heads the paragraph that overturns exactly that rule —
+*"**Superseded: "the gateway never mints a token."**"* — and gives three reasons,
+each cited to the map it guards: the key space collapses `Number` and `String` into
+one entry, `register_progress_token` is a bare `insert` that overwrites a live
+owner, and a caller reusing its token on a later call inherits the earlier call's
+late notifications. The decision it records is a minted `gw-<uuid>` registered as
+`minted → (the caller's token, the request's bounded sender)`, translated back on
+capture so the client still sees its own token byte-identically, with a drop guard
+removing the entry on every exit path.
+
+No such mint exists. A repo-wide search for a minted progress token finds only
+session ids (`src/gateway/streaming.rs:193,203`) and trace ids
+(`src/gateway/meta_mcp/tests.rs:78`); `register_progress_token` is called at one
+production site, `src/transport/stdio.rs:607`, with the caller's own token.
+
+That is why `s02_stdio_progress_reaches_its_own_call_before_the_result` is red, and
+it is red for the right reason. Its final assertion
+(`tests/mik_7272_sub2b_acs.rs:515-520`) requires the token the backend sees to
+differ from the client's, citing this ADR section by name. The row is a faithful
+acceptance test for a decision the code has not caught up with — not a row to
+amend, and not a row an `#[ignore]` may cover.
+
+Commit `aaad0281` ("relay the caller progress token to the backend", 2026-09-11
+04:09) is adjacent but not the cause. It supplies an outbound token where a backend
+previously received `null`, which the HTTP leg needs and correlates structurally
+anyway. On the stdio leg the ADR's mint would overwrite that value before the write.
+The conflict is not between the commit and the ADR; it is that the mint step, which
+both would sit under, is absent.
+
+**So step 1 becomes two.** Landing the emitter (still the peer lane's commit) clears
+delivery. Correlation is a second, smaller change in the same file: mint per outbound
+request that carries progress, register the minted key against the caller's token and
+sender, translate back at `capture_notification`, guard the removal, and rewrite the
+`:602-607` comment that still cites option (i) as live. Until it lands, `SUB.2b`
+stays blocking on both trees, and no count that assumes otherwise is safe.
