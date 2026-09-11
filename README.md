@@ -353,7 +353,7 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 
 ### Protocol and transport
 
-- **MCP version**: 2025-11-25 (latest spec)
+- **MCP versions**: the `initialize` handshake negotiates up to 2025-11-25. The newer 2026-07-28 revision is reached only on the stateless `POST /mcp` path, via the `MCP-Protocol-Version` header; it is served by default and is switched off with `server.modern_protocol: false`
 - **Transports**: stdio, Streamable HTTP, SSE, WebSocket
 - **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
 - **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` report `restart_required`, and keep reporting it until a restart, for every field a reload cannot apply — which is every field outside that short live list, `auth` included. A reload that would leave the tool endpoint reachable without a credential is refused rather than applied
@@ -480,6 +480,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Quick Start](docs/QUICKSTART.md) | Zero to running in 2 minutes |
 | [Annotated config example](examples/gateway-full.yaml) | Commented `gateway.yaml` covering the most-used config sections |
 | [OAuth Configuration](docs/OAUTH_CONFIG.md) | OAuth 2.0 setup with Slack and Figma examples |
+| [Upgrading to 4.0](docs/UPGRADING-4.0.md) | Per-issuer OAuth storage, strict `env_files` parsing, protocol floor, and the single-license change |
 | [Upgrading to 3.0](docs/UPGRADING-3.0.md) | Per-user OAuth isolation and identity-propagation upgrade path |
 | [Deployment Guide](docs/DEPLOYMENT.md) | Docker, systemd, TLS/mTLS, scaling |
 | [OpenAPI Import](docs/OPENAPI_IMPORT.md) | Generate capabilities from OpenAPI specs |

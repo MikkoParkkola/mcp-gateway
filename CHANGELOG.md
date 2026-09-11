@@ -99,6 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - 2026-08-29
 
+> Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). `gateway.yaml` loads
+> unchanged; two of the changes below refuse a start rather than warn.
+
 ### Changed
 
 - **OAuth credentials are keyed by the authorization server that granted
