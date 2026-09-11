@@ -178,3 +178,22 @@ notification, so dispatch cannot resolve first.
 5. No buffered SSE parse survives beside the decoder, and the lib build carries
    no new dead-code warning — the evidence that the replacement is a replacement
    and not an addition.
+
+## Measured outcome — acceptance 2 is not met, and not by gap A
+
+Points 1, 3, 4 and 5 hold: 81 `transport::http` lib rows, the 12 decoder rows and
+the four HTTP acceptance rows pass, and no buffered parse survives.
+
+Point 2 does not, and the cause is downstream of this leg. A row driving a fixture
+that emits its second notification only after the client has read the first and
+released receives one notification and then stalls. Instrumented at
+`src/transport/http/sse_decoder.rs:199`, the decoder logs both notifications, the
+second ~174 ms after the first, and publishes each to a request-scoped sink that is
+present and not shedding. A variant of the same row with the second notification on
+a timer and no intervening client call passes, so the decoder emits both and the
+loss is on the client leg: `first_event_wins_stream` in `src/gateway/streaming.rs`
+has no coverage for a second notification on one request's stream, and no test in
+the repository names it.
+
+Gap A cannot close point 2 and the row is therefore not carried here. It remains an
+open defect against the client leg, with the evidence above as its reproduction.
