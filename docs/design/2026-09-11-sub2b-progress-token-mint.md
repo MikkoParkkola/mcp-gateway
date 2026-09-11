@@ -195,6 +195,25 @@ uncommitted in the shared worktree and on no branch. Until it lands,
 `s02_stdio_progress_reaches_its_own_call_before_the_result` cannot pass, because nothing
 delivers a notification to a stdio client at all.
 
+**Superseded 2026-09-11 16:50 — the stdio forward path landed, and the blocker moved.**
+`f14e6954` committed it, and `s02_stdio_message` now reaches `notification.is_some()`
+green: a backend notification does reach a stdio client mid-call. The reason the progress
+row still cannot pass changed underneath this paragraph. It is no longer delivery; it is
+that `Gateway::run_stdio` awaits each dispatch inline in its read loop
+(`src/gateway/server/mod.rs:1648`, from `513647be`, 2026-03-24), so the row's release
+request -- sent while the first call is parked -- is never read, and the row dies on
+`the released call never returned a result` before it ever reaches the `assert_ne!` on
+the minted token. That ordering is why "Tests that discriminate" item 1 could not
+discriminate anything: the mint assertion sat behind an assertion that always failed
+first.
+
+The fixture now returns its `releases` semaphore to the test as a third value
+(`spawn_fixture_backend -> (String, Received, Arc<Semaphore>)`), so a row can unpark its
+own call without a second request. Once that lands, item 1 becomes a genuine
+discriminator for the first time and this design's acceptance target is reachable. `S-03`
+is unaffected: its two calls must be concurrent for per-call isolation to mean anything,
+so it stays blocked on the serve loop regardless of the mint.
+
 So this design closes the outbound half: the gateway stops handing a backend the
 client's own token, and translates its own token back on the path that can observe it.
 The ledger row `MIK-7272.SUB.2b` moves off `ABSENT` only when both halves are on the
