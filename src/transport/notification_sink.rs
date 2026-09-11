@@ -375,27 +375,54 @@ mod tests {
         );
     }
 
-    /// `DROPPED` is process-wide, so the two rows that read it cannot observe
-    /// it concurrently: one reads a baseline, the other floods the sink, and
-    /// whichever interleaving the harness picks decides whether the baseline
-    /// is still true when it is asserted against. The counter is deliberately
-    /// global -- it is an operator-facing total, not a per-request one -- so
-    /// the rows take turns rather than the counter being made per-scope. The
-    /// guard is held across the scope's awaits, so the lock has to be the
-    /// async one.
-    async fn drop_counter_lock() -> tokio::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await
+    /// A serialised observation of the process-wide `DROPPED` counter.
+    ///
+    /// `DROPPED` is global -- it is an operator-facing total, not a per-request
+    /// one -- so the rows that read it cannot observe it concurrently: one
+    /// reads a baseline, the other floods the sink, and whichever interleaving
+    /// the harness picks decides whether the baseline is still true when it is
+    /// asserted against. The rows take turns rather than the counter being made
+    /// per-scope.
+    ///
+    /// Taking the lock and reading the baseline are one step here rather than
+    /// two lines a row has to remember in the right order. The guard is held
+    /// across the scope's awaits, so the lock has to be the async one, and it
+    /// lives for as long as the observation does.
+    ///
+    /// This makes the correct pattern the easy one, not the only one: `DROPPED`
+    /// is still in scope for this module, so a row that loads it directly is
+    /// still a row that races. What it removes is the silent half-use -- a
+    /// baseline without the lock, or a lock without a baseline.
+    struct DropCounter {
+        _serialised: tokio::sync::MutexGuard<'static, ()>,
+        before: u64,
+    }
+
+    impl DropCounter {
+        /// Start observing: take the turn, then read the baseline under it.
+        async fn observe() -> Self {
+            static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+            let serialised = LOCK
+                .get_or_init(|| tokio::sync::Mutex::new(()))
+                .lock()
+                .await;
+            Self {
+                _serialised: serialised,
+                before: DROPPED.load(Ordering::Relaxed),
+            }
+        }
+
+        /// How many notifications the sink has shed since the observation began.
+        fn shed(&self) -> u64 {
+            DROPPED.load(Ordering::Relaxed) - self.before
+        }
     }
 
     /// Overflow and policy are different facts about a request. A message the
     /// filter drops must not read as sink pressure on a 64-deep channel.
     #[tokio::test]
     async fn a_policy_drop_is_not_counted_as_an_overflow() {
-        let _serialised = drop_counter_lock().await;
-        let before = DROPPED.load(Ordering::Relaxed);
+        let dropped = DropCounter::observe().await;
 
         let ((), delivered) = collect(async {
             publish(vec![JsonRpcNotification {
@@ -406,7 +433,7 @@ mod tests {
         .await;
 
         assert!(delivered.is_empty(), "no level was declared, so: silence");
-        assert_eq!(DROPPED.load(Ordering::Relaxed), before);
+        assert_eq!(dropped.shed(), 0, "a policy drop is not sink pressure");
     }
 
     /// S-03 in miniature: the isolation is structural, so two concurrent
@@ -456,8 +483,7 @@ mod tests {
     /// ADR-014 §5: past capacity the sink sheds rather than stalling the call.
     #[tokio::test]
     async fn an_overfull_sink_drops_and_counts_instead_of_blocking() {
-        let _serialised = drop_counter_lock().await;
-        let before = DROPPED.load(Ordering::Relaxed);
+        let dropped = DropCounter::observe().await;
         let ((), drained) = collect(async {
             publish(
                 (0..REQUEST_NOTIFICATION_DEPTH + 8)
@@ -468,7 +494,7 @@ mod tests {
         .await;
 
         assert_eq!(drained.len(), REQUEST_NOTIFICATION_DEPTH);
-        assert_eq!(DROPPED.load(Ordering::Relaxed) - before, 8);
+        assert_eq!(dropped.shed(), 8);
     }
 
     fn progress(token: &Value) -> JsonRpcNotification {
