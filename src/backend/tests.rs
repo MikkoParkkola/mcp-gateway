@@ -1249,3 +1249,94 @@ async fn row_7_a_transport_fault_still_restarts() {
         "a closed socket is a fault and must still rebuild the transport"
     );
 }
+
+/// Row 8 — regression guard: a served `ping` on the legacy arm still resets a
+/// tripped breaker. It guards against fixing rows 4 to 6 by making nothing
+/// healthy.
+#[tokio::test]
+async fn row_8_a_ping_result_on_the_legacy_arm_resets_the_breaker() {
+    let mock = Arc::new(ProbeMock::legacy_then(vec![ProbeAnswer::Result(json!({}))]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+    backend.trip_circuit_breaker_for_test();
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert_eq!(mock.probed_methods(), vec!["ping".to_string()]);
+    assert!(
+        !backend.is_circuit_tripped(),
+        "a served answer is evidence of health and must reset the breaker"
+    );
+}
+
+/// Row 8b — the mirror half, and fail-first: the reset must be wired to the
+/// *result*, not to the legacy branch that happens to carry it today. HEAD
+/// never sends `server/discover` from the probe, so the method assertion is
+/// what fails here.
+#[tokio::test]
+async fn row_8b_a_discover_result_on_the_modern_arm_resets_the_breaker() {
+    let mock = Arc::new(ProbeMock::modern_then(vec![ProbeAnswer::Result(json!({}))]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+    backend.trip_circuit_breaker_for_test();
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert_eq!(
+        mock.probed_methods(),
+        vec!["server/discover".to_string()],
+        "a modern peer is probed with server/discover"
+    );
+    assert!(
+        !backend.is_circuit_tripped(),
+        "the reset belongs to the result, not to the arm that carries it"
+    );
+}
+
+/// Row 9 — `-32601` *to `server/discover`* is the one answer that is evidence
+/// about era, and the cached verdict must not survive it.
+///
+/// Only the accessor is asserted. "The next tick sends `ping`" is a property of
+/// rows 1 and 2 composed with this one: those rows pin method selection as a
+/// function of the era, so re-asserting it here would add a second observation
+/// of the same rule - and it cannot be observed cleanly anyway, because the
+/// invalidation spawns a detached classification probe whose `server/discover`
+/// lands on the same wire at a time no test controls.
+#[tokio::test]
+async fn row_9_method_not_found_to_discover_invalidates_the_cached_era() {
+    let mock = Arc::new(ProbeMock::modern_then(vec![ProbeAnswer::InBandError(
+        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+    )]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+    assert_eq!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern)
+    );
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert_ne!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern),
+        "a peer that does not know server/discover is not modern, whatever the probe said"
+    );
+}
+
+/// Row 9c — re-classification comes only from positive evidence, never from an
+/// absence. A served `ping` says nothing about the era, and an implementation
+/// reading any successful probe as "the peer is fine, restore what we thought"
+/// sends the modern liveness method to a peer just reclassified as legacy.
+#[tokio::test]
+async fn row_9c_a_served_ping_is_not_evidence_of_modernity() {
+    let mock = Arc::new(ProbeMock::modern_then(vec![ProbeAnswer::InBandError(
+        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+    )]));
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert_ne!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern),
+        "an answered ping is an absence of evidence about the era, not positive evidence"
+    );
+}
