@@ -467,6 +467,28 @@ implementation from an empty one, so it is labelled rather than counted.
    `notifications/progress` reaches that call **carrying the client's original
    token, byte-identical**. Fails today twice over: no code outside
    `src/transport` mentions a progress token at all, and nothing mints.
+
+   **Superseded 2026-09-11 — rows 5 and 6 both state a "fails today" that is no
+   longer true, and each names a symbol the tree has moved past.** Read them as
+   dated, not current. Row 6: the mint landed. `mint_progress_token`
+   (`src/transport/notification_sink.rs:214`) issues a `gw-`-prefixed token, the
+   backend funnel calls it at `src/backend/ops.rs:674` and translates back at
+   `:761`, with `starts_with("gw-")` unit rows at `ops.rs:714` and
+   `src/gateway/router/backend_handlers.rs:1426`. So "nothing mints" is false
+   against the tree, and so is "no code outside `src/transport`". Row 5: the
+   `SseExchange` type it names no longer exists at all -- `fbca1bc9` replaced it
+   with incremental decoding in `src/transport/http/sse_decoder.rs`, so the
+   `:298`/`:1345`/`:297` citations resolve to nothing.
+
+   The cost of leaving these uncorrected was paid once already. Row 6's
+   acceptance assertion, `assert_ne!` on the minted token at
+   `tests/mik_7272_sub2b_acs.rs:539`, sat behind a release assertion that could
+   never pass on stdio, so the ledger carried the criterion red from `6fc9471b`
+   onward without the mint ever being the reason. When the fixture gained an
+   out-of-band release (`364f4373`), the row reached the assertion for the first
+   time and passed. A criterion can be recorded red for months by an assertion
+   that never runs; a "fails today" line in a decision record is evidence about
+   the day it was written and nothing else.
 7. **Negative control — no invented owner, through the real path.** *Passes
    today, like row 2, and for the same reason: it asserts an absence.* A backend
    `notifications/progress` carrying a token no caller supplied reaches no
