@@ -298,6 +298,20 @@ repository — its own definition. Struck rows have since acquired a caller:
 `set_playbook_engine` (`meta_mcp/invoke.rs:2882`) carries the same attribute but IS wired
 (`server/mod.rs:965`); its attribute is stale, not a defect.
 
+A second dead-definition case is live on the branch and is currently the only thing reding the
+lint gate. `blocked_response_value` (`src/security/firewall/mod.rs:708`, landed in `66d1fc23`) has
+no caller on any commit in the repository: `git log --all -S 'blocked_response_value('` matches
+only the commit that defined it, and `cargo clippy --all-targets -- -D warnings` fails with
+`function 'blocked_response_value' is never used` as its sole error. The three call sites exist as
+uncommitted text in the shared worktree (`gateway/router/backend_handlers.rs:1123,1177` and
+`gateway/meta_mcp/mod.rs:844`), written some six hours before the definition was committed without
+them.
+
+This moves no criterion row either way — it is a split change, not a requirements gap — but it does
+mean the branch cannot pass its own lint gate until the calling half is committed. Recorded here
+rather than fixed: deleting the definition would discard the other half's API, and an
+`#[allow(dead_code)]` would silence the one signal that the change is incomplete.
+
 The two budget setters left this table on 2026-09-05 with GH #475. Startup now reads the
 `error_budget:` config section and applies both, and the `#[allow(dead_code)]` that hid them is
 gone rather than merely inaccurate. The wiring is proved from outside the code: criterion

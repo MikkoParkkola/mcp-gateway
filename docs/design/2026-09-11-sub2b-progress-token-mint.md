@@ -223,6 +223,14 @@ two improvements; the disposition of each:
 delivery process asks for two independent non-Claude reviewers; one returned. The gate
 is recorded as partially met rather than treated as satisfied.
 
+The implementation carries the same gap, one round later. `grok-review` and `kimi-review`
+both returned SHIP on the second round of the patch, but three changes landed after that
+verdict: a third comment correction, a `let`-else in the direct route, and boxing the
+dispatch future at two call sites to clear `clippy::large_futures`. The boxing is the
+substantive one — it changes allocation on the dispatch path — and no reviewer has seen
+it. Nothing here is pushed, so this blocks merge rather than the branch; the obligation is
+a final review of the committed tree, not of the patch that produced it.
+
 ## Risks
 
 - **The mint leaks to the client.** If D3 misses a path, the client sees `gw-<uuid>` and
