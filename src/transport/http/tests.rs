@@ -1087,6 +1087,22 @@ fn session_expired_detection_matches_known_signatures() {
         message: "Method not found: tools/list".to_string(),
         data: None,
     }));
+
+    // The retryable carriage: a 429/503 whose body words the same expiry now
+    // parses into `JsonRpcRetryable`. Reading only the terminal variant here
+    // would keep a stale `MCP-Session-Id` and retry against a dead session.
+    assert!(is_session_expired_error(&Error::JsonRpcRetryable {
+        code: -32001,
+        message: "Session expired".to_string(),
+        status: 503,
+        data: None,
+    }));
+    assert!(!is_session_expired_error(&Error::JsonRpcRetryable {
+        code: crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        message: "Method not found: tools/list".to_string(),
+        status: 429,
+        data: None,
+    }));
 }
 
 #[test]

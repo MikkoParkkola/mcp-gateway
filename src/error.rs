@@ -227,6 +227,10 @@ pub enum Error {
         message: String,
         /// The HTTP status that carried it
         status: u16,
+        /// Additional error data the peer sent, kept at parity with
+        /// [`Error::JsonRpc`]: a refusal that exhausts its retries must
+        /// surface the same payload its in-band twin would have carried.
+        data: Option<serde_json::Value>,
     },
 
     /// IO error
@@ -292,7 +296,9 @@ impl Error {
     #[must_use]
     pub fn to_rpc_code(&self) -> i32 {
         match self {
-            Self::JsonRpc { code, .. } | Self::Forbidden { code, .. } => *code,
+            Self::JsonRpc { code, .. }
+            | Self::JsonRpcRetryable { code, .. }
+            | Self::Forbidden { code, .. } => *code,
             Self::Json(_) => -32700,     // Parse error
             Self::Protocol(_) => -32600, // Invalid request
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
@@ -351,6 +357,24 @@ mod rpc_code_tests {
             Error::Transport("connection refused".to_string()).to_rpc_code(),
             -32000,
             "the two transport variants must look the same to a JSON-RPC caller"
+        );
+    }
+
+    #[test]
+    fn a_refusal_keeps_the_peers_code_whichever_carriage_brings_it() {
+        // A peer code recovered from a 429/503 body is the peer's answer, not a
+        // gateway fault: omitting the retryable variant here reported an
+        // exhausted backend refusal as INTERNAL and sent operators after the
+        // wrong process.
+        assert_eq!(
+            Error::JsonRpcRetryable {
+                code: -32601,
+                message: "method not found".to_string(),
+                status: 503,
+                data: None,
+            }
+            .to_rpc_code(),
+            -32601,
         );
     }
 }

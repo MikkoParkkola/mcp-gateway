@@ -181,7 +181,7 @@ fn is_session_expired_error(err: &Error) -> bool {
         // `-32600`: on this path a malformed-request refusal is what it says it
         // is, and treating it as an expiry would re-initialize and retry every
         // one of them.
-        Error::JsonRpc { code, message, .. } => {
+        Error::JsonRpc { code, message, .. } | Error::JsonRpcRetryable { code, message, .. } => {
             let lower = message.to_lowercase();
             // The marker set is the Transport arm's, mirrored: a peer that words
             // its expiry as "session expired" reaches one arm or the other
@@ -203,8 +203,10 @@ fn is_session_expired_error(err: &Error) -> bool {
 /// transient statuses are the exception — an overloaded peer answering 429 or
 /// 503 is asking to be asked again, and it may carry that answer in a
 /// JSON-RPC error body like any other. Converting those to `Error::JsonRpc`
-/// would make them terminal for every caller on this transport, so the parse
-/// is skipped for them and the status stays a retryable transport error.
+/// would make them terminal for every caller on this transport, so they keep
+/// the peer's code in [`Error::JsonRpcRetryable`] instead: the probe reads the
+/// code, the retry classifiers read the carriage. Flattening them back to a
+/// single variant is what this predicate exists to prevent.
 fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
     matches!(
         status,
@@ -227,16 +229,31 @@ fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
 /// the one the 200 carriage already accepts: a JSON-RPC error member is the
 /// peer's own text about its own refusal, and it is surfaced verbatim when the
 /// same refusal arrives with a 200.
-fn peer_refusal(body: &str, id: &RequestId) -> Option<Error> {
+///
+/// The status and the body answer different questions. The body says what the
+/// peer replied; the status says whether that reply was final. A transient
+/// status keeps both facts in [`Error::JsonRpcRetryable`], because the health
+/// probe reads the code and the retry classifiers read the carriage
+/// (MIK-7217, OUTBOUND.2).
+fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Option<Error> {
     let response: JsonRpcResponse = serde_json::from_str(body).ok()?;
     if response.id.as_ref() != Some(id) {
         return None;
     }
     let error = response.error?;
-    Some(Error::JsonRpc {
-        code: error.code,
-        message: error.message,
-        data: error.data,
+    Some(if status_invites_a_retry(status) {
+        Error::JsonRpcRetryable {
+            code: error.code,
+            message: error.message,
+            status: status.as_u16(),
+            data: error.data,
+        }
+    } else {
+        Error::JsonRpc {
+            code: error.code,
+            message: error.message,
+            data: error.data,
+        }
     })
 }
 
@@ -1363,22 +1380,8 @@ impl HttpTransport {
             {
                 return Err(Error::ProtocolVersionRejected { supported });
             }
-            if let Some(refusal) = peer_refusal(&body, &request.id) {
-                // The status and the body answer different questions. The body
-                // says what the peer replied; the status says whether that
-                // reply was final. A transient status keeps both, because the
-                // probe reads the code and the retry classifiers read the
-                // carriage (MIK-7217, OUTBOUND.2).
-                return Err(match refusal {
-                    Error::JsonRpc { code, message, .. } if status_invites_a_retry(status) => {
-                        Error::JsonRpcRetryable {
-                            code,
-                            message,
-                            status: status.as_u16(),
-                        }
-                    }
-                    final_answer => final_answer,
-                });
+            if let Some(refusal) = peer_refusal(&body, &request.id, status) {
+                return Err(refusal);
             }
             return Err(safe_http_status_error(status, &body));
         }

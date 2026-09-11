@@ -219,6 +219,31 @@ mod tests {
     use crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION;
     use crate::protocol::meta::ADDED_IN_2026_07_28;
 
+    /// Both carriages of a refusal must reach the probe as the same code.
+    ///
+    /// `row_16g` pins the transport end -- a 5xx carrying a JSON-RPC error
+    /// keeps the peer's code -- and `row_6b` pins the scoring end, but `row_6b`
+    /// fabricates an `Error::JsonRpc` directly and so never reaches this
+    /// function with the variant the HTTP path actually produces. Dropping the
+    /// `JsonRpcRetryable` arm below would leave both rows green while the probe
+    /// scored a 5xx-carried refusal as a transport fault again.
+    #[test]
+    fn a_refusal_is_the_same_code_whichever_carriage_brings_it() {
+        let in_band = Err(Error::JsonRpc {
+            code: METHOD_NOT_FOUND_CODE,
+            message: "method not found".into(),
+            data: None,
+        });
+        let on_a_status = Err(Error::JsonRpcRetryable {
+            code: METHOD_NOT_FOUND_CODE,
+            message: "method not found".into(),
+            status: 503,
+            data: None,
+        });
+        assert_eq!(refusal_code(&in_band), Some(METHOD_NOT_FOUND_CODE));
+        assert_eq!(refusal_code(&on_a_status), Some(METHOD_NOT_FOUND_CODE));
+    }
+
     /// An optional extension the peer declined is not evidence about its era.
     ///
     /// The revision adds these methods and lets a peer omit them, so their `method not found`
