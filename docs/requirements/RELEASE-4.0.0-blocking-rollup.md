@@ -1372,3 +1372,47 @@ ordering that happened to keep them apart. They now share the repo's own async-s
 idiom (`tests/nfr_obs_records.rs:39`), which is the right lock because the guard has to be
 held across the scope's awaits. The counter stays global: it is an operator-facing total, and
 making it per-request to settle a test would change what it means.
+
+## 2026-09-11, later still — NFR.SEC.7 measured against a build from this tree
+
+The count is now **1 blocking**: the peer's `1144de47` dropped `MIK-7272.SUB.2b` to
+non-blocking on the ledger's own rule, and `903bc41e` closed the registration-drain finding
+with the drop guard both reviewers asked for. `NFR.SEC.7` is what is left.
+
+Earlier in the day the drift check ran against the listening install and came back
+`2 probed, 1 uncovered, 2 failing`, with both guards answering `200` where a `403` was
+required and the provenance line saying `5d25f104 is NOT in v3.4.0 -- the build predates the
+control`. That reads like a missing control and is not one. The process answering on
+`127.0.0.1:39401` is `3.4.0-f30539af`, installed from `~/.local/libexec/mcp-gateway/`, and it
+was built before the guards existed. The check was telling the truth about the install and
+nothing at all about the tree.
+
+So the tree was asked directly. A gateway built from this worktree
+(`cargo build --all-features --bin mcp-gateway`) was started on a spare port with a config of
+its own, and the same script was pointed at it:
+
+```
+$ python3 scripts/dev/check-control-drift.py http://127.0.0.1:39471/mcp
+origin-guard: refused 403; legitimate request 200 [provenance unavailable: v4.0.0 is not a tag in this repository]
+host-guard:   refused 403; legitimate request 200 [provenance unavailable: v4.0.0 is not a tag in this repository]
+unsafe-code-denied: uncovered -- a compile-time lint leaves no signal on the wire; drift is caught by the build, not by a request
+2 probed, 1 uncovered, 0 failing
+```
+
+Both halves of both probes decided: the request the control exists to refuse was refused with
+a `403`, and the legitimate request along the same path still returned `200`, so neither
+refusal is an auth wall or a wedged process reading as a control. `/health` on that instance
+reported `4.0.0`. The provenance line is unavailable rather than negative for the honest
+reason that `v4.0.0` is not yet a tag here — which is the same sentence as "this is the build
+being released, not one already released".
+
+**What this changes.** `NFR.SEC.7` is two facts, and only one of them was ever a code
+question. The control is merged, enabled by default configuration, and enforcing on the wire
+in a v4.0.0 build — measured, not inferred. What remains is that the install on 39401 has not
+been rebuilt from it, and rebuilding it means restarting the gateway that other sessions are
+holding MCP connections to. That is an operator action with a blast radius outside this lane,
+not an engineering gap, and the release-readiness question it leaves is "when is the install
+cut over", not "does the control exist".
+
+The local instance was stopped after the probe and the install on 39401 was re-checked
+afterwards: still `3.4.0`, still healthy, 32 backends, untouched.
