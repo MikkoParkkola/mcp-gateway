@@ -1174,3 +1174,82 @@ substitution has now been exercised: `grok-review` and `kimi-review` both ran ag
 -- it waits only if the release owner requires that the second reviewer be `gpt-review`
 rather than any non-Claude reviewer. That is a standards question for the release owner, not
 a blocked dependency, and it is the last open question in this document.
+
+## 2026-09-11, later — the implementation review, and what is left after it
+
+The corrections above were reviewed as a *document*. The transport work they describe had
+not itself been sent to a non-Claude reviewer. It has now, in two passes, because one
+commit could not be reviewed inside the other's range.
+
+### Pass one — the emitter and the fixture gate
+
+Payload: `f14e6954~1..364f4373`, src and tests, with the acceptance binary's measured state
+quoted. `kimi-review` returned **SHIP**, zero FINDINGs, three IMPROVEMENTs. Output at
+`~/.claude/data/reviews/runs/synthetic-20260911T145637Z-898.md`.
+
+The reviewer also reported that the two `Box::pin` call sites the payload asked it to
+examine (`src/gateway/server/mod.rs:1675`, `:1696`) were **not in the diff it was given**.
+That was correct and it is the most useful thing in the review. `git log -S'Box::pin(Self::dispatch_single_with_sink'`
+puts the boxing in `0a477a4b`, and `git merge-base --is-ancestor 0a477a4b f14e6954` confirms
+it is an ancestor — outside the range, so the SHIP verdict did not cover it. A review payload
+built from a range chosen by its newest commit silently excludes the ancestor that did the
+thing you most wanted looked at.
+
+### Pass two — the commit the first pass could not see
+
+Payload: `0a477a4b` alone, src only, 2 files, 189 insertions, with the three questions the
+change actually raises stated up front: whether the boxing is correct on the hot dispatch
+path, whether the spawned writer and the main loop can interleave a partial line on the
+shared stdout, and whether stdio registration drains on every exit path including
+cancellation — the last being a HIGH finding from the *design* review that the
+implementation was supposed to close with an RAII guard.
+
+### Disposition of the three IMPROVEMENTs
+
+None are code changes in this window, and each is recorded here so the next reader does not
+re-derive them.
+
+**"tool invoked" is emitted before the paths that can still refuse.** True:
+`src/gateway/meta_mcp/invoke.rs:1530` logs it, and the cost-governance budget check and the
+firewall below it can both return an error without a dispatch. This is not new and it is not
+being reordered for the release. The `tracing::info!` line is the OWASP ASI03 per-agent audit
+record and it deliberately records the *attempt*; every refusal below it emits its own
+`warn` and its own client-visible log. Moving the line would change what the audit trail
+means, on a path that is on every tool call, at a release gate. The ADR-014 §3 `emit_log`
+beside it mirrors the existing semantics exactly, which is the correct behaviour for a change
+whose whole purpose is to put the existing audit vocabulary on the caller's own stream.
+
+**The ADR-008 INV-2 refusal sentence is written out three times** — once in `tracing::warn!`,
+once in the `emit_log` payload, once in the `-32001` error (`invoke.rs:1334-1360`). Real
+duplication, real drift risk, and a `const` would retire it. Left alone: it is a cosmetic
+refactor of a security-refusal path with no behavioural test distinguishing the three copies,
+which is not a change to make in a release window.
+
+**`is_gateway_own` hardcodes the `"gateway."` prefix** at `tests/mik_7272_sub2b_acs.rs:399`,
+duplicating `GATEWAY_INVOKE_LOGGER`. Correct, and the file is a peer's in-flight work; it is
+not edited from this lane. Recorded for whoever lands the next commit in that binary.
+
+### Where the release gate actually stands
+
+`python3 scripts/release/count-release-criteria.py` — *149 criteria, 189 rows, 187 met or
+non-blocking, 2 blocking*, exit 0. Neither remaining blocker is engineering work.
+
+**`MIK-7272.SUB.2b`, row 230.** The engineering is done. On the committed tree at
+`364f4373`, `cargo test --test mik_7272_sub2b_acs` reports `7 passed; 0 failed; 3 ignored`,
+and the full suite with `--all-features --no-fail-fast` is 96 binaries with 0 failing (lib:
+4268 passed). `clippy --all-targets --all-features -- -D warnings` exits 0 and `fmt --check`
+is clean. What keeps the row blocking is the cell itself: it still carries `blocking: yes`
+and an evidence paragraph arguing for a verdict two commits behind. The ledger is frozen and
+the row is a peer's, so the flip belongs to whoever lands next in it — not to this document.
+
+**`NFR.SEC.7`.** Still the same shape, and still not a code change.
+`python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp` run today reports
+*2 probed, 1 uncovered, 2 failing*, with both failures annotated `5d25f104 is NOT in v3.4.0 --
+the build predates the control`. The origin guard and the host guard answer a refused request
+`200` because the binary serving `127.0.0.1:39401` is `3.4.0-f30539af` and does not contain
+them. Closing this means deploying a build that includes `5d25f104` and re-running the check.
+That is not done from an agent lane: replacing the live gateway binary restarts the process
+other sessions are routing MCP traffic through.
+
+So the path to a green gate is two actions, both outside this lane: a ledger-cell flip that
+the acceptance evidence already supports, and one deploy.
