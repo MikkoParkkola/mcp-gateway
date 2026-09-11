@@ -281,6 +281,7 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | NFR.SEC.4 | Deterministic fixtures MUST cover tamper, expiry, replay, wrong principal, wrong original request, key rotation, oversized state and arrival at a replica that does not hold the exchange — each failing closed, and failing for the stated reason. | T |
 | NFR.SEC.5 | `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo audit` and the secret scan MUST be clean. `#![deny(unsafe_code)]` MUST hold. | T |
 | NFR.SEC.6 | The four open security defects in the manifest — MIK-7249, MIK-7256, MIK-7262, MIK-7222 — MUST be closed in this release. | T |
+| NFR.SEC.7 | The build actually listening MUST contain every security control merged for this release, and the merged-versus-listening comparison MUST be automated rather than performed once by hand. A control's effective date is its install date, not its merge date, so the evidence is a probe against the running process — source inspection cannot distinguish a merged-and-unreachable guard from a working one. Raised by MIK-7265, whose 2026-08-28 probe returned the full tool list to a foreign `Origin` against an install that predated the DNS-rebinding guard by ten days. | T, M |
 
 ### 4.3 Performance
 
@@ -383,7 +384,9 @@ none here. Full statements in RFC-0061 §Unknowns.
 5. NFR.PERF.1 measured, not asserted.
 6. Two independent frontier-model reviews, from different vendors, recorded against the final change.
 7. The nineteen manifest tickets carry per-criterion verdicts; the six already-fixed tickets are closed; the three superseded tickets are re-scoped.
-8. `cargo clippy -D warnings`, `cargo fmt --check` and the full suite are green.
+8. `cargo clippy -D warnings`, `cargo fmt --check` and the full suite are green. "Full suite"
+   means `--all-features`: MIK-7320 found a fixture red under `--all-features` that the default
+   feature set never compiled, so a green default run is not evidence for this item.
 9. Every supplemental scope criterion and required decision is complete:
    `python3 scripts/release/check_scope_acceptance.py --release` succeeds.
 
