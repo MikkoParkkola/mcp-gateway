@@ -1125,9 +1125,12 @@ Against a clean tree at `1b83de13`, `cargo test --test mik_7272_sub2b_acs` repor
 `5 passed; 3 failed; 2 ignored`. The three failures are
 `s02_stdio_message_reaches_its_own_call_before_the_result`,
 `s02_stdio_progress_reaches_its_own_call_before_the_result` and
-`s03_progress_stdio_each_call_sees_only_its_own_token`, the last asserting
-`call B's token must appear exactly once: [String("token-A")]`, left `0`, right `1` --
-a correlation failure, not a delivery one. The row's own evidence cell was not rewritten to
+`s03_progress_stdio_each_call_sees_only_its_own_token`. All three fail on one mechanism,
+and it is neither delivery nor correlation: `Gateway::run_stdio` awaits each dispatch inline
+inside its read loop (`src/gateway/server/mod.rs:1648`, from `513647be`, 2026-03-24), so a
+second request sent while the first is still parked is never read. Each of the three rows
+sends one. `s03`'s panic reads `call B's token must appear exactly once: [String("token-A")]`
+because call B was never dispatched at all -- not because its token was mis-routed. The row's own evidence cell was not rewritten to
 match the new verdict and still contains the sentence *"The verdict stays ABSENT because
 `SseExchange.notifications` has NO production consumer"* -- itself naming a type removed in
 `fbca1bc9`, per the SSE citation correction above -- so the cell now argues against its own
@@ -1146,6 +1149,22 @@ pending rather than silently passing. So the defect is not that the code broke -
 advanced to `MET (caveat)` while three of the criterion's own acceptance rows are still in
 their pre-implementation state. The engineering work is exactly what this document already
 describes as in flight; only the grade is ahead of it.
+
+The three rows are not one disposition, and reading them as one costs either a hidden gap or
+a permanently red job. `s02`'s two rows hold **one** call in flight -- the test says so at
+`tests/mik_7272_sub2b_acs.rs:540` -- and their second request is `RELEASE_TOOL`, teardown that
+unparks the slow call so it can return. Their criterion assert is already green before it:
+the backend's notification does reach the stdio client mid-call. What they need is a release
+path that is not a JSON-RPC request, and the fixture already owns one -- `releases` is an
+`Arc<Semaphore>` the harness holds, so a handle that adds a permit directly retires the
+dependency. The fixture comment claiming "a second call in flight is the only way to release
+the first" describes the current fixture, not a constraint. `s03` is the opposite: its two
+calls carry `token-A` and `token-B` and the criterion IS per-call isolation, which cannot be
+demonstrated without two calls in flight. That row is genuinely blocked on the serve loop and
+is the honest `#[ignore]`, with `513647be` named as the reason and a concurrent-serve-loop
+ticket filed. Ignoring all three would repeat the pattern this document already flags at
+`tests/mik_6865_nested_key_probe.rs:62`: an `#[ignore]` that kept a live defect invisible
+behind a green suite.
 
 **The review gate is not date-bound; it is bound to `gpt-review` specifically.** The
 requirement is two independent non-Claude reviewers. This document's own text records that
