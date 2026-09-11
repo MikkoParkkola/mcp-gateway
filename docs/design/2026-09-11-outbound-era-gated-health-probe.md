@@ -431,7 +431,11 @@ before and after.
 
 ## 7. Fail-first record
 
-Nineteen of the thirty rows are written and have been observed against `HEAD`.
+Nineteen of the thirty rows are written and have been observed against `HEAD`. Five of
+those nineteen are second-stage pins rather than fail-first evidence for the half they name -
+rows 6, 8b, 9b, 9c and 9d - so the coverage this section records is fourteen rows, not nineteen.
+Rows 8b and 9c were added to that list on 2026-09-11 after an independent review; each cell
+says which sibling's defect it actually observes.
 The rest are listed below as outstanding, with what each is waiting on. This section
 records verdicts only - it is not an implementation report, and no production code has
 changed.
@@ -455,10 +459,10 @@ same verdicts.
 | 6b | **failed** | `tests.rs:1245` | "a status-carried -32603 is still a decline, not a fault" |
 | 7 | passed | - | regression guard, as designed |
 | 8 | passed | - | regression guard, as designed |
-| 8b | **failed** | `tests.rs:1304` | recorded methods were `["ping"]`, expected `["server/discover"]` |
+| 8b | **failed** | `tests.rs:1304` | recorded methods were `["ping"]`, expected `["server/discover"]` - which is ROW 1'S ASSERTION, not this row's. SECOND-STAGE PIN: the half this row exists to pin, that a `server/discover` result resets the breaker, receives no fail-first evidence at all, because HEAD already treats every result as healthy and resets. It discriminates only once the modern arm sends `server/discover` |
 | 9 | **failed** | `tests.rs:1337` | "a peer that does not know server/discover is not modern, whatever the probe said" |
 | 9b | **failed** | `tests.rs:1378` | "the -32601 to server/discover must drop the cached verdict" - row 9's defect |
-| 9c | **failed** | `tests.rs:1358` | "an answered ping is an absence of evidence about the era, not positive evidence" |
+| 9c | **failed** | `tests.rs:1358` | "an answered ping is an absence of evidence about the era, not positive evidence" - SECOND-STAGE PIN on row 9. The era is still `Some(Era::Modern)` here because nothing at HEAD ever drops it, which is row 9's defect; this row cannot distinguish "a served ping did not set the era" from "no invalidation path exists" until row 9's half lands |
 | 9d | **failed** | `tests.rs:1416` | `is_circuit_tripped()` false - the probe records no failures at all |
 | 12 | passed | - | all four non-refusal body shapes stay `Error::Transport`, as designed |
 | 16 | **failed** | `http/tests.rs:2233` | the `other =>` arm: HEAD yields a variant other than `Error::JsonRpc`. The panic is on the VARIANT and not on the ask count, so the retry baseline this row also carries is untainted. That baseline is not itself fail-first evidence: `assert_eq!(hits, 1)` never executes at HEAD, and once the variant changes it is satisfied for free, because `is_retryable` has no `JsonRpc` arm (`src/failsafe/retry.rs:96-105`). The no-retry half is a second-stage pin on the same footing as rows 6, 9b and 9d |
