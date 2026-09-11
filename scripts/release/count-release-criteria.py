@@ -44,6 +44,13 @@ ID_PREFIX = re.compile(r"^(?:MIK-\d+|NFR|GH\d+)\.")
 CLAUSE = re.compile(r" \(clause: [a-z]+\)$")
 # The verification-method vocabulary: test, measurement, inspection, demonstration.
 METHOD = re.compile(r"^[TMID](, ?[TMID])*$")
+
+# The status vocabulary the ledger's own header defines. A status outside it is
+# not a harmless synonym: the header's rule is "BLOCKING unless MET or N/A", and
+# the blocking column is set by hand, so an undefined word is a row whose flag
+# no rule connects to its verdict. Two rows read `PASS` for three days and were
+# counted non-blocking by a check that only ever policed the other column.
+STATUS_WORDS = re.compile(r"^(MET|PARTIAL|ABSENT|UNWIRED|UNTESTED|N/A)(\s*\(.+\))?$")
 # The headline sentence this script owns. Nothing else in the file may state totals.
 HEADLINE = re.compile(
     r"Coverage: (\d+) criteria, (\d+) rows, (\d+) met or non-blocking, (\d+) blocking\."
@@ -174,6 +181,29 @@ def rows(text):
         found = ID.match(cells[0])
         out.append((found.group(1), cells[-1], found.group(0)))
     return out, malformed
+
+
+def status_violations(text):
+    """Criterion ids whose status cell is outside the documented vocabulary.
+
+    Counted from the LEFT, not the right: an evidence cell may contain a literal
+    pipe, which moves every right-hand index and made two well-formed rows read
+    as violations. NFR rows carry a verification-method column that functional
+    rows do not, so the method regex decides which of the two positions holds
+    the status rather than a per-prefix rule that a new prefix would silently
+    escape.
+    """
+    out = []
+    for line in text.splitlines():
+        if not line.startswith("| ") or line.startswith("| ---"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 4 or not ID.match(cells[0]) or cells[-1] not in ("yes", "no"):
+            continue
+        status = cells[3] if METHOD.match(cells[2]) else cells[2]
+        if not STATUS_WORDS.match(status):
+            out.append(f"{cells[0]} ({status[:40]})")
+    return out
 
 
 def required_methods(text):
@@ -477,6 +507,15 @@ def main():
         # cell -- so the message names the ROW, not one of its columns. Naming
         # the blocking column sent a reader to a cell that was well formed.
         print(f"malformed criterion row: {', '.join(malformed)}", file=sys.stderr)
+        return 1
+
+    undefined = status_violations(text)
+    if undefined:
+        print(
+            "status outside the vocabulary the ledger defines:\n  "
+            + "\n  ".join(undefined),
+            file=sys.stderr,
+        )
         return 1
 
     blocking = sum(1 for _, b, _s in criteria if b == "yes")
