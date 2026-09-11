@@ -245,8 +245,18 @@ impl SseDecoder {
 /// before this returns, because returning ends the caller's scope.
 fn drain_events(events: Vec<SseEvent>) -> Result<Option<JsonRpcResponse>> {
     for event in events {
-        let message: JsonRpcMessage = serde_json::from_str(&event.data)
-            .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")))?;
+        // The line count is the discriminator for a backend that omits the
+        // blank line between frames: its glued frames arrive as one block and
+        // every `data:` line in a block is joined before parsing, so the parse
+        // fails with a count above one. The payload itself stays out of the
+        // message -- a tool result is the last thing to copy into an error.
+        let message: JsonRpcMessage = serde_json::from_str(&event.data).map_err(|e| {
+            Error::Transport(format!(
+                "Failed to parse SSE data ({} data lines, {} bytes): {e}",
+                event.data.lines().count(),
+                event.data.len()
+            ))
+        })?;
         match message {
             JsonRpcMessage::Response(response) => return Ok(Some(response)),
             JsonRpcMessage::Notification(notification) => {

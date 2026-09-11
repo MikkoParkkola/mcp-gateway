@@ -182,6 +182,26 @@ async fn a_stream_ending_without_a_blank_line_still_yields_its_response() {
     assert!(response.result.is_some());
 }
 
+/// A backend that omits the blank line between frames glues them into one
+/// block, and every `data:` line in a block is joined before parsing -- so the
+/// failure is a JSON parse error on text that looked like valid frames. The
+/// error carries the line count because that is the only part of the shape
+/// that distinguishes this from a genuinely malformed single payload.
+#[tokio::test]
+async fn frames_glued_without_a_blank_line_report_how_many_lines_were_joined() {
+    let body = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(
+        b"data: {\"jsonrpc\":\"2.0\",\"method\":\"x\"}\n\
+          data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n",
+    ))]);
+    let error = decode_sse_exchange(body)
+        .await
+        .expect_err("two frames joined into one payload cannot parse");
+    assert!(
+        error.to_string().contains("2 data lines"),
+        "the error must name the join that caused it: {error}"
+    );
+}
+
 /// P7, converse: the response frame ends the call immediately. A stream held
 /// open forever after it must not keep the caller waiting for EOF.
 #[tokio::test]
