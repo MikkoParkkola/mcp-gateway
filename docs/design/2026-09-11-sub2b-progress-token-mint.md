@@ -78,9 +78,14 @@ is the same shape of cross-cutting outbound rewrite and takes the same seat.
 on the strength of that site's own comment, *"`_meta` is one object, so one
 writer owns it"*. That comment is true about how `invoke` constructs `_meta`; it
 is not true of the system. The router's direct backend route dispatches at
-`src/gateway/router/backend_handlers.rs:830,833,888,891` and the file contains no
-occurrence of `_meta` or `progressToken` at all — it forwards the caller's params
-verbatim. A mint in `invoke` would have left that route handing backends the
+`src/gateway/router/backend_handlers.rs:830,833,888,891` and never writes either JSON
+key: `rg -c '"_meta"|"progressToken"'` over that file returns 0, so it forwards the
+caller's params verbatim.
+
+State that check with the quotes. Unquoted, `rg -c '_meta|progressToken'` returns a
+non-zero count — every hit is `prepare_tool_metadata`, `_meta` as a substring of an
+identifier — so anyone re-running the loose form to confirm this finding gets a
+positive count and doubts a correct conclusion. A mint in `invoke` would have left that route handing backends the
 client's own token. Reading a single-site ownership comment as a system-wide
 invariant is the same error this document already corrected once over ADR-014 §2's
 per-transport table.
