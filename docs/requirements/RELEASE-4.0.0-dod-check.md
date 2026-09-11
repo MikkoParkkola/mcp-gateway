@@ -94,7 +94,7 @@ commit rather than from the truncated log, because a truncated log is not eviden
 | D5 CONTRACTS | PARTIAL | the evidence fix changes no public API. The branch's own API changes are graded in the criteria ledger rather than re-verified here; no interface-stability diff was run against the merge-base |
 | D6 E2E | OUTSTANDING | the FUNCTIONAL PASS gate needs a driven user journey against a deployed build. Blocked on the same operator deploy as NFR.SEC.7 |
 | D7 WIRED | NOT EVALUATED | the CI wiring cited here is D24, not D7. No reachability sweep was run over the 39 changed `src/` files to show each is called from production rather than from tests alone |
-| D8 OBSERVABLE | NOT EVALUATED | no correlation-ID propagation sweep was run on this branch |
+| D8 OBSERVABLE | PARTIAL | the gate is "metrics/logs/traces **+ correlation ID propagated**" and the two halves split. Emission is met: the change adds 11 `tracing::*!` / `telemetry_metrics::*!` call sites, and both backend entry points carry `#[tracing::instrument]` spans. **Propagation is not.** The crate has no correlation-ID concept — `rg -w correlation_id src` is empty — and the field that stands in for one is minted, not carried: `src/backend/ops.rs:44` and `:384` set `request_id = %uuid::Uuid::new_v4()` inside the span attribute, so every backend call invents a fresh UUID. The only other `request_id` in the change is the JSON-RPC sequence counter at `src/transport/http/mod.rs:326` and `src/transport/stdio.rs:86`, which is a protocol id, not a trace id. Two backend calls serving one inbound request therefore carry two unrelated ids and nothing ties either to the client's request |
 | D9 STATIC | PASS | see the matrix above |
 | D10 0-BUG | PARTIAL | 0 debt markers in `src/`. "0 known defects" is withdrawn as well: the supplemental contract's 30 `pending` rows include unresolved assessments — identity-dependent tool catalogues crossing callers among them — and pending work is not the same as defect-free. The **no new suppression** claim was wrong and is withdrawn. Against the merge-base `738c7cee`, `src/backend/metadata.rs` gains two `#[expect(dead_code, ...)]` markers, at `:160` on `set_resend_permitted` and `:182` on `resend_permitted_snapshot`; both are deliberate (`expect` rather than `allow`, so the gate errors when the direct-route caller lands) but both are new. The third added `#[allow]` line is a move rather than an addition: `#[allow(clippy::too_many_lines)]` sits at `src/gateway/router/handlers.rs:580` on `main` and at `:620` here |
 | D11 OPTIMIZED | PARTIAL | criterion benchmarks ran on Spark 2026-09-03; no profiling pass at this head |
@@ -166,7 +166,7 @@ one-line summary plus the supplemental scope contract.
 
 **Not every gate that was run is green, and the count of what remains is larger than one blocker.**
 Two operator acts hold the release — the NFR.SEC.7 deploy and the #528 merge. Behind them sit
-twelve unevaluated analysis passes — the count below, not an exhaustive inventory of
+eleven unevaluated analysis passes — the count below, not an exhaustive inventory of
 unexamined work, since several PARTIAL rows carry unevaluated halves of their own — thirty `pending` rows in the supplemental contract
 (`RELEASE-4.0.0-scope-status.json`), and one gate that ran twice without reaching its own threshold:
 the dual-vendor review never recorded the two distinct approvals D12 requires. The baseline ledger's
@@ -190,13 +190,13 @@ which predates it. Its second half, drift between merged and listening controls,
 2026-09-11 by `scripts/dev/check-control-drift.py` against `security-controls.toml`. **D6** cannot be
 driven until that deploy exists, and **D18** is the merge itself.
 
-**The larger hold is not an operator act.** Twelve gates carry no evaluation at all, and they
+**The larger hold is not an operator act.** Eleven gates carry no evaluation at all, and they
 divide into two groups that should not be read as one. They are not the whole of what is unexamined:
 PARTIAL rows such as H8 (disk housekeeping), D5 (interface comparison) and D11 (profiling) each hold
 an unevaluated half that is counted nowhere below.
 
-**Seven an agent can run at this head today**, each with a command or a reasoning pass behind it:
-correlation-ID propagation (D8), STRIDE, coverage no-drop (§4), production wiring of the changed `src/` files
+**Six an agent can run at this head today**, each with a command or a reasoning pass behind it:
+STRIDE, coverage no-drop (§4), production wiring of the changed `src/` files
 (D7/§2), canary planning (D21), the bet assessment (B1–B4), and
 T1c. None is blocked. They are open because nobody has run them on this branch.
 
