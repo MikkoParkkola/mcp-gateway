@@ -187,7 +187,7 @@ Clusters A, D, F, G, H, I, J and L have cleared, and the residue emptied on 2026
 
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
-| C | MIK-7272 revision surface | `SUB.2` (own-stream clause) | 1 | three unbuilt pieces. `SUB.2b`'s inbound legs capture rather than discard (`parse_sse_response` returns `Result<SseExchange>`, `src/transport/http/mod.rs:312`; progress-token match, `src/transport/stdio.rs:416-431`), but that capture is post-hoc and cannot satisfy the acceptance rows on its own. (1) The SSE body is read whole by `response.text().await` (`src/transport/http/mod.rs:1373`), so nothing can be emitted before the result it is meant to precede; a streaming read replaces it. (2) The stdio serve loop awaits each dispatch inline (`src/gateway/server/mod.rs:1696`, `dispatch_single_with_sink` at `:1737`), so a second call cannot be read while the first is in flight -- a deadlock independent of (1). (3) No per-request sink carries a notification to the client ahead of the response. The fixture names this failure mode directly (`tests/mik_7272_sub2b_acs.rs:160`): a design that buffers and flushes at the end deadlocks there instead of passing. An earlier revision of this cell sized the row as outbound-leg wiring only; that sizing hits the deadlock. `SUB.4` left this cluster on 2026-09-11: the release-versus-settle decision it was waiting on is made and wired — a failure the transport can prove never left the origin releases the key, and every other shape settles terminally (`Error::TransportConnect` via `safe_request_error_for`, `src/security/http_diagnostics.rs:88`, on the redirect evidence the dispatch site samples). Scored by `tests/mik_7272_sub4_adr012_acs.rs`, 15 passed / 0 failed. `EXT.1`, `OTEL.1`, `TASK.1` and `MRTR.10` left this cluster as their wiring landed, and `ORDER.2` left it on 2026-09-08 |
+| C | MIK-7272 revision surface | `SUB.2` (own-stream clause) | 1 | three unbuilt pieces. `SUB.2b`'s inbound legs capture rather than discard (`sse_decoder.rs` publishes notifications per completed event, `src/transport/http/sse_decoder.rs:188,246` (superseded `parse_sse_response`, removed in `fbca1bc9`); progress-token match, `src/transport/stdio.rs:416-431`), but that capture is post-hoc and cannot satisfy the acceptance rows on its own. (1) The SSE body is read whole by `response.text().await` (`src/transport/http/mod.rs:1373`), so nothing can be emitted before the result it is meant to precede; a streaming read replaces it. (2) The stdio serve loop awaits each dispatch inline (`src/gateway/server/mod.rs:1696`, `dispatch_single_with_sink` at `:1737`), so a second call cannot be read while the first is in flight -- a deadlock independent of (1). (3) No per-request sink carries a notification to the client ahead of the response. The fixture names this failure mode directly (`tests/mik_7272_sub2b_acs.rs:160`): a design that buffers and flushes at the end deadlocks there instead of passing. An earlier revision of this cell sized the row as outbound-leg wiring only; that sizing hits the deadlock. `SUB.4` left this cluster on 2026-09-11: the release-versus-settle decision it was waiting on is made and wired — a failure the transport can prove never left the origin releases the key, and every other shape settles terminally (`Error::TransportConnect` via `safe_request_error_for`, `src/security/http_diagnostics.rs:88`, on the redirect evidence the dispatch site samples). Scored by `tests/mik_7272_sub4_adr012_acs.rs`, 15 passed / 0 failed. `EXT.1`, `OTEL.1`, `TASK.1` and `MRTR.10` left this cluster as their wiring landed, and `ORDER.2` left it on 2026-09-08 |
 | K | deployed-build control drift | `NFR.SEC.7` | 1 | both halves of a new row, added 2026-09-11 for MIK-7265, which had no requirement governing it. The origin guard `src/gateway/router/origin_guard.rs` is merged (added by `5d25f104`, 2026-08-28; `55970c2b` two days earlier only adds a tunnel-hostname unit test to it) and wired at `src/gateway/router/mod.rs:313`, with the policy built from live config at `:216`, so this is not unbuilt protocol work; a drift check cannot ask the process what it runs: there is no `build.rs` in the crate and no git sha is compiled in - `env!("CARGO_PKG_VERSION")` is the only provenance the binary carries (`src/gateway/server/support.rs`), so `3.4.0` is all it can report, and the commit is knowable only from the install artefact's path (`~/.local/libexec/mcp-gateway/3.4.0-f30539af`). Built 2026-09-11: `scripts/dev/check-control-drift.py` with the manifest `security-controls.toml`, the probe rows in `scripts/dev/test_check_control_drift.py` and the reviewed design at `docs/design/2026-09-11-merged-versus-listening-drift-check.md`. The checker therefore probes behaviour on the wire and uses the reported version only to corroborate, via `git merge-base --is-ancestor <control commit> v<version>`. Verified both ways the same day: a gateway built from this tree refuses the foreign `Origin` and the foreign `Host` and answers the legitimate request, exit 0; the listening install answers all three with 200, exit 1, noting `5d25f104 is NOT in v3.4.0`. What remains is the first half only — an install of a build that carries the guard. That is a deployment, and it is the operator's call; the row stays blocking until the live endpoint passes the check. |
 
 Cluster C's `SUB.4` prerequisite — the idempotency key binding the calling principal — closed, and
@@ -973,8 +973,12 @@ stall the release. One is unwritten code. The other is a deployment nobody has p
 ### `MIK-7272.SUB.2b` — ABSENT, and the absence is one leg
 
 Request-scoped notifications must flow on the response stream of their own request. The
-inbound leg exists and is scaffold, not absence: `parse_sse_response`
-(`transport/http/mod.rs:312`). The outbound leg is what the ledger calls ABSENT, and it is
+inbound leg exists and is scaffold, not absence -- but the symbol this rollup first cited for
+it, `parse_sse_response` at `transport/http/mod.rs:312`, no longer exists anywhere in `src`.
+Commit `fbca1bc9` replaced the buffer-the-whole-body parse with an incremental decoder, so
+the live citation is `src/transport/http/sse_decoder.rs` (`decode` at `:188`, `drain_events`
+at `:246`), which publishes notifications as each event completes instead of returning them
+alongside the response. The outbound leg is what the ledger calls ABSENT, and it is
 the work in flight on `feat/sub2b-outbound-mint`. The standing merge constraint is that the
 inbound capture scaffold ships with the outbound emitter or not at all, which is why PR #528
 is Draft rather than mergeable.
@@ -1091,10 +1095,11 @@ is the release owner's call.
 `criteria-status.md`, and add the `tests/mik_6865_nested_key_probe.rs:62` `#[ignore]` line
 noted above. Neither is a gate; both are cheap and both decay if deferred.
 
-Release-ready means all four, not the gate's count of 2. Two of the four can proceed right
-now: the outbound emitter and the operator deployment. The other two each wait on something
-outside the code -- bookkeeping on the push hold, review on a second non-Claude reviewer
-being available.
+Release-ready means all four, not the gate's count of 2. Three of the four can proceed right
+now: the outbound emitter, the operator deployment, and the review -- the last because the
+gate asks for two independent non-Claude reviewers, not for `gpt-review` in particular, and
+substituting the second one has since been exercised (see the corrections section below).
+Only bookkeeping waits, and it waits on the push hold rather than on anything technical.
 
 ### Corrections from the 2026-09-11 review of this document
 
