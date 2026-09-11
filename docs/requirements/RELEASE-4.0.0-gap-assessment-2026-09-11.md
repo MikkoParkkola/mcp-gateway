@@ -177,6 +177,34 @@ thirteen: they are the accounts/OpenWebUI/task-signing stack on the codex
 lineage, and #512 alone carries all 44 `src/personal_accounts/` files, so
 parking the leaves loses nothing.
 
+## Step 2 outcome: the DISCOVERY package is graded — 2026-09-11
+
+The plan's step 2 was to grade the five discovery-package criteria on the release line before
+deciding anything about the codex lineage. That grading is done and recorded in
+`RELEASE-4.0.0-scope-status.json`. **None reaches MET**, and the five rows stay `pending` with
+the grade and its citations now in the note rather than "not yet graded".
+
+| ID | Grade | Why it does not reach MET |
+|---|---|---|
+| MIK-3274.RANKING.1 | ABSENT | `score_text_relevance` is substring plus a 20-group synonym table (`src/ranking/scoring.rs:190`, `:17`); no edit distance, acronym or word-boundary matching in `src/ranking/`, and none of the 56 ranking tests covers abbreviation, word boundary, Unicode or Code Mode glob |
+| MIK-3274.RANKING.2 | UNTESTED | Both invariants are implemented and citable — authorization filters before collection (`search.rs:200`), ranking precedes truncation (`:763`), usage is multiplicative so 0.0 stays 0.0 (`ranking/mod.rs:396`) — but no test asserts either ordering |
+| MIK-3274.RANKING.3 | NEEDS-MEASUREMENT | No corpus, baseline or frozen threshold exists; the performance contract freezes the workload rows only. The freeze was never recorded, and cannot now be produced as written because ranking already shipped |
+| MIK-7332.DISCOVERY.1 | ABSENT | Tiered disclosure exists (`search_disclosure.rs:40`) but neither positive control from the test row does; `discovery_tests.rs` covers auto-discovery and shadow scan only |
+| MIK-7334.CATALOGUE.1 | ABSENT | `tools_cache` is one `CachedMetadata<Vec<Tool>>` per backend with no identity key (`src/backend/mod.rs:81`), beside a pool that *is* per-identity (`:47`) |
+
+The grades are static evidence: every citation is a read line, no test was run. That is enough to
+establish absence, which is what step 2 asked; it is not enough to promote anything to MET.
+
+`MIK-7334.CATALOGUE.1` is the row worth reading twice. MIK-6735 made transport sessions
+per-identity and left tool metadata on a single shared cache, so an identity-dependent catalogue
+crosses callers by construction rather than under a race — it needs no timing to reproduce.
+
+**What this settles for step 3.** The release line does not deliver these five. That is now a
+measured fact rather than an assumption, so the lineage question is no longer "does mint already
+have this" but "does the codex stack deliver any of the five, and at what merge cost" — the same
+grading, run against `codex/v4-next-integration`. Nothing about the 13 held drafts changes until
+that second grading exists.
+
 ## What this does not change
 
 The `NFR.SEC.7` deploy recommendation stands on its own merits and is unaffected. It is a
