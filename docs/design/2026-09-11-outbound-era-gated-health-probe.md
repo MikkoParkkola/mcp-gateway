@@ -500,3 +500,41 @@ the operator pre-authorised deciding it with the advisor models. The two candida
 are named in §3 - keep the session signature on the `Transport` side, or teach
 `is_session_expired_error` the `JsonRpc` variant - and rows 16 and 16d together will referee
 whichever lands, which is why both exist.
+
+### 8.1 Candidate resolution for the §3 ruling - NOT yet reviewed
+
+Recorded here rather than in §3 because the review running against this document was
+launched on the §3 text as it stands, and amending that text mid-review would leave the
+verdicts describing a document that no longer exists. Whichever resolution lands, it lands
+in §3 after the verdicts are in.
+
+The ruling named two options - keep the session signature on the `Transport` side, or teach
+`is_session_expired_error` the `JsonRpc` variant - and both are worse than a third the
+codebase already contains. `is_session_expired_error` has a sibling, `is_session_expired_response`
+(`src/transport/http/mod.rs:187`), added by MIK-6040 / #247 for remotes that encode the expiry
+as a JSON-RPC error under a **200**. Its body is a pure predicate over the error member:
+`code == -32015 || code == -32600 || message` containing `"session not found"`. The two are
+selected by a single `match` on the result at `:1473-1476`: `Err` goes to the first, `Ok` to
+the second.
+
+§3's parse change keeps a status-carried refusal in the `Err` arm and only changes its variant,
+so `is_session_expired_error` is still the classifier that must answer, and it returns false on
+anything that is not `Error::Transport`. The fix is to lift the predicate out of
+`is_session_expired_response` into one `is_session_expired_signature(code, message)` and give
+`is_session_expired_error` an `Error::JsonRpc { code, message }` arm that calls it. Both
+classifiers keep their current answers on every input they answer today; neither call site moves.
+
+This is worth stating plainly because it inverts what §3 currently claims about its own risk.
+The ruling reads as though the parse change endangers session recovery. Under this resolution
+it *extends* it: today a remote answering **404 with a `-32015` body** is rescued only by the
+`starts_with("http 404")` string test, and a remote answering **502 with a `-32015` body** is
+rescued by nothing at all, because the status is not 404 and the error never reaches the
+response-side classifier. After the change both are rescued by the signature itself, which is
+what the two MIK-6040 codes were written to recognise in the first place.
+
+What it costs: the existing guard `request_reinitializes_session_and_retries_on_http_404`
+(`src/transport/http/tests.rs:780`) answers bare non-JSON text, so it passes through the
+regression either way and cannot referee this. Row 16d is the row that does, and it must keep
+its JSON-RPC error body for that reason. A row for the 502-carried signature does not exist and
+should be added when this lands - it is the half that only becomes reachable after the change,
+so it is not a fail-first row for §3 and cannot be written as one.
