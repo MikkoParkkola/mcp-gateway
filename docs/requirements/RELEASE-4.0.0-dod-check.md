@@ -12,7 +12,11 @@ the head, that is said in the same line rather than rounded up.
 
 # DoD re-check at `a148c94e` — 2026-09-11
 
-**Head**: `a148c94e` (`fix(release): record scope evidence as repository paths`) ·
+**Assessment revision**: `8dd68269` — the commit at which this section's verdicts were last
+re-derived. Each measurement names the commit it ran at, which is not always this one; where a gate
+was run earlier, the row says so. **Head when the code-facing gates were run**: `a148c94e`
+(`fix(release): record scope evidence as repository paths`); every commit since changes documentation
+only ·
 **Merge-base with `main`**: `origin/main` at `738c7cee`, 0 behind / 209 ahead ·
 **Branch**: `feat/sub2b-outbound-mint` · **PR**: [#528](https://github.com/mikkoparkkola/mcp-gateway/pull/528) (draft) ·
 **SSOT**: `~/.claude/rules-source/workflows/quality-gates-dod.md` (cited by full path deliberately —
