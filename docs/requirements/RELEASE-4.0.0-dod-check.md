@@ -101,9 +101,9 @@ commit rather than from the truncated log, because a truncated log is not eviden
 | D12 REVIEWED | PARTIAL | three rounds (four launches) ran and **none reached the gate**, which requires `MIN_DISTINCT_APPROVALS` = 2. Round 1 on `7d6040e2` against `5e42f9b3`: kimi SHIP, gpt SHIP-WITH-FIXES, grok SHIP-WITH-FIXES — recorded as `1 of 2 required distinct vendors approved`. Round 2 on `f903b854` was launched twice: the first launch returned gpt SHIP-WITH-FIXES with grok and kimi silent; the second returned gpt SHIP-WITH-FIXES and grok SHIP-WITH-FIXES, the latter carrying the `#[expect(dead_code)]` finding that corrected D10. Round 3 on `252da51a`: gpt SHIP-WITH-FIXES, grok emitted a preamble with no `VERDICT` line, kimi wrote a 0-byte run file. **The gate is unmet because no round produced two approvals, not because the vendors went unheard** — across every round exactly one verdict was a bare SHIP (kimi, round 1) and all others were SHIP-WITH-FIXES, which the gate does not count as approval. Re-running cannot close it while findings keep landing; closing it needs either a round in which two vendors have nothing left to fix, or an operator decision to accept this section on one vendor. All rounds' findings are applied; see *What the review changed* below. What is PARTIAL is the approval count, not the review effort |
 | D13 TRACKED | PASS | committed, pushed, and carried by PR #528 |
 | D13a ISSUE-CLOSED | N/A | nothing may close before D18, and D18 is outstanding |
-| D13b EFFORT-LOGGED | NOT EVALUATED | no effort figure recorded |
+| D13b EFFORT-LOGGED | NOT MET | no effort figure exists to record. What the forge can state is size, not effort: PR #528 carries **100 commits, 82 files, +15,492/−660** against the base. Nothing in the PR, the branch or this document logs hours or points, and inventing one from the diff would be a fabricated measurement, so the gate is recorded as failing rather than passed on a proxy |
 | D13c DEPS-UNBLOCKED | PASS | the 13 held `codex/v4-*` drafts each carry an explicit held-disposition comment naming the condition for revisiting |
-| D13d LABELED | NOT EVALUATED | PR labels not audited |
+| D13d LABELED | PASS | `gh pr view 528` returned **zero labels** when audited, so the gate was failing rather than unevaluated. Three were applied from the repository's own set and verified back: `enhancement` (the PR is a `feat`), `security` (it changes `src/security/firewall/mod.rs` and `src/security/http_diagnostics.rs`) and `rust`. Priority is deliberately left unset — that is the operator's call, not an auditable property of the diff |
 | D14 DOCUMENTED | PASS | `docs/UPGRADING-4.0.md`, `CHANGELOG.md` 4.0.0 section, release-notes draft, criteria ledger |
 | D15 CLEAN | PARTIAL | the tree is clean and the evidence fix removes a CI failure while adding no file. D15 is defined as H6–H11, three of which are themselves NOT EVALUATED above, so it cannot be scored higher than its weakest prerequisite |
 | D16 TELEMETRY | N/A | no savings-emitting change on this branch |
@@ -166,7 +166,7 @@ one-line summary plus the supplemental scope contract.
 
 **Not every gate that was run is green, and the count of what remains is larger than one blocker.**
 Two operator acts hold the release — the NFR.SEC.7 deploy and the #528 merge. Behind them sit
-fourteen unevaluated analysis passes — the count below, not an exhaustive inventory of
+twelve unevaluated analysis passes — the count below, not an exhaustive inventory of
 unexamined work, since several PARTIAL rows carry unevaluated halves of their own — thirty `pending` rows in the supplemental contract
 (`RELEASE-4.0.0-scope-status.json`), and one gate that ran twice without reaching its own threshold:
 the dual-vendor review never recorded the two distinct approvals D12 requires. The baseline ledger's
@@ -190,14 +190,14 @@ which predates it. Its second half, drift between merged and listening controls,
 2026-09-11 by `scripts/dev/check-control-drift.py` against `security-controls.toml`. **D6** cannot be
 driven until that deploy exists, and **D18** is the merge itself.
 
-**The larger hold is not an operator act.** Fourteen gates carry no evaluation at all, and they
+**The larger hold is not an operator act.** Twelve gates carry no evaluation at all, and they
 divide into two groups that should not be read as one. They are not the whole of what is unexamined:
 PARTIAL rows such as H8 (disk housekeeping), D5 (interface comparison) and D11 (profiling) each hold
 an unevaluated half that is counted nowhere below.
 
-**Nine an agent can run at this head today**, each with a command or a reasoning pass behind it:
+**Seven an agent can run at this head today**, each with a command or a reasoning pass behind it:
 correlation-ID propagation (D8), STRIDE, coverage no-drop (§4), production wiring of the changed `src/` files
-(D7/§2), canary planning (D21), effort (D13b), PR labels (D13d), the bet assessment (B1–B4), and
+(D7/§2), canary planning (D21), the bet assessment (B1–B4), and
 T1c. None is blocked. They are open because nobody has run them on this branch.
 
 **Five need the same deployed build NFR.SEC.7 is waiting on**: structured-telemetry shape (D22),
