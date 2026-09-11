@@ -946,6 +946,12 @@ enum ProbeAnswer {
 struct ProbeMock {
     methods: std::sync::Mutex<Vec<String>>,
     answers: std::sync::Mutex<std::collections::VecDeque<ProbeAnswer>>,
+    /// Answer given once the script runs out. It exists because an
+    /// invalidation spawns a **detached** classification probe: that probe
+    /// draws from the same mock at a time no test controls, so a row scripting
+    /// one answer per tick would be racing it for queue slots. A standing
+    /// answer makes every row that outlives its script deterministic.
+    default_answer: std::sync::Mutex<ProbeAnswer>,
     connected: AtomicBool,
 }
 
@@ -954,6 +960,7 @@ impl ProbeMock {
         Self {
             methods: std::sync::Mutex::new(Vec::new()),
             answers: std::sync::Mutex::new(answers.into()),
+            default_answer: std::sync::Mutex::new(ProbeAnswer::Result(json!({}))),
             connected: AtomicBool::new(true),
         }
     }
@@ -979,6 +986,20 @@ impl ProbeMock {
         Self::scripted(answers)
     }
 
+    /// Set the standing answer. Rows that need the peer's behaviour to change
+    /// mid-test use this rather than lengthening the script, so a detached
+    /// probe arriving late gets the same answer a tick would.
+    fn set_default(&self, answer: ProbeAnswer) {
+        *self.default_answer.lock().expect("default lock") = answer;
+    }
+
+    /// Refuse everything after the scripted prefix, the way a peer that knows
+    /// neither `server/discover` nor `ping` does.
+    fn refusing(self, code: i32) -> Self {
+        self.set_default(ProbeAnswer::InBandError(code));
+        self
+    }
+
     fn methods(&self) -> Vec<String> {
         self.methods.lock().expect("methods lock").clone()
     }
@@ -1001,7 +1022,7 @@ impl Transport for ProbeMock {
             .lock()
             .expect("answers lock")
             .pop_front()
-            .unwrap_or(ProbeAnswer::Result(json!({})));
+            .unwrap_or_else(|| self.default_answer.lock().expect("default lock").clone());
         match answer {
             ProbeAnswer::Result(value) => Ok(JsonRpcResponse::success_serialized(
                 RequestId::Number(1),
@@ -1338,5 +1359,66 @@ async fn row_9c_a_served_ping_is_not_evidence_of_modernity() {
         backend.cached_era().await,
         Some(crate::protocol::era::Era::Modern),
         "an answered ping is an absence of evidence about the era, not positive evidence"
+    );
+}
+
+/// Row 9b — re-classification works in both directions, and the evidence
+/// arrives **off the probe path**. The start path's `resolve_era` is what
+/// returns a peer to `Era::Modern`; the health tick never sends
+/// `server/discover` to a backend it has just reclassified as legacy, which is
+/// the mirror-image OUTBOUND.1 defect.
+#[tokio::test]
+async fn row_9b_positive_evidence_off_the_probe_path_reclassifies_the_peer() {
+    let mock = Arc::new(
+        ProbeMock::modern_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
+    );
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+
+    let _ = backend.health_probe(Duration::from_secs(5)).await;
+    assert_ne!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern),
+        "the -32601 to server/discover must drop the cached verdict"
+    );
+
+    // The peer is replaced by one that answers discovery properly - an upgrade,
+    // as far as the gateway can tell - and the start path probes it again.
+    mock.set_default(ProbeAnswer::Result(json!({
+        "capabilities": {},
+        "supportedVersions": [crate::protocol::meta::MODERN_VERSIONS[0]],
+    })));
+    let transport = Arc::clone(&mock) as Arc<dyn Transport>;
+    backend.resolve_era(&transport).await;
+
+    assert_eq!(
+        backend.cached_era().await,
+        Some(crate::protocol::era::Era::Modern),
+        "positive evidence must be able to restore the modern verdict"
+    );
+}
+
+/// Row 9d — the escalation sequence section 3 uses to justify the bound, end to
+/// end, and the one that crosses an era invalidation: `server/discover` refused
+/// (invalidate, 1), `ping` refused (2), `ping` refused (3, trip and restart).
+/// An implementation that resets the unserved count when it invalidates the era
+/// leaves a refuse-everything backend permanently wedged and green.
+#[tokio::test]
+async fn row_9d_three_unserved_answers_across_an_invalidation_still_escalate() {
+    let mock = Arc::new(
+        ProbeMock::modern_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
+    );
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+
+    for _ in 0..3 {
+        let _ = backend.health_probe(Duration::from_secs(5)).await;
+    }
+
+    assert!(
+        backend.is_circuit_tripped(),
+        "three consecutive unserved answers must trip the breaker"
+    );
+    assert!(
+        !still_wired(&backend, &mock),
+        "the third unserved answer escalates to a restart"
     );
 }
