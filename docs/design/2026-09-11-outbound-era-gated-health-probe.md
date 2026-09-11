@@ -107,6 +107,25 @@ recording it as death restarts a working peer. It must be surfaced instead: a
 to `server/discover` means the era classification was wrong — an invalidation of the
 cached era so the next start-path probe re-classifies.
 
+**The third arm is bounded — a refusal cannot be permanent.** Left unbounded, the
+"neither" verdict is a new failure mode: a backend wedged into answering `-32601` to
+everything would never trip a breaker, never rebuild, and its only trace would be a
+counter nobody reads. So the refusal arm escalates:
+
+1. **First refusal** — record neither; warn; increment the counter; invalidate the cached
+   era so the next start-path probe re-classifies the peer.
+2. **Consecutive refusals** — count them per backend. The counter resets on any other
+   outcome, including a transport fault.
+3. **Three consecutive** (30s at the default interval), *spanning at least one
+   re-classification* — escalate to the fault arm: trip the breaker and `force_restart()`.
+
+Three is chosen to be the smallest count that cannot be reached without a completed
+re-classification: probe (refuse, invalidate) -> probe (re-classified era, refuse) ->
+probe (refuse again). A peer that refuses the liveness method of the era it was *just*
+re-classified into is not serving MCP, and the health signal should say so. The threshold
+is a constant, not a config knob — no requirement asks for one, and an unbounded arm is
+the defect, not a tuning surface.
+
 **This requires the HTTP transport to stop flattening a refusal into a string.** A 404
 whose body is a `-32601` JSON-RPC error is currently `Err(safe_http_status_error(..))`
 (`src/transport/http/mod.rs:1275-1295`), which discards the code. The existing
@@ -144,10 +163,14 @@ for a JSON-RPC error object before falling back to the status string.
    resets it, as today.
 8. **Era invalidation.** After a `-32601` to `server/discover`, the cached era for that
    backend is no longer `Modern`.
-9. **Measurement (M).** Per-probe wall time and response size for `server/discover`
+9. **Escalation bound.** A backend that refuses every probe: refusals 1 and 2 leave the
+   breaker unchanged; the third trips it and restarts. Guards the wedged-peer failure mode
+   the third arm would otherwise create. A companion row asserts the counter resets — two
+   refusals, one served result, then two more refusals must not trip.
+10. **Measurement (M).** Per-probe wall time and response size for `server/discover`
    against a real backend, compared with `ping`, at the default interval. This is the
    evidence for §2's load claim; the claim is unproven until it exists.
 
-Every one of 1–8 must fail against `HEAD` before the implementation lands. A test that
+Every one of 1–9 must fail against `HEAD` before the implementation lands. A test that
 passes before the fix is testing something else — see
 `a-test-first-suite-can-encode-an-inverted-oracle`.
