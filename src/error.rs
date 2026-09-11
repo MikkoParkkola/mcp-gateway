@@ -209,6 +209,26 @@ pub enum Error {
         data: Option<serde_json::Value>,
     },
 
+    /// A JSON-RPC error the peer carried on a status that invites a retry.
+    ///
+    /// Two independent facts, and a caller breaks if either is dropped. The
+    /// code is the peer's own answer, so the health probe must score it as an
+    /// unserved answer rather than as a transport fault and tear down a
+    /// backend that is up and merely declining. The status says the peer has
+    /// not finished answering, so the retry classifiers must keep retrying it
+    /// rather than hand an overloaded peer's "ask again" to a client as its
+    /// considered reply. Flattening this to `Transport` loses the code;
+    /// filing it as `JsonRpc` loses the retry.
+    #[error("JSON-RPC error {code} carried on retryable status {status}: {message}")]
+    JsonRpcRetryable {
+        /// Error code the peer sent
+        code: i32,
+        /// Error message the peer sent
+        message: String,
+        /// The HTTP status that carried it
+        status: u16,
+    },
+
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] io::Error),

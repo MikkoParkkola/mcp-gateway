@@ -2363,14 +2363,60 @@ async fn row_16f_a_transient_status_carrying_a_json_rpc_error_is_still_retried()
         .await
         .expect_err("a 429 must not report success");
 
-    assert!(
-        matches!(err, Error::Transport(_)),
-        "a peer that says 'ask again' has not answered, got: {err:?}"
-    );
+    match &err {
+        Error::JsonRpcRetryable { code, status, .. } => {
+            assert_eq!(*code, -32000, "the peer's own code must survive the retry");
+            assert_eq!(*status, 429, "the carriage is what made it retryable");
+        }
+        other => panic!("a transient status must keep both facts, got: {other:?}"),
+    }
     assert_eq!(
         hits.load(Ordering::Relaxed),
         3,
         "a transient status stays retryable; a JSON-RPC body must not make it terminal"
+    );
+
+    server.abort();
+}
+
+/// Row 16g - the half row 16f alone cannot pin, and the one the health probe
+/// depends on. `row_6b` asserts that a status-carried `-32603` is scored as an
+/// unserved answer rather than a transport fault, but it asserts it against a
+/// mock that fabricates `Error::JsonRpc` directly. Nothing in that row reaches
+/// the HTTP path, so a change that stopped producing a code-bearing error for a
+/// 5xx would leave `row_6b` green while the probe tore down every backend that
+/// declined over HTTP with a 500. This row is that missing leg: the real
+/// transport, a real 500, and the code still reaching the caller.
+#[tokio::test]
+async fn row_16g_a_5xx_carrying_a_json_rpc_error_keeps_the_peers_code() {
+    let (addr, hits, server) = spawn_fixed_response_server(
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        r#"{"jsonrpc":"2.0","id":{id},"error":{"code":-32603,"message":"internal error"}}"#,
+    )
+    .await;
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+
+    let err = request_through_retry(&transport, "tools/list")
+        .await
+        .expect_err("a 500 must not report success");
+
+    match &err {
+        Error::JsonRpcRetryable { code, status, .. } => {
+            assert_eq!(
+                *code,
+                crate::error::rpc_codes::INTERNAL_ERROR,
+                "the probe scores the peer's code; flattening it restarts a backend that is up"
+            );
+            assert_eq!(*status, 500, "the carriage is what kept the retry");
+        }
+        other => panic!("a 5xx-carried refusal must keep the peer's code, got: {other:?}"),
+    }
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        3,
+        "a 5xx still invites a retry; carrying a code must not make it terminal"
     );
 
     server.abort();

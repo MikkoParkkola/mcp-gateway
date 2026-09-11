@@ -186,6 +186,7 @@ fn is_retryable(error: &Error) -> bool {
     matches!(
         error,
         Error::Transport(_)
+            | Error::JsonRpcRetryable { .. }
             | Error::TransportConnect(_)
             | Error::BackendTimeout(_)
             | Error::Http(_)

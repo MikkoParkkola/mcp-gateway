@@ -1363,10 +1363,22 @@ impl HttpTransport {
             {
                 return Err(Error::ProtocolVersionRejected { supported });
             }
-            if !status_invites_a_retry(status)
-                && let Some(refusal) = peer_refusal(&body, &request.id)
-            {
-                return Err(refusal);
+            if let Some(refusal) = peer_refusal(&body, &request.id) {
+                // The status and the body answer different questions. The body
+                // says what the peer replied; the status says whether that
+                // reply was final. A transient status keeps both, because the
+                // probe reads the code and the retry classifiers read the
+                // carriage (MIK-7217, OUTBOUND.2).
+                return Err(match refusal {
+                    Error::JsonRpc { code, message, .. } if status_invites_a_retry(status) => {
+                        Error::JsonRpcRetryable {
+                            code,
+                            message,
+                            status: status.as_u16(),
+                        }
+                    }
+                    final_answer => final_answer,
+                });
             }
             return Err(safe_http_status_error(status, &body));
         }

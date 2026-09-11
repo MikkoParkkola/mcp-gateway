@@ -45,14 +45,16 @@ async fn probe(transport: &Arc<dyn Transport>, timeout: Duration) -> ProbeOutcom
 ///
 /// A refusal is a refusal whether it arrives in-band, as an error object in a
 /// 200 response, or status-carried, as a non-2xx whose body the HTTP transport
-/// parsed into [`Error::JsonRpc`]. The two carriages are one wire fact and the
+/// parsed into [`Error::JsonRpc`] -- or, when the status also says "ask again",
+/// into [`Error::JsonRpcRetryable`], which keeps the code the retry would
+/// otherwise have flattened away. The carriages are one wire fact and the
 /// probe must judge them the same, or a peer that declines over HTTP is torn
 /// down while the same peer over stdio is left alone. `None` means the answer
 /// is not a refusal: either the peer served it, or the transport itself broke.
 pub(super) fn refusal_code(answer: &Result<JsonRpcResponse>) -> Option<i32> {
     match answer {
         Ok(response) => response.error.as_ref().map(|error| error.code),
-        Err(Error::JsonRpc { code, .. }) => Some(*code),
+        Err(Error::JsonRpc { code, .. } | Error::JsonRpcRetryable { code, .. }) => Some(*code),
         Err(_) => None,
     }
 }
