@@ -336,6 +336,30 @@ The accumulated diff also carries new production emission code
 dual-vendor gate. Commit is not merge, so nothing is violated yet — the review is due before
 push, and its material is the diff, not the design documents.
 
+
+### A second one: two open tickets that no requirement row governs (2026-09-11)
+
+`MIK-7320` and `MIK-7265` appear zero times in `RELEASE-4.0.0-requirements.md`, zero times in
+`RELEASE-4.0.0-criteria-status.md`, and zero times in this file. Both are carried as open release
+work by `RELEASE-4.0.0-near-done-triage.md` — MIK-7320 at 3 of 3 ACs with an evidence comment and
+PR #464 outstanding, MIK-7265 correctly Blocked with its own deliverable, the drift-check script,
+unbuilt. The requirements document names fifteen tickets and neither is among them, so the
+criteria ledger's "every functional requirement ID has a row" is true and still leaves these two
+outside every gate that counts rows.
+
+Neither is large. What makes them a blocker is that no amount of closing criteria reaches them:
+a release declared ready on the criteria count would ship with one unmerged PR and one unbuilt
+deliverable, and nothing in the count would have gone red.
+
+The same 2026-09-11 comparison found the reverse failure too, and it is the more dangerous of the
+two. This file and the triage both use the label `DISCOVER`, for different lists: the criteria
+ledger grades `MIK-7217.DISCOVER` 11 of 11 MET, while the triage grades MIK-7217 at 1 of 8 against
+`MCP728.DISCOVER.1-8`, the ticket's own acceptance set. Both gradings are correct. A reader who
+takes the first as "the discovery ticket is done" is wrong by seven criteria, and the collision is
+invisible from inside either document. `MIK-7256` fails the same way in the other direction: 26
+acceptance criteria reduced to a single requirement row, `NFR.SEC.6`, graded MET on mechanism while
+the triage records 17 of the 26 with no verifying test.
+
 ## Who owns what, 2026-09-01
 
 The clusters above describe the work. This section says who is doing it, because the gap that
