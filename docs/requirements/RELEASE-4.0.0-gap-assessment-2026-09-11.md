@@ -160,6 +160,23 @@ leaf drafts are not the only copy of the accounts work: #512 alone carries all 4
 three measure the release tree, so all three are worth running only once steps 1–3 have
 settled what that tree contains.
 
+## PR triage outcome — 2026-09-11
+
+Step 4 executed for everything decidable without the step-2 grading.
+
+| PR | Verdict | Evidence |
+|---|---|---|
+| #528 `feat/sub2b-outbound-mint` | the release line | carries the counted ledger work; CI green; MERGEABLE |
+| #522 `fix/windows-stdio-appdata` | **merged** 2026-09-11 13:07Z | no `src/` delta; the cheapest merge on the board |
+| #521 `fix/gh517-protocol-negotiation` | **closed** — fully contained | zero commits `#528..#521`; GH #517 landed separately as #520 |
+| #516 `fix/mik-7215-control4-reaper` | **closed** — superseded | its four CONTROL.4 suites are byte-identical on `main` and #528 |
+| #499–#513 (13 `codex/v4-*` drafts) | held | disposition follows the lineage decision in step 3, which needs step 2 |
+
+Open PRs fell from 16 to 14. The remaining 13 drafts are one decision, not
+thirteen: they are the accounts/OpenWebUI/task-signing stack on the codex
+lineage, and #512 alone carries all 44 `src/personal_accounts/` files, so
+parking the leaves loses nothing.
+
 ## What this does not change
 
 The `NFR.SEC.7` deploy recommendation stands on its own merits and is unaffected. It is a
