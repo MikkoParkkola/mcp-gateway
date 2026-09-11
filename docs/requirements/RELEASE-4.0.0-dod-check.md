@@ -96,9 +96,9 @@ commit rather than from the truncated log, because a truncated log is not eviden
 | D7 WIRED | NOT EVALUATED | the CI wiring cited here is D24, not D7. No reachability sweep was run over the 39 changed `src/` files to show each is called from production rather than from tests alone |
 | D8 OBSERVABLE | NOT EVALUATED | no correlation-ID propagation sweep was run on this branch |
 | D9 STATIC | PASS | see the matrix above |
-| D10 0-BUG | PARTIAL | 0 debt markers in `src/` and 0 known defects. The **no new suppression** claim was wrong and is withdrawn. Against the merge-base `738c7cee`, `src/backend/metadata.rs` gains two `#[expect(dead_code, ...)]` markers, at `:160` on `set_resend_permitted` and `:182` on `resend_permitted_snapshot`; both are deliberate (`expect` rather than `allow`, so the gate errors when the direct-route caller lands) but both are new. The third added `#[allow]` line is a move rather than an addition: `#[allow(clippy::too_many_lines)]` sits at `src/gateway/router/handlers.rs:580` on `main` and at `:620` here |
+| D10 0-BUG | PARTIAL | 0 debt markers in `src/`. "0 known defects" is withdrawn as well: the supplemental contract's 30 `pending` rows include unresolved assessments — identity-dependent tool catalogues crossing callers among them — and pending work is not the same as defect-free. The **no new suppression** claim was wrong and is withdrawn. Against the merge-base `738c7cee`, `src/backend/metadata.rs` gains two `#[expect(dead_code, ...)]` markers, at `:160` on `set_resend_permitted` and `:182` on `resend_permitted_snapshot`; both are deliberate (`expect` rather than `allow`, so the gate errors when the direct-route caller lands) but both are new. The third added `#[allow]` line is a move rather than an addition: `#[allow(clippy::too_many_lines)]` sits at `src/gateway/router/handlers.rs:580` on `main` and at `:620` here |
 | D11 OPTIMIZED | PARTIAL | criterion benchmarks ran on Spark 2026-09-03; no profiling pass at this head |
-| D12 REVIEWED | PARTIAL | three rounds ran and **none reached the gate**, which requires `MIN_DISTINCT_APPROVALS` = 2. Round 1 on `7d6040e2` against `5e42f9b3`: kimi SHIP, gpt SHIP-WITH-FIXES, grok SHIP-WITH-FIXES — recorded as `1 of 2 required distinct vendors approved`. Round 2 on `f903b854`: gpt SHIP-WITH-FIXES, grok returned no verdict, kimi returned an empty run file. Round 3 on `252da51a` repeated round 2 exactly: gpt answered, grok emitted a preamble with no `VERDICT` line, kimi wrote a 0-byte run file. Three rounds with the same two vendors silent is reviewer infrastructure, not a transient flake, so the gate cannot be reached by running a fourth round — closing it needs an operator decision (accept single-vendor review for this section, or repair the grok and kimi wrappers). All rounds' findings are applied; see *What the review changed* below. What is PARTIAL is the approval count, not the review effort |
+| D12 REVIEWED | PARTIAL | three rounds (four launches) ran and **none reached the gate**, which requires `MIN_DISTINCT_APPROVALS` = 2. Round 1 on `7d6040e2` against `5e42f9b3`: kimi SHIP, gpt SHIP-WITH-FIXES, grok SHIP-WITH-FIXES — recorded as `1 of 2 required distinct vendors approved`. Round 2 on `f903b854` was launched twice: the first launch returned gpt SHIP-WITH-FIXES with grok and kimi silent; the second returned gpt SHIP-WITH-FIXES and grok SHIP-WITH-FIXES, the latter carrying the `#[expect(dead_code)]` finding that corrected D10. Round 3 on `252da51a`: gpt SHIP-WITH-FIXES, grok emitted a preamble with no `VERDICT` line, kimi wrote a 0-byte run file. **The gate is unmet because no round produced two approvals, not because the vendors went unheard** — across every round exactly one verdict was a bare SHIP (kimi, round 1) and all others were SHIP-WITH-FIXES, which the gate does not count as approval. Re-running cannot close it while findings keep landing; closing it needs either a round in which two vendors have nothing left to fix, or an operator decision to accept this section on one vendor. All rounds' findings are applied; see *What the review changed* below. What is PARTIAL is the approval count, not the review effort |
 | D13 TRACKED | PASS | committed, pushed, and carried by PR #528 |
 | D13a ISSUE-CLOSED | N/A | nothing may close before D18, and D18 is outstanding |
 | D13b EFFORT-LOGGED | NOT EVALUATED | no effort figure recorded |
@@ -149,7 +149,7 @@ one-line summary plus the supplemental scope contract.
 
 | # | Acceptance criterion | Status | Evidence |
 |---|---|---|---|
-| AC1 | Every release criterion is graded, none silently absent | MET | 149 criteria, 189 rows; `count-release-criteria.py --check` passes |
+| AC1 | Every release criterion is graded, none silently absent | PARTIAL | `count-release-criteria.py --check` passes over 149 criteria and 189 rows, which establishes that none is *absent*. It does not establish that each is *graded*: `RELEASE-4.0.0-scope-status.json` holds 30 `pending` rows, 25 of which carry the note "Not yet graded against the approved scope update." Baseline coverage is complete; grading is not |
 | AC2 | At most one blocking criterion remains, and it is named | MET for the baseline ledger only | the baseline criteria ledger has exactly one: NFR.SEC.7, `RELEASE-4.0.0-criteria-status.md:411`, "blocking until the live endpoint passes". This does **not** clear the release. The supplemental contract `RELEASE-4.0.0-scope-status.json` carries **30 rows at `pending`** against 1 `met` and 1 `resolved`, and those 30 are obligations this row's count never covered |
 | AC3 | Static gates green at head | MET | fmt, clippy, audit, secret scan, log-leak lint — all exit 0 |
 | AC4 | Suite green at head | MET | 5,470 passing, 0 failing, 30 ignored |
@@ -159,14 +159,15 @@ one-line summary plus the supplemental scope contract.
 | AC8 | Out-of-scope work is held with a stated condition, not abandoned | MET | 13 `codex/v4-*` drafts, each commented with its held disposition |
 | AC9 | Origin/Host enforcement proven against a deployed build | **NOT MET — blocking** | needs an operator deploy of a build carrying `5d25f104`; the listening process is `3.4.0-f30539af`, which predates it |
 | AC10 | A driven end-to-end journey passes against that build | **NOT MET — blocked by AC9** | D6 FUNCTIONAL PASS |
-| AC11 | Dual-vendor review of the release head | NOT MET | three rounds ran on this section and none recorded the two distinct vendor approvals the gate requires (see D12), because only one of the three vendors returned a verdict in rounds 2 and 3. Scope was this section, never the release head: the other 207 commits on this branch were explicitly excluded from both rounds |
+| AC11 | Dual-vendor review of the release head | NOT MET | three rounds ran on this section and none recorded the two distinct vendor approvals the gate requires (see D12): every round but the first returned SHIP-WITH-FIXES from every vendor that answered. Scope was this section, never the release head: the other 207 commits on this branch were explicitly excluded from both rounds |
 | AC12 | Merged to `main` | **NOT MET — operator act** | PR #528 draft, state `BLOCKED` |
 
 ## Verdict
 
 **Not every gate that was run is green, and the count of what remains is larger than one blocker.**
 Two operator acts hold the release — the NFR.SEC.7 deploy and the #528 merge. Behind them sit
-nineteen unevaluated analysis passes, thirty `pending` rows in the supplemental contract
+seventeen unevaluated analysis passes — the count below, not an exhaustive inventory of
+unexamined work, since several PARTIAL rows carry unevaluated halves of their own — thirty `pending` rows in the supplemental contract
 (`RELEASE-4.0.0-scope-status.json`), and one gate that ran twice without reaching its own threshold:
 the dual-vendor review never recorded the two distinct approvals D12 requires. The baseline ledger's
 "one blocking criterion" is true and is not the whole number.
@@ -189,13 +190,15 @@ which predates it. Its second half, drift between merged and listening controls,
 2026-09-11 by `scripts/dev/check-control-drift.py` against `security-controls.toml`. **D6** cannot be
 driven until that deploy exists, and **D18** is the merge itself.
 
-**The larger hold is not an operator act.** Nineteen gates are NOT EVALUATED, and they divide into
-two groups that should not be read as one.
+**The larger hold is not an operator act.** Seventeen gates carry no evaluation at all, and they
+divide into two groups that should not be read as one. They are not the whole of what is unexamined:
+PARTIAL rows such as H8 (disk housekeeping), D5 (interface comparison) and D11 (profiling) each hold
+an unevaluated half that is counted nowhere below.
 
-**Fourteen an agent can run at this head today**, each with a command or a reasoning pass behind it:
-correlation-ID propagation (D8), API-surface symbol count (D28), dependency cycles and abstraction
-direction (D27), STRIDE, coverage no-drop (§4), `pub`-item reachability (H6), duplicate-function
-detection (H9), documentation de-duplication (H7), production wiring of the changed `src/` files
+**Twelve an agent can run at this head today**, each with a command or a reasoning pass behind it:
+correlation-ID propagation (D8), dependency cycles and abstraction
+direction (D27), STRIDE, coverage no-drop (§4), `pub`-item reachability (H6),
+documentation de-duplication (H7), production wiring of the changed `src/` files
 (D7/§2), canary planning (D21), effort (D13b), PR labels (D13d), the bet assessment (B1–B4), and
 T1c. None is blocked. They are open because nobody has run them on this branch.
 
@@ -222,7 +225,8 @@ release touching transport, routing and idempotency.
 
 Two findings corrected facts rather than verdicts, and both were verified at source before being
 accepted. The `#[allow(clippy::too_many_lines)]` reported as a new suppression is a **move**: it
-sits at `handlers.rs:580` on `main` and at `:620` here, so D10 is PASS rather than PARTIAL. And the
+sits at `handlers.rs:580` on `main` and at `:620` here, so that particular claim does not stand against
+D10 — which remains PARTIAL for the reasons its own row gives. And the
 largest regression depends on which estimator is read — `semantic_search/query_top10/200` at +7.76%
 by criterion's own comparison, `session_sandbox/check_tool_denied` at +9.16% by point estimate. The
 earlier row quoted the second case's *comparison* figure and called it the worst, which understated
