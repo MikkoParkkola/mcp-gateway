@@ -431,13 +431,18 @@ before and after.
 
 ## 7. Fail-first record
 
-Fourteen of the twenty-eight rows are written and have been observed against `HEAD`.
+Nineteen of the twenty-eight rows are written and have been observed against `HEAD`.
 The rest are listed below as outstanding, with what each is waiting on. This section
 records verdicts only - it is not an implementation report, and no production code has
 changed.
 
-Command: `cargo test --lib backend::tests::row_`. Result: **4 passed, 10 failed**, on
-`a0b1e5db`, 2026-09-11.
+Command: `cargo test --lib row_`. Result on `2b52fdbc`, 2026-09-11: of the nineteen rows
+written, **eleven failed and eight passed** - every must-fail row failed and every
+must-pass row passed, with no row landing on the wrong side. (The run reports 21 passed /
+11 failed because `row_` is a substring filter and also matches thirteen unrelated tests
+elsewhere in the crate; those are not part of this record.) The fourteen backend rows were
+first observed under the narrower `backend::tests::row_` filter on `a0b1e5db`, with the
+same verdicts.
 
 | row | observed | line | the assertion that decided it |
 | --- | --- | --- | --- |
@@ -455,6 +460,11 @@ Command: `cargo test --lib backend::tests::row_`. Result: **4 passed, 10 failed*
 | 9b | **failed** | `tests.rs:1378` | "the -32601 to server/discover must drop the cached verdict" - row 9's defect |
 | 9c | **failed** | `tests.rs:1358` | "an answered ping is an absence of evidence about the era, not positive evidence" |
 | 9d | **failed** | `tests.rs:1416` | `is_circuit_tripped()` false - the probe records no failures at all |
+| 12 | passed | - | all four non-refusal body shapes stay `Error::Transport`, as designed |
+| 16 | **failed** | `http/tests.rs:2233` | the `other =>` arm: HEAD yields a variant other than `Error::JsonRpc`. The panic is on the VARIANT and not on the ask count, so the retry baseline this row also carries is untainted |
+| 16b | passed | - | an opaque 502 stays `Error::Transport` and is still asked three times |
+| 16c | passed | - | regression guard: both variants already map to `ErrorCategory::BackendError` |
+| 16d | passed | - | the session-recovery regression this row exists to catch is absent at HEAD, which is the point - it must still pass afterwards |
 
 Every must-fail row that is written failed, and every must-pass row passed. Three rows
 (6, 9b, 9d) failed on a **sibling row's defect** rather than on the half they exist to
@@ -468,7 +478,5 @@ would overstate the coverage by three.
 | rows | waiting on |
 | --- | --- |
 | 10, 10b, 10c, 11, 11b | the consecutive-unserved counter and an accessor for it. These rows also carry the counter assertions deferred out of rows 4 to 6b, and they are what turns rows 6, 9b and 9d into discriminating pins |
-| 12 | the HTTP body-parsing branch at `src/transport/http/mod.rs:1275-1295` |
 | 13, 14, 15, 15b, 15c | the four §4 gate sites |
-| 16, 16b | the shared transport change, observed from a non-probe caller |
 | M | the per-probe wall-time and response-size measurement §2's load claim rests on |

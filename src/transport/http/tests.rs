@@ -2119,3 +2119,305 @@ async fn http_leaves_the_sink_empty_when_the_backend_raises_nothing() {
     assert!(response.is_ok());
     assert!(notifications.is_empty());
 }
+
+/// Serve one fixed status and body to every POST, substituting the caller's own
+/// JSON-RPC `id` wherever the template contains `{id}`, and count the POSTs.
+/// The count is what rows 16 and 16b read: the retry decision is not observable
+/// from the error alone, only from how many times the peer was asked.
+async fn spawn_fixed_response_server(
+    status: axum::http::StatusCode,
+    body_template: &'static str,
+) -> (
+    std::net::SocketAddr,
+    Arc<std::sync::atomic::AtomicU32>,
+    tokio::task::JoinHandle<()>,
+) {
+    use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
+
+    type FixedState = (StatusCode, &'static str, Arc<std::sync::atomic::AtomicU32>);
+
+    async fn handler(
+        State((status, template, hits)): State<FixedState>,
+        body: String,
+    ) -> axum::response::Response {
+        hits.fetch_add(1, Ordering::Relaxed);
+        let id = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|v| v.get("id").cloned())
+            .map_or_else(|| "null".to_string(), |v| v.to_string());
+        (status, template.replace("{id}", &id)).into_response()
+    }
+
+    let hits = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route("/mcp", post(handler)).with_state((
+        status,
+        body_template,
+        Arc::clone(&hits),
+    ));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (addr, hits, server)
+}
+
+/// Three attempts with no real backoff, so a row can distinguish "asked once"
+/// from "asked until the policy ran out" without spending wall time on it.
+fn three_attempt_policy() -> crate::failsafe::RetryPolicy {
+    crate::failsafe::RetryPolicy {
+        enabled: true,
+        max_attempts: 3,
+        initial_backoff: Duration::from_millis(1),
+        max_backoff: Duration::from_millis(1),
+        multiplier: 1.0,
+    }
+}
+
+/// Drive one request through the same retry wrapper `Backend::request` uses
+/// (`src/backend/ops.rs:257`), so the retry assertion reads the production
+/// decision rather than a classifier this test invented.
+async fn request_through_retry(
+    transport: &Arc<HttpTransport>,
+    method: &str,
+) -> std::result::Result<crate::protocol::JsonRpcResponse, Error> {
+    let policy = three_attempt_policy();
+    crate::failsafe::with_retry(&policy, "row-16", || {
+        let transport = Arc::clone(transport);
+        let method = method.to_string();
+        async move { transport.request(&method, None).await }
+    })
+    .await
+}
+
+/// Row 16 - a non-probe caller receiving a status-carried JSON-RPC error sees
+/// the peer's own refusal, and is not retried. The assertions read the variant
+/// and the ask count, never the rendered string: `Error::JsonRpc` and
+/// `Error::Transport` render identically on purpose (`src/error.rs:159`).
+///
+/// The status is 405 and not 404 deliberately. A 404 is the one status already
+/// entangled with session recovery - `is_session_expired_error`
+/// (`src/transport/http/mod.rs:164`) matches on a message starting `http 404` -
+/// so a 404 here would make this row and row 16d the same response shape,
+/// distinguished only by the error code and whether a session was set. Nothing
+/// this row pins needs 404; leaving it to row 16d keeps the two verdicts
+/// independent. 400 and 426 are likewise avoided: they are the version-mismatch
+/// statuses the branch above already claims (`mod.rs:1289`).
+#[tokio::test]
+async fn row_16_a_status_carried_json_rpc_error_reaches_the_caller_as_json_rpc() {
+    let (addr, hits, server) = spawn_fixed_response_server(
+        axum::http::StatusCode::METHOD_NOT_ALLOWED,
+        r#"{"jsonrpc":"2.0","id":{id},"error":{"code":-32601,"message":"Method not found: tools/list"}}"#,
+    )
+    .await;
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+
+    let err = request_through_retry(&transport, "tools/list")
+        .await
+        .expect_err("a refused call must not report success");
+
+    match &err {
+        Error::JsonRpc { code, message, .. } => {
+            assert_eq!(
+                *code,
+                crate::protocol::era::METHOD_NOT_FOUND_CODE,
+                "the peer's own code must survive the status carriage"
+            );
+            assert!(
+                message.contains("Method not found"),
+                "the peer's message must replace the rendered status, got: {message}"
+            );
+        }
+        other => panic!(
+            "a status-carried JSON-RPC error must reach the caller as Error::JsonRpc, got: {other:?}"
+        ),
+    }
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        1,
+        "a refusal is terminal: retrying it asks a peer that already answered"
+    );
+
+    server.abort();
+}
+
+/// Row 16b - the other half of the same branch, and it passes today: a non-2xx
+/// whose body carries no JSON-RPC error is still an opaque fault, and is still
+/// retried. Split from row 16 so neither verdict masks the other.
+#[tokio::test]
+async fn row_16b_a_non_2xx_without_a_json_rpc_error_body_is_still_retried() {
+    let (addr, hits, server) = spawn_fixed_response_server(
+        axum::http::StatusCode::BAD_GATEWAY,
+        "<html><body>502 Bad Gateway</body></html>",
+    )
+    .await;
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+
+    let err = request_through_retry(&transport, "tools/list")
+        .await
+        .expect_err("a 502 must not report success");
+
+    assert!(
+        matches!(err, Error::Transport(_)),
+        "an opaque gateway fault is not the peer speaking, got: {err:?}"
+    );
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        3,
+        "an opaque fault stays retryable; narrowing that is a silent availability loss"
+    );
+
+    server.abort();
+}
+
+/// Row 12 - the four body shapes the new parsing branch must NOT claim. Each
+/// stays an opaque transport fault, which is what keeps the health probe
+/// restarting a dead backend rather than filing a proxy's error page as a
+/// considered refusal. Passes today and must keep passing: it exists to catch
+/// the branch widening past what it was scoped to.
+#[tokio::test]
+async fn row_12_a_non_2xx_body_that_is_not_the_peers_refusal_stays_a_transport_fault() {
+    const SHAPES: [(&str, &str); 4] = [
+        ("absent", ""),
+        ("not JSON", "<html><body>502 Bad Gateway</body></html>"),
+        (
+            "JSON with no error member",
+            r#"{"jsonrpc":"2.0","id":{id},"result":{}}"#,
+        ),
+        (
+            "an error under a foreign id",
+            r#"{"jsonrpc":"2.0","id":"not-the-callers-id","error":{"code":-32601,"message":"Method not found"}}"#,
+        ),
+    ];
+
+    for (label, body) in SHAPES {
+        let (addr, _hits, server) =
+            spawn_fixed_response_server(axum::http::StatusCode::BAD_GATEWAY, body).await;
+
+        let transport = make_transport(&format!("http://{addr}/mcp"));
+        *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+
+        let err = transport
+            .request("tools/list", None)
+            .await
+            .expect_err("a 502 must not report success");
+
+        assert!(
+            matches!(err, Error::Transport(_)),
+            "a body that is {label} is not the peer refusing, got: {err:?}"
+        );
+
+        server.abort();
+    }
+}
+
+/// Row 16d - a 404 whose body carries the session-expiry refusal as a JSON-RPC
+/// error must still drive session recovery.
+///
+/// `is_session_expired_error` (`src/transport/http/mod.rs:164`) only inspects
+/// `Error::Transport` text, and only matches a message starting `http 404`. The
+/// new parsing branch turns exactly this response into `Error::JsonRpc`, at
+/// which point the classifier stops firing and a remote that invalidates its
+/// session on token refresh is never re-initialized. The existing 404 recovery
+/// test answers with a bare text body, so it cannot see this: it keeps passing
+/// through the same regression.
+#[tokio::test]
+async fn row_16d_a_404_carrying_a_session_error_body_still_reinitializes() {
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
+        routing::post,
+    };
+    use serde_json::json;
+
+    const FRESH_SESSION: &str = "fresh-session-after-json-404";
+
+    async fn mcp_handler(
+        State(hits): State<Arc<std::sync::atomic::AtomicU32>>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> axum::response::Response {
+        hits.fetch_add(1, Ordering::Relaxed);
+        let session = headers
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+
+        if body["method"] == "initialize" {
+            let mut resp_headers = HeaderMap::new();
+            resp_headers.insert("mcp-session-id", FRESH_SESSION.parse().unwrap());
+            return (
+                StatusCode::OK,
+                resp_headers,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "serverInfo": {"name": "mock", "version": "0"}
+                    }
+                })),
+            )
+                .into_response();
+        }
+
+        if session == FRESH_SESSION {
+            return (
+                StatusCode::OK,
+                Json(json!({"jsonrpc": "2.0", "id": body["id"], "result": {"ok": true}})),
+            )
+                .into_response();
+        }
+
+        // The stale session, refused as a well-formed JSON-RPC error under a
+        // 404 rather than as opaque text.
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "error": {"code": -32015, "message": "Session not found"}
+            })),
+        )
+            .into_response()
+    }
+
+    let hits = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/mcp", post(mcp_handler))
+        .with_state(Arc::clone(&hits));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+    set_default_session(&transport, "stale-session-killed-on-refresh");
+
+    let response = transport
+        .request("tools/list", None)
+        .await
+        .expect("session recovery must carry the request through");
+
+    assert!(
+        response.error.is_none(),
+        "the retried request after re-initialize must succeed"
+    );
+    assert_eq!(
+        default_session(&transport).as_deref(),
+        Some(FRESH_SESSION),
+        "the stale session must be replaced, not kept"
+    );
+
+    server.abort();
+}

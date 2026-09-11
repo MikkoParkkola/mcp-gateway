@@ -3652,6 +3652,29 @@ mod error_classification_tests {
         }
     }
 
+    /// Row 16c - the client-facing category must not move when a status-carried
+    /// refusal starts arriving as `Error::JsonRpc` instead of `Error::Transport`.
+    /// Both already map to `BackendError`; this pins that, because the transport
+    /// rows cannot reach this classifier.
+    #[test]
+    fn row_16c_a_json_rpc_refusal_and_a_transport_fault_share_one_category() {
+        use super::classify_dispatch_error;
+        use crate::Error;
+
+        for error in [
+            Error::json_rpc(-32601, "Method not found: server/discover"),
+            Error::Transport("HTTP 404".to_string()),
+        ] {
+            assert!(
+                matches!(
+                    classify_dispatch_error(&error).0,
+                    ErrorCategory::BackendError
+                ),
+                "expected BackendError for {error:?}"
+            );
+        }
+    }
+
     #[test]
     fn genuine_validation_errors_default_to_validation() {
         // Schema/param errors must keep the prior behaviour.
