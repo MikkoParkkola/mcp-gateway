@@ -1635,31 +1635,42 @@ fn no_diagnostic_helper_passes_a_canary_through() {
     }
 }
 
+/// Feed a whole body to the streaming decoder as one chunk.
+///
+/// Chunk-boundary independence is the decoder's own property, proven in
+/// `sse_decoder_tests`. These rows are about what a decoded exchange delivers
+/// to the caller and to its sink, so one chunk is the right fixture here.
+fn sse_stream(body: impl Into<bytes::Bytes>) -> impl futures::Stream<Item = Result<bytes::Bytes>> {
+    futures::stream::iter(vec![Ok(body.into())])
+}
+
 /// The SSE body may carry a server-to-client *request* rather than the answer
 /// to the call in flight. Handing that back to the caller as its response is
 /// the defect this guards.
-#[test]
-fn parse_sse_response_rejects_inbound_request_frame() {
+#[tokio::test]
+async fn sse_decode_rejects_inbound_request_frame() {
     // GIVEN: an SSE body whose first data line is a request, not a response
     let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"sampling/createMessage\",\"params\":{}}\n\n";
 
-    // WHEN: the transport parses it
-    let outcome = parse_sse_response(body);
+    // WHEN: the transport decodes it
+    let outcome = sse_decoder::decode_sse_exchange(sse_stream(body)).await;
 
     // THEN: it is refused, never returned as an empty successful response
     assert!(
         outcome.is_err(),
-        "a frame carrying `method` must not parse as a response, got {outcome:?}"
+        "a frame carrying `method` must not decode as a response, got {outcome:?}"
     );
 }
 
-/// Guard the extraction: a genuine response still parses.
-#[test]
-fn parse_sse_response_accepts_response_frame() {
+/// Guard the extraction: a genuine response still decodes.
+#[tokio::test]
+async fn sse_decode_accepts_response_frame() {
     let body = "data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"tools\":[]}}\n";
-    let parsed = parse_sse_response(body).expect("valid response must parse");
-    assert!(parsed.response.result.is_some());
-    assert!(parsed.response.error.is_none());
+    let response = sse_decoder::decode_sse_exchange(sse_stream(body))
+        .await
+        .expect("valid response must decode");
+    assert!(response.result.is_some());
+    assert!(response.error.is_none());
 }
 
 // =========================================================================
@@ -1821,11 +1832,11 @@ async fn get_oauth_token_without_oauth_is_none_over_cleartext() {
 
 /// A notification seen ahead of the response is CAPTURED, not dropped.
 ///
-/// The discard at `mod.rs:294-296` is the defect: a conforming server may
-/// interleave `notifications/progress` on the response stream of the call in
-/// flight, and the caller currently never learns it happened.
-#[test]
-fn parse_sse_response_captures_the_notification_seen_before_the_response() {
+/// A conforming server may interleave `notifications/progress` on the response
+/// stream of the call in flight. It belongs to that call, and reaches the
+/// caller's sink rather than being discarded on the way to the result.
+#[tokio::test]
+async fn sse_decode_captures_the_notification_seen_before_the_response() {
     // GIVEN: a progress notification ahead of the answer, on one stream
     let body = concat!(
         "event: message\n",
@@ -1835,33 +1846,38 @@ fn parse_sse_response_captures_the_notification_seen_before_the_response() {
         "data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"tools\":[]}}\n",
     );
 
-    // WHEN: the transport parses it
-    let exchange = parse_sse_response(body).expect("the response after a notification must parse");
+    // WHEN: the transport decodes it inside the caller's sink scope
+    let (response, notifications) = crate::transport::notification_sink::collect(
+        sse_decoder::decode_sse_exchange(sse_stream(body)),
+    )
+    .await;
 
     // THEN: the response still reaches the caller ...
     assert!(
-        exchange.response.result.is_some(),
+        response
+            .expect("the response after a notification must decode")
+            .result
+            .is_some(),
         "the response frame must still be returned"
     );
     // ... AND the notification is no longer lost.
     assert_eq!(
-        exchange
-            .notifications
+        notifications
             .iter()
             .map(|n| n.method.as_str())
             .collect::<Vec<_>>(),
         vec!["notifications/progress"],
-        "the notification seen on this request's stream must be returned with it"
+        "the notification seen on this request's stream must reach its sink"
     );
 }
 
-/// Stream order is preserved: two notifications come back in the order the
+/// Stream order is preserved: two notifications reach the sink in the order the
 /// server sent them, ahead of the response that ended the scan.
 ///
-/// Order is the property the single-return shape exists to guarantee — an
-/// async sink delivering beside the call could not promise it.
-#[test]
-fn parse_sse_response_preserves_the_order_two_notifications_arrived_in() {
+/// Order is a property of publishing each frame as it decodes: a driver that
+/// buffered and replayed could not promise it.
+#[tokio::test]
+async fn sse_decode_preserves_the_order_two_notifications_arrived_in() {
     // GIVEN: message then progress, in that order, before the answer
     let body = concat!(
         "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\"}}\n",
@@ -1871,13 +1887,15 @@ fn parse_sse_response_preserves_the_order_two_notifications_arrived_in() {
         "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n",
     );
 
-    // WHEN: the transport parses it
-    let exchange = parse_sse_response(body).expect("the response must parse");
+    // WHEN: the transport decodes it
+    let (_, notifications) = crate::transport::notification_sink::collect(
+        sse_decoder::decode_sse_exchange(sse_stream(body)),
+    )
+    .await;
 
-    // THEN: both are returned, in arrival order
+    // THEN: both are delivered, in arrival order
     assert_eq!(
-        exchange
-            .notifications
+        notifications
             .iter()
             .map(|n| n.method.as_str())
             .collect::<Vec<_>>(),
@@ -1886,17 +1904,25 @@ fn parse_sse_response_preserves_the_order_two_notifications_arrived_in() {
     );
 }
 
-/// A body with no notifications yields an empty list, never a phantom entry.
+/// A body with no notifications leaves the sink empty, never a phantom entry.
 ///
 /// The negative case an empty world would also satisfy is guarded by equality
-/// against a literal, not by `is_empty()` alone on an untouched field.
-#[test]
-fn parse_sse_response_returns_no_notifications_when_the_server_sent_none() {
+/// against a literal count, not by `is_empty()` alone on an untouched channel.
+#[tokio::test]
+async fn sse_decode_delivers_no_notifications_when_the_server_sent_none() {
     let body = "data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"ok\":true}}\n";
-    let exchange = parse_sse_response(body).expect("valid response must parse");
-    assert!(exchange.response.result.is_some());
+    let (response, notifications) = crate::transport::notification_sink::collect(
+        sse_decoder::decode_sse_exchange(sse_stream(body)),
+    )
+    .await;
+    assert!(
+        response
+            .expect("valid response must decode")
+            .result
+            .is_some()
+    );
     assert_eq!(
-        exchange.notifications.len(),
+        notifications.len(),
         0,
         "a clean stream must not manufacture a notification"
     );
@@ -2031,8 +2057,10 @@ const MESSAGE: &str = r#"{"jsonrpc":"2.0","method":"notifications/message","para
 async fn http_forwards_both_notification_methods_to_the_callers_sink() {
     let body = sse_body(&[PROGRESS, MESSAGE], 1);
 
-    let (response, notifications) =
-        crate::transport::notification_sink::collect(async { forward_sse_exchange(&body) }).await;
+    let (response, notifications) = crate::transport::notification_sink::collect(
+        sse_decoder::decode_sse_exchange(sse_stream(body)),
+    )
+    .await;
 
     assert!(response.is_ok(), "the caller still gets its result");
     assert_eq!(notifications.len(), 2);
@@ -2060,10 +2088,14 @@ async fn http_never_crosses_a_notification_between_two_calls_in_flight() {
 
     let left = tokio::spawn(crate::transport::notification_sink::collect(async move {
         tokio::task::yield_now().await;
-        forward_sse_exchange(&mine).map(|_| ())
+        sse_decoder::decode_sse_exchange(sse_stream(mine))
+            .await
+            .map(|_| ())
     }));
     let right = tokio::spawn(crate::transport::notification_sink::collect(async move {
-        forward_sse_exchange(&theirs).map(|_| ())
+        sse_decoder::decode_sse_exchange(sse_stream(theirs))
+            .await
+            .map(|_| ())
     }));
 
     let (_, l) = left.await.unwrap();
@@ -2079,9 +2111,9 @@ async fn http_never_crosses_a_notification_between_two_calls_in_flight() {
 /// the `Accept`-negotiated stream is a conforming answer either way.
 #[tokio::test]
 async fn http_leaves_the_sink_empty_when_the_backend_raises_nothing() {
-    let (response, notifications) = crate::transport::notification_sink::collect(async {
-        forward_sse_exchange(&sse_body(&[], 1))
-    })
+    let (response, notifications) = crate::transport::notification_sink::collect(
+        sse_decoder::decode_sse_exchange(sse_stream(sse_body(&[], 1))),
+    )
     .await;
 
     assert!(response.is_ok());

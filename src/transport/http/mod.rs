@@ -29,9 +29,9 @@ use crate::oauth::OAuthClient;
 use crate::protocol::era::Era;
 use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::{
-    JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
-    RequestId, SUPPORTED_VERSIONS, is_version_mismatch_error, is_version_token,
-    negotiate_best_version, parse_supported_versions_from_error,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    SUPPORTED_VERSIONS, is_version_mismatch_error, is_version_token, negotiate_best_version,
+    parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
     RedirectEvidence, SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
@@ -288,86 +288,6 @@ enum HeaderMode<'a> {
 fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
     header::HeaderValue::from_str(&format!("Bearer {token}"))
         .map_err(|_| Error::OAuth("OAuth token is not a valid HTTP header value".into()))
-}
-
-/// One request's SSE exchange: its response, and the notifications the server
-/// sent on that request's own stream ahead of it, in arrival order.
-///
-/// The two travel together out of one call because that is what makes stream
-/// order free: capture and result leave the parse as a single value, so no
-/// second delivery path can reorder them. `MIK-7272.SUB.2b`.
-#[derive(Debug)]
-pub(crate) struct SseExchange {
-    /// The response frame that ended the scan.
-    pub(crate) response: JsonRpcResponse,
-    /// Notifications seen on this request's stream, in the order they arrived.
-    ///
-    /// SCAFFOLD, and labelled one: no production path reads this yet. The only
-    /// caller of `parse_sse_response` — `send_request_with_headers` — maps it
-    /// away, and the consumer
-    /// that will read it — the `Accept`-negotiated event-stream body in
-    /// `gateway::router::handlers::meta_mcp_handler` — is the outbound half of
-    /// `MIK-7272.SUB.2b` and lands next. Until then the field is proven only by
-    /// the unit tests, so the lib build cannot see it read.
-    // ponytail: allow lifts the moment the outbound consumer lands; if it has
-    // not, this attribute is the evidence that SUB.2b is still half-built.
-    #[allow(dead_code)]
-    pub(crate) notifications: Vec<JsonRpcNotification>,
-}
-
-/// Extract the JSON-RPC response carried by an SSE body, with the notifications
-/// that preceded it on the same stream.
-///
-/// A server may interleave notifications on a request's own stream ahead of the
-/// final response. They are CAPTURED, not skipped: they belong to this request
-/// and the caller is entitled to them (`MIK-7272.SUB.2b`). An inbound *request*
-/// is still refused: it is a call addressed to this client, never this call's
-/// result.
-///
-/// Returns a transport error when the body carries no response frame, or when a
-/// payload does not deserialize as a JSON-RPC message.
-fn parse_sse_response(text: &str) -> Result<SseExchange> {
-    let mut notifications = Vec::new();
-    for line in text.lines() {
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let message: JsonRpcMessage = serde_json::from_str(data.trim())
-            .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")))?;
-        match message {
-            JsonRpcMessage::Response(response) => {
-                return Ok(SseExchange {
-                    response,
-                    notifications,
-                });
-            }
-            JsonRpcMessage::Notification(notification) => {
-                debug!(method = %notification.method, "Notification on response stream");
-                notifications.push(notification);
-            }
-            JsonRpcMessage::Request(request) => {
-                return Err(Error::Transport(format!(
-                    "Peer sent request '{}' on the response stream",
-                    request.method
-                )));
-            }
-        }
-    }
-    Err(Error::Transport("No data in SSE response".to_string()))
-}
-
-/// Hand the caller its result and its notifications: the response goes back up
-/// the `Transport` return, the notifications go sideways into the sink.
-///
-/// **Unfiltered by token, deliberately.** Per-request framing IS the
-/// correlation on this transport -- every frame on this stream belongs to the
-/// request just sent -- which is why a token-less `notifications/message`
-/// survives here and cannot over stdio. `MIK-7272.SUB.2b`.
-pub(crate) fn forward_sse_exchange(text: &str) -> Result<JsonRpcResponse> {
-    parse_sse_response(text).map(|exchange| {
-        crate::transport::notification_sink::publish(exchange.notifications);
-        exchange.response
-    })
 }
 
 /// Re-assert on a modern peer's request what the revision requires of it.
@@ -1383,13 +1303,17 @@ impl HttpTransport {
             .unwrap_or("");
 
         if content_type.contains("text/event-stream") {
-            // Parse SSE response - extract JSON from "data:" line
-            let text = response
-                .text()
-                .await
-                .map_err(|e| safe_request_error("Failed to read SSE response", &e))?;
-
-            forward_sse_exchange(&text)
+            // Decoded incrementally, not buffered. A backend that interleaves
+            // notifications ahead of its result holds the body open until the
+            // result exists, so `.text()` here could not observe a
+            // notification until the call it belongs to had already finished
+            // -- the liveness `MIK-7272.SUB.2b` asks for is unreachable from a
+            // complete body. Each frame is published as its chunk arrives.
+            use futures::TryStreamExt;
+            let stream = response
+                .bytes_stream()
+                .map_err(|e| safe_request_error("Failed to read SSE response", &e));
+            sse_decoder::decode_sse_exchange(stream).await
         } else {
             // Parse JSON response
             response
