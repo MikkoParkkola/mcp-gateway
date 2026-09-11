@@ -72,9 +72,6 @@ The readiness board recorded this as the open decision. Ruled here.
 3. It is the one method a 2026 peer must implement. That makes a refusal *informative*
    rather than expected: a `-32601` to `server/discover` says the peer is not modern,
    which is a classification error to correct, not a health verdict.
-4. Its outcome is already modelled. `ProbeOutcome` and `classify` (`src/protocol/era.rs:93`)
-   exist and distinguish `Result`, a recognised modern `Error`, and everything else —
-   the classification OUTBOUND.2 needs has a home rather than a new enum.
 
 **Legacy peers keep `ping`.** `Era::Legacy` (including unknown/unreachable, which
 `classify` deliberately folds into legacy) still gets `ping`: it is defined for them, and
