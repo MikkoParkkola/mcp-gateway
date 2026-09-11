@@ -117,7 +117,7 @@ commit rather than from the truncated log, because a truncated log is not eviden
 | D24 ENFORCEMENT | PASS | the scope check is enforced in three workflows, not documented only |
 | D25 SESSION | N/A | no agent-session persistence change |
 | D26 SEC-MONITOR | NOT EVALUATED | no security-channel audit at this head |
-| D27 COUPLING | PARTIAL | the dependency count is unchanged — no crate added, lockfile untouched. The gate's other two halves, cycle detection and abstraction direction, are NOT EVALUATED: no module-graph analysis was run |
+| D27 COUPLING | PASS | the dependency count is unchanged — no crate added, lockfile untouched. A top-level module graph built from every `crate::` reference in `src/` at `738c7cee` and at this head is **identical in shape**: 55 modules both sides, one strongly-connected component of 30 modules both sides, and **no module newly inside it**. The cycle is pre-existing and this change neither widens nor enters it. Five module-level edges are added and none removed (`backend`→`error`, `error`→`security`, `transport`→`backend`, `transport`→`error`, `transport`→`failsafe`); read at source, three are doc-comment links (`src/error.rs:140` and `:142`, `src/transport/stdio.rs:441`), one is confined to a test module (`src/transport/http/tests.rs:2215`), and the only compile-time addition is `use crate::error::{Error, Result}` at `src/transport/http/sse_decoder.rs:40` — transport depending on error, the conventional direction. No inversion. Limitation: the graph is built from textual `crate::` references, so it over-counts doc links and test code, which is why each new edge was read individually |
 | D28 API-SURFACE | PASS | `git diff 738c7cee..HEAD -- src` adds **11 bare-`pub` items and removes 0**, plus 28 `pub(crate)`. The additions sit in `src/error.rs` (1), `src/idempotency.rs` (3), `src/protocol/meta.rs` (1), `src/security/firewall/mod.rs` (2), `src/security/http_diagnostics.rs` (2) and `src/transport/mod.rs` (2); `security` and `transport` are `pub mod` in `src/lib.rs:76` and `:89`, so four of those are externally reachable. Additive only — no removal, no signature change, no breaking public-API change |
 | D29 DEBT-TRAJ | PARTIAL | clippy is clean at `-D warnings`, which bounds but does not measure the trajectory; no dependency-graph comparison run |
 | D30 SUPPLY-CHAIN | PASS | `cargo audit` clean of advisories; no new dependency; lockfile unchanged by this commit |
@@ -166,7 +166,7 @@ one-line summary plus the supplemental scope contract.
 
 **Not every gate that was run is green, and the count of what remains is larger than one blocker.**
 Two operator acts hold the release — the NFR.SEC.7 deploy and the #528 merge. Behind them sit
-seventeen unevaluated analysis passes — the count below, not an exhaustive inventory of
+sixteen unevaluated analysis passes — the count below, not an exhaustive inventory of
 unexamined work, since several PARTIAL rows carry unevaluated halves of their own — thirty `pending` rows in the supplemental contract
 (`RELEASE-4.0.0-scope-status.json`), and one gate that ran twice without reaching its own threshold:
 the dual-vendor review never recorded the two distinct approvals D12 requires. The baseline ledger's
@@ -190,14 +190,13 @@ which predates it. Its second half, drift between merged and listening controls,
 2026-09-11 by `scripts/dev/check-control-drift.py` against `security-controls.toml`. **D6** cannot be
 driven until that deploy exists, and **D18** is the merge itself.
 
-**The larger hold is not an operator act.** Seventeen gates carry no evaluation at all, and they
+**The larger hold is not an operator act.** Sixteen gates carry no evaluation at all, and they
 divide into two groups that should not be read as one. They are not the whole of what is unexamined:
 PARTIAL rows such as H8 (disk housekeeping), D5 (interface comparison) and D11 (profiling) each hold
 an unevaluated half that is counted nowhere below.
 
-**Twelve an agent can run at this head today**, each with a command or a reasoning pass behind it:
-correlation-ID propagation (D8), dependency cycles and abstraction
-direction (D27), STRIDE, coverage no-drop (§4), `pub`-item reachability (H6),
+**Eleven an agent can run at this head today**, each with a command or a reasoning pass behind it:
+correlation-ID propagation (D8), STRIDE, coverage no-drop (§4), `pub`-item reachability (H6),
 documentation de-duplication (H7), production wiring of the changed `src/` files
 (D7/§2), canary planning (D21), effort (D13b), PR labels (D13d), the bet assessment (B1–B4), and
 T1c. None is blocked. They are open because nobody has run them on this branch.
