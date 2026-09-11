@@ -42,8 +42,10 @@ def is_prerelease(version: str) -> bool:
 
 def lock_version(text: str, crate: str) -> str | None:
     """The version of `crate` in a Cargo.lock, or None if it has no entry."""
-    for block in text.split("[[package]]"):
-        entry = tomllib.loads(block)
+    # Parse the whole document once rather than splitting on "[[package]]":
+    # that delimiter can appear inside a string value, and a split would make
+    # the surrounding block unparseable.
+    for entry in tomllib.loads(text).get("package", []):
         if entry.get("name") == crate:
             return entry.get("version")
     return None

@@ -259,7 +259,7 @@ jobs:
 
             ### Cargo (Recommended)
             ```bash
-            cargo install mcp-gateway
+            cargo install mcp-gateway --version ${{ needs.verify.outputs.version }}
             ```
 
             ### Manual Download

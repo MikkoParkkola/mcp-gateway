@@ -108,7 +108,9 @@ jobs:
           # prerelease the action discards the configured pattern and compiles
           # {{version}} instead (metadata-action src/meta.ts, the
           # semver.prerelease branch), so the row below yields :4.0.0-rc.1 and
-          # never :4.0. An rc image is reachable only by its exact version.
+          # never :4.0. No floating pointer therefore lands on a candidate:
+          # the exact version and the immutable :SHA tag from the row below
+          # are the only references that reach it, and both are opt-in.
           flavor: |
             latest=auto
           tags: |
@@ -180,6 +182,12 @@ jobs:
       #
       # Scoped to tags. Branch and PR images are out of scope — the collision
       # being closed is on release tags, and :main has never been signed.
+      #
+      # Residual: the push above lands before these steps run, so a failed or
+      # cancelled run can leave :VERSION public and unsigned. Red run, not a
+      # silent pass. Closing it needs push-by-digest plus tag promotion in both
+      # publishers — see docs/release/v4.0.0-prerelease-channel.md, "What this
+      # does not close", before moving these steps into their own job.
       - name: Install cosign
         if: startsWith(github.ref, 'refs/tags/v')
         # Pinned release, so flag behavior cannot drift under a v3 default.
@@ -210,6 +218,9 @@ jobs:
 
       - name: Verify the signature + SBOM attestation
         if: startsWith(github.ref, 'refs/tags/v')
+        # Verifying what this job just signed is not a tautology: it fails the
+        # release when the identity, the issuer or the Rekor round-trip is
+        # misconfigured, which is otherwise discovered by a consumer.
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           # Exact signer identity: THIS workflow file at the pushed tag ref, so
