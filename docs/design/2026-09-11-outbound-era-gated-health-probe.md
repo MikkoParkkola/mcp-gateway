@@ -145,6 +145,29 @@ outcome also emits a `warn!` and a `mcp_health_probe_unserved_total{backend,code
 carrying the JSON-RPC code and the era the gateway believed, so the new state is
 triageable per backend without log archaeology.
 
+**The invalidation is an existing mechanism, not a new one.**
+`Backend::reprobe_if_contradicted` (`src/backend/era.rs:110-145`) already does exactly what
+the paragraph above rules: it reads an ordinary response's error, drops the cached verdict
+when `contradicts_modern(method, code)` holds - which is `-32601` against `server/discover`
+and nothing else (`src/backend/era.rs:72`) - and spawns one detached re-probe. It is
+symmetric, so it also covers the return path row 9b pins: a `Legacy` verdict contradicted
+by one of the three modern-only codes is dropped the same way. **The probe does not call
+it**, because `health_probe` reaches `transport.request` directly (`:1053`) rather than
+through the dispatch path that does. So the implementation here is one call, not a second
+invalidation path, and building a second one would duplicate a rule that already has an
+owner.
+
+Two consequences follow and both are behavioural, which is how rows 9 and 9b assert them.
+First, the re-probe is detached and sends `server/discover` of its own accord; that is the
+*classification* probe, not the liveness tick, and it is the positive-evidence path §2
+requires. Whether it has finished by the next tick does not change what that tick sends: a
+completed re-probe leaves `Legacy`, an unfinished one leaves the era unresolved, and §2
+folds both onto `ping`. Second, `reprobe_if_contradicted` takes a `&JsonRpcResponse`, which
+the in-band shape has and the status-carried shape does not. Row 6b's carriage therefore
+needs the code lifted out of `Error::JsonRpc` and offered to the same judgment rather than
+a parallel one - the one piece of new plumbing this ruling actually adds. Found by reading
+`src/backend/era.rs`, 2026-09-11.
+
 **The middle arm is bounded - an unserved answer cannot be permanent.** Left unbounded,
 the third arm is a new failure mode: a backend wedged into answering errors would never
 trip a breaker, never rebuild, and its only trace would be a counter nobody reads. So:
@@ -363,7 +386,7 @@ the suite. Found by adversarial review, 2026-09-11.
 | 6b | a `-32603` carried as an HTTP 500 with a JSON-RPC error body and an echoing `id`: **unserved**, same three assertions as row 6, **no restart**, and **the era unchanged** - asserted as row 9 asserts it, by the method the next tick puts on the wire | **yes** | HEAD reads every non-2xx as a fault and restarts (`:1064-1066`). This is the cell where the two halves of §3 meet - the widened arm *and* the status carriage - and an implementation that faults on any parsed code except `-32601` passes every other row while restarting backends §3 says not to restart. The era half is the second intersection: §3 invalidates on `-32601` only, and an implementation wiring invalidation to any parsed status-carried error passes rows 6, 9 and the first half of this one. Found by adversarial review, 2026-09-11 |
 | 7 | closed socket / timeout still trips and restarts | no - regression guard | current behaviour; guards against fixing 4-6 by making everything healthy |
 | 8 | a valid `server/discover` result on a tripped breaker resets it, **and a `ping` result on the legacy arm resets it too** | no - regression guard | current behaviour for a result; guards against fixing 4-6 by making nothing healthy. The legacy half stops an implementation from wiring the reset into the modern branch only |
-| 9 | after a `-32601`, the cached era for that backend is no longer `Modern`, and the **next tick sends `ping`** - `server/discover` must not appear on the wire again until positive evidence reclassifies the peer | **yes** | no invalidation path exists on this call site, and naming the method is what makes the re-classification rule falsifiable rather than implied |
+| 9 | after a `-32601` to `server/discover`, the cached era for that backend is no longer `Modern`, and the **next tick sends `ping`** - `server/discover` must not appear on the wire again until positive evidence reclassifies the peer | **yes** | no invalidation path exists on this call site, and naming the method is what makes the re-classification rule falsifiable rather than implied. The row is behavioural on purpose: the judgment it pins lives in `reprobe_if_contradicted`, which the probe must be wired to rather than reimplement |
 | 9b | re-classification is possible in both directions: after the row 9 invalidation, a `server/discover` answered with a document naming a modern revision returns the peer to `Era::Modern` and the following tick sends `server/discover` again | **yes** | the invalidation path does not exist at HEAD, so neither does its inverse. Without this row an implementation that invalidates and never re-classifies leaves every peer permanently legacy and still passes rows 1 through 9 |
 | 10 | escalation: unserved answers 1 and 2 leave the breaker unchanged, the third trips and restarts | **yes** | no counter exists |
 | 10b | `force_restart()` resets the count: after an escalation, two further unserved answers must **not** trip a second time | **yes** | no counter exists. §3 rule 2 makes "a rebuilt backend starts from zero" load-bearing for the three-count arithmetic, and an implementation that never clears the counter restarts every tick after the first escalation |
