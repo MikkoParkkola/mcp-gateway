@@ -452,8 +452,14 @@ impl ProxyManager {
         }
     }
 
-    /// Broadcast `notifications/roots/list_changed` to all backends
-    /// when the client reports a roots change.
+    /// Fan `notifications/roots/list_changed` out to the connected *client*
+    /// sessions when the client reports a roots change.
+    ///
+    /// Not to backends, despite what this comment said until 2026-09-11:
+    /// `StreamingManager::broadcast` iterates client sessions. The distinction
+    /// matters because the method is in `REMOVED_IN_2026_07_28`, so a reader
+    /// trusting the old wording would count this as a fifth outbound sender to
+    /// gate (`MIK-7217.OUTBOUND.1`) when there is no backend send here at all.
     pub fn broadcast_roots_changed(&self) {
         let notification = TaggedNotification {
             source: "client".to_string(),
