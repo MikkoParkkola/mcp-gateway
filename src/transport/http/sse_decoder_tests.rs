@@ -283,6 +283,35 @@ fn a_leading_byte_order_mark_is_ignored_at_every_chunk_boundary() {
     }
 }
 
+/// The mark arrives one byte per chunk, so the state machine passes through
+/// every partial state before it resolves. The two-chunk sweep above can only
+/// split it once.
+#[test]
+fn a_mark_split_into_three_single_byte_chunks_is_still_ignored() {
+    let mut decoder = SseDecoder::new(MAX_PENDING_SSE_BYTES);
+    let mut got = Vec::new();
+    for byte in b"\xef\xbb\xbfdata: one\n\n" {
+        got.extend(decoder.push(&[*byte]).expect("single-byte push"));
+    }
+    got.extend(decoder.finish().expect("finish"));
+    assert_eq!(got, vec![event(None, "one")]);
+}
+
+/// Three bytes that merely begin like the mark are data, not a mark. Stripping
+/// them would turn the first line into a `data:` field and produce an event --
+/// so an empty decode is what proves they survived.
+#[test]
+fn a_leading_sequence_that_only_starts_like_a_mark_is_kept() {
+    assert_eq!(decode_all(b"\xef\xbf\xbddata: one\n\n"), vec![]);
+}
+
+/// A stream that is nothing but the mark ends cleanly. The mark is dropped at
+/// EOF with both cursors still at zero, which is the state the drain assumes.
+#[test]
+fn a_stream_of_only_a_mark_decodes_to_nothing() {
+    assert_eq!(decode_all(b"\xef\xbb\xbf"), vec![]);
+}
+
 /// A mark anywhere but the start is ordinary data: only the first one is a BOM.
 #[test]
 fn a_byte_order_mark_after_the_first_event_stays_in_the_data() {
