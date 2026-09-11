@@ -677,6 +677,7 @@ fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
         // reaper routes, which have no client; on a client-carrying route it
         // is a wiring gap, and only a log makes it visible before the backend
         // starts echoing a token the gateway cannot attribute.
+        // ci-allow-secret-log: an MCP progress token is a caller-chosen correlation id, not a credential; the value is what makes the miss attributable
         tracing::debug!(
             token = %client,
             "outbound call carries a caller progress token but runs outside a request scope; forwarding it unchanged"

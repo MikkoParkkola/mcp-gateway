@@ -24,10 +24,11 @@
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::protocol::JsonRpcNotification;
+use crate::protocol::types::LoggingLevel;
 
 /// Notifications one in-flight request may have outstanding before the sink
 /// starts shedding them (ADR-014 §5 overflow policy).
@@ -42,6 +43,13 @@ tokio::task_local! {
     /// -- and each gets its own mint. Lookup is linear over a list whose length
     /// is the number of progress-bearing calls in one request.
     static TRANSLATIONS: RefCell<Vec<(String, Value)>>;
+    /// The minimum severity this request asked to be told about (ADR-014 §4).
+    ///
+    /// `None` -- the seeded value -- is not "everything": it is *silence*. A
+    /// request that declared no level gets no `notifications/message` at all,
+    /// whoever raised them. Set once per request from the `_meta` key, after
+    /// the body has been classified.
+    static LEVEL: RefCell<Option<LoggingLevel>>;
 }
 
 /// Notifications dropped because a request's sink was full. Monotonic for the
@@ -62,7 +70,10 @@ pub(crate) fn scope<F: Future>(
 ) {
     let (tx, rx) = mpsc::channel(REQUEST_NOTIFICATION_DEPTH);
     (
-        TRANSLATIONS.scope(RefCell::new(Vec::new()), SINK.scope(tx, fut)),
+        LEVEL.scope(
+            RefCell::new(None),
+            TRANSLATIONS.scope(RefCell::new(Vec::new()), SINK.scope(tx, fut)),
+        ),
         rx,
     )
 }
@@ -102,6 +113,9 @@ pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
     }
     let _ = SINK.try_with(|tx| {
         for mut notification in notifications {
+            if !passes_level_filter(&notification) {
+                continue;
+            }
             translate_back(&mut notification);
             if tx.try_send(notification).is_err() {
                 let total = DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
@@ -113,6 +127,80 @@ pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
             }
         }
     });
+}
+
+/// Record the minimum severity this request declared (ADR-014 §4).
+///
+/// Called once per request, from the point where the body has been classified
+/// -- both transports classify, so both call it and neither gets a second
+/// policy. An unparseable declaration is treated as *absent* rather than
+/// refused: the field is optional and §4 already gives absence a defined
+/// meaning, so a typo silences this request's messages instead of failing a
+/// tool call that has nothing to do with logging.
+///
+/// A no-op outside a request scope, which is every backend call with no client
+/// behind it.
+pub(crate) fn set_request_log_level(declared: Option<&str>) {
+    let Some(declared) = declared else { return };
+    let parsed = serde_json::from_value::<LoggingLevel>(Value::String(declared.to_owned())).ok();
+    if parsed.is_none() {
+        tracing::debug!(
+            declared,
+            "request declared an unknown log level; treating it as undeclared"
+        );
+    }
+    let _ = LEVEL.try_with(|slot| *slot.borrow_mut() = parsed);
+}
+
+/// Raise a gateway-generated `notifications/message` on the in-flight
+/// request's stream (ADR-014 §3).
+///
+/// Per-site and additive: the caller keeps its `tracing` line, because the two
+/// have different audiences -- the operator's log records every request, this
+/// records only the one the caller asked to be told about. There is
+/// deliberately no `tracing_subscriber::Layer` behind it; a layer would have to
+/// reconstruct the request scope from a span, and §3 rejects that.
+///
+/// The payload is MCP's own logging shape: `level`, `logger`, `data`.
+pub(crate) fn emit_log(level: LoggingLevel, logger: &str, data: Value) {
+    publish(vec![JsonRpcNotification {
+        jsonrpc: "2.0".to_string(),
+        method: "notifications/message".to_string(),
+        params: Some(json!({ "level": level, "logger": logger, "data": data })),
+    }]);
+}
+
+/// One filter, both producers (ADR-014 §4): a relayed `notifications/message`
+/// and one the gateway raised itself are judged by the same rule, because a
+/// caller that asked for `error` does not care which side of the gateway a
+/// `debug` line came from.
+///
+/// `notifications/progress` is never filtered -- it carries no level, so there
+/// is nothing to judge it against.
+///
+/// Fails closed twice over: no declared level drops, and a message whose own
+/// level cannot be parsed drops too. Waving through a message that cannot be
+/// measured against the policy the caller asked for is the one outcome the
+/// policy exists to prevent.
+fn passes_level_filter(notification: &JsonRpcNotification) -> bool {
+    if notification.method != "notifications/message" {
+        return true;
+    }
+    let Ok(Some(declared)) = LEVEL.try_with(|slot| *slot.borrow()) else {
+        return false;
+    };
+    let raised = notification
+        .params
+        .as_ref()
+        .and_then(|params| params.get("level"))
+        .and_then(|level| serde_json::from_value::<LoggingLevel>(level.clone()).ok());
+    let Some(raised) = raised else {
+        tracing::debug!(
+            "notifications/message carries no level this request can judge; dropping"
+        );
+        return false;
+    };
+    raised >= declared
 }
 
 /// Substitute a gateway-owned progress token for the caller's, recording the
@@ -179,6 +267,7 @@ pub(crate) fn translate_back(notification: &mut JsonRpcNotification) {
         .flatten();
 
     let Some(client) = client else {
+        // ci-allow-secret-log: an MCP progress token is a caller-chosen correlation id, not a credential; the value is what makes the miss attributable
         tracing::debug!(
             method = %notification.method,
             token = %minted,
