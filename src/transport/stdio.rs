@@ -428,11 +428,21 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Register a progress token a caller supplied on a request.
+    /// Register the progress token this transport will route a backend's
+    /// notifications by.
     ///
-    /// Until a token is registered nothing carrying it is kept: the gateway
-    /// passes a backend's own token through only when it matches one the caller
-    /// supplied, and never mints one (MIK-7272.SUB.2b, §II.6 option (i)).
+    /// Until a token is registered nothing carrying it is kept: a backend's own
+    /// token is passed through only when it matches a registered one.
+    ///
+    /// The token registered here is the **gateway-minted** `gw-<uuid>`, not the
+    /// caller's. Minting happens above every transport, on the shared outbound
+    /// funnel (`crate::backend::ops`), so by the time a request reaches this
+    /// file the caller's token has already been substituted and recorded.
+    /// ADR-014 §2 marks the older rule -- register the caller's own token and
+    /// never mint -- superseded, and names the three defects that sink it: a
+    /// keyspace that collapses `7` and `"7"`, a bare `insert` that lets one
+    /// live call overwrite another's owner, and a reused token outliving its
+    /// request.
     // Registered from `Transport::request` below, before the request is
     // written: the reader task can route a notification back before the write
     // returns, and an unregistered token is dropped.
@@ -586,8 +596,10 @@ impl Transport for StdioTransport {
         };
 
         // Register before the write: the reader task can route a notification
-        // back before `write_message` returns. Never minted here -- only a
-        // token the caller supplied is honoured (MIK-7272.SUB.2b, option (i)).
+        // back before `write_message` returns. The token registered is whatever
+        // the params carry on the wire -- for a call the gateway minted for
+        // (`src/gateway/meta_mcp/invoke.rs`) that is the minted `gw-<uuid>`,
+        // never the caller's own token (MIK-7272.SUB.2b).
         let progress_token = request_progress_token(request.params.as_ref());
         if let Some(token) = &progress_token {
             self.register_progress_token(token);
@@ -1259,8 +1271,8 @@ done
         );
     }
 
-    /// Condition 2 of the correlation rule: a token no caller supplied is never
-    /// forwarded. The gateway passes a backend's token through, never mints one.
+    /// Condition 2 of the correlation rule: an unregistered token is never
+    /// forwarded. A backend's token is passed through only on a match.
     #[test]
     fn stdio_drops_a_progress_notification_no_caller_asked_for() {
         let t = make_transport("cat");

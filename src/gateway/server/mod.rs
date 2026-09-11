@@ -1668,13 +1668,19 @@ impl Gateway {
 
             // Handle batch requests (array of JSON-RPC calls)
             if request.is_array() {
-                let responses = Self::dispatch_batch_with_sink(
-                    &meta_mcp,
-                    &tool_policy,
-                    &mtls_policy,
-                    request,
-                    session_id,
-                    &mut protocol_telemetry_sink,
+                // Boxed: the dispatch future is tens of kilobytes and this one
+                // lives across the `select!` in the helper, so leaving it inline
+                // would put the whole thing on the reader loop's stack frame.
+                let responses = Self::dispatch_streaming_notifications(
+                    Box::pin(Self::dispatch_batch_with_sink(
+                        &meta_mcp,
+                        &tool_policy,
+                        &mtls_policy,
+                        request,
+                        session_id,
+                        &mut protocol_telemetry_sink,
+                    )),
+                    &mut stdout,
                 )
                 .await;
                 Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
@@ -1686,13 +1692,16 @@ impl Gateway {
             }
 
             // Single request
-            let response_opt = Self::dispatch_single_with_sink(
-                &meta_mcp,
-                &tool_policy,
-                &mtls_policy,
-                &request,
-                session_id,
-                protocol_telemetry_sink.as_mut(),
+            let response_opt = Self::dispatch_streaming_notifications(
+                Box::pin(Self::dispatch_single_with_sink(
+                    &meta_mcp,
+                    &tool_policy,
+                    &mtls_policy,
+                    &request,
+                    session_id,
+                    protocol_telemetry_sink.as_mut(),
+                )),
+                &mut stdout,
             )
             .await;
             Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
@@ -1735,7 +1744,10 @@ impl Gateway {
     }
 
     /// Write a JSON-RPC response to stdout followed by a newline.
-    async fn write_response(stdout: &mut tokio::io::Stdout, value: &serde_json::Value) {
+    async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
+        stdout: &mut W,
+        value: &serde_json::Value,
+    ) {
         let serialized = match serde_json::to_string(value) {
             Ok(s) => s,
             Err(e) => {
@@ -1754,6 +1766,57 @@ impl Gateway {
         }
         if let Err(e) = stdout.flush().await {
             warn!(error = %e, "Failed to flush stdout");
+        }
+    }
+
+    /// Run `fut` inside a notification scope, writing each notification the
+    /// backend publishes as it arrives.
+    ///
+    /// Draining concurrently rather than afterwards is the whole point: a
+    /// progress notification has to reach the client while the call that
+    /// raised it is still running, so it must be written *before* the caller
+    /// writes `fut`'s own response (`MIK-7272.SUB.2b`, S-02).
+    ///
+    /// Installing the scope is also what makes the mint reachable on stdio —
+    /// `mint_progress_token` returns `None` outside one, and the client's own
+    /// token would then travel to the backend unchanged.
+    async fn dispatch_streaming_notifications<F, W>(fut: F, stdout: &mut W) -> F::Output
+    where
+        F: Future,
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let (scoped, mut notifications) = crate::transport::notification_sink::scope(fut);
+        tokio::pin!(scoped);
+        let output = loop {
+            tokio::select! {
+                Some(notification) = notifications.recv() => {
+                    Self::write_notification(stdout, &notification).await;
+                }
+                output = &mut scoped => break output,
+            }
+        };
+        // The scope's sender drops with `scoped`, so anything still queued is
+        // everything that will ever arrive; write it before the response.
+        while let Ok(notification) = notifications.try_recv() {
+            Self::write_notification(stdout, &notification).await;
+        }
+        output
+    }
+
+    /// Serialise one notification onto the client's stream. A notification
+    /// that cannot be serialised is dropped with a warning rather than
+    /// failing the request it belongs to.
+    async fn write_notification<W: tokio::io::AsyncWrite + Unpin>(
+        stdout: &mut W,
+        notification: &crate::protocol::JsonRpcNotification,
+    ) {
+        match serde_json::to_value(notification) {
+            Ok(value) => Self::write_response(stdout, &value).await,
+            Err(error) => warn!(
+                %error,
+                method = %notification.method,
+                "stdio: unserialisable notification"
+            ),
         }
     }
 
@@ -2259,6 +2322,97 @@ fn stdio_caller_context<'a>(
         // about. Not "found no session" -- no asker can
         // exist here at all.
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+    }
+}
+
+#[cfg(test)]
+mod stdio_forward_path_tests {
+    use serde_json::json;
+    use tokio::io::AsyncBufReadExt;
+
+    use super::Gateway;
+    use crate::protocol::JsonRpcNotification;
+    use crate::transport::notification_sink;
+
+    fn progress(token: &str) -> JsonRpcNotification {
+        JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: "notifications/progress".to_string(),
+            params: Some(json!({ "progressToken": token, "progress": 1 })),
+        }
+    }
+
+    /// S-02's liveness half: the notification is on the wire before the
+    /// dispatch it belongs to has produced a response. Asserting only that
+    /// both appear would pass on a drain-then-emit implementation, which is
+    /// the design ADR-014 §1 rejects.
+    #[tokio::test]
+    async fn a_notification_is_written_before_its_dispatch_returns() {
+        let (client, mut server) = tokio::io::duplex(4096);
+        let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+        let dispatch_gate = std::sync::Arc::clone(&gate);
+
+        let dispatch = tokio::spawn(async move {
+            Gateway::dispatch_streaming_notifications(
+                async move {
+                    notification_sink::publish(vec![progress("gw-1")]);
+                    // Park the dispatch. Reading the notification below can
+                    // only succeed if it was written while this is pending,
+                    // so a drain-after-resolve implementation deadlocks here
+                    // instead of passing.
+                    let _permit = dispatch_gate.acquire().await.unwrap();
+                    "result"
+                },
+                &mut server,
+            )
+            .await
+        });
+
+        let mut lines = tokio::io::BufReader::new(client).lines();
+        let first = lines
+            .next_line()
+            .await
+            .unwrap()
+            .expect("no line on the wire");
+        assert!(
+            first.contains("notifications/progress"),
+            "first frame was not the notification: {first}"
+        );
+
+        gate.add_permits(1);
+        assert_eq!(dispatch.await.unwrap(), "result");
+    }
+
+    /// The scope is what makes the mint reachable. Without it
+    /// `mint_progress_token` returns `None` and the client's own token
+    /// travels to the backend unchanged -- the leak SUB.2b forbids.
+    #[tokio::test]
+    async fn a_dispatch_runs_inside_a_notification_scope() {
+        let mut wire: Vec<u8> = Vec::new();
+        let minted = Gateway::dispatch_streaming_notifications(
+            async { notification_sink::mint_progress_token(&json!(7)) },
+            &mut wire,
+        )
+        .await;
+        assert!(
+            minted.is_some(),
+            "dispatch ran outside a notification scope"
+        );
+    }
+
+    /// A notification published after the dispatch resolves is still the
+    /// caller's to see; the post-loop drain is what delivers it.
+    #[tokio::test]
+    async fn a_late_notification_is_drained_before_the_response() {
+        let mut wire: Vec<u8> = Vec::new();
+        Gateway::dispatch_streaming_notifications(
+            async {
+                notification_sink::publish(vec![progress("gw-late")]);
+            },
+            &mut wire,
+        )
+        .await;
+        assert!(std::str::from_utf8(&wire).unwrap().contains("gw-late"));
     }
 }
 
