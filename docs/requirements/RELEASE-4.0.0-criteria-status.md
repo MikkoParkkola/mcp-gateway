@@ -512,14 +512,33 @@ this section.
 | MIK-7214.HEADER.7-9 | 3 | yes, 2026-08-31 — see MIK-7213/7214 section above (HEADER.7 and .8 MET without caveat as of 2026-08-31; HEADER.9 was ABSENT/blocking **on that date**. This row records what the 2026-08-31 audit found, not a current grade: HEADER.9a and 9b are both MET in the live grade table above, closed by `1f695846`.) |
 | MIK-7214.HEADER.5 | 1 | corrected twice on 2026-08-31: recorded ABSENT, revised to UNWIRED when `param_headers.rs` landed, back to ABSENT once its unwired outbound helpers were deleted rather than kept as dead API |
 
-`RELEASE-4.0.0-near-done-triage.md` reaches some of them, under a different identifier scheme —
-`HDR` where this file says `HEADER`, `CONF` where the requirements say `CONFIRM`, plus `SESSION`,
-`SPEC` and `FIXTURE` groups that appear in no requirement row. Where the two overlap they disagree:
-this file scores five of six header criteria met, that one scores three of six, and neither is
-wrong, because they are scoring different criteria under similar names. Two ledgers with two
-schemes and no mapping between them is not redundancy, it is a release with no single answer to
-"how much is done". Reconciling them onto the requirement IDs is a prerequisite for calling the
-release ready, not a tidying task to do afterwards.
+`RELEASE-4.0.0-near-done-triage.md` reaches some of them, and the relationship between the two
+files was resolved on 2026-09-11. It is not an identifier scheme that drifted: the triage numbers
+each **Linear ticket's own acceptance criteria**, this file numbers **requirement-document IDs**,
+and they are two namespaces over two different sets of objects. `HDR.1-6` are MIK-7214's six ACs;
+`HEADER.1` through `HEADER.9f` are 22 requirement rows. Renaming one onto the other would destroy
+information rather than reconcile it.
+
+What the comparison does show is that the requirement rows are a **sample** of each ticket's
+obligations, not a cover, and that the sampling is uneven:
+
+- **Two open release tickets have no row anywhere.** `MIK-7320` and `MIK-7265` appear zero times
+  in `RELEASE-4.0.0-requirements.md` and zero times in this file, while the triage carries them as
+  `FIXTURE.1-3` and `DRIFT.1-2`. The requirements document names fifteen tickets and these are not
+  among them, so "every functional requirement ID has a row" is true and still leaves two tickets
+  ungoverned.
+- **A same-name collision is the dangerous case.** This file grades `MIK-7217.DISCOVER` 11 of 11
+  MET; the triage grades MIK-7217 at 1 of 8, because `MCP728.DISCOVER.1-8` is a different list that
+  happens to share the word. A reader who takes `DISCOVER 11/11 MET` as "the discovery ticket is
+  done" is wrong by seven criteria, and nothing in either file's own text stops them.
+- **A 26-AC ticket reduces to one row.** `MIK-7256` is named once in the requirements, inside
+  `NFR.SEC.6` ("the four open security defects MUST be closed"), graded MET here on mechanism. The
+  triage records 0 FAIL but 17 of its 26 ACs with no verifying test. Both gradings are defensible
+  and they answer different questions.
+
+So release readiness needs a per-ticket mapping between the two namespaces, plus requirement rows
+for the two ungoverned tickets — not a merge of the files, which would lose the ticket-level view
+that is the only place the MIK-7217 and MIK-7256 gaps are visible at all.
 
 ## GH517 (NEG) — streamable-HTTP protocol-version negotiation, cluster I
 
