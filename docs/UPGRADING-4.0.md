@@ -93,6 +93,8 @@ is the change to route past whoever approves your licensing, not a runtime conce
 
 ## Rolling back
 
-Downgrading to 3.x loads the same `gateway.yaml`, because 4.0.0 never edited it. The per-issuer
-OAuth credentials written by 4.0.0 are not read by 3.x, so a rollback costs one more
-re-authorization per backend in the other direction.
+Downgrading to 3.x loads the same `gateway.yaml`, because 4.0.0 never edited it. The upgrade
+leaves the 3.x token files in place — its migration prints the notice and stamps the version,
+and touches no credential (`src/commands/upgrade.rs:264`). A rollback therefore picks those
+files back up rather than prompting again, unless the tokens expired in the meantime. What 4.0.0
+wrote under the per-issuer key is simply not read by 3.x.
