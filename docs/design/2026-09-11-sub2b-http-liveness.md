@@ -191,9 +191,19 @@ released receives one notification and then stalls. Instrumented at
 second ~174 ms after the first, and publishes each to a request-scoped sink that is
 present and not shedding. A variant of the same row with the second notification on
 a timer and no intervening client call passes, so the decoder emits both and the
-loss is on the client leg: `first_event_wins_stream` in `src/gateway/streaming.rs`
-has no coverage for a second notification on one request's stream, and no test in
-the repository names it.
+stream leg forwards both.
 
-Gap A cannot close point 2 and the row is therefore not carried here. It remains an
-open defect against the client leg, with the evidence above as its reproduction.
+The loss is therefore specific to the two-gate shape, where the second notification
+does not exist until an intervening client call lands. Which layer drops it is not
+identified. `first_event_wins_stream` (`src/gateway/streaming.rs:727-752`) publishes
+inside its loop, drains on dispatch and emits a terminal frame, so the mechanism the
+client leg was said to lack is present; the timer variant exercises it and passes.
+The two-gate row differs on two axes at once — a second POST arrives on the session
+mid-stream, and the backend's second frame is causally gated on that POST reaching
+the fixture — and the evidence here does not separate them.
+
+Gap A cannot close point 2 and the row is therefore not carried here. Point 2 remains
+open, against an unidentified layer. The two reproduction rows in
+`tests/mik_7272_sub2b_acs.rs` are `#[ignore]`d and unrun; their PROBE labels separate
+"the intervening call was never serviced" (PROBE-A) from "it was serviced and no frame
+followed" (PROBE-B), which is the measurement that names the layer.
