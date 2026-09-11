@@ -179,7 +179,11 @@ class TestControlDrift(unittest.TestCase):
         with _StubServer("refuses-nothing") as stub:
             code, report = drift.run(_manifest(BOTH_PROBES), stub.endpoint)
         self.assertNotEqual(code, 0)
-        self.assertIn("origin-guard", report)
+        # Per line, not per run: one probe still failing must not cover for the
+        # other having quietly stopped discriminating.
+        for name in ("origin-guard", "host-guard"):
+            line = next(l for l in report.splitlines() if l.startswith(f"{name}:"))
+            self.assertIn("FAIL", line)
 
     # Row 5: refusing everything is not the control firing, and it is not the
     # same finding as an endpoint that never answered.
@@ -248,6 +252,11 @@ class TestControlDrift(unittest.TestCase):
             self.assertIn(control["probe"], set(drift.PROBES) | {"none"})
             if control["probe"] == "none":
                 self.assertTrue(control.get("reason"), control["id"])
+        # Each probed row keeps the probe that exercises its own control: a
+        # remap would leave both rows passing while one control goes unprobed.
+        probes = {control["id"]: control["probe"] for control in controls}
+        self.assertEqual(probes.get("origin-guard"), "foreign-origin")
+        self.assertEqual(probes.get("host-guard"), "foreign-host")
 
 
 if __name__ == "__main__":

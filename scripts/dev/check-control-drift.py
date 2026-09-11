@@ -80,7 +80,11 @@ def _post(endpoint, extra_headers=None, host_header=None):
             conn.putheader(name, value)
         conn.endheaders(REQUEST_BODY)
         response = conn.getresponse()
-        response.read()
+        # The body is deliberately left unread: a Streamable-HTTP server may
+        # answer the legitimate request with an open `text/event-stream`, and
+        # reading it would block until the timeout and report a live install as
+        # unreachable. The status line is the whole verdict, and the connection
+        # is closed below rather than reused.
         return response.status
     except (OSError, http.client.HTTPException) as exc:
         raise Unreachable(str(exc)) from exc
