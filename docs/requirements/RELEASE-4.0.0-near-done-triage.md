@@ -36,8 +36,16 @@ one of them.
 - FIXTURE.1 MET — `cargo test --all-features --test mik_7217_acs` run live: 22 passed, 0 failed.
 - FIXTURE.2 PARTIAL — fixtures captured (`tests/fixtures/mik_7217/initialize_3_5_0_{2025_06_18,2025_11_25}_spec_preview.json`, commit `e6e2ddd9`); rationale for why the tree qualifies is recorded but lives in `docs/requirements/RELEASE-4.0.0-dod-check.md:62-74`, not the commit body the AC's literal wording asks for — wording nit, not a substance gap.
 - FIXTURE.3 MET — full `cargo test --all-features --no-fail-fast` run live: 0 failed across 4619+ tests plus doctests.
-- Branch is 311 commits ahead of main; PR #464 open, covers the whole 4.0.0 protocol revision. A stale 2026-08-30 Linear comment claiming "no branch, no PR, no commit exists" is now false.
-- Remainder: evidence comment on the ticket + merging the PR. Nothing left at code level.
+- **Corrected 2026-09-11.** PR #464 is CLOSED, unmerged and `CONFLICTING` (`gh pr view 464`), and it
+  is the only PR that has ever named MIK-7320. Its branch `feat/MIK-7320-golden-fixture-fix`
+  (`a32de157`) survives on the remote but is not an ancestor of any current work. The commit counts
+  in the previous reading were meaningless: the 4.0.0 content reached `origin/main` by a different
+  route, so a raw `rev-list` against that branch compares two histories of the same work.
+- The deliverable itself IS on main — both fixtures resolve under `origin/main`
+  (`tests/fixtures/mik_7217/initialize_3_5_0_{2025_06_18,2025_11_25}_spec_preview.json`). Nothing is
+  waiting on a merge.
+- Remainder: the evidence comment on the ticket, and nothing else. Reading this row as "blocked on
+  a PR" overstates it by the whole merge.
 
 ### MIK-7272 — spec-decision documentation — 4/4, XS remainder
 
