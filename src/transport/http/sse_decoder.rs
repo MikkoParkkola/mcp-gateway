@@ -13,7 +13,14 @@
 //! - Fields are `NAME:VALUE`; exactly one optional leading space is stripped
 //!   from `VALUE` (the SSE rule), **not** `str::trim`.
 //! - Line terminators are LF, CRLF and bare CR. A `\r` is removed per line
-//!   before any join.
+//!   before any join. A `\r` that ends a chunk is held until the next byte
+//!   arrives: whether it terminates a line on its own or opens a CRLF is not
+//!   decidable there, and guessing would split one line into two.
+//! - One leading byte-order mark is ignored, and only the first one.
+//! - An error found while decoding a chunk drops the events that chunk had
+//!   already decoded. Every such error -- a bound overrun, invalid UTF-8 --
+//!   fails the whole exchange anyway, so there is no caller left to deliver
+//!   them to.
 //! - Multiple `data:` fields in one block join with a single `\n`.
 //! - A line with no colon, and a comment line (leading `:`), are skipped.
 //! - A block whose `data` is empty is skipped, not an error.
@@ -61,30 +68,50 @@ pub(crate) struct SseDecoder {
     max_pending_bytes: usize,
     /// Offset of the first byte of the partial, unterminated line.
     ///
-    /// Without it every `push` rescans the whole retained event, which is
-    /// quadratic in the frame size: a 10 MiB response arriving in 8 KiB chunks
-    /// would rescan ~6 GB. The bound is still measured from the block start, so
-    /// this cursor changes only where scanning *resumes*, never what counts.
+    /// The bound is still measured from the block start, so this cursor
+    /// changes only where a line *begins*, never what counts.
     scan_pos: usize,
+    /// Whether a leading byte-order mark may still be waiting to be dropped.
+    ///
+    /// The SSE rules ignore one BOM at the start of a stream, and the buffered
+    /// path this decoder replaces got that for free: `reqwest`'s `.text()`
+    /// decodes with BOM sniffing. Reading bytes gives that up, and a BOM left
+    /// in place renames the first field to `\u{feff}data`, silently dropping
+    /// the stream's first event.
+    at_stream_start: bool,
+    /// Offset of the first byte no scan has examined yet.
+    ///
+    /// Separate from `scan_pos` because a line start is the wrong place to
+    /// resume: one `data:` line holding a multi-MiB result never completes
+    /// until its terminator arrives, so resuming at its start rescans the
+    /// whole line on every chunk -- quadratic in the frame size, ~6 GB for a
+    /// 10 MiB response in 8 KiB chunks. Bytes already searched cannot grow a
+    /// terminator, with one exception: a trailing `\r` may yet become a CRLF,
+    /// so it is left unexamined.
+    search_pos: usize,
 }
 
-/// Next line at or after `pos`: the line's bytes and the offset past its
-/// terminator.
+/// Next line starting at `pos`, searching for its terminator from `from`: the
+/// line's bytes and the offset past that terminator.
+///
+/// `from` is an optimisation, not a second start: `buf[pos..from]` has already
+/// been searched and holds no terminator, so the line it yields is the same one
+/// a search from `pos` would find.
 ///
 /// `None` means "not yet decidable": no terminator, or a trailing lone `\r`
 /// that a following chunk may complete into a CRLF. At EOF a trailing `\r` is
 /// a bare-CR terminator and an unterminated remainder is a final line.
-fn next_line(buf: &[u8], pos: usize, at_eof: bool) -> Option<(&[u8], usize)> {
-    let rest = &buf[pos..];
+fn next_line(buf: &[u8], pos: usize, from: usize, at_eof: bool) -> Option<(&[u8], usize)> {
+    let rest = &buf[from..];
     match rest.iter().position(|b| matches!(b, b'\n' | b'\r')) {
-        Some(i) if rest[i] == b'\n' => Some((&rest[..i], pos + i + 1)),
+        Some(i) if rest[i] == b'\n' => Some((&buf[pos..from + i], from + i + 1)),
         Some(i) => match rest.get(i + 1) {
-            Some(b'\n') => Some((&rest[..i], pos + i + 2)),
-            Some(_) => Some((&rest[..i], pos + i + 1)),
-            None if at_eof => Some((&rest[..i], pos + i + 1)),
+            Some(b'\n') => Some((&buf[pos..from + i], from + i + 2)),
+            Some(_) => Some((&buf[pos..from + i], from + i + 1)),
+            None if at_eof => Some((&buf[pos..from + i], from + i + 1)),
             None => None,
         },
-        None if at_eof && !rest.is_empty() => Some((rest, buf.len())),
+        None if at_eof && pos < buf.len() => Some((&buf[pos..], buf.len())),
         None => None,
     }
 }
@@ -93,7 +120,7 @@ fn next_line(buf: &[u8], pos: usize, at_eof: bool) -> Option<(&[u8], usize)> {
 fn build_event(block: &[u8]) -> Result<Option<SseEvent>> {
     let (mut event, mut data) = (None, Vec::new());
     let mut pos = 0;
-    while let Some((line, next)) = next_line(block, pos, true) {
+    while let Some((line, next)) = next_line(block, pos, pos, true) {
         pos = next;
         if line.is_empty() || line[0] == b':' {
             continue;
@@ -125,6 +152,8 @@ impl SseDecoder {
             buffer: Vec::new(),
             max_pending_bytes,
             scan_pos: 0,
+            search_pos: 0,
+            at_stream_start: true,
         }
     }
 
@@ -157,28 +186,53 @@ impl SseDecoder {
     /// `block_start` is 0 on entry -- the previous call drained everything up
     /// to it -- so the retained event is `buffer[block_start..]` throughout.
     fn decode(&mut self, at_eof: bool) -> Result<Vec<SseEvent>> {
+        if self.at_stream_start {
+            const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+            if self.buffer.starts_with(BOM) {
+                self.buffer.drain(..BOM.len());
+                self.at_stream_start = false;
+            } else if at_eof || !BOM.starts_with(&self.buffer) {
+                self.at_stream_start = false;
+            } else {
+                // A BOM may be split across chunks, and a partial one is
+                // indistinguishable from a stream that opens with its bytes.
+                // Nothing decodable precedes it, so waiting costs no event.
+                return Ok(Vec::new());
+            }
+        }
         let mut events = Vec::new();
         let (mut block_start, mut pos) = (0, self.scan_pos);
-        while let Some((line, next)) = next_line(&self.buffer, pos, at_eof) {
+        let mut from = self.search_pos.max(pos);
+        while let Some((line, next)) = next_line(&self.buffer, pos, from, at_eof) {
             if !line.is_empty() {
                 pos = next;
+                from = next;
                 continue;
             }
             self.oversized(pos - block_start)?;
             events.extend(build_event(&self.buffer[block_start..pos])?);
             block_start = next;
             pos = next;
+            from = next;
         }
         if at_eof {
             self.oversized(self.buffer.len() - block_start)?;
             events.extend(build_event(&self.buffer[block_start..])?);
             self.buffer.clear();
             self.scan_pos = 0;
+            self.search_pos = 0;
             return Ok(events);
         }
         self.oversized(self.buffer.len() - block_start)?;
+        // A trailing `\r` is the one byte a later chunk can still reinterpret,
+        // so it is left for the next scan rather than counted as searched.
+        let searched = match self.buffer.last() {
+            Some(b'\r') => self.buffer.len() - 1,
+            _ => self.buffer.len(),
+        };
         self.buffer.drain(..block_start);
         self.scan_pos = pos - block_start;
+        self.search_pos = searched.max(pos) - block_start;
         Ok(events)
     }
 }

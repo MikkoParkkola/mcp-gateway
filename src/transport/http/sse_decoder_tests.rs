@@ -263,3 +263,49 @@ async fn a_notification_arrives_before_the_response_frame() {
         .expect("a response");
     assert!(response.result.is_some());
 }
+
+/// One leading BOM is ignored, per the SSE rules -- the behaviour `.text()`
+/// gave the buffered path for free and a byte-oriented decoder must restore.
+/// Split at every boundary because a three-byte mark can straddle a chunk, and
+/// a partial mark is indistinguishable from a stream opening with its bytes.
+#[test]
+fn a_leading_byte_order_mark_is_ignored_at_every_chunk_boundary() {
+    let body = b"\xef\xbb\xbfevent: message\ndata: {\"id\":1}\n\n";
+    let expected = vec![event(Some("message"), "{\"id\":1}")];
+    assert_eq!(decode_all(body), expected, "unsplit baseline");
+
+    for split in 0..=body.len() {
+        let mut decoder = SseDecoder::new(MAX_PENDING_SSE_BYTES);
+        let mut got = decoder.push(&body[..split]).expect("head");
+        got.extend(decoder.push(&body[split..]).expect("tail"));
+        got.extend(decoder.finish().expect("finish"));
+        assert_eq!(got, expected, "split at byte {split}");
+    }
+}
+
+/// A mark anywhere but the start is ordinary data: only the first one is a BOM.
+#[test]
+fn a_byte_order_mark_after_the_first_event_stays_in_the_data() {
+    let body = b"data: one\n\ndata: \xef\xbb\xbftwo\n\n";
+    assert_eq!(
+        decode_all(body),
+        vec![event(None, "one"), event(None, "\u{feff}two")],
+    );
+}
+
+/// The scan cursor resumes at the first unexamined byte, not at the start of
+/// the partial line. A single `data:` line delivered one byte at a time is the
+/// shape that made the old cursor quadratic; this asserts the framing survives
+/// the change, one push per byte.
+#[test]
+fn a_single_long_line_delivered_one_byte_at_a_time_decodes_once() {
+    let payload = "x".repeat(4096);
+    let body = format!("data: {payload}\r\n\r\n").into_bytes();
+    let mut decoder = SseDecoder::new(MAX_PENDING_SSE_BYTES);
+    let mut got = Vec::new();
+    for byte in &body {
+        got.extend(decoder.push(&[*byte]).expect("single-byte push"));
+    }
+    got.extend(decoder.finish().expect("finish"));
+    assert_eq!(got, vec![event(None, &payload)]);
+}
