@@ -445,6 +445,19 @@ async fn dispatch_in_scope(
     propagated_headers: &[(String, String)],
     identity_key: Option<&str>,
 ) -> crate::Result<JsonRpcResponse> {
+    // Unlike the three meta-dispatch call sites (each gating one hardcoded
+    // method), `method` here is client-chosen: this is the one place every
+    // direct-route request funnels through, so it is the one place that must
+    // refuse whatever the peer's era removed before it reaches the wire
+    // (MIK-7217, OUTBOUND.1). The id is restored by both callers after this
+    // returns, so `None` here is never seen by the client.
+    if crate::gateway::meta_mcp::era_removed_method(backend, method).await {
+        return Ok(JsonRpcResponse::error(
+            None,
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            format!("{method} was removed in protocol revision 2026-07-28"),
+        ));
+    }
     let (response, _discarded) = crate::transport::notification_sink::collect(async {
         if propagated_headers.is_empty() && identity_key.is_none() {
             backend.request(method, params).await

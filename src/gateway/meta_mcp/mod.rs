@@ -1981,7 +1981,15 @@ mod trace_correlation_tests;
 /// Unresolved and legacy eras both forward. Silence is not evidence of
 /// modernity, and refusing on a guess would take `logging/setLevel` away from
 /// every 2025 backend whose era probe has not come back yet.
-async fn era_removed_method(backend: &crate::backend::Backend, method: &str) -> bool {
+///
+/// `pub(in crate::gateway)`, widened from private, so the direct backend
+/// route (`gateway::router::backend_handlers`) can reuse this one mechanism
+/// instead of a second copy of the revision's removed-method list (MIK-7217,
+/// OUTBOUND.1).
+pub(in crate::gateway) async fn era_removed_method(
+    backend: &crate::backend::Backend,
+    method: &str,
+) -> bool {
     let era = backend.cached_era().await;
     if era != Some(crate::protocol::era::Era::Modern) {
         return false;
