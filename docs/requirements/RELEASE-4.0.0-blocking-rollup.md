@@ -1091,5 +1091,7 @@ is the release owner's call.
 `criteria-status.md`, and add the `tests/mik_6865_nested_key_probe.rs:62` `#[ignore]` line
 noted above. Neither is a gate; both are cheap and both decay if deferred.
 
-Release-ready means all four, not the gate's count of 2. Three of the four are unblocked
-right now; the one with a date on it is the review.
+Release-ready means all four, not the gate's count of 2. Two of the four can proceed right
+now: the outbound emitter and the operator deployment. The other two each wait on something
+outside the code -- bookkeeping on the push hold, review on a second non-Claude reviewer
+being available.
