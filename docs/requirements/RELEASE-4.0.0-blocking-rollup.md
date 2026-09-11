@@ -495,6 +495,16 @@ criterion is waived for this field**. The enforcement ships, the row leaves clus
 release notes carry the break rather than the criterion swallowing it. The waiver is recorded
 for this field only — `NFR.COMPAT.3` still binds every other configuration surface.
 
+**2026-09-11, evidence that narrows what the waiver had to cover.** The field is absent from
+the whole `v3.5.1` tree — `git grep -l exposed_meta_tools v3.5.1` returns nothing — and arrives
+with `0f04a179` (#473) on the release line, defaulting to an empty list (`src/config/mod.rs:1365`)
+which restricts nothing. No configuration an operator could be running today sets it, so the
+enforcement cannot require anyone to edit configuration for existing behaviour to continue,
+which is the thing `NFR.COMPAT.3` forbids. The waiver stands as recorded — withdrawing an
+operator decision is the operator's call, not a consequence of this note — but the break it
+authorised has no population. The release notes accordingly describe the field as new rather
+than as a breaking change.
+
 ### The count is checked, not asserted
 
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
