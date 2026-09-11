@@ -681,28 +681,17 @@ async fn s03_progress_stdio_each_call_sees_only_its_own_token() {
 // halves of `S-03`. Both halves of `S-03` are written below, on the harness
 // that follows.
 //
-// The two `S-02` rows are BLOCKED, not omitted. `S-02` asserts liveness: the
-// fixture releases the result only once the client has read the notification
-// (ADR-014 Acceptance row 4). The client-facing HTTP leg collects rather than
-// streams — `src/gateway/router/handlers.rs:599` runs the whole dispatch
-// inside `notification_sink::collect(..).await`, and
-// `request_scoped_event_stream` (`src/gateway/streaming.rs:604`) is handed a
-// finished `Vec<JsonRpcNotification>` — so no byte reaches the client until
-// dispatch has already returned. A row of that shape deadlocks in four steps:
-// the client waits for the notification, the gateway waits for dispatch,
-// dispatch waits for the backend, the backend waits for the client. That is a
-// property of the consumer, not of any harness, and no amount of incremental
-// reading on the client side fixes it.
+// The two `S-02` rows assert liveness: the fixture releases a result only once
+// the client has read the notification (ADR-014 Acceptance row 4). They
+// therefore cannot use `post_sse`, which reads a body to its end — a client
+// that waits for the whole body waits for a result the fixture is withholding
+// from it, and the four-step deadlock that follows is a property of the
+// consumer and not of any harness. `SseReader` below is the incremental
+// consumer they need instead.
 //
-// So the two `S-02` × HTTP rows land when the consumer streams. Until then
-// they are UNMET in the `MIK-7272.SUB.2b` row of
-// `docs/requirements/RELEASE-4.0.0-criteria-status.md`, not covered here.
-//
-// `S-03` is unaffected: which stream carried which notification is fully
-// observable in a buffered body. Batching breaks liveness, not isolation —
-// which is also why `post_sse` below reads the body to its end. When the two
-// `S-02` rows land they will need an incremental-read variant of it, which
-// this harness does not have.
+// `S-03` is unaffected either way: which stream carried which notification is
+// fully observable in a buffered body. Batching breaks liveness, not
+// isolation, which is why the two `S-03` rows keep reading to the end.
 
 // ── Client harness: HTTP ────────────────────────────────────────────────────
 
@@ -889,6 +878,103 @@ fn sse_frames(body: &str) -> Vec<Value> {
         .filter_map(|line| line.strip_prefix("data: "))
         .filter_map(|data| serde_json::from_str::<Value>(data).ok())
         .collect()
+}
+
+/// Reads one SSE body frame by frame, as the bytes arrive.
+///
+/// The `S-02` liveness rows need a consumer that acts on a notification before
+/// the response it belongs to has ended — that is the whole assertion — so
+/// they cannot buffer. Everything else here reads to the end with
+/// [`post_sse`].
+struct SseReader {
+    stream: std::pin::Pin<Box<dyn futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>>,
+    pending: String,
+}
+
+impl SseReader {
+    /// POST `message` offering a stream, and return a reader over the body
+    /// alongside the status and content type of its head.
+    ///
+    /// The head is available before the body because the gateway commits to
+    /// SSE headers before dispatch finishes; a row that never sees a head has
+    /// found the buffered arm, which is the failure it exists to catch.
+    async fn post(
+        client: &reqwest::Client,
+        url: &str,
+        session: &str,
+        message: Value,
+    ) -> (u16, String, Self) {
+        use futures::StreamExt as _;
+
+        let version = message
+            .pointer("/params/_meta/io.modelcontextprotocol~1protocolVersion")
+            .and_then(Value::as_str)
+            .expect("an S-02 row declares its revision");
+        let method = message
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut request = client
+            .post(url)
+            .header("Accept", "application/json, text/event-stream")
+            .header("Mcp-Session-Id", session)
+            .header("MCP-Protocol-Version", version)
+            .header("Mcp-Method", method);
+        if let Some(field) = mcp_name_body_field(method) {
+            if let Some(name) = message
+                .pointer(&format!("/params/{field}"))
+                .and_then(Value::as_str)
+            {
+                request = request.header("Mcp-Name", encode_header_value(name));
+            }
+        }
+        let response = request
+            .json(&message)
+            .send()
+            .await
+            .expect("POST to the gateway");
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        (
+            status,
+            content_type,
+            Self {
+                stream: Box::pin(response.bytes_stream()),
+                pending: String::new(),
+            },
+        )
+    }
+
+    /// The next complete frame, or `None` when the body ends without one.
+    ///
+    /// Bounded by [`READ_TIMEOUT`] rather than left to the test harness: a row
+    /// whose notification never arrives is exactly the regression being
+    /// guarded against, and it must fail as an assertion rather than hang.
+    async fn next_frame(&mut self) -> Option<Value> {
+        use futures::StreamExt as _;
+
+        loop {
+            if let Some(split) = self.pending.find("\n\n") {
+                let frame: String = self.pending.drain(..split + 2).collect();
+                if let Some(data) = frame.lines().find_map(|l| l.strip_prefix("data: ")) {
+                    if let Ok(value) = serde_json::from_str::<Value>(data) {
+                        return Some(value);
+                    }
+                }
+                continue;
+            }
+            let chunk = timeout(READ_TIMEOUT, self.stream.next())
+                .await
+                .expect("the response body stalled with no frame in it")?;
+            let chunk = chunk.expect("read the response body");
+            self.pending.push_str(&String::from_utf8_lossy(&chunk));
+        }
+    }
 }
 
 /// Wait until `count` slow calls have reached the fixture and parked there.
@@ -1143,6 +1229,170 @@ async fn s03_progress_http_isolates_by_stream() {
         notified(&body_b, "notifications/progress", "/params/progressToken"),
         vec![json!("token-B")],
         "call B's stream must carry its own token and only its own: {body_b}"
+    );
+    session.shutdown().await;
+}
+
+// ── S-02 over HTTP ──────────────────────────────────────────────────────────
+
+/// Read one notification off a still-open call, then release it and read the
+/// result — the liveness assertion of ADR-014 row 4, over HTTP.
+///
+/// Returns the notification frame and the result frame, in the order the
+/// client actually saw them. The release is a second POST because the first
+/// connection is parked and cannot carry anything.
+async fn notification_then_result(
+    session: &HttpSession,
+    received: &Received,
+    arguments: Value,
+    request_meta: Value,
+) -> (Value, Value) {
+    let (status, content_type, mut reader) = SseReader::post(
+        &session.client,
+        &session.url,
+        &session.session,
+        invoke(2, SLOW_TOOL, &arguments, &request_meta),
+    )
+    .await;
+    assert_eq!(status, 200, "the slow call was refused before it streamed");
+    assert!(
+        content_type.contains("text/event-stream"),
+        "the gateway answered {content_type}, so it never committed to a \
+         stream and the notification below cannot arrive before the result"
+    );
+
+    // The first frame must arrive while the call is still parked at the
+    // fixture. Nothing has released it, so a buffered consumer would deadlock
+    // here and this read is what proves the gateway does not.
+    let notification = reader
+        .next_frame()
+        .await
+        .expect("the body ended before any frame");
+    assert!(
+        parked_slow_calls(received, 1).await,
+        "the frame arrived but the call is not parked, so it proves no \
+         liveness: {notification}"
+    );
+
+    let (release_status, _, release_body) = post_sse(
+        &session.client,
+        &session.url,
+        &session.session,
+        invoke(3, RELEASE_TOOL, &json!({}), &json!({})),
+    )
+    .await;
+    assert_eq!(
+        release_status, 200,
+        "the release call failed, so the result below cannot arrive: \
+         {release_body}"
+    );
+
+    let mut result = reader.next_frame().await;
+    while result.as_ref().is_some_and(|frame| !has_id(frame, 2)) {
+        result = reader.next_frame().await;
+    }
+    let result = result.expect("the body ended before the result frame");
+    (notification, result)
+}
+
+/// `S-02`, progress half, HTTP: a backend's `notifications/progress` reaches
+/// the client that provoked it *before* that call's result.
+///
+/// GIVEN a call to the slow tool, which emits one progress notification and
+/// then withholds its result until a second call releases it,
+/// WHEN the client reads the response body incrementally,
+/// THEN it reads the notification while the call is still parked, and the
+/// result only after it releases it.
+///
+/// The order is the assertion and the parking is what gives it force: a
+/// gateway that buffers cannot pass this row, because the result it would be
+/// buffering does not exist until the client has acted on the notification.
+/// ADR-014 Acceptance row 4.
+#[tokio::test]
+async fn s02_progress_http_reaches_its_own_call_before_the_result() {
+    // GIVEN
+    let (backend_url, received) = spawn_fixture_backend().await;
+    let home = tempfile::tempdir().expect("temp home");
+    let session = HttpSession::spawn(home.path(), &backend_url).await;
+
+    // WHEN
+    let (notification, result) = timeout(
+        READ_TIMEOUT,
+        notification_then_result(
+            &session,
+            &received,
+            json!({}),
+            json!({"progressToken": "client-token"}),
+        ),
+    )
+    .await
+    .expect("the row deadlocked, which is the buffered arm answering");
+
+    // THEN
+    assert!(
+        is_method(&notification, "notifications/progress"),
+        "the first frame was not a progress notification: {notification}"
+    );
+    assert_eq!(
+        progress_token_of(&notification),
+        Some(&json!("client-token")),
+        "the client must see its own token back, not the minted one: \
+         {notification}"
+    );
+    assert!(
+        has_id(&result, 2),
+        "the last frame is not this call's result: {result}"
+    );
+    session.shutdown().await;
+}
+
+/// `S-02`, message half, HTTP: a backend's `notifications/message` reaches the
+/// client that provoked it before that call's result.
+///
+/// GIVEN a call to the slow tool declaring `logLevel`, so the fixture emits a
+/// logging notification and then withholds its result,
+/// WHEN the client reads the response body incrementally,
+/// THEN it reads the notification while the call is still parked, and the
+/// result only after it releases it.
+///
+/// The separate row matters because a logging notification carries no request
+/// linkage: the only thing tying it to this call is the stream it arrived on,
+/// so the progress row above cannot stand in for it. ADR-014 Acceptance row 4.
+#[tokio::test]
+async fn s02_message_http_reaches_its_own_call_before_the_result() {
+    // GIVEN
+    let (backend_url, received) = spawn_fixture_backend().await;
+    let home = tempfile::tempdir().expect("temp home");
+    let session = HttpSession::spawn(home.path(), &backend_url).await;
+
+    // WHEN
+    let marker = "sub2b-http-message-solo";
+    let (notification, result) = timeout(
+        READ_TIMEOUT,
+        notification_then_result(
+            &session,
+            &received,
+            json!({"message_marker": marker}),
+            json!({"logLevel": "info"}),
+        ),
+    )
+    .await
+    .expect("the row deadlocked, which is the buffered arm answering");
+
+    // THEN
+    assert!(
+        is_method(&notification, "notifications/message"),
+        "the first frame was not a logging notification: {notification}"
+    );
+    assert_eq!(
+        notification.pointer("/params/data"),
+        Some(&json!(marker)),
+        "the logging notification is not the one this call provoked: \
+         {notification}"
+    );
+    assert!(
+        has_id(&result, 2),
+        "the last frame is not this call's result: {result}"
     );
     session.shutdown().await;
 }

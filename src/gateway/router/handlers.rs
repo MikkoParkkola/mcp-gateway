@@ -596,16 +596,22 @@ pub(super) async fn meta_mcp_handler(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|accept| accept.contains("text/event-stream"));
 
-    let (response, notifications) = crate::transport::notification_sink::collect(async {
+    let dispatch = async {
         Box::pin(meta_mcp_dispatch(state, http_request))
             .await
             .into_response()
-    })
-    .await;
+    };
 
     if offers_event_stream {
-        crate::gateway::streaming::request_scoped_event_stream(response, notifications).await
+        // Scope rather than collect: the client offered a stream, so the first
+        // notification decides the body shape instead of waiting for dispatch.
+        let (scoped, rx) = crate::transport::notification_sink::scope(dispatch);
+        crate::gateway::streaming::first_event_wins_stream(scoped, rx).await
     } else {
+        // Still scoped, and still drained alongside: `publish` sheds on a full
+        // sink, and a client that did not offer a stream must not make a
+        // backend's notifications count against that depth.
+        let (response, _notifications) = crate::transport::notification_sink::collect(dispatch).await;
         response
     }
 }

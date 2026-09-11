@@ -651,6 +651,121 @@ pub(crate) async fn request_scoped_event_stream(
     (parts, axum::body::Body::from(sse)).into_response()
 }
 
+/// One SSE frame carrying `data`, in the `event: message` shape both arms use.
+fn message_frame(data: &str) -> String {
+    format!("event: message\ndata: {data}\n\n")
+}
+
+/// The terminal frame emitted when we have committed to SSE and dispatch then
+/// resolved to something we cannot frame. Ending the stream silently would
+/// leave the client with neither a result nor an error -- a worse failure than
+/// the one being guarded against.
+const UNFRAMEABLE_FRAME: &str = concat!(
+    "event: message\ndata: ",
+    r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"response not frameable over event stream"}}"#,
+    "\n\n"
+);
+
+/// Frame a finished dispatch as the stream's last event.
+///
+/// Framing requires JSON *and* 200. On today's call graph anything else is
+/// unreachable -- every non-200 is decided in validation and routing, which
+/// precede the only block that can publish -- but those are properties of the
+/// call graph, not invariants the compiler holds, so a future publisher gets
+/// the error frame rather than a truncated body.
+async fn terminal_frame(response: axum::response::Response) -> String {
+    use axum::http::header::CONTENT_TYPE;
+
+    let is_json = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("application/json"));
+    if !is_json || response.status() != axum::http::StatusCode::OK {
+        return UNFRAMEABLE_FRAME.to_string();
+    }
+    match axum::body::to_bytes(response.into_body(), usize::MAX).await {
+        Ok(bytes) => message_frame(&String::from_utf8_lossy(&bytes)),
+        Err(_) => UNFRAMEABLE_FRAME.to_string(),
+    }
+}
+
+/// Race `dispatch` against the first notification it publishes, and let
+/// whichever arrives first decide the response body's shape.
+///
+/// **Dispatch first** -- nothing was published, so this falls through to
+/// [`request_scoped_event_stream`] and every request that publishes nothing
+/// stays byte-identical to the buffered arm, non-JSON pass-through included.
+///
+/// **Notification first** -- commit to SSE headers before dispatch finishes,
+/// write that frame immediately, keep forwarding, and frame the result last.
+/// Committing early also fixes the status at 200; that is sound because a
+/// request that ends non-200 never reaches the block that can publish, so it
+/// always takes the buffered arm. `MIK-7272.SUB.2b`.
+pub(crate) async fn first_event_wins_stream<F>(
+    dispatch: F,
+    mut rx: tokio::sync::mpsc::Receiver<crate::protocol::JsonRpcNotification>,
+) -> axum::response::Response
+where
+    F: Future<Output = axum::response::Response> + Send + 'static,
+{
+    use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+
+    let mut dispatch = Box::pin(dispatch);
+    let first = tokio::select! {
+        biased;
+        Some(notification) = rx.recv() => notification,
+        response = &mut dispatch => {
+            // Nothing was published; the sender is gone, so try_recv only
+            // confirms that. Hand the finished response to the buffered arm.
+            let mut drained = Vec::new();
+            while let Ok(notification) = rx.try_recv() {
+                drained.push(notification);
+            }
+            return request_scoped_event_stream(response, drained).await;
+        }
+    };
+
+    let body = stream! {
+        if let Ok(frame) = serde_json::to_string(&first) {
+            yield Ok::<_, Infallible>(message_frame(&frame));
+        }
+        loop {
+            tokio::select! {
+                biased;
+                Some(notification) = rx.recv() => {
+                    if let Ok(frame) = serde_json::to_string(&notification) {
+                        yield Ok(message_frame(&frame));
+                    }
+                }
+                response = &mut dispatch => {
+                    // Drain what the sink still holds before the result frame,
+                    // so a notification published as dispatch resolved is not
+                    // overtaken by the result it preceded.
+                    while let Ok(notification) = rx.try_recv() {
+                        if let Ok(frame) = serde_json::to_string(&notification) {
+                            yield Ok(message_frame(&frame));
+                        }
+                    }
+                    yield Ok(terminal_frame(response).await);
+                    break;
+                }
+            }
+        }
+    };
+
+    let mut response = axum::body::Body::from_stream(body).into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/event-stream"),
+    );
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
