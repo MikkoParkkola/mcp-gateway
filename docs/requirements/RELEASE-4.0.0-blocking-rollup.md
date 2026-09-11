@@ -1059,7 +1059,9 @@ binds: no P50 or P99 may be quoted publicly until an end-to-end harness produces
 
 `MIK-6865`'s nested-key defect is **ungoverned by any v4.0.0 criterion** and is not release
 work. `SCHEMA.1a/1b/1c` govern schemas the gateway EMITS and are MET on evidence at HEAD
-(`tests/mik_7272_exploit_acs.rs:323,343,365`, `tests/schema_2020_12_validity.rs`,
+(`ac_schema_1_no_meta_tool_nests_an_object_inside_an_array` and
+`ac_schema_1_the_detector_finds_the_shape_it_is_looking_for` in
+`tests/mik_7272_exploit_acs.rs`, `tests/schema_2020_12_validity.rs`,
 `unresolved_refs` in `src/trust/schema_bounds.rs`). The defect concerns arguments the gateway
 ACCEPTS — undeclared keys at depth >= 2 — and `additionalProperties` has zero hits across
 `docs/requirements/`. Its fix is stranded on `origin/fix/mik-6865-schema-key-invention`
@@ -1127,8 +1129,9 @@ Against a clean tree at `1b83de13`, `cargo test --test mik_7272_sub2b_acs` repor
 `call B's token must appear exactly once: [String("token-A")]`, left `0`, right `1` --
 a correlation failure, not a delivery one. The row's own evidence cell was not rewritten to
 match the new verdict and still contains the sentence *"The verdict stays ABSENT because
-`SseExchange.notifications` has NO production consumer"*, so the cell now argues against its
-own grade. This is recorded here rather than fixed in `criteria-status.md` because the row is
+`SseExchange.notifications` has NO production consumer"* -- itself naming a type removed in
+`fbca1bc9`, per the SSE citation correction above -- so the cell now argues against its own
+grade on a mechanism that no longer exists. This is recorded here rather than fixed in `criteria-status.md` because the row is
 a peer's in-flight work and the ledger is frozen; whoever lands the next SUB.2b commit owns
 reconciling the two. Until then the gate's `187 met or non-blocking` counts a row whose
 acceptance tests do not pass.
@@ -1136,8 +1139,10 @@ acceptance tests do not pass.
 One qualification on the three failures, so the next reader does not treat them as a break:
 they are not a regression from `f14e6954`. They were written red on purpose, by
 `94291d83 test(sub2b): failing acceptance rows for S-02 and S-03 over stdio` and
-`43bd88de`, as the failing half of a test-first sequence, and `f14e6954` turned five of the
-eight green. So the defect is not that the code broke -- it is that the ledger verdict was
+`43bd88de`, as the failing half of a test-first sequence, and `f14e6954` turned five of them
+green. The binary holds ten cases, not eight: the remaining two are `#[ignore]`d by design as
+the reproduction and the discriminator for the open client-leg defect, so they are declared
+pending rather than silently passing. So the defect is not that the code broke -- it is that the ledger verdict was
 advanced to `MET (caveat)` while three of the criterion's own acceptance rows are still in
 their pre-implementation state. The engineering work is exactly what this document already
 describes as in flight; only the grade is ahead of it.
