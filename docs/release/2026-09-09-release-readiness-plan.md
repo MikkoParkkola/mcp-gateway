@@ -1270,9 +1270,18 @@ that statement is never reached.
 - `stdio_observation::ac_obs_1_stdio_records_the_revision_the_handshake_negotiated`
 - `stdio_observation::ac_obs_1_stdio_records_the_answer_not_the_ask`
 
-All four fail the same way — `0 record(s) captured` — and the assertion message names
-the discriminator itself: empty means the tracing capture never delivered, non-empty
-means the record site ran without `protocol_revision`. Empty is what we observe.
+Three of the four fail the same way — `0 record(s) captured` — and the assertion message
+names the discriminator itself: empty means the tracing capture never delivered,
+non-empty means the record site ran without `protocol_revision`. Empty is what we observe.
+
+The fourth fails differently, and an earlier revision of this section wrongly folded it
+into the same message. `stdio_initialize_records_requested_revision` panics at
+`src/gateway/server/mod.rs:2807` on a counter comparison —
+`after.by_revision.get("2026-07-28") > before.by_revision.get("2026-07-28")` — and it
+lives outside `mod stdio_observation`. A shared cause is plausible, because a counter that
+never increments is what an observation site that never runs produces, but it is inference
+from the failure shape, not a shared message. The three and the one must be re-checked
+separately once the file is committed.
 
 Two hypotheses were separated before anything was read as a product defect.
 
@@ -1292,10 +1301,17 @@ the added lines are the same three calls inside the extracted function, reached 
 call sites in the read loop. A capture that sees zero records is what a half-landed move
 of exactly that site produces.
 
-Evidence class: inferred from the diff, one source. Confirming it as verified would need
-a run against a detached worktree at `HEAD`, which is a full rebuild of the crate and is
-not worth its cost while the owning lane is still editing the file — the answer would be
-stale on arrival.
+Evidence class: inferred from the diff and from the introducing commits, two sources.
+Existing at `HEAD` is not the same claim as passing at `HEAD`, and in this repo lanes do
+land deliberate red acceptance tests; `ac_obs_1_` is acceptance-criterion naming. The
+introducing subjects discriminate: `git log -S` puts `mod stdio_observation` and the three
+`ac_obs_1_*` tests in `0f04a179 feat(protocol): v4.0.0 multi-round tool result readiness
+(#473)` and the fourth in `4c0525da feat(telemetry): measure MCP revision use (#480)`.
+Both are `feat` merges, not the `test(...): RED` subject this repo uses when a lane lands
+a test against an absent surface. Confirming green-at-`HEAD` outright would need a run in
+a detached worktree at `HEAD`, which is a full rebuild of the crate; it is queued rather
+than skipped, and is not worth blocking on while the owning lane is still editing the
+file, because the answer would be stale on arrival.
 
 Consequence for the release gate: these four are not counted as a release defect and not
 attributed to any criteria row. They are the `stdio-concurrent` lane's own red, mid-edit,
