@@ -190,6 +190,13 @@ impl Backend {
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
+        // MIK-7272.SUB.2b / ADR-014 §2: never hand a backend the client's own
+        // progress token. This sits here for the same reason the param mirror
+        // below does -- meta-MCP invoke and the router's direct backend route
+        // both funnel through this function, and minting in one dispatcher
+        // would leave the sibling route forwarding the caller's token.
+        let params = substitute_progress_token(params);
+
         // SEP-2243 (MIK-7214.HEADER.5): mirror the arguments a tool's schema
         // declares onto `Mcp-Param-*` headers. This sits here, not in each
         // dispatcher, because every tools/call — the MCP provider, meta-MCP
@@ -211,21 +218,19 @@ impl Backend {
         let key = self.pool_key_for(identity_key);
         let entry = self.pooled_entry(&key);
 
-        // Check THIS slot's failsafe, not the backend's.
-        if !entry.failsafe.can_proceed() {
-            telemetry_metrics::gauge!(
-                "mcp_backend_circuit_state",
-                "backend" => self.name.clone()
-            )
-            .set(0.0_f64);
-            tracing::warn!(backend = %self.name, ?key, "Request rejected by circuit breaker");
-            return Err(Error::CircuitOpen(self.name.clone()));
-        }
+        // Check THIS slot's failsafe, not the backend's. The gauge is set once
+        // from the same decision both branches read, so an open breaker cannot
+        // be reported closed by a later edit to only one of them.
+        let can_proceed = entry.failsafe.can_proceed();
         telemetry_metrics::gauge!(
             "mcp_backend_circuit_state",
             "backend" => self.name.clone()
         )
-        .set(1.0_f64);
+        .set(if can_proceed { 1.0_f64 } else { 0.0_f64 });
+        if !can_proceed {
+            tracing::warn!(backend = %self.name, ?key, "Request rejected by circuit breaker");
+            return Err(Error::CircuitOpen(self.name.clone()));
+        }
 
         // Acquire semaphore
         let _permit = self.semaphore.acquire().await.map_err(|_| {
@@ -628,4 +633,25 @@ impl Backend {
     pub fn health_metrics(&self) -> crate::failsafe::HealthMetrics {
         self.shared_entry().failsafe.health_metrics()
     }
+}
+
+/// Replace the caller's `_meta.progressToken` with a gateway-minted one,
+/// recording the pair so the notification carrying it back can be restored.
+///
+/// `params` travels unchanged when the request carries no progress token, or
+/// when the call runs outside a request scope -- health probes, warm-up
+/// handshakes and the reaper have no client to translate back to.
+fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
+    let mut params = params?;
+    let client = params
+        .get("_meta")
+        .and_then(|meta| meta.get("progressToken"))
+        .cloned();
+    if let Some(client) = client
+        && let Some(minted) = crate::transport::notification_sink::mint_progress_token(&client)
+        && let Some(Value::Object(meta)) = params.get_mut("_meta")
+    {
+        meta.insert("progressToken".to_string(), Value::String(minted));
+    }
+    Some(params)
 }
