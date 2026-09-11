@@ -34,6 +34,28 @@ near-identical second struct: one `Drop`, two maps.
 `src/transport/websocket.rs:515` is the other call site. The parameter is
 inferred there, so it compiles unchanged.
 
+The motivation is not new and need not be argued: `websocket.rs:511-514`
+already gives the guard's purpose as stopping "a request future dropped by an
+OUTER timeout or task abort" from stranding its entry. That is the cancellation
+case, stated by the codebase before this row existed. Only the second map is
+new — which is also why one generic guard beats a second near-identical struct.
+
+### Two comments outside `transport/` that this change falsifies
+
+Both describe the guard from elsewhere and must be re-read, not assumed, at
+implementation time:
+
+- `src/gateway/proxy.rs:95-97` — "That guard is typed to the transports'
+  `DashMap` of response senders, so it cannot be reused here." A generic
+  parameter makes the stated reason false. Note the consequence beyond
+  staleness: it also removes the blocker on folding `PendingSampleGuard`
+  (`proxy.rs:98`) into the same guard. **Not this row's work** — record it as a
+  follow-up rather than widening the diff.
+- `src/gateway/input_bridge.rs:291-295` — cites `stdio.rs:517` and
+  `stdio.rs:815` by line number. Editing `stdio.rs` shifts both. Re-anchor to
+  the symbol names (`cancelled_request_does_not_strand_pending_entry`) rather
+  than re-numbering.
+
 ## 3. Today's code does not meet ADR-014:157-161 (the gap to close)
 
 Release is currently a statement after `outcome`. It runs on `Ok`, on transport
