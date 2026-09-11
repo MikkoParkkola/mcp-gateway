@@ -147,6 +147,13 @@ pub(crate) fn mint_progress_token(client: &Value) -> Option<String> {
 /// client is entitled to. The miss is logged so a genuine mint leak is
 /// visible in logs rather than only in client behaviour.
 pub(crate) fn translate_back(notification: &mut JsonRpcNotification) {
+    // Only progress frames carry a token this store can own. Another
+    // notification method is free to use a `progressToken` param of its own
+    // meaning, and rewriting it -- or logging it as a miss -- would be this
+    // gateway reading someone else's field.
+    if notification.method != "notifications/progress" {
+        return;
+    }
     let Some(token) = notification
         .params
         .as_ref()
@@ -272,6 +279,27 @@ mod tests {
 
     fn token_of(notification: &JsonRpcNotification) -> Value {
         notification.params.as_ref().unwrap()["progressToken"].clone()
+    }
+
+    /// A `progressToken` on another method belongs to that method. Even a
+    /// value this store would match is left alone, so the gate is asserted
+    /// with a real mint rather than a stranger's string.
+    #[tokio::test]
+    async fn a_token_on_another_notification_method_is_not_rewritten() {
+        let ((), drained) = collect(async {
+            let minted = mint_progress_token(&serde_json::json!(7)).expect("inside a scope");
+            let mut other = progress(&Value::String(minted.clone()));
+            other.method = "notifications/message".to_string();
+            publish(vec![other]);
+        })
+        .await;
+
+        assert_eq!(drained.len(), 1);
+        assert!(
+            token_of(&drained[0]).as_str().unwrap().starts_with("gw-"),
+            "a non-progress notification was translated: {:?}",
+            token_of(&drained[0])
+        );
     }
 
     /// Every backend call that did not arrive on `POST /mcp` runs outside a

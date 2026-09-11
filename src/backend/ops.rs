@@ -647,11 +647,104 @@ fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
         .get("_meta")
         .and_then(|meta| meta.get("progressToken"))
         .cloned();
-    if let Some(client) = client
-        && let Some(minted) = crate::transport::notification_sink::mint_progress_token(&client)
-        && let Some(Value::Object(meta)) = params.get_mut("_meta")
-    {
+    let Some(client) = client else {
+        return Some(params);
+    };
+    let Some(minted) = crate::transport::notification_sink::mint_progress_token(&client) else {
+        // A caller token reaching a backend unsubstituted is exactly what this
+        // function exists to prevent, so say so. Expected for the probe and
+        // reaper routes, which have no client; on a client-carrying route it
+        // is a wiring gap, and only a log makes it visible before the backend
+        // starts echoing a token the gateway cannot attribute.
+        tracing::debug!(
+            token = %client,
+            "outbound call carries a caller progress token but runs outside a request scope; forwarding it unchanged"
+        );
+        return Some(params);
+    };
+    if let Some(Value::Object(meta)) = params.get_mut("_meta") {
         meta.insert("progressToken".to_string(), Value::String(minted));
     }
     Some(params)
+}
+
+#[cfg(test)]
+mod progress_token_substitution_tests {
+    use super::*;
+    use crate::transport::notification_sink::{collect, publish, translate_back};
+    use serde_json::json;
+
+    fn token_of(params: &Value) -> Value {
+        params["_meta"]["progressToken"].clone()
+    }
+
+    /// The security property itself: what leaves for the backend is never the
+    /// value the client sent.
+    #[tokio::test]
+    async fn inside_a_scope_the_callers_token_never_reaches_the_backend() {
+        let ((), _) = collect(async {
+            let outbound =
+                substitute_progress_token(Some(json!({ "_meta": { "progressToken": 7 } })))
+                    .expect("params survive");
+            let sent = token_of(&outbound);
+            assert_ne!(sent, json!(7), "the caller's own token went out");
+            assert!(
+                sent.as_str().is_some_and(|t| t.starts_with("gw-")),
+                "outbound token was {sent:?}"
+            );
+        })
+        .await;
+    }
+
+    /// A health probe or the reaper has no client to translate back to, so its
+    /// `_meta` travels exactly as built.
+    #[tokio::test]
+    async fn outside_a_scope_params_travel_unchanged() {
+        let params = json!({ "_meta": { "progressToken": 7 }, "name": "t" });
+        assert_eq!(
+            substitute_progress_token(Some(params.clone())),
+            Some(params)
+        );
+    }
+
+    /// The gateway never synthesises a token a client did not ask for.
+    #[tokio::test]
+    async fn a_call_with_no_token_gains_none() {
+        let ((), _) = collect(async {
+            let params = json!({ "_meta": { "traceparent": "00-a-b-01" } });
+            assert_eq!(
+                substitute_progress_token(Some(params.clone())),
+                Some(params)
+            );
+        })
+        .await;
+    }
+
+    /// The pair, end to end: whatever the mint sent out, the notification
+    /// coming back carries the client's own value again -- byte- and
+    /// type-identically. This is the contract the stdio backend leg relies on,
+    /// since it captures under the token this function wrote and republishes
+    /// it into the same scope.
+    #[tokio::test]
+    async fn a_minted_token_round_trips_to_the_callers_value() {
+        let ((), drained) = collect(async {
+            let outbound =
+                substitute_progress_token(Some(json!({ "_meta": { "progressToken": 7 } })))
+                    .expect("params survive");
+            let mut back = crate::protocol::JsonRpcNotification {
+                jsonrpc: "2.0".to_string(),
+                method: "notifications/progress".to_string(),
+                params: Some(json!({ "progressToken": token_of(&outbound), "progress": 1 })),
+            };
+            translate_back(&mut back);
+            publish(vec![back]);
+        })
+        .await;
+
+        assert_eq!(drained.len(), 1);
+        assert_eq!(
+            drained[0].params.as_ref().unwrap()["progressToken"],
+            json!(7)
+        );
+    }
 }
