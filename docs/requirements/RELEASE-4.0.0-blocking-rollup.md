@@ -960,3 +960,136 @@ emit the byte-identical message on the wire. Nothing external breaks, so the
 question the escalation raised does not arise; the frozen message needs a comment
 saying why it is frozen, or someone tidies it away and reopens the defect. If the
 operator later prefers the clean break, that is a further change, not a rework.
+
+## 2026-09-11 — the count is 2, and they are different kinds of work
+
+`scripts/release/count-release-criteria.py --blocking` returns `MIK-7272.SUB.2b` and
+`NFR.SEC.7`. The clusters above were written when the count was 28 and are retained as the
+record of how it came down; this section states where it stands, not how it got here.
+
+The two are not the same kind of problem, and treating them as one queue is what would
+stall the release. One is unwritten code. The other is a deployment nobody has performed.
+
+### `MIK-7272.SUB.2b` — ABSENT, and the absence is one leg
+
+Request-scoped notifications must flow on the response stream of their own request. The
+inbound leg exists and is scaffold, not absence: `parse_sse_response`
+(`transport/http/mod.rs:312`). The outbound leg is what the ledger calls ABSENT, and it is
+the work in flight on `feat/sub2b-outbound-mint`. The standing merge constraint is that the
+inbound capture scaffold ships with the outbound emitter or not at all, which is why PR #528
+is Draft rather than mergeable.
+
+Closing it is ordinary engineering with a reviewed design already on the record. No operator
+decision is pending on it. A review obligation is — see the next section; it blocks the merge,
+not the engineering.
+
+### `NFR.SEC.7` — PARTIAL, and the open half is not a code change
+
+Second half MET. The drift check exists, is reviewed, and discriminates: each probe requires
+both that the request the control exists to refuse IS refused and that a legitimate request
+on the same path succeeds, so an auth wall or a wedged process cannot read as the control
+firing.
+
+First half unchanged and re-verified today against the live endpoint:
+
+    python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp
+    origin-guard: FAIL: the refused request was answered 200; legitimate request 200
+      [provenance: 5d25f104 is NOT in v3.4.0 -- the build predates the control]
+    host-guard:   FAIL: the refused request was answered 200; legitimate request 200
+
+The process behind that socket is `~/.local/libexec/mcp-gateway/3.4.0-f30539af`. It answers a
+foreign `Origin` and a foreign `Host` with the full tool list because it predates `5d25f104`.
+Nothing in this repository can close that half: the guard is already merged, and the listening
+build is old. **Closing it is deploying a current build to that install, which is the
+operator's call.** The criterion stays blocking until the live endpoint passes.
+
+Pass the checker a full URL. A bare `host:port` makes `urlparse` read `127.0.0.1` as the
+scheme, and the run reports `endpoint unreachable ([Errno 61] Connection refused)` — which
+is honest about having no verdict, but reads at a glance like the install is down.
+
+### Gates no criterion owns
+
+The Base-tree CI gap section above states the structural point: every criterion row asserts a
+behaviour of the gateway, and none asserts that the tree compiles clean or that a human read
+it. So the gate's count of 2 is the count of *criterion* blockers, not of things that block
+the release. Three such gates were on the record. Their state today:
+
+- **Base-tree clippy, 5 errors (recorded 2026-09-07) — CLOSED.** CI runs the gate command
+  verbatim (`cargo clippy --all-targets --all-features -- -D warnings`,
+  `.github/workflows/ci.yml:180`) and the `Clippy (pedantic)` job is green on `origin/main`
+  at `738c7cee` (2026-09-11), alongside `Format`, `Tests`, `Kani` and the ledger job. The
+  2026-09-07 record no longer reproduces on the base tree.
+- **The `blocked_response_value` lint blocker — CLOSED** by `e0f9396b`, an ancestor of HEAD,
+  which dropped the superseded blocked-response payload builder; the symbol has no remaining
+  matches in `src/`. The note recorded against it in `criteria-status.md` earlier on
+  2026-09-11 is therefore stale. The ledger is frozen while the push is held, so the
+  correction is recorded here rather than edited into it.
+- **A final review of the committed tree — OPEN, and it is the one that still binds.**
+  `grok-review` and `kimi-review` both returned SHIP on the second round of the patch, but
+  three changes landed after that verdict: a comment correction, a `let`-else in the direct
+  route, and boxing the dispatch future at two call sites to clear `clippy::large_futures`.
+  The boxing is the substantive one — it changes allocation on the dispatch path — and no
+  reviewer has seen it. Two further commits, `e0f9396b` and `645371b4`, landed after that
+  record was written. The obligation is a review of the committed tree, not of the patch that
+  produced it (`docs/design/2026-09-11-sub2b-progress-token-mint.md:225-232`).
+
+The branch's own lint gate is green as it stands. `cargo clippy --all-targets --all-features
+-- -D warnings` re-linted the crate (not a cache replay: `Checking mcp-gateway`, 56.9s) and
+returned zero warnings and zero errors. That measurement covers the worktree *including* the
+outbound-emitter worker's uncommitted edits, which is the tree that will become the commit,
+and is not a statement about any of those edits in isolation.
+
+One scheduling fact falls out of that last item and is not a judgement call: `gpt-review` is
+credit-exhausted for the period, quoting `try again at Sep 15th, 2026`. The delivery process
+asks for two independent non-Claude reviewers and one is unavailable until then, so both the
+design gate and the implementation gate stand at one reviewer of two. Either the release
+waits for 2026-09-15, or a second non-Claude reviewer other than `gpt-review` is used. That is
+a release-owner choice, and it is the only gate here with a date attached to it.
+
+### Not blockers, recorded so they are not re-litigated
+
+`NFR.PERF.1` is PARTIAL with its blocking flag deliberately lifted under the release owner's
+2026-09-05 ruling: 4.0.0 ships on the headroom argument, worst shared case +6.07% against a
+10% P99 bound. The grade stays PARTIAL because the wording genuinely is not met. Its residual
+binds: no P50 or P99 may be quoted publicly until an end-to-end harness produces one.
+
+`MIK-6865`'s nested-key defect is **ungoverned by any v4.0.0 criterion** and is not release
+work. `SCHEMA.1a/1b/1c` govern schemas the gateway EMITS and are MET on evidence at HEAD
+(`tests/mik_7272_exploit_acs.rs:323,343,365`, `tests/schema_2020_12_validity.rs`,
+`unresolved_refs` in `src/trust/schema_bounds.rs`). The defect concerns arguments the gateway
+ACCEPTS — undeclared keys at depth >= 2 — and `additionalProperties` has zero hits across
+`docs/requirements/`. Its fix is stranded on `origin/fix/mik-6865-schema-key-invention`
+(3 commits, 16 files, 1204 insertions, no PR), whose merge is the operator's call and not a
+release gate. Worth one line when the ledger is writable: the `#[ignore]` at
+`tests/mik_6865_nested_key_probe.rs:62` is what kept a live defect invisible behind a green
+suite — the depth-1 falsifier at line 83 is not ignored and passes, so refusal works at the
+top level and stops recursing below it.
+
+### What closing all of it requires
+
+Ordered by who has to act, because the two queues do not block each other and running them
+in series is the only way this slips.
+
+**Engineering, in flight.** Finish the `MIK-7272.SUB.2b` outbound emitter on
+`feat/sub2b-outbound-mint` against the reviewed design. It merges together with the inbound
+capture scaffold or not at all, so PR #528 leaves Draft only when both legs are in. Nothing
+here needs a decision.
+
+**Operator, not code.** Deploy a build containing `5d25f104` to the install behind
+`127.0.0.1:39401`, which currently runs `3.4.0-f30539af`. Then
+`python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp` must return pass on
+both `origin-guard` and `host-guard`. `NFR.SEC.7` stays blocking until it does, and no
+change in this repository can move it.
+
+**Review, dated.** A final review of the committed tree by two independent non-Claude
+reviewers. `gpt-review` is unavailable until 2026-09-15; `grok-review` and `kimi-review` have
+seen an earlier round and would be re-reviewing, which satisfies the letter of the gate for
+the commits they have not seen. Choosing between waiting and substituting a second reviewer
+is the release owner's call.
+
+**Bookkeeping, once the push is unheld.** Correct the stale `blocked_response_value` note in
+`criteria-status.md`, and add the `tests/mik_6865_nested_key_probe.rs:62` `#[ignore]` line
+noted above. Neither is a gate; both are cheap and both decay if deferred.
+
+Release-ready means all four, not the gate's count of 2. Three of the four are unblocked
+right now; the one with a date on it is the review.
