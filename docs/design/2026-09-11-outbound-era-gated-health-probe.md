@@ -576,3 +576,37 @@ the caller as `Error::JsonRpc` **and leave the session bucket intact** - the ass
 separates the narrow signature from the naive lift. It cannot be written fail-first, because at
 `HEAD` the variant it asserts does not occur; it lands with the implementation, and §7's
 outstanding list gains it.
+
+### 8.2 The deferral of rows 10-15c was wrong, and is withdrawn
+
+§7 lists eleven rows as outstanding on the grounds that the symbols they would name do not
+exist at `HEAD`, so a test naming them would not compile and would record nothing. That
+reasoning is sound and the premise was not checked. It is false for most of the eleven.
+
+`cached_era()` exists - `src/backend/era.rs:80` - and row 9c already calls it. `is_circuit_tripped()`
+exists - `src/backend/ops.rs:626`, with its own test at `src/backend/tests.rs:109` - and rows 6,
+6b and 9d already call it. The §4 handlers rows 13-15c would drive are present and callable:
+`protocol.rs:310`, `resources.rs:389` and `:423`. Only `consecutive_unserved` is genuinely
+absent - `rg` over `src/` returns nothing for it - and it is the one symbol the deferral was
+actually justified by.
+
+So the split that §7 already applies elsewhere applies here too, and the eleven rows are not
+one population:
+
+- **Writable now, behaviourally**: rows 13, 14, 15, 15b, 15c drive existing handlers against a
+  modern-era fixture and assert on observable output, naming no new symbol. The behavioural
+  cores of rows 10, 10b, 10c, 11 and 11b - trips on the third consecutive unserved answer, the
+  count resets on a restart, one request in flight - run on `is_circuit_tripped()` and the
+  mock's recorded methods, which is the same observable surface rows 4 through 9d already use.
+- **Genuinely deferred**: the assertions that read `consecutive_unserved` directly, and the
+  metric-label assertions. Those land with the mechanism.
+
+Why this matters more than the row count. Evidence that the fix *changed the measured behaviour*
+is available exactly once, before the fix. Written afterwards, with the implementation in view,
+these rows invite the inverted oracle this plan already cites as a known failure - a suite that
+encodes what the code does rather than what the requirement demands, and passes for that reason.
+The deferral traded an irrecoverable observation for a compile error that mostly was not there.
+
+The corrected outstanding list is therefore: rows 10-11b's counter-reading halves, the metric
+assertions, the `-32600` session row from §8.1.1, and nothing else. Rows 13-15c and the
+behavioural halves of 10-11b are to be written and observed against `HEAD` before implementation.
