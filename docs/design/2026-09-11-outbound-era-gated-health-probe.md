@@ -102,6 +102,18 @@ backend is serving, and only a served result is evidence for it.**
 | a JSON-RPC **error**, any code, in-band *or* carried as a status | **answered, not served**: the peer parsed the request and declined to fulfil it | **unchanged** - neither reset nor tripped; counts toward the escalation bound below | keep |
 | transport fault or timeout | not serving | trip | `force_restart()` |
 
+**The middle row arrives in two shapes, and the match must cover both.** A JSON-RPC
+error carried in band is not an `Err` at all: `Transport::request` returns
+`Ok(JsonRpcResponse)` with the `error` field populated, and the stdio and WebSocket
+transports both do this (`src/transport/stdio.rs:589`, `src/transport/websocket.rs:501`).
+A status-carried one, after the change below, arrives as `Err(Error::JsonRpc { .. })` from
+the HTTP transport. So the classification cannot be written as a match on `Result` alone:
+the `Ok` arm must inspect `response.error` before calling it a served result, and the
+`Err` arm must separate `Error::JsonRpc` from every other error. An implementation that
+covers only the `Ok` shape restarts every HTTP backend that declines a probe - the exact
+behaviour this ruling removes - while passing any row driven by a stdio fixture. Found by
+reading the transports, 2026-09-11.
+
 The middle row is the whole point of OUTBOUND.2, and it is deliberately wider than
 `-32601`. An earlier draft of this design ruled that any error *other than*
 method-not-found proved the peer was serving, on the reasoning that a peer which parses
@@ -327,7 +339,10 @@ regression guards. Found by adversarial review, 2026-09-11. Only the fail-first 
 evidence that the fix did anything; only the regression rows are evidence it broke nothing.
 
 Two conventions apply to every row rather than being repeated in each. **Carriage:**
-rows 4 and 5 run the classification assertions on both carriages explicitly; rows 6
+rows 4 and 5 run the classification assertions on both carriages explicitly, and
+"both carriages" means the two *shapes* named in section 3 - an `Ok(JsonRpcResponse)`
+carrying an `error` field, and an `Err(Error::JsonRpc { .. })` - not two fixtures that
+differ only in a label; rows 6
 through 12 use the in-band (stdio) carriage unless the row names HTTP, and their
 fail-first half is the counter assertion, which no carriage satisfies at HEAD.
 **Observability:** every row asserting a middle-arm outcome also asserts the `warn!` and
