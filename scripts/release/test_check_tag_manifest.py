@@ -245,6 +245,10 @@ WORKFLOWS = pathlib.Path(
     or pathlib.Path(__file__).parents[2] / ".github" / "workflows"
 )
 JOB_HEADER = re.compile(r"^  ([A-Za-z][\w-]*):\s*$")
+# A cosign verb ends where the word ends: without the boundary, `verify`
+# matches `verify-attestation` and a deleted signature check passes on the
+# attestation check standing in for it.
+COSIGN_VERIFY = re.compile(r"\bcosign verify(-attestation)?(?![-\w])")
 
 
 def needs_of(body):
@@ -276,9 +280,16 @@ def uncommented(line):
     does, and a harmless `# v3` pin comment makes an exact-value assertion
     fail on a step that is wired correctly.
     """
-    quote = None
+    quote, escaped = None, False
     for index, char in enumerate(line):
-        if quote:
+        if escaped:
+            escaped = False
+        elif quote == '"' and char == "\\":
+            # Only a double-quoted scalar has escapes; inside single quotes a
+            # backslash is literal, so treating one as an escape there would
+            # swallow the closing quote and mangle the rest of the line.
+            escaped = True
+        elif quote:
             if char == quote:
                 quote = None
         elif char in "'\"":
@@ -334,17 +345,43 @@ def steps(workflow):
     one step at a time. A `DIGEST` bound in a neighbouring step does not reach
     this one, so checking the file for any binding at all passes a signing
     step that lost its own.
+
+    A block opens at every list item at the steps-list indentation, not only
+    at `- name:`. A step written `- run:` or `- id:` first is the same step to
+    Actions, but splitting on the name alone would merge it into its
+    predecessor and let it inherit that step's bindings.
     """
-    blocks, current = [], None
+    blocks, current, indent = [], None, None
+
+    def close():
+        nonlocal current
+        if current:
+            blocks.append(current)
+        current = None
+
     for line in live_lines(workflow):
-        if line.lstrip().startswith("- name:") or JOB_HEADER.match(line):
-            if current:
-                blocks.append(current)
-            current = [line] if not JOB_HEADER.match(line) else None
-        elif current is not None:
+        if JOB_HEADER.match(line):
+            close()
+            indent = None
+            continue
+        if re.match(r"^\s*steps:$", line):
+            close()
+            indent = -1  # the first list item below fixes the indentation
+            continue
+        if indent is None:
+            continue
+        item = re.match(r"^(\s*)- ", line)
+        depth = len(line) - len(line.lstrip())
+        if item and indent in (-1, len(item.group(1))):
+            indent = len(item.group(1))
+            close()
+            current = [line]
+        elif current is not None and depth > indent:
             current.append(line)
-    if current:
-        blocks.append(current)
+        elif depth <= indent and indent >= 0:
+            close()  # the steps list ended
+            indent = None
+    close()
     return blocks
 
 
@@ -411,8 +448,16 @@ class WorkflowWiring(unittest.TestCase):
         for workflow in ("release.yml", "ci.yml", "docker.yml"):
             live = commands(workflow)
             for script in ("check_tag_manifest.py", "test_check_tag_manifest.py"):
+                # A command position, not a mention. `run: echo python3
+                # scripts/release/check_tag_manifest.py` names the gate
+                # without running it, and so would a paths filter listing the
+                # file; both would satisfy a substring search.
+                invocation = re.compile(
+                    r"(?:^(?:run: )?|&&\s*|\|\|\s*|;\s*|\|\s*|\bthen\s+|\bdo\s+)"
+                    rf"(?:python3?|uv run)\s+scripts/release/{re.escape(script)}"
+                )
                 self.assertTrue(
-                    [c for c in live if f"scripts/release/{script}" in c],
+                    [c for c in live if invocation.search(c)],
                     f"{workflow} never runs scripts/release/{script}",
                 )
 
@@ -426,6 +471,18 @@ class WorkflowWiring(unittest.TestCase):
         def condition(workflow, job):
             return " ".join(jobs(workflow)[job].split())
 
+        def header(workflow, job):
+            # The job's own keys only. A step-level `if:` carrying the same
+            # clause skips one step while the job — and its other steps — run
+            # anyway, so a search of the whole body passes a guard that was
+            # moved rather than kept.
+            lines = jobs(workflow)[job].splitlines()
+            for index, line in enumerate(lines):
+                if re.match(r"^\s*steps:$", line):
+                    lines = lines[:index]
+                    break
+            return " ".join(" ".join(lines).split())
+
         def skip(job):
             # A condition may legitimately carry other clauses — the tag-ref
             # guard does — so a prefix is allowed, but only one holding no
@@ -435,8 +492,15 @@ class WorkflowWiring(unittest.TestCase):
                 r"if: (?:[>|][-+]?\s)?[^:]*?needs\." + job + r"\.outputs\.is_prerelease != 'true'"
             )
 
-        self.assertRegex(condition("release.yml", "homebrew-update"), skip("verify"))
-        self.assertRegex(condition("docker.yml", "publish-mcp-registry"), skip("build"))
+        for workflow, job, gate in (
+            ("release.yml", "homebrew-update", "verify"),
+            ("docker.yml", "publish-mcp-registry", "build"),
+        ):
+            own = header(workflow, job)
+            self.assertRegex(own, skip(gate))
+            # A disjunction makes the guard optional: `!= 'true' || true`
+            # matches the clause and skips nothing.
+            self.assertNotIn("||", own, f"{workflow} {job}: its skip is not mandatory")
         self.assertRegex(
             condition("ci.yml", "docker"),
             r"is_prerelease != 'true' && 'ghcr\.io/[^']*:latest'",
@@ -460,14 +524,26 @@ class WorkflowWiring(unittest.TestCase):
                     # Sign and verify the digest the build step produced, not a
                     # tag: a tag is a mutable pointer the other publisher can
                     # move, and a signature is over a digest.
-                    self.assertRegex(command, r"@\$\{DIGEST\}\"", f"{workflow}: {command}")
+                    # The closing quote is optional — an unquoted reference is
+                    # the same reference, and failing it would be a red CI on a
+                    # reformat.
+                    self.assertRegex(
+                        command, r"@\$\{DIGEST\}[\"']?(?:\s|$)", f"{workflow}: {command}"
+                    )
             # Read the binding per step, not per file. `DIGEST` is step-scoped
             # env, so a step that lost its own binding expands it to the empty
             # string and signs a bare repository name.
-            digest = re.compile(r"^DIGEST: \"?\$\{\{ steps\.build\.outputs\.digest \}\}\"?$")
+            # Quoting and inner spacing are the author's choice; the expression
+            # is not. A job-level binding would also reach these steps and is
+            # rejected anyway: step-scoped env is what these steps use, and an
+            # assertion that accepted either could not tell a step that lost
+            # its binding from one that never had it.
+            digest = re.compile(
+                r"^DIGEST: [\"']?\$\{\{\s*steps\.build\.outputs\.digest\s*\}\}[\"']?$"
+            )
             identity = re.compile(
-                r"^IDENTITY: \"?https://github\.com/MikkoParkkola/mcp-gateway"
-                rf"/\.github/workflows/{re.escape(workflow)}@\$\{{\{{ github\.ref \}}\}}\"?$"
+                r"^IDENTITY: [\"']?https://github\.com/MikkoParkkola/mcp-gateway"
+                rf"/\.github/workflows/{re.escape(workflow)}@\$\{{\{{\s*github\.ref\s*\}}\}}[\"']?$"
             )
             signing = 0
             for block in steps(workflow):
@@ -480,7 +556,16 @@ class WorkflowWiring(unittest.TestCase):
                     any(digest.match(c) for c in block),
                     f"{workflow}: {name} runs cosign without binding DIGEST to the build digest",
                 )
-                if not any(re.search(r"\bcosign verify(-attestation)?(?![-\w])", c) for c in block):
+                # The env binding is only worth what the shell leaves of it: a
+                # `DIGEST=` assignment in the run body rebinds the name the
+                # cosign command below expands, and the env check still passes.
+                for command in block:
+                    self.assertNotRegex(
+                        command,
+                        r"(?:^|[;&|]\s*|\bexport\s+)DIGEST=",
+                        f"{workflow}: {name} reassigns DIGEST in its shell",
+                    )
+                if not any(COSIGN_VERIFY.search(c) for c in block):
                     continue
                 # An identity is what makes a signature mean something: an
                 # unpinned verify, or one relaxed to a regexp, accepts a
@@ -490,7 +575,7 @@ class WorkflowWiring(unittest.TestCase):
                     f"{workflow}: {name} verifies without pinning this workflow's identity",
                 )
                 for command in block:
-                    if re.search(r"\bcosign verify(-attestation)?(?![-\w])", command):
+                    if COSIGN_VERIFY.search(command):
                         self.assertIn(
                             '--certificate-identity "${IDENTITY}"',
                             command,
@@ -506,19 +591,37 @@ class WorkflowWiring(unittest.TestCase):
         # runner holding the publishing credentials.
         # Checking only lines that start with `run:` would miss the body of a
         # `run: |` block, which is where an interpolation would actually sit.
-        # Invert it: every executable mention of the input must be an `env:`
-        # assignment or an `if:` condition, so any other placement fails
-        # whatever its indentation. An `if:` is evaluated by the expression
-        # engine and never reaches a shell, so banning it would block a safe
-        # construct; a `run:` placement is the one that executes.
+        # So every mention is read, and each has to be an `env:` assignment or
+        # an `if:` condition — evaluated by the expression engine, never
+        # reaching a shell — with `run:` bodies tracked separately because
+        # inside one no spelling is safe.
         permitted = re.compile(
-            r"^(?:[A-Z][A-Z0-9_]*: \"?\$\{\{ inputs\.tag \}\}\"?"
+            r"^(?:[A-Z][A-Z0-9_]*: [\"']?\$\{\{\s*inputs\.tag\s*\}\}[\"']?"
             r"|if: (?:[>|][-+]?\s)?\$\{\{ [^}]*inputs\.tag[^}]*\}\})$"
         )
-        for line in live_lines("release.yml"):
+        raw = (WORKFLOWS / "release.yml").read_text(encoding="utf-8").splitlines()
+        block, kind = None, None
+        for raw_line in raw:
+            stripped = raw_line.strip()
+            depth = len(raw_line) - len(raw_line.lstrip())
+            if block is not None:
+                if not stripped or depth > block:
+                    if kind == "run":
+                        # Inside a `run:` body, read the line raw. A `#` here
+                        # opens a *shell* comment, and a tag carrying a newline
+                        # ends it — so an interpolation in a comment executes
+                        # too. Nothing is permitted in this position.
+                        self.assertNotIn("inputs.tag", raw_line, raw_line)
+                    continue  # a folded `if:` is evaluated, never executed
+                block, kind = None, None
+            folded = re.match(r"^(?:- )?(run|if): *[|>]", stripped)
+            if folded:
+                block, kind = depth, folded.group(1)
+                continue
+            line = uncommented(raw_line).strip()
             if "inputs.tag" not in line:
                 continue
-            self.assertRegex(line.strip(), permitted, line)
+            self.assertRegex(line, permitted, raw_line)
 
 
 if __name__ == "__main__":
