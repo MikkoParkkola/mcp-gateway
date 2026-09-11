@@ -137,17 +137,25 @@ pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
 /// meaning, so a typo silences this request's messages instead of failing a
 /// tool call that has nothing to do with logging.
 ///
+/// Absence overwrites. A stdio JSON-RPC batch dispatches every item inside one
+/// scope, so the slot outlives the item that set it; leaving it untouched would
+/// hand an item that declared nothing the level its predecessor declared, and
+/// §4's absence-is-silence would stop holding for every item after the first.
+///
 /// A no-op outside a request scope, which is every backend call with no client
 /// behind it.
 pub(crate) fn set_request_log_level(declared: Option<&str>) {
-    let Some(declared) = declared else { return };
-    let parsed = serde_json::from_value::<LoggingLevel>(Value::String(declared.to_owned())).ok();
-    if parsed.is_none() {
-        tracing::debug!(
-            declared,
-            "request declared an unknown log level; treating it as undeclared"
-        );
-    }
+    let parsed = declared.and_then(|declared| {
+        let parsed =
+            serde_json::from_value::<LoggingLevel>(Value::String(declared.to_owned())).ok();
+        if parsed.is_none() {
+            tracing::debug!(
+                declared,
+                "request declared an unknown log level; treating it as undeclared"
+            );
+        }
+        parsed
+    });
     let _ = LEVEL.try_with(|slot| *slot.borrow_mut() = parsed);
 }
 
@@ -330,10 +338,47 @@ mod tests {
         );
     }
 
+    /// A stdio batch dispatches every item inside one scope, so the slot one
+    /// item writes is still there for the next. The item that declares nothing
+    /// must be silent on its own account, not on its predecessor's.
+    #[tokio::test]
+    async fn a_second_declaration_of_nothing_clears_the_first() {
+        let ((), delivered) = collect(async {
+            set_request_log_level(Some("debug"));
+            set_request_log_level(None);
+            publish(vec![JsonRpcNotification {
+                params: Some(json!({ "level": "error", "data": "x" })),
+                ..note("notifications/message")
+            }]);
+        })
+        .await;
+
+        assert!(
+            delivered.is_empty(),
+            "the second item declared no level, so nothing it produced may pass: {delivered:?}"
+        );
+    }
+
+    /// `DROPPED` is process-wide, so the two rows that read it cannot observe
+    /// it concurrently: one reads a baseline, the other floods the sink, and
+    /// whichever interleaving the harness picks decides whether the baseline
+    /// is still true when it is asserted against. The counter is deliberately
+    /// global -- it is an operator-facing total, not a per-request one -- so
+    /// the rows take turns rather than the counter being made per-scope. The
+    /// guard is held across the scope's awaits, so the lock has to be the
+    /// async one.
+    async fn drop_counter_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await
+    }
+
     /// Overflow and policy are different facts about a request. A message the
     /// filter drops must not read as sink pressure on a 64-deep channel.
     #[tokio::test]
     async fn a_policy_drop_is_not_counted_as_an_overflow() {
+        let _serialised = drop_counter_lock().await;
         let before = DROPPED.load(Ordering::Relaxed);
 
         let ((), delivered) = collect(async {
@@ -395,6 +440,7 @@ mod tests {
     /// ADR-014 §5: past capacity the sink sheds rather than stalling the call.
     #[tokio::test]
     async fn an_overfull_sink_drops_and_counts_instead_of_blocking() {
+        let _serialised = drop_counter_lock().await;
         let before = DROPPED.load(Ordering::Relaxed);
         let ((), drained) = collect(async {
             publish(
