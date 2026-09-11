@@ -1133,6 +1133,15 @@ a peer's in-flight work and the ledger is frozen; whoever lands the next SUB.2b 
 reconciling the two. Until then the gate's `187 met or non-blocking` counts a row whose
 acceptance tests do not pass.
 
+One qualification on the three failures, so the next reader does not treat them as a break:
+they are not a regression from `f14e6954`. They were written red on purpose, by
+`94291d83 test(sub2b): failing acceptance rows for S-02 and S-03 over stdio` and
+`43bd88de`, as the failing half of a test-first sequence, and `f14e6954` turned five of the
+eight green. So the defect is not that the code broke -- it is that the ledger verdict was
+advanced to `MET (caveat)` while three of the criterion's own acceptance rows are still in
+their pre-implementation state. The engineering work is exactly what this document already
+describes as in flight; only the grade is ahead of it.
+
 **The review gate is not date-bound; it is bound to `gpt-review` specifically.** The
 requirement is two independent non-Claude reviewers. This document's own text records that
 the release owner may either wait for 2026-09-15 or substitute a second reviewer, and the
