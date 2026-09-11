@@ -94,7 +94,7 @@ commit rather than from the truncated log, because a truncated log is not eviden
 | D5 CONTRACTS | PARTIAL | the evidence fix changes no public API. The branch's own API changes are graded in the criteria ledger rather than re-verified here; no interface-stability diff was run against the merge-base |
 | D6 E2E | OUTSTANDING | the FUNCTIONAL PASS gate needs a driven user journey against a deployed build. Blocked on the same operator deploy as NFR.SEC.7 |
 | D7 WIRED | PARTIAL | the CI wiring cited elsewhere is D24, not D7. Sweeping the 39 changed `src/` files: **7 are test files and all 7 are correctly `#[cfg(test)]`-gated** at their `mod` declaration (`src/backend/tests.rs`, `src/gateway/meta_mcp/authz_tests.rs`, `era_gate_tests.rs`, `outbound_log_tests.rs`, `src/gateway/router/backend_handlers/tests.rs`, `src/transport/http/sse_decoder_tests.rs`, `tests.rs`); the remaining **32 are ungated production modules** reachable from the crate root. At symbol level the H6 sweep found 10 of the 11 new public items called from production and one — `IdempotencyCache::age_in_flight` — called only from its own test block. PARTIAL for that one symbol; the file-level wiring is clean |
-| D8 OBSERVABLE | PARTIAL | the gate is "metrics/logs/traces **+ correlation ID propagated**" and the two halves split. Emission is met: the change adds 11 `tracing::*!` / `telemetry_metrics::*!` call sites, and both backend entry points carry `#[tracing::instrument]` spans. **Propagation is not.** The crate has no correlation-ID concept — `rg -w correlation_id src` is empty — and the field that stands in for one is minted, not carried: `src/backend/ops.rs:44` and `:384` set `request_id = %uuid::Uuid::new_v4()` inside the span attribute, so every backend call invents a fresh UUID. The only other `request_id` in the change is the JSON-RPC sequence counter at `src/transport/http/mod.rs:326` and `src/transport/stdio.rs:86`, which is a protocol id, not a trace id. Two backend calls serving one inbound request therefore carry two unrelated ids and nothing ties either to the client's request |
+| D8 OBSERVABLE | PARTIAL | the gate is "metrics/logs/traces **+ correlation ID propagated**" and the two halves split. Emission is met: the change adds 11 `tracing::*!` / `telemetry_metrics::*!` call sites, and both backend entry points carry `#[tracing::instrument]` spans. **Propagation is not.** The crate has no correlation-ID concept — `rg -w correlation_id src` is empty — and the field that stands in for one is minted, not carried: `src/backend/ops.rs:44` and `:384` set `request_id = %uuid::Uuid::new_v4()` inside the span attribute, so every backend call invents a fresh UUID. The only other `request_id` in the change is the JSON-RPC sequence counter at `src/transport/http/mod.rs:326` and `src/transport/stdio.rs:86`, which is a protocol id, not a trace id. Nor is there an enclosing span to inherit from: `rg -n 'instrument|span!'` over `src/transport/http/mod.rs`, `src/gateway/router/backend_handlers.rs` and `src/gateway/meta_mcp/invoke.rs` returns nothing, so the two spans have no parent carrying an inbound id. Two backend calls serving one inbound request therefore carry two unrelated ids, and neither is tied to the client's request |
 | D9 STATIC | PASS | see the matrix above |
 | D10 0-BUG | PARTIAL | 0 debt markers in `src/`. "0 known defects" is withdrawn as well: the supplemental contract's 30 `pending` rows include unresolved assessments — identity-dependent tool catalogues crossing callers among them — and pending work is not the same as defect-free. The **no new suppression** claim was wrong and is withdrawn. Against the merge-base `738c7cee`, `src/backend/metadata.rs` gains two `#[expect(dead_code, ...)]` markers, at `:160` on `set_resend_permitted` and `:182` on `resend_permitted_snapshot`; both are deliberate (`expect` rather than `allow`, so the gate errors when the direct-route caller lands) but both are new. The third added `#[allow]` line is a move rather than an addition: `#[allow(clippy::too_many_lines)]` sits at `src/gateway/router/handlers.rs:580` on `main` and at `:620` here |
 | D11 OPTIMIZED | PARTIAL | criterion benchmarks ran on Spark 2026-09-03; no profiling pass at this head |
@@ -111,7 +111,7 @@ commit rather than from the truncated log, because a truncated log is not eviden
 | D18 MERGED | OUTSTANDING | PR #528 is a draft, `mergeable: MERGEABLE`, state `BLOCKED`, review empty. Merge is the operator's act |
 | D19 BACKUP | N/A | no production state to snapshot at this stage |
 | D20 ROLLBACK | PARTIAL | `docs/UPGRADING-4.0.md` §Rolling back documents the 3.x downgrade path and why it does not re-prompt. The gate asks for a *tested* procedure and nothing was exercised, so execution is NOT EVALUATED |
-| D21 CANARY | NOT EVALUATED | the evidence fix alone would be N/A, but this section checks a release of 80 files touching transport, routing and idempotency. No rollout mechanism or gradual-exposure plan was assessed for that change, and an N/A scoped to the smallest commit would hide it |
+| D21 CANARY | NOT MET | the gate is "feature flag/gradual for high-risk" and this release changes the shared transport, routing and idempotency paths, which is high-risk by that standard. The mechanism is absent, not merely unassessed: the diff against `738c7cee` adds no feature gate or config toggle for the new behaviour — the only added `#[cfg(feature = ...)]` lines are four pre-existing `firewall` gates, and the added `enabled:` literals are fixture values, not a rollout switch. `0a009d6f feat(backend): gate outbound health probes on the peer's era` gates on a *protocol era*, not on exposure. Nor is there a pre-release channel to stage through: `git tag --list` carries no `rc`/`beta`/`alpha`/`pre` tag in the project's history, and `.github/workflows/release.yml` has no prerelease path. The gradual-exposure mechanism actually available to a client-installed binary is the major-version boundary itself — users opt in by upgrading — but that is an argument, not the flag the gate asks for |
 | D22 TELEMETRY (structured) | NOT EVALUATED | no log-shape audit on this branch |
 | D23 ALERTING | NOT EVALUATED | no threshold or routing review |
 | D24 ENFORCEMENT | PASS | the scope check is enforced in three workflows, not documented only |
@@ -121,7 +121,7 @@ commit rather than from the truncated log, because a truncated log is not eviden
 | D28 API-SURFACE | PASS | `git diff 738c7cee..HEAD -- src` adds **11 bare-`pub` items and removes 0**, plus 28 `pub(crate)`. The additions sit in `src/error.rs` (1), `src/idempotency.rs` (3), `src/protocol/meta.rs` (1), `src/security/firewall/mod.rs` (2), `src/security/http_diagnostics.rs` (2) and `src/transport/mod.rs` (2); **all five modules are exported from `src/lib.rs`** — `error:47`, `idempotency:53`, `protocol:65`, `security:76`, `transport:89` — so all 11 additions are externally reachable, not a crate-internal subset. Additive only — no removal, no signature change, no breaking public-API change |
 | D29 DEBT-TRAJ | PARTIAL | clippy is clean at `-D warnings`, which bounds but does not measure the trajectory; no dependency-graph comparison run |
 | D30 SUPPLY-CHAIN | PASS | `cargo audit` clean of advisories; no new dependency; lockfile unchanged by this commit |
-| T1c MOAT-MEASURED | NOT EVALUATED | flagged unanswered rather than guessed, as in the 2026-09-03 section |
+| T1c MOAT-MEASURED | N/A | the gate fires on emerging tech whose advantage is *asserted without numbers*. This release asserts none: the 82 changed files include no benchmark artefact, `benchmarks/public_claims.json` is unchanged, and the `README.md` diff adds no numeric or comparative claim (`git diff ... -- README.md | rg '^\+' | rg -i '%|x |faster|token|benchmark'` returns nothing). The repository's standing moat claim — the schema-only context reduction — already carries measured numbers in `benchmarks/public_claims.json` behind a CI drift check, and this branch neither alters nor relies on it |
 
 ## §1–§13 and B1–B4 — the SSOT rows this table would otherwise omit
 
@@ -140,7 +140,10 @@ visible rather than absent.
 | §11 | NOT EVALUATED | no pass run on this branch |
 | §12 documentation | PASS | upgrade guide, changelog, release-notes draft and this record |
 | §13 | NOT EVALUATED | no pass run on this branch |
-| B1–B4 bets | NOT EVALUATED | Bet 4 is this repository's own (shared platform primitives); no bet-level assessment was made for this release |
+| B1 IDENT | N/A | the attribution surface is untouched: the 82-file diff contains no `src/attestation/`, `src/identity_grants.rs`, `src/identity_propagation/`, `src/mtls/` or `src/key_server/` path. The one attribution-adjacent gap this release does carry — backend spans minting a fresh UUID instead of propagating a correlation ID — is graded under D8 rather than double-counted here |
+| B2 MEM | N/A | a protocol and router change with no agent-memory surface; hebb owns memory and is not in the diff |
+| B3 DURABLE | PARTIAL | in scope and partly evidenced. `src/idempotency.rs` changes substantially (+399/-71), and the suite carries checkpoint and restart rows that run green in the D1 pass — `tests/mik_5223_acs.rs:350` `ac_9_b3_durable_rotation_state_persists_across_checkpoint`, `tests/mik_7218_acs.rs:282` `mcp728_u1_2_stdio_window_survives_process_restart`, `tests/mik_7217_era_probe_acs.rs:373` `discover_5_a_restart_discards_the_cached_era` (the era mechanism this branch adds), and `tests/mik_7272_sub4_three_routes.rs:295` `direct_route_does_not_replay_across_callers`. What is *not* covered is a mission-length disconnect-and-resume against a live peer; the green rows are unit-scoped |
+| B4 PLATFORM | PASS | the change routes through the gateway's own primitives — capability system, meta-MCP surface, transport layer — rather than adding parallel plumbing. `mcp-gateway` **is** the Bet-4 platform, and this release extends it in place |
 
 ## Acceptance criteria for 4.0.0
 
@@ -190,14 +193,16 @@ which predates it. Its second half, drift between merged and listening controls,
 2026-09-11 by `scripts/dev/check-control-drift.py` against `security-controls.toml`. **D6** cannot be
 driven until that deploy exists, and **D18** is the merge itself.
 
-**The larger hold is not an operator act.** Ten gates carry no evaluation at all, and they
+**The larger hold is not an operator act.** Seven gates carry no evaluation at all, and they
 divide into two groups that should not be read as one. They are not the whole of what is unexamined:
 PARTIAL rows such as H8 (disk housekeeping), D5 (interface comparison) and D11 (profiling) each hold
 an unevaluated half that is counted nowhere below.
 
-**Five an agent can run at this head today**, each with a command or a reasoning pass behind it:
-STRIDE, coverage no-drop (§4), canary
-planning (D21), the bet assessment (B1–B4), and T1c. None is blocked. They are open because nobody has run them on this branch.
+**Two an agent can run at this head today**, each with a command or a reasoning pass behind it:
+STRIDE and coverage no-drop (§4). Neither is blocked. They are open because nobody has run them on
+this branch; §4 additionally needs a coverage build, which belongs on Spark rather than this machine.
+The three that were in this group — D21, T1c and the bet assessment — have since been scored above:
+D21 NOT MET, T1c N/A, and B1–B4 as N/A, N/A, PARTIAL and PASS respectively.
 
 **Five need the same deployed build NFR.SEC.7 is waiting on**: structured-telemetry shape (D22),
 alerting thresholds and routing (D23), the security-channel audit (D26), DAST (§8), and rollback
