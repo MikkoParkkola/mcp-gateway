@@ -1439,3 +1439,74 @@ its absence is a real gap in this lane's evidence rather than a formality. Its l
 result stands from earlier the same day at `364f4373`: 7 passed, 0 failed, 3 ignored — which
 predates both commits above. The file is owned by a concurrent lane and is not edited from
 here; that lane holds the current result.
+
+## 2026-09-11 — the post-fix review of `e8c941ca`, and which reviewer legs are alive
+
+### Verdict
+
+`grok-review` reviewed `e8c941ca` (the absence-clears-the-slot repair plus its test) as a
+post-fix pass, scoped to the repair and explicitly excluding `903bc41e`, the acceptance binary
+and `src/transport/stdio.rs`. Verdict **SHIP**, no FINDING at any gate. Its reasoning on the
+two questions the payload asked:
+
+- clearing the slot is a no-op for the HTTP caller, whose scope is minted per request and
+  already seeded `None`; the overwrite is only load-bearing for a stdio batch item following a
+  declared predecessor.
+- serialising the two `DROPPED` observers is the right fix for a process-wide operator counter;
+  per-scope was correctly rejected.
+
+Two IMPROVEMENTs, both SMALL and neither blocking:
+
+| # | Where | What |
+|---|---|---|
+| 1 | `src/transport/notification_sink.rs:345` | the new row never proves the *first* declaration wrote, so a no-op `Some(...)` would leave the seeded silence and the assertion would still pass. A publish-and-assert between the two calls makes the row self-sufficient. |
+| 2 | `src/transport/notification_sink.rs:140` | the rewritten comment says absence-is-silence would fail for every item after the first. It fails only for an *undeclared* item following a *declared* predecessor. |
+
+Improvement 2 is a factual error in a comment this lane wrote and is worth repairing on its own
+terms; improvement 1 strengthens a test that currently leans on a sibling row.
+
+### Reviewer availability has swapped since §12 of the dod-check
+
+`docs/requirements/RELEASE-4.0.0-dod-check.md` §12 records the grok leg as dead
+(`402`, Grok Build balance exhausted). That is **stale**. As of this date grok runs and returns
+a verdict, and `gpt-review` is the leg that is down: it exits 0 with reviewer-shaped preamble and
+no verdict, the tail reading `You've hit your usage limit … try again at Sep 15th, 2026`. Exit 0
+from `gpt-review` is therefore not evidence of a clean review — the tail of the output has to be
+read before a verdict is recorded.
+
+Neither outage is an authorship bar, so neither removes a vendor from the eligible set. The
+second leg for this commit is `kimi-review`, dispatched against the same payload; its result is
+recorded below when it lands.
+
+### Two ledgers disagree, and both are true
+
+| Ledger | Reading | Scope |
+|---|---|---|
+| `scripts/release/count-release-criteria.py` | 149 criteria, 189 rows, 188 met or non-blocking, **1 blocking** (`NFR.SEC.7`) | the criteria table only |
+| dod-check §4 / D1 | the suite is **FAIL** at the head it was measured against — 14 failures | the test suites |
+
+Quoting "1 blocking" without the suite row beside it overstates readiness. One of the 14 is a
+real finding rather than a deliberate red: `every_cited_test_exists` in `mik_7272_conformance`
+fails because the conformance evidence for "Multi Round-Trip Requests replace server-initiated
+requests" cites `mik_7212_acs::inflight::ac_mrtr_6_a_retry_landing_elsewhere_is_sent_to_the_holder`,
+and row 6's routing variant was deleted at `6e744936` without its citation.
+
+That citation is **still dangling at this head**: a tree-wide search for the test name returns
+three hits, all prose — this document's predecessor row, and two references in
+`docs/design/2026-09-03-cluster-a-coverage-audit.md`. No definition exists under `tests/` or
+`src/`. So the honest count is **two** blocking items, not one: `NFR.SEC.7`'s deploy half, and
+this citation. The second is a documentation repair, not a code change — either the citation
+moves to a test that exists, or the evidence row is rewritten to cite the surviving coverage.
+
+### Which dod-check rows are stale at this head
+
+`docs/requirements/RELEASE-4.0.0-dod-check.md` is a point-in-time record measured at `c3083368`
+and is not edited retroactively. At this head the following rows no longer describe the tree:
+
+- **§12 (reviewer legs)** — inverted, as above: grok alive, gpt down until 2026-09-15.
+- **the suite figures** — measured at `c3083368`, which predates `903bc41e`, `e8c941ca` and
+  `aee7dfd3`. The current library unit figure from this lane is 4229 passed, 0 failed, 3 ignored.
+- **the `NFR.SEC.7` row** — superseded twice since, first by the code/deploy split and then by
+  the correction that the origin guard is unconditional rather than default-on.
+
+The H1–H11, D1–D30 and §1–13 tables themselves stand; only these rows have moved.
