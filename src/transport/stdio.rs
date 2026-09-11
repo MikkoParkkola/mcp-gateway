@@ -584,6 +584,47 @@ fn request_progress_token(params: Option<&Value>) -> Option<String> {
         .and_then(progress_token_string)
 }
 
+/// Keep a progress-token registration alive exactly as long as its request,
+/// and drain it wherever that request ends.
+///
+/// `register_progress_token` inserts and only a drain removes, so every exit
+/// path has to reach one. A drain written as a statement after the await
+/// reaches three of them -- success, a write error, the internal timeout --
+/// and misses the fourth: an OUTER timeout or a task abort drops the in-flight
+/// request future mid-await, the statement never runs, and the entry lives for
+/// the transport's lifetime. That is growth rather than misrouting, because
+/// `gw-<uuid>` keys never collide and a stranded entry cannot capture another
+/// call's notifications, but it is unbounded growth.
+///
+/// This is `crate::transport::PendingRequestGuard`'s counterpart: same problem,
+/// same shape, the other map. Drop publishes what was captured, so all four
+/// paths drain through one place. Publishing outside a notification scope is a
+/// no-op, which is what a cancelled request wants.
+struct ProgressRegistrationGuard<'a> {
+    transport: &'a StdioTransport,
+    token: String,
+}
+
+impl<'a> ProgressRegistrationGuard<'a> {
+    /// Register `token` on `transport` and hold it for the guard's lifetime.
+    #[must_use]
+    fn register(transport: &'a StdioTransport, token: &str) -> Self {
+        transport.register_progress_token(token);
+        Self {
+            transport,
+            token: token.to_string(),
+        }
+    }
+}
+
+impl Drop for ProgressRegistrationGuard<'_> {
+    fn drop(&mut self) {
+        crate::transport::notification_sink::publish(
+            self.transport.take_captured_notifications(&self.token),
+        );
+    }
+}
+
 #[async_trait]
 impl Transport for StdioTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
@@ -599,11 +640,10 @@ impl Transport for StdioTransport {
         // back before `write_message` returns. The token registered is whatever
         // the params carry on the wire -- for a call the gateway minted for
         // (`src/gateway/meta_mcp/invoke.rs`) that is the minted `gw-<uuid>`,
-        // never the caller's own token (MIK-7272.SUB.2b).
-        let progress_token = request_progress_token(request.params.as_ref());
-        if let Some(token) = &progress_token {
-            self.register_progress_token(token);
-        }
+        // never the caller's own token (MIK-7272.SUB.2b). Draining it is the
+        // guard's job on every exit path, cancellation included.
+        let _progress_cleanup = request_progress_token(request.params.as_ref())
+            .map(|token| ProgressRegistrationGuard::register(self, &token));
 
         let message = serde_json::to_string(&request)?;
         let (tx, rx) = oneshot::channel();
@@ -616,7 +656,9 @@ impl Transport for StdioTransport {
         // the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
-        let outcome = match self.write_message(&message).await {
+        // Both guards drop after this value is produced, which is where the
+        // pending entry and the progress registration are retired.
+        match self.write_message(&message).await {
             Err(e) => Err(e),
             // Wait for response with timeout
             Ok(()) => match tokio::time::timeout(self.request_timeout, rx).await {
@@ -624,15 +666,7 @@ impl Transport for StdioTransport {
                 Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
                 Err(_) => Err(Error::BackendTimeout("Request timed out".to_string())),
             },
-        };
-
-        // Drain on every exit path. `register_progress_token` inserts and only
-        // this drains, so an error return that skipped it would strand the
-        // entry for the transport's lifetime.
-        if let Some(token) = &progress_token {
-            crate::transport::notification_sink::publish(self.take_captured_notifications(token));
         }
-        outcome
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
@@ -1268,6 +1302,43 @@ done
         assert!(
             !t.captured_notifications.contains_key("tok-leak"),
             "the registration must not outlive the failed request"
+        );
+    }
+
+    /// The fourth exit path, and the one a drain written after the await
+    /// cannot reach: the request future is DROPPED while still parked on its
+    /// response (an outer timeout, a task abort). Nothing after the await runs,
+    /// so retiring the registration has to happen in `Drop`.
+    ///
+    /// The guard is tested directly rather than through a cancelled
+    /// `request()`: reaching a parked await needs a live child that completes
+    /// `start()`'s handshake, and `cat` cannot. What ties the guard to the
+    /// request path is that it is now the ONLY drain there —
+    /// `stdio_request_drains_its_registration_even_when_the_write_fails` goes
+    /// red the moment `request` stops holding one.
+    #[tokio::test]
+    async fn a_dropped_progress_registration_publishes_and_retires() {
+        // GIVEN a registration holding one captured notification.
+        let t = make_transport("cat");
+        let ((), drained) = crate::transport::notification_sink::collect(async {
+            let guard = ProgressRegistrationGuard::register(&t, "tok-cancel");
+            t.handle_response(&progress_line("tok-cancel", 1)).unwrap();
+
+            // WHEN the guard drops without anyone draining explicitly, which is
+            // what a dropped request future leaves behind.
+            drop(guard);
+        })
+        .await;
+
+        // THEN what was captured still reaches the sink, and the entry is gone.
+        assert_eq!(
+            drained.len(),
+            1,
+            "a cancelled request's captured notifications must still be published"
+        );
+        assert!(
+            !t.captured_notifications.contains_key("tok-cancel"),
+            "a cancelled request must not strand its registration for the transport's lifetime"
         );
     }
 
