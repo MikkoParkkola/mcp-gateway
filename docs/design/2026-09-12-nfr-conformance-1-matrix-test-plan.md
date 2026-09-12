@@ -277,6 +277,13 @@ many words. A conformance cell asserts MCP behaviour over a transport; the liste
 dispatch behind it, so 440 extra cells could only be evidenced vacuously. One honest gap beats
 440 vacuous cells. Target stays **880**.
 
+*As implemented:* the record lives in `UNOWNED_BEYOND_THE_MATRIX` in
+`tests/mik_7272_conformance.rs`, not in `TRACKED_GAPS`. A `Gap` naming WebSocket matches zero
+cells and `a_tracked_gap_is_still_a_gap` fails on `matched == 0`; a `Gap` with every scope
+left empty matches all 880 and would absolve the whole matrix. The separate const carries the
+same words, and `the_matrix_records_what_it_cannot_hold_a_cell_for` forces it back into
+`TRACKED_GAPS` if the transport axis ever grows.
+
 **D2 — ratified.** The 2026-09-06 criterion supersedes the 2026-09-02 design; that supersession is
 the standing rule for this scope update. "Complete applicable" wins, and N/A-with-reason is how
 applicability is expressed. The criterion's second clause is therefore load-bearing.
