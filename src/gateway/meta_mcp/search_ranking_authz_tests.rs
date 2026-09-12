@@ -887,3 +887,46 @@ async fn a_forbidden_mcp_tool_loses_to_an_allowed_one() {
         "the denied tool must not be counted as a candidate"
     );
 }
+
+/// INVARIANT A, mixed authorization on the Code Mode MCP-backend route — the
+/// `profile.tool_allowed(&t.name)` filter inside
+/// `collect_code_mode_backend_matches` (`src/gateway/meta_mcp/search.rs:254`).
+///
+/// The sibling of the `search.rs:341` filter pinned above. Both collectors carry
+/// their own copy, so pinning one leaves the other free to drop its filter.
+///
+/// `tool_allowed` is asked about the BARE name the backend served, while Code
+/// Mode emits the qualified `server:tool`, so this also pins that the filter
+/// reads the unqualified name.
+///
+/// Self-falsifying against a cold cache: the surviving sibling is asserted
+/// present, so an empty collection fails the test rather than passing it. The
+/// denial-only tests above need the permissive control for that; this one does
+/// not.
+#[tokio::test]
+async fn code_mode_forbidden_mcp_tool_loses_to_an_allowed_one() {
+    let meta = meta_with_mcp_backend(
+        registry_with_default(
+            "partial",
+            RoutingProfileConfig {
+                description: "allows the backend, denies one tool".to_string(),
+                deny_tools: Some(vec![QUERY.to_string()]),
+                ..Default::default()
+            },
+        ),
+        true,
+    )
+    .await;
+
+    let response = meta
+        .code_mode_search(&json!({ "query": QUERY }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        vec![format!("{MCP_BACKEND}:weak_match")],
+        "the denied tool must be absent from Code Mode while its allowed \
+         sibling survives"
+    );
+}
