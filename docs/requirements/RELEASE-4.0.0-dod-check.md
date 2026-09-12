@@ -1,3 +1,113 @@
+# DoD re-check at `3e26c369` — 2026-09-12
+
+**Head when code-facing gates were run**: `3e26c369`
+(`test(release): pin the reachability disarms and state the corpus scope`); the working tree was
+clean at measurement time (`git status --porcelain` empty) ·
+**Merge-base with `main`**: `origin/main` at `738c7cee`, 0 behind / 254 ahead ·
+**Branch**: `feat/sub2b-outbound-mint` · **PR**: [#528](https://github.com/mikkoparkkola/mcp-gateway/pull/528) (draft, MERGEABLE, no review decision recorded) ·
+**SSOT**: `~/.claude/rules-source/workflows/quality-gates-dod.md`
+
+This is a delta re-check over the `a148c94e` record below, not a re-derivation of it. Verdict words
+carry the same meanings as in that section — **PASS** / **FAIL** mean the gate was run, **N/A**
+carries its reason, **NOT EVALUATED** means the gate applies and was not run, and **OUTSTANDING**
+means only an operator act can satisfy it.
+
+## What carries, and the falsifier for carrying it
+
+Forty-five commits separate `a148c94e` from this head and **none of them touches `src/`**:
+`git diff --stat a148c94e..HEAD -- src/` returns nothing. The cargo-side verdicts in the section
+below — formatter, clippy-as-SAST, the 5,470-test suite, the coverage measurement, the dependency
+audit — are therefore carried rather than re-run, and the carry is falsifiable by one command: if
+that diff is ever non-empty, every carried verdict is void and has to be re-measured on Spark. The
+45 commits are release-gate scripts, their tests, and documentation.
+
+The Python release gates were re-run on the Mac at this head:
+
+| Gate | Command | Result |
+|---|---|---|
+| Baseline ledger header vs rows | `count-release-criteria.py --check` | **PASS** — 149 criteria, 189 rows, 188 met or non-blocking, 1 blocking |
+| Counter parser | `test_count_release_criteria.py` | **PASS** |
+| Supplemental acceptance checks | `test_scope_acceptance.py` | **PASS** |
+| Tag/manifest publish gate | `test_check_tag_manifest.py` | **PASS** — 38 tests |
+| Workflow-wiring mutation corpus | `test_workflow_wiring_mutations.py` | **PASS** — 79 cases agree with the suite |
+| Supplemental scope consistency | `check_scope_acceptance.py --check` | **PASS** — 31 criteria, 30 pending, 1 baseline blocking row |
+
+CI at this head: 28 checks pass, 3 skipping (`Docker`, `publish-mcp-registry`, `auto-merge`). One of
+those 28 passes cannot fail on this branch; see the verdict.
+
+## The supplemental contract was not graded in this pass
+
+`RELEASE-4.0.0-scope-status.json` still holds **31 criteria: one `met` (`NFR.RELEASEGATE.1`) and
+thirty `pending`**. No row moved at this head. The thirty are the same set the section below
+inventories — `GH462.CONFIG.1`, `GH452.SESSION.1`, `MIK-7377.SIGNING.1`, `MIK-7334.CATALOGUE.1`,
+`MIK-7387.STDIO.1–3`, `MIK-7388.CANCEL.1`, `MIK-7311.LIFECYCLE.1–5`, `MIK-6744.STORE.1–2`,
+`MIK-6745.JOURNEY.1–3`, `MIK-6746.CONTRACT.1`, `MIK-3274.RANKING.1–3`, `MIK-7332.DISCOVERY.1`,
+`MIK-7235.PIN.1`, `MIK-6710.AUDIT.1`, `NFR.CONFORMANCE.1`, `NFR.WORKLOAD.1`, `NFR.UPGRADE.1`,
+`NFR.DEMO.1`, `NFR.BUILD.1`. Each carries the same note: *not yet graded against the approved scope
+update*. Grading them is the largest single piece of remaining release work and it is
+agent-runnable — no operator act and no deployed build is needed to score any of them.
+
+## Verdict
+
+**1. The ledger gate is report-only on every build that is not a tag, so thirty pending rows have
+never been able to turn a check red.** `ci.yml:264` sets
+`continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}` on the `release-criteria` job.
+On this branch the job runs, reports, and passes regardless of outcome. That is why the headline
+"one blocking criterion" survived alongside a supplemental contract in which thirty of thirty-one
+rows are ungraded: the two numbers come from different files, and the gate that would have
+reconciled them is structurally unable to fail here. The design is deliberate and documented in the
+job's own comment — a row edited mid-flight must not block unrelated PRs — but a reader taking the
+green check as evidence of release readiness is reading a check that cannot go red.
+
+**2. That same gate does block at tag time, and `NFR.RELEASEGATE.1` is genuinely met.** This was
+run, not reasoned about. `check_scope_acceptance.py --publish-check` requires acceptance only in a
+publishing context (`check_scope_acceptance.py:243–258`), so on the Mac with no `GITHUB_REF` it
+prints *"Plan check only; not release approval"* and exits 0. Under the tag environment:
+
+```
+GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v4.0.0 \
+  python3 scripts/release/check_scope_acceptance.py --publish-check
+# exit 1 — "Release acceptance incomplete:" then GH462.CONFIG.1, GH452.SESSION.1, …
+```
+
+With `continue-on-error` false on a tag and the container publish depending on the job, **tagging
+4.0.0 today fails the release and publishes nothing**. The one `met` row in the supplemental
+contract is the row that says so, and it holds.
+
+**3. The workflow-wiring assertions were green against a corpus that measured their author's
+imagination.** At the previous head the mutation corpus reported 66 cases agreeing and 38 tests
+passing. An adversarial reviewer given the same two files named **ten** mutations that disable a
+release protection while every assertion stayed green — a gate behind `exit 0;`, a gate step
+rescoped from `refs/tags/v` to `refs/heads/`, `cosign sign … || echo ignored`, a `NOTE: |2` block
+whose explicit indentation indicator the scalar filter missed, a producer expression with one
+character appended so a prerelease emits `truex`, a guard reading a step id that does not exist, a
+second unguarded `:latest` entry, and the npm dist-tag branches swapped. All ten reproduced as
+TOLERATED before they were fixed. The corpus now stands at 79 cases and the reachability disarms
+are pinned. The lesson generalises past this suite: a hand-written mutation corpus reports agreement
+whether the assertions are strong or weak, because corpus and assertions share one author and one
+blind spot.
+
+**4. Nothing in this pass changes the code-facing picture or the operator holds.** The two holds
+named below are unchanged: **NFR.SEC.7** needs a deploy of a build carrying `5d25f104` (the running
+process is `3.4.0-f30539af`, which predates it), and **D18** is the merge of #528, still a draft.
+**D12** still has not recorded the two distinct vendor approvals it requires; `grok-review` was
+unreachable across rounds 8 and 9, and `gpt-review` exits 0 when out of credits — reviewer-shaped
+output with no verdict line — so its exit status is not evidence of a review. A second reachable
+vendor is what D12 needs, not another round against the same one.
+
+**5. Control drift: the CI check is green and the live check is not, and they answer different
+questions.** `check-control-drift.py` compares merged controls against a listening endpoint. In CI
+it passes against `security-controls.toml`. Against the local install it does not, because the
+listening process predates the fix — the same gap NFR.SEC.7 records, observed from the other side.
+Run the script with the endpoint argument (`http://127.0.0.1:39401/mcp`); with no path argument it
+defaults to `/`, both probes return 404, and the result is UNDETERMINABLE rather than a drift
+finding.
+
+**Release readiness, stated plainly**: the code-facing gates are green and carried on a falsifiable
+zero-`src`-delta argument; the publish gate correctly refuses to tag; and the work between here and
+a release is thirty ungraded acceptance rows, one review threshold, one deploy and one merge.
+
+---
 # DoD check — MCP 2026-07-28 support (branch `feat/mcp-2026-protocol`)
 
 **Date**: 2026-08-30 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `edfd020a`, at which §3 and §4 were re-run after that commit changed production code; every commit above it changes documentation only
