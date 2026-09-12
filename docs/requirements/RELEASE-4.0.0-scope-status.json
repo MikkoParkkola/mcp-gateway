@@ -3,21 +3,31 @@
   "criteria": [
     {
       "id": "GH462.CONFIG.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "src/config_reload/mod.rs",
+        "tests/gh462_config_preservation.rs"
+      ],
+      "note": "Graded met on origin/main@738c7cee. Integration side not measured; origin/codex/v4-next-integration@dbc06304 may already supply it. Impl: src/config_reload/mod.rs:1866 (mutate_config_and_reload) Test: tests/gh462_config_preservation.rs:98 (invalid-existing-file reject+byte-preservation cases, mutate closure not called), tests/gh462_config_preservation.rs:120 (missing-file first-setup case), tests/gh462_config_preservation.rs:163 (valid-edit still applies) Re-graded against scope-update.md:29 + scope-tests.md:12 (not the JSON ledger or any design doc). mutate_config_and_reload loads-before-mutate: on load failure of an existing invalid file it returns ConfigWriteError::Failed, the mutate closure is never invoked (calls==0 asserted), and the file's bytes/hash are asserted unchanged after -- satisfies clause 1 (\"refuses and preserves its original bytes\"). Missing-file path uses load_existing_or_default and proceeds -- satisfies clause 2 (\"missing file still supports first setup\"). Test would fail if either clause regressed: byte-identity assert catches a write-on-failure regression, calls==0 assert catches a mutate-before-load reordering, missing-file case catches a first-setup regression. Ran: cargo test --test gh462_config_preservation -> 44 passed, 0 failed. Verdict unchanged from first pass; confirms the original grading already used scope-update.md/scope-tests.md, not the status JSON or a design doc."
     },
     {
       "id": "GH452.SESSION.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "src/gateway/router/handlers.rs",
+        "src/gateway/streaming.rs",
+        "tests/gh452_session_owner.rs"
+      ],
+      "note": "Graded met on origin/main@738c7cee. Integration side not measured; origin/codex/v4-next-integration@dbc06304 may already supply it. Impl: src/gateway/router/handlers.rs:452 (mcp_delete_handler) + src/gateway/streaming.rs:245 (remove_session_for(session_id, owner)) Test: tests/gh452_session_owner.rs:282 gh452_session_3_foreign_and_unknown_are_indistinguishable (response_parts byte-for-byte assert_eq!(foreign, unknown) on status+headers+body for a fabricated id vs a real foreign-owned id), tests/gh452_session_owner.rs:224 gh452_session_1_foreign_delete_preserves_original_stream_and_calls (non-owner delete leaves owner's SSE stream and multiplexer entry live) Re-graded against scope-update.md:30 + scope-tests.md:13 (not the JSON ledger or any design doc). Requirement has two clauses: (1) 'enforces authenticated ownership' -- covered by session_1 (non-owner DELETE -> 404, owner's stream/session_count unaffected); (2) 'unknown and unauthorized IDs do not disclose existence' -- covered directly and exactly by session_3 (line 282), which asserts a fabricated session id and a real-but-foreign-owned session id produce identical status/headers/body (assert_eq!(foreign, unknown)), i.e. no existence oracle. This is a stronger, more literal match to the requirement text than my first-pass citation (which only cited session_1); adding it here. Test would fail if either clause regressed: a response-shape diff between foreign/unknown breaks session_3, an owner-stream side effect from a non-owner delete breaks session_1. Ran: cargo test --test gh452_session_owner -> 11 passed, 0 failed. Verdict unchanged from first pass; confirms the original grading already used scope-update.md/scope-tests.md, not the status JSON or a design doc."
     },
     {
       "id": "MIK-7377.SIGNING.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/security/message_signing.rs",
+        "src/gateway/meta_mcp/mod.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Integration side not measured; origin/codex/v4-next-integration@dbc06304 may already supply it. Impl: src/security/message_signing.rs:244 (validate_secret, exists but uncalled outside its own tests); src/gateway/meta_mcp/mod.rs:732 (enable_message_signing, only called from tests) Neither disjunct holds: enable_message_signing/validate_secret have no production caller (only src/gateway/meta_mcp/authz_tests.rs:714), so an enabled config signs nothing; and Config::validate/validate_with_env (src/config/mod.rs:706-720) never inspects security.message_signing, so startup does not reject an invalid/missing key either. No feature-claim correction found. Matches existing findings in docs/requirements/RELEASE-4.0.0-readiness-board.md:94 and docs/compliance/MITRE-F3-MAPPING.md:54."
     },
     {
       "id": "MIK-7334.CATALOGUE.1",
@@ -26,97 +36,132 @@
         "src/backend/mod.rs",
         "src/backend/metadata.rs"
       ],
-      "note": "Graded 2026-09-11: ABSENT. tools_cache is one CachedMetadata<Vec<Tool>> per Backend with no identity key, beside a pool that is per-identity. MIK-6735 isolated transport sessions and left tool metadata shared, so an identity-dependent catalogue crosses callers by construction rather than by race. No revocation-during-fill or two-identity differing-schema test. Static evidence only; no test run. Lines: src/backend/mod.rs:81, src/backend/mod.rs:47, src/backend/metadata.rs:137."
+      "note": "Graded not_met on origin/main@738c7cee. Integration side not measured; origin/codex/v4-next-integration@dbc06304 may already supply it. Backend.tools_cache/resources_cache/prompts_cache (src/backend/mod.rs:81,91,95) are one CachedMetadata per Backend with no identity key, while the transport pool (src/backend/mod.rs:47, PoolKey::PerUser) is per-identity (MIK-6735). get_tools_shared (src/backend/metadata.rs:136) fills/reads that single shared cache regardless of caller identity, so a backend whose tool list/schema differs per identity serves one caller's cached result to another. No revocation-during-fill or two-identity differing-schema test exists anywhere in the tree."
     },
     {
       "id": "MIK-7387.STDIO.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/gateway/input_bridge.rs",
+        "src/gateway/meta_mcp/invoke.rs",
+        "src/gateway/server/mod.rs",
+        "tests/mik_7212_mrtr7_stdio_acs.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Integration side not measured; origin/codex/v4-next-integration@dbc06304 may already supply it. Impl: src/gateway/input_bridge.rs:361 (InputBridge, wired for non-stdio legacy callers only via src/gateway/meta_mcp/invoke.rs:1842); src/gateway/server/mod.rs:2306 (stdio_caller_context sets Declared::NONE, blocking stdio from reaching the bridge) Test: tests/mik_7212_mrtr7_stdio_acs.rs -- test exists but is #[ignore]d, so it does not run in CI 'reaches a legacy stdio client, whose answer reaches the backend while the gateway continues reading' -- ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads (line 356) is ignored and stdio never reaches the bridge. All three ac_mrtr_7a_* tests in tests/mik_7212_mrtr7_stdio_acs.rs remain #[ignore = \"MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec\"]. src/gateway/meta_mcp/invoke.rs:1842-1852 does wire InputBridge.run() for non-stdio legacy callers, but src/gateway/server/mod.rs:2306-2328 stdio_caller_context() sets input_capabilities: Declared::NONE, and invoke.rs:1876-1893's own comment states this arm 'does NOT reach stdio' because plan() refuses on the empty declared set before any bridge delivery is attempted. So the serve-loop property under test (reader keeps reading while a question is outstanding; ordering vs initialize; non-interleaved concurrent frames) is unbuilt for stdio."
     },
     {
       "id": "MIK-7387.STDIO.2",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/gateway/input_bridge.rs",
+        "src/gateway/meta_mcp/invoke.rs",
+        "src/gateway/server/mod.rs",
+        "tests/mik_7212_mrtr7_stdio_acs.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Integration side not measured; origin/codex/v4-next-integration@dbc06304 may already supply it. Impl: src/gateway/input_bridge.rs:361 (InputBridge, wired for non-stdio legacy callers only via src/gateway/meta_mcp/invoke.rs:1842); src/gateway/server/mod.rs:2306 (stdio_caller_context sets Declared::NONE, blocking stdio from reaching the bridge) Test: tests/mik_7212_mrtr7_stdio_acs.rs -- test exists but is #[ignore]d, so it does not run in CI 'input request cannot overtake the initialize response on legacy stdio' -- ac_mrtr_7a_bridged_request_follows_the_initialize_response (line 421) is ignored; no bridged request is ever written to stdio to order against initialize. All three ac_mrtr_7a_* tests in tests/mik_7212_mrtr7_stdio_acs.rs remain #[ignore = \"MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec\"]. src/gateway/meta_mcp/invoke.rs:1842-1852 does wire InputBridge.run() for non-stdio legacy callers, but src/gateway/server/mod.rs:2306-2328 stdio_caller_context() sets input_capabilities: Declared::NONE, and invoke.rs:1876-1893's own comment states this arm 'does NOT reach stdio' because plan() refuses on the empty declared set before any bridge delivery is attempted. So the serve-loop property under test (reader keeps reading while a question is outstanding; ordering vs initialize; non-interleaved concurrent frames) is unbuilt for stdio."
     },
     {
       "id": "MIK-7387.STDIO.3",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/gateway/input_bridge.rs",
+        "src/gateway/meta_mcp/invoke.rs",
+        "src/gateway/server/mod.rs",
+        "tests/mik_7212_mrtr7_stdio_acs.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Integration side not measured; origin/codex/v4-next-integration@dbc06304 may already supply it. Impl: src/gateway/input_bridge.rs:361 (InputBridge, wired for non-stdio legacy callers only via src/gateway/meta_mcp/invoke.rs:1842); src/gateway/server/mod.rs:2306 (stdio_caller_context sets Declared::NONE, blocking stdio from reaching the bridge) Test: tests/mik_7212_mrtr7_stdio_acs.rs -- test exists but is #[ignore]d, so it does not run in CI 'Concurrent stdio requests and replies emit complete, non-interleaved JSON frames' -- ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames (line 471) is ignored; the shared-writer serialization it targets is unexercised because no bridged frame reaches stdio at all. All three ac_mrtr_7a_* tests in tests/mik_7212_mrtr7_stdio_acs.rs remain #[ignore = \"MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec\"]. src/gateway/meta_mcp/invoke.rs:1842-1852 does wire InputBridge.run() for non-stdio legacy callers, but src/gateway/server/mod.rs:2306-2328 stdio_caller_context() sets input_capabilities: Declared::NONE, and invoke.rs:1876-1893's own comment states this arm 'does NOT reach stdio' because plan() refuses on the empty declared set before any bridge delivery is attempted. So the serve-loop property under test (reader keeps reading while a question is outstanding; ordering vs initialize; non-interleaved concurrent frames) is unbuilt for stdio."
     },
     {
       "id": "MIK-7388.CANCEL.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "src/gateway/proxy.rs",
+        "src/gateway/meta_mcp/invoke.rs"
+      ],
+      "note": "Graded met on origin/main@738c7cee. Integration side not measured; origin/codex/v4-next-integration@dbc06304 may already supply it. Impl: src/gateway/proxy.rs:529 (impl ClientChannel for ProxyManager::send_request, the production bridge channel used from src/gateway/meta_mcp/invoke.rs:1842); src/gateway/proxy.rs:98-106 (PendingSampleGuard, RAII cleanup on drop calling cancel_pending) Test: src/gateway/proxy.rs:717 (mik_7212_wire_11_cancelled_channel_send_does_not_strand_pending_entry) plus resolve_pending_from_other_session_is_refused_and_does_not_race and the sibling non-existent-id resolve test in src/gateway/proxy.rs The cancelled-channel-send test drives the exact production trait object used by the real bridge (ClientChannel via ProxyManager), registers a pending entry, delivers to a live session, cancels via outer timeout, and asserts pending_sampling.len()==0 (reclaimed). The other two tests together prove a removed/non-existent id resolves to nothing and a non-owning session cannot hijack a pending id -- combined this satisfies 'does not deliver its response to another exchange or caller'. Ran: cargo test --lib gateway::proxy::tests:: -> 27 passed."
     },
     {
       "id": "MIK-7311.LIFECYCLE.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "tests/mik_7272_task_1_acs.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Measured on origin/codex/v4-next-integration@dbc06304 as met. Impl: src/gateway/task_service/execution.rs, src/gateway/router/handlers/tasks.rs Test: src/gateway/router/tests/task_execution_adapter/lifecycle.rs:93 (verified: real #[tokio::test] x3_a_cancel_during_dispatch_is_terminal...); tests/mik_7272_task_1_acs.rs:97,98; tests/task_expiry_http_lifecycle.rs:62 Readiness board tracks this under a different ID (MIK-7272.TASK.1) and never mentions MIK-7311; search evidence wins. Real-process HTTP tests plus router tests jointly cover negotiate/poll/input/cancel/terminal/expiry, all non-ignored."
     },
     {
       "id": "MIK-7311.LIFECYCLE.2",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "tests/mik_7272_task_1_acs.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Measured on origin/codex/v4-next-integration@dbc06304 as met. Impl: src/gateway/task_service/execution.rs, store.rs (owner-scoped reads) Test: tests/mik_7272_task_1_acs.rs:1130,1181; src/gateway/router/tests/task_execution_adapter/lifecycle.rs:163; interlock.rs:398; tests/task_upstream_recovery.rs:176 Board silent on this ID. Coverage spans disconnect (dropped future + real process kill), reconnect as owner (succeeds) and foreign principal (denied, indistinguishable from nonexistent), all non-ignored."
     },
     {
       "id": "MIK-7311.LIFECYCLE.3",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "tests/mik_7272_task_1_acs.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Measured on origin/codex/v4-next-integration@dbc06304 as met. Impl: src/gateway/task_service/store.rs, execution.rs Test: tests/mik_7272_task_1_acs.rs:954; store_tests/durability.rs:375; tests/task_upstream_recovery.rs:176; tests/task_expiry_http_lifecycle.rs:62 Board silent on this ID. Store-level crash-boundary tests plus two real-process kill/restart integration tests show handle resolves immediately and survives restart with owner-only access, all non-ignored."
     },
     {
       "id": "MIK-7311.LIFECYCLE.4",
       "status": "pending",
       "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "note": "Graded not_met on origin/main@738c7cee. Measured on origin/codex/v4-next-integration@dbc06304 as met. Impl: src/gateway/task_service/execution/upstream.rs:158 Test: src/gateway/router/tests/task_execution_adapter/query_serialization.rs:455 TaskStatus stays a standard extension state; uncertainty reported via Completed+isError plus namespaced _meta executionOutcome, not an invented status. Verified test is real, non-ignored, proves exactly-one-query/no-resubmit."
     },
     {
       "id": "MIK-7311.LIFECYCLE.5",
       "status": "pending",
       "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "note": "Graded not_met on origin/main@738c7cee. Measured on origin/codex/v4-next-integration@dbc06304 as met. Impl: src/gateway/task_service/execution.rs:206, execution/expiry.rs:133 Test: src/gateway/task_service/store_tests.rs:153 (cancel_01_first_terminal_commit_wins_in_both_orders_and_after_reopen) Verified test is real, non-ignored, races Cancel vs Complete in both orders, asserts first-terminal-commit-wins durably across reopen. Deterministic-clock expiry sweep covers TTL/bound reclaim without sleeps."
     },
     {
       "id": "MIK-6744.STORE.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/oauth/storage.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Integration side flagged for check but not yet measured on origin/codex/v4-next-integration@dbc06304; the verdict is unproven on main, not proven absent everywhere. Impl: src/oauth/storage.rs:143 TokenStorage, :178 storage_key(backend_name, resource_url) -- two-part key only, no principal component No principal-keyed gateway credential store exists in this worktree. src/oauth/storage.rs::storage_key takes only (backend_name, resource_url) -- this is the exact pre-existing (backend, resource)-only key ADR-008 names as the cross-user leak (docs/adr/ADR-008-multi-user-oauth-isolation.md:11-19), still present unchanged. ADR-008:135 labels MIK-6744 ('Slice B, principal-keyed token store') a 'demand-gated follow-up (not release-gating)... build when a thin client demands it' -- it was never built under that gate. scope-update.md:7 supersedes that deferral for THIS release, but the code still is not here: `fd -HI personal_accounts` (the consent/identity/commit subsystem gap-assessment-2026-09-11.md:76,85-89 names as the implementation surface for the Accounts criteria) returns zero matches in this worktree -- it exists only on origin/codex/v4-next-integration (44 files). rg for CredentialStore/TokenStore/per-principal keying outside src/key_server (an unrelated OIDC-to-LLM-API-key system, not backend OAuth credentials) is empty. No test can exist for a store that is not built."
     },
     {
       "id": "MIK-6744.STORE.2",
       "status": "pending",
       "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "note": "Graded not_met on origin/main@738c7cee. Integration side flagged for check but not yet measured on origin/codex/v4-next-integration@dbc06304; the verdict is unproven on main, not proven absent everywhere. Depends structurally on STORE.1's principal-keyed store, which does not exist in this worktree (see STORE.1 note). Without per-principal credential records there is nothing for a revoke-during-refresh or restart-isolation guarantee to apply to; 'credential isolation' across principals is not a coherent claim over a (backend, resource)-only key. rg for revoke*refresh / restart*isolat / old-refresh-job-cannot-restore patterns across src is empty. No implementation, no test."
     },
     {
       "id": "MIK-6745.JOURNEY.1",
       "status": "pending",
       "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "note": "Graded not_met on origin/main@738c7cee. Integration side flagged for check but not yet measured on origin/codex/v4-next-integration@dbc06304; the verdict is unproven on main, not proven absent everywhere. No gateway-brokered consent-journey engine (ADR-008 Slice C, MIK-6745) exists in this worktree. ADR-008:138 labels it a demand-gated follow-up, 'build when a thin client demands it' -- never built under that gate; scope-update.md:7 supersedes the deferral for this release but the code is still absent. `fd -HI personal_accounts` (consent.rs, identity.rs, commit.rs -- the implementation surface gap-assessment-2026-09-11.md:85-89 names for the Accounts criteria) returns zero matches; it exists only on origin/codex/v4-next-integration (44 files, gap-assessment:76). rg -i for 'Open ?WebUI|Google Workspace|Spark' across src/tests hits only two unrelated lines (invoke.rs:192 structured-output client detection; mik_5226_acs.rs:209 a compute-routing workload-attestation comment) -- neither is a consent/connect/refresh/revoke journey. No connect/use/refresh/revoke/cancelled-consent journey code or test exists here."
     },
     {
       "id": "MIK-6745.JOURNEY.2",
       "status": "pending",
       "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "note": "Graded not_met on origin/main@738c7cee. Integration side flagged for check but not yet measured on origin/codex/v4-next-integration@dbc06304; the verdict is unproven on main, not proven absent everywhere. Same absence as JOURNEY.1: no per-principal personal-account connect state exists in this worktree (src/personal_accounts/ absent; confirmed via fd), so there is no 'two users reach their own accounts concurrently' mechanism to test, and no 'unconnected user' state distinct from a shared-token fallback to check for a fall-back refusal against. The nearest existing mechanism, ADR-008 INV-2 (`enforce_oauth_isolation`), refuses serving a SHARED gateway-held OAuth token to any caller on a multi-user gateway (tested: gateway::meta_mcp::protocol::tests::prompts_get_refuses_oauth_isolated_backend_on_multi_user_gateway) -- that is real and tested, but it is a narrower guarantee than JOURNEY.2 asks for: it blocks the leak, it does not give each of two connected users their OWN account access, because there is no per-user OAuth token store (STORE.1) for either user to be connected to. So the failure mode this test spec cares about (an actionable refusal for the unconnected user specifically, as distinct from the connected users succeeding) cannot be exercised."
     },
     {
       "id": "MIK-6745.JOURNEY.3",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/capability/execution_context.rs",
+        "src/gateway/meta_mcp/mod.rs",
+        "src/capability/backend.rs",
+        "src/gateway/meta_mcp/protocol.rs"
+      ],
+      "note": "Graded partial on origin/main@738c7cee. Integration side flagged for check but not yet measured on origin/codex/v4-next-integration@dbc06304; the verdict is unproven on main, not proven absent everywhere. Impl: src/capability/execution_context.rs:110 validate_personal_capability_identity + :91 validate_oauth_isolation (REST capability exposure:personal / identity_owner path); src/gateway/meta_mcp/mod.rs:901 enforce_oauth_isolation_for (MCP-backend OAuth-isolation path, called from protocol.rs, resources.rs, invoke.rs and backend_handlers.rs:810) Test: src/capability/executor/tests.rs (path-included via executor/mod.rs:702) personal_capability_owner_mismatch_denies_before_auth_lookup -- cargo test -- personal_capability_owner_mismatch_denies_before_auth_lookup -> 1 passed; src/capability/backend.rs:834 capability_backend_call_tool_denies_personal_without_identity_before_schema -- passed; src/gateway/meta_mcp/protocol.rs:478/529 prompts_get/prompts_list *_refuses/omits_oauth_isolated_backend_on_multi_user_gateway -- passed Split verdict: the REST-capability half is real and tested twice over -- absent-identity denial (capability_backend_..._before_schema) and identity-owner MISMATCH denial (personal_capability_owner_mismatch_denies_before_auth_lookup, confirmed compiled and passing after tracing its #[path] inclusion at executor/mod.rs:702 -- it is not orphaned) both fire before the tool schema/auth lookup runs, i.e. both would catch a regression. The MCP-backend half only has the narrower OAuth-isolation refusal (enforce_oauth_isolation_for, INV-2: refuses a SHARED credential on a multi-user gateway), not a personal-account identity/ownership concept -- MCP backends have no exposure:personal / identity_owner analogue because src/personal_accounts/ (which would carry it) is absent from this worktree. The isolation refusal is tested on the meta route (protocol.rs) and the capability route (execution_context.rs) but has NO unit or integration test at the direct-route call site (backend_handlers.rs:810) and NO test comparing direct vs meta route outcomes for the same backend/identity -- so 'consistent ... on their public entry points' (list/search, calls, prompts/resources, MCP backends, REST capabilities, ALL of them) is untested as a single cross-surface claim; only pairwise slices are. Genuine tested coverage on one clause, real architectural sharing (one chokepoint function used by all MCP-backend call sites) but unverified consistency, and no personal-account concept for MCP backends at all -- partial, not met."
     },
     {
       "id": "MIK-6746.CONTRACT.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/gateway/meta_mcp/mod.rs",
+        "src/gateway/router/backend_handlers.rs",
+        "src/identity_propagation/mod.rs"
+      ],
+      "note": "Graded partial on origin/main@738c7cee. Integration side flagged for check but not yet measured on origin/codex/v4-next-integration@dbc06304; the verdict is unproven on main, not proven absent everywhere. Impl: src/gateway/meta_mcp/mod.rs:883 enforce_oauth_isolation / :901 enforce_oauth_isolation_for (single chokepoint called from meta_mcp/protocol.rs:250, resources.rs:317/384/430, invoke.rs:1333, backend_handlers.rs:810, capability/execution_context.rs); src/gateway/router/backend_handlers.rs:230 passthrough_identity_key / :260 resolve_passthrough_headers (ADR-008 rung 2 passthrough); src/identity_propagation/mod.rs (SignedAssertion + TokenExchange strategies, audience binding, cache_binding) Test: cargo test --lib -- gateway::meta_mcp::protocol::tests:: identity_propagation:: capability::execution_context:: gateway::router::backend_handlers -> 132 passed, 0 failed (passthrough absent/required/transport-incapable refusal, distinct-credential session isolation, SHA-256 bucket-key privacy, empty-audience refusal, cache_binding isolates_users_and_audiences, TTL clamping, meta-route OAuth-isolation refusal+omission) Real production authorization boundary, genuinely shared across surfaces (one enforce_oauth_isolation_for chokepoint called by meta_mcp/*, backend_handlers.rs, and capability/execution_context.rs -- this IS the 'route parity' the requirement asks for, architecturally). 132 passing unit tests cover real slices: absent-credential refusal, per-credential session-bucket isolation, empty-audience refusal, per-audience cache-binding isolation, signed-assertion TTL clamping, and meta-route INV-2 refusal. But scope-tests.md:46's full discriminating-test list is NOT fully covered: (1) no test exercises OAuth-isolation refusal AT the direct route (backend_handlers.rs:810 itself has no unit test hitting that line -- only the shared predicate `oauth_requires_per_user_isolation` is unit-tested in src/backend/tests.rs, and only the meta+capability routes have call-site tests); (2) no test compares direct vs meta outcomes on the SAME backend/identity to prove parity rather than assume it from shared code; (3) no issuer/backend-swap test (a token minted/bound for backend A rejected when replayed against backend B); (4) no mixed-credential-strategy test (passthrough + signed-assertion + token-exchange interacting on one gateway); (5) no downstream wrong-audience rejection test (only that the gateway itself refuses an empty audience when MINTING, not that a wrong-but-nonempty audience is caught). rg for wrong.audience/issuer.*swap/mixed.*credential/direct.*meta.*parity across src+tests is empty. Substantial and tested, but the contract-conformance test list scope-tests.md:46 specifies is incompletely built -- partial, not met."
     },
     {
       "id": "MIK-3274.RANKING.1",
@@ -134,57 +179,63 @@
         "src/gateway/meta_mcp/search.rs",
         "src/ranking/mod.rs"
       ],
-      "note": "Graded 2026-09-11: UNTESTED (implementation present). Both invariants are implemented and citable: authorization filters before collection, ranking precedes truncation, and the usage boost is multiplicative so a 0.0 relevance stays 0.0. No test asserts either ordering; the criterion's test row needs a low limit, poisoned feedback and a forbidden-but-used versus allowed-but-relevant pairing, and nothing pits those against each other. Static evidence only; no test run. Lines: src/gateway/meta_mcp/search.rs:200, src/gateway/meta_mcp/search.rs:763, src/ranking/mod.rs:396."
+      "note": "Graded not_met on origin/main@738c7cee. Outside the modules origin/codex/v4-next-integration@dbc06304 touches, so the main-branch verdict carries. Impl: src/gateway/meta_mcp/search.rs:200 (backend_allowed filter before collection), src/gateway/meta_mcp/search.rs:763-771 (rank() called before matches.truncate(limit)), src/ranking/mod.rs:376-401 (exclusion_for sets score=0.0 and results.retain drops excluded; score = text_relevance * (1.0 + usage_factor) * multiplier() so a 0.0 relevance stays 0.0 regardless of usage) Both invariants (authorization-before-collection, rank-before-truncate, multiplicative usage boost) are implemented and citable, but no test asserts either ordering or exercises a forbidden-but-used vs allowed-but-relevant pairing with a low limit and poisoned/global feedback. src/ranking/tests.rs (63 tests) and tests/discovery_tests.rs/tests/security_tests.rs never call backend_allowed or exclusion_for."
     },
     {
       "id": "MIK-3274.RANKING.3",
       "status": "pending",
       "evidence": [
-        "benchmarks/results/mik-6977-live-agent-2026-09-04.json",
-        "docs/requirements/RELEASE-4.0.0-performance-contract.md",
         "src/ranking/mod.rs"
       ],
-      "note": "Graded 2026-09-11: NEEDS-MEASUREMENT. No ranking corpus, baseline or frozen threshold exists: benchmarks/results/ holds one unrelated file, mik-6977-live-agent-2026-09-04.json, cited here as inventory evidence for that absence rather than as a baseline and the performance contract freezes only the workload rows. The freeze was never recorded, and cannot now be produced as specified because ranking already shipped. evaluate_offline is a fixture comparator, not the obligation. Static evidence only; no test run. Lines: src/ranking/mod.rs:421."
+      "note": "Graded not_met on origin/main@738c7cee. Outside the modules origin/codex/v4-next-integration@dbc06304 touches, so the main-branch verdict carries. Impl: src/ranking/mod.rs:421 (evaluate_offline is a fixture comparator against deterministic offline cases, not a held-out-quality/discovery-turns/invalid-invocation/token measurement) Acceptance requires thresholds frozen after a baseline measurement and before ranking implementation; no such freeze exists anywhere in the repo. benchmarks/results/ holds only one unrelated file (mik-6977-live-agent-2026-09-04.json), and docs/requirements/RELEASE-4.0.0-performance-contract.md freezes only the workload (latency) rows, never ranking-quality thresholds. Ranking already shipped (src/ranking/mod.rs exists on this branch), so the required before-implementation freeze cannot now be produced."
     },
     {
       "id": "MIK-7332.DISCOVERY.1",
       "status": "pending",
       "evidence": [
         "src/gateway/search_disclosure.rs",
-        "tests/discovery_tests.rs",
-        "tests/tool_list_tests.rs"
+        "src/gateway/meta_mcp/search.rs"
       ],
-      "note": "Graded 2026-09-11: ABSENT. Tiered disclosure exists and L0 drops disabled tools, but no test exercises the four conjuncts together. discovery_tests.rs covers auto-discovery and shadow scan only; tool_list_tests.rs holds one test. Neither positive control from the test row exists. Static evidence only; no test run. Lines: src/gateway/search_disclosure.rs:40, tests/tool_list_tests.rs:13."
+      "note": "Graded not_met on origin/main@738c7cee. Outside the modules origin/codex/v4-next-integration@dbc06304 touches, so the main-branch verdict carries. Impl: src/gateway/search_disclosure.rs:18-60 (tiered L0/L1/L2 disclosure); src/gateway/meta_mcp/search.rs:200,238,289,329,582,655,678 (profile.backend_allowed gating per route) Tiered disclosure and authorization gating each exist independently, but no test exercises admin/nonadmin x configured/unconfigured together with served-list/routing-guide/schema-detail/invoke-permission agreement. tests/discovery_tests.rs (11 tests) covers only MCP-server auto-discovery from environment/config files (unrelated construct); tests/tool_list_tests.rs has exactly one test, for a missing-capability-dir CLI degrade path. No test withholds an invalid-schema tool while keeping healthy backend tools surfaced."
     },
     {
       "id": "MIK-7235.PIN.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/cli/subcommands.rs",
+        "src/commands/cap.rs",
+        "src/capability/backend.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Outside the modules origin/codex/v4-next-integration@dbc06304 touches, so the main-branch verdict carries. Impl: src/cli/subcommands.rs:26-34 (Pin command computes+writes a sha256 for one file at a time); src/commands/cap.rs:117 (cap_pin); src/capability/backend.rs:1019 (detect_rug_pulls_quarantines_tampered_pinned_file test covers tamper rejection) Test: src/commands/cap.rs:647 (cap_pin_writes_valid_hash_and_roundtrips_through_loader) and src/capability/backend.rs:1019 cover the mechanical pin+tamper-detect primitives only Only a per-file 'compute and write one sha256' command and a tamper-quarantine check exist. There is no catalogue-wide classification: of 125 shipped capability YAMLs only 6 carry a sha256 pin (capabilities/knowledge/{wolfram_llm,wayback_cdx,wayback_save,internet_archive_search,internet_archive_metadata,internet_archive_changes}.yaml), with no doc or code identifying them as the 'stable high-privilege subset', no record of intentional exclusions for the other 119, and no re-pin/drift check running over the catalogue as a whole (capabilities/README.md documents discovery commands only, not pinning policy)."
     },
     {
       "id": "MIK-6710.AUDIT.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/control_plane/store.rs",
+        "src/security/transparency_log.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Outside the modules origin/codex/v4-next-integration@dbc06304 touches, so the main-branch verdict carries. Impl: src/control_plane/store.rs:742-767 (FileControlPlaneStore::read_audit does std::fs::read_to_string(&path) — the FULL audit file, every call, before any filter/offset/limit is applied); src/control_plane/store.rs:112-134 (AuditFilter/page_audit: 'the first `limit` events in chain order', offset skips 'leading (oldest, chain-order) events' — i.e. oldest-first, not newest-first); src/security/transparency_log.rs:63-75,653 (MAX_AUDIT_READ_BYTES/MAX_TAIL_SCAN_BYTES bound a *different* audit surface, the transparency-log CLI `show_session_entries`, not this store) The control-plane audit store (the one with actor/action filters and offset/limit paging that the acceptance describes) has no work bound at all: read_audit loads the entire audit file into memory on every call regardless of how selective the filter is — exactly the 'unsupported O(N) promise' the criterion forbids, with no index, scan-budget, or cursor. Its own doc comments lock in oldest-first ('chain order'), not newest-first. The only bounded-read code (transparency_log.rs, cited under the same MIK-6710 ticket number) belongs to a separate, session-only CLI path with no actor/action filter or pagination, so it does not satisfy this store's selective-query clause either. No test in src/control_plane/store.rs (read_audit_honors_offset_limit_and_filters, invalid_filter_errors) measures records/bytes examined, compares to a full-scan oracle, or exercises a large log with a rare/no-match filter."
     },
     {
       "id": "NFR.CONFORMANCE.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "tests/mik_7272_conformance.rs"
+      ],
+      "note": "Graded not_met on origin/main@738c7cee. Measured on origin/codex/v4-next-integration@dbc06304 as partial. Impl: tests/mik_7272_conformance.rs:52-292 Test: tests/mik_7272_conformance.rs:314,332,421 Real self-enforcing matrix (19 rows, role x transport) exists but lacks revision/outcome axes and URL-elicitation/structured-result coverage. Ledger says no evidence; disagrees, real partial evidence exists uncredited."
     },
     {
       "id": "NFR.WORKLOAD.1",
       "status": "pending",
       "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "note": "Graded not_met on origin/main@738c7cee. Measured on origin/codex/v4-next-integration@dbc06304 as not_met. docs/release/v4.0.0-gap-closure-plan.md:188 says 3.5.0 latency baseline does not exist in this tree; no legacy/modern/mixed-era comparison found. Matches ledger."
     },
     {
       "id": "NFR.UPGRADE.1",
       "status": "pending",
       "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "note": "Graded not_met on origin/main@738c7cee. Measured on origin/codex/v4-next-integration@dbc06304 as not_met. Only adjacent evidence is a manual QA doc for a different criterion; no realistic 3.5.1 fixture; finds advertised rollback text doesn't match real behavior. No PR supplies this."
     },
     {
       "id": "NFR.RELEASEGATE.1",
@@ -203,20 +254,20 @@
       "id": "NFR.DEMO.1",
       "status": "pending",
       "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "note": "Graded not_met on origin/main@738c7cee. Measured on origin/codex/v4-next-integration@dbc06304 as not_met. Only recorded demos are the general README benchmark walkthrough; none cover mixed-era, reconnectable task, accounts, discovery or error-budget recovery. Matches ledger."
     },
     {
       "id": "NFR.BUILD.1",
       "status": "pending",
       "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "note": "Graded not_met on origin/main@738c7cee. Measured on origin/codex/v4-next-integration@dbc06304 as not_met. No doc pins supported client/backend versions under the license split. Only coverage/mutation evidence grades the Python release-contract checker, not Rust startup/OAuth/dispatch/bridge/tasks/account paths -- the stale wrong-scope sample the criterion warns against. No PR supplies this."
     }
   ],
   "decisions": [
     {
       "id": "reference_personal_account_journey",
       "status": "resolved",
-      "selection": "Open WebUI on Spark \u2192 gateway \u2192 Google Workspace",
+      "selection": "Open WebUI on Spark → gateway → Google Workspace",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md"
       ]
