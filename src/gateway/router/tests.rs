@@ -32,6 +32,9 @@ use tower::ServiceExt;
 
 use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targets_for_call};
 
+/// The Meta-MCP route's own response-firewall verdict obligation (RED).
+#[cfg(feature = "firewall")]
+mod meta_firewall_verdict;
 mod order2_fsm;
 mod task_execution_adapter;
 
@@ -3543,3 +3546,5 @@ async fn ac_order_2_a_modern_caller_is_refused_gateway_set_profile() {
          cannot help: {message}"
     );
 }
+
+mod openwebui_adapter;

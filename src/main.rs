@@ -57,6 +57,11 @@ async fn main() -> ExitCode {
         Some(Command::Tls(tls_cmd)) => commands::run_tls_command(tls_cmd),
         Some(Command::Trust(trust_cmd)) => commands::run_trust_command(trust_cmd).await,
         Some(Command::Identity(identity_cmd)) => commands::run_identity_command(identity_cmd).await,
+        // Offline and synchronous on purpose: initializing custody state must
+        // not share a dispatch path with anything that starts the gateway.
+        Some(Command::Accounts(accounts_cmd)) => {
+            commands::run_accounts_command(accounts_cmd, config_path.as_deref())
+        }
         Some(Command::Stats { url }) => {
             let effective_url = resolve_stats_url(
                 url,

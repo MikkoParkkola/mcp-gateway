@@ -1431,10 +1431,15 @@ impl MetaMcp {
                 .map(|prepared| prepared.cache_binding().to_owned())
         });
         // Who the RETRY entry belongs to. Binding first, then verified
-        // subject — the same fallback the protocol side added because the
-        // default left this empty for everyone. Deliberately a separate
-        // value from `caller_principal` below: retry de-duplication and
-        // response caching are different contracts with different lifetimes.
+        // subject — the fallback the protocol side added because the default
+        // left this empty for everyone; `retry_identity_suffix` defers that
+        // order to `CallerIdentity::select`, so this site owns only WHICH
+        // binding it hands in, and the binding it hands in is the dispatch
+        // one so a capability's account boundary reaches the retry key too.
+        // Deliberately a separate value from `caller_principal` below: retry
+        // de-duplication and response caching are different contracts with
+        // different lifetimes, and collapsing them would make one contract's
+        // key change silently move the other's.
         let identity_suffix = retry_identity_suffix(
             dispatch_binding.as_deref(),
             verified_identity

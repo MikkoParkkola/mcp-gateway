@@ -124,6 +124,28 @@ impl std::fmt::Debug for ResolvedApiKey {
     }
 }
 
+/// Proof that THIS request authenticated with a configured API key, naming
+/// which one.
+///
+/// Deliberately not constructible outside this module (private field, no public
+/// constructor): the only mint site is
+/// [`ResolvedAuthConfig::validate_token_with_origin`], the one place that
+/// compares a presented secret against `api_keys`. An adapter allow-list is
+/// written against these names, so if any other code could build one — from a
+/// header, from `AuthenticatedClient::name`, from an OIDC subject — the
+/// allow-list would be satisfiable by an identity that never presented the key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamedApiKey {
+    name: String,
+}
+
+impl NamedApiKey {
+    /// The configured `name` of the API key that authenticated this request.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 impl ResolvedAuthConfig {
     /// Create resolved config from `AuthConfig`.
     ///
@@ -210,6 +232,26 @@ impl ResolvedAuthConfig {
     /// Validate a token and return the client info if valid
     #[must_use]
     pub fn validate_token(&self, token: &str) -> Option<AuthenticatedClient> {
+        self.validate_token_with_origin(token)
+            .map(|(client, _origin)| client)
+    }
+
+    /// The same validation, also saying WHICH configured credential matched.
+    ///
+    /// `AuthenticatedClient::name` cannot answer that question: the bearer
+    /// identity is named `"bearer"`, a key-server identity is named from a
+    /// verified OIDC subject, and an operator may name an API key anything at
+    /// all — so a rule written against the name would let a non-API-key
+    /// identity claim an API key's privileges by being called the same thing.
+    /// The provenance is therefore recorded HERE, at the one place that
+    /// actually compares a presented secret against `api_keys`, and nowhere
+    /// else can mint it. `validate_token` delegates so both callers keep one
+    /// precedence: a token equal to the bearer is the bearer, never a key.
+    #[must_use]
+    pub(crate) fn validate_token_with_origin(
+        &self,
+        token: &str,
+    ) -> Option<(AuthenticatedClient, Option<NamedApiKey>)> {
         use subtle::ConstantTimeEq;
 
         // Check bearer token first. Constant-time comparison prevents a timing
@@ -218,33 +260,43 @@ impl ResolvedAuthConfig {
         if let Some(ref bearer) = self.bearer_token
             && token.as_bytes().ct_eq(bearer.as_bytes()).into()
         {
-            return Some(AuthenticatedClient {
-                quota_principal: self.bearer_quota_principal.clone(),
-                name: "bearer".to_string(),
-                principal: principal_of(token),
-                rate_limit: 0,
-                backends: vec!["*".to_string()],
-                allowed_tools: None,
-                denied_tools: None,
-                admin: true,
-                authenticated: true,
-            });
+            return Some((
+                AuthenticatedClient {
+                    quota_principal: self.bearer_quota_principal.clone(),
+                    name: "bearer".to_string(),
+                    principal: principal_of(token),
+                    rate_limit: 0,
+                    backends: vec!["*".to_string()],
+                    allowed_tools: None,
+                    denied_tools: None,
+                    admin: true,
+                    authenticated: true,
+                },
+                // The bearer is NOT an API key, whatever an operator named their
+                // keys: no adapter allow-list entry may be satisfied by it.
+                None,
+            ));
         }
 
         // Check API keys (constant-time to avoid a per-key timing oracle).
         for key in &self.api_keys {
             if token.as_bytes().ct_eq(key.key.as_bytes()).into() {
-                return Some(AuthenticatedClient {
-                    quota_principal: Some(key.quota_principal.clone()),
-                    name: key.name.clone(),
-                    principal: principal_of(&key.key),
-                    rate_limit: key.rate_limit,
-                    backends: key.backends.clone(),
-                    allowed_tools: key.allowed_tools.clone(),
-                    denied_tools: key.denied_tools.clone(),
-                    admin: key.admin,
-                    authenticated: true,
-                });
+                return Some((
+                    AuthenticatedClient {
+                        quota_principal: Some(key.quota_principal.clone()),
+                        name: key.name.clone(),
+                        principal: principal_of(&key.key),
+                        rate_limit: key.rate_limit,
+                        backends: key.backends.clone(),
+                        allowed_tools: key.allowed_tools.clone(),
+                        denied_tools: key.denied_tools.clone(),
+                        admin: key.admin,
+                        authenticated: true,
+                    },
+                    Some(NamedApiKey {
+                        name: key.name.clone(),
+                    }),
+                ));
             }
         }
 
@@ -877,7 +929,12 @@ pub async fn auth_middleware(
     if auth_config.is_public_path(path)
         && let Some(presented) = presented_credential(request.headers())
     {
-        if let Some(client) = auth_config.validate_token(&presented) {
+        if let Some((client, api_key)) = auth_config.validate_token_with_origin(&presented) {
+            // The adapter allow-list is checked downstream against this, so the
+            // provenance has to travel with the request rather than be re-derived.
+            if let Some(api_key) = api_key {
+                request.extensions_mut().insert(api_key);
+            }
             request.extensions_mut().insert(client);
             return next.run(request).await;
         }
@@ -933,11 +990,14 @@ pub async fn auth_middleware(
     let token = token.as_str();
 
     // 1. Try static auth (existing behavior)
-    if let Some(client) = auth_config.validate_token(token) {
+    if let Some((client, api_key)) = auth_config.validate_token_with_origin(token) {
         if let Some(deny) = client_preflight(auth_config, &client, path) {
             return deny;
         }
         debug!(client = %client.name, path = %path, "Authenticated via static key");
+        if let Some(api_key) = api_key {
+            request.extensions_mut().insert(api_key);
+        }
         request.extensions_mut().insert(client);
         return next.run(request).await;
     }

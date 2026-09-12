@@ -115,8 +115,12 @@ streaming's `session_reaper_interval` config knob and a second constant beside i
 reader — a dead value that reads as a scheduling authority. (v2 GPT improvement, confirmed by
 construction: with D1 as the host, nothing could ever read it.) Streaming's `session_ttl` is
 likewise NOT collapsed in — `IDLE_TTL` governs only what `track` writes as a deadline.
-**Effective reclaim latency is therefore `IDLE_TTL + session_reaper_interval`, not 60 seconds**, and
-that is the figure §P2 asserts against. Writing 60s anywhere would promise a sweep cadence this
+**Nominal reclaim latency is therefore `IDLE_TTL + 1s + session_reaper_interval`, not 60 seconds.** The
+`1s` is `reap`'s strict `>` on whole seconds, carried in the displayed figure rather than mentioned
+beside it. Nominal, not exact even so: a loaded runtime delays the tick by
+an amount this design does not bound, and a wall-clock step moves the deadline after it is written. §P2
+asserts against the INGREDIENTS of that figure — the write site's arithmetic and both constants — never
+against a measured latency; see the composition table in the test plan. Writing 60s anywhere would promise a sweep cadence this
 design does not own. (v2 kimi FINDING, MEDIUM/LIKELY/NOW — the same defect GPT raised independently.) Thirty seconds would hold less abandoned state under churn; an
 hour would never lose a long human-in-the-loop elicitation. Nobody has ruled.
 
@@ -129,6 +133,45 @@ between the two reads. The count already exists inside `reap` as `expired.len()`
 strictly smaller than the racy alternative. (v2 GPT improvement, confirmed at source.) Per-key
 `debug!` already exists (`session_lifecycle.rs:87-95`). No new metric until an operator asks a
 question the log cannot answer.
+
+**Design event (§P3), decided at test-plan review.** The tick ALSO emits a `trace!` marker on every
+sweep, including one that reclaimed nothing. The `info!` alone cannot be observed to be absent: an
+empty sweep and a sweep that never ran are the same silence, so the negative half of the observability
+test had no way to fail. This marker is the completion acknowledgement that makes "no `info!` on an
+empty sweep" a falsifiable claim. One line at `trace!`, off in every normal build, and it stays — not
+a test-only conditional, because a log line compiled out under test is a different program.
+
+**The marker is emitted LAST, after the conditional `info!`, and that ordering is part of the
+design event rather than an implementation detail.** A marker that could precede its own sweep's
+`info!` would be useless to the observer: an acknowledgement is only a boundary if everything the
+sweep had to say has already been said. With the order fixed, the markers partition the log into
+sweeps, an observer counts them, and "no `info!` between marker N and marker N+1" is a statement
+about exactly one sweep. Emit it first and that same wait catches the marker of the sweep that
+just logged a count, which is the false pass this event exists to close.
+
+**D8 — the registration lives in ONE production function, which the startup path and T4 both call.**
+Nothing constructs a `SessionLifecycle` today and nothing calls `register`: outside its own module the
+identifier appears only as the module declaration (`src/gateway/mod.rs:21`) and three doc comments
+(`anomaly.rs:26`, `:187`, `firewall/mod.rs:680`). So D1a's "created at gateway startup" names no site,
+and the gap matters most for the row that carries the criterion: a T4 that registers `on_session_end`
+itself is a fixture standing in for the production code it exists to prove — the shape §P2 records as
+two shipped defects.
+
+So one named function owns it — `wire_session_lifecycle(firewall: Option<&Arc<Firewall>>) ->
+Arc<SessionLifecycle>`, placed beside the firewall block (`src/gateway/server/mod.rs:1197-1211`). It
+creates the instance, registers `Firewall::on_session_end` (`firewall/mod.rs:682`) under a
+`Weak<Firewall>`, and returns the handle. Startup calls it; T4 calls the SAME function and supplies
+only a firewall. No test registers a handler. The capture is `Weak` because the handle is stored on
+`AppState` beside `firewall` (`server/mod.rs:1249`) and a strong `Arc` inside the callback would close
+a cycle through the state that owns both.
+
+**Ordering, which the sites force and the design had not stated.** The reaper is spawned at
+`server/mod.rs:992`, roughly two hundred lines BEFORE the firewall exists at `:1197`. The instance is
+therefore created before `:992` and passed to `spawn_reaper_on` (D1a), and the handler is registered
+afterwards. That is safe, not a race: `register` takes `&self` (`session_lifecycle.rs:48`), and no key
+is tracked until requests flow, which requires the `AppState` built at `:1220` — so the first possible
+`reap` with anything in it happens after registration. Rejected: moving `spawn_reaper_on` below the
+firewall block, which reorders two unrelated subsystems' startup to save one `Arc::clone`.
 
 ### Findings carried in from the v2 review
 
@@ -187,18 +230,21 @@ from the same unbounded identity keyspace, that motivated `MAX_TRACKED_IDENTITIE
 detector (`anomaly.rs:138-149`) — but it is not the same map and does not get a second ceiling. A
 ceiling here would be a second eviction rule that can disagree with the anomaly one, which is exactly
 why D3a was deleted. The bound is TEMPORAL and is stated instead: **the map holds at most the
-distinct control identities seen in one `IDLE_TTL + session_reaper_interval` window**, because every
+distinct control identities seen in one nominal `IDLE_TTL + 1s + session_reaper_interval` window**, because every
 key carries a deadline and `reap` removes it unconditionally (D5) — at the FIRST SWEEP AFTER the
-deadline, never at the deadline itself. That is the same arithmetic as D6's reclaim latency, and it
-is stated here rather than as `IDLE_TTL` alone because the correction applies at both sites: an
-earlier draft of this paragraph said one `IDLE_TTL` window and was wrong by exactly one sweep.
+deadline, never at the deadline itself, and `reap`'s strict `>` on whole seconds adds up to a further
+second. That is the same arithmetic as D6's reclaim latency, carried here in the same form: NOMINAL,
+because both terms after `IDLE_TTL` are the sweep's timing and not a guarantee. It is stated here
+rather than as `IDLE_TTL` alone because the correction applies at both sites: an earlier draft of
+this paragraph said one `IDLE_TTL` window and was wrong by exactly one sweep, and a later one omitted
+the whole-second slack D6 now carries inside its figure.
 
 The second term is NOT OURS, and that is the honest weakness of this bound. `session_reaper_interval`
 is `StreamingConfig`'s field (`src/config/features/streaming.rs:37`), read by the host loop at
 `src/gateway/streaming.rs:108`, defaulting to 60 s (`src/config/features/streaming.rs:14`) — with NO
 validation and NO ceiling: `rg session_reaper src/config/` returns the declaration and the default
 and nothing else. An operator who sets it to an hour widens this map's window to an hour, and no
-code in this change can refuse that. So the claim is `IDLE_TTL + <an interval the gateway operator
+code in this change can refuse that. So the claim is `IDLE_TTL + 1s + <an interval the gateway operator
 owns>`, not a number. It is still refused a ceiling for the reason above — a second eviction rule
 that can disagree with the anomaly one — and the residual is now stated at its true size rather than
 understated by a sweep — and that stated bound is the whole resolution. An earlier draft closed this

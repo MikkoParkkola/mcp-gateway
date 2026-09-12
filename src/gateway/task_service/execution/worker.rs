@@ -38,19 +38,16 @@ pub(super) async fn commit_and_run(
     let executor = Arc::clone(handoff.executor());
     let principal = intent.request.principal().to_string();
 
-    let outcome = match executor
+    let Ok(WriteOutcome::Create(outcome)) = executor
         .commit(TaskWrite::Create {
             request: &intent.request,
             task: &task,
             backend: &backend,
         })
         .await
-    {
-        Ok(WriteOutcome::Create(created)) => created,
-        Ok(_) | Err(_) => {
-            let _ = tx.send(Err(ServiceError::Unavailable));
-            return;
-        }
+    else {
+        let _ = tx.send(Err(ServiceError::Unavailable));
+        return;
     };
 
     let (begin, slot) = split_create(outcome);
@@ -66,9 +63,9 @@ pub(super) async fn commit_and_run(
     let revision = committed.revision;
     // Ignorable: a dropped request future must not abort already-durable work.
     let _ = tx.send(Ok(BeginOutcome::Created(committed)));
-    run_dispatched(
+    Box::pin(run_dispatched(
         executor, handoff, intent, call, cancel_rx, principal, id, revision, slot,
-    )
+    ))
     .await;
 }
 
@@ -193,9 +190,11 @@ async fn run_dispatched(
     let dispatch = async {
         match submission.as_ref() {
             Some(submission) => {
-                crate::gateway::meta_mcp::upstream::with_upstream_submission(
-                    Arc::clone(submission),
-                    dispatch,
+                Box::pin(
+                    crate::gateway::meta_mcp::upstream::with_upstream_submission(
+                        Arc::clone(submission),
+                        dispatch,
+                    ),
                 )
                 .await
             }

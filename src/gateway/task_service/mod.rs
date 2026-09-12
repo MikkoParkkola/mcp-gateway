@@ -81,8 +81,7 @@ pub async fn open_runtime(
     let admission = ExecutionAdmission::new(Arc::new(|| {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_secs())
-            .unwrap_or(0)
+            .map_or(0, |elapsed| elapsed.as_secs())
     }));
     open_runtime_with_admission(store_dir, max_workers, limits, subscriptions, admission).await
 }

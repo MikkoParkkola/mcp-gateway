@@ -94,6 +94,12 @@ pub mod validator;
 
 pub use error::{Error, Result};
 
+// Offline account-store initialization only — the same narrowing `config`
+// already applies to the `AccountsConfig` DTO. The store, the service and the
+// worker stay crate-private; this exposes one explicit, offline entry point so
+// the `accounts init-store` command can reach it without opening the module.
+pub use personal_accounts::{InitializedStore, OfflineInitError, initialize_store_offline};
+
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// MCP Protocol version supported by this gateway (latest)

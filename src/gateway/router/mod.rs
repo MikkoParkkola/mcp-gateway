@@ -13,6 +13,7 @@ use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, tr
 use super::auth::{AuthState, ResolvedAuthConfig, auth_middleware};
 use super::meta_mcp::MetaMcp;
 use super::oauth::{AgentAuthState, GatewayKeyPair, agent_auth_middleware, jwks_handler};
+use super::openwebui_adapter::{OpenWebUiAdapterState, openwebui_adapter_middleware};
 use super::proxy::ProxyManager;
 use super::streaming::NotificationMultiplexer;
 use crate::backend::BackendRegistry;
@@ -257,12 +258,33 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
         routes = routes.merge(super::ui::api_router());
     }
 
+    // Open WebUI assertion adapter. `None` when no adapter is configured, and
+    // then no layer is installed at all — the no-adapter deployment keeps its
+    // exact previous behaviour, including doing no environment lookup.
+    let openwebui_adapter =
+        OpenWebUiAdapterState::from_config(&startup_config, &startup_config.env_overlay());
+
     let mut app = routes
         // Agent JWT scope middleware runs inside the standard auth layer.
         .layer(middleware::from_fn_with_state(
             agent_auth_state,
             agent_auth_middleware,
-        ))
+        ));
+
+    // Layers wrap outward, so a layer added LATER runs EARLIER. Adding the
+    // adapter here — after agent auth, before the auth layer below — is what
+    // makes it run strictly after authentication: an assertion is read only
+    // once the presenter has been identified, which the adapter then requires
+    // to be a named API key. Reversing these two lines would let an
+    // unauthenticated request assert an identity.
+    if let Some(adapter_state) = openwebui_adapter {
+        app = app.layer(middleware::from_fn_with_state(
+            adapter_state,
+            openwebui_adapter_middleware,
+        ));
+    }
+
+    let mut app = app
         // Authentication middleware (applied before other layers)
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
         .layer(CatchPanicLayer::new())
