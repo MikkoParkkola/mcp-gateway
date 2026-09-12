@@ -49,12 +49,9 @@ pub(crate) struct AccountDescriptor {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum IdentityBindingError {
     #[error("account identity binding is not implemented")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
+    #[expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
     )]
     RuntimeNotImplemented,
     /// No verified principal reached this call. Never downgraded to a guess.
@@ -62,12 +59,9 @@ pub(crate) enum IdentityBindingError {
     MissingVerifiedPrincipal,
     /// The caller named a descriptor that is not configured.
     #[error("account descriptor is not configured")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
+    #[expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
     )]
     UnknownDescriptor,
     #[error(transparent)]

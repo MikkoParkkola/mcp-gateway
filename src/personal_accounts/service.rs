@@ -140,7 +140,7 @@ impl ConsentExpectation {
 pub(crate) enum AccountServiceError {
     #[error("account service runtime is not implemented")]
     #[cfg_attr(
-        not(test),
+        all(not(test), not(kani)),
         expect(
             dead_code,
             reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
@@ -159,7 +159,7 @@ pub(crate) enum AccountServiceError {
     LeaseRetired,
     #[error("stale consent was fenced by a later grant or revoke")]
     #[cfg_attr(
-        not(test),
+        all(not(test), not(kani)),
         expect(
             dead_code,
             reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
@@ -243,7 +243,7 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
 
     /// Account key → lease, or a typed refusal. Storage failure is never absence.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(kani)),
         expect(
             dead_code,
             reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
@@ -317,7 +317,7 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
 
     /// Durably revoke, then bar new leases and release eligibility.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(kani)),
         expect(
             dead_code,
             reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
@@ -333,7 +333,7 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
     /// One store call, on purpose. Reading the state here and committing after
     /// would be the TOCTOU the guarded entrypoint exists to remove.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(kani)),
         expect(
             dead_code,
             reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"

@@ -493,7 +493,7 @@ impl PersonalAccountStore {
 
     /// Durably tombstone the current generation before reporting success.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(kani)),
         expect(
             dead_code,
             reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"

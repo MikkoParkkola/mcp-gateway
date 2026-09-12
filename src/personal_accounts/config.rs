@@ -325,12 +325,9 @@ impl Default for AccountsLimits {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum AccountsConfigError {
     #[error("accounts configuration resolution is not implemented")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
+    #[expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
     )]
     RuntimeNotImplemented,
     #[error("accounts.schema_version must be the literal accounts.v1")]
@@ -357,12 +354,9 @@ pub(crate) enum AccountsConfigError {
     #[error("accounts.limits.{field} must be a positive integer within bounds")]
     Limit { field: &'static str },
     #[error("accounts contains unknown field {field}")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
+    #[expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
     )]
     UnknownField { field: String },
     /// Named by account id and by what is wrong with it. `problem` is a fixed

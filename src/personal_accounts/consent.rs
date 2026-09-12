@@ -65,7 +65,10 @@ impl PersonalAccountStore {
     // test-tree caller already makes the lint fire (dead_code would not fire
     // there, so a bare `expect` would itself become an `unfulfilled_lint_expectations`
     // error under `--all-targets`).
-    #[cfg_attr(not(test), expect(dead_code, reason = "MIK-6744.STORE.1"))]
+    #[cfg_attr(
+        all(not(test), not(kani)),
+        expect(dead_code, reason = "MIK-6744.STORE.1")
+    )]
     pub(crate) fn commit_grant_if_unchanged(
         &self,
         account: &AccountKey,

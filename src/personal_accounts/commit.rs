@@ -202,6 +202,7 @@ fn commit_checkpoint(
     write_manifest(config, slot, encoded, next)
 }
 
+#[cfg(unix)]
 fn write_manifest(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -469,7 +470,7 @@ fn refusal_as_fault(refusal: &ManifestRefusal) -> AccountError {
 
 #[cfg(unix)]
 #[cfg_attr(
-    not(test),
+    all(not(test), not(kani)),
     expect(
         dead_code,
         reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
@@ -500,7 +501,7 @@ pub(in crate::personal_accounts) fn revoke(
 
 #[cfg(unix)]
 #[cfg_attr(
-    not(test),
+    all(not(test), not(kani)),
     expect(
         dead_code,
         reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"

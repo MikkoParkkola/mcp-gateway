@@ -52,12 +52,9 @@ pub(crate) const DEFAULT_CAPACITY: usize = 32;
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum CustodyError {
     #[error("custody handle runtime is not implemented")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
+    #[expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
     )]
     RuntimeNotImplemented,
     /// The in-flight bound is reached. A retryable refusal, not a failure.
@@ -75,12 +72,9 @@ pub(crate) enum CustodyError {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum CustodyStartError {
     #[error("custody start is not implemented")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
+    #[expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
     )]
     RuntimeNotImplemented,
     #[error(transparent)]
