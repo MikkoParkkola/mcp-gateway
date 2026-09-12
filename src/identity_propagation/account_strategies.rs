@@ -269,21 +269,80 @@ impl AccountStrategyRegistry {
         format!("oauth:{provider}")
     }
 
-    /// Resolve one `auth.account` reference into a credential, or refuse.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Config`] for an unresolved reference, a provider mismatch, a
-    /// missing installation, a missing verified identity, a strategy refusal or
-    /// an unusable minted header; [`Error::Internal`] when a required account
-    /// would mint without a durable audit record. Every one of these is a
-    /// refusal, never a fallback.
-    pub(crate) async fn resolve(
+    /// Validate a minted credential's headers, then audit the mint. Split
+    /// out of [`Self::resolve`] purely to keep that function under the line
+    /// budget — logic, ordering and every error message are unchanged.
+    fn validate_and_audit_mint(
+        logger: Option<&TransparencyLogger>,
+        subject_id: &str,
+        descriptor_id: &str,
+        audience: &str,
+        required: bool,
+        credential: &super::PropagatedCredential,
+    ) -> Result<()> {
+        if credential.headers.is_empty() {
+            return Err(Error::Config(format!(
+                "account '{descriptor_id}' produced no credential header; an account binding \
+                 must produce the account holder's own credential."
+            )));
+        }
+        // Validate every header BEFORE dispatch, so an unusable minted
+        // credential fails closed instead of silently leaving the request
+        // unauthenticated.
+        for (name, value) in &credential.headers {
+            if name.parse::<reqwest::header::HeaderName>().is_err()
+                || value.parse::<reqwest::header::HeaderValue>().is_err()
+            {
+                return Err(Error::Config(format!(
+                    "account '{descriptor_id}' minted an unusable credential header '{name}'"
+                )));
+            }
+        }
+
+        // Operator-misconfig fail-OPEN guard, closed: the audit helper treats a
+        // disabled transparency log as a no-op, which on a required account
+        // would let a minted per-user credential go on the wire with NO durable
+        // record. Same rule the Meta-MCP mint path applies.
+        if required && logger.is_none() {
+            return Err(Error::Internal(format!(
+                "account '{descriptor_id}' is required for this capability but no transparency \
+                 log is configured; refusing to mint a per-user credential without a durable \
+                 audit record"
+            )));
+        }
+        if let Err(error) = audit_identity_propagation(
+            logger,
+            "idp_mint",
+            subject_id,
+            descriptor_id,
+            Some(audience),
+            None,
+        ) {
+            // CWE-209: the audit error can carry a filesystem path. Keep it in
+            // the server log; return a generic message to the caller.
+            tracing::warn!(
+                account = descriptor_id,
+                error = %error,
+                "account credential mint audit write failed"
+            );
+            return Err(Error::Internal(format!(
+                "identity-propagation audit unavailable for account '{descriptor_id}'"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Resolve `descriptor_id` to its declared descriptor, verify `auth_key`
+    /// matches its provider, and look up its installed strategy. `Ok(None)`
+    /// means the descriptor is in shared mode, and the caller returns
+    /// [`AccountCredential::Legacy`] for it. Split out of [`Self::resolve`]
+    /// purely to keep that function under the line budget — logic, ordering
+    /// and every error message are unchanged.
+    fn declared_installed(
         &self,
         descriptor_id: &str,
         auth_key: &str,
-        identity: Option<&VerifiedIdentity>,
-    ) -> Result<AccountCredential> {
+    ) -> Result<Option<Arc<InstalledAccount>>> {
         let Some(declared) = self.declared(descriptor_id) else {
             return Err(Error::Config(format!(
                 "capability auth references account '{descriptor_id}', which is not a key in \
@@ -308,7 +367,7 @@ impl AccountStrategyRegistry {
 
         // Existing shared behaviour, preserved verbatim.
         if declared.mode == DescriptorMode::Shared {
-            return Ok(AccountCredential::Legacy);
+            return Ok(None);
         }
 
         let Some(installed) = self.installed(descriptor_id) else {
@@ -316,6 +375,27 @@ impl AccountStrategyRegistry {
                 "capability auth references account '{descriptor_id}' but no account strategy is \
                  installed for it; refusing to dispatch without the account holder's credential."
             )));
+        };
+        Ok(Some(installed))
+    }
+
+    /// Resolve one `auth.account` reference into a credential, or refuse.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] for an unresolved reference, a provider mismatch, a
+    /// missing installation, a missing verified identity, a strategy refusal or
+    /// an unusable minted header; [`Error::Internal`] when a required account
+    /// would mint without a durable audit record. Every one of these is a
+    /// refusal, never a fallback.
+    pub(crate) async fn resolve(
+        &self,
+        descriptor_id: &str,
+        auth_key: &str,
+        identity: Option<&VerifiedIdentity>,
+    ) -> Result<AccountCredential> {
+        let Some(installed) = self.declared_installed(descriptor_id, auth_key)? else {
+            return Ok(AccountCredential::Legacy);
         };
 
         let logger = self.audit.read().clone();
@@ -416,55 +496,14 @@ impl AccountStrategyRegistry {
             )));
         }
 
-        if credential.headers.is_empty() {
-            return Err(Error::Config(format!(
-                "account '{descriptor_id}' produced no credential header; an account binding \
-                 must produce the account holder's own credential."
-            )));
-        }
-        // Validate every header BEFORE dispatch, so an unusable minted
-        // credential fails closed instead of silently leaving the request
-        // unauthenticated.
-        for (name, value) in &credential.headers {
-            if name.parse::<reqwest::header::HeaderName>().is_err()
-                || value.parse::<reqwest::header::HeaderValue>().is_err()
-            {
-                return Err(Error::Config(format!(
-                    "account '{descriptor_id}' minted an unusable credential header '{name}'"
-                )));
-            }
-        }
-
-        // Operator-misconfig fail-OPEN guard, closed: the audit helper treats a
-        // disabled transparency log as a no-op, which on a required account
-        // would let a minted per-user credential go on the wire with NO durable
-        // record. Same rule the Meta-MCP mint path applies.
-        if installed.required && logger.is_none() {
-            return Err(Error::Internal(format!(
-                "account '{descriptor_id}' is required for this capability but no transparency \
-                 log is configured; refusing to mint a per-user credential without a durable \
-                 audit record"
-            )));
-        }
-        if let Err(error) = audit_identity_propagation(
+        Self::validate_and_audit_mint(
             logger.as_deref(),
-            "idp_mint",
             &subject_id,
             descriptor_id,
-            Some(audience),
-            None,
-        ) {
-            // CWE-209: the audit error can carry a filesystem path. Keep it in
-            // the server log; return a generic message to the caller.
-            tracing::warn!(
-                account = descriptor_id,
-                error = %error,
-                "account credential mint audit write failed"
-            );
-            return Err(Error::Internal(format!(
-                "identity-propagation audit unavailable for account '{descriptor_id}'"
-            )));
-        }
+            audience,
+            installed.required,
+            &credential,
+        )?;
 
         Ok(AccountCredential::Prepared(Arc::new(
             PreparedAccountCredential {
