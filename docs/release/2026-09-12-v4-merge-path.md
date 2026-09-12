@@ -142,3 +142,29 @@ That leaves thirteen rows as genuine implementation. Fifteen of the twenty-eight
 sequenced behind the merge and the deploy. Draft state on all fourteen PRs, and the
 operator approval behind it, gates more than half the release ledger rather than one
 merge commit.
+
+## 8. The dead-code lint is reporting release scope, not debt
+
+`cargo clippy --all-features -- -D warnings` fails on the integration line with a cluster of
+zero-caller symbols. Twenty-five of them are one finding rather than twenty-five: a
+`personal_accounts` consent and grant subsystem, the response-firewall check
+`enforce_firewall_challenge` with the two variants only it constructs, and six singletons of
+the same shape.
+
+None of it is disposable. The accounts subsystem is the partial implementation of
+`MIK-6744.STORE.1`, `MIK-6745.JOURNEY.1` and `MIK-6745.JOURNEY.3` — three `ACCOUNTS`-tagged
+blocking rows that are `not_met` for the reason the lint names, that the subsystem exists and
+nothing calls it. Deleting it with its tests would delete work the release has to ship.
+
+`enforce_firewall_challenge` is the sharper case and points back at §7. On integration it has
+six test call sites (`src/gateway/meta_mcp/response_challenge_tests.rs:171-251`) against one
+definition (`response_security.rs:159`) and no production caller — a merged security control
+absent from the behaviour of the build that would listen. That is the condition `NFR.SEC.7`
+exists to detect, so suppressing the lint there removes the signal rather than the defect.
+
+Resolution: `#[expect(dead_code, reason = "…")]` per symbol, each reason naming the criterion
+that will wire it. `#[expect]` fails the build once the symbol acquires a caller, so the
+annotation is removed by the wiring work itself; `#[allow]` would outlive the fix and keep
+suppressing. Any symbol that cannot be tied to a row stays failing and gets listed — an
+untraceable zero-caller symbol is a question, and answering it by annotation is how it stops
+being asked.
