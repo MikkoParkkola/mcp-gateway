@@ -46,9 +46,6 @@ artefacts and only one of them is closed:
   which predates the control commit `5d25f104`. Cutover plus a live drift
   check remains a deployment gate and an operator decision; it is not closed
   by the build being clean.
-- `MIK-7214.HEADER.7-9`, `MIK-7217.DISCOVER`, `MIK-7246.CONFIRM` — rows in the
-  audit summary table, not criteria rows. A regex anchored on `| MIK-` picks
-  them up and inflates both numerator and denominator.
 
 ## The two trees diverged bidirectionally
 
@@ -80,8 +77,8 @@ release line answer "how much is done" from one ledger:
   identity; the older regex cannot see rows the release line already splits.
 - `check_scope_acceptance.py --check` reported **19 baseline blocking rows** off
   the stale copy against main's **1**. Eighteen of those nineteen were rows main
-  had already resolved. `NFR.SEC.7` is the one that survives, and it is the
-  phantom recorded above.
+  had already resolved. `NFR.SEC.7` is the one that survives, and its open
+  half is the listening install described above.
 
 The two scope-contract gradings were disjoint rather than contradictory. The
 branch graded the account and lifecycle rows; main graded `MIK-3274.RANKING.2`,
