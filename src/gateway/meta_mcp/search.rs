@@ -408,7 +408,12 @@ impl MetaMcp {
 
         let total_found = matches.len();
 
-        // Apply ranking for keyword queries (not glob — glob already filters precisely)
+        // Rank keyword queries before `finalize_search_matches` truncates.
+        // Glob skips the ranker because `finalize_search_matches` scores every
+        // glob match a uniform 1.0: the candidates all tie, so truncating them
+        // cannot discard a better-scored match. Preferring, say, popularity
+        // among glob matches would need its own specified ordering, not the
+        // keyword ranker.
         if !use_glob && let Some(ref ranker) = self.ranker {
             let search_results: Vec<_> = matches
                 .iter()
