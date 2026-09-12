@@ -72,10 +72,53 @@ pub(super) fn retry_identity_suffix(
     cache_binding: Option<&str>,
     verified_subject: Option<&str>,
 ) -> String {
-    match (cache_binding, verified_subject) {
-        (Some(binding), _) => format!("|idp:{binding}"),
-        (None, Some(subject)) => format!("|sub:{subject}"),
-        (None, None) => String::new(),
+    match CallerIdentity::select(cache_binding, verified_subject) {
+        Some(CallerIdentity::Binding(binding)) => format!("|idp:{binding}"),
+        Some(CallerIdentity::Subject(subject)) => format!("|sub:{subject}"),
+        None => String::new(),
+    }
+}
+
+/// WHO a keyed call belongs to.
+///
+/// The propagated `cache_binding` when identity propagation is minting
+/// per-user credentials, otherwise the verified subject. ONE spelling of that
+/// order: both keys derived at an invoke need it — the retry suffix above and
+/// the response cache's `caller_principal` — and a second copy is how the two
+/// keying contracts drift apart the day a third identity source arrives.
+///
+/// SELECTING the caller is the part that must not drift. COMPOSING the key is
+/// the part that must stay separate, and it deliberately still is: the suffix
+/// tags its arms so a binding can never collide with an actor id reading the
+/// same, and the response-cache principal takes the value alone.
+pub(super) enum CallerIdentity<'a> {
+    /// A credential identity propagation minted for this caller.
+    Binding(&'a str),
+    /// The verified subject, which is what the backend's answer depended on
+    /// when no per-user credential was minted.
+    Subject(&'a str),
+}
+
+impl<'a> CallerIdentity<'a> {
+    /// `None` for a caller with neither: such callers are pooled by the
+    /// operator's own decision to run without authentication.
+    pub(super) fn select(
+        cache_binding: Option<&'a str>,
+        verified_subject: Option<&'a str>,
+    ) -> Option<Self> {
+        match (cache_binding, verified_subject) {
+            (Some(binding), _) => Some(Self::Binding(binding)),
+            (None, Some(subject)) => Some(Self::Subject(subject)),
+            (None, None) => None,
+        }
+    }
+
+    /// The identity's own value, untagged — for a key that carries no second
+    /// identity arm to collide with.
+    pub(super) fn value(self) -> &'a str {
+        match self {
+            Self::Binding(value) | Self::Subject(value) => value,
+        }
     }
 }
 
@@ -547,6 +590,26 @@ mod tests {
         assert_ne!(
             victim, forger,
             "a client key that spells the victim's verified subject must not \
+             collide with the victim's key"
+        );
+    }
+
+    /// MIK-7408, third segment. The projection arm is the OTHER thing
+    /// concatenated into this key, and the elimination claim covers it only
+    /// because `projection_key_suffix` draws from four `&'static str` literals
+    /// a client cannot reach. That argument is about today's producer; the
+    /// length prefix is what makes the boundary hold whatever the producer
+    /// later emits. Pinned here so the claim is a test rather than a paragraph.
+    #[test]
+    fn a_forged_client_key_cannot_spell_another_callers_projection_arm() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let victim = super::idempotency_key_for(Some("X"), "#arm=treatment", "", Some(&cache));
+        let forger = super::idempotency_key_for(Some("X#arm=treatment"), "", "", Some(&cache));
+
+        assert_ne!(
+            victim, forger,
+            "a client key that spells the victim's projection arm must not \
              collide with the victim's key"
         );
     }

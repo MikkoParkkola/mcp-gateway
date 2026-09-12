@@ -143,12 +143,16 @@ its disposal, so neither ages into a ticket by default.
   verdict once per tool when the backend cache is populated, instead of walking
   the schema in `ToolDescriptorTrustCard::from_tool` on every emission.
   DISPOSAL: **recorded as an observation on `MIK-7415`** (ruling `R23`), not as a
-  ticket of its own — anyone working the anchor code is already inside this
-  function and can hoist while there, and two tickets for two edits in one
-  function is the expensive default §P0 exists to stop. It is pure cost — no
-  behaviour changes — so there is no decision for a human to make, and the walk
-  is cheap
-  on realistically sized schemas. It is not free either: the closed row's
+  ticket of its own. The two edits are not in one function — the anchor fix is in
+  the module-private free function `resolves` (`src/trust/schema_bounds.rs:136`,
+  reached from `SchemaBounds` only through `unresolved_refs`), and the hoist moves
+  the entry point `SchemaBounds::inspect_descriptor` (`:87`) out of
+  `ToolDescriptorTrustCard::from_tool` (`src/trust/descriptor.rs:58`) — but they
+  are one slice of the same walker, and filing a second ticket for the second
+  edit of one slice is the expensive default §P0 exists to stop. It is pure cost
+  — no behaviour changes — so there is no decision for a human to make, and the
+  walk is cheap on realistically sized schemas. It is not free either: the
+  closed row's
   `by construction` claim rests on `project_tool_descriptor_trust_card` being the
   single choke point every `tools/list` route crosses. Moving the computation
   upstream of that projection moves what has to be proved, and the proof, not the

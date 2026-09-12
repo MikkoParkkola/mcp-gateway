@@ -297,7 +297,10 @@ export default function () {
 
   sleep(0.1);
 
-  // 3. Dashboard — HTML endpoint (webui feature). Accept 404 when feature disabled.
+  // 3. Dashboard — HTML endpoint (webui feature). 404 when the feature is
+  //    disabled; 403 when it is built in but the caller is not admin, which is
+  //    every caller here — the workload sends no admin credentials and the
+  //    handler gates on `is_admin` exactly as `/ui/api/status` does.
   group("dashboard", () => {
     const res = http.get(`${BASE_URL}/dashboard`, {
       headers: headers({ Accept: "text/html,application/json" }),
@@ -309,7 +312,8 @@ export default function () {
 
     check(res, {
       "dashboard: not 5xx": (r) => r.status < 500,
-      "dashboard: 200 or 404": (r) => r.status === 200 || r.status === 404,
+      "dashboard: 200 or 403 or 404": (r) =>
+        [200, 403, 404].includes(r.status),
     });
   });
 
@@ -340,9 +344,13 @@ export default function () {
 
 export function handleSummary(data) {
   const thresholds = data.metrics;
-  const passed = Object.entries(thresholds)
-    .filter(([, m]) => m.thresholds)
-    .every(([, m]) => m.thresholds.every((t) => !t.ok === false));
+  // `m.thresholds` is an OBJECT keyed by threshold expression
+  // ({"p(95)<300": {ok: true}}), never an array — calling `.every` on it throws
+  // a TypeError that k6 reports as a failed handleSummary, losing the summary
+  // for the whole run.
+  const passed = Object.values(thresholds)
+    .filter((m) => m.thresholds)
+    .every((m) => Object.values(m.thresholds).every((t) => t.ok));
 
   console.log("\n=== MCP Gateway Load Test Summary ===");
   console.log(`Scenario : ${SCENARIO}`);

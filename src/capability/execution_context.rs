@@ -72,6 +72,7 @@ pub struct CapabilityExecutionContext {
     /// Crate-visible because a prepared credential is not something an embedder
     /// may fabricate: the only producer is
     /// [`crate::identity_propagation::AccountStrategyRegistry::resolve`].
+    // ci-allow-secret-debug: PreparedAccountCredential redacts header values; execution_context_debug_redacts_prepared_credential_headers verifies the enclosing formatter.
     pub(crate) account_credential: Option<Arc<PreparedAccountCredential>>,
 }
 

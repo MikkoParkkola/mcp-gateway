@@ -44,7 +44,7 @@ impl TaskExecutor {
             // takes the reviewed I3 treatment below, unchanged.
             if row.is_working
                 && let Some(upstream) = row.upstream.as_ref()
-                && managed.iter().any(|name| *name == upstream.backend)
+                && managed.contains(&upstream.backend)
             {
                 tracing::info!(
                     task_id = %row.id,

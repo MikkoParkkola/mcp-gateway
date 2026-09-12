@@ -33,10 +33,16 @@ residual fix — that commit `8efa02c8` did not disclose edits it made to `WIRE.
 and `WIRE.13` — is FALSIFIED AT SOURCE and closed without a repair: that commit
 is `1 file changed, 1 insertion(+), 1 deletion(-)`, and the changed line is the
 `WIRE.11` row. `WIRE.12` and `WIRE.13` appear in the submitted diff as context,
-not as edits. `gpt-review`'s finding against `WIRE.5` versus the recorded
-gate-once policy is NOT closed by this round; it is escalated to the team-lead
-and named in full below, because it turns on which document moves and that is
-not this lane's decision.
+not as edits.
+`gpt-review`'s finding against `WIRE.5` versus the recorded gate-once policy was
+escalated by this round and is now RULED: `R8` takes per-round gating and
+refuses the narrowing. BOTH halves land, and both cost edits: the policy below
+is amended to per-round gating, the criterion stands unnarrowed, and `WIRE.5`
+and `WIRE.13` were each repaired in
+`docs/design/2026-09-05-mrtr7-test-plan.md` — the first to parameterize the
+refusal position and state its staging conditions, the second to drop an
+approval inference its spend count cannot support. It is named in full further
+down, where the escalation was stated.
 
 ## Problem
 
@@ -59,6 +65,11 @@ concurrency is a **separate work package** — independently designed,
 independently implemented, lower priority than this one — and whether it lands
 in 4.0.0 is decided after that design exists and carries an effort estimate,
 not now. Deferring it here is a sequencing decision, not a decision to drop it.
+
+IN, added 2026-09-08 and stated here so the move costs a visible edit: the
+governance gate is called before **every** bridged dispatch, not only the first.
+Ruled at R8; what it deletes and what it leaves standing is the Policy section
+below.
 
 IN, not out: live delivery of the question over the client's own stream.
 Release row 308 defers its own evidence with this commit as the trigger, which
@@ -1231,30 +1242,66 @@ Unresolved from round 5 and still unresolved. Named here so it stops being
 carried as a footnote: a retry sequence emits warnings per round, and nothing
 decides whether the caller sees the first round's or the last's.
 
-### Policy — a bridge exchange is gated ONCE (design event)
+### Policy — every bridge round is gated (design event, RULED 2026-09-08)
 
-The governance gate stays **outside** `accounted_dispatch` deliberately, and
-the reason is the accounting one below, NOT a lifecycle one. An earlier draft
-of this paragraph argued that a mid-exchange refusal would strand a
-`PendingSampleGuard`. That argument is RETRACTED: the guard is RAII, taken
-inside `send_request` (`let _cleanup = PendingSampleGuard { proxy: self, id }`,
-`src/gateway/proxy.rs:532-533`), held across the await and dropped on return
-AND on unwind, so a refusal arriving after `send_request` returns has nothing
-left to strand. What makes gating once affordable is that the cost of not
-re-gating is bounded and visible. Accounting still accrues per round — `record_spend`
-writes both the `global_daily` and `tool_daily` accumulators on every dispatch —
-so the exposure is bounded to overspend within a single call, not to an
-unmetered retry loop. That bound is what makes gating once affordable.
+The governance gate is called **before every dispatch the exchange makes**, not
+only the first. Ruled at `R8 — bridge-mrtr7: WIRE.5 takes per-round gating; the
+criterion is not narrowed` (`docs/release/2026-09-08-team-lead-rulings.md`),
+which took exit (A) of the escalation below on the elimination test: after (B)
+an exchange that overspends an operator's limit stays describable and merely
+untested; after (A) it cannot be stated at all. Eliminating a mechanism is this
+lane's to do. Eliminating a criterion is not, and it was refused.
 
-**The bound has a number, 2026-09-08.** `BridgeBounds::DEFAULT`
-(`src/gateway/input_bridge.rs:241-246`) is `rounds: 3`, and `run` loops `for _ in
-0..self.bounds.rounds` with exactly one `self.backend.invoke(..)` per iteration
-(`:387`). So an exchange makes at most **three dispatches beyond the one the
-budget approved — four paid backend calls, worst case**, and the overspend
-ceiling is `3 × cost_for(tool)` past the gated round. Every one of them is
-metered, because `record_spend` sits inside `accounted_dispatch`: the exposure is
-VISIBLE after the fact, not PREVENTED. That is the deliberate trade, and naming
-the number is what stops "bounded" being read as "small".
+That elimination is bounded to the SEQUENTIAL exchange, and the bound is stated
+rather than left to be discovered. The gate projects `current_usd + cost` and
+reserves nothing (`src/cost_accounting/enforcer.rs:217`), so two exchanges in
+flight read the same spent total and can each be admitted for a cost only one of
+them could afford. Per-round gating eliminates overspend BY ROUNDS — that is the
+claim, and it is the whole claim. Concurrent overspend across exchanges is
+untouched by it, remains describable, and is a residual of the cost accounting's
+read-then-add shape rather than of where this lane puts its gate.
+
+**Where the gate sits, precisely.** Outside `accounted_dispatch` still — D-D's
+extraction is unchanged, the helper keeps metering and the gate stays excluded
+from it (`src/gateway/meta_mcp/invoke.rs:2464`). What moves is the CALLER: the
+gate runs inside `for _ in 0..self.bounds.rounds`
+(`src/gateway/input_bridge.rs:387`) ahead of each `self.backend.invoke(..)`, so a
+refusal ends the exchange on the round it arrives on. **The invariant is ONE
+GATE CALL PER DISPATCH, not one gate call somewhere in the loop.** The pre-loop
+gate at `src/gateway/meta_mcp/invoke.rs:1413` is RETAINED — it is what admits the
+first dispatch — and the loop ADDS one call per retry, so a fully funded exchange
+under `BridgeBounds::DEFAULT` (`rounds: 3`) issues four dispatches and four gate
+calls. Nothing is moved out of the pre-loop position; a gate call is added to
+each round that did not have one. It must reach the caller as
+itself — the same `-32003` and the same block reason — which stays unwritable
+until `invoke` yields `Result<Value, Error>`. That widening was the round-3
+design event and is still this change's work, per D-D.
+
+**What this reversal DELETES, so nothing carries it forward by habit.** The
+accepted residual — "a bridged round may not be budget-refused, so an exchange
+CAN overspend by its rounds" — is gone, not mitigated. With it go the
+`3 × cost_for(tool)` overspend ceiling and the arithmetic that reconciled that
+number against four paid calls. **The four-dispatch ceiling clause R1 asked for
+on the `WIRE.13` row is withdrawn by its author** (R8), because it was derived
+from the single-gate fixture (A) deletes. It is removed rather than kept out of
+deference to the ruling that requested it.
+
+**What `WIRE.13` still asserts, and the one thing per-round gating adds.** Four
+dispatches and four `record_spend` entries stand: that total counts from zero,
+and where the gate sits does not change how many calls a fully funded exchange
+makes. What the reversal adds is a PRECONDITION on the fixture — every round must
+be inside budget for the fourth dispatch to be reachable, so an under-funded
+fixture would now end in a governance refusal while the row asserted
+`RoundsExhausted`, passing or failing for a reason it never names. The row says
+so in its own evidence column rather than leaving it to whoever writes the test.
+
+The `PendingSampleGuard` argument stays RETRACTED and must not return with the
+gate. The guard is RAII, taken inside `send_request`
+(`src/gateway/proxy.rs:532-533`), held across the await and dropped on return AND
+on unwind, so a refusal arriving mid-exchange has nothing left to strand —
+verified at source, and R1 verified it independently across `:219`, `:286` and
+`:417`. Per-round gating does not reopen that question; the lifecycle objection
+was never the reason the gate sat outside.
 
 Capping rounds does not cap the asking, and the struct's own doc says why
 (`:213-217`): one interim result may carry an arbitrary number of entries, so a
@@ -1264,29 +1311,34 @@ are on the original call rather than on a round — `requests: 8`, `aggregate:
 elicitation constant in `destructive_confirmation`; reusing that would let one
 unanswered prompt consume the whole aggregate budget.
 
-The residual this leaves, stated rather than mitigated: a bridged round may not
-be budget-refused, so an exchange CAN overspend by its rounds. Creating that
-refusal was considered and rejected on the metered-overspend trade above —
-`3 × cost_for(tool)`, every unit of it recorded — and on nothing else. The
-lifecycle objection that used to end this sentence is retracted where the
-policy is stated.
-
 Today every `BridgeBounds` construction site is a test
 (`tests/mik_7212_mrtr7_bridge_acs.rs:306,430-450,1118,1195`). The production
-wiring is what puts `DEFAULT` on the live path, and until it does, the ceiling
-above is a property of a struct nothing constructs.
+wiring is what puts `DEFAULT` on the live path, and until it does, the ceilings
+above are properties of a struct nothing constructs.
 
-### Round 6 escalation — `gpt-review` F1, `WIRE.5` versus gate-once — OPEN
+**Process status of this reversal.** It is a §P3 design event moving what an
+acceptance criterion asserts, so §P0 reopened where Scope is stated — one added
+line, above — and §P2 reopens at the `WIRE.5` and `WIRE.13` rows of
+`docs/design/2026-09-05-mrtr7-test-plan.md`. The round count does NOT reset: the
+spec moves, the history does not — `R8` and `R22` of
+`docs/release/2026-09-08-team-lead-rulings.md` (2026-09-08) both rule so. The repair
+takes no new `BridgeError` variant and no wire change — a call moved inside a
+loop, the propagation the widening already owed, and the documentation delta.
+
+### Round 6 escalation — `gpt-review` F1, `WIRE.5` versus gate-once — RULED (A), 2026-09-08
 
 Stated in full here, because the header says it is and because a team lead
-cannot rule on a summary of a finding.
+cannot rule on a summary of a finding. Everything below describes the policy
+AS IT THEN READ, before `R8`. The gate-once statements it quotes have since
+been amended above; they are preserved here in their pre-ruling form because a
+ruling that cannot be read against the text it ruled on is unauditable.
 
 - **the finding.** `WIRE.5`'s criterion reads "Every backend attempt is
   accounted exactly once, including bridge retries, **and governance is
   re-checked before each**", and its second fixture asserts a budget sized to
   admit the first attempt and reject the second, with the retry never reaching
   the backend (`docs/design/2026-09-05-mrtr7-test-plan.md:61`). The policy
-  section above says the opposite in this same design: the gate stays outside
+  section above THEN SAID the opposite in this same design: the gate stays outside
   `accounted_dispatch` deliberately, an exchange is gated ONCE, and the residual
   — "a bridged round may not be budget-refused" — is ACCEPTED as metered
   overspend bounded at `3 × cost_for(tool)`. A plan row and a design event
@@ -1306,28 +1358,41 @@ cannot rule on a summary of a finding.
   set stays describable, merely untested. After (A) it cannot be stated at all.
   Eliminating a mechanism is always this lane's to do; eliminating a criterion
   is not.
-- **blocked until ruled.** `WIRE.5` and `WIRE.13` are frozen in their current
-  form; neither is repaired, and no test is written against either.
-- **who re-checks the repair, when there is one.** The repair protocol returns a
-  finding to the vendor that RAISED it, and that vendor is `gpt-review`, which is
-  usage-limited until 2026-09-12 with `process_status=error` rows since
-  2026-09-06. So the closure path is the finder-unavailable one, planned here
-  rather than improvised on the day: a 12h clock from the closure request,
-  extended to the end of any verdict-bearing round in flight at expiry, then the
-  re-check falls to the other vendor or a human under a NARROWER mandate —
-  confirm or refuse F1's own text, answer `CANNOT VERIFY` rather than
-  substituting its own materiality judgment — with the row marked
-  `closure_recheck: delegated`. Never a silent reassignment to whichever leg
-  happens to be up.
+- **RULED (A), 2026-09-08.** `R8` in `docs/release/2026-09-08-team-lead-rulings.md`
+  takes per-round gating and refuses the narrowing, on the recommendation's own
+  test. The freeze lifts: the Policy section above is amended to the ruled shape,
+  and `WIRE.5` and `WIRE.13` are repaired in
+  `docs/design/2026-09-05-mrtr7-test-plan.md`. No test code is written against
+  either row until both review legs return on the amended material — the
+  sequence the ruling reopens is §P0, then §P2, then §P4, with the round count
+  carried rather than reset.
+- **who re-checks the repair.** `gpt-review` returned this round with `rc=0`, so
+  the finder is available and the ordinary path applies: F1 and F2 go back to
+  `gpt-review`. The finder-unavailable clock drafted here on 2026-09-06, when
+  that leg was erroring, is DELETED rather than kept dormant against a future
+  outage. Its terms are owned by the repair protocol in
+  `rules-source/workflows/development-process.md`, and a second copy of them in
+  a lane document would drift from the one that decides.
 
 ### Review provenance for this round
 
-The `gpt-review` ledger holds **no row** for this material. The most recent row
-is a different repo, run and ticket (`mcp-v4-delivery`, MIK-7212 component
-tests, 2026-09-06). The round-7 verdict is therefore `MISSING`, never a verdict
-scraped from any output file. The round-6 recorded verdict reviewed the
-**unamended** design and does not carry to this amendment; both legs re-run
-against the material above, submitted on stdin.
+Round 7 ran on 2026-09-08 against the amended material, both legs fed on
+stdin: `~/.claude/bin/gpt-review` (Codex, availability restored) and
+`~/.grok/bin/claude-review` (Claude Opus 5, `--safe-mode`). Both processes
+exited 0 and both returned SHIP-WITH-FIXES — verdict taken from the ledger row
+and the exit status, never scraped from the body (§PA). `gpt-review` raised two
+findings and one improvement; `claude-review` raised six and four. Every one is
+either a repair commit above or is recorded as falsified at source in the
+commit that closes it, and those repairs ARE the confirmation pass this round
+owes rather than a round of their own.
+
+The unreviewed baseline is disclosed rather than assumed away. The package both
+legs read was assembled at `63de240c`; every repair commit postdates both
+verdicts and has been read by neither leg. Under the repair protocol the
+closure re-check returns to the vendor that raised each finding. The round-6
+recorded verdict reviewed the **unamended** design and does not carry to this
+amendment: both legs re-run against the material as it stands at submission,
+submitted on stdin.
 
 That sentence binds the PACKAGE, not just the intent: no round may carry an
 earlier round's PART A verbatim. PART A is the design and plan **as they stand

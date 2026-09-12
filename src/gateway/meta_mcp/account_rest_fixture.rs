@@ -179,6 +179,7 @@ pub(super) fn rest_config(
     Config {
         backends: HashMap::new(),
         accounts: Some(AccountsConfig {
+            adapters: Vec::new(),
             schema_version: "accounts.v1".to_string(),
             enabled: true,
             deployment: "single_process".to_string(),
