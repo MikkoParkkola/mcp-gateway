@@ -248,7 +248,19 @@ JOB_HEADER = re.compile(r"^  ([A-Za-z][\w-]*):\s*$")
 # A cosign verb ends where the word ends: without the boundary, `verify`
 # matches `verify-attestation` and a deleted signature check passes on the
 # attestation check standing in for it.
-COSIGN_VERIFY = re.compile(r"\bcosign verify(-attestation)?(?![-\w])")
+COSIGN_VERIFY = re.compile(r"cosign\s+verify(-attestation)?(?![-\w])")
+# Any cosign verb, in command position. `\bcosign` would also match the word
+# inside `echo "run cosign sign …"`, which signs nothing; these patterns are
+# matched against command positions by `runs()`, never searched for.
+COSIGN_ANY = re.compile(r"cosign\s+\w")
+# The gate, however it is spelled. Shared by the assertion that it runs at all
+# and by the one that protects the steps running it, so a step cannot be
+# protected under one spelling and unguarded under the other.
+GATE_SCRIPT = re.compile(r"(?:python3?|uv run)\s+scripts/release/")
+# A step key that turns a failure into a log line, or a condition that is false
+# whatever the run: both leave every wiring assertion above satisfied.
+NEVER_RUNS = re.compile(r"^(?:- )?if:\s*['\"]?(?:\$\{\{\s*)?false(?:\s*\}\})?['\"]?$")
+SWALLOWS = re.compile(r"^(?:- )?continue-on-error:")
 
 
 def needs_of(body):
@@ -271,6 +283,12 @@ def needs_of(body):
     return None
 
 
+# `steps:` at the job-key indentation and nowhere else. A shell heredoc is
+# free to contain a line reading `steps:`, and treating that as the start of a
+# steps list would close the step it sits in and drop the rest of it.
+STEPS_KEY = re.compile(r"^ {4}steps:$")
+
+
 def uncommented(line):
     """`line` with a trailing YAML comment removed, quoting respected.
 
@@ -280,9 +298,17 @@ def uncommented(line):
     does, and a harmless `# v3` pin comment makes an exact-value assertion
     fail on a step that is wired correctly.
     """
-    quote, escaped = None, False
+    quote, escaped, skip = None, False, False
     for index, char in enumerate(line):
-        if escaped:
+        if skip:
+            skip = False
+        elif quote == "'" and char == "'" and line[index + 1 : index + 2] == "'":
+            # `''` inside a single-quoted scalar is YAML's escaped apostrophe,
+            # not the end of the scalar. Closing on the first of the pair
+            # leaves the rest of the line read as unquoted, so a `#` in it ends
+            # the line early and the command it carries is read truncated.
+            skip = True
+        elif escaped:
             escaped = False
         elif quote == '"' and char == "\\":
             # Only a double-quoted scalar has escapes; inside single quotes a
@@ -292,23 +318,60 @@ def uncommented(line):
         elif quote:
             if char == quote:
                 quote = None
-        elif char in "'\"":
+        elif char in "'\"" and (index == 0 or line[index - 1].isspace()):
+            # A quote opens only where a token does. Mid-token an apostrophe
+            # is a letter — `name: Don't execute` is a plain YAML scalar, not
+            # an open quote — and reading one as a quote leaves the state open
+            # to the end of the line, so a real trailing comment survives.
             quote = char
         elif char == "#" and (index == 0 or line[index - 1].isspace()):
             return line[:index].rstrip()
     return line
 
 
+# A heredoc opener: `<<EOF`, `<< 'EOF'`, `<<-"EOF"`, `<<~EOF`. What follows is
+# data a command is handed, not command text — but to a textual reader it is
+# indistinguishable from workflow YAML, so a `steps:`, a `continue-on-error:`,
+# a `DIGEST:` binding or a gate invocation printed inside one satisfies an
+# assertion about wiring that no longer exists. `<<:` — YAML's merge key — is
+# not an opener and does not match: a delimiter is a word.
+HEREDOC = re.compile(r"<<[-~]?\s*(['\"]?)(\w+)\1")
+
+
 def live_lines(workflow):
-    """A workflow's executable lines, comments dropped.
+    """A workflow's executable lines, comments and heredoc payloads dropped.
 
     Every assertion here is textual, so a rule commented out rather than
     deleted would still satisfy an `assertIn` against the raw file. That is
     the shape a regression takes: a step disabled during debugging and
     committed. Reading only executable lines makes the mutation fail.
+
+    A heredoc payload is the same hazard written as data: `cat <<'EOF'` turns
+    every line up to the terminator into an argument, so text that reads as a
+    gate invocation, an env binding or a step key runs nothing at all.
     """
     text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
-    return [line for line in (uncommented(raw) for raw in text.splitlines()) if line.strip()]
+    live = (uncommented(raw) for raw in text.splitlines())
+    return heredocs_dropped([line for line in live if line.strip()])
+
+
+def heredocs_dropped(lines):
+    """`lines` with every heredoc body and terminator removed."""
+    kept, delimiter = [], None
+    for line in lines:
+        if delimiter is not None:
+            # Inside a payload only the terminator is looked for. Scanning for
+            # a further opener here would resume on `<<~CAVEATS` — Ruby source
+            # inside a shell heredoc — and hand the rest of the payload back to
+            # the assertions as workflow text.
+            if line.strip() == delimiter:
+                delimiter = None
+            continue
+        kept.append(line)
+        opener = HEREDOC.search(line)
+        if opener:
+            delimiter = opener.group(2)
+    return kept
 
 
 def joined(lines):
@@ -319,9 +382,25 @@ def joined(lines):
     statement, and a check for it can be satisfied by a different command
     further down the file.
     """
-    commands, buffer = [], ""
+    commands, buffer, folded = [], "", None
     for line in lines:
         stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if folded is not None:
+            # A folded scalar is one command written across lines: YAML joins
+            # them with spaces before Actions ever sees it, so reading them
+            # separately rejects a spelling that runs exactly what the
+            # one-line form runs.
+            if indent > folded:
+                buffer = f"{buffer} {stripped}".strip()
+                continue
+            commands.append(buffer)
+            buffer, folded = "", None
+        opener = re.match(r"^(- )?run: *>[-+]?$", stripped)
+        if opener and not buffer:
+            folded = indent + (2 if opener.group(1) else 0)
+            buffer = "run:"
+            continue
         buffer = f"{buffer} {stripped}".strip() if buffer else stripped
         if buffer.endswith("\\"):
             buffer = buffer[:-1].strip()
@@ -331,6 +410,90 @@ def joined(lines):
     if buffer:
         commands.append(buffer)
     return commands
+
+
+def shell(command):
+    """A joined step line as the shell sees it: `run:` key and YAML quotes off.
+
+    `run: 'python3 …'` runs exactly what `run: python3 …` runs, and an
+    assertion reading the raw line sees a different string for each — so one
+    spelling is rejected while `echo "…; python3 …"`, which runs nothing, is
+    accepted. What is left after this is the text bash parses, and the quoting
+    in it is the quoting bash applies.
+    """
+    body, inline = re.subn(r"^(?:- )?run: ", "", command)
+    if not inline:
+        # A block scalar's lines carry no YAML quoting — `run: |` already ended
+        # the YAML scalar — so a quote in one is a shell quote bash keeps.
+        # Stripping it turns `'python3 …'`, which bash reads as one unfindable
+        # command name, into the invocation the assertions want to see.
+        return body
+    quoted = re.match(r"^(['\"])(.*)\1$", body)
+    return quoted.group(2) if quoted else body
+
+
+def segments(command):
+    """`command` split at its unquoted shell separators.
+
+    Each piece starts where the shell starts reading a command name, which is
+    what an assertion about a program being *run* has to anchor on. A
+    separator inside quotes is data — `echo "skipped; cosign sign …"` is one
+    command that runs nothing — so the quote state is tracked rather than the
+    text split on the punctuation.
+    """
+    found, current, quote, escaped = [], "", None, False
+    for char in command:
+        if escaped:
+            escaped, current = False, current + char
+        elif char == "\\" and quote != "'":
+            escaped, current = True, current + char
+        elif quote:
+            if char == quote:
+                quote = None
+            current += char
+        elif char in "'\"":
+            quote, current = char, current + char
+        elif char in ";&|\n":
+            found.append(current)
+            current = ""
+        else:
+            current += char
+    found.append(current)
+    return [piece.strip() for piece in found if piece.strip()]
+
+
+def runs(command, program):
+    """Whether `command` runs `program` — a compiled pattern — as a command.
+
+    Shared by every assertion that asks whether something executes, because
+    each of them is wrong in the same way on its own: a mention satisfies a
+    search, and `echo cosign sign …` mentions.
+    """
+    return any(program.match(piece) for piece in segments(shell(command)))
+
+
+def env_of(block):
+    """A step's `env:` mapping entries, taken by indentation.
+
+    A binding is only a binding where Actions reads one. Stripped of its
+    indentation, `DIGEST: ${{ steps.build.outputs.digest }}` printed by the
+    step — or sitting in a `run:` block as shell text — is the same string as
+    the env entry that actually binds it, so the mapping has to be located
+    before the line is read.
+    """
+    found, depth = [], None
+    for line in block:
+        indent = len(line) - len(line.lstrip())
+        if depth is not None:
+            if indent > depth:
+                found.append(line.strip())
+                continue
+            depth = None
+        if re.match(r"^\s*(?:- )?env:\s*$", line):
+            # Written `- env:`, the key sits two columns right of the item,
+            # so a sibling key of the step is not read as one of its bindings.
+            depth = indent + (2 if line.lstrip().startswith("- ") else 0)
+    return found
 
 
 def commands(workflow):
@@ -364,7 +527,7 @@ def steps(workflow):
             close()
             indent = None
             continue
-        if re.match(r"^\s*steps:$", line):
+        if STEPS_KEY.match(line):
             close()
             indent = -1  # the first list item below fixes the indentation
             continue
@@ -401,6 +564,74 @@ def jobs(workflow):
     if name:
         found[name] = "\n".join(body)
     return found
+
+
+# The dispatch input, in either notation. `inputs['tag']` reads the same value
+# as `inputs.tag`, so a check spelled for one of them is a check nobody has to
+# evade deliberately. Outside `${{ }}` neither is interpolated at all, which is
+# why the reference has to be read inside the delimiters: a shell comment
+# mentioning inputs.tag is inert text, not an injection.
+TAG_INPUT = r"inputs\s*(?:\.\s*tag\b|\[\s*['\"]tag['\"]\s*\])"
+TAG_EXPRESSION = re.compile(r"\$\{\{[^}]*" + TAG_INPUT + r"[^}]*\}\}")
+
+
+def job_if(workflow, job):
+    """A job's own `if:` scalar, folded to one line.
+
+    Its own: a step-level `if:` carrying the same clause skips one step while
+    the job — and its other steps — run anyway, and an `if` nested under some
+    other job key (`env:`, say) is not a condition at all. Both read as a
+    guard to a search of the job body, so the scalar is taken by indentation.
+    """
+    lines = jobs(workflow)[job].splitlines()
+    for index, line in enumerate(lines):
+        if not re.match(r"^ {4}if:", line):
+            continue
+        scalar = [line.split(":", 1)[1]]
+        for following in lines[index + 1 :]:
+            if following.strip() and len(following) - len(following.lstrip()) <= 4:
+                break  # the next job key ends a folded condition
+            scalar.append(following)
+        return " ".join(" ".join(scalar).split())
+    return ""
+
+
+def conjuncts(condition):
+    """`condition`'s top-level `&&` operands, block indicator and `${{ }}` off."""
+    body = re.sub(r"^[>|][-+]?\s*", "", condition.strip())
+    wrapped = re.match(r"^\$\{\{(.*)\}\}$", body)
+    if wrapped:
+        body = wrapped.group(1)
+    found, depth, current, index = [], 0, "", 0
+    while index < len(body):
+        char = body[index]
+        depth += (char == "(") - (char == ")")
+        if not depth and body[index : index + 2] == "&&":
+            found.append(current.strip())
+            current, index = "", index + 2
+            continue
+        current += char
+        index += 1
+    found.append(current.strip())
+    return [unwrapped(operand) for operand in found]
+
+
+def unwrapped(operand):
+    """`operand` with balanced enclosing parentheses removed.
+
+    `(a != 'true')` guards exactly what `a != 'true'` guards, so rejecting the
+    parenthesised spelling fails a workflow that is wired correctly. Only an
+    enclosing pair is removed: in `!(a)` the leading `!` is not a parenthesis,
+    so a negated guard stays negated and stays rejected.
+    """
+    while operand.startswith("(") and operand.endswith(")"):
+        depth = 0
+        for index, char in enumerate(operand):
+            depth += (char == "(") - (char == ")")
+            if not depth and index < len(operand) - 1:
+                return operand  # the pair closes early: `(a) && (b)`
+        operand = operand[1:-1].strip()
+    return operand
 
 
 class WorkflowWiring(unittest.TestCase):
@@ -452,12 +683,14 @@ class WorkflowWiring(unittest.TestCase):
                 # scripts/release/check_tag_manifest.py` names the gate
                 # without running it, and so would a paths filter listing the
                 # file; both would satisfy a substring search.
+                # The complete filename, ending at a shell argument
+                # boundary: without it `check_tag_manifest.py.bak` — a
+                # different script, or none — satisfies the assertion.
                 invocation = re.compile(
-                    r"(?:^(?:run: )?|&&\s*|\|\|\s*|;\s*|\|\s*|\bthen\s+|\bdo\s+)"
-                    rf"(?:python3?|uv run)\s+scripts/release/{re.escape(script)}"
+                    rf"(?:python3?|uv run)\s+scripts/release/{re.escape(script)}(?=\s|$)"
                 )
                 self.assertTrue(
-                    [c for c in live if invocation.search(c)],
+                    [c for c in live if runs(c, invocation)],
                     f"{workflow} never runs scripts/release/{script}",
                 )
 
@@ -471,33 +704,20 @@ class WorkflowWiring(unittest.TestCase):
         def condition(workflow, job):
             return " ".join(jobs(workflow)[job].split())
 
-        def header(workflow, job):
-            # The job's own keys only. A step-level `if:` carrying the same
-            # clause skips one step while the job — and its other steps — run
-            # anyway, so a search of the whole body passes a guard that was
-            # moved rather than kept.
-            lines = jobs(workflow)[job].splitlines()
-            for index, line in enumerate(lines):
-                if re.match(r"^\s*steps:$", line):
-                    lines = lines[:index]
-                    break
-            return " ".join(" ".join(lines).split())
-
-        def skip(job):
-            # A condition may legitimately carry other clauses — the tag-ref
-            # guard does — so a prefix is allowed, but only one holding no
-            # colon: that keeps the match inside this `if:` instead of letting
-            # it drift into a later key.
-            return (
-                r"if: (?:[>|][-+]?\s)?[^:]*?needs\." + job + r"\.outputs\.is_prerelease != 'true'"
-            )
-
         for workflow, job, gate in (
             ("release.yml", "homebrew-update", "verify"),
             ("docker.yml", "publish-mcp-registry", "build"),
         ):
-            own = header(workflow, job)
-            self.assertRegex(own, skip(gate))
+            own = job_if(workflow, job)
+            # The clause has to be one of the condition's own top-level
+            # conjuncts, spelled affirmatively. Searching the text for it
+            # instead accepts `!(needs.verify.outputs.is_prerelease != 'true')`,
+            # which matches the clause and reverses the guard.
+            self.assertIn(
+                f"needs.{gate}.outputs.is_prerelease != 'true'",
+                conjuncts(own),
+                f"{workflow} {job}: its `if:` does not require a non-prerelease",
+            )
             # A disjunction makes the guard optional: `!= 'true' || true`
             # matches the clause and skips nothing.
             self.assertNotIn("||", own, f"{workflow} {job}: its skip is not mandatory")
@@ -517,18 +737,26 @@ class WorkflowWiring(unittest.TestCase):
             # satisfied by `verify-attestation`: an attestation is not a
             # signature, and deleting either step has to fail.
             for verb in ("sign", "attest", "verify", "verify-attestation"):
-                pattern = rf"\bcosign {re.escape(verb)}(?![-\w])"
-                found = [c for c in live if re.search(pattern, c)]
+                pattern = re.compile(rf"cosign\s+{re.escape(verb)}(?![-\w])")
+                found = [c for c in live if runs(c, pattern)]
                 self.assertTrue(found, f"{workflow} never runs cosign {verb}")
                 for command in found:
                     # Sign and verify the digest the build step produced, not a
                     # tag: a tag is a mutable pointer the other publisher can
                     # move, and a signature is over a digest.
-                    # The closing quote is optional — an unquoted reference is
-                    # the same reference, and failing it would be a red CI on a
-                    # reformat.
+                    # Double-quoted or bare, but not shell-single-quoted:
+                    # the first two expand the digest and the third passes
+                    # `${DIGEST}` through literally, signing a name no
+                    # registry resolves. YAML quoting is stripped first, so
+                    # this reads the quoting bash actually applies.
+                    # The whole argument, so its opening quote is read too:
+                    # matching from the `@` inward accepts
+                    # `'…@${DIGEST} '`, where the single quotes bash keeps
+                    # make the reference a literal the registry cannot resolve.
                     self.assertRegex(
-                        command, r"@\$\{DIGEST\}[\"']?(?:\s|$)", f"{workflow}: {command}"
+                        shell(command),
+                        r"(?:^|\s)(?:\"[^\"]*@\$\{DIGEST\}\"|[^\s\"']*@\$\{DIGEST\})(?:\s|$)",
+                        f"{workflow}: {command}",
                     )
             # Read the binding per step, not per file. `DIGEST` is step-scoped
             # env, so a step that lost its own binding expands it to the empty
@@ -547,13 +775,14 @@ class WorkflowWiring(unittest.TestCase):
             )
             signing = 0
             for block in steps(workflow):
+                bindings = env_of(block)
                 block = joined(block)
-                if not any(re.search(r"\bcosign \w", c) for c in block):
+                if not any(runs(c, COSIGN_ANY) for c in block):
                     continue
                 signing += 1
                 name = block[0]
                 self.assertTrue(
-                    any(digest.match(c) for c in block),
+                    any(digest.match(c) for c in bindings),
                     f"{workflow}: {name} runs cosign without binding DIGEST to the build digest",
                 )
                 # The env binding is only worth what the shell leaves of it: a
@@ -561,21 +790,21 @@ class WorkflowWiring(unittest.TestCase):
                 # cosign command below expands, and the env check still passes.
                 for command in block:
                     self.assertNotRegex(
-                        command,
+                        shell(command),
                         r"(?:^|[;&|]\s*|\bexport\s+)DIGEST=",
                         f"{workflow}: {name} reassigns DIGEST in its shell",
                     )
-                if not any(COSIGN_VERIFY.search(c) for c in block):
+                if not any(runs(c, COSIGN_VERIFY) for c in block):
                     continue
                 # An identity is what makes a signature mean something: an
                 # unpinned verify, or one relaxed to a regexp, accepts a
                 # signature from any workflow that can mint an OIDC token.
                 self.assertTrue(
-                    any(identity.match(c) for c in block),
+                    any(identity.match(c) for c in bindings),
                     f"{workflow}: {name} verifies without pinning this workflow's identity",
                 )
                 for command in block:
-                    if COSIGN_VERIFY.search(command):
+                    if runs(command, COSIGN_VERIFY):
                         self.assertIn(
                             '--certificate-identity "${IDENTITY}"',
                             command,
@@ -584,6 +813,132 @@ class WorkflowWiring(unittest.TestCase):
             # Non-vacuity: if the step scan found nothing, the per-step
             # assertions above never ran and the whole loop is decoration.
             self.assertTrue(signing, f"{workflow}: no step containing a cosign command was read")
+
+    def test_a_comment_is_stripped_and_a_quoted_hash_is_not(self):
+        # Every assertion here reads uncommented text, so both directions are
+        # load-bearing: a comment left in place satisfies an assertion the
+        # executable line no longer does, and a `#` cut out of a quoted scalar
+        # rewrites a command that was wired correctly. An apostrophe inside a
+        # word is neither — it is a letter.
+        self.assertEqual(uncommented("name: Don't execute # a comment"), "name: Don't execute")
+        self.assertEqual(uncommented("run: echo 'a # b'"), "run: echo 'a # b'")
+        self.assertEqual(uncommented('run: echo "a # b" # c'), 'run: echo "a # b"')
+        self.assertEqual(uncommented("run: echo don't # c"), "run: echo don't")
+
+    def test_a_doubled_apostrophe_does_not_end_a_single_quoted_scalar(self):
+        # `''` is how YAML writes an apostrophe inside a single-quoted scalar.
+        # Read as a closing quote, everything after it looks unquoted, so the
+        # next `#` truncates a command that runs in full.
+        self.assertEqual(uncommented("run: 'echo don''t # keep' # cut"), "run: 'echo don''t # keep'")
+
+    def test_a_heredoc_payload_is_not_read_as_workflow_text(self):
+        # The payload is an argument to `cat`. Every line in it reads as
+        # whatever it spells — a step key, an env binding, an invocation — and
+        # none of it runs.
+        lines = [
+            "        run: |",
+            "          cat <<'EOF'",
+            "          steps:",
+            "          DIGEST: x",
+            "          EOF",
+            "          echo after",
+        ]
+        kept = heredocs_dropped(lines)
+        self.assertEqual(kept, [lines[0], lines[1], lines[5]])
+
+    def test_a_quote_inside_a_block_scalar_belongs_to_the_shell(self):
+        # `run: '…'` is a YAML scalar whose quotes never reach bash. The same
+        # text on a block-scalar line is a command name in quotes, which bash
+        # looks for and does not find.
+        self.assertEqual(shell("run: 'python3 gate.py'"), "python3 gate.py")
+        self.assertEqual(shell("'python3 gate.py'"), "'python3 gate.py'")
+
+    def test_a_command_is_found_by_position_not_by_mention(self):
+        # `echo cosign sign …` mentions; `true && cosign sign …` runs.
+        program = re.compile(r"cosign\s+sign\b")
+        self.assertFalse(runs("run: echo cosign sign x", program))
+        self.assertFalse(runs('run: echo "a; cosign sign x"', program))
+        self.assertTrue(runs("run: true && cosign sign x", program))
+        self.assertTrue(runs("run: cleanup; cosign sign x", program))
+
+    def test_a_parenthesised_conjunct_guards_what_the_bare_one_guards(self):
+        # Parentheses are formatting. A negation is not.
+        self.assertEqual(conjuncts("${{ (a != 'x') && b }}"), ["a != 'x'", "b"])
+        self.assertEqual(conjuncts("${{ !(a != 'x') }}"), ["!(a != 'x')"])
+        self.assertEqual(conjuncts("${{ (a) && (b) }}"), ["a", "b"])
+
+    def test_a_folded_scalar_is_one_command(self):
+        # YAML joins the lines with spaces before Actions sees them.
+        self.assertEqual(
+            joined(["        run: >-", "          python3", "          gate.py"]),
+            ["run: python3 gate.py"],
+        )
+
+    def test_a_binding_is_read_only_where_actions_binds_one(self):
+        # Stripped of indentation, a printed `DIGEST:` and a real one are the
+        # same string.
+        block = [
+            "      - name: Sign",
+            "        env:",
+            "          DIGEST: real",
+            "        run: |",
+            "          DIGEST: printed",
+        ]
+        self.assertEqual(env_of(block), ["DIGEST: real"])
+
+    def test_no_signing_or_gate_step_is_allowed_to_fail(self):
+        # `continue-on-error` keeps the job green when the step fails. On a
+        # step that signs, verifies, or runs the gate, that is the whole
+        # check turned into a log line: a mismatched manifest or a missing
+        # signature still publishes, and every assertion above still passes
+        # because the wiring is all still there. The key is rejected however
+        # it is valued — `false` today is `true` in one character.
+        guarded = 0
+        for workflow in ("release.yml", "ci.yml", "docker.yml"):
+            for block in steps(workflow):
+                commands_in = joined(block)
+                if not any(
+                    runs(c, COSIGN_ANY) or runs(c, GATE_SCRIPT) for c in commands_in
+                ):
+                    continue
+                guarded += 1
+                for line in block:
+                    self.assertNotRegex(
+                        line.strip(),
+                        SWALLOWS,
+                        f"{workflow}: {block[0].strip()} is allowed to fail",
+                    )
+                    # A step-level `if:` is legitimate here — these steps are
+                    # tag-gated — but one that is false whatever the run is a
+                    # deletion that leaves the step in the file.
+                    self.assertNotRegex(
+                        line.strip(),
+                        NEVER_RUNS,
+                        f"{workflow}: {block[0].strip()} never runs",
+                    )
+                # A step's status is its last command's. `cosign sign … ||
+                # true`, or a `; true` after it, reports success on a failed
+                # signature exactly as `continue-on-error` does, and `set +e`
+                # does it for every command that follows.
+                for command in commands_in:
+                    # A no-op *after* a command: `cosign sign … || true` and
+                    # `… ; true` both report success on a failed signature. A
+                    # leading one — `true && cosign sign …` — decides nothing,
+                    # because the status still comes from what follows it.
+                    for piece in segments(shell(command))[1:]:
+                        self.assertNotIn(
+                            piece,
+                            ("true", ":"),
+                            f"{workflow}: {block[0].strip()} swallows a failure",
+                        )
+                    self.assertNotRegex(
+                        shell(command),
+                        r"(?:^|\s)set\s+[-+]?\+e",
+                        f"{workflow}: {block[0].strip()} disables failure exit",
+                    )
+        # Non-vacuity: a scan that classified no step would pass with the
+        # steps it is about never read.
+        self.assertTrue(guarded, "no signing or gate step was read")
 
     def test_the_dispatch_tag_is_not_interpolated_into_a_shell_command(self):
         # A dispatch input expanded inside `run:` is substituted before bash
@@ -596,8 +951,8 @@ class WorkflowWiring(unittest.TestCase):
         # reaching a shell — with `run:` bodies tracked separately because
         # inside one no spelling is safe.
         permitted = re.compile(
-            r"^(?:[A-Z][A-Z0-9_]*: [\"']?\$\{\{\s*inputs\.tag\s*\}\}[\"']?"
-            r"|if: (?:[>|][-+]?\s)?\$\{\{ [^}]*inputs\.tag[^}]*\}\})$"
+            r"^(?:[A-Z][A-Z0-9_]*: [\"']?\$\{\{\s*" + TAG_INPUT + r"\s*\}\}[\"']?"
+            r"|if: (?:[>|][-+]?\s)?\$\{\{ [^}]*" + TAG_INPUT + r"[^}]*\}\})$"
         )
         raw = (WORKFLOWS / "release.yml").read_text(encoding="utf-8").splitlines()
         block, kind = None, None
@@ -611,15 +966,23 @@ class WorkflowWiring(unittest.TestCase):
                         # opens a *shell* comment, and a tag carrying a newline
                         # ends it — so an interpolation in a comment executes
                         # too. Nothing is permitted in this position.
-                        self.assertNotIn("inputs.tag", raw_line, raw_line)
+                        self.assertNotRegex(raw_line, TAG_EXPRESSION, raw_line)
                     continue  # a folded `if:` is evaluated, never executed
                 block, kind = None, None
-            folded = re.match(r"^(?:- )?(run|if): *[|>]", stripped)
+            folded = re.match(r"^(- )?(run|if): *[|>]", stripped)
             if folded:
-                block, kind = depth, folded.group(1)
+                # A list marker is not part of the key. `- if: >-` puts the
+                # key two columns right of the item, and the step's other
+                # keys — `run:` among them — sit at that same column; taking
+                # the item's indentation as the scalar's would swallow them.
+                block = depth + (2 if folded.group(1) else 0)
+                kind = folded.group(2)
                 continue
-            line = uncommented(raw_line).strip()
-            if "inputs.tag" not in line:
+            # A list marker is not part of the key here either: `- if: ${{ … }}`
+            # is the same condition as the `if:` that follows a `- name:`, and
+            # the expression engine evaluates both without a shell.
+            line = re.sub(r"^- ", "", uncommented(raw_line).strip())
+            if not TAG_EXPRESSION.search(line):
                 continue
             self.assertRegex(line, permitted, raw_line)
 

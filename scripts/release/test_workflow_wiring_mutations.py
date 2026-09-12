@@ -43,8 +43,8 @@ CASES = [
     (
         "identity-relaxed-to-a-regexp",
         "docker.yml",
-        '--certificate-identity "${IDENTITY}"',
-        '--certificate-identity-regexp ".*"',
+        'cosign verify \\\n            --certificate-identity "${IDENTITY}"',
+        'cosign verify \\\n            --certificate-identity-regexp ".*"',
         CAUGHT,
     ),
     (
@@ -114,6 +114,13 @@ CASES = [
         CAUGHT,
     ),
     (
+        "gate-invocation-inside-an-echoed-string",
+        "ci.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        '        run: echo "skipped; python3 scripts/release/check_tag_manifest.py"',
+        CAUGHT,
+    ),
+    (
         "gate-invocation-commented-out-in-ci",
         "ci.yml",
         "        run: python3 scripts/release/check_tag_manifest.py",
@@ -165,13 +172,98 @@ CASES = [
         '          python3 scripts/release/check_tag_manifest.py --tag "$INPUT_TAG"',
         CAUGHT,
     ),
+    (
+        "folded-if-hides-the-steps-sibling-run",
+        "release.yml",
+        "      - name: Check formatting\n        run: cargo fmt --all -- --check",
+        "      - if: >-\n          true\n        run: echo ${{ inputs.tag }}",
+        CAUGHT,
+    ),
+    (
+        "dispatch-tag-in-index-notation",
+        "release.yml",
+        "        run: cargo fmt --all -- --check",
+        "        run: echo ${{ inputs['tag'] }}",
+        CAUGHT,
+    ),
+    (
+        "digest-reassigned-inline-in-the-shell",
+        "ci.yml",
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        '        run: DIGEST="${{ steps.meta.outputs.version }}"; '
+        'cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        CAUGHT,
+    ),
+    (
+        "digest-reference-single-quoted",
+        "docker.yml",
+        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        "run: cosign sign --yes 'ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}'",
+        CAUGHT,
+    ),
+    (
+        "prerelease-guard-negated",
+        "release.yml",
+        "    if: needs.verify.outputs.is_prerelease != 'true'",
+        "    if: ${{ !(needs.verify.outputs.is_prerelease != 'true') }}",
+        CAUGHT,
+    ),
+    (
+        "prerelease-skip-moved-into-env",
+        "release.yml",
+        "    if: needs.verify.outputs.is_prerelease != 'true'\n",
+        "    env:\n      if: needs.verify.outputs.is_prerelease != 'true'\n",
+        CAUGHT,
+    ),
+    (
+        "heredoc-steps-line-hides-a-lost-digest-binding",
+        "ci.yml",
+        "      - name: Cosign keyless-sign the released image by digest\n"
+        "        env:\n          DIGEST: ${{ steps.build.outputs.digest }}\n"
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "      - name: Cosign keyless-sign the released image by digest\n"
+        "        run: |\n          cat <<'YAML'\n          steps:\n          YAML\n"
+        '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        CAUGHT,
+    ),
+    (
+        "signing-step-allowed-to-fail-at-its-name-key",
+        "ci.yml",
+        "      - name: Cosign keyless-sign the released image by digest\n",
+        "      - name: Cosign keyless-sign the released image by digest\n"
+        "        continue-on-error: true\n",
+        CAUGHT,
+    ),
+    (
+        "gate-step-allowed-to-fail",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py\n",
+        "        continue-on-error: true\n"
+        "        run: python3 scripts/release/check_tag_manifest.py\n",
+        CAUGHT,
+    ),
+    (
+        "steps-key-in-a-heredoc-hides-the-signing-step",
+        "ci.yml",
+        "      - name: Cosign keyless-sign the released image by digest\n"
+        "        env:\n          DIGEST: ${{ steps.build.outputs.digest }}\n",
+        "      - name: Describe the job\n"
+        "        run: |\n"
+        "          cat <<'EOF'\n"
+        "          steps:\n"
+        "          EOF\n"
+        "      - name: Cosign keyless-sign the released image by digest\n",
+        CAUGHT,
+    ),
     # Equivalent spellings. A suite that fails these is a suite nobody can
     # reformat a workflow under, which is how textual assertions get deleted.
     (
         "digest-value-quoted",
         "ci.yml",
-        "          DIGEST: ${{ steps.build.outputs.digest }}",
-        '          DIGEST: "${{ steps.build.outputs.digest }}"',
+        "          DIGEST: ${{ steps.build.outputs.digest }}\n"
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        '          DIGEST: "${{ steps.build.outputs.digest }}"\n'
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
         TOLERATED,
     ),
     (
@@ -205,8 +297,10 @@ CASES = [
     (
         "digest-expression-without-inner-spaces",
         "ci.yml",
-        "          DIGEST: ${{ steps.build.outputs.digest }}",
-        "          DIGEST: ${{steps.build.outputs.digest}}",
+        "          DIGEST: ${{ steps.build.outputs.digest }}\n"
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        "          DIGEST: ${{steps.build.outputs.digest}}\n"
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
         TOLERATED,
     ),
     (
@@ -223,6 +317,166 @@ CASES = [
         "  verify:\n    if: >-\n      ${{ inputs.tag != '' }}\n",
         TOLERATED,
     ),
+    (
+        "gate-invocation-as-a-quoted-scalar",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        "        run: 'python3 scripts/release/check_tag_manifest.py'",
+        TOLERATED,
+    ),
+    (
+        "dispatch-input-named-in-a-shell-comment",
+        "release.yml",
+        "        run: cargo fmt --all -- --check",
+        "        run: |\n          # INPUT_TAG comes from inputs.tag\n"
+        "          cargo fmt --all -- --check",
+        TOLERATED,
+    ),
+    (
+        "gate-invocation-as-an-inline-list-item",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py\n",
+        "        run: true\n\n      - run: python3 scripts/release/check_tag_manifest.py\n",
+        TOLERATED,
+    ),
+    (
+        "unrelated-job-env-expression-with-a-disjunction",
+        "release.yml",
+        "    if: needs.verify.outputs.is_prerelease != 'true'\n",
+        "    if: needs.verify.outputs.is_prerelease != 'true'\n"
+        "    env:\n      DISPLAY: ${{ env.DISPLAY || ':0' }}\n",
+        TOLERATED,
+    ),
+    (
+        "gate-invocation-as-a-list-item",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        "        run: 'true'\n      - run: python3 scripts/release/check_tag_manifest.py",
+        TOLERATED,
+    ),
+    (
+        # A prefix match approves a different file: `.bak` is a copy nobody
+        # maintains, and a renamed gate is no gate.
+        "gate-invocation-with-a-suffixed-filename",
+        "docker.yml",
+        '        run: python3 scripts/release/check_tag_manifest.py',
+        "        run: python3 scripts/release/check_tag_manifest.py.bak",
+        CAUGHT,
+    ),
+    (
+        # A heredoc hands its body to `cat` as data. The text reads as the
+        # invocation; nothing in it runs.
+        "gate-invocation-printed-from-a-heredoc",
+        "docker.yml",
+        '        run: python3 scripts/release/check_tag_manifest.py',
+        "        run: |\n          cat <<'SH'\n"
+        "          python3 scripts/release/check_tag_manifest.py\n          SH",
+        CAUGHT,
+    ),
+    (
+        # `echo cosign sign` prints a command line. Nothing is signed.
+        "cosign-sign-echoed-instead-of-run",
+        "docker.yml",
+        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        'run: echo cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        CAUGHT,
+    ),
+    (
+        # A condition that is false on every run is a deletion that leaves the
+        # step in the file for a reader to find.
+        "gate-step-disabled-by-a-false-condition",
+        "docker.yml",
+        "        if: startsWith(github.ref, 'refs/tags/v')\n        run: python3 scripts/release/check_tag_manifest.py",
+        "        if: false\n" + '        run: python3 scripts/release/check_tag_manifest.py',
+        CAUGHT,
+    ),
+    (
+        # The step's status is its last command's, so `|| true` reports a
+        # successful signature over a failed one.
+        "cosign-sign-failure-swallowed",
+        "docker.yml",
+        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"' + " || true",
+        CAUGHT,
+    ),
+    (
+        # Inside a block scalar the quotes are the shell's: bash looks for one
+        # command whose name is the whole quoted string.
+        "gate-invocation-quoted-inside-a-block-scalar",
+        "docker.yml",
+        '        run: python3 scripts/release/check_tag_manifest.py',
+        "        run: |\n          'python3 scripts/release/check_tag_manifest.py'",
+        CAUGHT,
+    ),
+    (
+        # Single quotes bash keeps: the trailing space inside them makes the
+        # whole thing one literal argument the registry cannot resolve, and
+        # `${DIGEST}` never expands.
+        "digest-reference-single-quoted-with-trailing-space",
+        "docker.yml",
+        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        "run: cosign sign --yes 'ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST} '",
+        CAUGHT,
+    ),
+    (
+        # Equivalent spellings. `true && …` runs the gate, and the gate's exit
+        # status is still the step's.
+        "gate-invocation-after-an-unquoted-separator",
+        "docker.yml",
+        '        run: python3 scripts/release/check_tag_manifest.py',
+        "        run: true && python3 scripts/release/check_tag_manifest.py",
+        TOLERATED,
+    ),
+    (
+        # `''` is YAML's escaped apostrophe, not the end of the scalar, so the
+        # `#` after it stays inside the command.
+        "gate-invocation-with-a-doubled-apostrophe",
+        "docker.yml",
+        '        run: python3 scripts/release/check_tag_manifest.py',
+        "        run: 'python3 scripts/release/check_tag_manifest.py # don''t # log'",
+        TOLERATED,
+    ),
+    (
+        # Parentheses around the same comparison guard the same thing.
+        "prerelease-guard-parenthesised",
+        "release.yml",
+        "    if: needs.verify.outputs.is_prerelease != 'true'",
+        "    if: ${{ (needs.verify.outputs.is_prerelease != 'true') }}",
+        TOLERATED,
+    ),
+    (
+        # A folded scalar is one command once the folding is undone.
+        "gate-invocation-in-a-folded-scalar",
+        "docker.yml",
+        '        run: python3 scripts/release/check_tag_manifest.py',
+        "        run: >-\n          python3\n          scripts/release/check_tag_manifest.py",
+        TOLERATED,
+    ),
+    (
+        # The list marker is not part of the key: this condition is evaluated
+        # by the expression engine, never handed to a shell.
+        "dispatch-tag-in-an-inline-list-item-condition",
+        "release.yml",
+        "          INPUT_TAG: ${{ inputs.tag }}\n"
+        '        run: python3 scripts/release/check_scope_acceptance.py --publish-check',
+        "          INPUT_TAG: x\n      - if: ${{ inputs.tag != '' }}\n"
+        '        run: python3 scripts/release/check_scope_acceptance.py --publish-check',
+        TOLERATED,
+    ),
+    (
+        # A step may open with any key. Written `- env:`, the mapping sits two
+        # columns right of the item — and a `DIGEST:` line printed by the run
+        # body is not a binding however much it reads like one.
+        "digest-binding-printed-by-a-step-opening-with-env",
+        "ci.yml",
+        "      - name: Cosign keyless-sign the released image by digest\n"
+        "        env:\n          DIGEST: ${{ steps.build.outputs.digest }}\n"
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "      - env:\n          NOTE: none\n        run: |\n"
+        "          DIGEST: ${{ steps.build.outputs.digest }}\n"
+        '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        CAUGHT,
+    ),
 ]
 
 
@@ -230,7 +484,11 @@ def verdict(directory, workflow, before, after):
     """Apply one mutation to the copied workflows and run the suite against it."""
     path = directory / workflow
     original = path.read_text(encoding="utf-8")
-    if before not in original:
+    # Exactly once. An anchor matching twice mutates whichever copy comes
+    # first, which is not necessarily the one the case is about — and a case
+    # that breaks a different rule from the one it names reports coverage it
+    # does not have.
+    if original.count(before) != 1:
         return None, ""
     path.write_text(original.replace(before, after, 1), encoding="utf-8")
     try:
