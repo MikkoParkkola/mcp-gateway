@@ -581,6 +581,119 @@ CASES = [
         '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
         CAUGHT,
     ),
+    # Disarmament that survives a search AND a command-position read. Each
+    # of these leaves the step, its name and a real invocation in place; what
+    # changes is whether the command is reached, whether its failure counts,
+    # or which value the surviving expression yields.
+    (
+        # The shell is gone before the gate is reached. A search for the
+        # command finds it, and it is genuinely in a command position.
+        "gate-behind-an-exit",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        "        run: exit 0; python3 scripts/release/check_tag_manifest.py",
+        CAUGHT,
+    ),
+    (
+        # A gate that never fires is a gate that passed. `refs/heads/`
+        # matches every branch push and no tag.
+        "gate-step-rescoped-to-branches",
+        "docker.yml",
+        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        "        if: startsWith(github.ref, 'refs/heads/')\n"
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        CAUGHT,
+    ),
+    (
+        # The same disarm folded, where a line-scoped read of the condition
+        # sees only the block-scalar indicator.
+        "gate-step-condition-folded-to-false",
+        "docker.yml",
+        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        "        if: >-\n          false\n"
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        CAUGHT,
+    ),
+    (
+        # cosign runs, cosign fails, the step stays green and an unsigned
+        # image is already pushed.
+        "signature-failure-swallowed",
+        "docker.yml",
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"'
+        " || echo ignored",
+        CAUGHT,
+    ),
+    (
+        # The heredoc hazard with an explicit indentation indicator. `|2` is
+        # the same block scalar as `|`, and a filter matching only `|` and
+        # `|-` reads the note's body as the command it replaced.
+        "gate-moved-into-an-indented-env-note",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        "        env:\n          NOTE: |2\n"
+        "            python3 scripts/release/check_tag_manifest.py\n"
+        "        run: true",
+        CAUGHT,
+    ),
+    (
+        # The producer expression is intact and one character longer. A
+        # prerelease now emits `truex`, and every `!= 'true'` guard
+        # downstream reads that as a stable release.
+        "classification-output-given-a-suffix",
+        "release.yml",
+        "      is_prerelease: ${{ steps.channel.outputs.is_prerelease }}",
+        "      is_prerelease: ${{ steps.channel.outputs.is_prerelease }}x",
+        CAUGHT,
+    ),
+    (
+        # ci.yml reads its classification from a step in its own job rather
+        # than from a job output. Point it at a step that does not exist and
+        # Actions yields the empty string, not an error.
+        "latest-guard-reading-a-missing-step",
+        "ci.yml",
+        "            ${{ steps.meta.outputs.is_prerelease != 'true'"
+        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}",
+        "            ${{ steps.missing.outputs.is_prerelease != 'true'"
+        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}",
+        CAUGHT,
+    ),
+    (
+        # The guarded entry is untouched; a second, unguarded one is added
+        # below it. Every assertion that reads the guard still finds it.
+        "latest-tagged-again-unconditionally",
+        "ci.yml",
+        "            ${{ steps.meta.outputs.is_prerelease != 'true'"
+        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}",
+        "            ${{ steps.meta.outputs.is_prerelease != 'true'"
+        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}\n"
+        "            ghcr.io/mikkoparkkola/mcp-gateway:latest",
+        CAUGHT,
+    ),
+    (
+        # The channel still decides the dist-tag. It decides it backwards,
+        # and `npm install mcp-gateway` resolves to a candidate.
+        "npm-dist-tag-branches-swapped",
+        "release.yml",
+        "          DIST_TAG: ${{ needs.verify.outputs.is_prerelease == 'true'"
+        " && 'next' || 'latest' }}",
+        "          DIST_TAG: ${{ needs.verify.outputs.is_prerelease == 'true'"
+        " && 'latest' || 'next' }}",
+        CAUGHT,
+    ),
+    (
+        # The other direction, which a scalar filter gets wrong just as
+        # easily: shell text that looks like YAML. The gate runs here, so
+        # reading the note's body as structure would fail a green workflow.
+        "run-body-quoting-a-yaml-key",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        "        run: |\n          echo '\n          NOTE: |\n          '\n"
+        "          python3 scripts/release/check_tag_manifest.py",
+        TOLERATED,
+    ),
 ]
 
 

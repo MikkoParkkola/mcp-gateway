@@ -362,16 +362,24 @@ def inert_scalars_dropped(lines):
     structure: a folded `if:` condition is a block scalar too, and its body is
     the condition itself.
     """
-    kept, depth = [], None
+    kept, depth, dropping = [], None, False
     for line in lines:
         indent = len(line) - len(line.lstrip())
         if depth is not None:
             if indent > depth:
+                # A `run:` body is passed through verbatim rather than
+                # rescanned: shell text can contain `NOTE: |`, and reading
+                # that as a YAML key would drop the commands under it.
+                if not dropping:
+                    kept.append(line)
                 continue
             depth = None
-        opener = re.match(r"^(\s*)(?:- )?([\w.-]+): *[|>][-+]?$", line)
-        if opener and opener.group(2) != "run":
+        # `|`, `>`, and either indicator order after them — `|2-` and `|-2`
+        # are the same scalar. Matching only `|-` leaves `NOTE: |2` unread.
+        opener = re.match(r"^(\s*)(?:- )?([\w.-]+): *[|>][-+0-9]*$", line)
+        if opener:
             depth = indent + (2 if line.lstrip().startswith("- ") else 0)
+            dropping = opener.group(2) != "run"
         kept.append(line)
     return kept
 
@@ -755,11 +763,49 @@ class WorkflowWiring(unittest.TestCase):
                     # Arguments, not just the program: `--help` makes argparse
                     # print usage and exit 0, which is a passing step that
                     # verified nothing.
-                    piece = next(p for p in segments(text) if invocation.match(p))
+                    pieces = segments(text)
+                    index = next(
+                        i for i, p in enumerate(pieces) if invocation.match(p)
+                    )
+                    # Reachable, not merely present. `exit 0; python3 …`
+                    # leaves the invocation in the file AND in a command
+                    # position; the shell is gone before it is reached.
+                    for earlier in pieces[:index]:
+                        self.assertNotRegex(
+                            earlier,
+                            r"^(?:exit|return)(?=\s|$)",
+                            f"{workflow}: the shell exits before the gate: {text}",
+                        )
+                    piece = pieces[index]
                     self.assertNotRegex(
                         piece,
                         r"(?:^|\s)(?:--help|-h)(?=\s|$)",
                         f"{workflow}: the gate is invoked as help: {piece}",
+                    )
+            # The step's own condition. A gate that never fires is a gate
+            # that passed: `refs/heads/` matches no tag, and a folded
+            # `false` matches nothing at all. Both leave the step, its name
+            # and its command exactly where every search above looks.
+            # Read only where a condition exists — a gate with none runs
+            # whenever its job does, which is never less often. And only on
+            # the gate itself: another `scripts/release/` script in its own
+            # step answers a different question and carries its own guard.
+            gate_step = re.compile(
+                r"(?:python3?|uv run)\s+scripts/release/check_tag_manifest\.py(?=\s|$)"
+            )
+            for block in steps(workflow):
+                if not any(gate_step.search(line) for line in block):
+                    continue
+                own = [
+                    line.split(":", 1)[1].strip()
+                    for line in block
+                    if re.match(r"^\s*(?:- )?if:", line)
+                ]
+                for condition in own:
+                    self.assertIn(
+                        "refs/tags/",
+                        condition,
+                        f"{workflow}: the gate step is not scoped to tags: {condition}",
                     )
 
     def test_prerelease_skips_are_declared_where_they_are_claimed(self):
@@ -799,6 +845,30 @@ class WorkflowWiring(unittest.TestCase):
             r"(?<![!\w.])steps\.\w+\.outputs\.is_prerelease != 'true'"
             r" && 'ghcr\.io/[^']*:latest' \|\| ''",
         )
+        # The step that decides it has to exist. `steps.missing.outputs.…`
+        # is not an error in Actions — it is the empty string, and `'' !=
+        # 'true'` tags every release candidate :latest.
+        body = jobs("ci.yml")["docker"]
+        producer = re.search(
+            r"(?<![!\w.])steps\.(\w+)\.outputs\.is_prerelease != 'true'"
+            r" && 'ghcr\.io/[^']*:latest'",
+            condition("ci.yml", "docker"),
+        )
+        self.assertIsNotNone(producer, "ci.yml docker: nothing decides :latest")
+        self.assertRegex(
+            body,
+            rf"(?m)^\s+id:\s*{re.escape(producer.group(1))}\s*$",
+            f"ci.yml docker: no step is id {producer.group(1)}",
+        )
+        # And nothing tags :latest beside it. A second entry in the same
+        # `tags:` list carries no expression, moves the name on every build,
+        # and leaves the guarded entry above it untouched and green.
+        for line in live_lines("ci.yml"):
+            self.assertNotRegex(
+                line.strip(),
+                r"^-?\s*ghcr\.io/[\w./-]+:latest$",
+                f"ci.yml: :latest is tagged unconditionally: {line.strip()}",
+            )
 
     def test_the_prerelease_classification_is_computed(self):
         # Every guard above reads `needs.<job>.outputs.is_prerelease` from
@@ -812,8 +882,12 @@ class WorkflowWiring(unittest.TestCase):
             self.assertIsNotNone(
                 value, f"{workflow} {job}: declares no is_prerelease output"
             )
-            source = re.search(
-                r"\$\{\{\s*steps\.(\w+)\.outputs\.is_prerelease\s*\}\}", value
+            # The whole value, not an expression somewhere inside it.
+            # `${{ … }}x` leaves the substring intact and makes a prerelease
+            # publish `truex`, which every `!= 'true'` guard reads as stable.
+            source = re.fullmatch(
+                r"\$\{\{\s*steps\.(\w+)\.outputs\.is_prerelease\s*\}\}",
+                (value or "").strip(),
             )
             self.assertIsNotNone(
                 source,
@@ -856,6 +930,14 @@ class WorkflowWiring(unittest.TestCase):
                 r"\$\{\{[^}]*needs\.\w+\.outputs\.is_prerelease[^}]*\}\}",
                 f"release.yml: DIST_TAG is not chosen by the channel: {binding}",
             )
+            # And which way round. Swapping the branches keeps the channel
+            # in the expression, keeps every assertion above green, and
+            # makes `npm install mcp-gateway` resolve to a candidate.
+            self.assertRegex(
+                binding,
+                r"needs\.\w+\.outputs\.is_prerelease == 'true' && 'next' \|\| 'latest'",
+                f"release.yml: DIST_TAG is inverted: {binding}",
+            )
 
     def test_both_ghcr_publishers_sign_what_they_push(self):
         # Both push :VERSION from the same commit on the same tag with no
@@ -872,6 +954,15 @@ class WorkflowWiring(unittest.TestCase):
                 found = [c for c in live if runs(c, pattern)]
                 self.assertTrue(found, f"{workflow} never runs cosign {verb}")
                 for command in found:
+                    # `cosign sign … || echo ignored` runs cosign, keeps the
+                    # step green when it fails, and pushes an unsigned image.
+                    # The same for `verify`: a verification whose failure is
+                    # discarded verified nothing.
+                    self.assertNotIn(
+                        "||",
+                        shell(command),
+                        f"{workflow}: cosign {verb} may fail silently: {shell(command)}",
+                    )
                     # Sign and verify the digest the build step produced, not a
                     # tag: a tag is a mutable pointer the other publisher can
                     # move, and a signature is over a digest.
