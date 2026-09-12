@@ -2684,6 +2684,65 @@ impl Gateway {
     /// own its payload. `params` is re-derived from `request` here (already
     /// validated by the caller) so the immutable borrow it needs can end
     /// before the one branch below that needs `request` mutably.
+    /// Build the stdio-path `MetaMcpCallerContext`, split out of
+    /// [`Self::dispatch_tools_call`] purely to keep that function under the
+    /// line budget — every field and its rationale are unchanged.
+    fn build_stdio_caller_context<'a>(
+        is_modern: bool,
+        protocol_revision: Option<&'a str>,
+        stdio_authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
+        retry: &'a crate::protocol::mrtr::RetryFields,
+        era: crate::protocol::meta::Era,
+    ) -> MetaMcpCallerContext<'a> {
+        MetaMcpCallerContext {
+            // stdio has no task route: the extension's handle is read
+            // back over `tasks/get`, which only the HTTP surface serves,
+            // so a handle minted here would name work nobody could ask
+            // about. Every stdio call stays synchronous.
+            task: None,
+            execution: None,
+            signing: None,
+            is_modern,
+            protocol_revision,
+            credential_principal: None,
+            authorizer: stdio_authorizer,
+            // Stdio has no port and no network surface: the
+            // client SPAWNED this process, so it already holds
+            // whatever the operator holds — it could edit the
+            // config file just as easily. Withholding admin
+            // here would take the management tools away from
+            // exactly the single-user setup the origin gate
+            // exists to protect, and protect nothing.
+            //
+            // Explicit since the admin gate moved to the
+            // dispatcher: it previously lived on the HTTP path
+            // alone, so stdio was never checked and the default
+            // non-admin context went unnoticed.
+            is_admin: true,
+            // stdio carries no per-request capability
+            // declaration to read, and absent means absent.
+            input_capabilities: crate::protocol::meta::Declared::NONE,
+            retry,
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            verified_identity: None,
+            // Same `RequestShape` the `initialize` arm advertises against.
+            era,
+            // No `ProxyManager` in this scope -- it is HTTP-only --
+            // so there is no session to put a request on.
+            channel: &crate::gateway::input_bridge::NoClientChannel,
+            // stdio speaks to one process over two pipes and
+            // has no elicitation channel: there is no operator
+            // this transport can reach, so a destructive call
+            // it cannot confirm is refused rather than asked
+            // about. Not "found no session" -- no asker can
+            // exist here at all.
+            confirmation:
+                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        }
+    }
+
     async fn dispatch_tools_call(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
@@ -2759,53 +2818,13 @@ impl Gateway {
             } else {
                 merge_client_meta_ref(arguments.unwrap_or(&empty_arguments), params, is_meta_tool)
             };
-            let mut caller = MetaMcpCallerContext {
-                // stdio has no task route: the extension's handle is read
-                // back over `tasks/get`, which only the HTTP surface serves,
-                // so a handle minted here would name work nobody could ask
-                // about. Every stdio call stays synchronous.
-                task: None,
-                execution: None,
-                signing: None,
+            let mut caller = Self::build_stdio_caller_context(
                 is_modern,
-                protocol_revision: protocol_revision_owned.as_deref(),
-                credential_principal: None,
-                authorizer: &stdio_authorizer,
-                // Stdio has no port and no network surface: the
-                // client SPAWNED this process, so it already holds
-                // whatever the operator holds — it could edit the
-                // config file just as easily. Withholding admin
-                // here would take the management tools away from
-                // exactly the single-user setup the origin gate
-                // exists to protect, and protect nothing.
-                //
-                // Explicit since the admin gate moved to the
-                // dispatcher: it previously lived on the HTTP path
-                // alone, so stdio was never checked and the default
-                // non-admin context went unnoticed.
-                is_admin: true,
-                // stdio carries no per-request capability
-                // declaration to read, and absent means absent.
-                input_capabilities: crate::protocol::meta::Declared::NONE,
-                retry: &retry,
-                api_key_name: None,
-                agent_id: None,
-                grant_subject: None,
-                verified_identity: None,
-                // Same `RequestShape` the `initialize` arm advertises against.
-                era: request_shape.era(),
-                // No `ProxyManager` in this scope -- it is HTTP-only --
-                // so there is no session to put a request on.
-                channel: &crate::gateway::input_bridge::NoClientChannel,
-                // stdio speaks to one process over two pipes and
-                // has no elicitation channel: there is no operator
-                // this transport can reach, so a destructive call
-                // it cannot confirm is refused rather than asked
-                // about. Not "found no session" -- no asker can
-                // exist here at all.
-                confirmation:
-                    crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-            };
+                protocol_revision_owned.as_deref(),
+                &stdio_authorizer,
+                &retry,
+                request_shape.era(),
+            );
             if let Some(context) = signing_context.as_mut()
                 && let Err(error) = meta_mcp.prepare_signing_invocation(
                     context,
