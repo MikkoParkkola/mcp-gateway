@@ -15,8 +15,16 @@
 > `src/gateway/meta_mcp/invoke.rs:1888` names MIK-7387 as the only thing that lifts the
 > deliberate stdio refusal, and pins the two halves separately: read that arm first.
 >
-> **The gap, stated precisely (verified at source).** The bridge is not unwired. It is
-> constructed and driven in production: `src/gateway/meta_mcp/invoke.rs:1842` builds an
+> **Branch caveat — the paragraph below describes `main`, not the release branch.**
+> `git grep -n InputBridge origin/codex/v4-next-integration -- src/` returns three hits,
+> all inside `src/gateway/input_bridge.rs` itself. On the integration branch the bridge is
+> never constructed in production at all, so "constructed but handed a refusing channel"
+> is a `main`-only description. Whichever branch this lands on, re-source the call sites
+> first: on integration the work includes restoring the construction that `main` has, not
+> only implementing `ClientChannel` for the stdio writer.
+>
+> **The gap, stated precisely (verified at source on `origin/main`).** The bridge is not
+> unwired there. It is constructed and driven in production: `src/gateway/meta_mcp/invoke.rs:1842` builds an
 > `InputBridge` inside `invoke_tool_traced` (`:1079`) and `:1852` calls `bridge.run(...)`,
 > with no `#[cfg(test)]` above either. What the stdio path lacks is a channel. That
 > construction passes `channel: caller.channel`, and on the stdio serving sites

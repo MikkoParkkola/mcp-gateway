@@ -38,6 +38,14 @@ Integration is 779 commits ahead, but it does **not** contain everything on `mai
 stdio fix (#522) is absent there. A one-directional "take integration" resolution would
 silently drop it.
 
+The same shape appears on the elicitation path, and there it sits on a blocking row.
+`main` constructs an `InputBridge` in production inside `invoke_tool_traced`
+(`src/gateway/meta_mcp/invoke.rs`); on integration, `git grep -n InputBridge
+origin/codex/v4-next-integration -- src/` returns three hits and all three are inside
+`src/gateway/input_bridge.rs` itself. The bridge is defined there and constructed
+nowhere. `MIK-7387.STDIO.1`-`.3` therefore cost more on integration than on `main`: the
+work is to restore a production call site as well as to implement the channel.
+
 ## 3. The stacked PRs are small; their diffs are not
 
 Every PR targeting `codex/v4-next-integration` carries 1-4 commits. The five-figure diffs
