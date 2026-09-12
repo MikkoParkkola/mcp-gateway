@@ -13,6 +13,14 @@ Measured this date against `origin/main` (`bd1adbb4`) and
 Counts recognise `MET (structural)` and `MET (caveat)` as MET; a regex matching
 only the bare token `MET` under-reports main by nine rows.
 
+Those two fractions were hand-counted and are kept only as the record of what
+this measurement found on the date. The re-runnable form is the script the
+release gate already uses: `python3 scripts/release/count-release-criteria.py`
+reports **149 criteria, 189 rows, 188 met or non-blocking, 1 blocking** against
+`origin/main`'s ledger, which is the one both trees now carry. The stale branch
+copy's own figure is recoverable from git history rather than re-derivable here,
+because that copy was replaced on this date.
+
 ## The branch ledger is strictly stale, not independently graded
 
 Row-by-row diff of the two copies of `RELEASE-4.0.0-criteria-status.md`:
