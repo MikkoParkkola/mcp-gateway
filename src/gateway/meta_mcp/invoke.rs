@@ -463,6 +463,181 @@ impl OutboundRetry {
     }
 }
 
+/// The production [`crate::gateway::input_bridge::BackendInvoker`]: one retry
+/// round is one whole dispatch.
+///
+/// The field list is the argument list of [`MetaMcp::accounted_dispatch`], and
+/// that is the point rather than an accident. A retry that reached the backend
+/// by any shorter path would be a call nobody metered, nobody billed and
+/// nobody gated — the bridge can drive three of them per call, so the shorter
+/// path is worth three unaccounted invocations, not one.
+struct BridgeDispatch<'a> {
+    /// The gateway this dispatch runs through.
+    meta: &'a MetaMcp,
+    /// Backend name, unchanged across rounds: a retry is the same call.
+    server: &'a str,
+    /// Tool name, likewise unchanged.
+    tool: &'a str,
+    /// The original arguments. Answers travel beside them, never inside.
+    arguments: &'a Value,
+    /// Carried through so a retry keeps the first round's cache slot.
+    prompt_cache_key: Option<&'a str>,
+    /// The caller's own `_meta`, relayed as it was.
+    inbound_meta: Option<&'a Value>,
+    /// Whether the caller asked for the untruncated body.
+    want_full: bool,
+    /// The session the exchange belongs to.
+    session_id: Option<&'a str>,
+    /// Who is calling, for grants and audit.
+    caller_identity: Option<&'a GrantSubject>,
+    /// The verified end-user identity, pass-through.
+    verified_identity: Option<&'a crate::key_server::oidc::VerifiedIdentity>,
+    /// Headers propagated to the backend.
+    propagated_headers: &'a [(String, String)],
+    /// Response-cache binding.
+    cache_binding: Option<&'a str>,
+    /// The capability route's account credential.
+    account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+    /// Which API key is being billed.
+    api_key_name: Option<&'a str>,
+    /// The trace every round is recorded under.
+    trace_id: &'a str,
+    /// The policy epoch the call was admitted under.
+    policy_epoch: u64,
+    /// The revision this caller is served at.
+    protocol_revision: Option<&'a str>,
+    /// The routing profile in force.
+    routing_profile: &'a str,
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatch<'_> {
+    async fn invoke(&self, retry_params: Value) -> Result<Value> {
+        // Per-round, before the dispatch it gates, because the bound this
+        // enforces is on spend and every round spends again. Checked once for
+        // the whole exchange it would admit a budget's worth of calls on the
+        // strength of a verdict taken when the budget still had room, and the
+        // refusal a legacy caller gets back would name a round it never made.
+        #[cfg(feature = "cost-governance")]
+        if let Some(ref enforcer) = self.meta.budget_enforcer {
+            let verdict = enforcer.check(self.tool, self.api_key_name);
+            if !verdict.allowed {
+                return Err(Error::json_rpc(
+                    -32003,
+                    verdict
+                        .block_reason
+                        .unwrap_or_else(|| "Budget exceeded".to_string()),
+                ));
+            }
+        }
+        // Rebuilt from the bridge's own params rather than carried: the bridge
+        // composes what the backend asked for and what the client answered,
+        // and this side's only job is to put both where a backend reads them.
+        // No continuation is redeemed — the exchange never left the gateway,
+        // so there is no handle for this round to spend.
+        let retry = OutboundRetry {
+            request_state: retry_params
+                .get("requestState")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            input_responses: retry_params.get("inputResponses").cloned(),
+        };
+        self.meta
+            .accounted_dispatch(
+                self.server,
+                self.tool,
+                self.arguments.clone(),
+                &retry,
+                self.prompt_cache_key,
+                self.inbound_meta,
+                self.want_full,
+                self.session_id,
+                self.caller_identity,
+                self.verified_identity,
+                self.propagated_headers,
+                self.cache_binding,
+                self.account_credential.clone(),
+                self.api_key_name,
+                self.trace_id,
+                self.policy_epoch,
+                self.protocol_revision,
+                self.routing_profile,
+            )
+            .await
+    }
+}
+
+/// The production [`crate::gateway::input_bridge::BridgeObserver`].
+///
+/// The bridge builds the label set; this only forwards it, because the
+/// requirement the seam exists for is about what a record contains and a
+/// forwarder that re-labels is a second place for that to be got wrong.
+struct BridgeMetrics;
+
+impl crate::gateway::input_bridge::BridgeObserver for BridgeMetrics {
+    fn record(&self, record: crate::gateway::input_bridge::BridgeRecord) {
+        let labels: Vec<telemetry_metrics::Label> = record
+            .labels
+            .into_iter()
+            .map(|(key, value)| telemetry_metrics::Label::new(key, value))
+            .collect();
+        telemetry_metrics::counter!(record.counter, labels).increment(1);
+    }
+}
+
+/// What a bridged exchange that failed reports to the caller.
+///
+/// A governance refusal keeps its own code and its own sentence: it was
+/// produced by the same gate that would have refused the first dispatch, and
+/// rewriting it here would tell a caller its budget is fine and the gateway is
+/// confused. Everything else is the gateway declining to finish an exchange it
+/// started, which is `-32603`, and names the bound it hit rather than the
+/// person who did or did not answer.
+fn bridge_failed(error: &crate::gateway::input_bridge::BridgeError) -> Error {
+    use crate::gateway::input_bridge::BridgeError;
+    match error {
+        BridgeError::Backend { code, message } => Error::json_rpc(*code, message.clone()),
+        BridgeError::Refused { key, .. } => Error::json_rpc(
+            -32603,
+            format!(
+                "The backend asked for input under `{key}` of a type this client did not declare."
+            ),
+        ),
+        BridgeError::Delivery { key, .. } => Error::json_rpc(
+            -32603,
+            format!("The request for input under `{key}` was not answered."),
+        ),
+        BridgeError::RoundsExhausted | BridgeError::RequestBudgetExhausted => Error::json_rpc(
+            -32603,
+            "The backend asked for more input than one call may collect.".to_string(),
+        ),
+        BridgeError::Deadline => Error::json_rpc(
+            -32603,
+            "The exchange ran past the time one call may spend collecting input.".to_string(),
+        ),
+    }
+}
+
+/// What a settled idempotency key stores when the body is still in doubt.
+///
+/// Two sites commit this: the post-dispatch gate below the first dispatch, and
+/// the bridge, whose exchange settles after that gate has already run on an
+/// interim result and skipped it. One spelling, because a retry under the same
+/// key is answered from whichever site got there first and a second wording
+/// would make the two distinguishable to a caller for no reason.
+fn withheld_placeholder() -> Value {
+    json!({
+        "resultType": "complete",
+        "isError": true,
+        "content": [{
+            "type": "text",
+            "text": "Side effect executed; the response was withheld by a \
+                     post-dispatch gate. Retrying with the same idempotency \
+                     key will not re-execute it."
+        }],
+    })
+}
+
 /// The refusal for a continuation this gateway will not redeem (MRTR.3).
 ///
 /// One sentence for every cause, taken from [`ContinuationError`] itself rather
@@ -1693,7 +1868,7 @@ impl MetaMcp {
                 verified_identity,
                 &caller_credential.headers,
                 dispatch_binding.as_deref(),
-                account_credential,
+                account_credential.clone(),
                 api_key_name,
                 trace_id,
                 policy_epoch,
@@ -1776,7 +1951,10 @@ impl MetaMcp {
         // Answering or asking? Read once, because the same verdict decides two
         // things: whether the idempotency key may be settled as completed, and
         // whether the question may be put to this client at all.
-        let interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+        // `mut` because the bridge below can settle the exchange this
+        // classification opened: once the backend has answered, there is no
+        // interim result left to mint a continuation for.
+        let mut interim = crate::protocol::mrtr::InputRequired::from_result(&result);
         // Whether the backend said it acted, which is a different question from
         // whether the gateway can carry what it sent. Both post-dispatch gates
         // below need this one, not `interim`.
@@ -1805,16 +1983,7 @@ impl MetaMcp {
         // "side effect executed" over a backend that stopped to ask. Keying on
         // the classification would exempt exactly the shapes it rejects.
         if !stopped_to_ask && let Some(reservation) = idem_reservation.as_mut() {
-            reservation.commit(&json!({
-                "resultType": "complete",
-                "isError": true,
-                "content": [{
-                    "type": "text",
-                    "text": "Side effect executed; the response was withheld by a \
-                             post-dispatch gate. Retrying with the same idempotency \
-                             key will not re-execute it."
-                }],
-            }));
+            reservation.commit(&withheld_placeholder());
         }
 
         // MRTR.9: a question the client never said it could answer is refused
@@ -1835,6 +2004,94 @@ impl MetaMcp {
                 "Backend asked for input of a type the client did not declare"
             );
             return Err(undeclared_input_request(server, tool, &refused));
+        }
+
+        // MRTR.7: a legacy caller is asked here and now, because it has no
+        // second turn. The continuation minted below travels in `_meta` and is
+        // redeemed out of `_meta`, and a legacy request has neither — so for
+        // this caller the exchange either completes inside this call or it
+        // does not happen at all.
+        //
+        // A conjunction, not a fallback. A modern caller is served the
+        // continuation it can redeem, which is cheaper and survives a dropped
+        // connection. A caller with no session has nowhere to put a question:
+        // the channel would refuse, and refusing after the gate above has
+        // passed reads as the gate having changed its mind.
+        //
+        // The declaration behind `caller.input_capabilities` is the session's
+        // for exactly this era (`router::handlers`), so the gate above has
+        // already decided this question may be asked. The bridge re-checks it
+        // every round because a later round may ask for something else.
+        if let Some(asked) = interim.as_ref()
+            && caller.era == crate::protocol::meta::Era::Legacy
+            && let Some(bridge_session) = session_id
+        {
+            let dispatch = BridgeDispatch {
+                meta: self,
+                server,
+                tool,
+                arguments: &arguments,
+                prompt_cache_key: prompt_cache_key.as_deref(),
+                inbound_meta: args.get("_meta"),
+                want_full,
+                session_id,
+                caller_identity,
+                verified_identity,
+                propagated_headers: &caller_credential.headers,
+                cache_binding: dispatch_binding.as_deref(),
+                account_credential: account_credential.clone(),
+                api_key_name,
+                trace_id,
+                policy_epoch,
+                protocol_revision,
+                routing_profile: &profile.name,
+            };
+            let bridge = crate::gateway::input_bridge::InputBridge {
+                channel: caller.channel,
+                backend: &dispatch,
+                observer: &BridgeMetrics,
+                bounds: crate::gateway::input_bridge::BridgeBounds::DEFAULT,
+            };
+            // `None` for the per-request slice: a legacy request has no place
+            // to narrow its declaration from, and an empty slice would narrow
+            // it to nothing.
+            match bridge
+                .run(bridge_session, caller.input_capabilities, None, asked)
+                .await
+            {
+                Ok(settled) => {
+                    debug!(server, tool, trace_id, "Bridged exchange completed");
+                    result = settled;
+                    // Re-derived from what the bridge settled on, not carried:
+                    // the exchange's last round is the one that says whether
+                    // the backend acted, and the classification taken before
+                    // any of them said only that it had not yet.
+                    interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+                    // The settle above ran while the backend was still asking
+                    // and skipped the key for that reason. It has acted now, so
+                    // the key is settled here instead — every path below this
+                    // point is one the first dispatch's settle already covers.
+                    if interim.is_none()
+                        && let Some(reservation) = idem_reservation.as_mut()
+                    {
+                        reservation.commit(&withheld_placeholder());
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        server,
+                        tool,
+                        trace_id,
+                        ?error,
+                        "Bridged exchange failed; failing the call"
+                    );
+                    // Failed, not relayed as a continuation. The caller cannot
+                    // redeem one, so the only alternative to an error is a
+                    // body that reads like an answer to a question nobody
+                    // answered.
+                    return Err(bridge_failed(&error));
+                }
+            }
         }
 
         // MRTR.2: the backend's own `requestState` never reaches the client.
