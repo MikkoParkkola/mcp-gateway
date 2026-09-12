@@ -82,34 +82,59 @@ fn store_unavailable(id: RequestId) -> JsonRpcResponse {
     JsonRpcResponse::error(Some(id), -32603, "task store unavailable")
 }
 
+/// Everything the task-intent decision reads about one `tools/call`.
+///
+/// Deliberately has **no `Default`**: every field either selects the task path
+/// or attributes the durable record, so a defaulted one would let a
+/// construction site acquire an unattributed caller by omission.
+pub(super) struct TaskIntentRequest<'a> {
+    /// Backend tool the call targets; decides task dispatchability.
+    pub tool_name: &'a str,
+    /// Call arguments, recorded verbatim on the admission request.
+    pub arguments: &'a Value,
+    /// False for protocol revisions predating tasks, which never create one.
+    pub is_modern: bool,
+    /// Retry and idempotency fields; a resumed call is not a new task.
+    pub retry: &'a RetryFields,
+    /// The authenticated caller, absent only when authentication is disabled.
+    pub verified_identity: Option<&'a VerifiedIdentity>,
+    /// The owner the durable record is admitted under.
+    pub owner: &'a str,
+    /// Authenticated client, captured into the owned authorizer.
+    pub client: Option<&'a AuthenticatedClient>,
+    /// `OAuth` agent identity, captured into the owned authorizer.
+    pub oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
+    /// Client-certificate identity, captured into the owned authorizer.
+    pub cert_identity: Option<&'a CertIdentity>,
+    /// Name of the API key the caller presented, if any.
+    pub api_key_name: Option<&'a str>,
+    /// Agent identifier the caller presented, if any.
+    pub agent_id: Option<&'a str>,
+    /// Grant subject the worker re-authorizes against.
+    pub grant_subject: Option<crate::identity_grants::GrantSubject>,
+    /// Whether the caller holds admin rights on this gateway.
+    pub is_admin: bool,
+    /// Capabilities the client declared on initialize.
+    pub input_capabilities: Declared,
+    /// Session the call arrived on; an empty one is treated as absent.
+    pub session_id: Option<&'a str>,
+    /// Protocol revision negotiated for this session.
+    pub protocol_revision: Option<&'a str>,
+}
+
 /// Build a `'static` intent, or a refusal, or `None` for the ordinary path.
 pub(super) fn task_intent_for_call(
     state: &Arc<AppState>,
     id: RequestId,
-    tool_name: &str,
-    arguments: &Value,
-    is_modern: bool,
-    retry: &RetryFields,
-    verified_identity: Option<&VerifiedIdentity>,
-    owner: &str,
-    client: Option<&AuthenticatedClient>,
-    oauth_agent_identity: Option<&OAuthAgentIdentity>,
-    cert_identity: Option<&CertIdentity>,
-    api_key_name: Option<&str>,
-    agent_id: Option<&str>,
-    grant_subject: Option<crate::identity_grants::GrantSubject>,
-    is_admin: bool,
-    input_capabilities: Declared,
-    session_id: Option<&str>,
-    protocol_revision: Option<&str>,
-) -> Result<Option<TaskIntent>, JsonRpcResponse> {
-    if !is_modern {
+    req: TaskIntentRequest<'_>,
+) -> Result<Option<TaskIntent>, Box<JsonRpcResponse>> {
+    if !req.is_modern {
         return Ok(None);
     }
-    if retry.request_state.is_some() || retry.input_responses.is_some() {
+    if req.retry.request_state.is_some() || req.retry.input_responses.is_some() {
         return Ok(None);
     }
-    if !is_task_dispatchable(&state.meta_mcp, tool_name) {
+    if !is_task_dispatchable(&state.meta_mcp, req.tool_name) {
         return Ok(None);
     }
     // A gateway that HAS identities must not create a task for a caller that
@@ -117,19 +142,19 @@ pub(super) fn task_intent_for_call(
     // path resolves, and every other unattributed caller reads it. With
     // authentication off there are no identities to confuse, and the owner
     // resolved for this request is the gateway's own constant.
-    if state.auth_config.enabled && verified_identity.is_none() {
-        return Err(JsonRpcResponse::error(
+    if state.auth_config.enabled && req.verified_identity.is_none() {
+        return Err(Box::new(JsonRpcResponse::error(
             Some(id),
             -32600,
             "task creation requires a verified caller identity",
-        ));
+        )));
     }
-    let Some(key) = retry.idempotency_key.as_deref() else {
-        return Err(JsonRpcResponse::error(
+    let Some(key) = req.retry.idempotency_key.as_deref() else {
+        return Err(Box::new(JsonRpcResponse::error(
             Some(id),
             -32602,
             "task creation requires an idempotency key",
-        ));
+        )));
     };
     let tasks = state.live_config.get();
     let options = TaskOptions {
@@ -141,31 +166,33 @@ pub(super) fn task_intent_for_call(
         executor: Arc::clone(&state.task_executor),
         owned: OwnedCallerContext::new(
             Arc::downgrade(state),
-            OwnedRouterAuthorizer::capture(client, oauth_agent_identity, cert_identity),
-            api_key_name.map(str::to_owned),
-            agent_id.map(str::to_owned),
-            grant_subject,
+            OwnedRouterAuthorizer::capture(req.client, req.oauth_agent_identity, req.cert_identity),
+            req.api_key_name.map(str::to_owned),
+            req.agent_id.map(str::to_owned),
+            req.grant_subject,
             // No identity is invented for the auth-disabled caller: the owner
             // is a routing decision, and a fake VerifiedIdentity here would
             // reach every control that keys on a *verified* caller.
-            verified_identity.cloned(),
+            req.verified_identity.cloned(),
             // The same owner the durable record is admitted under, handed over
             // rather than re-derived, so the worker's caller and the task agree.
-            owner.to_owned(),
-            is_admin,
-            input_capabilities,
-            session_id.filter(|id| !id.is_empty()).map(str::to_owned),
-            protocol_revision.map(str::to_owned),
+            req.owner.to_owned(),
+            req.is_admin,
+            req.input_capabilities,
+            req.session_id
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned),
+            req.protocol_revision.map(str::to_owned),
         ),
         // One builder, shared with the confirmation gate's read-only committed
         // lookup, and the SAME owner string the read arms use. Two renderings
         // of one caller is how an accepted retry's replay misses the task it
         // already owns and starts a second one.
         request: crate::gateway::meta_mcp::task_admission_request(
-            owner.to_owned(),
+            req.owner.to_owned(),
             key.to_owned(),
-            tool_name,
-            arguments,
+            req.tool_name,
+            req.arguments,
         ),
         options,
     }))

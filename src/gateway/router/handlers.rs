@@ -1468,26 +1468,28 @@ pub(super) async fn meta_mcp_handler(
                 match tasks::task_intent_for_call(
                     &state,
                     id.clone(),
-                    tool_name,
-                    &arguments,
-                    is_modern,
-                    &retry,
-                    verified_identity.as_ref(),
-                    &owner,
-                    client.as_ref(),
-                    oauth_agent_identity.as_ref(),
-                    cert_identity.as_ref(),
-                    api_key_name,
-                    agent_id,
-                    grant_subject.clone(),
-                    client.as_ref().is_some_and(|c| c.admin),
-                    declared_capabilities,
-                    Some(session_id.as_str()),
-                    protocol_revision_owned.as_deref(),
+                    tasks::TaskIntentRequest {
+                        tool_name,
+                        arguments: &arguments,
+                        is_modern,
+                        retry: &retry,
+                        verified_identity: verified_identity.as_ref(),
+                        owner: &owner,
+                        client: client.as_ref(),
+                        oauth_agent_identity: oauth_agent_identity.as_ref(),
+                        cert_identity: cert_identity.as_ref(),
+                        api_key_name,
+                        agent_id,
+                        grant_subject: grant_subject.clone(),
+                        is_admin: client.as_ref().is_some_and(|c| c.admin),
+                        input_capabilities: declared_capabilities,
+                        session_id: Some(session_id.as_str()),
+                        protocol_revision: protocol_revision_owned.as_deref(),
+                    },
                 ) {
                     Ok(intent) => intent,
                     Err(refusal) => {
-                        return build_response(refusal, &session_id, StatusCode::BAD_REQUEST);
+                        return build_response(*refusal, &session_id, StatusCode::BAD_REQUEST);
                     }
                 }
             } else {
