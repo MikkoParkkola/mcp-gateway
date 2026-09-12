@@ -339,7 +339,30 @@ impl Backend {
         // `can_proceed()` gate above, so gating and recording are always
         // symmetric even if a concurrent idle-eviction later replaces this
         // slot's `PooledEntry` for `key` (MIK-6735 fix 1).
-        match &result {
+        self.record_attempt_outcome(&entry, latency, &result);
+
+        // An ordinary answer can contradict the era we probed for: a peer that
+        // rejects this call with a 2026-only code is modern whatever its
+        // `server/discover` did. Correct the verdict off the request path.
+        if let Ok(response) = &result {
+            self.reprobe_if_contradicted(method, response, &transport)
+                .await;
+        }
+
+        result
+    }
+
+    /// Record the outcome of one dispatch attempt against the slot's failsafe
+    /// and the request-duration metrics, split out of [`Self::request_attempted`]
+    /// purely to keep that function under the line budget -- the logic and its
+    /// ordering (gate check, then this, both on the same slot) are unchanged.
+    fn record_attempt_outcome(
+        &self,
+        entry: &super::PooledEntry,
+        latency: std::time::Duration,
+        result: &Result<JsonRpcResponse>,
+    ) {
+        match result {
             Ok(response) => {
                 tracing::info!(
                     latency_ms = latency.as_millis(),
@@ -394,16 +417,6 @@ impl Backend {
             "backend" => self.name.clone()
         )
         .record(latency.as_secs_f64());
-
-        // An ordinary answer can contradict the era we probed for: a peer that
-        // rejects this call with a 2026-only code is modern whatever its
-        // `server/discover` did. Correct the verdict off the request path.
-        if let Ok(response) = &result {
-            self.reprobe_if_contradicted(method, response, &transport)
-                .await;
-        }
-
-        result
     }
 
     /// Send a notification to the backend via the canonical shared slot's
