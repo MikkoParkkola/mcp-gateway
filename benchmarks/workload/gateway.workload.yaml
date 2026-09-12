@@ -1,0 +1,16 @@
+# NFR.WORKLOAD.1 gateway configuration -- gating cells A, B, C and D.
+#
+# Byte-identical across every gating cell. The port is NOT set here; each cell
+# passes --port on the command line, which exists identically at v3.5.0,
+# v3.5.1 and HEAD. That is what keeps this file one artefact instead of three
+# configs argued to be equivalent.
+#
+# WORKLOAD_FIXTURE is the absolute path to benchmarks/workload/mcp_backend.py.
+
+server:
+  host: "127.0.0.1"
+
+backends:
+  workload:
+    command: "python3 ${WORKLOAD_FIXTURE} --protocol-version echo"
+    description: "Deterministic fixture backend for NFR.WORKLOAD.1"
