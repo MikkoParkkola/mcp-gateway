@@ -563,12 +563,14 @@ fn ac_cache_4a_two_routing_profiles_do_not_share_an_entry() {
 
 #[test]
 fn ac_cache_4e_seam_guard_only_this_does_not_close_the_criterion() {
-    // SEAM GUARD ONLY — this does not close CACHE.4e / 4.e. Production still
-    // passes `protocol_revision: None` at both invoke sites. The assertion
-    // below proves `KeyContext::digest` reads the field, not that anything
-    // on the invoke path supplies a negotiated revision. Wiring that value
-    // is a later increment; an unlabelled guard becomes false evidence for
-    // the criterion within a week, which is why the name says so.
+    // SEAM GUARD ONLY — this does not close CACHE.4e / 4.e on its own. The
+    // assertion below proves `KeyContext::digest` reads the field, not that
+    // anything on the invoke path supplies a negotiated revision. Production
+    // now does supply it (`meta_mcp/invoke.rs:1547-1549`, read at `:1565`,
+    // written at `:1934`), and the behavioural proof of that is
+    // `ac_cache_4e_two_protocol_revisions_do_not_share_one_cache_entry` in
+    // `src/gateway/meta_mcp/tests.rs`. An unlabelled guard becomes false
+    // evidence for the criterion within a week, which is why the name says so.
     use mcp_gateway::cache::{KeyContext, ResponseCache};
     let arguments = serde_json::json!({ "query": "quarterly numbers" });
     let key = |protocol_revision| {

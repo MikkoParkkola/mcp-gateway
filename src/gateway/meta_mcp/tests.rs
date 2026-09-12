@@ -5687,6 +5687,80 @@ async fn ac_cache_4a_two_backends_do_not_share_one_cache_entry() {
     );
 }
 
+/// CACHE.4.e — same `{server, tool, arguments}`, two negotiated revisions.
+///
+/// The seam guard in `mik_7213_acs.rs` proves only that `KeyContext::digest`
+/// reads the field. This one drives `invoke_tool`, so it fails if production
+/// stops supplying the caller's negotiated revision as well as if the field
+/// leaves the key. The `None` half pins the other production branch: an
+/// unclassified revision must bypass the cache rather than name a bucket.
+#[tokio::test]
+async fn ac_cache_4e_two_protocol_revisions_do_not_share_one_cache_entry() {
+    // Both revisions below must classify, or the "miss" half would pass for the
+    // wrong reason: an unclassified revision bypasses the cache and the backend
+    // is called twice regardless of how the key is built.
+    for revision in ["2025-11-25", "2025-06-18"] {
+        assert!(
+            crate::protocol::meta::served_revision(revision).is_some(),
+            "{revision} no longer classifies, so this test would stop exercising the cache key"
+        );
+    }
+    let registry = Arc::new(BackendRegistry::new());
+    let (docs, calls) = counting_backend("remote_docs", "SHARED-BODY");
+    let _ = registry.register(docs);
+
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::new(crate::cache::ResponseCache::new())),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+    let invoke = async |revision: Option<&str>| {
+        let mut ctx = allow_all_ctx();
+        ctx.protocol_revision = revision;
+        meta.invoke_tool(
+            &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
+            Some("session-1"),
+            &ctx,
+        )
+        .await
+        .unwrap()
+        .to_string()
+    };
+    let calls_now = || calls.load(std::sync::atomic::Ordering::SeqCst);
+
+    // Hit control. Without it a cache that stores nothing satisfies the miss
+    // half below.
+    let _ = invoke(Some("2025-11-25")).await;
+    let _ = invoke(Some("2025-11-25")).await;
+    assert_eq!(
+        calls_now(),
+        1,
+        "the second identical call must be served from the entry the first stored"
+    );
+
+    // Miss half. Only the negotiated revision differs, so a hit here can only
+    // come from the revision going unkeyed — or from production passing a
+    // constant instead of the caller's value.
+    let _ = invoke(Some("2025-06-18")).await;
+    assert_eq!(
+        calls_now(),
+        2,
+        "a second protocol revision was served a body shaped for the first"
+    );
+
+    // Unclassified revision: neither get nor set, so both of these reach the
+    // backend and neither leaves an entry the keyed callers could collide with.
+    let _ = invoke(None).await;
+    let _ = invoke(None).await;
+    assert_eq!(
+        calls_now(),
+        4,
+        "an unclassified revision must bypass the cache, not name a bucket"
+    );
+}
+
 static CACHE_PRINCIPAL_ALICE: std::sync::LazyLock<crate::key_server::oidc::VerifiedIdentity> =
     std::sync::LazyLock::new(|| crate::key_server::oidc::VerifiedIdentity {
         subject: "alice".to_string(),
