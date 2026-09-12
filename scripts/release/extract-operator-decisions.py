@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Regenerate the operator-decision ledger from the session transcripts.
 
 An answer given through the question tool arrives as a tool result, never as a
