@@ -654,7 +654,7 @@ impl ExecutionAdmission {
     }
 
     #[cfg(not(test))]
-    fn fire_lock_witness(&self) {}
+    fn fire_lock_witness() {}
 
     /// Task-mode admission. `admit` keeps its exact signature and behaviour for
     /// Sync; this is the only entry point that can mint a task lease.
@@ -668,7 +668,10 @@ impl ExecutionAdmission {
         let principal_digest = canonical_json_sha256(&json!([PRINCIPAL_TAG, request.principal]));
         let (identity, mut candidate) = request.prepare()?;
         let now = (self.clock)();
+        #[cfg(test)]
         self.fire_lock_witness();
+        #[cfg(not(test))]
+        Self::fire_lock_witness();
         let mut state = self.state.lock();
         if state
             .entries
@@ -847,7 +850,7 @@ impl ExecutionAdmission {
 
     /// Sole principal hasher. Empty identity is refused; oversize is refused
     /// before hashing. Bound is the existing `METADATA_LIMIT`.
-    pub(crate) fn owner(&self, principal: &str) -> Result<TaskOwner, Refusal> {
+    pub(crate) fn owner(principal: &str) -> Result<TaskOwner, Refusal> {
         if principal.is_empty() {
             return Err(Refusal::InvalidIdentity);
         }

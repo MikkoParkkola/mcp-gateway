@@ -1356,19 +1356,16 @@ impl MetaMcp {
         // resolved `cache_binding` (user+audience) is mixed into every cache key
         // so per-user results cache in ISOLATION rather than leaking across users
         // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
-        let caller_credential = match self
+        let caller_credential = if let Some(idp_cfg) = self
             .backends
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         {
-            Some(idp_cfg) => {
-                self.resolve_caller_credential(server, &idp_cfg, verified_identity)
-                    .await?
-            }
-            None => {
-                self.refuse_unbound_account_backend(server)?;
-                CallerCredential::default()
-            }
+            self.resolve_caller_credential(server, &idp_cfg, verified_identity)
+                .await?
+        } else {
+            self.refuse_unbound_account_backend(server)?;
+            CallerCredential::default()
         };
 
         // ADR-008 INV-2 fail-closed guard. On a multi-user gateway, a backend

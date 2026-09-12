@@ -284,8 +284,7 @@ fn owner_01_principal_digest_matches_binding_and_bounds_identity() {
     let binding = published(&service, "oidc:acme:alice", "k-1", "task-1");
     let held = service.snapshot();
 
-    let owner = service
-        .owner("oidc:acme:alice")
+    let owner = ExecutionAdmission::owner("oidc:acme:alice")
         .expect("a non-empty in-limit principal hashes");
     assert_eq!(owner.as_digest(), binding.principal_digest());
     assert_eq!(
@@ -296,21 +295,22 @@ fn owner_01_principal_digest_matches_binding_and_bounds_identity() {
         ]))
     );
 
-    let other = service
-        .owner("oidc:acme:mallory")
-        .expect("a different principal hashes");
+    let other =
+        ExecutionAdmission::owner("oidc:acme:mallory").expect("a different principal hashes");
     assert_ne!(other.as_digest(), owner.as_digest());
     assert_ne!(other.as_digest(), binding.principal_digest());
 
-    assert_eq!(service.owner("").err(), Some(Refusal::InvalidIdentity));
     assert_eq!(
-        service.owner(&"x".repeat(METADATA_LIMIT + 1)).err(),
+        ExecutionAdmission::owner("").err(),
+        Some(Refusal::InvalidIdentity)
+    );
+    assert_eq!(
+        ExecutionAdmission::owner(&"x".repeat(METADATA_LIMIT + 1)).err(),
         Some(Refusal::MetadataTooLarge)
     );
 
     let at_limit = "y".repeat(METADATA_LIMIT);
-    let at_limit_owner = service
-        .owner(&at_limit)
+    let at_limit_owner = ExecutionAdmission::owner(&at_limit)
         .expect("exactly METADATA_LIMIT is hashed, not refused");
     assert_eq!(
         at_limit_owner.as_digest(),
@@ -326,8 +326,7 @@ fn owner_01_principal_digest_matches_binding_and_bounds_identity() {
     let wide_at_limit = "д".repeat(METADATA_LIMIT / 2);
     assert_eq!(wide_at_limit.len(), METADATA_LIMIT);
     assert_eq!(wide_at_limit.chars().count(), METADATA_LIMIT / 2);
-    let wide_owner = service
-        .owner(&wide_at_limit)
+    let wide_owner = ExecutionAdmission::owner(&wide_at_limit)
         .expect("METADATA_LIMIT bytes of multibyte principal is hashed, not refused");
     assert_eq!(
         wide_owner.as_digest(),
@@ -342,7 +341,7 @@ fn owner_01_principal_digest_matches_binding_and_bounds_identity() {
     assert_eq!(wide_over_limit.len(), METADATA_LIMIT + 1);
     assert_eq!(wide_over_limit.chars().count(), METADATA_LIMIT / 2 + 1);
     assert_eq!(
-        service.owner(&wide_over_limit).err(),
+        ExecutionAdmission::owner(&wide_over_limit).err(),
         Some(Refusal::MetadataTooLarge)
     );
     assert_eq!(service.snapshot(), held);

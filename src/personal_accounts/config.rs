@@ -705,7 +705,7 @@ fn validate_managed(
     if descriptor
         .client_id
         .as_ref()
-        .is_none_or(|value| value.is_empty())
+        .is_none_or(std::string::String::is_empty)
     {
         return Err(fail("client_id must be present and nonempty"));
     }

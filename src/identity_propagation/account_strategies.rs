@@ -209,7 +209,7 @@ impl std::fmt::Debug for PreparedAccountCredential {
             .field("cache_binding", &self.cache_binding)
             .field("expires_at", &self.expires_at)
             .field("headers", &format_args!("{header_names:?} = <redacted>"))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -323,7 +323,7 @@ impl AccountStrategyRegistry {
         let audience = installed.audience.as_str();
 
         let Some(identity) = identity else {
-            self.audit_refusal(
+            Self::audit_refusal(
                 logger.as_deref(),
                 &subject_id,
                 descriptor_id,
@@ -375,7 +375,7 @@ impl AccountStrategyRegistry {
             Ok(minted) => minted,
             Err(error) => {
                 let reason = error.to_string();
-                self.audit_refusal(
+                Self::audit_refusal(
                     logger.as_deref(),
                     &subject_id,
                     descriptor_id,
@@ -403,7 +403,7 @@ impl AccountStrategyRegistry {
         let minted_at = chrono::Utc::now().timestamp();
         if managed.is_none() && credential.expires_at <= minted_at {
             let reason = "the external strategy published an expiry that has already passed";
-            self.audit_refusal(
+            Self::audit_refusal(
                 logger.as_deref(),
                 &subject_id,
                 descriptor_id,
@@ -595,7 +595,6 @@ impl AccountStrategyRegistry {
     /// failure does not change the outcome — but it must not be dropped
     /// silently.
     fn audit_refusal(
-        &self,
         logger: Option<&TransparencyLogger>,
         subject_id: &str,
         descriptor_id: &str,

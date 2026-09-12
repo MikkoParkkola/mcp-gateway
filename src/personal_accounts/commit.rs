@@ -186,6 +186,22 @@ fn seal_authority(config: &StoreConfig, next: &Authority) -> Result<String, Mani
 /// durable revoke has already retired, and the next write would rebuild from a
 /// stale revision and silently undo a durable change.
 #[cfg(unix)]
+// Spelled out rather than `boundary!`, for the same reason `ParentSync`
+// is: this site needs the refusal category, which the macro cannot give.
+fn commit_checkpoint(
+    config: &StoreConfig,
+    slot: &mut Option<Authority>,
+    encoded: &str,
+    next: Authority,
+) -> Result<(), ManifestRefusal> {
+    #[cfg(test)]
+    crate::personal_accounts::faults::reached(
+        crate::personal_accounts::faults::Boundary::CommitCheckpoint,
+    )
+    .map_err(ManifestRefusal::Staged)?;
+    write_manifest(config, slot, encoded, next)
+}
+
 fn write_manifest(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -289,19 +305,10 @@ fn stage_publication(
     persist_record(&config.store_dir, &basename, bytes.as_bytes())
         .map_err(ManifestRefusal::Staged)?;
     // Everything from here to the manifest rename shares one fate: the candidate
-    // is on disk and nothing names it yet. Closing over the whole window rather
-    // than each step is what stops a later boundary being added outside the
+    // is on disk and nothing names it yet. Sharing the whole window rather than
+    // each step is what stops a later boundary being added outside the
     // sweep — which is exactly how `CommitCheckpoint` escaped the first attempt.
-    let committed = (|| -> Result<(), ManifestRefusal> {
-        // Spelled out rather than `boundary!`, for the same reason `ParentSync`
-        // is: this site needs the refusal category, which the macro cannot give.
-        #[cfg(test)]
-        crate::personal_accounts::faults::reached(
-            crate::personal_accounts::faults::Boundary::CommitCheckpoint,
-        )
-        .map_err(ManifestRefusal::Staged)?;
-        write_manifest(config, slot, &encoded, next)
-    })();
+    let committed = commit_checkpoint(config, slot, &encoded, next);
     if let Err(refusal) = committed {
         // Only a failure AFTER the rename leaves the candidate durably named,
         // and that one must survive: removing it would destroy a committed
@@ -332,7 +339,7 @@ fn publish(
     account: &AccountKey,
     record: &GrantRecord,
 ) -> Result<(), AccountError> {
-    stage_publication(config, slot, digest, account, record).map_err(refusal_as_fault)
+    stage_publication(config, slot, digest, account, record).map_err(|e| refusal_as_fault(&e))
 }
 
 /// Replace only the manifest, keeping the four version fields the entry already
@@ -401,7 +408,7 @@ pub(in crate::personal_accounts) fn commit_grant(
     // to evict grants over what is a store fault.
     stage_publication(config, slot, &digest, account, record).map_err(|refusal| match refusal {
         ManifestRefusal::TooLarge if adds_entry => AccountError::CapacityExhausted,
-        other => refusal_as_fault(other),
+        other => refusal_as_fault(&other),
     })
 }
 
@@ -453,10 +460,10 @@ pub(in crate::personal_accounts) fn refresh_tokens(
 /// The category for every operation that adds no entry: an authority that no
 /// longer fits is not a capacity answer they can honestly give.
 #[cfg(unix)]
-fn refusal_as_fault(refusal: ManifestRefusal) -> AccountError {
+fn refusal_as_fault(refusal: &ManifestRefusal) -> AccountError {
     match refusal {
         ManifestRefusal::TooLarge => AccountError::StorageUnavailable,
-        ManifestRefusal::Staged(error) | ManifestRefusal::Renamed(error) => error,
+        ManifestRefusal::Staged(error) | ManifestRefusal::Renamed(error) => *error,
     }
 }
 
@@ -475,7 +482,8 @@ pub(in crate::personal_accounts) fn revoke(
         Some(entry) if matches!(entry.state, GrantState::Revoked) => return Ok(()),
         Some(_) => {}
     }
-    let retired = restate(config, slot, &digest, GrantState::Revoked).map_err(refusal_as_fault)?;
+    let retired =
+        restate(config, slot, &digest, GrantState::Revoked).map_err(|e| refusal_as_fault(&e))?;
     // Token bytes go only after the authority says they are unreferenced.
     if let Some(basename) = retired {
         remove_unreferenced(config, &digest, &basename);
@@ -503,7 +511,8 @@ pub(in crate::personal_accounts) fn mark_reconnect_required(
     }
     // The fence keeps the record pointer, so `restate` returns nothing to
     // remove — the credential stays on disk and stays named by the manifest.
-    restate(config, slot, &digest, GrantState::ReconnectRequired).map_err(refusal_as_fault)?;
+    restate(config, slot, &digest, GrantState::ReconnectRequired)
+        .map_err(|e| refusal_as_fault(&e))?;
     Ok(())
 }
 
@@ -544,7 +553,8 @@ pub(in crate::personal_accounts) fn fence_expected_version(
     }
     // Keeps the record pointer, like the descriptor fence: the credential stays
     // named by the manifest, so `restate` reports nothing to remove.
-    restate(config, slot, &digest, GrantState::ReconnectRequired).map_err(refusal_as_fault)?;
+    restate(config, slot, &digest, GrantState::ReconnectRequired)
+        .map_err(|e| refusal_as_fault(&e))?;
     Ok(FenceOutcome::Fenced)
 }
 

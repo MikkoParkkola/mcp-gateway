@@ -244,9 +244,7 @@ impl TaskService {
     /// to hash owns nothing, so it is told what anyone naming a task they do not
     /// own is told.
     pub(crate) fn owner(&self, principal: &str) -> Result<TaskOwner, ServiceError> {
-        self.admission
-            .owner(principal)
-            .map_err(|_| ServiceError::NotFound)
+        ExecutionAdmission::owner(principal).map_err(|_| ServiceError::NotFound)
     }
 }
 

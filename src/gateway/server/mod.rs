@@ -2325,14 +2325,14 @@ impl Gateway {
 
             // Handle batch requests (array of JSON-RPC calls)
             if request.is_array() {
-                let responses = Self::dispatch_batch_with_sink(
+                let responses = Box::pin(Self::dispatch_batch_with_sink(
                     &meta_mcp,
                     &tool_policy,
                     &mtls_policy,
                     request,
                     session_id,
                     &mut protocol_telemetry_sink,
-                )
+                ))
                 .await;
                 Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
                 if !responses.is_empty() {
@@ -2343,14 +2343,14 @@ impl Gateway {
             }
 
             // Single request
-            let response_opt = Self::dispatch_single_with_sink(
+            let response_opt = Box::pin(Self::dispatch_single_with_sink(
                 &meta_mcp,
                 &tool_policy,
                 &mtls_policy,
                 request,
                 session_id,
                 protocol_telemetry_sink.as_mut(),
-            )
+            ))
             .await;
             Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
 
@@ -2500,7 +2500,7 @@ impl Gateway {
             (external_tool, response_targets)
         };
         let (response, execution) = if method == "tools/call" {
-            Self::dispatch_tools_call(
+            Box::pin(Self::dispatch_tools_call(
                 meta_mcp,
                 tool_policy,
                 &mut request,
@@ -2508,7 +2508,7 @@ impl Gateway {
                 session_id,
                 &mut signing_context,
                 &request_shape,
-            )
+            ))
             .await
         } else {
             (
@@ -2846,15 +2846,14 @@ impl Gateway {
             // The one copy this path still makes, taken past every refusal
             // above — signing, nonce, admission, replay — because only an
             // executing call needs to own its arguments.
-            meta_mcp
-                .handle_tools_call(
-                    id,
-                    &tool_name,
-                    arguments.into_owned(),
-                    Some(session_id),
-                    caller,
-                )
-                .await
+            Box::pin(meta_mcp.handle_tools_call(
+                id,
+                &tool_name,
+                arguments.into_owned(),
+                Some(session_id),
+                caller,
+            ))
+            .await
         };
         (response, execution)
     }
@@ -2906,14 +2905,14 @@ impl Gateway {
 
         let mut responses = Vec::new();
         for req in requests {
-            if let Some(resp) = Self::dispatch_single_with_sink(
+            if let Some(resp) = Box::pin(Self::dispatch_single_with_sink(
                 meta_mcp,
                 tool_policy,
                 mtls_policy,
                 req,
                 session_id,
                 protocol_telemetry_sink.as_mut(),
-            )
+            ))
             .await
             {
                 responses.push(resp);
