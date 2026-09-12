@@ -411,7 +411,7 @@ def joined(lines):
     statement, and a check for it can be satisfied by a different command
     further down the file.
     """
-    commands, buffer, folded = [], "", None
+    commands, buffer, folded, literal = [], "", None, False
     for line in lines:
         stripped = line.strip()
         indent = len(line) - len(line.lstrip())
@@ -421,13 +421,28 @@ def joined(lines):
             # separately rejects a spelling that runs exactly what the
             # one-line form runs.
             if indent > folded:
-                buffer = f"{buffer} {stripped}".strip()
+                # A literal block keeps its newlines, a folded one loses
+                # them. Either way the whole scalar is ONE step body: read
+                # per line and `exit 0` on the line above the gate is a
+                # different command, so nothing can see that the shell is
+                # already gone.
+                if not literal:
+                    separator = " "
+                elif buffer.endswith("\\"):
+                    # A backslash continuation is the shell's own way of
+                    # writing one command across lines, so it splices where
+                    # a bare newline separates.
+                    buffer, separator = buffer[:-1].rstrip(), " "
+                else:
+                    separator = "\n"
+                buffer = f"{buffer}{separator}{stripped}".strip()
                 continue
             commands.append(buffer)
             buffer, folded = "", None
-        opener = re.match(r"^(- )?run: *>[-+]?$", stripped)
+        opener = re.match(r"^(- )?run: *([|>])[-+0-9]*$", stripped)
         if opener and not buffer:
             folded = indent + (2 if opener.group(1) else 0)
+            literal = opener.group(2) == "|"
             buffer = "run:"
             continue
         buffer = f"{buffer} {stripped}".strip() if buffer else stripped
@@ -773,7 +788,7 @@ class WorkflowWiring(unittest.TestCase):
                     for earlier in pieces[:index]:
                         self.assertNotRegex(
                             earlier,
-                            r"^(?:exit|return)(?=\s|$)",
+                            r"^(?:exit|return|exec)(?=\s|$)",
                             f"{workflow}: the shell exits before the gate: {text}",
                         )
                     piece = pieces[index]
@@ -1024,12 +1039,16 @@ class WorkflowWiring(unittest.TestCase):
                 # `local`, `typeset` and `readonly` all rebind the name, and a
                 # check naming one of them invites the other four.
                 for command in block:
-                    self.assertNotRegex(
-                        shell(command),
-                        r"(?:^|[;&|]\s*|\b(?:export|declare|local|typeset|readonly)\s+)"
-                        r"DIGEST=",
-                        f"{workflow}: {name} reassigns DIGEST in its shell",
-                    )
+                    # Per command position: one `run: |` body is one command
+                    # here, and a rebinding on its third line is neither at
+                    # the start of the text nor after a `;`.
+                    for piece in segments(shell(command)):
+                        self.assertNotRegex(
+                            piece,
+                            r"(?:^|\b(?:export|declare|local|typeset|readonly)\s+)"
+                            r"DIGEST=",
+                            f"{workflow}: {name} reassigns DIGEST in its shell",
+                        )
                 if not any(runs(c, COSIGN_VERIFY) for c in block):
                     continue
                 # An identity is what makes a signature mean something: an
@@ -1040,12 +1059,16 @@ class WorkflowWiring(unittest.TestCase):
                     f"{workflow}: {name} verifies without pinning this workflow's identity",
                 )
                 for command in block:
-                    if runs(command, COSIGN_VERIFY):
-                        self.assertIn(
-                            '--certificate-identity "${IDENTITY}"',
-                            command,
-                            f"{workflow}: {command}",
-                        )
+                    # Every verify in the body, not the body as a whole: one
+                    # relaxed `--certificate-identity-regexp` beside a pinned
+                    # sibling satisfies a search of the joined text.
+                    for piece in segments(shell(command)):
+                        if COSIGN_VERIFY.match(piece):
+                            self.assertIn(
+                                '--certificate-identity "${IDENTITY}"',
+                                piece,
+                                f"{workflow}: {piece}",
+                            )
             # Non-vacuity: if the step scan found nothing, the per-step
             # assertions above never ran and the whole loop is decoration.
             self.assertTrue(signing, f"{workflow}: no step containing a cosign command was read")
