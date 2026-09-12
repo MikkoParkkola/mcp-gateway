@@ -1,40 +1,5 @@
 # Stdio inbound request bridging
 
-> **DO NOT IMPLEMENT — §5 targets the wrong module.**
-> §5 describes the new `ClientChannel` implementation as wrapping or extending
-> `StdioTransport`. That is the wrong direction. `src/transport/stdio.rs:5,161,178`
-> spawns an MCP server as a *child process* and dials **out** to backends. The
-> requirement here is inbound: the gateway answering its own client while its serve
-> loop reads. The `NoClientChannel` sites this design cites
-> (`src/gateway/server/mod.rs:2339,2933`) sit in that inbound serving path, whose loop
-> is `run_stdio` at `src/gateway/server/mod.rs:1566`, reading `tokio::io::stdin()` at
-> `:1640`. Any file:line in this document pointing at `src/transport/stdio.rs` — the
-> routing point, the writer mutex — describes the outbound backend transport and does
-> not apply. Re-source §5 against `run_stdio` before this document is reviewed again.
->
-> `src/gateway/meta_mcp/invoke.rs:1888` names MIK-7387 as the only thing that lifts the
-> deliberate stdio refusal, and pins the two halves separately: read that arm first.
->
-> **Branch caveat — the paragraph below describes `main`, not the release branch.**
-> `git grep -n InputBridge origin/codex/v4-next-integration -- src/` returns three hits,
-> all inside `src/gateway/input_bridge.rs` itself. On the integration branch the bridge is
-> never constructed in production at all, so "constructed but handed a refusing channel"
-> is a `main`-only description. Whichever branch this lands on, re-source the call sites
-> first: on integration the work includes restoring the construction that `main` has, not
-> only implementing `ClientChannel` for the stdio writer.
->
-> **The gap, stated precisely (verified at source on `origin/main`).** The bridge is not
-> unwired there. It is constructed and driven in production: `src/gateway/meta_mcp/invoke.rs:1842` builds an
-> `InputBridge` inside `invoke_tool_traced` (`:1079`) and `:1852` calls `bridge.run(...)`,
-> with no `#[cfg(test)]` above either. What the stdio path lacks is a channel. That
-> construction passes `channel: caller.channel`, and on the stdio serving sites
-> (`src/gateway/server/mod.rs:2339,2933`) `caller.channel` is `NoClientChannel`, whose
-> refusal is deliberate. `ProxyManager` implements `ClientChannel`
-> (`src/gateway/proxy.rs:529`) but is HTTP-only. So the work is to implement
-> `ClientChannel` over the `run_stdio` loop's writer and pass it at those two sites --
-> not to give an orphaned bridge a caller.
-
-
 Status: design, not implemented.
 
 ## 1. What is required
@@ -53,145 +18,363 @@ Status: design, not implemented.
 
 Nothing beyond these six lines is required by this design.
 
-## 2. The invariant this design preserves
+## 2. Which stdio this is, and which it is not
 
-`StdioTransport::handle_response` (`src/transport/stdio.rs:499-511`) refuses any inbound
-`JsonRpcMessage::Request` it receives, because routing one into the pending-response map
-would answer a waiting caller with a frame carrying neither `result` nor `error`.
-`handle_response_rejects_inbound_request_and_leaves_caller_pending`
-(`src/transport/stdio.rs:850-869`) pins this: a frame carrying `method` must not be treated
-as a response, and the caller whose id it reused must stay pending, not be silently
-completed.
+Two unrelated things in this tree are called stdio, and an earlier revision of
+this document designed against the wrong one.
 
-This is correct and this design does not touch it. `handle_response` has exactly one
-caller — the reader loop in `start()` (`src/transport/stdio.rs:234`) — and in production
-that loop is the only source of inbound Requests it can ever see. The fix moves where a
-Request is recognized, not what `handle_response` does with one it is handed.
+`src/transport/stdio.rs` is the **outbound backend transport**: it spawns an MCP
+server as a child process (`Command::new`, `:161`; `cmd.spawn()`, `:178`) and
+dials out to it. Its writer mutex (`write_message`, `:532-553`), its
+pending-response map, its `next_id` counter (`:561`, `:633`) and its
+`handle_response` refusal arm (`:499-511`) all belong to that direction. None of
+them sits on the path this requirement names, and none of them is edited here.
+They are re-scoped, not cited: the only thing this design takes from that module
+is the *shape* of `PendingRequestGuard` (§6), not its instance.
 
-## 3. The routing point
+The inbound path — the gateway answering the client that spawned it — is
+`Gateway::run_stdio` (`src/gateway/server/mod.rs:1566`). It owns
+`tokio::io::stdin()` and `tokio::io::stdout()` (`:1638-1643`), reads one line at
+a time through `BufReader::new(stdin).lines()`, and dispatches each through
+`dispatch_single_with_sink` (`:1876`) or `dispatch_batch_with_sink` (`:2047`).
+That loop is where all three requirements live.
 
-The read loop today (`src/transport/stdio.rs:226-247`) reads one line and hands it to
-`handle_response` unconditionally:
+## 3. What is actually missing
 
-```rust
-Ok(Some(line)) => {
-    ...
-    if let Err(e) = transport.handle_response(&line) {
-        error!(error = %e, line = %line, "Failed to handle response");
-    }
-}
-```
+The bridge is not unwired. `src/gateway/meta_mcp/invoke.rs:1842` constructs an
+`InputBridge` inside `invoke_tool_traced` (`:1079`) and `:1853` calls
+`bridge.run(...)`; neither is under `#[cfg(test)]`. Three separate things stop a
+stdio caller from reaching it, and **all three must change** — a channel alone
+leaves every one of the three ACs red.
 
-`handle_response` does its own `serde_json::from_str::<JsonRpcMessage>(line)` and matches
-on the result. The routing point is this call site: parse the line here first, and only
-call `handle_response` on the `Response` and `Notification` cases. A `Request` case is
-handed to the new bridging path instead of ever reaching `handle_response`.
+1. **No channel.** `InputBridge` is constructed with `channel: caller.channel`,
+   and the one production stdio site (`stdio_caller_context`,
+   `src/gateway/server/mod.rs:2306`, field at `:2339`) passes `&NoClientChannel`,
+   which returns `DeliveryError::NoSession` unconditionally. `ProxyManager`
+   implements `ClientChannel` (`src/gateway/proxy.rs:529`) but is HTTP-only.
+2. **No declaration.** `stdio_caller_context` pins
+   `input_capabilities: Declared::NONE` (`:2328`). Two gates read that field
+   before any channel is consulted: the MRTR.9 gate at `invoke.rs:1781`
+   (`interim.undeclared(caller.input_capabilities)`) returns
+   `undeclared_input_request` outright, and `InputBridge::plan`
+   (`src/gateway/input_bridge.rs:427`) refuses on the same predicate. With
+   `NONE`, no `elicitation/create` frame is ever written — which is exactly what
+   all three ACs assert on (`tests/mik_7212_mrtr7_stdio_acs.rs:377`, `:441`,
+   `:491`).
+3. **Wrong era.** The bridge branch is gated on `caller.era == Era::Legacy`
+   (`invoke.rs:1821`). `stdio_caller_context` is handed `shape.era()` (`:2002`),
+   and the ACs' `tools/call` carries `_meta` with
+   `io.modelcontextprotocol/protocolVersion` and
+   `io.modelcontextprotocol/clientCapabilities`
+   (`tests/mik_7212_mrtr7_stdio_acs.rs:318-321`), which
+   `protocol::meta::classify_request` (`src/protocol/meta.rs:150`) classifies as
+   `RequestShape::Modern` — that arm is entered on *any* declared revision
+   string, not only a modern one (`:180-186`, `:213-220`). So the caller's era is
+   `Modern`, and the bridge branch is skipped in favour of the continuation mint
+   even once the declaration is read.
 
-**Smaller diff: parse the line twice, at both sites, rather than restructure
-`handle_response` to take a parsed `JsonRpcMessage`.** `handle_response` has fourteen call
-sites in its own test module (`src/transport/stdio.rs:826, 840, 858, 877, 885, 896, 906,
-1204, 1220, 1261, 1278, 1327, 1354`, plus `906` which asserts on invalid JSON), every one
-passing a raw `&str` line and asserting against `handle_response`'s `Result<()>` return.
-Changing its signature to accept a `JsonRpcMessage` forces every one of those tests to
-parse the JSON itself before calling in, for no behavioural gain — none of them exercise
-the routing decision, they exercise what `handle_response` does with a message it has
-already been handed. A second `serde_json::from_str` in the read loop is one parse of one
-line on a path that already does a `BufReader::next_line().await` per message; it is not a
-measurable cost here. `handle_response` keeps its current signature and test surface
-unchanged.
+A per-request `_meta` slice cannot rescue (2): `run`'s third argument narrows and
+may only narrow the value passed as its second (`InputBridge::prompt`,
+`src/gateway/input_bridge.rs:451`, and the doc above it). The declaration has to
+arrive as `caller.input_capabilities` itself.
 
-The read loop becomes: parse the line; on `Request`, spawn (or hand to) the bridging path
-described in §5 and continue the loop without calling `handle_response`; on `Response` or
-`Notification`, pass the original line to `handle_response` exactly as today, so its own
-parse and its own match arms are unchanged and its refusal arm becomes dead code reachable
-only if this design's own routing is wrong — which is what its test continues to guard
-against.
+## 4. The writer
 
-## 4. Writer-side concurrency
+`run_stdio` owns `stdout` by value and lends `&mut stdout` to each write
+(`write_response`, `:1747`; `write_notification`, `:1808`). That is sound today
+because the loop is strictly sequential: one line in, one dispatch, one frame
+out. There is no mutex on this path and none is needed — until requests are
+dispatched concurrently, at which point three writer classes exist at once:
 
-STDIO.3 requires concurrent peer exchanges to share the real writer and emit complete,
-non-interleaved frames. This already exists and needs no sibling: `write_message`
-(`src/transport/stdio.rs:532-553`) takes `self.writer.lock().await` — a `tokio::sync::Mutex`
-— and holds it across both `write_all` calls (payload, then `\n`) and the `flush`, only
-releasing it once the frame is fully on the wire. Any two callers of `write_message`,
-however they got there, cannot interleave partial frames; the second caller's lock
-acquisition simply waits for the first frame to finish. A bridged answer going out to the
-backend, and an ordinary outbound `request()` call, or a second concurrent bridged answer,
-compose correctly through this one path with no new synchronization primitive.
+- per-request responses written by the loop after each dispatch (`:1708`);
+- streaming notifications written from inside an in-flight dispatch by
+  `dispatch_streaming_notifications` (`:1783`), which already interleaves
+  notification writes with the dispatch future through `select!`;
+- bridge request frames written by the channel of §6, from inside a dispatch
+  that is still awaiting its own answer.
 
-`PendingRequestGuard` (`src/transport/mod.rs:185`, used at `src/transport/stdio.rs:659` and
-`:744`) is a different mechanism and is not writer-side concurrency: it is an RAII guard
-over one entry in the *pending-response map*, dropped to release that entry on every exit
-path including cancellation (`cancelled_request_does_not_strand_pending_entry`,
-`src/transport/stdio.rs:960`). It is the correct shape to mirror for the bridge's own
-pending state (§5), not for the writer.
+So the single-writer property must be **introduced**, not inherited. The minimum
+that gets it: `run_stdio` wraps its stdout in `Arc<tokio::sync::Mutex<Stdout>>`
+and hands clones to the spawned dispatches and to the channel. Every writer takes
+the lock, serialises one value, writes payload and newline, flushes, then
+releases — the frame is whole before the lock is. `write_response` and
+`write_notification` keep their `&mut W` signatures and their generic bound, so
+their own blast radius stays nil; the lock is taken by their callers. Only
+`dispatch_streaming_notifications` changes shape, from `stdout: &mut W` to a
+shared handle it locks once per notification.
 
-## 5. How the client is reached
+Nothing here is a second synchronisation mechanism. It is the only one on this
+path.
+
+## 5. The read loop
+
+Three changes, all inside `run_stdio`.
+
+**Route reply frames.** After the existing `serde_json::from_str` (`:1652-1666`),
+a frame that carries no `method` and whose `id` matches a pending bridge entry is
+delivered to that entry's `oneshot` and the loop continues; it is never
+dispatched. Everything else is dispatched exactly as today. This is the only
+place a client reply can be recognised, because on stdio the reply arrives on the
+same pipe as the next request.
+
+A method-less frame today reaches `dispatch_single_with_sink`, whose
+`parse_request` (`src/gateway/router/helpers.rs:276-280`) answers
+`-32600 "Missing method"` against the client's own id. That behaviour is kept for
+an unmatched id: only a frame whose id is a live bridge key is diverted, so a
+stray response still gets the same `-32600` it gets today. Nothing observable
+changes for any frame that is not an answer to a question this gateway asked.
+
+**Malformed lines stay log-and-continue.** The `-32700` arm (`:1656-1665`) and the
+empty-line `continue` are untouched. A line that does not parse as JSON is not a
+reply and cannot be matched against anything; the routing check above runs only
+on a `Value` that already parsed.
+
+**Spawn per request, after initialize.** The loop keeps a flag that starts unset
+and is set once an `initialize` request has been dispatched *and* its response
+written by the loop. While it is unset, every request is dispatched inline on the
+loop exactly as today — so the initialize response is on the wire before any
+concurrent dispatch exists, and STDIO.2 holds structurally rather than by timing.
+Once set, each subsequent single request is `tokio::spawn`ed; the spawned task
+runs the same `dispatch_streaming_notifications` wrapper and writes its own
+response through the shared writer. Batches keep running inline: they are already
+a sequence inside `dispatch_batch_with_sink` and no requirement asks for
+concurrency across a batch.
+
+Backpressure is `InputBridge`'s own, not a queue: `BridgeBounds::DEFAULT` bounds
+each exchange with a per-prompt and an aggregate timeout
+(`src/gateway/input_bridge.rs:492-520`), so a spawned dispatch cannot outlive its
+bounds and the number in flight is bounded by how fast a client can ask. Bounding
+the spawn itself instead — a semaphore the loop waits on — reintroduces exactly
+the stall STDIO.1 forbids, because the loop would block on capacity while the
+answer it is waiting for is the next line to read.
+
+Two consequences worth naming rather than discovering:
+
+- A `tools/call` that arrives *before* `initialize` runs inline. If that call
+  bridges, the loop is inside a dispatch that is waiting for an answer it cannot
+  read, and the exchange ends at the bridge's own timeout with the same refusal a
+  silent client gets. No real client does this, and the alternative — spawning
+  before initialize — is what item 2 of the prior review forbids.
+  <!-- ponytail: bounded by BridgeBounds; per-request init gating if a client ever needs it -->
+- `protocol_telemetry_sink` is passed as `Option<&mut DurableTelemetrySink>`
+  (`:1701`), and a `&mut` borrow cannot cross into a spawned task any more than
+  `&mut stdout` can. It becomes a shared handle of the same shape as the writer,
+  and `persist_stdio_protocol_telemetry` (`:1731`) runs at the end of each
+  spawned dispatch rather than on the loop. This is the second `'static` blocker
+  and the reason the spawn is not a one-line change.
+
+## 6. How the client is reached
 
 `InputBridge` (`src/gateway/input_bridge.rs:361-370`) reaches a client through a
-`&dyn ClientChannel` field — it is already transport-agnostic; `InputBridge::run` needs no
-new method and no change. What stdio has today is `NoClientChannel`
-(`src/gateway/input_bridge.rs:323-337`), wired at both stdio caller sites in
-`src/gateway/server/mod.rs:2339` and `:2933`, which unconditionally returns
-`DeliveryError::NoSession`. Its own doc comment states this is provisional: "Refusing here
-is also what MIK-7387 will change: until it lands, an initialized stdio caller stays
-refused."
+`&dyn ClientChannel`. It is already transport-agnostic: `run`, `plan` and `ask`
+need no change, and no new trait method is added. What is added is one
+implementer.
 
-This is a new caller, not a new method: implement `ClientChannel` for a stdio-backed type
-(wrapping or extending `StdioTransport`) whose `send_request(session_id, id, method,
-params)` mints a request frame, sends it through `write_message` (§4), and awaits the
-reply through the same pending-map/oneshot-channel mechanism `Transport::request`
-(`src/transport/stdio.rs:632-670`) already uses for gateway-originated calls — the
-`ClientChannel` trait's own doc comment (`src/gateway/input_bridge.rs:291-296`) names
-`PendingRequestGuard` as the exact shape to hold across the awaited send, for the same
-cancellation reason described in §4. The two `NoClientChannel` wiring sites in
-`src/gateway/server/mod.rs` are replaced with this implementation when a stdio-connected
-caller is what production has.
+`StdioClientChannel` holds two things: a clone of the shared writer from §4, and
+a `DashMap<String, oneshot::Sender<Value>>` of questions awaiting an answer. Its
+`send_request(session_id, id, method, params)`:
 
-## 6. Explicitly out of scope
+1. refuses `DeliveryError::NoSession` unless `session_id` is `STDIO_SESSION_ID` —
+   one process, one session, and a mismatch means the caller is not this
+   transport's;
+2. registers `id` in the pending map and takes a drop guard over that entry
+   *before* writing anything;
+3. writes `{"jsonrpc":"2.0","id":<id>,"method":<method>,"params":<params>}`
+   through the shared writer, one whole frame under one lock;
+4. awaits the `oneshot` and returns the reply frame **whole**, because
+   `InputBridge::project` reads `reply.get("error")` and `reply.get("result")` off
+   the envelope, not off a pre-extracted result.
 
-- Any change to `handle_response`'s refusal behaviour or its pinning test (§2).
-- A second writer synchronization mechanism (§4) — `write_message`'s existing mutex covers
-  every caller.
-- `InputBridge::run` or the `ClientChannel`/`BackendInvoker`/`BridgeObserver` trait
-  definitions in `src/gateway/input_bridge.rs` — unchanged; only a new implementer of
-  `ClientChannel` is added.
+**Ids need no namespacing mechanism.** `InputBridge::ask` mints the id itself —
+`format!("{}{}", prompt.kind.prefix(), uuid::Uuid::new_v4())`
+(`src/gateway/input_bridge.rs:492`), with prefixes `sampling-`, `elicitation-`,
+`roots-`. The channel never mints one; it registers the id it is handed and
+matches the reply against it. These are prefixed UUID strings, structurally
+disjoint from anything a client would send as its own request id, and the
+`next_id` counter named in the earlier revision of this item belongs to the
+outbound transport (`src/transport/stdio.rs:561`) and is not on this path at all.
+Nothing further is required for item 3.
+
+**The guard is the cancellation contract, not an optimisation.** `ask` wraps every
+`send_request` in an outer `tokio::time::timeout` and abandons the future on
+expiry (`src/gateway/input_bridge.rs:271-296`). An implementation that registers
+pending state before awaiting must release it on drop or the map grows one entry
+per timed-out question for the life of the process, and a late answer finds a
+sender nobody is listening on. `PendingRequestGuard`
+(`src/transport/mod.rs:185-208`) is the right shape and the wrong type — it is
+`pub(crate)` over `DashMap<String, oneshot::Sender<JsonRpcResponse>>`, and the
+bridge's replies are `Value` envelopes, not `JsonRpcResponse`. Mirror the shape
+locally in the channel's module; do not generalise the existing guard for one new
+caller. Recorded as MIK-7388 on the trait's own doc.
+
+**Wiring.** `stdio_caller_context` (`src/gateway/server/mod.rs:2306`) takes the
+channel by reference alongside `era` and `retry`, and three of its fields change:
+
+- `channel` — the `StdioClientChannel` instead of `&NoClientChannel`;
+- `input_capabilities` — `shape.declared_capabilities()`, the same value the HTTP
+  path passes (`src/gateway/router/handlers.rs:877`, used at `:1506` and `:1636`).
+  The claim it replaces, "stdio carries no per-request capability declaration to
+  read", is false: `_meta` is transport-independent and `classify_and_observe` is
+  already called on the stdio path (`src/gateway/server/mod.rs:1903`) — its result
+  is used for the era and the log level and then the declaration half is thrown
+  away;
+- `era` — pinned to `Era::Legacy` rather than taken from `shape`. Stdio has no
+  modern path wired: `server/discover` returns the legacy document
+  unconditionally on this transport, and the stateless revision is specified over
+  streamable HTTP. A stdio caller is therefore legacy whatever its `_meta`
+  declares, which is also how the requirement words it — "a legacy stdio client".
+  `caller.era` has exactly one production reader, the bridge branch at
+  `invoke.rs:1821`, so this changes nothing else; the `initialize` arm keeps
+  advertising against `shape.era()` directly (`:1945`) and is not routed through
+  the caller context.
+
+`dispatch_single_with_sink` (`:1876`) passes the channel down to that helper. The
+batch path reaches the same helper (`dispatch_batch_with_sink`, `:2047`), so one
+parameter covers both.
+
+## 7. Impact analysis
+
+`gitnexus_impact`, direction upstream, repo `mcp-gateway`, run against every
+symbol this design proposes to edit. **No target returned HIGH or CRITICAL; every
+one is LOW.**
+
+| Symbol | Impacted | d=1 | Processes | Risk |
+|---|---|---|---|---|
+| `run_stdio` | 0 | 0 | 0 | LOW |
+| `dispatch_single_with_sink` | 21 | 4 | 1 (`run_stdio`, earliest broken step 1) | LOW |
+| `stdio_caller_context` | 17 | 2 | 1 (`run_stdio`, earliest broken step 1) | LOW |
+| `write_response` | 1 | 1 | 1 (`run_stdio`) | LOW |
+| `invoke_tool_traced` | 1 | 1 | 0 | LOW |
+
+The d=1 sets are small and entirely in-file. `dispatch_single_with_sink` breaks
+`run_stdio`, `dispatch_single` (`#[cfg(test)]`, `:1827`), `dispatch_batch_with_sink`
+and one named test; `stdio_caller_context` breaks `dispatch_single_with_sink` and
+`stdio_caller_context_carries_the_clients_idempotency_key`; `write_response`
+breaks only `run_stdio`, and this design does not change its signature at all —
+it is listed because its call sites move under a lock. `invoke_tool_traced`'s only
+caller is `invoke_tool`, and the change proposed there is comment text (§8), not
+behaviour.
+
+Two symbols this design touches are **absent from the index**:
+`dispatch_streaming_notifications` and `write_notification` both return
+`Target not found`. Recorded rather than skipped. Their call sites, verified by
+grep instead: `dispatch_streaming_notifications` has five —
+`src/gateway/server/mod.rs:1674` and `:1695` in `run_stdio`, and `:2382`, `:2418`,
+`:2434` inside `#[cfg(test)] mod stdio_forward_path_tests` (`:2354-2355`);
+`write_notification` has two, both inside `dispatch_streaming_notifications`
+(`:1793`, `:1801`). Re-run `npx gitnexus analyze` before implementation so the
+index covers them.
+
+One more signature-shape guard to keep green: `stdio_dispatch_builds_its_retry_fields_from_the_request`
+(`:3983`) locates `fn stdio_caller_context<'a>(` by string and then scans the next
+2000 characters for the `retry` field. Adding parameters leaves the search string
+intact, but the field moves further down the body — check the window still
+reaches it.
+
+## 8. The production comment this makes stale
+
+`src/gateway/meta_mcp/invoke.rs:1884-1895` documents why the bridge's
+`NoSession` arm cannot be reached from stdio, and asks to be re-read if either
+half moves:
+
+> …`plan` — which refuses requests that are *present and undeclared*… then
+> refuses every one of them, because `stdio_caller_context` declares
+> `Declared::NONE`. `run` calls `plan` before `ask`, so that refusal lands as
+> `Refused` one step before any delivery is attempted, never as `NoSession`.…
+> change `Declared::NONE` or `plan`'s position and re-read this arm.
+
+This design changes `Declared::NONE`, so the arm is stale by its own terms and
+must be rewritten in the same change. It is also **already inaccurate in one
+respect**, independent of this design: with `Declared::NONE`, the MRTR.9 gate at
+`:1781` refuses the interim result before the bridge branch at `:1821` is
+evaluated at all, so `plan` is not what refuses a stdio caller today — nothing on
+the stdio path ever reaches `plan`. Proposed replacement:
+
+> This arm does not reach stdio, and the reason is worth naming because no test
+> enforces it. A stdio caller now arrives with a real declaration
+> (`stdio_caller_context` passes `shape.declared_capabilities()`) and a real
+> channel (`StdioClientChannel`), so neither the MRTR.9 gate above nor `plan`
+> refuses it and the bridge is the right messenger. What it cannot produce is
+> `NoSession`: the stdio channel refuses that only when the session id is not
+> `STDIO_SESSION_ID`, which the one caller that builds it cannot get wrong.
+> A stdio exchange that fails therefore fails as `Delivery { TimedOut }` or
+> `Deadline`, never here. Change the stdio session id or give that channel a
+> second caller and re-read this arm.
+
+The missing `MIK-7212.WIRE.10` row in the MRTR.7 test plan — named in the current
+comment as the thing that joins the two halves, and still absent — is superseded
+rather than filled: `MIK-7387.STDIO.1` is the row that pins the stdio bridging
+behaviour end to end, and the two halves it was to join no longer exist as a pair.
+
+## 9. Explicitly out of scope
+
+- The outbound backend transport `src/transport/stdio.rs` in every part:
+  `handle_response`'s refusal arm and its pinning test, `write_message`'s mutex,
+  the `next_id` counter, `PendingRequestGuard`'s existing instances (§2).
+- `InputBridge::run`, `plan`, `ask`, `project`, and the
+  `ClientChannel`/`BackendInvoker`/`BridgeObserver` trait definitions — unchanged;
+  one new implementer is added and `NoClientChannel` stays for every caller that
+  still has no channel.
 - The HTTP `ClientChannel` implementation, `ProxyManager`, and anything under
   `src/transport/http/`.
-- `NFR.COMPAT.1`'s stdio protocol-revision question and the `is_admin: true` stdio grant —
-  both out under `docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md`'s OUT list and
-  not reopened here.
+- Concurrency across a batch: batches stay sequential (§5).
+- `NFR.COMPAT.1`'s stdio protocol-revision question and the `is_admin: true`
+  stdio grant — both out under
+  `docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md`'s OUT list and not
+  reopened here. Pinning `era` to `Legacy` in the caller context (§6) is not that
+  question: it changes one predicate with one production reader and does not touch
+  what `initialize` advertises.
+- `ConfirmationChannel::Unavailable` on stdio. Destructive-call confirmation is a
+  different capability with its own row; a channel that can carry
+  `elicitation/create` for MRTR does not automatically become the operator asker,
+  and no requirement here asks for it.
 
-## 7. The three ignored tests
+## 10. The three ignored tests
 
-- `ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads`
-  (`tests/mik_7212_mrtr7_stdio_acs.rs:356`) — assertions are correct as written for this
-  design: it exercises exactly the read-loop routing decision in §3 and the `ClientChannel`
-  path in §5.
-- `ac_mrtr_7a_bridged_request_follows_the_initialize_response`
-  (`tests/mik_7212_mrtr7_stdio_acs.rs:420`) — assertions are correct as written; ordering
-  falls out of the read loop being sequential per line (§3) with no reordering introduced by
-  this design.
-- `ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames`
-  (`tests/mik_7212_mrtr7_stdio_acs.rs:470`) — assertions are correct as written; satisfied by
-  the existing `write_message` mutex in §4 with no new mechanism.
+All three are in `tests/mik_7212_mrtr7_stdio_acs.rs`, each with
+`#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this
+row is its spec"]` one line above the `fn`. **This design satisfies all three;
+none is reported as unsatisfiable.**
 
-## Pending revisions (drafted, not yet applied)
+- `ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads` (`fn` at `:356`) —
+  MIK-7387.STDIO.1. Needs the declaration (§3.2), the era (§3.3) and the channel
+  (§6) to emit `elicitation/create`, and the reply-routing arm (§5) to take the
+  client's `{"id":<question id>,"result":{…}}` off the same pipe while the loop
+  keeps reading. The backend then re-runs with `inputResponses` present and the
+  fixture returns `answered` (`:150-155`), which is what `/result/content/0/text`
+  is asserted against. The fixture asks in `form` mode (`:162`) and the client
+  declares `{"elicitation": {}}`, which `Declared::parse` reads as form
+  (`src/protocol/meta.rs:416-419`), so the mode arm of `Refusal` passes too.
+- `ac_mrtr_7a_bridged_request_follows_the_initialize_response` (`fn` at `:421`) —
+  MIK-7387.STDIO.2. Guaranteed by the init gate in §5, not by timing: the
+  initialize response is written by the loop before any dispatch is spawned, so no
+  bridge frame can precede it even though the test sends both requests without
+  waiting.
+- `ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames` (`fn` at `:471`) —
+  MIK-7387.STDIO.3. Two spawned dispatches each emit one `elicitation/create`
+  through the shared writer of §4; exactly two frames, and every emitted line is a
+  whole JSON value because a frame is written under one lock. Neither question is
+  answered, so both end at `BridgeBounds::DEFAULT` — the test asserts on the
+  frames, not on the outcome.
 
-Six review fixes are outstanding. Four were drafted but never written into the text
-above; the fifth and sixth are superseded by the module correction in the banner.
+## 11. Findings
 
-1. **Commit to spawn-per-request.** §3 currently says "spawn (or hand to)". Awaiting
-   bridge capacity on the read loop stalls STDIO.1. Apply backpressure through
-   `InputBridge`'s own timeout rather than an unbounded spawn.
-2. **Order initialize ahead of concurrent dispatch.** The initialize dispatch and its
-   client-facing response write must both complete before any concurrent dispatch
-   begins. Gate this through the existing init phase, activated when routing activates.
-3. **Namespace bridge ids.** Use the peer-supplied id on the reply frame, kept disjoint
-   from the outbound counter that `next_id` advances.
-4. **Keep malformed-line handling as log-and-continue.** The §3 path must not change
-   this existing semantics.
-5. **Make single-writer structural** — re-source against `run_stdio` first; the writer
-   mutex cited in §4 belongs to the outbound backend transport.
-6. **Fix the test section** — one test reference is duplicated, and a test-only call
-   site is described as production wiring.
+Three corrections to the record, each verified at source.
+
+1. **There is one production `NoClientChannel` stdio site, not two.** The brief
+   and the previous revision of this document both name
+   `src/gateway/server/mod.rs:2339` and `:2933`. `#[cfg(test)]` is at `:2445` and
+   `mod tests {` at `:2446`, so `:2933` is inside the test module — a hand-built
+   context in `ac_confirm_1a_the_refusal_marker_never_reaches_the_wire`. The only
+   production wiring is `stdio_caller_context` (`:2306`, field at `:2339`), called
+   once at `:2002`. This is the "test-only call site described as production
+   wiring" the sixth pending revision named.
+2. **The test line numbers in circulation are wrong in both directions.** The
+   brief cites `:354/:419/:469` and the previous revision `:356/:420/:470`. The
+   `fn` lines are `356`, `421` and `471`; the `#[ignore]` attributes are at `355`,
+   `420` and `470`. §10 cites the `fn` lines.
+3. **A channel alone would not have passed a single AC.** The declaration and the
+   era (§3.2, §3.3) are each independently fatal, and both sit upstream of any
+   channel call. Had this design shipped as "implement `ClientChannel` and wire it
+   at the `NoClientChannel` sites", all three tests would have failed with no
+   `elicitation/create` frame emitted and no channel method ever invoked.
