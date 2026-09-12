@@ -459,7 +459,10 @@ mod http {
         pub(super) state: Arc<AppState>,
         pub(super) backend: Arc<CountedBackend>,
         _server: ServerGuard,
-        _store_dir: tempfile::TempDir,
+        /// `None` when the TEST owns the directory, which is how one store
+        /// outlives one gateway: a reconnect fixture opens a second state over
+        /// a directory the test keeps alive across both.
+        _store_dir: Option<tempfile::TempDir>,
     }
 
     /// The suite's standard gateway: authentication on, two principals, one
@@ -511,6 +514,32 @@ mod http {
     }
 
     pub(super) async fn state_from_with(auth: AuthConfig, backend: Arc<CountedBackend>) -> Fixture {
+        let store_dir = tempfile::tempdir().expect("a private task-store directory");
+        let fixture = state_in(auth, backend, store_dir.path()).await;
+        Fixture {
+            _store_dir: Some(store_dir),
+            ..fixture
+        }
+    }
+
+    /// A gateway over a store directory the CALLER owns.
+    ///
+    /// The reconnect rows need two gateways over one store, which is only
+    /// possible if the directory outlives the first fixture. The custody lease
+    /// (`store.lease`, taken with a non-blocking `try_acquire`) is released when
+    /// the previous fixture's last `Arc` drops, and a worker thread can still be
+    /// finishing at that instant, so the open is retried to [`fixture::BOUND`]
+    /// rather than raced. A lease that never frees fails here by name instead of
+    /// surfacing as an unrelated store error inside a task assertion.
+    pub(super) async fn state_over(store_root: &std::path::Path) -> Fixture {
+        state_in(two_principal_auth(), CountedBackend::open(), store_root).await
+    }
+
+    async fn state_in(
+        auth: AuthConfig,
+        backend: Arc<CountedBackend>,
+        store_root: &std::path::Path,
+    ) -> Fixture {
         let mut config = Config::default();
         config.server.modern_protocol = true;
         config.auth = auth;
@@ -524,15 +553,36 @@ mod http {
         // One registry, shared between the state the router reads and the
         // executor that publishes through it.
         let subscriptions = Arc::new(SubscriptionRegistry::new(64));
-        let store_dir = tempfile::tempdir().expect("a private task-store directory");
-        let (tasks, task_executor) = open_runtime(
-            &store_dir.path().join("tasks"),
-            config.tasks.max_workers,
-            StoreLimits::default(),
-            Arc::clone(&subscriptions),
-        )
-        .await
-        .expect("the fixture task store opens");
+        let tasks_dir = store_root.join("tasks");
+        let deadline = tokio::time::Instant::now() + fixture::BOUND;
+        let (tasks, task_executor) = loop {
+            match open_runtime(
+                &tasks_dir,
+                config.tasks.max_workers,
+                StoreLimits::default(),
+                Arc::clone(&subscriptions),
+            )
+            .await
+            {
+                Ok(runtime) => break runtime,
+                Err(error) if tokio::time::Instant::now() < deadline => {
+                    // EVERY failure is retried, not only custody contention:
+                    // the open does not report a reason this helper could
+                    // branch on, so naming one here would be a guess. What the
+                    // retry buys is the one case a reconnect row creates — a
+                    // previous custodian still letting go — and the bound is
+                    // what keeps any other cause finite.
+                    let _ = error;
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!(
+                    "the task store at {} could not be opened within {:?}; the last \
+                     attempt failed with: {error:?}",
+                    tasks_dir.display(),
+                    fixture::BOUND
+                ),
+            }
+        };
 
         let state = Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
@@ -576,7 +626,7 @@ mod http {
             state,
             backend,
             _server: server,
-            _store_dir: store_dir,
+            _store_dir: None,
         }
     }
 
@@ -1085,9 +1135,12 @@ mod ownership {
 
     use serde_json::{Value, json};
 
+    use mcp_gateway::gateway::test_helpers::AppState;
+
+    use super::fixture;
     use super::http::{
         modern, poll_unattributed_until_terminal, post_against, post_unattributed, public_mcp_auth,
-        state, state_from, state_public_mcp, task_id_of, task_invoke,
+        state, state_from, state_holding, state_over, state_public_mcp, task_id_of, task_invoke,
     };
 
     /// An id nothing ever created: the negative control every "indistinguishable
@@ -1592,5 +1645,394 @@ mod ownership {
             1,
             "one create, one retry, one dispatch: settling is not a second run"
         );
+    }
+
+    // =======================================================================
+    // MIK-7311.LIFECYCLE.2 — an accepted task survives the loss of the
+    // connection that created it, stays queryable by the same principal, and
+    // stays invisible to every other one.
+    // =======================================================================
+
+    /// The subscription ceiling this suite's fixtures are built with. The
+    /// registry hands out one permit per open stream and takes it back when the
+    /// stream is dropped, so the count is the only in-process observable that
+    /// tells "the listener went away" apart from "the listener was never
+    /// admitted".
+    const SUBSCRIPTION_CAPACITY: usize = 64;
+
+    /// Both not-found verbs, each anchored to a KNOWN refusal rather than to
+    /// two agreeing unknowns.
+    ///
+    /// Byte-identity alone proves only that two answers match; it is satisfied
+    /// by a gateway that answers both with a success. The code and the message
+    /// are therefore asserted first, against the one constant the gateway uses
+    /// for absent-or-foreign (`missing_task_error`,
+    /// `src/gateway/router/handlers.rs:216`), and the identity is what proves
+    /// the refusal discloses nothing further.
+    async fn refused_identically(
+        state: &Arc<AppState>,
+        principal: &str,
+        id_from: i64,
+        method: &str,
+        real_task: &str,
+    ) {
+        let (_, real) = post_against(
+            Arc::clone(state),
+            principal,
+            modern(id_from, method, json!({ "taskId": real_task }), true),
+        )
+        .await;
+        let (_, fabricated) = post_against(
+            Arc::clone(state),
+            principal,
+            modern(
+                id_from + 1,
+                method,
+                json!({ "taskId": FABRICATED_ID }),
+                true,
+            ),
+        )
+        .await;
+
+        assert_eq!(
+            real.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32602),
+            "'{method}' on a task this caller does not own must be refused as absent: {real}"
+        );
+        assert_eq!(
+            real.pointer("/error/message").and_then(Value::as_str),
+            Some("no such task"),
+            "the refusal must carry the one constant message, not a narrating one: {real}"
+        );
+        assert_eq!(
+            shape(real),
+            shape(fabricated),
+            "'{method}' on another principal's task must be byte-identical to an id \
+             that never existed"
+        );
+    }
+
+    /// The third admission path, asserted for disclosure and labelled for what
+    /// it cannot prove.
+    ///
+    /// `subscriptions/listen` narrows a foreign `taskIds` to the empty list IN
+    /// SILENCE rather than refusing (`src/gateway/router/handlers.rs:1050-1062`),
+    /// so both answers here are streams. That makes this pair an assertion that
+    /// the narrowing discloses nothing — NOT the discriminating oracle for a
+    /// privacy row. The two not-found refusals are.
+    async fn listen_discloses_nothing(
+        state: &Arc<AppState>,
+        principal: &str,
+        id_from: i64,
+        real_task: &str,
+    ) {
+        let (_, foreign) = post_against(
+            Arc::clone(state),
+            principal,
+            modern(
+                id_from,
+                "subscriptions/listen",
+                json!({ "taskIds": [real_task] }),
+                true,
+            ),
+        )
+        .await;
+        let (_, absent) = post_against(
+            Arc::clone(state),
+            principal,
+            modern(
+                id_from + 1,
+                "subscriptions/listen",
+                json!({ "taskIds": [FABRICATED_ID] }),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(
+            shape(foreign),
+            shape(absent),
+            "listening on another principal's task must be byte-identical to \
+             listening on an id that never existed"
+        );
+    }
+
+    /// Poll `tasks/get` AS `principal` until the task is terminal.
+    ///
+    /// The unattributed poller cannot be used here: these rows run with
+    /// authentication on and `/mcp` closed, so an unattributed request never
+    /// reaches a task handler at all.
+    async fn poll_until_terminal(
+        state: &Arc<AppState>,
+        principal: &str,
+        id_from: i64,
+        task_id: &str,
+    ) -> Value {
+        let mut last = Value::Null;
+        tokio::time::timeout(fixture::BOUND, async {
+            let mut request_id = id_from;
+            loop {
+                let (_, body) = post_against(
+                    Arc::clone(state),
+                    principal,
+                    modern(request_id, "tasks/get", json!({ "taskId": task_id }), true),
+                )
+                .await;
+                request_id += 1;
+                if let Some("completed" | "failed" | "cancelled") =
+                    body.pointer("/result/status").and_then(Value::as_str)
+                {
+                    return body;
+                }
+                last = body;
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "'{task_id}' never reached a terminal status within {:?}: {last}",
+                fixture::BOUND
+            )
+        })
+    }
+
+    /// Wait until every subscription permit is back in the registry.
+    ///
+    /// The permit is released when the stream's body is dropped, which happens
+    /// on another task, so the return is awaited rather than assumed.
+    async fn await_no_open_subscriptions(state: &Arc<AppState>) {
+        let deadline = tokio::time::Instant::now() + fixture::BOUND;
+        loop {
+            let available = state.subscriptions.available();
+            if available == SUBSCRIPTION_CAPACITY {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "a dropped subscription stream still holds a permit after {:?}: \
+                 {available} of {SUBSCRIPTION_CAPACITY} available",
+                fixture::BOUND
+            );
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// The task is HELD at the backend for the whole row, so every assertion is
+    /// made about a task that is provably still running: a gateway that quietly
+    /// settled or discarded the task on the disconnect would answer a terminal
+    /// status here rather than a running one.
+    #[tokio::test]
+    async fn lifecycle_2_a_task_survives_a_dropped_stream_and_stays_private() {
+        let (fixture, gate) = state_holding().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(60, "mik-7311-lifecycle-2-disconnect"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
+        fixture.backend.wait_for_calls(1).await;
+
+        // THE CONNECTION THAT IS LOST. An admitted listen answers
+        // `text/event-stream`, which the post helper reports as a null body
+        // rather than draining a stream that never ends — so a null body here
+        // IS the admission, and the permit it took is the observable.
+        let (status, admitted) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(
+                62,
+                "subscriptions/listen",
+                json!({ "taskIds": [task_id.clone()] }),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::OK,
+            "the owner's listen must be admitted, or the disconnect below is a \
+             disconnect of nothing: {admitted}"
+        );
+        assert!(
+            admitted.is_null(),
+            "an admitted listen is a stream, not a JSON acknowledgement: {admitted}"
+        );
+
+        // DISCONNECT. The helper dropped the response body when it returned,
+        // which drops the listener and returns its permit. Waiting for that
+        // makes "the stream went away" an observed fact: without it a gateway
+        // that never tore the subscription down would pass everything below.
+        await_no_open_subscriptions(&fixture.state).await;
+
+        // Every request from here is a fresh, independently authenticated POST,
+        // which is what reconnect means on this transport.
+        let (_, after) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(64, "tasks/get", json!({ "taskId": task_id.clone() }), true),
+        )
+        .await;
+        assert_eq!(
+            after.pointer("/result/taskId").and_then(Value::as_str),
+            Some(task_id.as_str()),
+            "the creating principal must still resolve the task after the stream \
+             was lost: {after}"
+        );
+        assert_eq!(
+            after.pointer("/result/status").and_then(Value::as_str),
+            Some("working"),
+            "the backend is still holding the dispatch, so the task is running — a \
+             terminal status here means the disconnect settled it: {after}"
+        );
+
+        refused_identically(&fixture.state, "key-b", 65, "tasks/get", &task_id).await;
+        refused_identically(&fixture.state, "key-b", 67, "tasks/cancel", &task_id).await;
+
+        listen_discloses_nothing(&fixture.state, "key-b", 69, &task_id).await;
+
+        // A foreign cancel that mutated the task WHILE answering not-found
+        // would satisfy every assertion above. The whole answer is compared,
+        // not one field: anything the probes changed shows up here.
+        let (_, unchanged) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(71, "tasks/get", json!({ "taskId": task_id.clone() }), true),
+        )
+        .await;
+        assert_eq!(
+            shape(unchanged),
+            shape(after),
+            "the foreign probes must leave the owner's view of the task exactly as \
+             it was"
+        );
+
+        // Control, after the foreign probes so those ran against a live task.
+        let (_, cancelled) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(
+                72,
+                "tasks/cancel",
+                json!({ "taskId": task_id.clone() }),
+                true,
+            ),
+        )
+        .await;
+        assert!(
+            cancelled.get("error").is_none(),
+            "the creating principal still controls the task after the stream was \
+             lost: {cancelled}"
+        );
+        let (_, observed) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(73, "tasks/get", json!({ "taskId": task_id }), true),
+        )
+        .await;
+        assert_eq!(
+            observed.pointer("/result/status").and_then(Value::as_str),
+            Some("cancelled"),
+            "an accepted cancel that changed nothing would pass the assertion \
+             above: {observed}"
+        );
+
+        assert_eq!(
+            fixture.backend.calls(),
+            1,
+            "one create, one dispatch: no read, refusal or cancel re-runs the tool"
+        );
+        gate.release_all();
+    }
+
+    /// A whole gateway is lost and a second one opens over the same store.
+    ///
+    /// Strictly stronger than the criterion's client disconnect, and kept
+    /// alongside it rather than in place of it: this row cannot observe
+    /// per-connection cleanup, and the row above cannot observe durability.
+    /// The backend answers immediately here, so the task is terminal before the
+    /// restart and startup recovery
+    /// (`src/gateway/task_service/execution/recovery.rs:36-80`) has nothing to
+    /// re-settle — what is asserted is that the RESULT was retained.
+    #[tokio::test]
+    async fn lifecycle_2_a_task_survives_a_gateway_restart_and_stays_private() {
+        let store_dir = tempfile::tempdir().expect("a task store the test owns");
+
+        // Scoped so the first gateway — its custody lease, its executor and its
+        // loopback listener — is gone before the second one opens.
+        let (task_id, before) = {
+            let fixture = state_over(store_dir.path()).await;
+            let (_, created) = post_against(
+                Arc::clone(&fixture.state),
+                "key-a",
+                task_invoke(80, "mik-7311-lifecycle-2-restart"),
+            )
+            .await;
+            let task_id = task_id_of(&created);
+            fixture.backend.wait_for_calls(1).await;
+            let before = poll_until_terminal(&fixture.state, "key-a", 81, &task_id).await;
+            assert_eq!(
+                before.pointer("/result/status").and_then(Value::as_str),
+                Some("completed"),
+                "the task must settle before the restart, or this row is about \
+                 recovery rather than about retention: {before}"
+            );
+            (task_id, before)
+        };
+
+        let restarted = state_over(store_dir.path()).await;
+
+        let (_, recovered) = post_against(
+            Arc::clone(&restarted.state),
+            "key-a",
+            modern(85, "tasks/get", json!({ "taskId": task_id.clone() }), true),
+        )
+        .await;
+        assert_eq!(
+            shape(recovered),
+            shape(before),
+            "the second gateway must answer the creating principal with the SAME \
+             task, field for field: a partially recovered record is a task that \
+             did not survive"
+        );
+
+        refused_identically(&restarted.state, "key-b", 86, "tasks/get", &task_id).await;
+        refused_identically(&restarted.state, "key-b", 88, "tasks/cancel", &task_id).await;
+
+        assert_eq!(
+            restarted.backend.calls(),
+            0,
+            "recovery is a read of the store: a second gateway that re-dispatched \
+             the tool would answer every assertion above and run the work twice"
+        );
+    }
+
+    /// THE FALSIFIER for the row above. Same steps, but the second gateway
+    /// opens over an EMPTY directory — and now the task's own creator is told
+    /// it does not exist, in the same words as an id nobody ever minted.
+    ///
+    /// Without this row, a read path that answered success for any well-formed
+    /// id would satisfy the restart row completely.
+    #[tokio::test]
+    async fn lifecycle_2_a_fresh_store_answers_the_same_task_as_absent() {
+        let store_dir = tempfile::tempdir().expect("a task store the test owns");
+        let task_id = {
+            let fixture = state_over(store_dir.path()).await;
+            let (_, created) = post_against(
+                Arc::clone(&fixture.state),
+                "key-a",
+                task_invoke(90, "mik-7311-lifecycle-2-fresh-store"),
+            )
+            .await;
+            let task_id = task_id_of(&created);
+            fixture.backend.wait_for_calls(1).await;
+            poll_until_terminal(&fixture.state, "key-a", 91, &task_id).await;
+            task_id
+        };
+
+        let empty_dir = tempfile::tempdir().expect("a second, empty task store");
+        let fresh = state_over(empty_dir.path()).await;
+
+        refused_identically(&fresh.state, "key-a", 95, "tasks/get", &task_id).await;
     }
 }
