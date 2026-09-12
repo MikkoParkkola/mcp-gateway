@@ -10,6 +10,19 @@
 //!
 //! Both are asserted through the public search entry points against a real
 //! `CapabilityBackend`, not by inspecting intermediate state.
+//!
+//! Every guard site needs its own test. The two `tool_allowed` filters in
+//! `search.rs` (`:254` Code Mode, `:341` classic) were each inverted in turn and
+//! each inversion failed *exactly one* test — neither test covers the other's
+//! site. So coverage here is per-call-site by necessity, and extracting the
+//! guards into one shared helper would make both tests pass with either call
+//! site removed, which is why that refactor was declined.
+//!
+//! What no test in this module can establish is the absence of a *forgotten*
+//! guard site. That the in-scope sites are the ones covered rests on an
+//! enumeration of `tool_allowed`/`backend_allowed` in `search.rs`, not on a
+//! test. The remaining hits belong to `gateway_list_tools`, a different
+//! meta-tool outside this criterion.
 
 use super::MetaMcp;
 use crate::backend::BackendRegistry;
