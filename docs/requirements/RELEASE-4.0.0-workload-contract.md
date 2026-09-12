@@ -148,6 +148,21 @@ the registration configs were compared directly:
 git diff v3.5.0 HEAD -- examples/minimal.yaml examples/servers.yaml   # empty
 ```
 
+The measured surface itself was compared, not assumed. The router's registered
+route table is identical at `v3.5.0` and HEAD — `/.well-known/jwks.json`,
+`/.well-known/oauth-protected-resource`, `/health`, `/api/costs`, `/mcp`,
+`/mcp/{name}`, `/mcp/{name}/{*path}`, `/sse`, `/metrics`
+(`src/gateway/router/mod.rs`). Both endpoints this row touches, `/mcp` and
+`/health`, exist identically at both refs.
+
+`/health` needs no credential: `auth.enabled` defaults to false and
+`/health` is in `default_public_paths()` (`src/config/features/auth.rs`), so
+the readiness probe is not measuring an auth path. Its `version` field is
+`env!("CARGO_PKG_VERSION")` at both `v3.5.0` and HEAD
+(`src/gateway/router/handlers.rs`), i.e. a bare `3.5.0`, which is the exact
+form the evaluator compares and the form `pins.json` derives from
+`Cargo.toml`. That was read from source rather than discovered in a rep.
+
 The `backends.<name>.command` stdio registration shape is unchanged across
 the range, and `--port` / `MCP_GATEWAY_PORT` is defined identically at
 `v3.5.0` and HEAD (`src/cli/mod.rs`). Cells therefore share **one
