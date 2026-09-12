@@ -2325,14 +2325,14 @@ impl Gateway {
 
             // Handle batch requests (array of JSON-RPC calls)
             if request.is_array() {
-                let responses = Self::dispatch_batch_with_sink(
+                let responses = Box::pin(Self::dispatch_batch_with_sink(
                     &meta_mcp,
                     &tool_policy,
                     &mtls_policy,
                     request,
                     session_id,
                     &mut protocol_telemetry_sink,
-                )
+                ))
                 .await;
                 Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
                 if !responses.is_empty() {
@@ -2343,14 +2343,14 @@ impl Gateway {
             }
 
             // Single request
-            let response_opt = Self::dispatch_single_with_sink(
+            let response_opt = Box::pin(Self::dispatch_single_with_sink(
                 &meta_mcp,
                 &tool_policy,
                 &mtls_policy,
                 request,
                 session_id,
                 protocol_telemetry_sink.as_mut(),
-            )
+            ))
             .await;
             Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
 
@@ -2500,7 +2500,7 @@ impl Gateway {
             (external_tool, response_targets)
         };
         let (response, execution) = if method == "tools/call" {
-            Self::dispatch_tools_call(
+            Box::pin(Self::dispatch_tools_call(
                 meta_mcp,
                 tool_policy,
                 &mut request,
@@ -2508,7 +2508,7 @@ impl Gateway {
                 session_id,
                 &mut signing_context,
                 &request_shape,
-            )
+            ))
             .await
         } else {
             (
@@ -2684,6 +2684,65 @@ impl Gateway {
     /// own its payload. `params` is re-derived from `request` here (already
     /// validated by the caller) so the immutable borrow it needs can end
     /// before the one branch below that needs `request` mutably.
+    /// Build the stdio-path `MetaMcpCallerContext`, split out of
+    /// [`Self::dispatch_tools_call`] purely to keep that function under the
+    /// line budget — every field and its rationale are unchanged.
+    fn build_stdio_caller_context<'a>(
+        is_modern: bool,
+        protocol_revision: Option<&'a str>,
+        stdio_authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
+        retry: &'a crate::protocol::mrtr::RetryFields,
+        era: crate::protocol::meta::Era,
+    ) -> MetaMcpCallerContext<'a> {
+        MetaMcpCallerContext {
+            // stdio has no task route: the extension's handle is read
+            // back over `tasks/get`, which only the HTTP surface serves,
+            // so a handle minted here would name work nobody could ask
+            // about. Every stdio call stays synchronous.
+            task: None,
+            execution: None,
+            signing: None,
+            is_modern,
+            protocol_revision,
+            credential_principal: None,
+            authorizer: stdio_authorizer,
+            // Stdio has no port and no network surface: the
+            // client SPAWNED this process, so it already holds
+            // whatever the operator holds — it could edit the
+            // config file just as easily. Withholding admin
+            // here would take the management tools away from
+            // exactly the single-user setup the origin gate
+            // exists to protect, and protect nothing.
+            //
+            // Explicit since the admin gate moved to the
+            // dispatcher: it previously lived on the HTTP path
+            // alone, so stdio was never checked and the default
+            // non-admin context went unnoticed.
+            is_admin: true,
+            // stdio carries no per-request capability
+            // declaration to read, and absent means absent.
+            input_capabilities: crate::protocol::meta::Declared::NONE,
+            retry,
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            verified_identity: None,
+            // Same `RequestShape` the `initialize` arm advertises against.
+            era,
+            // No `ProxyManager` in this scope -- it is HTTP-only --
+            // so there is no session to put a request on.
+            channel: &crate::gateway::input_bridge::NoClientChannel,
+            // stdio speaks to one process over two pipes and
+            // has no elicitation channel: there is no operator
+            // this transport can reach, so a destructive call
+            // it cannot confirm is refused rather than asked
+            // about. Not "found no session" -- no asker can
+            // exist here at all.
+            confirmation:
+                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        }
+    }
+
     async fn dispatch_tools_call(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
@@ -2759,53 +2818,13 @@ impl Gateway {
             } else {
                 merge_client_meta_ref(arguments.unwrap_or(&empty_arguments), params, is_meta_tool)
             };
-            let mut caller = MetaMcpCallerContext {
-                // stdio has no task route: the extension's handle is read
-                // back over `tasks/get`, which only the HTTP surface serves,
-                // so a handle minted here would name work nobody could ask
-                // about. Every stdio call stays synchronous.
-                task: None,
-                execution: None,
-                signing: None,
+            let mut caller = Self::build_stdio_caller_context(
                 is_modern,
-                protocol_revision: protocol_revision_owned.as_deref(),
-                credential_principal: None,
-                authorizer: &stdio_authorizer,
-                // Stdio has no port and no network surface: the
-                // client SPAWNED this process, so it already holds
-                // whatever the operator holds — it could edit the
-                // config file just as easily. Withholding admin
-                // here would take the management tools away from
-                // exactly the single-user setup the origin gate
-                // exists to protect, and protect nothing.
-                //
-                // Explicit since the admin gate moved to the
-                // dispatcher: it previously lived on the HTTP path
-                // alone, so stdio was never checked and the default
-                // non-admin context went unnoticed.
-                is_admin: true,
-                // stdio carries no per-request capability
-                // declaration to read, and absent means absent.
-                input_capabilities: crate::protocol::meta::Declared::NONE,
-                retry: &retry,
-                api_key_name: None,
-                agent_id: None,
-                grant_subject: None,
-                verified_identity: None,
-                // Same `RequestShape` the `initialize` arm advertises against.
-                era: request_shape.era(),
-                // No `ProxyManager` in this scope -- it is HTTP-only --
-                // so there is no session to put a request on.
-                channel: &crate::gateway::input_bridge::NoClientChannel,
-                // stdio speaks to one process over two pipes and
-                // has no elicitation channel: there is no operator
-                // this transport can reach, so a destructive call
-                // it cannot confirm is refused rather than asked
-                // about. Not "found no session" -- no asker can
-                // exist here at all.
-                confirmation:
-                    crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-            };
+                protocol_revision_owned.as_deref(),
+                &stdio_authorizer,
+                &retry,
+                request_shape.era(),
+            );
             if let Some(context) = signing_context.as_mut()
                 && let Err(error) = meta_mcp.prepare_signing_invocation(
                     context,
@@ -2846,15 +2865,14 @@ impl Gateway {
             // The one copy this path still makes, taken past every refusal
             // above — signing, nonce, admission, replay — because only an
             // executing call needs to own its arguments.
-            meta_mcp
-                .handle_tools_call(
-                    id,
-                    &tool_name,
-                    arguments.into_owned(),
-                    Some(session_id),
-                    caller,
-                )
-                .await
+            Box::pin(meta_mcp.handle_tools_call(
+                id,
+                &tool_name,
+                arguments.into_owned(),
+                Some(session_id),
+                caller,
+            ))
+            .await
         };
         (response, execution)
     }
@@ -2906,14 +2924,14 @@ impl Gateway {
 
         let mut responses = Vec::new();
         for req in requests {
-            if let Some(resp) = Self::dispatch_single_with_sink(
+            if let Some(resp) = Box::pin(Self::dispatch_single_with_sink(
                 meta_mcp,
                 tool_policy,
                 mtls_policy,
                 req,
                 session_id,
                 protocol_telemetry_sink.as_mut(),
-            )
+            ))
             .await
             {
                 responses.push(resp);
@@ -3132,13 +3150,17 @@ fn spawn_idle_reaper(
     })
 }
 
-/// The caller context every stdio `tools/call` runs under.
+/// A test fixture approximating the caller context a stdio `tools/call`
+/// runs under -- why stdio is admin, why it has no channel and no asker --
+/// in one named place instead of forty lines per test.
 ///
-/// Extracted from `dispatch_single_with_sink` so the transport-specific
-/// reasoning below -- why stdio is admin, why it has no channel and no
-/// asker -- sits in one named place instead of forty lines inside a match
-/// arm. `era` is the caller's because the `initialize` arm advertises
-/// against the same `shape`.
+/// NOT the production path. `dispatch_tools_call` builds its own context
+/// inline (`mod.rs:2762`) and carries the negotiated `protocol_revision`,
+/// which this fixture hardcodes to `None`. An earlier doc comment here
+/// claimed the helper had been extracted from `dispatch_single_with_sink`;
+/// it never was, and no production arm calls it. Assert production stdio
+/// behaviour against the dispatcher, not against this.
+#[cfg(test)]
 fn stdio_caller_context<'a>(
     authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
     era: crate::protocol::meta::Era,
@@ -3663,15 +3685,14 @@ mod tests {
         // Built by the gate itself, not by hand: a hand-made response would
         // only prove that serde skips a field, never that the refusal the
         // gateway actually emits carries it.
-        let marked = meta
-            .handle_tools_call(
-                RequestId::Number(19),
-                "gateway_kill_server",
-                json!({ "server": "row19-sentinel" }),
-                Some("stdio-session"),
-                super::stdio_caller_context(&authorizer, crate::protocol::meta::Era::Legacy),
-            )
-            .await;
+        let marked = Box::pin(meta.handle_tools_call(
+            RequestId::Number(19),
+            "gateway_kill_server",
+            json!({ "server": "row19-sentinel" }),
+            Some("stdio-session"),
+            super::stdio_caller_context(&authorizer, crate::protocol::meta::Era::Legacy),
+        ))
+        .await;
 
         // (b) in-process, the accounting can see it.
         assert!(

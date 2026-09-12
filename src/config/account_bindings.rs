@@ -43,6 +43,12 @@ use crate::{Error, Result};
 #[derive(Clone, Debug)]
 pub(crate) struct BoundAccountBackend {
     /// Backend registry name (the `backends` map key).
+    #[expect(
+        dead_code,
+        reason = "Provenance carried by `compile` so a compiled binding names the \
+                  backend it came from; every consumer reads `effective`, `mode` or \
+                  `propagation` instead. Delete if no consumer ever needs provenance."
+    )]
     pub(crate) backend: String,
     /// The `accounts.descriptors` map key this backend named.
     pub(crate) descriptor_id: String,
@@ -52,6 +58,12 @@ pub(crate) struct BoundAccountBackend {
     /// `None` for `shared`: static behaviour is unchanged.
     pub(crate) propagation: Option<IdentityPropagationConfig>,
     /// The five-field account-key descriptor, for `personal_managed` only.
+    #[expect(
+        dead_code,
+        reason = "Provenance carried by `compile` alongside `backend`; the managed \
+                  custody path resolves its descriptor from the registry rather than \
+                  from this field. Delete together with `backend` if unused."
+    )]
     pub(crate) account: Option<AccountKeyDescriptor>,
 }
 

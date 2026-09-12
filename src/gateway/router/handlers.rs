@@ -1468,26 +1468,28 @@ pub(super) async fn meta_mcp_handler(
                 match tasks::task_intent_for_call(
                     &state,
                     id.clone(),
-                    tool_name,
-                    &arguments,
-                    is_modern,
-                    &retry,
-                    verified_identity.as_ref(),
-                    &owner,
-                    client.as_ref(),
-                    oauth_agent_identity.as_ref(),
-                    cert_identity.as_ref(),
-                    api_key_name,
-                    agent_id,
-                    grant_subject.clone(),
-                    client.as_ref().is_some_and(|c| c.admin),
-                    declared_capabilities,
-                    Some(session_id.as_str()),
-                    protocol_revision_owned.as_deref(),
+                    tasks::TaskIntentRequest {
+                        tool_name,
+                        arguments: &arguments,
+                        is_modern,
+                        retry: &retry,
+                        verified_identity: verified_identity.as_ref(),
+                        owner: &owner,
+                        client: client.as_ref(),
+                        oauth_agent_identity: oauth_agent_identity.as_ref(),
+                        cert_identity: cert_identity.as_ref(),
+                        api_key_name,
+                        agent_id,
+                        grant_subject: grant_subject.clone(),
+                        is_admin: client.as_ref().is_some_and(|c| c.admin),
+                        input_capabilities: declared_capabilities,
+                        session_id: Some(session_id.as_str()),
+                        protocol_revision: protocol_revision_owned.as_deref(),
+                    },
                 ) {
                     Ok(intent) => intent,
                     Err(refusal) => {
-                        return build_response(refusal, &session_id, StatusCode::BAD_REQUEST);
+                        return build_response(*refusal, &session_id, StatusCode::BAD_REQUEST);
                     }
                 }
             } else {
@@ -1600,10 +1602,14 @@ pub(super) async fn meta_mcp_handler(
             let mut call_response = if let Some(response) = replay {
                 response
             } else {
-                state
-                    .meta_mcp
-                    .handle_tools_call(id, tool_name, arguments, Some(session_id.as_str()), caller)
-                    .await
+                Box::pin(state.meta_mcp.handle_tools_call(
+                    id,
+                    tool_name,
+                    arguments,
+                    Some(session_id.as_str()),
+                    caller,
+                ))
+                .await
             };
 
             // Firewall: post-invocation response scan + credential redaction.
@@ -1630,38 +1636,35 @@ pub(super) async fn meta_mcp_handler(
                         external_server: "gateway",
                         external_tool: &external_tool,
                     };
-                    match fw.check_response_artifact(
+                    if let Ok(verdict) = fw.check_response_artifact(
                         result_val,
                         &response_targets,
                         &correlation,
                         crate::security::response_policy::ResponseArtifactKind::FinalResponse,
                         crate::security::response_policy::ResponseMutationPolicy::Redact,
                     ) {
-                        Ok(verdict) => {
-                            if !verdict.allowed || verdict.action == FirewallAction::Block {
-                                warn!(
-                                    targets = response_targets.len(),
-                                    findings = verdict.findings.len(),
-                                    "Firewall: response blocked"
-                                );
-                                refused = true;
-                            } else if verdict.action == FirewallAction::Warn {
-                                warn!(
-                                    targets = response_targets.len(),
-                                    findings = verdict.findings.len(),
-                                    "Firewall: response warning"
-                                );
-                            }
-                        }
-                        // No authenticated target means nothing can admit this
-                        // artifact; fail closed exactly as a Block would.
-                        Err(_) => {
+                        if !verdict.allowed || verdict.action == FirewallAction::Block {
                             warn!(
                                 targets = response_targets.len(),
-                                "Firewall: response inspection lacked a policy target"
+                                findings = verdict.findings.len(),
+                                "Firewall: response blocked"
                             );
                             refused = true;
+                        } else if verdict.action == FirewallAction::Warn {
+                            warn!(
+                                targets = response_targets.len(),
+                                findings = verdict.findings.len(),
+                                "Firewall: response warning"
+                            );
                         }
+                    } else {
+                        // No authenticated target means nothing can admit this
+                        // artifact; fail closed exactly as a Block would.
+                        warn!(
+                            targets = response_targets.len(),
+                            "Firewall: response inspection lacked a policy target"
+                        );
+                        refused = true;
                     }
                 }
                 if refused {
