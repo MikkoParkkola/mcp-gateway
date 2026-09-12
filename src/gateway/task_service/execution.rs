@@ -365,7 +365,7 @@ impl TaskExecutor {
     }
 
     pub(crate) async fn commit(&self, write: TaskWrite<'_>) -> Result<WriteOutcome, CommitFailure> {
-        let (outcome, was_created, stage, task_id) = match write {
+        let (outcome, wrote, stage, task_id) = match write {
             TaskWrite::Create {
                 request,
                 task,
@@ -379,7 +379,7 @@ impl TaskExecutor {
                     })
                     .await
                     .map_err(CommitFailure::Service)?;
-                let was_created = matches!(created, CreateOutcome::Created { .. });
+                let wrote = matches!(created, CreateOutcome::Created { .. });
                 let id = match &created {
                     CreateOutcome::Created { task, .. } | CreateOutcome::Existing(task) => {
                         task.task.id().to_owned()
@@ -388,7 +388,7 @@ impl TaskExecutor {
                 };
                 (
                     WriteOutcome::Create(created),
-                    was_created,
+                    wrote,
                     CommitStage::Published,
                     id,
                 )
@@ -423,7 +423,7 @@ impl TaskExecutor {
                     .await?
             }
         };
-        if was_created {
+        if wrote {
             self.published(&outcome, &task_id);
             self.notify_observer(stage, &task_id).await;
         }
