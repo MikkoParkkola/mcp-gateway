@@ -30,7 +30,7 @@ fn response(id: Option<RequestId>, body: Value) -> JsonRpcResponse {
 
 fn verify(
     response: &JsonRpcResponse,
-    expected_id: Value,
+    expected_id: &Value,
     expected_nonce: Option<&str>,
     key: &str,
 ) -> std::result::Result<Value, String> {
@@ -93,7 +93,7 @@ fn signing_v2_fixed_vector_authenticates_the_exact_delivered_envelope() {
     );
     let verified = verify(
         &response,
-        json!({"kind": "number", "value": "1"}),
+        &json!({"kind": "number", "value": "1"}),
         Some("test-nonce"),
         KEY,
     )
@@ -138,7 +138,7 @@ fn signing_v2_typed_request_id_vectors_include_i64_extrema_and_null() {
         if response.result.as_ref().expect("result")["_signature"]["sig"] != expected_mac {
             mismatches.push(expected_id.clone());
         }
-        if let Err(error) = verify(&response, expected_id.clone(), Some("test-nonce"), KEY) {
+        if let Err(error) = verify(&response, &expected_id, Some("test-nonce"), KEY) {
             mismatches.push(json!({"id": expected_id, "verification": error}));
         }
     }
@@ -168,7 +168,7 @@ fn signing_v2_jcs_unicode_fraction_and_exponent_vector_is_interoperable() {
         response.result.as_ref().expect("result")["_signature"]["sig"],
         "9deaafde7102ed0e4fb66513836842251c46035c009cca9c8a187625e5197f7f"
     );
-    let verified = verify(&response, expected_id, Some("vector-🦀"), KEY)
+    let verified = verify(&response, &expected_id, Some("vector-🦀"), KEY)
         .expect("Node verifies Rust JCS output");
     assert_eq!(verified["result"]["nested"], body["nested"]);
 }
@@ -190,7 +190,7 @@ fn signing_v2_nonce_and_timestamp_each_change_the_mac() {
             response.result.as_ref().unwrap()["_signature"]["ts"],
             timestamp
         );
-        verify(&response, json!({"kind":"number","value":"1"}), nonce, KEY)
+        verify(&response, &json!({"kind":"number","value":"1"}), nonce, KEY)
             .expect("independent verifier authenticates each nonce/timestamp row");
         signatures.insert(
             response.result.as_ref().expect("result")["_signature"]["sig"]
@@ -214,7 +214,7 @@ fn signing_v2_relabeling_fails_mac_after_expected_metadata_matches() {
         .expect("sign original");
     verify(
         &response,
-        json!({"kind":"number", "value":"1"}),
+        &json!({"kind":"number", "value":"1"}),
         Some("test-nonce"),
         KEY,
     )
@@ -224,7 +224,7 @@ fn signing_v2_relabeling_fails_mac_after_expected_metadata_matches() {
     assert!(
         verify(
             &forged_nonce,
-            json!({"kind":"number", "value":"1"}),
+            &json!({"kind":"number", "value":"1"}),
             Some("forged-nonce"),
             KEY
         )
@@ -235,7 +235,7 @@ fn signing_v2_relabeling_fails_mac_after_expected_metadata_matches() {
     assert!(
         verify(
             &response,
-            json!({"kind":"string", "value":"1"}),
+            &json!({"kind":"string", "value":"1"}),
             Some("test-nonce"),
             KEY
         )
@@ -255,7 +255,7 @@ fn signing_v2_replaces_top_level_signature_and_authenticates_nested_signature_da
         .expect("sign envelope");
     let verified = verify(
         &response,
-        json!({"kind":"number", "value":"1"}),
+        &json!({"kind":"number", "value":"1"}),
         Some("test-nonce"),
         KEY,
     )
@@ -268,7 +268,7 @@ fn signing_v2_replaces_top_level_signature_and_authenticates_nested_signature_da
     assert!(
         verify(
             &response,
-            json!({"kind":"number", "value":"1"}),
+            &json!({"kind":"number", "value":"1"}),
             Some("test-nonce"),
             KEY
         )
@@ -353,12 +353,12 @@ fn signing_v2_current_key_signs_and_previous_key_does_not_verify() {
     signer
         .sign_json_rpc_response_at(&mut response, None, TIMESTAMP)
         .expect("sign under current key");
-    verify(&response, json!({"kind":"number", "value":"1"}), None, KEY)
+    verify(&response, &json!({"kind":"number", "value":"1"}), None, KEY)
         .expect("current key verifies");
     assert!(
         verify(
             &response,
-            json!({"kind":"number", "value":"1"}),
+            &json!({"kind":"number", "value":"1"}),
             None,
             PREVIOUS
         )
@@ -412,7 +412,7 @@ fn signing_v2_defensive_nonce_exact_byte_boundaries_verify() {
             .expect("valid nonce byte boundary");
         verify(
             &response,
-            json!({"kind":"number","value":"1"}),
+            &json!({"kind":"number","value":"1"}),
             Some(&nonce),
             KEY,
         )

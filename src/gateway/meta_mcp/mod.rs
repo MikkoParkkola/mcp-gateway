@@ -2050,8 +2050,7 @@ fn task_backend_name(meta: &MetaMcp, tool_name: &str, arguments: &Value) -> Stri
             .get("tool")
             .and_then(Value::as_str)
             .and_then(|tool_ref| tool_ref.split_once(':'))
-            .map(|(server, _)| server.to_owned())
-            .unwrap_or_else(|| "execute".to_owned()),
+            .map_or_else(|| "execute".to_owned(), |(server, _)| server.to_owned()),
         "gateway_run_playbook" => "playbook".to_owned(),
         other => other.to_owned(),
     }

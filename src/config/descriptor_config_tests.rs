@@ -165,6 +165,10 @@ fn configured_personal_managed_descriptors_roundtrip_without_custody_or_secret_r
     assert!(!fx.authority_dir.exists());
 }
 
+/// A named reject-table case: a label and the mutation it applies to an
+/// otherwise-valid descriptor before asserting it is refused.
+type RejectCase = (&'static str, fn(&mut Value));
+
 #[test]
 fn structurally_invalid_managed_descriptors_reject_against_a_valid_anchor() {
     let root = tempfile::TempDir::new().unwrap();
@@ -195,9 +199,9 @@ fn structurally_invalid_managed_descriptors_reject_against_a_valid_anchor() {
     Config::load_evaluated(Some(&urn_fixture.config))
         .expect("an absolute URN resource must be accepted");
 
-    let cases: &[(&str, fn(&mut Value))] = &[
+    let cases: &[RejectCase] = &[
         ("unknown mode spelling", |d| {
-            d["mode"] = json!("personal-managed")
+            d["mode"] = json!("personal-managed");
         }),
         ("missing mode", |d| {
             d.as_object_mut().unwrap().remove("mode");
@@ -218,25 +222,25 @@ fn structurally_invalid_managed_descriptors_reject_against_a_valid_anchor() {
             d["scopes"] = json!([
                 "https://www.googleapis.com/auth/gmail.readonly",
                 "https://www.googleapis.com/auth/gmail.readonly"
-            ])
+            ]);
         }),
         ("non-HTTPS callback", |d| {
-            d["redirect_uri"] = json!("http://gateway.example.com/oauth/callback")
+            d["redirect_uri"] = json!("http://gateway.example.com/oauth/callback");
         }),
         ("literal client_secret_ref", |d| {
-            d["client_secret_ref"] = json!("inline-literal-not-a-reference")
+            d["client_secret_ref"] = json!("inline-literal-not-a-reference");
         }),
         ("unknown descriptor field", |d| {
-            d["token_ttl_seconds"] = json!(300)
+            d["token_ttl_seconds"] = json!(300);
         }),
         ("relative resource", |d| {
-            d["resource"] = json!("/auth/gmail")
+            d["resource"] = json!("/auth/gmail");
         }),
         ("non-HTTPS issuer", |d| {
-            d["issuer"] = json!("http://accounts.google.com")
+            d["issuer"] = json!("http://accounts.google.com");
         }),
         ("hostless https token_endpoint", |d| {
-            d["token_endpoint"] = json!("https://")
+            d["token_endpoint"] = json!("https://");
         }),
     ];
 

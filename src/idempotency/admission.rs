@@ -295,6 +295,18 @@ impl ExecutionAdmission {
         }))
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Superseded, not deferred: production already reclaims inline \
+                      under slot pressure (`state.reclaim(now)` at admission.rs:279 \
+                      and :711), so no caller needs this wrapper. It is retained \
+                      because the admission tests have no other way to trigger and \
+                      observe `State::reclaim`, which production does run. Delete it \
+                      with those tests if that accounting moves elsewhere."
+        )
+    )]
     pub(crate) fn reclaim_completed(&self) -> usize {
         let now = (self.clock)();
         self.state.lock().reclaim(now)
@@ -654,7 +666,7 @@ impl ExecutionAdmission {
     }
 
     #[cfg(not(test))]
-    fn fire_lock_witness(&self) {}
+    fn fire_lock_witness() {}
 
     /// Task-mode admission. `admit` keeps its exact signature and behaviour for
     /// Sync; this is the only entry point that can mint a task lease.
@@ -668,7 +680,10 @@ impl ExecutionAdmission {
         let principal_digest = canonical_json_sha256(&json!([PRINCIPAL_TAG, request.principal]));
         let (identity, mut candidate) = request.prepare()?;
         let now = (self.clock)();
+        #[cfg(test)]
         self.fire_lock_witness();
+        #[cfg(not(test))]
+        Self::fire_lock_witness();
         let mut state = self.state.lock();
         if state
             .entries
@@ -726,6 +741,16 @@ impl ExecutionAdmission {
     /// COMPLETE entry and accounts its bytes exactly as `admit` does, so a
     /// post-restart retry is not a false `Mismatch` and a later release cannot
     /// underflow the counter.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Single-record variant superseded by the plural `import_tasks`, \
+                      which builds its own two-phase transaction and is the path \
+                      `TaskService::open` takes (src/gateway/task_service/service.rs:90). \
+                      Retained only for the per-record admission tests."
+        )
+    )]
     pub(crate) fn import_task(
         self: &Arc<Self>,
         restored: &RestoredBinding,
@@ -755,13 +780,13 @@ impl ExecutionAdmission {
     /// own the earlier keys of a batch its later record refuses.
     pub(crate) fn import_tasks(
         &self,
-        restored: Vec<(RestoredBinding, String)>,
+        restored: &[(RestoredBinding, String)],
     ) -> Result<(), Refusal> {
         if restored.is_empty() {
             return Ok(());
         }
         let mut prepared = Vec::with_capacity(restored.len());
-        for (record, task_id) in &restored {
+        for (record, task_id) in restored {
             // A binding whose handle is unusable restores an unreachable task.
             if task_id.is_empty() {
                 return Err(Refusal::InvalidIdentity);
@@ -847,7 +872,7 @@ impl ExecutionAdmission {
 
     /// Sole principal hasher. Empty identity is refused; oversize is refused
     /// before hashing. Bound is the existing `METADATA_LIMIT`.
-    pub(crate) fn owner(&self, principal: &str) -> Result<TaskOwner, Refusal> {
+    pub(crate) fn owner(principal: &str) -> Result<TaskOwner, Refusal> {
         if principal.is_empty() {
             return Err(Refusal::InvalidIdentity);
         }

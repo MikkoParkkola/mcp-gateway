@@ -65,7 +65,7 @@ fn adapter(installation_id: &str, variable: &str) -> AdapterConfig {
 
 /// Exactly 32 ASCII bytes, distinct per `tag`.
 fn secret_32(tag: char) -> String {
-    std::iter::repeat(tag).take(32).collect()
+    std::iter::repeat_n(tag, 32).collect()
 }
 
 fn no_store_keys() -> BTreeMap<String, Vec<u8>> {
@@ -74,7 +74,7 @@ fn no_store_keys() -> BTreeMap<String, Vec<u8>> {
 
 #[test]
 fn secret_of_thirty_one_bytes_is_refused() {
-    let short: String = std::iter::repeat('a').take(31).collect();
+    let short: String = std::iter::repeat_n('a', 31).collect();
     let overlay = FakeOverlay::new(&[("OPENWEBUI_HMAC", short.as_str())]);
 
     let error = resolve_secrets(

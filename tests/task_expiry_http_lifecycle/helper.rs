@@ -52,12 +52,11 @@ impl CountedBackend {
                 tokio::time::sleep(POLL_GAP).await;
             }
         };
-        if tokio::time::timeout(READY_BOUND, observe).await.is_err() {
-            panic!(
-                "the backend saw {} dispatch(es) within {READY_BOUND:?}, expected {expected}",
-                self.calls()
-            );
-        }
+        assert!(
+            tokio::time::timeout(READY_BOUND, observe).await.is_ok(),
+            "the backend saw {} dispatch(es) within {READY_BOUND:?}, expected {expected}",
+            self.calls()
+        );
         assert_eq!(
             self.calls(),
             expected,
@@ -65,7 +64,7 @@ impl CountedBackend {
         );
     }
 
-    fn result(&self) -> Value {
+    fn result() -> Value {
         json!({
             "content": [{ "type": "text", "text": MARKER }],
             "structuredContent": { "marker": MARKER }
@@ -120,7 +119,7 @@ async fn mcp_handler(
         }),
         "tools/call" => {
             backend.calls.fetch_add(1, Ordering::SeqCst);
-            backend.result()
+            CountedBackend::result()
         }
         _ => json!({}),
     };
@@ -207,7 +206,12 @@ pub fn durable_records(root: &Path) -> Vec<String> {
     entries
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
-        .filter(|name| name.starts_with("task-") && name.ends_with(".json"))
+        .filter(|name| {
+            name.starts_with("task-")
+                && Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        })
         .collect()
 }
 
@@ -280,12 +284,11 @@ impl Gateway {
                 tokio::time::sleep(POLL_GAP).await;
             }
         };
-        if tokio::time::timeout(READY_BOUND, ready).await.is_err() {
-            panic!(
-                "the gateway never answered on {url} within {READY_BOUND:?}\n{}",
-                self.logs()
-            );
-        }
+        assert!(
+            tokio::time::timeout(READY_BOUND, ready).await.is_ok(),
+            "the gateway never answered on {url} within {READY_BOUND:?}\n{}",
+            self.logs()
+        );
     }
 
     pub async fn post(&self, client: &reqwest::Client, body: &Value) -> Value {
@@ -336,9 +339,9 @@ impl Gateway {
 
         match tokio::time::timeout(EXIT_BOUND, self.child.wait()).await {
             Ok(status) => status.expect("the owned child is waitable"),
-            Err(_) => panic!(
-                "pid {pid} did not exit within {EXIT_BOUND:?} of SIGTERM: the graceful \
-                 shutdown never completed, so the store lease is still held\n{}",
+            Err(elapsed) => panic!(
+                "pid {pid} did not exit within {EXIT_BOUND:?} of SIGTERM ({elapsed}): the \
+                 graceful shutdown never completed, so the store lease is still held\n{}",
                 self.logs()
             ),
         }

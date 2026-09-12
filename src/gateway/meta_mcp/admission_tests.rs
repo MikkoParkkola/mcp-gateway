@@ -158,8 +158,8 @@ fn refusal(result: Result<SyncAdmission>) -> Error {
 fn revoked_replay(
     is_modern: bool,
     tool: &str,
-    args: Value,
-    changed_args: Value,
+    args: &Value,
+    changed_args: &Value,
     targets: &[(&'static str, &'static str)],
 ) {
     let meta =
@@ -176,10 +176,10 @@ fn revoked_replay(
     let mut caller = context(&policy, &retry);
     // Seed in modern mode; the legacy case must reuse this same owner's key
     // across the protocol transition rather than merely replay legacy work.
-    retained_operation(&meta, &caller, tool, &args);
+    retained_operation(&meta, &caller, tool, args);
     caller.is_modern = is_modern;
     policy.revoked.store(true, Ordering::SeqCst);
-    for request in [&args, &changed_args] {
+    for request in [args, changed_args] {
         policy.seen.lock().clear();
         let error = refusal(admit(&meta, &caller, tool, request, 3));
         assert!(
@@ -198,7 +198,7 @@ fn revoked_replay(
     // Denial cannot discard the original owner. Restored current permission
     // must find the same secured outcome, not a newly admitted operation.
     policy.revoked.store(false, Ordering::SeqCst);
-    assert_replay(admit(&meta, &caller, tool, &args, 4), 4);
+    assert_replay(admit(&meta, &caller, tool, args, 4), 4);
 }
 
 #[test]
@@ -206,8 +206,8 @@ fn sub4_replay_current_policy_single_target_control() {
     revoked_replay(
         true,
         "gateway_invoke",
-        json!({"server":FIRST.0, "tool":FIRST.1, "arguments":{"record":"original"}}),
-        json!({"server":FIRST.0, "tool":FIRST.1, "arguments":{"record":"changed"}}),
+        &json!({"server":FIRST.0, "tool":FIRST.1, "arguments":{"record":"original"}}),
+        &json!({"server":FIRST.0, "tool":FIRST.1, "arguments":{"record":"changed"}}),
         &[FIRST],
     );
 }
@@ -220,7 +220,7 @@ fn sub4_replay_current_policy_code_mode_revocation() {
     ]});
     let mut changed = args.clone();
     changed["chain"][0]["arguments"]["record"] = json!("changed");
-    revoked_replay(true, "gateway_execute", args, changed, &[FIRST, SECOND]);
+    revoked_replay(true, "gateway_execute", &args, &changed, &[FIRST, SECOND]);
 }
 
 #[test]
@@ -228,8 +228,8 @@ fn sub4_replay_current_policy_playbook_revocation() {
     revoked_replay(
         true,
         "gateway_run_playbook",
-        json!({"name":"protected-plan", "arguments":{"record":"original"}}),
-        json!({"name":"protected-plan", "arguments":{"record":"changed"}}),
+        &json!({"name":"protected-plan", "arguments":{"record":"original"}}),
+        &json!({"name":"protected-plan", "arguments":{"record":"changed"}}),
         &[FIRST, SECOND],
     );
 }
@@ -293,8 +293,8 @@ fn sub4_replay_current_policy_legacy_keyed_opt_in() {
     revoked_replay(
         false,
         "gateway_run_playbook",
-        json!({"name":"protected-plan", "arguments":{"record":"original"}}),
-        json!({"name":"protected-plan", "arguments":{"record":"changed"}}),
+        &json!({"name":"protected-plan", "arguments":{"record":"original"}}),
+        &json!({"name":"protected-plan", "arguments":{"record":"changed"}}),
         &[FIRST, SECOND],
     );
 }
@@ -331,7 +331,7 @@ fn sub4_preflight_preserves_legacy_unkeyed_per_step_authorization() {
     }
 }
 
-fn profile_replay(tool: &str, args: Value, changed_args: Value) {
+fn profile_replay(tool: &str, args: &Value, changed_args: &Value) {
     use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
     let profiles = std::collections::HashMap::from([
         (
@@ -356,11 +356,11 @@ fn profile_replay(tool: &str, args: Value, changed_args: Value) {
     };
     let mut caller = context(&policy, &retry);
     caller.is_modern = false;
-    retained_operation(&meta, &caller, tool, &args);
+    retained_operation(&meta, &caller, tool, args);
     meta.session_profiles()
         .set_profile("legacy:session", "restricted");
     assert!(meta.active_profile(None).check(SECOND.0, SECOND.1).is_ok());
-    for request in [&args, &changed_args] {
+    for request in [args, changed_args] {
         let error = refusal(admit(&meta, &caller, tool, request, 3));
         assert!(
             matches!(&error, Error::Protocol(message)
@@ -370,15 +370,15 @@ fn profile_replay(tool: &str, args: Value, changed_args: Value) {
     }
     meta.session_profiles()
         .set_profile("legacy:session", "open");
-    assert_replay(admit(&meta, &caller, tool, &args, 4), 4);
+    assert_replay(admit(&meta, &caller, tool, args, 4), 4);
 }
 
 #[test]
 fn sub4_replay_current_profile_playbook() {
     profile_replay(
         "gateway_run_playbook",
-        json!({"name":"protected-plan", "arguments":{"record":"original"}}),
-        json!({"name":"protected-plan", "arguments":{"record":"changed"}}),
+        &json!({"name":"protected-plan", "arguments":{"record":"original"}}),
+        &json!({"name":"protected-plan", "arguments":{"record":"changed"}}),
     );
 }
 
@@ -386,9 +386,9 @@ fn sub4_replay_current_profile_playbook() {
 fn sub4_replay_current_profile_code_mode() {
     profile_replay(
         "gateway_execute",
-        json!({"chain":[{"tool":format!("{}:{}",FIRST.0,FIRST.1)},
+        &json!({"chain":[{"tool":format!("{}:{}",FIRST.0,FIRST.1)},
             {"tool":format!("{}:{}",SECOND.0,SECOND.1),"arguments":{"record":"original"}}]}),
-        json!({"chain":[{"tool":format!("{}:{}",FIRST.0,FIRST.1)},
+        &json!({"chain":[{"tool":format!("{}:{}",FIRST.0,FIRST.1)},
             {"tool":format!("{}:{}",SECOND.0,SECOND.1),"arguments":{"record":"changed"}}]}),
     );
 }
@@ -397,8 +397,8 @@ fn sub4_replay_current_profile_code_mode() {
 fn sub4_replay_current_profile_single_target() {
     profile_replay(
         "gateway_invoke",
-        json!({"server":SECOND.0,"tool":SECOND.1,"arguments":{"record":"original"}}),
-        json!({"server":SECOND.0,"tool":SECOND.1,"arguments":{"record":"changed"}}),
+        &json!({"server":SECOND.0,"tool":SECOND.1,"arguments":{"record":"original"}}),
+        &json!({"server":SECOND.0,"tool":SECOND.1,"arguments":{"record":"changed"}}),
     );
 }
 

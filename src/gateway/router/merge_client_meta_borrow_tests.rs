@@ -28,7 +28,7 @@ fn assert_borrowed_alias_eq_owned(arguments: &Value, params: Option<&Value>, is_
         "expected Cow::Borrowed so the no-copy path is observable"
     );
     assert!(
-        std::ptr::eq(&*result, arguments),
+        std::ptr::eq(&raw const *result, arguments),
         "Cow::Borrowed must alias the original arguments Value"
     );
     assert_eq!(result.as_ref(), &owned);

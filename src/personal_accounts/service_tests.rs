@@ -297,10 +297,10 @@ impl<F: Future> Future for FirstPending<F> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let polled = this.inner.as_mut().poll(cx);
-        if polled.is_pending() {
-            if let Some(signal) = this.signal.take() {
-                let _ = signal.send(());
-            }
+        if polled.is_pending()
+            && let Some(signal) = this.signal.take()
+        {
+            let _ = signal.send(());
         }
         polled
     }

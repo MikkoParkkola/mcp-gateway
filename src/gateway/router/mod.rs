@@ -173,8 +173,11 @@ impl AppState {
     }
 }
 
-pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router {
-    let auth_state = AuthState {
+/// The `AuthState` needed by [`auth_middleware`], split out of
+/// [`create_router_with`] purely to keep that function under the line
+/// budget — logic and ordering are unchanged.
+fn build_auth_state(state: &Arc<AppState>) -> AuthState {
+    AuthState {
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
@@ -189,7 +192,11 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
                     .as_deref()
                     .is_some_and(|u| u.starts_with("https://"))
         },
-    };
+    }
+}
+
+pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router {
+    let auth_state = build_auth_state(&state);
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).
     let agent_auth_state = state.agent_auth.clone();

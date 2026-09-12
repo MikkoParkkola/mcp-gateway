@@ -385,7 +385,7 @@ async fn an_external_descriptor_and_a_managed_one_coexist_without_substitution()
     );
 }
 
-/// THE ONE MetaMcp THREADING CONTROL.
+/// THE ONE `MetaMcp` THREADING CONTROL.
 ///
 /// Everything above hands the verified identity to the executor directly, which
 /// proves the credential boundary but not that the GATEWAY fills it. This case
@@ -794,7 +794,7 @@ async fn alice_and_bob_receive_their_own_account_credentials_on_a_multi_user_gat
     );
 }
 
-/// THE MetaMcp MULTI-USER THREADING CASE.
+/// THE `MetaMcp` MULTI-USER THREADING CASE.
 ///
 /// The sibling control
 /// (`meta_mcp_capability_dispatch_carries_the_verified_identity_to_the_account_boundary`)

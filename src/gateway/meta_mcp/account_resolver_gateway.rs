@@ -234,7 +234,7 @@ pub(in super::super) fn gateway(
 /// The permissive authorizer the dispatch entry needs.
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 
-fn caller<'a>(verified_identity: Option<&'a VerifiedIdentity>) -> MetaMcpCallerContext<'a> {
+fn caller(verified_identity: Option<&VerifiedIdentity>) -> MetaMcpCallerContext<'_> {
     MetaMcpCallerContext {
         task: None,
         signing: None,
