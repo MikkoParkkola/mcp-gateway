@@ -52,3 +52,31 @@ divergence, with CodeQL red.
 `fix/v4-integration-ci-green` is 45 commits ahead of `codex/v4-next-integration`
 and 1 behind it (`47f2c23d`), so the CI-green work sits on top of the release
 PR's head and is not itself on any open PR.
+
+## Resolution: the branch now grades against the release line (2026-09-12)
+
+The stale copies were replaced with `origin/main`'s, so the branch and the
+release line answer "how much is done" from one ledger:
+
+- `RELEASE-4.0.0-criteria-status.md`, `RELEASE-4.0.0-blocking-rollup.md` and the
+  surrounding scope documents are taken from `origin/main`.
+- `count-release-criteria.py` is taken with them. The branch copy's criterion-id
+  regex had no ` (clause: <word>)` arm, so it read main's two split
+  `MIK-7272.EXT.1` rows as malformed. A clause suffix is part of a row's
+  identity; the older regex cannot see rows the release line already splits.
+- `check_scope_acceptance.py --check` reported **19 baseline blocking rows** off
+  the stale copy against main's **1**. Eighteen of those nineteen were rows main
+  had already resolved. `NFR.SEC.7` is the one that survives, and it is the
+  phantom recorded above.
+
+The two scope-contract gradings were disjoint rather than contradictory. The
+branch graded the account and lifecycle rows; main graded `MIK-3274.RANKING.2`,
+`.3`, `MIK-7332.DISCOVERY.1` and `MIK-7334.CATALOGUE.1`. The contract now holds
+the union. `MIK-3274.RANKING.1` keeps the branch note, which withdraws the
+2026-09-12 MET grade; the supplemental set therefore reads 8 met, not 9.
+
+`scripts/release/check_tag_manifest.py` and its two test files stay on the
+release line. They assert against `.github/workflows/release.yml` and
+`docker.yml` as main ships them, and six of their checks fail on this branch's
+older workflows — evidence that the branch trails the release line on release
+tooling as well, not a defect to fix here.
