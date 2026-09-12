@@ -809,11 +809,47 @@ mod http {
         }
     }
 
+    /// The answer to a request, keeping the content type apart from the body.
+    ///
+    /// `post_as` collapses two different answers to a null `Value`: an admitted
+    /// stream, which has no body to collect, and a non-JSON response, which
+    /// fails to parse. A row that reads admission off `is_null()` therefore
+    /// cannot tell an open stream from a 200 that carried nothing, so the rows
+    /// that turn on an admission read this instead.
+    #[derive(Debug)]
+    pub(super) struct Answer {
+        pub status: StatusCode,
+        pub content_type: String,
+        pub body: Value,
+    }
+
+    impl Answer {
+        /// An admitted `subscriptions/listen` is an open SSE stream. Nothing
+        /// else on this route answers with that content type.
+        pub fn is_open_stream(&self) -> bool {
+            self.status == StatusCode::OK && self.content_type.starts_with("text/event-stream")
+        }
+    }
+
     pub(super) async fn post_as(
         state: Arc<AppState>,
         principal: Option<&str>,
         body: Value,
     ) -> (StatusCode, Value) {
+        let answer = post_answer(state, principal, body).await;
+        (answer.status, answer.body)
+    }
+
+    /// As [`post_as`], keeping the content type the body decision was made on.
+    pub(super) async fn post_answer_against(
+        state: Arc<AppState>,
+        principal: &str,
+        body: Value,
+    ) -> Answer {
+        post_answer(state, Some(principal), body).await
+    }
+
+    async fn post_answer(state: Arc<AppState>, principal: Option<&str>, body: Value) -> Answer {
         let method = body["method"].as_str().unwrap_or_default().to_string();
         let mut builder = Request::builder()
             .method("POST")
@@ -861,21 +897,27 @@ mod http {
         // draining its body never returns. Content-type is what separates the
         // two answers: a refusal is `application/json` and must be read and
         // compared; a stream is `text/event-stream` and has no body to collect.
-        let streaming = response
+        let content_type = response
             .headers()
             .get(axum::http::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("text/event-stream"));
-        if streaming {
-            return (status, Value::Null);
+            .unwrap_or_default()
+            .to_string();
+        if content_type.starts_with("text/event-stream") {
+            return Answer {
+                status,
+                content_type,
+                body: Value::Null,
+            };
         }
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("body must read");
-        (
+        Answer {
             status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+            content_type,
+            body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        }
     }
 }
 
@@ -1148,8 +1190,8 @@ mod ownership {
     use super::fixture;
     use super::http::{
         SUBSCRIPTION_CAPACITY, modern, poll_unattributed_until_terminal, post_against,
-        post_unattributed, public_mcp_auth, state, state_from, state_holding, state_over,
-        state_public_mcp, task_id_of, task_invoke,
+        post_answer_against, post_unattributed, public_mcp_auth, state, state_from, state_holding,
+        state_over, state_public_mcp, task_id_of, task_invoke,
     };
 
     /// An id nothing ever created: the negative control every "indistinguishable
@@ -1795,7 +1837,7 @@ mod ownership {
         // `text/event-stream`, which the post helper reports as a null body
         // rather than draining a stream that never ends — so a null body here
         // IS the admission, and the permit it took is the observable.
-        let (status, admitted) = post_against(
+        let admitted = post_answer_against(
             Arc::clone(&fixture.state),
             "key-a",
             modern(
@@ -1806,15 +1848,12 @@ mod ownership {
             ),
         )
         .await;
-        assert_eq!(
-            status,
-            axum::http::StatusCode::OK,
-            "the owner's listen must be admitted, or the disconnect below is a \
-             disconnect of nothing: {admitted}"
-        );
         assert!(
-            admitted.is_null(),
-            "an admitted listen is a stream, not a JSON acknowledgement: {admitted}"
+            admitted.is_open_stream(),
+            "the owner's listen must be admitted AS A STREAM, or the disconnect \
+             below is a disconnect of nothing. Read off the content type, not off \
+             an absent body: a 200 that carried nothing parses to the same null: \
+             {admitted:?}"
         );
 
         // DISCONNECT. The helper dropped the response body when it returned,
@@ -1929,7 +1968,7 @@ mod ownership {
         let task_id = task_id_of(&created);
         fixture.backend.wait_for_calls(1).await;
 
-        let (status, admitted) = post_against(
+        let admitted = post_answer_against(
             Arc::clone(&fixture.state),
             "key-a",
             modern(
@@ -1940,10 +1979,9 @@ mod ownership {
             ),
         )
         .await;
-        assert_eq!(
-            status,
-            axum::http::StatusCode::OK,
-            "the owner's listen must be admitted: {admitted}"
+        assert!(
+            admitted.is_open_stream(),
+            "the owner's listen must be admitted as a stream: {admitted:?}"
         );
         await_no_open_subscriptions(&fixture.state).await;
 
@@ -2064,5 +2102,11 @@ mod ownership {
         let fresh = state_over(empty_dir.path()).await;
 
         refused_identically(&fresh.state, "key-a", 95, "tasks/get", &task_id).await;
+        // Both verbs, as on the row this one falsifies: a control path that
+        // accepted any well-formed id on cancel would be invisible to a
+        // read-only negative. Proved: against the POPULATED store with the get
+        // arm removed, this arm alone fails, and the accepted cancel answers a
+        // bare `{"resultType":"complete"}`.
+        refused_identically(&fresh.state, "key-a", 97, "tasks/cancel", &task_id).await;
     }
 }
