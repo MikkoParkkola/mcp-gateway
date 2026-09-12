@@ -2154,14 +2154,19 @@ mod ownership {
 
         gate.release_all();
 
-        let carried = drain_until_status_event(&mut owner, &task_id).await;
+        let carried = drain_for(&mut owner, &task_id, Expect::TerminalStatus).await;
         assert!(
             carried.is_some(),
-            "the owner's own stream must carry an event naming the task, or the \
-             foreign stream below is empty because nothing was ever emitted"
+            "the owner's own stream must carry a terminal status event for the \
+             task, or the foreign stream below is empty because nothing was ever \
+             emitted"
         );
 
-        let leaked = drain_until_status_event(&mut foreign, &task_id).await;
+        // Deliberately the WIDER predicate on this side. The control needs a
+        // specific event to prove one was emitted at all; the negative must
+        // reject EVERY task notification naming the task, or a gateway that
+        // leaked a `working` frame and withheld the `completed` one would pass.
+        let leaked = drain_for(&mut foreign, &task_id, Expect::AnyTaskEvent).await;
         assert!(
             leaked.is_none(),
             "a principal who does not own the task must receive no event naming \
@@ -2209,30 +2214,54 @@ mod ownership {
         response.into_body().into_data_stream()
     }
 
-    /// Read frames until one names `task_id`, or until the stream goes quiet.
+    /// What a drained frame has to be to count.
+    #[derive(Clone, Copy)]
+    enum Expect {
+        /// The settled status the release produces. Used for the CONTROL: it
+        /// has to prove an event was emitted, so it names the one event the
+        /// release is known to cause.
+        TerminalStatus,
+        /// Any task notification naming the task. Used for the NEGATIVE, which
+        /// must not be satisfied by a gateway that leaks a different frame.
+        AnyTaskEvent,
+    }
+
+    /// Read frames until one matches, or until the drain's deadline passes.
     ///
-    /// Bounded on purpose in BOTH directions: a subscription stream stays open,
-    /// so "nothing arrived" can only ever be a timeout, and the same bound is
-    /// used for the control and for the negative so the two are comparable.
-    async fn drain_until_status_event(
+    /// ONE deadline for the whole drain, not one per chunk: the stream stays
+    /// open and sends a keepalive every 15s, so a per-chunk timeout that
+    /// restarts on every frame would never conclude "nothing arrived" once
+    /// anything else shares the stream. The same bound serves the control and
+    /// the negative, so the two observations are comparable.
+    ///
+    /// Frames are appended to a rolling buffer rather than matched one chunk at
+    /// a time. In this in-process path `axum::response::Sse` writes a whole
+    /// event per frame, so a split is not expected — but a matcher that can
+    /// only see inside one chunk would answer "no leak" if framing ever
+    /// changed, which is the wrong way for this row to fail.
+    async fn drain_for(
         stream: &mut axum::body::BodyDataStream,
         task_id: &str,
+        expect: Expect,
     ) -> Option<String> {
         use futures::StreamExt;
 
-        loop {
-            let chunk = tokio::time::timeout(fixture::BOUND, stream.next())
-                .await
-                .ok()??;
-            let text = String::from_utf8(chunk.expect("chunk").to_vec()).expect("utf-8");
-            // The ACK also names the taskIds the listen was accepted with, so
-            // naming the task is not enough: what is looked for is the
-            // STATUS EVENT the release produces. A row that accepted the ack
-            // would prove only that the echo is narrowed, never that an event
-            // fails to travel.
-            if text.contains(task_id) && text.contains("completed") {
-                return Some(text);
+        let drained = tokio::time::timeout(fixture::BOUND, async {
+            let mut seen = String::new();
+            while let Some(chunk) = stream.next().await {
+                seen.push_str(&String::from_utf8(chunk.ok()?.to_vec()).ok()?);
+                let matched = seen.contains(task_id)
+                    && match expect {
+                        Expect::TerminalStatus => seen.contains("completed"),
+                        Expect::AnyTaskEvent => seen.contains("notifications/tasks"),
+                    };
+                if matched {
+                    return Some(seen);
+                }
             }
-        }
+            None
+        })
+        .await;
+        drained.ok().flatten()
     }
 }
