@@ -100,9 +100,11 @@ build_arm() {
   local sha; sha="$(git -C "$REPO" rev-parse "${ref}^{commit}")"
 
   echo "[build] cell $cell ref $ref sha $sha"
-  # Retire the administrative entry too. `rm -rf` alone leaves a stale record in
-  # the shared worktree list that every other agent on this repo would see.
-  git -C "$REPO" worktree remove "$dir" 2>/dev/null || rm -rf "$dir"
+  # A rebuilt arm carries several GB of untracked target/ output, which
+  # `worktree remove` refuses to delete and this repo forbids forcing past. So
+  # delete the directory outright and prune the administrative entry after,
+  # rather than leading with a removal that can only ever fail here.
+  rm -rf "$dir"
   git -C "$REPO" worktree prune
   git -C "$REPO" worktree add --detach "$dir" "$sha" >/dev/null
   ( cd "$dir" && cargo build --release --locked --features "$FEATURES" )
