@@ -177,6 +177,15 @@ fn shared_descriptor_backend() -> BackendConfig {
     }
 }
 
+fn error_message(response: &JsonRpcResponse) -> String {
+    response
+        .error
+        .as_ref()
+        .expect("the refusal must carry an error")
+        .message
+        .clone()
+}
+
 async fn prompts_get(meta: &MetaMcp) -> JsonRpcResponse {
     meta.handle_prompts_get(
         RequestId::Number(7),
@@ -216,6 +225,15 @@ async fn prompts_get_refuses_a_personal_managed_backend_on_a_multi_user_gateway(
         0,
         "the refusal must precede the backend round-trip, not follow it"
     );
+
+    // TWIN of the required-propagation assertion below. Without this arm a
+    // single generic message that never mentions propagation would satisfy both.
+    let message = error_message(&response);
+    assert!(
+        message.contains("`mode: shared`"),
+        "a descriptor binding is resolved by a shared descriptor, and the message \
+         must say so: {message}"
+    );
 }
 
 #[tokio::test]
@@ -249,6 +267,21 @@ async fn prompts_get_refuses_a_required_propagation_backend_on_a_multi_user_gate
          still be that person: {response:?}"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0, "refusal precedes dispatch");
+
+    // The remediation must be per-reason. Propagation is already enabled and
+    // already `required` on this backend, so advising the operator to enable it
+    // points at the one setting that cannot resolve the refusal.
+    let message = error_message(&response);
+    assert!(
+        !message.contains("enabling identity propagation"),
+        "the required-propagation arm must not advise enabling what is already \
+         required: {message}"
+    );
+    assert!(
+        message.contains("required propagation can never be satisfied"),
+        "the operator needs the reason this route cannot carry an end-user \
+         identity: {message}"
+    );
 }
 
 #[tokio::test]

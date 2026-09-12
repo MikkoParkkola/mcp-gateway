@@ -1037,8 +1037,16 @@ impl MetaMcp {
         // Any of them means the gateway-held static credential is somebody's
         // personal login, and every caller of this function resolves no per-user
         // credential of its own (MIK-6745.JOURNEY.3).
-        let reason = if backend.oauth_requires_per_user_isolation() {
-            "uses a gateway-held OAuth login that is not isolated per user"
+        // Each arm carries its OWN remediation: a single generic fix line sent
+        // the propagation arm to "enable identity propagation", which is already
+        // enabled and required there.
+        let (reason, fix) = if backend.oauth_requires_per_user_isolation() {
+            (
+                "uses a gateway-held OAuth login that is not isolated per user",
+                "supply a per-user credential by enabling identity propagation for \
+                 this backend, or set `oauth.shared_account = true` if this is a \
+                 genuinely shared service account",
+            )
         } else if backend.account_descriptor_id().is_some() {
             // A surviving `account` reference is `personal_managed`:
             // `config::account_bindings::Bound::effective` erases it for both
@@ -1047,14 +1055,25 @@ impl MetaMcp {
             // survives a registration rebuilt from raw config that lost its
             // compiled strategy -- the state `refuse_unbound_account_backend`
             // refuses on the call path, refused here for the same reason.
-            "is bound to a personal account descriptor"
+            (
+                "is bound to a personal account descriptor",
+                "give the descriptor a per-user binding, or use an \
+                 `accounts.descriptors` entry with `mode: shared` if this is a \
+                 genuinely shared service account",
+            )
         } else if backend
             .identity_propagation_config()
             .is_some_and(|cfg| cfg.required)
         {
             // `required` means there is no best-effort downgrade that would
             // still be that person (ADR-007 IDP.2/IDP.3).
-            "requires an end-user identity credential that this route cannot resolve"
+            (
+                "requires an end-user identity credential that this route cannot resolve",
+                "this route carries no end-user identity, so a required propagation \
+                 can never be satisfied on it: keep the backend off the meta routes, \
+                 or set `identity_propagation.required = false` and give it a \
+                 genuinely shared service account",
+            )
         } else {
             return Ok(());
         };
@@ -1069,11 +1088,8 @@ impl MetaMcp {
             -32001,
             format!(
                 "Backend '{server}' {reason}. On a multi-user gateway this call is \
-                 refused so one user's credential is never served to another. Fix: \
-                 supply a per-user credential (enable identity propagation for this \
-                 backend), or set `oauth.shared_account = true` / use an \
-                 `accounts.descriptors` entry with `mode: shared` if this is a \
-                 genuinely shared service account."
+                 refused so one user's credential is never served to another. \
+                 Fix: {fix}."
             ),
         ))
     }
