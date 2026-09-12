@@ -14,12 +14,23 @@ means only an operator act can satisfy it.
 
 ## What carries, and the falsifier for carrying it
 
-Forty-five commits separate `a148c94e` from this head and **none of them touches `src/`**:
-`git diff --stat a148c94e..HEAD -- src/` returns nothing. The cargo-side verdicts in the section
-below — formatter, clippy-as-SAST, the 5,470-test suite, the coverage measurement, the dependency
-audit — are therefore carried rather than re-run, and the carry is falsifiable by one command: if
-that diff is ever non-empty, every carried verdict is void and has to be re-measured on Spark. The
-45 commits are release-gate scripts, their tests, and documentation.
+Forty-five commits separate `a148c94e` from this head and **none of them touches anything the
+cargo gates read**. The falsifier has to be at least as wide as the verdicts it carries, and
+`src/` alone is not: `cargo fmt --check` reads every `.rs` file, `cargo clippy --all-targets`
+covers tests and benches, the suite includes `tests/`, and `cargo audit` is a function of
+`Cargo.lock`. So the command run is the complement — everything the delta touches, minus the three
+directories this branch has been working in:
+
+```
+git diff --name-only a148c94e..3e26c369 | rg -v '^(docs/|scripts/release/|\.github/)'
+# no output
+```
+
+Empty. The 45 commits are release-gate scripts, their tests, and documentation, and nothing else.
+The cargo-side verdicts in the section below — formatter, clippy-as-SAST, the 5,470-test suite,
+the coverage measurement, the dependency audit — are therefore **carried**, not asserted and not
+re-run. If that command ever prints a path, every carried verdict is void and has to be re-measured
+on Spark before it may be quoted again.
 
 The Python release gates were re-run on the Mac at this head:
 
@@ -83,7 +94,13 @@ whose explicit indentation indicator the scalar filter missed, a producer expres
 character appended so a prerelease emits `truex`, a guard reading a step id that does not exist, a
 second unguarded `:latest` entry, and the npm dist-tag branches swapped. All ten reproduced as
 TOLERATED before they were fixed. The corpus now stands at 79 cases and the reachability disarms
-are pinned. The lesson generalises past this suite: a hand-written mutation corpus reports agreement
+are pinned — `gate-behind-an-exit-on-the-line-above` and `gate-echoed-as-quoted-data`, the two the
+reviewer rated HIGH/CERTAIN, are both `CAUGHT` rows at this head. "79 cases agree" would also be
+compatible with a hole the corpus had been taught to *expect*, so the twenty `TOLERATED` rows were
+read one by one: every one is an equivalent spelling (a folded scalar, a quoted digest, `true &&`
+before the gate, a note whose body only looks like YAML) where the protection still runs and
+tolerating is the correct answer. None records an accepted disarm, so there is no stated limit
+against a MUST hiding in the expected verdicts. The lesson generalises past this suite: a hand-written mutation corpus reports agreement
 whether the assertions are strong or weak, because corpus and assertions share one author and one
 blind spot.
 
