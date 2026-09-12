@@ -255,6 +255,44 @@ CASES = [
         "      - name: Cosign keyless-sign the released image by digest\n",
         CAUGHT,
     ),
+    # The classification itself. Every guard above reads it from another job;
+    # forcing the producer leaves each guard's text intact and its decision
+    # meaningless.
+    (
+        "verify-output-forced-stable",
+        "release.yml",
+        "      is_prerelease: ${{ steps.channel.outputs.is_prerelease }}",
+        "      is_prerelease: false",
+        CAUGHT,
+    ),
+    (
+        "verify-output-bound-to-a-missing-step",
+        "release.yml",
+        "      is_prerelease: ${{ steps.channel.outputs.is_prerelease }}",
+        "      is_prerelease: ${{ steps.missing.outputs.is_prerelease }}",
+        CAUGHT,
+    ),
+    (
+        "classifying-job-disabled",
+        "release.yml",
+        "  verify:\n",
+        "  verify:\n    if: false\n",
+        CAUGHT,
+    ),
+    (
+        "ci-latest-tag-guard-negated",
+        "ci.yml",
+        "steps.meta.outputs.is_prerelease != 'true' && 'ghcr.io/mikkoparkkola/mcp-gateway:latest'",
+        "!steps.meta.outputs.is_prerelease != 'true' && 'ghcr.io/mikkoparkkola/mcp-gateway:latest'",
+        CAUGHT,
+    ),
+    (
+        "npm-dist-tag-forced-latest",
+        "release.yml",
+        "          DIST_TAG: ${{ needs.verify.outputs.is_prerelease == 'true' && 'next' || 'latest' }}",
+        "          DIST_TAG: latest",
+        CAUGHT,
+    ),
     # Equivalent spellings. A suite that fails these is a suite nobody can
     # reformat a workflow under, which is how textual assertions get deleted.
     (

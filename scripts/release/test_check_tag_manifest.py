@@ -596,6 +596,28 @@ def job_if(workflow, job):
     return ""
 
 
+def job_output(workflow, job, name):
+    """A job's `outputs:` entry for `name`, folded to one line, or None.
+
+    Taken by indentation like `job_if`: the mapping's keys sit six columns in
+    under an `outputs:` key at four. A search of the job body would instead
+    find the same name in a step's `env:`, in an `echo` writing to
+    $GITHUB_OUTPUT, or in a comment — none of which is what a dependent job
+    reads.
+    """
+    lines = jobs(workflow)[job].splitlines()
+    for index, line in enumerate(lines):
+        if not re.match(r"^ {4}outputs:\s*$", line):
+            continue
+        for following in lines[index + 1 :]:
+            if following.strip() and len(following) - len(following.lstrip()) <= 4:
+                break  # the next job key ends the mapping
+            entry = re.match(rf"^ {{6}}{re.escape(name)}:(.*)$", following)
+            if entry:
+                return " ".join(entry.group(1).split())
+    return None
+
+
 def conjuncts(condition):
     """`condition`'s top-level `&&` operands, block indicator and `${{ }}` off."""
     body = re.sub(r"^[>|][-+]?\s*", "", condition.strip())
@@ -721,10 +743,70 @@ class WorkflowWiring(unittest.TestCase):
             # A disjunction makes the guard optional: `!= 'true' || true`
             # matches the clause and skips nothing.
             self.assertNotIn("||", own, f"{workflow} {job}: its skip is not mandatory")
+        # Affirmatively: a leading `!` matches the clause and reverses which
+        # builds are tagged :latest, so the operand is read from its start.
         self.assertRegex(
             condition("ci.yml", "docker"),
-            r"is_prerelease != 'true' && 'ghcr\.io/[^']*:latest'",
+            r"(?<![!\w.])steps\.\w+\.outputs\.is_prerelease != 'true'"
+            r" && 'ghcr\.io/[^']*:latest'",
         )
+
+    def test_the_prerelease_classification_is_computed(self):
+        # Every guard above reads `needs.<job>.outputs.is_prerelease` from
+        # another job. Nothing above reads the job that PRODUCES it. Bind that
+        # output to a constant, or to a step that does not exist, and each
+        # guard keeps its text, stays green, and decides nothing: a guard
+        # reading a constant is not a guard.
+        for workflow, job in (("release.yml", "verify"), ("docker.yml", "build")):
+            body = jobs(workflow)[job]
+            value = job_output(workflow, job, "is_prerelease")
+            self.assertIsNotNone(
+                value, f"{workflow} {job}: declares no is_prerelease output"
+            )
+            source = re.search(
+                r"\$\{\{\s*steps\.(\w+)\.outputs\.is_prerelease\s*\}\}", value
+            )
+            self.assertIsNotNone(
+                source,
+                f"{workflow} {job}: is_prerelease is not a step's output: {value}",
+            )
+            # The step has to exist. `steps.missing.outputs.is_prerelease`
+            # is not an error in Actions — it is the empty string, which
+            # every `!= 'true'` guard downstream reads as a stable release.
+            self.assertRegex(
+                body,
+                rf"(?m)^\s+id:\s*{re.escape(source.group(1))}\s*$",
+                f"{workflow} {job}: no step is id {source.group(1)}",
+            )
+            # A disabled producer is the same failure by another route: the
+            # job never runs, its outputs are empty, and every downstream
+            # guard reads a stable release.
+            self.assertNotIn(
+                "false",
+                conjuncts(job_if(workflow, job)),
+                f"{workflow} {job}: the classifying job is disabled",
+            )
+
+    def test_the_npm_dist_tag_is_chosen_by_the_channel(self):
+        # npm has no skip to delete: a prerelease is published either way, and
+        # the only thing separating `next` from `latest` is this expression.
+        # Hardcode the value and `npm install mcp-gateway` starts resolving to
+        # a release candidate, with every `if:` guard above still green.
+        # The binding is read from the step's own `env:` mapping, so the same
+        # text echoed by a script does not satisfy it.
+        bindings = [
+            entry
+            for block in steps("release.yml")
+            for entry in env_of(block)
+            if entry.startswith("DIST_TAG:")
+        ]
+        self.assertTrue(bindings, "release.yml: nothing binds DIST_TAG")
+        for binding in bindings:
+            self.assertRegex(
+                binding,
+                r"\$\{\{[^}]*needs\.\w+\.outputs\.is_prerelease[^}]*\}\}",
+                f"release.yml: DIST_TAG is not chosen by the channel: {binding}",
+            )
 
     def test_both_ghcr_publishers_sign_what_they_push(self):
         # Both push :VERSION from the same commit on the same tag with no
