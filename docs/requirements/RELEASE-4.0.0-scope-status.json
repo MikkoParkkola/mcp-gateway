@@ -140,13 +140,12 @@
     },
     {
       "id": "MIK-3274.RANKING.1",
-      "status": "met",
+      "status": "pending",
       "evidence": [
-        "src/ranking/tests.rs",
         "src/ranking/scoring.rs",
-        "docs/requirements/scope-grading-2026-09-12.md"
+        "src/ranking/tests.rs"
       ],
-      "note": "Graded 2026-09-12. cargo test --lib ranking::: test result: ok. 66 passed; 0 failed; 0 ignored; 4668 filtered out. Implementation in src/ranking/mod.rs and src/ranking/scoring.rs; abbreviation and word-boundary discovery, exact-identifier reliability and Code Mode glob reliability are all inside that passing set. Graded by running the module, not by counting attributes."
+      "note": "Graded 2026-09-12: ABSENT. The 2026-09-12 MET grade is withdrawn. It read 66 passing ranking tests as covering abbreviation and word-boundary discovery without checking that either construct exists. rg -i 'abbrev|word_boundary|levenshtein|edit_distance|fuzzy|acronym' src/ranking/ returns no matches, so no fuzzy ranking is implemented and no test can cover it. src/ranking/{scoring.rs,mod.rs,tests.rs} are byte-identical on origin/main and this branch (blobs a5d786ac, e351b088, e55c15fe), so this row grades the same on both lineages, as docs/requirements/RELEASE-4.0.0-gap-assessment-2026-09-11.md on origin/main already recorded."
     },
     {
       "id": "MIK-3274.RANKING.2",
@@ -226,7 +225,7 @@
     {
       "id": "reference_personal_account_journey",
       "status": "resolved",
-      "selection": "Open WebUI on Spark → gateway → Google Workspace",
+      "selection": "Open WebUI on Spark \u2192 gateway \u2192 Google Workspace",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md"
       ]

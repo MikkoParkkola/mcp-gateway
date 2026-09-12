@@ -64,7 +64,7 @@ The single ignored test was not identified; no row below rests on it.
 
 | ID | Verdict | Evidence | Effort to close |
 |---|---|---|---|
-| MIK-3274.RANKING.1 | MET | `cargo test --lib ranking::` -> `test result: ok. 66 passed; 0 failed; 0 ignored; 4668 filtered out`. Implementation in `src/ranking/{mod.rs,scoring.rs}` with `src/ranking/tests.rs` + `src/ranking/tests/`. Abbreviation and word-boundary scoring, exact-identifier and glob reliability are all inside that passing set. | none |
+| MIK-3274.RANKING.1 | ABSENT (withdrawn MET) | The earlier MET on this row is withdrawn. It inferred coverage from a passing count without checking that the construct exists: `rg -i 'abbrev|word_boundary|levenshtein|edit_distance|fuzzy|acronym' src/ranking/` returns **no matches**, so fuzzy/abbreviation/word-boundary ranking is not implemented and no passing test can cover it. `src/ranking/{scoring.rs,mod.rs,tests.rs}` are byte-identical on `origin/main` and this branch (blobs `a5d786ac`, `e351b088`, `e55c15fe`), so the row grades the same on both lineages — which is what `RELEASE-4.0.0-gap-assessment-2026-09-11.md` on `origin/main` had already recorded. | large — fuzzy matching is unbuilt, not untested |
 | MIK-3274.RANKING.2 | PARTIAL | Usage-feedback ordering exists: `rg -uu -l 'rank_before_truncate\|usage_feedback\|usage_boost' src/` -> `src/ranking/tests.rs` (passing). Disclosure behaviour on the served route passes too: `cargo test --test discovery_tests` -> `ok. 19 passed; 0 failed; 0 ignored`. But no single passing test proves the conjunction the criterion demands — authorization applied **before** disclosure **and** ranking applied **before** truncation, on **both** discovery routes, with usage feedback unable to promote a forbidden tool over an allowed relevant one. | small — one test per route asserting a forbidden high-usage tool never outranks an allowed relevant one, and that truncation happens after ranking |
 | MIK-3274.RANKING.3 | ABSENT (unrecoverable as written) | The criterion requires thresholds "frozen after baseline measurement and **before** ranking implementation". Ranking is already implemented (66 passing tests), and no frozen held-out corpus or threshold artifact exists — `benchmarks/` holds only `public_claims.json`, `token_savings.py`, `live_agent_*.py`, `discovery_response_fixture.json`, `BENCHMARK-RECOVERY.md`. The ordering clause cannot now be satisfied; the row needs a scope amendment or an explicitly retrospective threshold record. | decision, not work — amend the clause or accept a retrospective freeze |
 | MIK-7332.DISCOVERY.1 | PARTIAL | `discovery_tests` 19 passed covers the served consumer surface; tiered disclosure and configured surfaced tools exist: `rg -uu -l 'tiered_disclosure\|surfaced_tools' src/` -> `src/config/mod.rs`, `src/config/tests.rs`, `src/gateway/router/tests.rs`, `src/gateway/meta_mcp_tool_defs.rs`. No test ties the four clauses together on the served surface (authorization-derived exposure + tiering + schema validity + configured surface with consistent guides and invocation permissions). | medium — one integration test over the served surface asserting all four at once |
@@ -91,13 +91,13 @@ the result of looking for the artifact the criterion names.
 
 | Bucket | Count | IDs |
 |---|---|---|
-| MET | 9 | GH462.CONFIG.1, GH452.SESSION.1, MIK-7377.SIGNING.1, MIK-7311.LIFECYCLE.1, MIK-7311.LIFECYCLE.3, MIK-7311.LIFECYCLE.4, MIK-6744.STORE.1, MIK-3274.RANKING.1, NFR.RELEASEGATE.1 |
+| MET | 8 | GH462.CONFIG.1, GH452.SESSION.1, MIK-7377.SIGNING.1, MIK-7311.LIFECYCLE.1, MIK-7311.LIFECYCLE.3, MIK-7311.LIFECYCLE.4, MIK-6744.STORE.1, NFR.RELEASEGATE.1 |
 | PARTIAL | 12 | MIK-7334.CATALOGUE.1, MIK-7388.CANCEL.1, MIK-7311.LIFECYCLE.2, MIK-7311.LIFECYCLE.5, MIK-6744.STORE.2, MIK-6745.JOURNEY.2, MIK-6745.JOURNEY.3, MIK-6746.CONTRACT.1, MIK-3274.RANKING.2, MIK-7332.DISCOVERY.1, MIK-7235.PIN.1, NFR.CONFORMANCE.1 |
-| ABSENT | 10 | MIK-7387.STDIO.1, .2, .3, MIK-6745.JOURNEY.1, MIK-3274.RANKING.3, MIK-6710.AUDIT.1, NFR.WORKLOAD.1, NFR.UPGRADE.1, NFR.DEMO.1, NFR.BUILD.1 |
+| ABSENT | 11 | MIK-7387.STDIO.1, .2, .3, MIK-6745.JOURNEY.1, MIK-3274.RANKING.1, MIK-3274.RANKING.3, MIK-6710.AUDIT.1, NFR.WORKLOAD.1, NFR.UPGRADE.1, NFR.DEMO.1, NFR.BUILD.1 |
 | IMPLEMENTED-UNTESTED | 0 | — |
 | NO-REQUIREMENT | 0 | — |
 
-Row count check: 9 MET + 12 PARTIAL + 10 ABSENT = 31 = the approved supplemental
+Row count check: 8 MET + 12 PARTIAL + 11 ABSENT = 31 = the approved supplemental
 criteria count in `RELEASE-4.0.0-scope-update.md`.
 
 ## Verdict changes against the previous (attribute-counting) pass
