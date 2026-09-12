@@ -189,6 +189,10 @@ Consumption rules, so two implementers cannot produce different rankings:
    that matters most: a single-word query like `k8s` against an untagged
    `kubernetes_list` reaches no coverage tier at all, so without it an admitted
    abbreviation scores `0.0` and is admitted only to be ranked last.
+   Four is verified repo-wide, not assumed: `expand_synonyms` is `pub` and
+   re-exported at `mod.rs:19`, and a sweep of `src/` finds no caller outside
+   these four sites and the unit tests. A fifth caller would otherwise inherit
+   synonym behaviour with no abbreviation behaviour.
 3. Abbreviation matches reuse the existing `SYNONYM_MULTIPLIER = 0.8` discount
    rather than introducing a second constant. Both are "matched only through
    expansion", the scorer already carries exactly one boolean of expansion
@@ -220,6 +224,15 @@ the start of the haystack or immediately preceded by any **non-alphanumeric**
 character (`char::is_alphanumeric` is false). Deriving it this way rather than
 from a fixed ASCII separator list keeps it consistent with the Unicode
 commitment in §3.5 and cannot miss a separator the catalogue adopts later.
+
+Which positions are tested, stated once so two implementers cannot disagree: a
+query word is boundary-aligned against a tool name when **at least one** of its
+occurrences in that name is boundary-aligned, and the candidate is
+boundary-aligned when **every** query word that matched the name is
+boundary-aligned. A single-word query therefore reduces to "any occurrence
+aligns"; a multi-word query is aligned only if all of its matched words are.
+Words that did not match the name at all do not participate — they are already
+accounted for in the score the tie-break is breaking.
 
 Scope: tool names only, not descriptions. Conflicting siblings live in names
 (`gmail_search` / `gmail_send` / `gmail_batch_modify`), and leaving description
@@ -254,6 +267,12 @@ Minimal fix: carry an exact-identifier flag on the result and use it as the
 usage is unbounded, so any floor is beatable by a sufficiently used sibling.
 Both reviewers raised this independently; it is not RANKING.2's row, because
 there both tools are relevant and allowed and the question is purely ordering.
+
+Intended route, because it decides the cost: `rank()` already holds
+`query_lower` and each `result.tool`, so the comparator computes exactness
+inline. No field is added to `pub struct SearchResult`, so neither
+`SearchResult::new` nor `json_to_search_result` changes and no public API
+visibility widens — which is what makes §7 question 1 cheap to answer either way.
 
 The remaining invariants hold by construction: abbreviation matches are
 discounted to 0.8 of a literal match at the same tier (§3.2 rule 3), the
@@ -387,5 +406,11 @@ Findings and disposition:
 | Split the `auth` seed group; authentication and authorization are confusable | Synthetic | Moot — `auth` is a prefix of both and already matches by substring, so it is not in the table at all. |
 | Reuse `SYNONYM_MULTIPLIER` rather than adding a second constant | Codex | Accepted. §3.2 rule 3. |
 | Resolve boundary scope to names only | Synthetic | Accepted. §3.3. |
+
+Three points were tightened after the review round without reopening it, none
+of them reversing a reviewer decision: the boundary tie-break now states which
+match positions it tests (§3.3), the exact-identifier fix names its
+no-API-widening implementation route (§3.4), and the "four expansion sites"
+count is recorded as verified repo-wide rather than asserted (§3.2 rule 2).
 
 No implementation code is written until the two questions in §7 are answered.
