@@ -101,7 +101,9 @@ releases — the frame is whole before the lock is. `write_response` and
 `write_notification` keep their `&mut W` signatures and their generic bound, so
 their own blast radius stays nil; the lock is taken by their callers. Only
 `dispatch_streaming_notifications` changes shape, from `stdout: &mut W` to a
-shared handle it locks once per notification.
+shared handle it locks once per notification, and its `W` bound gains
+`Send + 'static` — satisfied by `Stdout` and by the `tokio::io::duplex` halves its
+three test call sites pass.
 
 **The lock alone is not enough, and this is the subtle part.** `InputBridge::ask`
 wraps its `send_request` call in an outer `tokio::time::timeout` and drops the
@@ -118,6 +120,19 @@ the task, so the frame finishes either way. `Arc<Mutex<Stdout>>` is `'static`, s
 the task needs nothing else moved into it. A write error terminates the loop the
 same way a write error terminates it today — a stdout that cannot be written is
 not a transport.
+
+Spawning every write also settles the question a shared writer always raises on
+this path: **no writer holds the guard across a poll of the dispatch future.**
+`dispatch_streaming_notifications` does not lock stdout for the life of its
+`select!` — it awaits a spawned write per notification, and the guard lives and
+dies inside that task. So the bridge frame written from inside `scoped` and the
+notification written from the arm beside it are two independent tasks queueing on
+the same mutex, not one task waiting on a lock it already holds. Holding the
+guard across the `select!` instead would deadlock `tokio::sync::Mutex`, which is
+not reentrant: the arm would own the lock while the only future that can release
+the bridge's `ask` waits for it. That is the shape to keep out of the
+implementation, and it is why the lock is described per write rather than per
+loop.
 
 Nothing here is a second synchronisation mechanism. It is the only one on this
 path.
@@ -139,6 +154,12 @@ A method-less frame today reaches `dispatch_single_with_sink`, whose
 an unmatched id: only a frame whose id is a live bridge key is diverted, so a
 stray response still gets the same `-32600` it gets today. Nothing observable
 changes for any frame that is not an answer to a question this gateway asked.
+
+The match is on `id.as_str()` against the minted key, not on `id.to_string()`:
+the mint is always a string (`§6`), `to_string` would quote it, and a client that
+answers with a number or any other JSON type has not answered a question this
+gateway asked. Such a frame falls through to the existing `-32600`, which is the
+correct answer to it.
 
 **Malformed lines stay log-and-continue.** The `-32700` arm (`:1656-1665`) and the
 empty-line `continue` are untouched. A line that does not parse as JSON is not a
@@ -186,7 +207,11 @@ Two consequences worth naming rather than discovering:
   bridges, the loop is inside a dispatch that is waiting for an answer it cannot
   read, and the exchange ends at the bridge's own timeout with the same refusal a
   silent client gets. No real client does this, and the alternative — spawning
-  before initialize — is what item 2 of the prior review forbids.
+  before initialize — is what item 2 of the prior review forbids. A batch that
+  arrives before `initialize` is the same case for the same reason: it runs
+  inline, so a bridging member stalls the reader until its bounds expire. After
+  initialize the batch is spawned and the stall is gone; the residual is confined
+  to the window where no client has yet been told the protocol version.
   <!-- ponytail: bounded by BridgeBounds; per-request init gating if a client ever needs it -->
 - `protocol_telemetry_sink` is passed as `Option<&mut DurableTelemetrySink>`
   (`:1701`), and a `&mut` borrow cannot cross into a spawned task any more than
@@ -309,7 +334,7 @@ One more signature-shape guard to keep green: `stdio_dispatch_builds_its_retry_f
 intact, but the field moves further down the body — check the window still
 reaches it.
 
-## 8. The production comment this makes stale
+## 8. The production comments this makes stale
 
 `src/gateway/meta_mcp/invoke.rs:1884-1895` documents why the bridge's
 `NoSession` arm cannot be reached from stdio, and asks to be re-read if either
@@ -345,6 +370,40 @@ The missing `MIK-7212.WIRE.10` row in the MRTR.7 test plan — named in the curr
 comment as the thing that joins the two halves, and still absent — is superseded
 rather than filled: `MIK-7387.STDIO.1` is the row that pins the stdio bridging
 behaviour end to end, and the two halves it was to join no longer exist as a pair.
+
+Two field comments on `MetaMcpCallerContext` go stale in the same change, and
+both are the kind that quietly restore the old value if left standing.
+
+`input_capabilities` (`src/gateway/meta_mcp/mod.rs:143-145`) reads "On stdio there
+is no per-request declaration to read, so this is `Declared::NONE`". That is the
+claim §6 refutes: the declaration is in the same `_meta` the HTTP path already
+parses, and `classify_and_observe` is already called on this path. Replacement:
+
+> Every transport that dispatches supplies this from the request's own
+> classification: both the HTTP handler and the stdio loop read it off the
+> `RequestShape` they already hold, via `RequestShape::declared_capabilities`. A
+> caller that declared nothing is still never sent a continuation — absent means
+> absent — but absent is now a fact about the request, not about the transport.
+
+`era` (`:171-176`) reads "until it does, nothing on the production path reads this
+field". That is already false before this design: the bridge branch at
+`invoke.rs:1821` reads it. Replacement:
+
+> Read on the production path by the bridge branch in `meta_mcp::invoke`, which
+> takes the in-band route only for `Legacy`. Stdio pins `Legacy` at
+> `stdio_caller_context` because it has no modern continuation path to fall back
+> to; `initialize` keeps `shape.era()`, because what it advertises must be what
+> the client declared.
+
+That pin is the one place this design writes an era that is not the era the
+client declared, and it is worth naming as a risk rather than a detail: a second
+production reader of `caller.era`, added later for any purpose other than
+choosing between in-band and continuation, would read `Legacy` for a stdio caller
+that declared a modern revision. The narrower alternative — gate the bridge
+branch on the channel rather than the era — was not taken because it edits a
+condition shared with HTTP to fix a stdio-only fact, and the blast radius runs
+the wrong way. The mitigation is the doc comment above, which says what the pin
+means and what it does not.
 
 ## 9. Explicitly out of scope
 
