@@ -156,6 +156,15 @@ impl super::MetaMcp {
 impl super::MetaMcp {
     /// Admit the whole client-visible question artifact without rewriting it.
     /// The bridge supplies authenticated targets and excludes opaque state.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Implemented and tested, but never called from the response \
+                      dispatch path. Wire-or-delete ruling pending in issue #532; \
+                      this expectation is removed when that issue resolves."
+        )
+    )]
     pub(crate) fn enforce_firewall_challenge(
         &self,
         challenge: &serde_json::Value,

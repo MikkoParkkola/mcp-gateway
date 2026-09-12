@@ -295,6 +295,15 @@ impl ExecutionAdmission {
         }))
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "No production caller; kept for the admission tests that pin \
+                      reclaim accounting. Delete with those tests if the accounting \
+                      assertion moves elsewhere."
+        )
+    )]
     pub(crate) fn reclaim_completed(&self) -> usize {
         let now = (self.clock)();
         self.state.lock().reclaim(now)
@@ -729,6 +738,16 @@ impl ExecutionAdmission {
     /// COMPLETE entry and accounts its bytes exactly as `admit` does, so a
     /// post-restart retry is not a false `Mismatch` and a later release cannot
     /// underflow the counter.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Single-record variant superseded by the plural `import_tasks`, \
+                      which builds its own two-phase transaction and is the path \
+                      `TaskService::open` takes (src/gateway/task_service/service.rs:90). \
+                      Retained only for the per-record admission tests."
+        )
+    )]
     pub(crate) fn import_task(
         self: &Arc<Self>,
         restored: &RestoredBinding,

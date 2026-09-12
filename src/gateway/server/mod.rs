@@ -3138,6 +3138,15 @@ fn spawn_idle_reaper(
 /// asker -- sits in one named place instead of forty lines inside a match
 /// arm. `era` is the caller's because the `initialize` arm advertises
 /// against the same `shape`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Implemented and documented at docs/architecture/bridge-wiring.md:334, \
+                  but the stdio request path never calls it. Wire-or-delete ruling \
+                  pending in issue #533 (MIK-7387)."
+    )
+)]
 fn stdio_caller_context<'a>(
     authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
     era: crate::protocol::meta::Era,
