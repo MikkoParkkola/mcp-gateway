@@ -58,9 +58,15 @@ the merge, and measure the lint backlog against the restored command.
 
 ## 3. The stacked PRs are small; their diffs are not
 
-Every PR targeting `codex/v4-next-integration` carries 1-4 commits. The five-figure diffs
-GitHub shows are an artifact of a stale base: each branch is 85-267 commits *behind* the
-branch it targets, and the compare view charges that drift to the PR.
+Every PR targeting `codex/v4-next-integration` carries 1-4 commits, and each branch is
+85-268 commits *behind* the branch it targets, so the compare view charges that drift to the
+PR. Calling the five-figure diffs a pure artifact was too clean, and the distinction matters
+for sizing. Measured from its own merge-base rather than from the compare view, `#501` is
+still 22 files and 4401 insertions — real content, not display noise. What makes the work
+small is that integration **already carries** all four of its add/add files, differing by 1,
+1, 3 and 26 lines. "The equivalent work already shipped" and "the diff is an artifact"
+predict the same size but different risk: the first makes a resolution mostly a confirmation
+of equivalence, the second would imply there is nothing to confirm.
 
 Measured against current integration with `git merge-tree --write-tree`:
 
@@ -68,8 +74,14 @@ Measured against current integration with `git merge-tree --write-tree`:
 |---|---|---|---|
 | 502, 503, 506, 508, 509, 511 | 1-2 | 85-218 | 0 |
 | 510 | 1 | 85 | 1 (`src/personal_accounts/mod.rs`) |
-| 501 | 2 | 219 | 7 |
-| 499 | 4 | 267 | 7 |
+| 501 | 2 | 220 | 7 |
+| 499 | 4 | 268 | 7 |
+
+Re-measured at integration head `825f3be1`, the stack reads `#501` 7 conflicts, `#504` 6,
+`#507` 7, `#513` 7. `#504` sitting one *below* its own ancestor is not an ancestry error:
+its extra commit `f951ea11` makes `src/gateway/server/mod.rs` merge clean. The ancestry is
+confirmed rather than assumed — `#501`'s `c0687eb3` and `5f2cfff0` appear verbatim in the
+commit lists of `#504`, `#507` and `#513`.
 
 Six of the nine independent PRs merge clean today. Four more sit behind `#501`:
 `#501` is an ancestor of `#504` and of `#507`, and `#507` is an ancestor of `#513`.
