@@ -69,6 +69,11 @@ def red_ci_jobs():
     return 0, ""
 
 
+def integration_tip():
+    """Tip of the integration branch. Not the SHA any CI run was built from."""
+    return sh("git", "rev-parse", "--short", f"origin/{INTEGRATION}")
+
+
 def merge_conflicts():
     """Files that conflict when integration meets main."""
     sh("git", "fetch", "-q", "origin", "main", INTEGRATION)
@@ -99,7 +104,8 @@ def main():
     print(f"RBU total: {total}")
     for k, v in streams.items():
         print(f"  {k}: {v}")
-    print(f"  integration_sha: {sha}")
+    print(f"  ci_run_sha: {sha}")
+    print(f"  integration_tip: {integration_tip()}")
 
     if "--record" in sys.argv:
         new = not LEDGER.exists()
