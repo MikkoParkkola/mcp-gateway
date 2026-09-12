@@ -14,6 +14,18 @@
 >
 > `src/gateway/meta_mcp/invoke.rs:1888` names MIK-7387 as the only thing that lifts the
 > deliberate stdio refusal, and pins the two halves separately: read that arm first.
+>
+> **The gap, stated precisely (verified at source).** The bridge is not unwired. It is
+> constructed and driven in production: `src/gateway/meta_mcp/invoke.rs:1842` builds an
+> `InputBridge` inside `invoke_tool_traced` (`:1079`) and `:1852` calls `bridge.run(...)`,
+> with no `#[cfg(test)]` above either. What the stdio path lacks is a channel. That
+> construction passes `channel: caller.channel`, and on the stdio serving sites
+> (`src/gateway/server/mod.rs:2339,2933`) `caller.channel` is `NoClientChannel`, whose
+> refusal is deliberate. `ProxyManager` implements `ClientChannel`
+> (`src/gateway/proxy.rs:529`) but is HTTP-only. So the work is to implement
+> `ClientChannel` over the `run_stdio` loop's writer and pass it at those two sites --
+> not to give an orphaned bridge a caller.
+
 
 Status: design, not implemented.
 
