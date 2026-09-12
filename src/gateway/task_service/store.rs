@@ -564,7 +564,13 @@ impl Shared {
             .clone()
     }
 
+    // `&self` is load-bearing even here: the cfg(test) twin above reads the
+    // hook slot, and every caller writes `self.hook()`. One shape, two bodies.
     #[cfg(not(test))]
+    #[expect(
+        clippy::unused_self,
+        reason = "keeps one shape with the cfg(test) twin"
+    )]
     fn hook(&self) -> Option<CommitHook> {
         None
     }

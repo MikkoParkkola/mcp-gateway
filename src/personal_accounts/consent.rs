@@ -39,8 +39,11 @@ pub(crate) enum GuardedCommit {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum GuardedCommitError {
     #[error("guarded consent commit is not implemented")]
+    // `unix` in the predicate, not just `not(test)`: on a non-unix target the
+    // module-level expectation in `super` already covers every dead item here,
+    // and two expectations over one diagnostic leave the inner one unfulfilled.
     #[cfg_attr(
-        not(test),
+        all(not(test), unix),
         expect(
             dead_code,
             reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"

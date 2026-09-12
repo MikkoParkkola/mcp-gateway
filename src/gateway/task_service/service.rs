@@ -242,6 +242,9 @@ impl TaskService {
     /// The admission-owned digest for a principal. A principal admission refuses
     /// to hash owns nothing, so it is told what anyone naming a task they do not
     /// own is told.
+    // A method, not an associated function: callers hold a service and should
+    // not have to name the admission type to learn who owns a task.
+    #[expect(clippy::unused_self, reason = "the service is the caller's vocabulary")]
     pub(crate) fn owner(&self, principal: &str) -> Result<TaskOwner, ServiceError> {
         ExecutionAdmission::owner(principal).map_err(|_| ServiceError::NotFound)
     }

@@ -32,9 +32,7 @@ pub(super) fn task_principal(
     verified_identity: Option<&VerifiedIdentity>,
     owner_key: &str,
 ) -> String {
-    verified_identity
-        .map(VerifiedIdentity::stable_actor_id)
-        .unwrap_or_else(|| owner_key.to_owned())
+    verified_identity.map_or_else(|| owner_key.to_owned(), VerifiedIdentity::stable_actor_id)
 }
 
 /// The owner a gateway with authentication switched off records tasks under.
