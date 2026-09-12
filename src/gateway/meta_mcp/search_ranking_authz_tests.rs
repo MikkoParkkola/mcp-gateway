@@ -211,11 +211,11 @@ async fn permissive_profile_sees_the_same_capabilities() {
 ///
 /// Code Mode collects candidates through its own function with its own copy of
 /// the guard, so the classic path passing proves nothing about this one. Code
-/// Mode finalises through `crate::gateway::search_disclosure::finalize_search_matches`,
-/// which emits no pre-truncation count, so this test asserts only that nothing
-/// leaks. The classic-path test's `total_available` carries the stronger claim:
-/// denied tools are absent from the count, which rules out a filter applied
-/// after counting but not a filter applied just before it.
+/// Mode counts candidates at `src/gateway/meta_mcp/search.rs:409`, before the
+/// ranker block and before `finalize_search_matches` truncates, and reports
+/// that count as `total_available`. Asserting it is zero therefore carries the
+/// same strength as the classic path: it distinguishes a backend that was
+/// never collected from one collected and then filtered out of the survivors.
 #[tokio::test]
 async fn code_mode_denied_backend_contributes_no_matches() {
     let (cap_backend, _dirs) = capability_backend(RANKING_FIXTURES).await;
@@ -246,6 +246,11 @@ async fn code_mode_denied_backend_contributes_no_matches() {
         tool_names(&response),
         Vec::<String>::new(),
         "a denied backend must contribute no Code Mode matches"
+    );
+    assert_eq!(
+        response["total_available"], 0,
+        "denied capability tools must not be counted as Code Mode candidates, \
+         so the denial is not a late filter over an already-counted set"
     );
 }
 
@@ -492,6 +497,19 @@ fn poisoned_profile(deny_weak: bool) -> RoutingProfileConfig {
     }
 }
 
+/// As `RANKING_FIXTURES`, collected in the OPPOSITE order: the exact-name
+/// match is collected first and the heavily-used `weak_match` second.
+///
+/// The order matters for the potency controls below. With `RANKING_FIXTURES`,
+/// `weak_match` is collected first, so a `limit` of 1 keeps it whether ranking
+/// promoted it or never ran at all — a control on those fixtures cannot tell
+/// "the boost is potent" from "ranking was skipped". Here the two disagree:
+/// only an applied boost puts `weak_match` ahead of the exact match.
+const POTENCY_FIXTURES: &[(&str, &str)] = &[
+    (QUERY, "the exact name match"),
+    ("weak_match", "a zebracorn adjacent helper"),
+];
+
 /// CONTROL for the two tests below — the poison has to actually work.
 ///
 /// Without a denial, 10^12 uses lift `weak_match` (relevance 2.0) to
@@ -499,10 +517,14 @@ fn poisoned_profile(deny_weak: bool) -> RoutingProfileConfig {
 /// match's 10.0. If this test ever fails the usage boost has stopped being
 /// potent enough to promote anything, and the two denial tests below would
 /// pass whether or not authorization ran.
+///
+/// Uses `POTENCY_FIXTURES`, not `RANKING_FIXTURES`: see the note there. On
+/// `RANKING_FIXTURES` this assertion also holds when ranking is skipped
+/// entirely, which is the one failure mode a potency control exists to catch.
 #[tokio::test]
 async fn heavy_usage_outranks_the_exact_match_when_nothing_is_denied() {
     let (meta, _dirs) = meta_with_ranker(
-        RANKING_FIXTURES,
+        POTENCY_FIXTURES,
         registry_with_default("open", poisoned_profile(false)),
         ranker_with_heavy_usage("weak_match"),
     )
@@ -835,8 +857,9 @@ async fn denied_mcp_backend_never_enters_the_candidate_set() {
 /// INVARIANT A on the Code Mode MCP-backend route —
 /// `src/gateway/meta_mcp/search.rs:238` (`collect_code_mode_backend_matches`).
 ///
-/// Code Mode finalises through `finalize_search_matches`, which emits no
-/// pre-truncation count, so this asserts survivor absence only.
+/// The pre-truncation candidate count is taken at `search.rs:409` and reported
+/// as `total_available`, so this asserts absence from the count as well as from
+/// the survivors.
 #[tokio::test]
 async fn code_mode_denied_mcp_backend_contributes_no_matches() {
     let meta = meta_with_mcp_backend(
@@ -861,6 +884,11 @@ async fn code_mode_denied_mcp_backend_contributes_no_matches() {
         tool_names(&response),
         Vec::<String>::new(),
         "a denied MCP backend must contribute no Code Mode matches"
+    );
+    assert_eq!(
+        response["total_available"], 0,
+        "denied MCP backend tools must not be counted as Code Mode candidates, \
+         so the denial is not a late filter over an already-counted set"
     );
 }
 
@@ -943,4 +971,138 @@ async fn code_mode_forbidden_mcp_tool_loses_to_an_allowed_one() {
         "the denied tool must be absent from Code Mode while its allowed \
          sibling survives"
     );
+}
+
+/// USAGE CLAUSE, boost potency on the Code Mode route — the twin of
+/// `heavy_usage_outranks_the_exact_match_when_nothing_is_denied`.
+///
+/// That control runs the CLASSIC route, which serialises through
+/// `json_to_search_result`; Code Mode uses `json_to_code_mode_search_result`.
+/// If the Code Mode conversion ever dropped the server/tool keying the ranker
+/// looks usage up by, the boost would silently zero, the exact-name match would
+/// win on its bare 10.0, and
+/// `code_mode_forbidden_heavily_used_tool_loses_to_an_allowed_one` would pass
+/// without `tool_allowed` doing anything. This pins the premise that test needs.
+///
+/// On `POTENCY_FIXTURES` for the reason given there: the heavily-used tool is
+/// collected SECOND, so skipping the ranker outright also fails this test.
+#[tokio::test]
+async fn code_mode_heavy_usage_outranks_the_exact_match_when_nothing_is_denied() {
+    let (cap_backend, _dirs) = capability_backend(POTENCY_FIXTURES).await;
+    let meta = MetaMcp::with_features(
+        Arc::new(BackendRegistry::new()),
+        None,
+        None,
+        Some(ranker_with_heavy_usage("weak_match")),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(true)
+    .with_profile_registry(registry_with_default("open", poisoned_profile(false)));
+    meta.set_capabilities(cap_backend);
+
+    let response = meta
+        .code_mode_search(&json!({ "query": QUERY, "limit": 1 }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        vec![format!("{CAP_BACKEND}:weak_match")],
+        "the Code Mode control has stopped controlling: usage feedback no longer \
+         promotes a weaker match on this route, so the Code Mode denial test \
+         proves nothing"
+    );
+}
+
+/// Two equally relevant capabilities whose names share a glob-able prefix.
+///
+/// Neither name equals `QUERY`, so `score_text_relevance` gives them the SAME
+/// non-zero score and usage is the only thing that can reorder them. `_alpha`
+/// is collected first (see `capability_backend_named`), so collection order and
+/// ranked order disagree once `_beta` carries the usage.
+const GLOB_FIXTURES: &[(&str, &str)] = &[
+    ("zebracorn_alpha", "first zebracorn helper"),
+    ("zebracorn_beta", "second zebracorn helper"),
+];
+
+/// CONTROL for the glob carve-out below — ranking must be able to reorder
+/// these two, or the carve-out test would pass whether or not it was applied.
+#[tokio::test]
+async fn code_mode_usage_reorders_these_fixtures_on_a_keyword_query() {
+    let (meta, _dirs) = glob_fixture_meta().await;
+
+    let response = meta
+        .code_mode_search(&json!({ "query": QUERY, "limit": 1 }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        vec![format!("{CAP_BACKEND}:zebracorn_beta")],
+        "ranking must promote the later-collected tool on a keyword query, or \
+         the glob test below cannot tell ranking apart from collection order"
+    );
+}
+
+/// INVARIANT B, the documented glob exception —
+/// `src/gateway/meta_mcp/search.rs:412` (`if !use_glob && let Some(ref ranker)`,
+/// rationale at :411).
+///
+/// The criterion says both routes rank before truncation and names no glob
+/// carve-out, so the exception lives only in a comment. This pins it: a glob
+/// query truncates in COLLECTION order, not ranked order. The control above
+/// proves the ranker is potent against this very pair — on a KEYWORD query it
+/// promotes the later-collected tool — so the carve-out is what holds the glob
+/// order still, not an inert fixture. It does NOT prove ranking would reorder
+/// the GLOB query; see the next paragraph for why nothing could.
+///
+/// The SCORE is what discriminates, not the order. Ranking a glob query does
+/// not reorder these fixtures: `score_text_relevance` scores the literal
+/// pattern `zebracorn_*` at 0.0 for both, and the usage factor is
+/// multiplicative, so `0.0 * (1 + factor)` leaves the 10^12 uses inert and the
+/// collection order intact. Order alone therefore cannot tell the carve-out
+/// apart — verified by removing `!use_glob &&`, which left the order assertion
+/// green. `finalize_search_matches` stamps `score: 1.0` on matches that arrive
+/// unscored, so a glob match scoring 1.0 proves the ranker never touched it;
+/// with the carve-out removed the same match comes back at 0.0.
+///
+/// Fails in both directions on purpose — if a future change starts ranking glob
+/// results, or stops ranking keyword ones, exactly one of this pair goes red.
+#[tokio::test]
+async fn code_mode_glob_results_are_not_reranked() {
+    let (meta, _dirs) = glob_fixture_meta().await;
+
+    let response = meta
+        .code_mode_search(&json!({ "query": "zebracorn_*", "limit": 1 }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        vec![format!("{CAP_BACKEND}:zebracorn_alpha")],
+        "a glob query must truncate in collection order: the ranker is skipped \
+         for globs, so 10^12 uses on the later tool must not promote it"
+    );
+    assert_eq!(
+        response["matches"][0]["score"], 1.0,
+        "glob matches must carry the flat score `finalize_search_matches` stamps \
+         on unscored matches; a real relevance score here means the ranker ran"
+    );
+}
+
+/// The gateway both glob tests share: Code Mode on, usage loaded on the
+/// later-collected `zebracorn_beta`, no denials.
+async fn glob_fixture_meta() -> (MetaMcp, Vec<TempDir>) {
+    let (cap_backend, dirs) = capability_backend_named(CAP_BACKEND, GLOB_FIXTURES).await;
+    let meta = MetaMcp::with_features(
+        Arc::new(BackendRegistry::new()),
+        None,
+        None,
+        Some(ranker_with_heavy_usage("zebracorn_beta")),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(true)
+    .with_profile_registry(registry_with_default("open", poisoned_profile(false)));
+    meta.set_capabilities(cap_backend);
+    (meta, dirs)
 }
