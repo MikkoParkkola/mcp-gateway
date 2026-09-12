@@ -135,9 +135,12 @@
     },
     {
       "id": "MIK-6745.JOURNEY.3",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "src/gateway/meta_mcp/account_entry_point_authz_tests.rs",
+        "src/gateway/meta_mcp/mod.rs"
+      ],
+      "note": "Graded 2026-09-13. cargo test --lib account_entry_point_authz: test result: ok. 8 passed; 0 failed; 0 ignored. Full lib suite: 4754 passed; 0 failed. Parity closed by ff0e3626 (guard at src/gateway/meta_mcp/mod.rs:1019) plus a12ff924 (ordering proof). Clause coverage: a personally-bound backend is refused on prompts/get, prompts/list and resources/read before dispatch; each refusal arm is paired with a single-user permissive control on the identical fixture, so neither arm can pass vacuously. Pre-guard the 4 refusal tests were RED with \"served\": Bool(true) observed on the wire. The prompts/get and resources/read refusals additionally assert calls == 0 while their controls assert the transport is actually reached, which is what proves the refusal precedes the round-trip rather than merely hiding the result. Out of scope for this row and filed separately: the direct-route tools/list exemption at src/backend/backend_handlers.rs:588 and the 20-site rename."
     },
     {
       "id": "MIK-6746.CONTRACT.1",
