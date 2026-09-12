@@ -211,7 +211,11 @@ PY
   # stays read-only; k6's own outputs go to a separate writable mount, so
   # nothing is written back into the committed harness directory and there is
   # no post-run rename to race against.
+  # The image's default user is not the user that owns the run directory, so
+  # without this every write to /out is refused and the load generator dies
+  # during init with nothing measured.
   docker run --rm --network host \
+    --user "$(id -u):$(id -g)" \
     -v "$HERE:/scripts:ro" \
     -v "$run:/out" \
     -e BASE_URL="http://127.0.0.1:$port" \
