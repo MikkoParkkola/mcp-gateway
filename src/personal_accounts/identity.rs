@@ -41,7 +41,7 @@ pub(crate) struct AccountDescriptor {
     pub(crate) provider: String,
     /// Explicit absolute resource (approved table row 425).
     pub(crate) resource: String,
-    /// Exact trusted downstream OAuth issuer. Distinct from the inbound IdP.
+    /// Exact trusted downstream OAuth issuer. Distinct from the inbound `IdP`.
     pub(crate) issuer: String,
 }
 

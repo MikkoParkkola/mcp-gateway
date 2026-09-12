@@ -23,7 +23,7 @@ use std::path::Path;
 /// cannot extend the owner's normal guard lifetime. On non-unix the legacy
 /// blocking constructor opens the file without an advisory lock.
 pub(crate) struct ExclusiveFileLock {
-    _file: File,
+    file: File,
 }
 
 impl ExclusiveFileLock {
@@ -44,7 +44,7 @@ impl ExclusiveFileLock {
         }
         rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
             .map_err(|error| io::Error::from_raw_os_error(error.raw_os_error()))?;
-        Ok(Self { _file: file })
+        Ok(Self { file })
     }
 
     #[cfg(not(unix))]
@@ -63,7 +63,7 @@ impl ExclusiveFileLock {
         set_owner_only(&mut opts);
         let file = opts.open(lock_path)?;
         lock_exclusive(&file)?;
-        Ok(Self { _file: file })
+        Ok(Self { file })
     }
 }
 
@@ -72,7 +72,7 @@ impl Drop for ExclusiveFileLock {
     fn drop(&mut self) {
         // File close alone leaves a fork/dup reference holding the same lock.
         // Drop cannot return an unlock error; File still closes without panic.
-        let _ = rustix::fs::flock(&self._file, rustix::fs::FlockOperation::Unlock);
+        let _ = rustix::fs::flock(&self.file, rustix::fs::FlockOperation::Unlock);
     }
 }
 
@@ -120,8 +120,8 @@ mod tests {
         let owner = acquire(&path).expect("own the real kernel lock");
         // try_clone shares the exact open-file description, as fork does.
         // Opening the same pathname again would not establish this condition.
-        let inherited = owner._file.try_clone().expect("duplicate the owner's fd");
-        let identity = owner._file.metadata().unwrap();
+        let inherited = owner.file.try_clone().expect("duplicate the owner's fd");
+        let identity = owner.file.metadata().unwrap();
         assert_eq!(
             ExclusiveFileLock::try_acquire(&path)
                 .err()

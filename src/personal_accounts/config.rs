@@ -315,7 +315,7 @@ impl Default for AccountsLimits {
     fn default() -> Self {
         Self {
             store_entries: 10000,
-            authority_bytes: 16777216,
+            authority_bytes: 16_777_216,
         }
     }
 }
@@ -692,20 +692,20 @@ fn validate_managed(
 
     // RFC 8707 resource is an absolute URI, not necessarily https: a urn: is
     // a legitimate resource identifier.
-    if !descriptor
+    if descriptor
         .resource
         .as_ref()
-        .is_some_and(|value| Url::parse(value).is_ok())
+        .is_none_or(|value| Url::parse(value).is_err())
     {
         return Err(fail("resource must be present and nonempty"));
     }
     if !https_host(&descriptor.issuer) {
         return Err(fail("issuer must be present and nonempty"));
     }
-    if !descriptor
+    if descriptor
         .client_id
         .as_ref()
-        .is_some_and(|value| !value.is_empty())
+        .is_none_or(|value| value.is_empty())
     {
         return Err(fail("client_id must be present and nonempty"));
     }
