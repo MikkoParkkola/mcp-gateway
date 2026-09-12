@@ -10,6 +10,11 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # Busts the runtime stage's apt layer once per run. Both builds below read
+  # this same value, so the push build still restores the layers the scan build
+  # wrote and trivy clears the image that actually ships. Defined here rather
+  # than inline so the two cannot drift apart.
+  APT_CACHE_BUST: ${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   # Dependency-vulnerability gate for the image build. ci.yml runs `cargo audit`
@@ -134,6 +139,8 @@ jobs:
           # literal for the ephemeral local scan tag (the pushed image uses the
           # metadata-action's already-lowercased tags).
           tags: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan
+          build-args: |
+            APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -155,6 +162,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
