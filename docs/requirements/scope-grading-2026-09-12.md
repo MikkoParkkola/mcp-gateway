@@ -116,3 +116,34 @@ Nine test binaries were run for this pass. One returned `0 passed; 3 ignored`
 (`mik_7212_mrtr7_stdio_acs`); a green `test result: ok` line from it would have
 been read as MET by a summary-only reading. Every MET row above quotes the
 passed/ignored counts and at least one named test from the passing set.
+
+## Which grades transfer to the release line
+
+A grade is only as portable as the files it cites. Comparing every cited path's
+blob against `origin/main`:
+
+| Row | Grade | Transfers to main? | Decisive path |
+|---|---|---|---|
+| MIK-3274.RANKING.1 | ABSENT | **yes, invariant** | `src/ranking/{scoring.rs,tests.rs}` byte-identical on both refs |
+| GH462.CONFIG.1 | MET | re-grade needed | `tests/gh462_config_preservation.rs` differs (`29f728ca` vs `c04b98f6`) |
+| GH452.SESSION.1 | MET | re-grade needed | `tests/gh452_session_owner.rs` differs (`f6684518` vs `daf6b168`) |
+| MIK-7377.SIGNING.1 | MET | no | both `tests/message_signing_*.rs` absent from main |
+| MIK-7311.LIFECYCLE.1 | MET | no | `tests/task_expiry_http_lifecycle.rs` absent from main |
+| MIK-7311.LIFECYCLE.3 | MET | no | `tests/task_upstream_recovery.rs` absent from main |
+| MIK-7311.LIFECYCLE.4 | MET | no | `src/gateway/task_service/execution/upstream.rs` absent from main |
+| MIK-6744.STORE.1 | MET | no | all of `src/personal_accounts/` absent from main |
+
+Six of the eight grade code that is not on the release line. They are statements
+about this branch, and they become statements about the release only when the
+subsystems they cite land there — which is what the re-cut in
+`RELEASE-4.0.0-gap-assessment-2026-09-11.md` step 3 exists to do. Reading them
+as release readiness before that is the same error as grading against the stale
+ledger.
+
+Two rows cite files that exist on both refs but differ. Neither grade carries
+across on its citation alone; each needs re-running against main's copy of the
+test file.
+
+Three rows cite this document as evidence for their own grade. A grading record
+is a record of the reading, not an independent artefact of the behaviour, so
+those citations establish nothing the named test files do not already establish.
