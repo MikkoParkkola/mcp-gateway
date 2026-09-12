@@ -1040,10 +1040,34 @@ impl HttpTransport {
     }
 
     /// Establish SSE connection and get the message endpoint
+    ///
+    /// `initialize()` re-enters this on session expiry, by which time
+    /// `outbound_era()` may already read `Modern` (MIK-7214.HEADER.9a/.9b,
+    /// `docs/design/2026-09-03-header-9-era-conditional-outbound.md`). The
+    /// builder always writes the legacy handshake version, so a reconnect to
+    /// an already-classified peer is re-asserted here, after the builder's
+    /// static-header merge — the same ordering the `Request`/`Notify`
+    /// finalisation needs, and for the same reason: sited earlier, an
+    /// operator's pinned header would win. Two headers only, not the full
+    /// `finalise_modern_headers` set: `Mcp-Method`/`Mcp-Name` mirror a
+    /// JSON-RPC body field and this `GET` has no body to mirror.
+    /// `MCP-Session-Id` is removed rather than merely left unminted —
+    /// `build_mcp_headers`'s `Sse` arm never mints one, but an
+    /// operator-configured static header would otherwise reach a modern peer,
+    /// which `MIK-7215.STATELESS.3a` prohibits outright. The first connection
+    /// is unaffected: the era is unresolved before the first `initialize()`,
+    /// `outbound_era()` reads `None`, and the GET stays legacy-shaped.
     async fn establish_sse_connection(&self) -> Result<String> {
         use futures::StreamExt;
 
-        let headers = self.build_mcp_headers(HeaderMode::Sse, None).await?;
+        let mut headers = self.build_mcp_headers(HeaderMode::Sse, None).await?;
+        if self.outbound_era() == Some(Era::Modern) {
+            headers.insert(
+                "MCP-Protocol-Version",
+                header::HeaderValue::from_static(MODERN_VERSIONS[0]),
+            );
+            headers.remove("MCP-Session-Id");
+        }
 
         debug!(url = %sanitize_url_for_diagnostics(&self.base_url), "Establishing SSE connection");
 
