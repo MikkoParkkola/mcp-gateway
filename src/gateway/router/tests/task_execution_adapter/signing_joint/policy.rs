@@ -4,10 +4,9 @@
 //!
 //! Valid tokens attach through `MetaMcp::with_attestation` in Enforce mode
 //! before the router shares the fixture. Rotation uses the same shared
-//! `AttestationValidator` with zero grace. Existing signed_state/cases stay
-//! untouched; this module only reinstalls the exclusive MetaMcp.
+//! `AttestationValidator` with zero grace. Existing `signed_state/cases` stay
+//! untouched; this module only reinstalls the exclusive `MetaMcp`.
 
-use super::super::support::*;
 use super::*;
 
 use std::sync::Arc;
@@ -45,7 +44,7 @@ fn issue(signer: &BnautAttestationSigner, identity: &str) -> crate::attestation:
 }
 
 /// Exclusive signed fixture plus shared Enforce validator. Preserves the
-/// fixture MetaMcp (admission, subscriptions, executor) — no replacement.
+/// fixture `MetaMcp` (admission, subscriptions, executor) — no replacement.
 async fn attested_state(
     mock: &Arc<MockBackend>,
 ) -> (

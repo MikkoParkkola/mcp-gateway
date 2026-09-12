@@ -93,7 +93,7 @@ fn import_01_valid_then_malformed_rolls_back_and_corrected_batch_can_retry() {
     // already own `k-1` when the later record fails validation.
     assert_eq!(
         service
-            .import_tasks(vec![
+            .import_tasks(&vec![
                 (good_first.clone(), "task-1".to_owned()),
                 (malformed_second, "task-2".to_owned()),
             ])
@@ -115,7 +115,7 @@ fn import_01_valid_then_malformed_rolls_back_and_corrected_batch_can_retry() {
     // refusal and the same rollback.
     assert_eq!(
         service
-            .import_tasks(vec![
+            .import_tasks(&vec![
                 (good_first.clone(), "task-1".to_owned()),
                 (restored_from(&second), String::new()),
             ])
@@ -131,7 +131,7 @@ fn import_01_valid_then_malformed_rolls_back_and_corrected_batch_can_retry() {
     assert_eq!(service.snapshot(), seeded);
 
     service
-        .import_tasks(vec![
+        .import_tasks(&vec![
             (good_first, "task-1".to_owned()),
             (restored_from(&second), "task-2".to_owned()),
         ])
@@ -166,7 +166,7 @@ fn import_02_published_collision_and_in_batch_duplicate_leave_seed_untouched() {
     let colliding = restored_from(&existing);
     assert_eq!(
         service
-            .import_tasks(vec![
+            .import_tasks(&vec![
                 (restored_from(&first), "task-1".to_owned()),
                 (colliding, "task-other".to_owned()),
             ])
@@ -189,7 +189,7 @@ fn import_02_published_collision_and_in_batch_duplicate_leave_seed_untouched() {
     // an identical record is still a collision, never a silent no-op.
     assert_eq!(
         service
-            .import_tasks(vec![
+            .import_tasks(&vec![
                 (restored_from(&first), "task-1".to_owned()),
                 (restored_from(&existing), "task-seed".to_owned()),
             ])
@@ -211,7 +211,7 @@ fn import_02_published_collision_and_in_batch_duplicate_leave_seed_untouched() {
     let restored = restored_from(&dup);
     assert_eq!(
         service
-            .import_tasks(vec![
+            .import_tasks(&vec![
                 (restored.clone(), "task-dup-a".to_owned()),
                 (restored, "task-dup-b".to_owned()),
             ])
@@ -224,7 +224,7 @@ fn import_02_published_collision_and_in_batch_duplicate_leave_seed_untouched() {
     // hide a corrupt record instead of refusing it.
     assert_eq!(
         service
-            .import_tasks(vec![
+            .import_tasks(&vec![
                 (restored_from(&dup), "task-dup-a".to_owned()),
                 (restored_from(&dup), "task-dup-a".to_owned()),
             ])
@@ -247,12 +247,12 @@ fn import_03_valid_two_record_batch_retries_existing_and_empty_is_noop() {
     let seeded = service.snapshot();
 
     service
-        .import_tasks(Vec::new())
+        .import_tasks(&[])
         .expect("an empty batch is a no-op");
     assert_eq!(service.snapshot(), seeded);
 
     service
-        .import_tasks(vec![
+        .import_tasks(&vec![
             (restored_from(&first), "task-1".to_owned()),
             (restored_from(&second), "task-2".to_owned()),
         ])
@@ -364,7 +364,7 @@ fn import_04_generation_overflow_refuses_capacity_and_commits_nothing() {
 
     assert_eq!(
         service
-            .import_tasks(vec![
+            .import_tasks(&vec![
                 (restored_from(&first), "task-1".to_owned()),
                 (restored_from(&second), "task-2".to_owned()),
             ])
@@ -409,7 +409,7 @@ fn import_05_new_identity_reusing_published_handle_refuses_and_reserves_nothing(
     assert_ne!(second.identity(), seed.identity());
     assert_eq!(
         service
-            .import_tasks(vec![
+            .import_tasks(&vec![
                 (restored_from(&first), "task-1".to_owned()),
                 (restored_from(&second), "task-seed".to_owned()),
             ])
@@ -443,7 +443,7 @@ fn import_05_new_identity_reusing_published_handle_refuses_and_reserves_nothing(
     // Control: the same two records import once the later handle is its own, so
     // the refusal above is the handle collision and nothing else.
     service
-        .import_tasks(vec![
+        .import_tasks(&vec![
             (restored_from(&first), "task-1".to_owned()),
             (restored_from(&second), "task-2".to_owned()),
         ])

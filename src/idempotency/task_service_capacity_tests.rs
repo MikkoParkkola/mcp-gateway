@@ -64,7 +64,7 @@ fn capacity_01_a_batch_landing_exactly_on_the_slot_limit_imports() {
     let imported_bytes: usize = batch.iter().map(|(record, _)| record.metadata_bytes).sum();
 
     service
-        .import_tasks(batch)
+        .import_tasks(&batch)
         .expect("exactly SLOT_LIMIT held records is the bound, not one past it");
 
     let held = service.snapshot();
@@ -117,7 +117,7 @@ fn capacity_02_a_batch_one_record_over_the_slot_limit_commits_nothing() {
     let batch = RESTORABLE.to_vec();
     assert_eq!(seeded.entries + batch.len(), SLOT_LIMIT + 1);
 
-    assert_eq!(service.import_tasks(batch).unwrap_err(), Refusal::Capacity);
+    assert_eq!(service.import_tasks(&batch).unwrap_err(), Refusal::Capacity);
     assert_eq!(service.snapshot(), seeded);
 
     // The held record keeps its handle and its binding: a refused batch is not a
