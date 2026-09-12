@@ -7,7 +7,7 @@
 
 #[path = "capture.rs"]
 mod capture;
-pub(super) use capture::capture_warnings;
+pub(crate) use capture::capture_warnings;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

@@ -104,7 +104,7 @@ fn refresh_presence_case(
             reopened.access_token == rotated.access_token,
             "reopen must preserve the rotated access token"
         );
-        assert!(reopened.token_type == token_type);
+        assert_eq!(reopened.token_type, token_type);
     });
 }
 
@@ -169,7 +169,10 @@ fn an_unexpired_grant_is_returned_without_contacting_the_provider() {
         let Fixture { tmp, service, .. } = fx;
         drop(service);
         let store = PersonalAccountStore::open(config(tmp.path())).expect("reopen");
-        assert!(expect_connected(store.lookup(&alice()).expect("unexpired reopen")) == record);
+        assert_eq!(
+            expect_connected(store.lookup(&alice()).expect("unexpired reopen")),
+            record
+        );
     });
 }
 
@@ -218,6 +221,6 @@ fn an_unavailable_provider_leaves_the_account_connected_and_untouched() {
             "connected",
             "an outage must not durably fence the account"
         );
-        assert!(expect_connected(reopened) == record);
+        assert_eq!(expect_connected(reopened), record);
     });
 }

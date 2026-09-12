@@ -84,6 +84,10 @@ fn record_files(path: &Path) -> Vec<String> {
 
 /// I1 — one admission, four outcomes, and only `Created` asks for a worker.
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end admission scenario read as a single sequence is the point of this test"
+)]
 async fn facade_01_one_admission_maps_created_existing_mismatch_and_in_flight() {
     let dir = tempfile::tempdir().unwrap();
     let store_dir = dir.path().join("tasks");
@@ -225,9 +229,8 @@ async fn facade_02_a_saturated_pool_still_answers_the_original_handle() {
         )
         .await
         .expect("a fresh key creates a task");
-    let slot = match created {
-        CreateOutcome::Created { slot, .. } => slot,
-        _ => panic!("an admitted fresh key must be Created"),
+    let CreateOutcome::Created { slot, .. } = created else {
+        panic!("an admitted fresh key must be Created")
     };
     assert_eq!(
         workers.available_permits(),
@@ -289,9 +292,8 @@ async fn facade_03_a_worker_cap_refusal_writes_nothing_and_leaves_the_key_unclai
         )
         .await
         .expect("a fresh key creates a task");
-    let slot = match created {
-        CreateOutcome::Created { slot, .. } => slot,
-        _ => panic!("an admitted fresh key must be Created"),
+    let CreateOutcome::Created { slot, .. } = created else {
+        panic!("an admitted fresh key must be Created")
     };
     assert_eq!(workers.available_permits(), 0);
     let before_files = record_files(&store_dir);
@@ -333,13 +335,13 @@ async fn facade_03_a_worker_cap_refusal_writes_nothing_and_leaves_the_key_unclai
 
     // Unclaimed means usable: the same key creates once a worker is free.
     drop(slot);
-    let retries = Arc::new(AtomicUsize::new(0));
+    let retry_calls = Arc::new(AtomicUsize::new(0));
     let retried = service
         .create(
             request(ALICE, "k-2"),
             &second,
             BACKEND,
-            counting_reserve(&workers, &retries),
+            counting_reserve(&workers, &retry_calls),
         )
         .await
         .expect("the refused key is free to create");
@@ -449,9 +451,8 @@ async fn facade_05_created_holds_its_permit_until_the_consumer_drops_it() {
         )
         .await
         .expect("a fresh key creates a task");
-    let slot = match created {
-        CreateOutcome::Created { slot, .. } => slot,
-        _ => panic!("an admitted fresh key must be Created"),
+    let CreateOutcome::Created { slot, .. } = created else {
+        panic!("an admitted fresh key must be Created")
     };
     assert_eq!(
         workers.available_permits(),

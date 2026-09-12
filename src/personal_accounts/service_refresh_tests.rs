@@ -429,6 +429,6 @@ fn a_newer_grant_during_a_held_refresh_is_not_tombstoned_by_a_stale_invalid_gran
             "connected",
             "reopen must not surface a tombstone the stale refresh wrote"
         );
-        assert!(expect_connected(reopened) == newer);
+        assert_eq!(expect_connected(reopened), newer);
     });
 }

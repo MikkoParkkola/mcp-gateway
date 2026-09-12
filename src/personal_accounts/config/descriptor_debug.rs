@@ -65,7 +65,7 @@ mod tests {
             "inline-9f3c-literal-not-an-env-reference",
         ] {
             let descriptor = descriptor(Some(secret));
-            let rendered = format!("{:?}", descriptor);
+            let rendered = format!("{descriptor:?}");
 
             assert!(
                 rendered.contains("acme-directory"),
@@ -91,7 +91,7 @@ mod tests {
         }
 
         let absent = descriptor(None);
-        let rendered = format!("{:?}", absent);
+        let rendered = format!("{absent:?}");
         assert!(
             rendered.contains("acme-directory"),
             "provider must survive Debug: {rendered}"

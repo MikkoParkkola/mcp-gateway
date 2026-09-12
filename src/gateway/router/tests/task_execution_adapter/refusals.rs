@@ -226,8 +226,8 @@ async fn x14_a_refusal_above_the_handoff_creates_no_task_and_leaves_the_key_free
         "and nothing was dispatched anywhere else either: {refused}"
     );
 
-    let reused = key_is_still_free(&state, "key-a", "x14-key", 141).await;
-    let id = task_id(&reused);
+    let key_still_free = key_is_still_free(&state, "key-a", "x14-key", 141).await;
+    let id = task_id(&key_still_free);
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     assert_carries_the_backend_result(&settled);
     std::assert_eq!(
@@ -291,8 +291,8 @@ async fn x14_a_destructive_tool_refused_at_the_gate_creates_no_task_record() {
          dispatched: {refused}"
     );
 
-    let reused = key_is_still_free(&state, "key-admin", "x14-destructive", 144).await;
-    let id = task_id(&reused);
+    let key_still_free = key_is_still_free(&state, "key-admin", "x14-destructive", 144).await;
+    let id = task_id(&key_still_free);
     let settled = poll_until_terminal(&state, "key-admin", &id).await;
     assert_carries_the_backend_result(&settled);
     std::assert_eq!(

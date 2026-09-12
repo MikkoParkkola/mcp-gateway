@@ -918,3 +918,19 @@ emit the byte-identical message on the wire. Nothing external breaks, so the
 question the escalation raised does not arise; the frozen message needs a comment
 saying why it is frozen, or someone tidies it away and reopens the defect. If the
 operator later prefers the clean break, that is a further change, not a rework.
+
+## NFR.SEC.7 does not exist (2026-09-12)
+
+An earlier hand-off listed `NFR.SEC.7` as an open criterion awaiting re-dispatch. It is a
+phantom: it appears in no requirement, criterion, ADR or design document in this
+repository, and no Linear issue mentions it.
+
+Evidence, both run 2026-09-12:
+
+- `rg -n 'NFR\.SEC\.[0-9]' --no-ignore -uu docs/` returns `NFR.SEC.1` through `.6` only —
+  28, 22, 17, 8 and 4 hits respectively, and zero for `.7`.
+- A Linear issue search over the same corpus surfaces `NFR.SEC.1` and `NFR.SEC.3` by name
+  and no `.7`, so the lookup was capable of finding the ID had it existed.
+
+The security non-functional requirements end at `NFR.SEC.6`. Nothing is to be built for
+`NFR.SEC.7`; the item is closed as a mis-transcription, not deferred.

@@ -197,6 +197,11 @@ pub(super) fn keyed(mut body: Value, key: &str) -> Value {
 }
 
 /// A task-augmented `gateway_invoke` at the mock backend, with a key.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "every call site across this adapter suite passes an owned json! literal; \
+              taking &Value would force a borrow at each of them for no benefit"
+)]
 pub(super) fn task_invoke(id: i64, key: &str, arguments: Value) -> Value {
     keyed(
         modern(
@@ -215,6 +220,11 @@ pub(super) fn task_invoke(id: i64, key: &str, arguments: Value) -> Value {
 
 /// The same call with no `task` member: the ordinary synchronous path, and the
 /// positive control every "the backend was reached" assertion rests on.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "every call site across this adapter suite passes an owned json! literal; \
+              taking &Value would force a borrow at each of them for no benefit"
+)]
 pub(super) fn sync_invoke(id: i64, arguments: Value) -> Value {
     modern(
         id,

@@ -4,9 +4,6 @@
 //! Final response enforcement and independent delivery-attempt hash checks.
 //! Protocol shaping is supplied here; real adapter shaping has separate tests.
 
-#[path = "../../security/firewall/response_tests/capture.rs"]
-mod capture;
-
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -19,6 +16,7 @@ use super::{ResponseCorrelation, ResponseDeliveryContext, ResponsePolicyTarget};
 use crate::backend::BackendRegistry;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::firewall::response_tests::audit::assert_v2_event;
+use crate::security::firewall::response_tests::audit::capture_warnings;
 use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
 use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
@@ -747,7 +745,7 @@ fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault(
     assert!(fixture.attempts().is_empty());
 
     logger.fail_next_append_for_test();
-    let (response, warning) = capture::capture_warnings(|| {
+    let (response, warning) = capture_warnings(|| {
         fixture.finalize(
             "tools/call",
             shaped_response(&format!("{DELIVERED_SENTINEL} {CANARY}")),

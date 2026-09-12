@@ -299,12 +299,12 @@ fn forced_whole_tree_clone_costs_at_least_the_payload() {
 /// counter that saw exactly one allocation ever would pass `> 0`.
 #[test]
 fn known_size_allocation_is_reported_at_its_known_size() {
+    const SIZE: usize = 4096;
     if isolate(&test_path(
         "known_size_allocation_is_reported_at_its_known_size",
     )) {
         return;
     }
-    const SIZE: usize = 4096;
     let (buffer, measured) = measure(|| std::hint::black_box(Vec::<u8>::with_capacity(SIZE)));
     assert_eq!(buffer.capacity(), SIZE);
     // Ranges, not equality. The floor is what kills a blind counter; an exact

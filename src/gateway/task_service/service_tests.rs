@@ -126,13 +126,15 @@ async fn service_01_a_created_task_resolves_immediately_for_its_owner() {
     let task = task();
     assert_fixture_lifetime(&task);
 
-    let created = match service
+    let CreateOutcome::Created {
+        task: created,
+        slot: _,
+    } = service
         .create(request(ALICE, "k-1"), &task, BACKEND, allow_worker())
         .await
         .expect("a fresh key creates a task")
-    {
-        CreateOutcome::Created { task, slot: _ } => task,
-        _ => panic!("a fresh key must be Created"),
+    else {
+        panic!("a fresh key must be Created")
     };
 
     assert_eq!(created.task.id(), task.id());
@@ -197,24 +199,25 @@ async fn service_03_an_identical_retry_recovers_the_one_task() {
     );
     assert_ne!(first.tool(), second.tool());
 
-    let created = match service
+    let CreateOutcome::Created {
+        task: created,
+        slot: _,
+    } = service
         .create(request(ALICE, "k-1"), &first, BACKEND, allow_worker())
         .await
         .unwrap()
-    {
-        CreateOutcome::Created { task, slot: _ } => task,
-        _ => panic!("a fresh key must be Created"),
+    else {
+        panic!("a fresh key must be Created")
     };
 
     // A DIFFERENT task value under the same key: the service must return the
     // task the key already owns, not create this one.
-    let retried = match service
+    let CreateOutcome::Existing(retried) = service
         .create(request(ALICE, "k-1"), &second, BACKEND, allow_worker())
         .await
         .expect("an identical retry is not a refusal")
-    {
-        CreateOutcome::Existing(committed) => committed,
-        _ => panic!("an identical retry must recover Existing"),
+    else {
+        panic!("an identical retry must recover Existing")
     };
 
     assert_eq!(retried.task.id(), created.task.id());

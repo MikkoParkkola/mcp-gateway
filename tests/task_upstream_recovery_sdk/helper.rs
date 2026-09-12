@@ -3,7 +3,7 @@
 //! Owned gateway children, temporary config, and durable-record helpers for
 //! the real pinned-SDK upstream-recovery vertical.
 //!
-//! The peer is `peer.rs` (pinned FastMCP + Docket). Nothing here is a
+//! The peer is `peer.rs` (pinned `FastMCP` + Docket). Nothing here is a
 //! synthetic upstream: process, config, store and JSON plumbing only,
 //! copied from the proven synthetic-journey helper this target used to
 //! import.
@@ -50,7 +50,7 @@ pub fn write_config(root: &Path, fixture: &Fixture<'_>) -> PathBuf {
     config.tasks.store_dir = root.join("tasks").display().to_string();
     config.tasks.default_ttl_ms = 3_600_000;
     config.tasks.expiry_interval = Duration::from_secs(3_600);
-    config.tasks.recovery_adapters = fixture.adapters.clone();
+    config.tasks.recovery_adapters.clone_from(&fixture.adapters);
 
     config.backends.insert(
         BACKEND.to_string(),
@@ -103,7 +103,7 @@ pub fn durable_record(root: &Path, task_id: &str) -> Value {
 }
 
 /// The committed status inside the private snapshot
-/// (`TaskSnapshot { task: TaskWire { status, .. } }`, camelCase, snake_case
+/// (`TaskSnapshot { task: TaskWire { status, .. } }`, camelCase, `snake_case`
 /// status values).
 pub fn record_status(record: &Value) -> Option<&str> {
     record.pointer("/model/task/status").and_then(Value::as_str)
@@ -182,12 +182,11 @@ impl Gateway {
                 tokio::time::sleep(POLL_GAP).await;
             }
         };
-        if tokio::time::timeout(READY_BOUND, ready).await.is_err() {
-            panic!(
-                "the gateway never answered on {url} within {READY_BOUND:?}\n{}",
-                self.logs()
-            );
-        }
+        assert!(
+            tokio::time::timeout(READY_BOUND, ready).await.is_ok(),
+            "the gateway never answered on {url} within {READY_BOUND:?}\n{}",
+            self.logs()
+        );
     }
 
     /// Request under a caller's own credential. `None` presents no

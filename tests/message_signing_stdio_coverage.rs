@@ -112,7 +112,7 @@ impl StdioGateway {
                         assert_eq!(members.len(), 2, "batch must deliver two members: {frame}");
                         return members.clone();
                     }
-                    Value::Object(_) if frame.get("id").is_none() => continue,
+                    Value::Object(_) if frame.get("id").is_none() => {}
                     _ => panic!("unexpected stdio frame while awaiting batch: {frame}"),
                 }
             }
@@ -155,7 +155,11 @@ impl StdioGateway {
             env!("CARGO_BIN_EXE_mcp-gateway"),
             status.success()
         );
-        assert_child_profile(&self.profile_dir, &self.prior_profiles, self.child_pid);
+        assert_child_profile(
+            self.profile_dir.as_ref(),
+            &self.prior_profiles,
+            self.child_pid,
+        );
     }
 }
 
@@ -339,8 +343,7 @@ fn snapshot_profile_dir() -> (Option<PathBuf>, HashSet<PathBuf>) {
     let dir = pattern
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     (Some(dir.clone()), existing_profraw(&dir))
 }
 
@@ -358,7 +361,7 @@ fn existing_profraw(dir: &Path) -> HashSet<PathBuf> {
     paths
 }
 
-fn assert_child_profile(dir: &Option<PathBuf>, prior: &HashSet<PathBuf>, pid: u32) {
+fn assert_child_profile(dir: Option<&PathBuf>, prior: &HashSet<PathBuf>, pid: u32) {
     let Some(dir) = dir else {
         return;
     };
@@ -375,11 +378,9 @@ fn assert_child_profile(dir: &Option<PathBuf>, prior: &HashSet<PathBuf>, pid: u3
                 })
         })
         .collect::<Vec<_>>();
-    let nonempty = created.iter().any(|path| {
-        std::fs::metadata(path)
-            .map(|m| m.len() > 0)
-            .unwrap_or(false)
-    });
+    let nonempty = created
+        .iter()
+        .any(|path| std::fs::metadata(path).is_ok_and(|m| m.len() > 0));
     assert!(
         nonempty,
         "expected nonempty child profraw containing pid {pid} in {} after EOF exit; found {created:?}",

@@ -51,15 +51,14 @@ async fn assert_membership(meta: &MetaMcp, session: Option<&str>, expected: &[&s
 async fn missing_and_empty_keys_are_explicitly_refused() {
     for session in [None, Some("")] {
         let meta = meta_with_state_staged_capabilities().await;
-        let response = meta
-            .handle_tools_call(
-                RequestId::Number(31),
-                "gateway_set_state",
-                json!({"state": TARGET_STATE}),
-                session,
-                allow_all_ctx(),
-            )
-            .await;
+        let response = Box::pin(meta.handle_tools_call(
+            RequestId::Number(31),
+            "gateway_set_state",
+            json!({"state": TARGET_STATE}),
+            session,
+            allow_all_ctx(),
+        ))
+        .await;
         assert_refusal(&meta, &response);
         assert_membership(&meta, session, STAGED_DEFAULT_TOOLS).await;
     }
@@ -87,15 +86,14 @@ async fn nonempty_legacy_and_stdio_keys_retain_isolated_state_changes() {
     for owner in ["legacy-session", "stdio-session"] {
         let meta = meta_with_state_staged_capabilities().await;
         assert_membership(&meta, Some(owner), STAGED_DEFAULT_TOOLS).await;
-        let response = meta
-            .handle_tools_call(
-                RequestId::Number(51),
-                "gateway_set_state",
-                json!({"state": TARGET_STATE}),
-                Some(owner),
-                allow_all_ctx(),
-            )
-            .await;
+        let response = Box::pin(meta.handle_tools_call(
+            RequestId::Number(51),
+            "gateway_set_state",
+            json!({"state": TARGET_STATE}),
+            Some(owner),
+            allow_all_ctx(),
+        ))
+        .await;
         assert!(response.error.is_none(), "{owner}: {:?}", response.error);
         assert!(response.result.is_some());
         assert_eq!(meta.session_state.get_state(owner), TARGET_STATE);
