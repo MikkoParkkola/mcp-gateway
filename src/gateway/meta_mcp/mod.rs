@@ -2188,6 +2188,10 @@ mod search_disclosure_e2e;
 #[path = "trace_correlation_tests.rs"]
 mod trace_correlation_tests;
 
+#[cfg(test)]
+#[path = "search_ranking_authz_tests.rs"]
+mod search_ranking_authz_tests;
+
 /// Destructive-action confirmation. NOT the control -- the admin
 /// requirement is, and `gateway_kill_server`, the only tool carrying
 /// `destructiveHint: true`, is in the admin set. This is the prompt an
