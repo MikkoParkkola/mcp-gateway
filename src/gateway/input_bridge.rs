@@ -208,6 +208,20 @@ pub enum BridgeError {
     RequestBudgetExhausted,
     /// The aggregate wall-clock budget for the call ran out.
     Deadline,
+    /// A retry round's dispatch failed or was refused.
+    ///
+    /// Carried as code and message rather than as the [`crate::Error`] itself
+    /// so this enum stays comparable — the whole test surface asserts on
+    /// equality — while losing nothing the caller must relay: the call site
+    /// rebuilds the refusal with [`crate::Error::json_rpc`], so a governance
+    /// block reaches the caller under its own code and its own reason rather
+    /// than as a generic bridge failure.
+    Backend {
+        /// The JSON-RPC code the failed dispatch classified itself as.
+        code: i32,
+        /// Its message, already caller-safe.
+        message: String,
+    },
 }
 
 /// The bounds on what a backend can make the gateway ask a client.
@@ -331,7 +345,15 @@ impl ClientChannel for NoClientChannel {
 #[async_trait::async_trait]
 pub trait BackendInvoker: Send + Sync {
     /// Retry the original call with these params, yielding its raw result.
-    async fn invoke(&self, retry_params: Value) -> Value;
+    ///
+    /// # Errors
+    ///
+    /// Returns the dispatch's own failure. A retry round is a full dispatch —
+    /// governance, accounting, transport — and any of them can refuse or fail.
+    /// Flattening that into a `Value` would report a backend that went down
+    /// mid-exchange, or a budget that ran out between rounds, as an ordinary
+    /// result the caller is expected to read as success.
+    async fn invoke(&self, retry_params: Value) -> Result<Value, crate::Error>;
 }
 
 /// Where the bridge's counters go.
@@ -396,7 +418,20 @@ impl InputBridge<'_> {
             self.observe(&interim);
             let answers = self.ask(session_id, prompts, started).await?;
             let retry = crate::protocol::mrtr::Bridge::retry_params(&interim, answers);
-            let result = self.backend.invoke(retry).await;
+            let result = self.backend.invoke(retry).await.map_err(|e| {
+                // `JsonRpc` displays its own code back into the string; every
+                // other variant, `Forbidden` included, displays as the bare
+                // message. Taking the field rather than the rendering is what
+                // keeps a relayed refusal reading like the refusal it is.
+                let message = match &e {
+                    crate::Error::JsonRpc { message, .. } => message.clone(),
+                    other => other.to_string(),
+                };
+                BridgeError::Backend {
+                    code: e.to_rpc_code(),
+                    message,
+                }
+            })?;
             match crate::protocol::mrtr::InputRequired::from_result(&result) {
                 Some(next) => interim = next,
                 None => return Ok(result),
