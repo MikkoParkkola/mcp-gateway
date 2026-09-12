@@ -23,6 +23,13 @@ use std::path::Path;
 /// cannot extend the owner's normal guard lifetime. On non-unix the legacy
 /// blocking constructor opens the file without an advisory lock.
 pub(crate) struct ExclusiveFileLock {
+    // On non-unix there is no advisory lock to take and none to release on
+    // drop, so nothing reads the handle; it is held to keep the sidecar file
+    // open for the guard's lifetime and for nothing else.
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "only the cfg(unix) flock paths read the handle")
+    )]
     file: File,
 }
 

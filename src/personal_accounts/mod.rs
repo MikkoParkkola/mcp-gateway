@@ -6,6 +6,21 @@
 //! fallback to legacy operator tokens. Filesystem operations are synchronous;
 //! async callers must execute custody work on a blocking worker.
 
+// The durable writer half lives in `commit`, every item of which is `cfg(unix)`
+// because the sequence depends on `flock`, `fsync` on a directory handle and
+// owner-only file modes. On a non-unix target that half is compiled out, so the
+// states it constructs and the sealing helpers it calls read as dead even though
+// the reader half still compiles. `expect` rather than `allow`: once the writer
+// half is ported and nothing here is dead any more, the unfulfilled expectation
+// is what tells the porter to delete this line.
+#![cfg_attr(
+    not(unix),
+    expect(
+        dead_code,
+        reason = "the cfg(unix) writer half in `commit` is the only consumer"
+    )
+)]
+
 pub(crate) mod config;
 mod consent;
 // Visible to the crate for the descriptor contract only: `account_key` and the
