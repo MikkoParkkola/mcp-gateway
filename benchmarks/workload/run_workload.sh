@@ -169,6 +169,17 @@ start_gateway() {
   # argv is recorded here, before the process starts.
   GW_ARGV="$bin --config $config --port $port"
   GW_PORT="$port"
+  # Every arm gets its own empty home. The gateway keeps a version stamp under
+  # the user's home directory and compares it to its own version at startup: a
+  # shared home would make 3.5.1 run upgrade migrations over the directory 3.5.0
+  # just stamped, and 3.5.0 log a downgrade against 4.0.0's. Startup work and
+  # on-disk state would then depend on the order the cells happened to run in.
+  local gwhome="$run/home-$rep"
+  rm -rf "$gwhome"; mkdir -p "$gwhome"
+  # Log verbosity is pinned rather than inherited. At the default level the
+  # gateway writes an audit line per invoke -- nearly nine megabytes a minute,
+  # written by the very process whose latency is being measured.
+  HOME="$gwhome" RUST_LOG="${WORKLOAD_RUST_LOG:-error}" \
   "$bin" --config "$config" --port "$port" \
     > "$run/$rep.gateway.stdout" 2> "$run/$rep.gateway.stderr" &
   GW_PID=$!
@@ -227,7 +238,6 @@ PY
     "$K6_IMAGE" run \
       --summary-trend-stats="avg,min,med,p(50),p(90),p(95),p(99),max" \
       --summary-export="/out/$rep.summary.json" \
-      --out "json=/out/$rep.raw.json" \
       /scripts/k6_workload.js \
       > "$run/$rep.k6.txt" 2> "$run/$rep.k6.err" || die "$rep: k6 exited non-zero"
 
