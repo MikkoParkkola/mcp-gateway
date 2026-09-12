@@ -1016,34 +1016,66 @@ impl MetaMcp {
     /// the check and the later `backend.request` bind to the SAME instance —
     /// eliminating the hot-reload TOCTOU where a name re-lookup could evaluate a
     /// different backend than the one used (ADR-008 INV-2, MIK-6742 R2-1).
+    ///
+    /// Despite the name this covers every personal binding a backend can carry,
+    /// not only `oauth`: see the enumeration in the body. The name is kept
+    /// because twenty call sites and the public `enforce_oauth_isolation`
+    /// wrapper spell it.
     pub(crate) fn enforce_oauth_isolation_for(
         &self,
         backend: &crate::backend::Backend,
         server: &str,
         has_per_user_credential: bool,
     ) -> Result<()> {
-        if self.multi_user.load(std::sync::atomic::Ordering::Relaxed)
-            && !has_per_user_credential
-            && backend.oauth_requires_per_user_isolation()
-        {
-            warn!(
-                server = %server,
-                "refused: multi-user gateway would serve a gateway-held OAuth token \
-                 that is not isolated per user (ADR-008 INV-2)"
-            );
-            return Err(Error::json_rpc(
-                -32001,
-                format!(
-                    "Backend '{server}' uses a gateway-held OAuth login that is not \
-                     isolated per user. On a multi-user gateway this call is refused so \
-                     one user's token is never served to another. Fix: supply a per-user \
-                     credential (enable identity propagation for this backend), or set \
-                     `oauth.shared_account = true` if this is a genuinely shared service \
-                     account."
-                ),
-            ));
+        if !self.multi_user.load(std::sync::atomic::Ordering::Relaxed) || has_per_user_credential {
+            return Ok(());
         }
-        Ok(())
+
+        // THREE independent ways a backend is bound to one person, enumerated
+        // from `BackendConfig` (`config::BackendConfig::oauth`, `::account`,
+        // `::identity_propagation`) rather than discovered one leak at a time.
+        // Any of them means the gateway-held static credential is somebody's
+        // personal login, and every caller of this function resolves no per-user
+        // credential of its own (MIK-6745.JOURNEY.3).
+        let reason = if backend.oauth_requires_per_user_isolation() {
+            "uses a gateway-held OAuth login that is not isolated per user"
+        } else if backend.account_descriptor_id().is_some() {
+            // A surviving `account` reference is `personal_managed`:
+            // `config::account_bindings::Bound::effective` erases it for both
+            // `shared` (the operator's escape hatch) and `external` (which
+            // compiles to the `identity_propagation` arm below). It also
+            // survives a registration rebuilt from raw config that lost its
+            // compiled strategy -- the state `refuse_unbound_account_backend`
+            // refuses on the call path, refused here for the same reason.
+            "is bound to a personal account descriptor"
+        } else if backend
+            .identity_propagation_config()
+            .is_some_and(|cfg| cfg.required)
+        {
+            // `required` means there is no best-effort downgrade that would
+            // still be that person (ADR-007 IDP.2/IDP.3).
+            "requires an end-user identity credential that this route cannot resolve"
+        } else {
+            return Ok(());
+        };
+
+        warn!(
+            server = %server,
+            reason,
+            "refused: multi-user gateway would serve one user's personal backend \
+             credential to another (ADR-008 INV-2)"
+        );
+        Err(Error::json_rpc(
+            -32001,
+            format!(
+                "Backend '{server}' {reason}. On a multi-user gateway this call is \
+                 refused so one user's credential is never served to another. Fix: \
+                 supply a per-user credential (enable identity propagation for this \
+                 backend), or set `oauth.shared_account = true` / use an \
+                 `accounts.descriptors` entry with `mode: shared` if this is a \
+                 genuinely shared service account."
+            ),
+        ))
     }
 
     /// True when a meta-route aggregation / ownership scan must SKIP `backend`
@@ -2187,6 +2219,10 @@ mod search_disclosure_e2e;
 #[cfg(test)]
 #[path = "trace_correlation_tests.rs"]
 mod trace_correlation_tests;
+
+#[cfg(test)]
+#[path = "account_entry_point_authz_tests.rs"]
+mod account_entry_point_authz_tests;
 
 #[cfg(test)]
 #[path = "search_ranking_authz_tests.rs"]
