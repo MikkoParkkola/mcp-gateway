@@ -780,13 +780,13 @@ impl ExecutionAdmission {
     /// own the earlier keys of a batch its later record refuses.
     pub(crate) fn import_tasks(
         &self,
-        restored: Vec<(RestoredBinding, String)>,
+        restored: &[(RestoredBinding, String)],
     ) -> Result<(), Refusal> {
         if restored.is_empty() {
             return Ok(());
         }
         let mut prepared = Vec::with_capacity(restored.len());
-        for (record, task_id) in &restored {
+        for (record, task_id) in restored {
             // A binding whose handle is unusable restores an unreachable task.
             if task_id.is_empty() {
                 return Err(Refusal::InvalidIdentity);
