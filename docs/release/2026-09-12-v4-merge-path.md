@@ -83,3 +83,40 @@ blocker; `CONFLICTING` is the secondary one.
 | 512 | main | draft, CONFLICTING |
 | 513, 510, 507, 504, 501, 499 | integration | draft, CONFLICTING |
 | 511, 509, 508, 506, 503, 502 | integration | draft, MERGEABLE |
+
+## 6. Fourteen of the blocking rows are sequenced behind the merge
+
+The publish gate (`check_scope_acceptance.py --publish-check`) names 28 unresolved
+criteria. They do not all represent code that has to be written.
+
+Nine are already satisfied on `codex/v4-next-integration` and graded there row by row
+(`LIFECYCLE.1`-`.5`, `STORE.2`, `JOURNEY.2`, `CONTRACT.1`, `SIGNING.1`). Each ledger note
+carries the branch citation. They close when integration reaches `main`; no further
+implementation is required for them.
+
+Five more are `VALIDATION` rows whose acceptance text names a revision that does not
+exist yet:
+
+| Row | What its acceptance requires |
+|---|---|
+| `NFR.BUILD.1` | coverage and mutation evidence that "grades the final integration revision" |
+| `NFR.UPGRADE.1` | an upgrade executed *from* 3.5.1 into the shipping deployment |
+| `NFR.WORKLOAD.1` | same-host interleaved measurement against the frozen 3.5.0 baseline and 3.5.1 |
+| `NFR.DEMO.1` | recorded demonstrations of five journeys, with versions and actual outcomes |
+| `NFR.CONFORMANCE.1` | evidence references for every cell of the role/transport/revision/outcome matrix |
+
+A run recorded against today's `main` would grade the wrong artifact, and
+`scope-tests.md:73` rules that out in as many words: "don't grade the branch from an old
+protocol-only sample."
+
+Two of the five do have pre-merge work, and it is build work rather than measurement.
+`NFR.CONFORMANCE.1` needs the matrix widened — the existing 19-row table on integration
+(`tests/mik_7272_conformance.rs:52-292`) has role and transport axes but neither revision
+nor outcome, and covers neither modern URL-elicitation completion removal nor
+arbitrary-JSON structured results. `NFR.WORKLOAD.1` needs its harness and the 3.5.0
+baseline, which is not in the tree at all. Building both before the merge is what makes
+the post-merge validation pass a measurement rather than a project.
+
+That leaves fourteen rows as genuine implementation, and the merge as the critical path
+for the other half. Draft state on all fourteen PRs, and the operator approval behind it,
+therefore gates half the release ledger rather than one merge commit.
