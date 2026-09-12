@@ -39,6 +39,13 @@ pub(crate) enum GuardedCommit {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum GuardedCommitError {
     #[error("guarded consent commit is not implemented")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     RuntimeNotImplemented,
     #[error(transparent)]
     Store(#[from] AccountError),

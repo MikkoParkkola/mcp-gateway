@@ -468,6 +468,13 @@ fn refusal_as_fault(refusal: &ManifestRefusal) -> AccountError {
 }
 
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+    )
+)]
 pub(in crate::personal_accounts) fn revoke(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -492,6 +499,13 @@ pub(in crate::personal_accounts) fn revoke(
 }
 
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+    )
+)]
 pub(in crate::personal_accounts) fn mark_reconnect_required(
     config: &StoreConfig,
     slot: &mut Option<Authority>,

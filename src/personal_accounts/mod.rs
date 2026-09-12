@@ -460,6 +460,13 @@ impl PersonalAccountStore {
     }
 
     /// Commit a new grant generation for an account.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn commit_grant(
         &self,
         account: &AccountKey,
@@ -485,6 +492,13 @@ impl PersonalAccountStore {
     }
 
     /// Durably tombstone the current generation before reporting success.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn revoke(&self, account: &AccountKey) -> Result<(), AccountError> {
         let mut authority = self.lock_authority();
         #[cfg(test)]
@@ -507,6 +521,13 @@ impl PersonalAccountStore {
     }
 
     /// Fence a grant whose descriptor revision moved.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn mark_reconnect_required(
         &self,
         account: &AccountKey,

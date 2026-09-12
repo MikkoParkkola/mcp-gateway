@@ -52,6 +52,13 @@ pub(crate) const DEFAULT_CAPACITY: usize = 32;
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum CustodyError {
     #[error("custody handle runtime is not implemented")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     RuntimeNotImplemented,
     /// The in-flight bound is reached. A retryable refusal, not a failure.
     #[error("custody is at its in-flight bound")]
@@ -68,6 +75,13 @@ pub(crate) enum CustodyError {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum CustodyStartError {
     #[error("custody start is not implemented")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     RuntimeNotImplemented,
     #[error(transparent)]
     Store(#[from] AccountError),
@@ -119,6 +133,13 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         })
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn capacity(&self) -> usize {
         self.capacity
     }
@@ -169,6 +190,13 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         .map_err(CustodyError::from)
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) async fn resolve(
         &self,
         account: &AccountKey,
@@ -209,12 +237,26 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         self.offload(move |service| service.release(&lease)).await
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) async fn invalidate(&self, account: &AccountKey) -> Result<(), CustodyError> {
         let account = account.clone();
         self.offload(move |service| service.invalidate(&account))
             .await
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) async fn commit_grant_if(
         &self,
         account: &AccountKey,
