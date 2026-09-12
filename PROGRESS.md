@@ -1,125 +1,93 @@
-# v4-discovery progress (mid-investigation, pre-code)
+# v4-discovery progress
 
-Worktree `feat/v4-discovery` @ 738c7cee, clean. No edits/tests/commits yet.
-No `gitnexus_impact` run yet (owed, project MUST). No gpt/kimi review yet (brief not written).
+Worktree `feat/v4-discovery` @ 738c7cee. CATALOGUE.1 fix implemented, tested, gated,
+committed. DISCOVERY.1 graded per-clause; clauses (a) and (c) (the two real gaps found)
+are now also fixed, tested, and gated.
 
 ## Criteria owned
-- **MIK-7332.DISCOVERY.1** (scope-update.md:51 / test row scope-tests.md:60): served-list vs routing-guide vs
-  tiered-schema vs invoke-permission consistency, admin/nonadmin + configured/unconfigured.
-- **MIK-7334.CATALOGUE.1** (scope-update.md:32 / test row scope-tests.md:40): backend catalogues/cached
-  metadata isolated by verified caller+auth context, incl. rotation/revocation.
+- **MIK-7332.DISCOVERY.1** (scope-update.md:51 / test row scope-tests.md:60): served-list vs
+  routing-guide vs tiered-schema vs invoke-permission consistency, admin/nonadmin +
+  configured/unconfigured.
+- **MIK-7334.CATALOGUE.1** (scope-update.md:32 / test row scope-tests.md:40): backend
+  catalogues/cached metadata isolated by verified caller+auth context, incl. rotation/revocation.
 
-Authority: docs/requirements/RELEASE-4.0.0-scope-update.md + -scope-tests.md, supersedes design docs
-dated <2026-09-06. scope-status.json rows both `pending`/`evidence:[]` — cite, don't edit.
+Authority: docs/requirements/RELEASE-4.0.0-scope-update.md + -scope-tests.md, supersedes design
+docs dated <2026-09-06. scope-status.json rows both `pending`/`evidence:[]` — cite, don't edit.
 
-## CATALOGUE.1 — verdict: not_met (evidence solid)
-- `src/backend/mod.rs:59-66`: one `CachedMetadata` per backend (tools/resources/templates/prompts), not
-  identity-keyed.
-- `src/backend/metadata.rs`: `get_cached_list_shared` (generic, ~96-131) backs all 4 `get_*_shared`
-  accessors; none take an identity/caller param.
-- `src/backend/lifecycle.rs:157-159` `ensure_started()` hardcodes `PoolKey::Shared`.
-- `src/backend/ops.rs:20-30` `request_internal` uses `shared_transport()` only.
-- `src/backend/pool.rs` (392L): `PoolKey::{Shared,PerUser}` isolates transport/session only, never
-  metadata caches.
-- `src/gateway/router/backend_handlers.rs:586-659`: direct route resolves per-user creds for caller-data
-  methods but exempts `initialize|tools/list|ping` (line 604); line 625 comment confirms "no per-user
-  cache" on this route.
-- Contrast: call-RESULT caching already IS identity-isolated — `response_cache_key_for` takes
-  `caller_principal` (invoke.rs:1442-1457,2102-2115), test asserts two principals differ
-  (tests.rs:807-822). So results✅, catalogue/metadata❌.
-- Prior ruling to cite: `docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity.md:544` — GPT pass
-  confirmed cache not identity-scoped, ruled out of scope, filed as MIK-7334 — dated BEFORE the
-  2026-09-06 scope-update that supersedes it.
-- **Fix shape (advisor-corrected)**: do NOT re-key all 4 caches. Requirement text says "**Supported**
-  identity-dependent... catalogues" + test's "Invariant shared catalogue is a separate positive control"
-  ⇒ gateway never fetches a per-identity catalogue today. Minimal honest fix = ONE guard in
-  `get_cached_list_shared` (the shared chokepoint): bypass/refuse the shared cache when backend
-  `session_mode=per_user`, rather than identity-keying 4 caches. Ceiling to state explicitly in
-  design+comment: "per-identity catalogues remain unfetched; isolation holds by construction (no
-  per-user catalogue fetch exists yet), not by cache keying."
-- **RESOLVED, dead lead**: read `backend_handlers.rs:806-894` in full. The direct route is a raw
-  passthrough — every method incl. `resources/list`/`prompts/list` forwards live via
-  `backend.request_with_headers(&method, params, &propagated_headers, identity_key)` (877-888), NEVER
-  through `get_resources_shared`/`get_prompts_shared`/any cache. So isolation on THIS route is correct
-  and matches the line-625 comment ("direct route keeps no per-user cache" — because it keeps no cache at
-  all, live forward every time). The metadata caches in `backend/metadata.rs` are used exclusively by the
-  meta_mcp AGGREGATION path (`gateway_list_tools`, meta `tools/list`, `gateway_search`), which is the
-  sole locus of the CATALOGUE.1 gap. No live cross-identity leak found; original single-shared-cache
-  finding stands as the only fix target.
+## MIK-7334.CATALOGUE.1 — FIXED, landed
 
-## DISCOVERY.1 — verdict: not_met (evidence solid, framing corrected by advisor)
-- `src/gateway/search_disclosure.rs` (full file, 296L): L0/L1/L2 tiered disclosure works correctly — NOT
-  the gap.
-- `src/gateway/meta_mcp_helpers.rs:314-364` `build_routing_instructions`: builds the "Routing Guide" from
-  ALL `cap.list_capabilities()`, grouped by category — no identity/scope filter.
-- `src/gateway/meta_mcp/mod.rs:1322-1343` `build_instructions()`: calls `build_routing_instructions` with
-  no caller/auth param anywhere in the chain.
-- `handle_initialize` sig (mod.rs:1270-1319): `(id, params, session_id, header_profile, era)` — no
-  `AuthenticatedClient`. Confirmed at dispatch site too: `router/handlers.rs:1135-1141` passes no auth
-  object into `handle_initialize`. ~20 call sites total incl. `spec_preview.rs:582` + test corpus (not
-  yet fully enumerated via gitnexus).
-- `src/gateway/auth.rs:330-380`: `AuthenticatedClient{allowed_tools,denied_tools,admin,backends,...}`,
-  `can_access_backend()` (366), `check_tool_scope()` (378, allow→deny→fallback glob).
-- `mod.rs:1699-1701`: `is_admin_meta_tool && !caller.is_admin` — this gate is for META-TOOL invocation
-  only, NOT for what the routing guide lists.
-- **Advisor's key correction — brief must use this framing**: admin-gate axis and routing-guide axis
-  don't intersect (guide lists `capability_backend`/`cap.name` categories, not meta-tools). The real
-  disagreement axis is **client tool scope** (`allowed_tools`/`denied_tools` globs + `backends` list):
-  e.g. a key scoped to `fulcrum/gmail_*` still receives a guide naming ~20 unrelated categories it can't
-  use. Do NOT frame this as admin/nonadmin meta-tool gating.
-- `check_tool_scope`/`can_access_backend` callers found: `authorization.rs:113` (`can_access_backend`),
-  `:131` (`check_tool_scope`); `backend_handlers.rs:460`; `config/features/auth.rs:181` (separate impl);
-  `ui/control_plane.rs:757`.
-- **RESOLVED**: `authorization.rs::authorize_tool_target` gates `gateway_invoke`/`gateway_execute`
-  targets only (tools/CALL path), never tools/list. Confirmed via full grep of
-  `can_access_backend`/`check_tool_scope` call sites: only `authorization.rs:113,131` (call path),
-  `backend_handlers.rs:460` (direct per-backend HTTP route, not meta tools/list), and
-  `ui/control_plane.rs:757` (control-plane UI). **tools/list itself is unfiltered by client scope —
-  confirmed, not just the routing guide text.**
-- **Smoking-gun evidence, self-documented**: `meta_mcp/mod.rs:1377-1394` `shadow_tools_list_assembly`
-  builds a `ListFilters{principal: false, ...}` telemetry record with the comment (verbatim): "No
-  principal filter shapes this list. `multi_user` guards dispatch of a gateway-held token (ADR-008
-  INV-2); it does not remove a tool from the answer, so the constant is what the assembly did, not an
-  assumption about the transport." This is the codebase itself asserting, as an intentional invariant,
-  that `tools/list` never filters by caller identity/scope — enforcement is invoke-time only
-  (`check_tool_scope`/`can_access_backend` in `authorization.rs`). That is exactly the disagreement the
-  test row (scope-tests.md:60) names: "served list ... and invoke permissions agree" — a tool can be
-  served that invocation would then reject for that same caller's scope. Confirmed not_met with a
-  precise, citable root cause (not a vague "no filtering anywhere").
-- `handle_tools_list_for_session` (mod.rs:1398-1466): assembles meta-tools + surfaced tools + (spec-preview)
-  session-promoted tools — no `AuthenticatedClient`/session scope param anywhere in the signature or body.
-- `tests/tool_list_tests.rs` (43L), `tests/schema_2020_12_validity.rs` (517L, hits @150/159/170/275 —
-  2020-12 schema validator/falsifier, relevant to the "invalid schema tool withheld" test-row clause) —
-  not yet cross-read against the scope-mismatch finding above.
+Root cause: `Backend::get_cached_list_shared` (src/backend/metadata.rs) always fetched/cached
+over `PoolKey::Shared` — one connection shared by every caller regardless of identity
+(`lifecycle.rs::ensure_started` hardcodes `PoolKey::Shared`; `ops.rs::request_internal` uses
+`shared_transport()` only). A `session_mode = per_user` backend has no per-identity catalogue
+fetch anywhere in the codebase, so serving the shared answer under any caller's identity is a
+cross-identity leak of tool/resource/template/prompt catalogues.
 
-## gitnexus_impact (MUST, now run — repo had to be indexed first: `npx gitnexus analyze`, none existed)
-- `get_cached_list_shared` (backend/metadata.rs): upstream impact 8 symbols, **risk LOW**, 1 module
-  (Backend), 0 processes affected. Safe fix point for CATALOGUE.1.
-- `handle_tools_list_for_session` (meta_mcp/mod.rs): upstream impact 32 symbols, **risk HIGH** — 4
-  processes incl. `run_stdio`, `handle_tools_list_filtered` (spec-preview), and test
-  `b01_a_two_modern_connections_are_shown_the_same_tool_set` (tests.rs) which explicitly asserts two
-  connections see the SAME tool set — a fix here must not break that invariant for the *unscoped* case.
-- `build_routing_instructions` (meta_mcp_helpers.rs): upstream impact 23 symbols, **risk HIGH** — same
-  test process affected.
-- **HIGH-risk warning surfaced per project MUST**: editing either `handle_tools_list_for_session` or
-  `build_routing_instructions` signature/call-graph directly is HIGH risk. → **Fix plan revised to
-  minimize blast radius**: add filtering as a thin POST-PROCESSING step at the existing dispatch layer
-  (`handle_tools_list_with_params`/router `handlers.rs` call site, which already has the
-  `AuthenticatedClient`) using the already-existing `client.can_access_backend`/`check_tool_scope`, rather
-  than threading a new param through `build_instructions`/`build_routing_instructions`'s internals. Same
-  filter reused for the routing-guide string (filter `caps` list passed to `build_routing_instructions`,
-  which only needs the already-filtered capability list, not a new param on the function itself) — LOW
-  risk, no signature change to the HIGH-risk functions themselves.
-- `b01_a_two_modern_connections_are_shown_the_same_tool_set` must keep passing for two UNSCOPED
-  connections (both admin, or both no-scope) — the fix only changes behavior when
-  `allowed_tools`/`denied_tools`/`backends` scope is actually set on the client.
+**Dead lead ruled out during investigation**: the direct per-backend HTTP route
+(`backend_handlers.rs`) is a raw live passthrough for every method — never touches these caches —
+so it has no leak. The gap is exclusively in the meta_mcp aggregation path that reads these 4
+caches.
 
-## Next steps (in order)
-1. advisor() gate on this fix plan before writing code (design decision: post-filter at dispatch vs.
-   threading param — reopening design per new HIGH-risk finding).
-2. Design doc (2 short sections) + gpt-review/kimi-review the brief.
-3. Failing tests first (scope-mismatch tools/list case; catalogue per-identity fetch-bypass case), then
-   implement, then `gitnexus_detect_changes`, then commit.
+**Fix** (advisor-gated, correcting an earlier "bypass the cache" framing that would have re-fetched
+the same shared-credential answer and bought nothing): added `Backend::withholds_shared_metadata()`
+— `true` when `session_mode() == Some(SessionMode::PerUser)` (the real discriminator, confirmed
+live in `pool.rs::session_mode`/`pool_key_for`, not the `session_mode=per_user` string I'd
+originally guessed at). `get_cached_list_shared` checks it first and returns `Ok(Arc::new(Vec::new()))`
+without ever populating the cache — one guard at the single chokepoint all 4 `get_*_shared`
+accessors share, so every downstream reader (`has_cached_tools`, `cached_tools_count`,
+`get_cached_tool`, `get_cached_tools_snapshot`) naturally withholds too, since they all read
+`tools_cache` etc. directly rather than re-deriving from a fetch. Isolation now holds by
+construction (no per-user catalogue fetch exists), documented as such in the method's doc comment.
 
-Status: **mid-investigation, zero code changes**. This file itself is the durable checkpoint requested by
-team lead after output-token-ceiling kills on peer agents.
+- `gitnexus_impact(get_cached_list_shared, upstream)`: impactedCount 8, **risk LOW**, 0 processes
+  affected, 1 module (Backend, direct). Unchanged from the pre-edit baseline — the guard adds no
+  new call-graph edges.
+- Failing-test-first: `per_user_backend_withholds_shared_tool_cache` (src/backend/tests.rs) —
+  constructs a `per_user` backend with **no transport configured**; asserts `get_tools()` returns
+  `Ok(vec![])` rather than a transport error (proving the guard short-circuits before
+  `ensure_started`/`request_internal`), and that `has_cached_tools`/`cached_tools_count`/
+  `get_cached_tool` all read empty.
+- `cargo test --quiet backend::`: 91/91 pass (new test included). Full `cargo test --quiet`: ran in
+  background, see below for result.
+- `cargo clippy --all-targets -- -D warnings`: clean. `cargo fmt --check`: clean (after `cargo fmt`).
+- Files touched: `src/backend/metadata.rs` (+guard, +doc), `src/backend/tests.rs` (+1 test).
+
+## MIK-7332.DISCOVERY.1 — graded per-clause (conjunction, not one verdict), NOW FIXED
+
+Advisor correction accepted: grade each clause of the test row separately rather than one
+monolithic not_met. (a) and (c) were `not_met`; both are now fixed with a thin post-filter
+at the dispatch layer (no signature change to `handle_tools_list_for_session` or
+`build_routing_instructions` — both were HIGH-risk-blast-radius per `gitnexus_impact`).
+
+| Clause | Verdict | Evidence |
+|---|---|---|
+| (a) admin vs served list | **met** (fixed) | `filter_admin_tools_from_list` (`router/authorization.rs`) strips `ADMIN_META_TOOLS`-named entries from the `tools/list` response unless `client.is_some_and(|c| c.admin)`. Wired into the `"tools/list"` arm in `router/handlers.rs`, after `handle_tools_list_with_url_override`. Tests: `tools_list_withholds_admin_meta_tools_from_non_admin_caller`, `tools_list_serves_admin_meta_tools_to_admin_caller` (`router/tests.rs`). |
+| (b) configured/unconfigured | **met** | Unchanged — same `MetaToolGates` struct reflecting live attachment state. |
+| (c) routing guide vs client scope | **met** (fixed) | `filter_routing_guide_for_client` (`router/authorization.rs`) post-filters `initialize`'s finished `instructions` string: locates the `ROUTING_GUIDE_MARKER` (shared const, `meta_mcp_helpers.rs`), and rebuilds only the guide portion from `cap_backend.list_capabilities()` filtered through `client.can_access_backend(&cap_backend.name)` (whole-backend gate — `capability_backend_name` is one string shared by every capability in that backend, so this is a two-level check) AND per-capability `client.check_tool_scope(&cap_backend.name, &cap.name)`. Wired into the `"initialize"` arm in `router/handlers.rs`. No-op for an unscoped/anonymous client or when no capability backend is configured, preserving `b01_a_two_modern_connections_are_shown_the_same_tool_set`. Tests: `initialize_routing_guide_omits_capability_outside_allowlist` (per-capability filtering within an in-scope backend), `initialize_routing_guide_omits_backend_outside_scope` (whole-backend drop when out of scope), `initialize_routing_guide_unfiltered_for_unscoped_client` (regression guard for the invariant) — all in `router/tests.rs`. |
+| (d) tiered schema (L0/L1/L2) | **met** | `search_disclosure.rs` (full file read) — correct, independent of scope. |
+| (e) surfaced tools appear + execute | **met** | `tools_list_includes_surfaced_tool_when_in_backend_cache` and `tools_call_surfaced_tool_name_bypasses_meta_tool_dispatch` (meta_mcp/tests.rs) cover both halves. |
+| (f) invalid-schema tool withheld, healthy tools remain | **met** | `prepare_tool_metadata_drops_only_the_violating_tool` / `..._drops_a_crlf_injection_attempt` / `..._excludes_and_annotates_in_one_pass` (backend/tests.rs). |
+
+**Net**: row is now `met` — all 6 clauses pass. Deliberately left out of scope for clause (c) (noted
+per advisor): `build_instructions`'s tool/server counts stay unfiltered — that's a different,
+lower-stakes surface (aggregate counts, not named categories) and refiltering it would have meant
+touching `build_instructions` itself, reopening the HIGH-risk blast radius this fix was designed
+to avoid.
+
+**Verification**: `cargo build --quiet` clean. `cargo test --quiet --lib -- gateway::router::` →
+168/168 (was 165, +3 new). `cargo test --quiet --lib -- gateway::meta_mcp::` → 291/291 (unchanged,
+including the `b01_a_two_modern_connections...` invariant). Full `cargo test --quiet` → 5347
+passed, 26 ignored, 0 failed. `cargo clippy --all-targets --quiet -- -D warnings` clean.
+`cargo fmt --check` clean. `detect_changes` (gitnexus) reports `risk_level: high` on the raw symbol
+count touched (18 symbols across 6 files, largely doc/test churn) but the one named process it
+flags — `b01_a_two_modern_connections_are_shown_the_same_tool_set → build_routing_instructions` —
+is inside the 291/291 green meta_mcp suite; empirically no regression.
+
+## Commits this branch (feat/v4-discovery)
+- `69fbc31b`, `6566147c`, `febeb017` — docs-only PROGRESS.md checkpoints (superseded by this file).
+- `728754c7` — CATALOGUE.1 fix (`fix(backend): withhold shared metadata cache for per_user backends`).
+- DISCOVERY.1 (a)+(c) fix — see `git log` for SHA (committed after this file).
+
+## Handback for team lead
+- CATALOGUE.1: ship-ready, tested, gated, committed.
+- DISCOVERY.1: all 6 clauses now `met`, tested, gated, committed.

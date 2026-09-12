@@ -3125,6 +3125,243 @@ fn admin_gate_covers_global_tools_and_not_session_local_ones() {
     }
 }
 
+/// MIK-7332 DISCOVERY.1 clause (a): the served `tools/list` must agree with
+/// what `tools/call` actually permits. Before `filter_admin_tools_from_list`,
+/// `ADMIN_META_TOOLS` were gated only at invoke time and every caller, admin
+/// or not, was shown all four in the list — this is the regression guard for
+/// the served-list half of that gap.
+#[tokio::test]
+async fn tools_list_withholds_admin_meta_tools_from_non_admin_caller() {
+    let router = create_router(test_router_app_state_with_auth(&scoped_auth_config(false)));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", "Bearer scoped-key")
+        .header("content-type", "application/json")
+        .header("mcp-session-id", "sess-admin-filter-non-admin")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let tools = json["result"]["tools"].as_array().expect("tools array");
+    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+
+    for admin_tool in super::authorization::ADMIN_META_TOOLS {
+        assert!(
+            !names.contains(admin_tool),
+            "{admin_tool} must not be served to a non-admin caller: \
+             tools/call already refuses it, so serving it disagrees with \
+             what invoking it does"
+        );
+    }
+}
+
+/// The other half of the same guard: an admin caller must still be SHOWN the
+/// tools it is allowed to invoke. Without this, a filter that stripped
+/// `ADMIN_META_TOOLS` unconditionally (rather than only for non-admins) would
+/// pass the test above and still be wrong.
+#[tokio::test]
+async fn tools_list_serves_admin_meta_tools_to_admin_caller() {
+    let router = create_router(test_router_app_state_with_auth(&scoped_auth_config(true)));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", "Bearer scoped-key")
+        .header("content-type", "application/json")
+        .header("mcp-session-id", "sess-admin-filter-admin")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let tools = json["result"]["tools"].as_array().expect("tools array");
+    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+
+    assert!(
+        super::authorization::ADMIN_META_TOOLS
+            .iter()
+            .any(|admin_tool| names.contains(admin_tool)),
+        "an admin caller must still see at least one admin meta-tool, or the \
+         filter is stripping unconditionally rather than gating on admin-ness"
+    );
+}
+
+/// Shared fixture for the clause (c) tests below: two capabilities in one
+/// backend, one that `scoped_auth_config`'s allowlist permits and one it
+/// doesn't, so a routing-guide filter has something real to disagree about.
+async fn capability_backend_with_two_tools(
+    name: &str,
+) -> Arc<crate::capability::CapabilityBackend> {
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("allowed_tool.yaml"),
+        r"
+name: allowed_tool
+description: A capability the scoped client's allowlist permits
+metadata:
+  category: catA
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.invalid
+      path: /allowed
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("other_tool.yaml"),
+        r"
+name: other_tool
+description: A capability the scoped client's allowlist does not permit
+metadata:
+  category: catB
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.invalid
+      path: /other
+",
+    )
+    .unwrap();
+
+    let cap_backend = Arc::new(CapabilityBackend::new(
+        name,
+        Arc::new(CapabilityExecutor::new()),
+    ));
+    cap_backend
+        .load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    cap_backend
+}
+
+async fn initialize_instructions(
+    router: axum::Router,
+    session_id: &str,
+    bearer: Option<&str>,
+) -> String {
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-session-id", session_id);
+    if let Some(token) = bearer {
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    let request = builder
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": { "name": "test-client", "version": "1.0" }
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    json["result"]["instructions"]
+        .as_str()
+        .expect("instructions string")
+        .to_string()
+}
+
+/// MIK-7332 DISCOVERY.1 clause (c): the routing guide must not name a
+/// capability the caller's own scope will refuse at invoke time. Regression
+/// guard for the per-capability half: the backend itself IS in scope
+/// (`scoped_auth_config`'s `backends: ["demo"]`), but only one of its two
+/// capabilities is on the allowlist.
+#[tokio::test]
+async fn initialize_routing_guide_omits_capability_outside_allowlist() {
+    let state = test_router_app_state_with_auth(&scoped_auth_config(false));
+    state
+        .meta_mcp
+        .set_capabilities(capability_backend_with_two_tools("demo").await);
+    let router = create_router(state);
+
+    let instructions =
+        initialize_instructions(router, "sess-routing-guide-scoped", Some("scoped-key")).await;
+
+    assert!(
+        instructions.contains("demo/allowed_tool"),
+        "the allowlisted capability must still be advertised: {instructions}"
+    );
+    assert!(
+        !instructions.contains("other_tool") && !instructions.contains("catB"),
+        "a capability outside the caller's allowlist must not appear in its \
+         routing guide: {instructions}"
+    );
+}
+
+/// The other half: the whole backend is out of scope
+/// (`scoped_auth_config`'s `backends: ["demo"]` excludes it), so the guide
+/// must drop it wholesale rather than leak categories from a backend the
+/// client can never reach.
+#[tokio::test]
+async fn initialize_routing_guide_omits_backend_outside_scope() {
+    let state = test_router_app_state_with_auth(&scoped_auth_config(false));
+    state
+        .meta_mcp
+        .set_capabilities(capability_backend_with_two_tools("unlisted_backend").await);
+    let router = create_router(state);
+
+    let instructions = initialize_instructions(
+        router,
+        "sess-routing-guide-unscoped-backend",
+        Some("scoped-key"),
+    )
+    .await;
+
+    assert!(
+        !instructions.contains("Routing Guide") && !instructions.contains("unlisted_backend"),
+        "a backend outside the caller's `backends` allowlist must not appear \
+         in the routing guide at all: {instructions}"
+    );
+}
+
+/// Regression guard for the existing invariant this filter must not break:
+/// an unscoped/anonymous connection (auth disabled) still sees the full,
+/// unfiltered guide — `b01_a_two_modern_connections_are_shown_the_same_tool_set`
+/// in `meta_mcp/tests.rs` covers `tools/list`'s side of the same invariant.
+#[tokio::test]
+async fn initialize_routing_guide_unfiltered_for_unscoped_client() {
+    let state = test_router_app_state();
+    state
+        .meta_mcp
+        .set_capabilities(capability_backend_with_two_tools("demo").await);
+    let router = create_router(state);
+
+    let instructions = initialize_instructions(router, "sess-routing-guide-unscoped", None).await;
+
+    assert!(
+        instructions.contains("demo/allowed_tool") && instructions.contains("demo/other_tool"),
+        "an unscoped connection must keep seeing every capability, admin \
+         gating aside: {instructions}"
+    );
+}
+
 /// A non-admin caller can switch its own routing profile.
 ///
 /// The regression guard for the half above that is easy to re-break: someone

@@ -15,7 +15,8 @@ use tracing::{debug, info, warn};
 
 use super::AppState;
 use super::authorization::{
-    RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
+    RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call,
+    filter_admin_tools_from_list, filter_routing_guide_for_client, is_admin_meta_tool,
     refusal_principal, require_admin_tool_access,
 };
 use super::helpers::{
@@ -1132,13 +1133,23 @@ pub(super) async fn meta_mcp_handler(
                 .meta_mcp
                 .discover_document(state.live_config.running().server.modern_protocol),
         ),
-        "initialize" => state.meta_mcp.handle_initialize(
-            id,
-            params.as_ref(),
-            Some(session_id.as_str()),
-            header_profile.as_deref(),
-            era,
-        ),
+        "initialize" => {
+            let response = state.meta_mcp.handle_initialize(
+                id,
+                params.as_ref(),
+                Some(session_id.as_str()),
+                header_profile.as_deref(),
+                era,
+            );
+            // MIK-7332 DISCOVERY.1 clause (c): the routing guide must not name
+            // categories the caller's own scope will refuse at invoke time.
+            // See `filter_routing_guide_for_client` doc comment.
+            filter_routing_guide_for_client(
+                response,
+                state.meta_mcp.get_capabilities().as_deref(),
+                client.as_ref(),
+            )
+        }
         "tools/list" => {
             // NFR.OBS.2. The inputs that decide this surface, and the
             // cacheScope the response will carry — recorded before the list is
@@ -1169,12 +1180,16 @@ pub(super) async fn meta_mcp_handler(
                 cache_scope_advertised = is_modern,
                 "tools/list surface inputs and cache scope"
             );
-            state.meta_mcp.handle_tools_list_with_url_override(
+            let response = state.meta_mcp.handle_tools_list_with_url_override(
                 id,
                 params.as_ref(),
                 Some(session_id.as_str()),
                 code_mode_url_active,
-            )
+            );
+            // MIK-7332 DISCOVERY.1 clause (a): a non-admin caller must not be
+            // shown a tool `tools/call` will refuse it for. See
+            // `filter_admin_tools_from_list` doc comment.
+            filter_admin_tools_from_list(response, client.as_ref())
         }
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
