@@ -312,3 +312,234 @@ async fn mik_gw_t2_invalid_detail_fails_fast() {
         .unwrap_err();
     assert!(err.to_string().contains("l0|l1|l2"), "{err}");
 }
+
+// ---------------------------------------------------------------------------
+// MIK-3274.RANKING.2 — authorization before disclosure, ranking before truncation
+// ---------------------------------------------------------------------------
+
+use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
+use std::collections::HashMap;
+
+/// Query used by every ordering fixture below.
+const OUTBOUND_QUERY: &str = "send email";
+
+/// Adversarially high usage count fed to the ranker before searching.
+const POISON_USES: usize = 4096;
+
+fn outbound_servers() -> Vec<(&'static str, Vec<Tool>)> {
+    vec![
+        (
+            "gmail",
+            vec![tool(
+                "send_email",
+                "Send an email from the connected Gmail account. [keywords: email, send]",
+                schema(&["to"], &json!({"to": {"type": "string"}})),
+            )],
+        ),
+        (
+            "mailroom",
+            vec![
+                tool(
+                    "email_digest_status",
+                    "Report whether the nightly digest finished.",
+                    schema(&["day"], &json!({"day": {"type": "string"}})),
+                ),
+                tool(
+                    "send_email",
+                    "Deliver a message through the internal relay. [keywords: relay]",
+                    schema(&["to"], &json!({"to": {"type": "string"}})),
+                ),
+            ],
+        ),
+    ]
+}
+
+async fn outbound_meta(profile: Option<ProfileRegistry>) -> MetaMcp {
+    let registry = Arc::new(BackendRegistry::new());
+    for (name, tools) in outbound_servers() {
+        let _ = registry.register(backend_with_tools(name, tools).await);
+    }
+    let ranker = Arc::new(SearchRanker::new());
+    for _ in 0..POISON_USES {
+        ranker.record_use("gmail", "send_email");
+        ranker.record_use("mailroom", "email_digest_status");
+    }
+    let meta = MetaMcp::with_features(registry, None, None, Some(ranker), Duration::from_secs(60))
+        .with_code_mode(true);
+    match profile {
+        Some(registry) => meta.with_profile_registry(registry),
+        None => meta,
+    }
+}
+
+fn deny_gmail_profile() -> ProfileRegistry {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "restricted".to_string(),
+        RoutingProfileConfig {
+            deny_backends: Some(vec!["gmail".to_string()]),
+            ..RoutingProfileConfig::default()
+        },
+    );
+    ProfileRegistry::from_config(&configs, "restricted")
+}
+
+/// Collect `"server:tool"` refs from a Code Mode search response.
+fn code_mode_refs(response: &Value) -> Vec<String> {
+    response["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["tool"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Collect `"server:tool"` refs from a `gateway_search_tools` response.
+fn search_tools_refs(response: &Value) -> Vec<String> {
+    response["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            format!(
+                "{}:{}",
+                m["server"].as_str().unwrap(),
+                m["tool"].as_str().unwrap()
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn mik_gw_ranking2_code_mode_filters_forbidden_before_disclosure() {
+    // Counterfactual: with no profile the forbidden tool is not merely present,
+    // its poisoned usage puts it first — so its absence below is authorization,
+    // not a ranking accident.
+    let open = outbound_meta(None).await;
+    let open_hits = open
+        .code_mode_search(&json!({"query": OUTBOUND_QUERY, "limit": 10}), None)
+        .await
+        .unwrap();
+    assert_eq!(code_mode_refs(&open_hits)[0], "gmail:send_email");
+    assert_eq!(open_hits["total_available"], 3);
+
+    // Restricted: a wide limit leaves room for the forbidden tool, so absence
+    // cannot be blamed on truncation.
+    let closed = outbound_meta(Some(deny_gmail_profile())).await;
+    let closed_hits = closed
+        .code_mode_search(&json!({"query": OUTBOUND_QUERY, "limit": 10}), None)
+        .await
+        .unwrap();
+    let refs = code_mode_refs(&closed_hits);
+    assert!(
+        !refs.iter().any(|r| r.starts_with("gmail:")),
+        "forbidden backend disclosed: {refs:?}"
+    );
+    assert!(
+        refs.contains(&"mailroom:send_email".to_string()),
+        "{refs:?}"
+    );
+    // Pre-truncation candidate count also drops: the filter runs before the
+    // catalogue is counted, not after it is trimmed.
+    assert_eq!(closed_hits["total_available"], 2);
+}
+
+#[tokio::test]
+async fn mik_gw_ranking2_code_mode_ranks_before_truncating() {
+    let meta = outbound_meta(Some(deny_gmail_profile())).await;
+
+    // Pre-ranking order, measured through the glob path (which skips the
+    // ranker): the weak tool is collected first, so truncating before ranking
+    // would return it.
+    let unranked = meta
+        .code_mode_search(&json!({"query": "*mail*", "limit": 10}), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        code_mode_refs(&unranked),
+        vec!["mailroom:email_digest_status", "mailroom:send_email"]
+    );
+
+    let hits = meta
+        .code_mode_search(&json!({"query": OUTBOUND_QUERY, "limit": 1}), None)
+        .await
+        .unwrap();
+    assert_eq!(code_mode_refs(&hits), vec!["mailroom:send_email"]);
+    assert_eq!(hits["total"], 1);
+    assert_eq!(hits["total_available"], 2);
+
+    // The loser really did carry the poisoned feedback and still lost.
+    let explained = meta
+        .code_mode_search(
+            &json!({"query": OUTBOUND_QUERY, "limit": 10, "explain": true}),
+            None,
+        )
+        .await
+        .unwrap();
+    let matches = explained["matches"].as_array().unwrap();
+    assert_eq!(matches[0]["ranking"]["signals"]["usage_count"], 0);
+    assert_eq!(
+        matches[1]["ranking"]["signals"]["usage_count"],
+        POISON_USES as u64
+    );
+    assert!(
+        matches[1]["ranking"]["signals"]["relevance"]
+            .as_f64()
+            .unwrap()
+            < 6.0
+    );
+}
+
+#[tokio::test]
+async fn mik_gw_ranking2_search_tools_filters_forbidden_before_disclosure() {
+    let open = outbound_meta(None).await;
+    let open_hits = open
+        .search_tools(&json!({"query": OUTBOUND_QUERY, "limit": 10}), None)
+        .await
+        .unwrap();
+    assert_eq!(search_tools_refs(&open_hits)[0], "gmail:send_email");
+    assert_eq!(open_hits["total_available"], 3);
+
+    let closed = outbound_meta(Some(deny_gmail_profile())).await;
+    let closed_hits = closed
+        .search_tools(&json!({"query": OUTBOUND_QUERY, "limit": 10}), None)
+        .await
+        .unwrap();
+    let refs = search_tools_refs(&closed_hits);
+    assert!(
+        !refs.iter().any(|r| r.starts_with("gmail:")),
+        "forbidden backend disclosed: {refs:?}"
+    );
+    assert!(
+        refs.contains(&"mailroom:send_email".to_string()),
+        "{refs:?}"
+    );
+    assert_eq!(closed_hits["total_available"], 2);
+}
+
+#[tokio::test]
+async fn mik_gw_ranking2_search_tools_ranks_before_truncating() {
+    let meta = outbound_meta(Some(deny_gmail_profile())).await;
+
+    let hits = meta
+        .search_tools(&json!({"query": OUTBOUND_QUERY, "limit": 1}), None)
+        .await
+        .unwrap();
+    assert_eq!(search_tools_refs(&hits), vec!["mailroom:send_email"]);
+    assert_eq!(hits["total"], 1);
+    assert_eq!(hits["total_available"], 2);
+
+    let explained = meta
+        .search_tools(
+            &json!({"query": OUTBOUND_QUERY, "limit": 10, "explain": true}),
+            None,
+        )
+        .await
+        .unwrap();
+    let matches = explained["matches"].as_array().unwrap();
+    assert_eq!(matches[0]["ranking"]["signals"]["usage_count"], 0);
+    assert_eq!(
+        matches[1]["ranking"]["signals"]["usage_count"],
+        POISON_USES as u64
+    );
+}
