@@ -23,9 +23,11 @@
       "status": "met",
       "evidence": [
         "tests/message_signing_delivery.rs",
-        "tests/message_signing_config.rs"
+        "tests/message_signing_config.rs",
+        "tests/message_signing_stdio_coverage.rs",
+        "src/security/message_signing_v2_tests.rs"
       ],
-      "note": "Graded 2026-09-12. cargo test --features webui,config-export,firewall --test message_signing_config --test message_signing_delivery: test result: ok. 14 passed; 0 failed; 0 ignored and test result: ok. 5 passed; 0 failed; 0 ignored. signing_1_real_http_startup_installs_the_configured_signer (tests/message_signing_delivery.rs:59) starts a real HTTP gateway with a valid key, forces real backend dispatch and inspects the emitted _signature: version 2, nonce, key_id, hmac-sha256 alg, delivery-bounded timestamp and a 64-char lowercase hex MAC. The produces-validated-signatures branch is therefore proven, not the rejection fallback. Invalid-key rejection by signing_2_enabled_config_rejects_short_and_zero_keys (:39); disabled baseline retains unsigned delivery by signing_6_disabled_dormant_secret_preserves_unsigned_calls (:160); missing-reference refusal without leak by signing_config_missing_current_reference_is_refused_without_leak (tests/message_signing_config.rs:211)."
+      "note": "Graded 2026-09-12. cargo test --features webui,config-export,firewall --test message_signing_config --test message_signing_delivery: test result: ok. 14 passed; 0 failed; 0 ignored and test result: ok. 5 passed; 0 failed; 0 ignored. signing_1_real_http_startup_installs_the_configured_signer (tests/message_signing_delivery.rs:59) starts a real HTTP gateway with a valid key, forces real backend dispatch and inspects the emitted _signature: version 2, nonce, key_id, hmac-sha256 alg, delivery-bounded timestamp and a 64-char lowercase hex MAC. The produces-validated-signatures branch is therefore proven, not the rejection fallback. Invalid-key rejection by signing_2_enabled_config_rejects_short_and_zero_keys (:39); disabled baseline retains unsigned delivery by signing_6_disabled_dormant_secret_preserves_unsigned_calls (:160); missing-reference refusal without leak by signing_config_missing_current_reference_is_refused_without_leak (tests/message_signing_config.rs:211). CITATION CORRECTED 2026-09-12: the row holds, but not on the test this note first cited. signing_1_real_http_startup_installs_the_configured_signer checks signature SHAPE only - version, nonce, key_id, alg, timestamp bounds and a 64-char lowercase hex string - and never verifies the MAC, so it cannot carry the 'validated' conjunct. That conjunct is carried by the stdio path: stdio_enabled_nonce_replay_then_fresh_batch_is_signed (tests/message_signing_stdio_coverage.rs:167) and stdio_enabled_optional_nonce_omitted_is_signed (:228) route through verify_signed_wire (:291) to an independent Node verifier doing createHmac(\"sha256\") and timingSafeEqual (tests/common/signing_verifier.mjs:173, :212), with a fixed-vector unit at src/security/message_signing_v2_tests.rs:66. RESIDUAL GAP: no HTTP-transport test verifies a delivered MAC; the HTTP path is asserted by shape alone."
     },
     {
       "id": "MIK-7334.CATALOGUE.1",
@@ -102,14 +104,16 @@
     },
     {
       "id": "MIK-6744.STORE.1",
-      "status": "met",
+      "status": "pending",
       "evidence": [
         "src/personal_accounts/store_tests.rs",
         "src/personal_accounts/service_refresh_tests.rs",
-        "src/personal_accounts/vault.rs",
-        "docs/requirements/scope-grading-2026-09-12.md"
+        "src/personal_accounts/tests.rs",
+        "src/personal_accounts/crash_tests.rs",
+        "src/personal_accounts/mod.rs",
+        "src/commands/upgrade.rs"
       ],
-      "note": "Graded 2026-09-12. cargo test --lib personal_accounts::: test result: ok. 157 passed; 0 failed; 1 ignored; 4576 filtered out. Clause coverage by module inside that passing set: principal/backend/resource keying plus load and save in src/personal_accounts/store_tests.rs; refresh in service_refresh_tests.rs; at-rest protection in vault.rs and storage.rs; wire bounds in wire_bound_tests.rs; no silent loss under crash and repair in crash_tests.rs, repair_tests.rs and fence_tests.rs. The single ignored test in the module was not identified and this verdict does not rest on it. One integration test in a neighbouring file is red on this machine: init_store_creates_an_empty_store_and_a_second_run_refuses_without_touching_it panics at tests/accounts_init_store.rs:117 with \"personal account storage configuration is invalid\", and the panic is on the FIRST run, so the test never reaches the never-replaced assertion. It reproduces unchanged on the base branch in a clean worktree with a private build directory, which places it before this work rather than in it, and CI runs cargo test --all-features (.github/workflows/ci.yml:199) green on this branch. Treated as a macOS-local environment defect, not evidence against this row. It is filed and must be triaged before release."
+      "note": "Regraded 2026-09-12: the 2026-09-12 MET grade is WITHDRAWN. It was established by module, not conjunct by conjunct, off a passing test count. A conjunct audit splits the criterion into seven parts and two of them have no covering construct. COVERED: principal/backend/resource keying for load (s01_independent_committed_fixture_resolves_every_account_axis, store_tests.rs:166), for save (s03_explicit_initialization_creates_encrypted_authority_and_reopens, tests.rs:272) and for refresh (invalidate_during_held_refresh_discards_stale_provider_success, service_refresh_tests.rs:102); at-rest protection (s02_envelope_roundtrip_has_exact_public_shape_and_no_plaintext_secrets, tests.rs:168 and s03_independent_aes256_gcm_vector_opens_exact_expired_payload, tests.rs:362, against seal_bytes at storage.rs:154 with 0o600 at commit.rs:81); no silent loss under crash (s10_a_committed_generation_survives_an_abrupt_death, crash_tests.rs:119). NOT COVERED: existing single-user data is READABLE - no test opens a pre-existing 3.x single-user store; and MIGRATED - no test, no code path, and the source states the opposite. src/personal_accounts/mod.rs:779 reads \"Existing state is never replaced, and nothing is migrated into a store this command creates\" and :790 \"a store this creates has zero records by construction\"; src/commands/upgrade.rs:243 ships the user-facing notice \"Stored tokens from 3.x are not migrated: each OAuth backend re-authenticates once\". legacy_migration (mod.rs:207) is a dead field, only ever written None (repair_tests.rs:179). This is an implementation gap, not a test gap: the row cannot reach MET by adding tests. Either the migration path is built, or the criterion is rewritten to match the shipped re-authenticate-once behaviour, which is an operator decision. The accounts_init_store.rs:117 local-only failure recorded by the previous note is unrelated and stands."
     },
     {
       "id": "MIK-6744.STORE.2",
@@ -239,7 +243,7 @@
     {
       "id": "reference_personal_account_journey",
       "status": "resolved",
-      "selection": "Open WebUI on Spark → gateway → Google Workspace",
+      "selection": "Open WebUI on Spark \u2192 gateway \u2192 Google Workspace",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md"
       ]

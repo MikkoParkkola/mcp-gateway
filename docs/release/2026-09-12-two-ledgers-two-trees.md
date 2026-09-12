@@ -26,7 +26,7 @@ line. The "56 -> 46 open" figure is withdrawn.
 - `NFR.PERF.1` — PARTIAL on both trees. `session_sandbox/check_tool_denied`
   regressed +6.07% against the >5% P50 bound (criterion's own interval
   `[+5.05%, +7.11%]`), measured on `spark` 2026-09-03.
-- 22 of the 31 supplemental scope criteria — pending on the branch, and
+- 24 of the 31 supplemental scope criteria — pending on the branch, and
   ungradeable on main because the code they grade is not there.
 
 Not open, despite reading as open:
@@ -87,7 +87,12 @@ The two scope-contract gradings were disjoint rather than contradictory. The
 branch graded the account and lifecycle rows; main graded `MIK-3274.RANKING.2`,
 `.3`, `MIK-7332.DISCOVERY.1` and `MIK-7334.CATALOGUE.1`. The contract now holds
 the union. `MIK-3274.RANKING.1` keeps the branch note, which withdraws the
-2026-09-12 MET grade; the supplemental set therefore reads 8 met, not 9.
+2026-09-12 MET grade; the supplemental set read 8 met, not 9. A conjunct audit
+on 2026-09-12 then withdrew `MIK-6744.STORE.1` as well — existing single-user
+data is neither read nor migrated by any code path, and `mod.rs:779` says so in
+as many words — so the set now reads **7 met, 24 pending**. Both withdrawals have
+the same cause: a grade established by running a module's tests and counting
+passes, rather than by pinning each conjunct of the criterion to a construct.
 
 `scripts/release/check_tag_manifest.py` and its two test files stay on the
 release line. They assert against `.github/workflows/release.yml` and
