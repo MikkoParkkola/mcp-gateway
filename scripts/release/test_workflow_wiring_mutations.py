@@ -515,6 +515,72 @@ CASES = [
         '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
         CAUGHT,
     ),
+    # Disarmament in place. The step, its name and its text all survive the
+    # mutation — only what actually runs changes — so every assertion that
+    # searches the file for the wiring still finds it.
+    (
+        "gate-short-circuited",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py\n",
+        "        run: python3 scripts/release/check_tag_manifest.py || true\n",
+        CAUGHT,
+    ),
+    (
+        "gate-failure-swallowed",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py\n",
+        "        run: |\n          set +e\n"
+        "          python3 scripts/release/check_tag_manifest.py\n",
+        CAUGHT,
+    ),
+    (
+        "gate-replaced-by-help",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py\n",
+        "        run: python3 scripts/release/check_tag_manifest.py --help\n",
+        CAUGHT,
+    ),
+    (
+        # The heredoc hazard one level out: the gate text becomes the value of
+        # a variable, which reads as a command and runs nothing.
+        "gate-run-moved-into-an-env-note",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py\n",
+        "        env:\n          NOTE: |\n"
+        "            python3 scripts/release/check_tag_manifest.py\n"
+        "        run: true\n",
+        CAUGHT,
+    ),
+    (
+        # `latest` would follow every release candidate, which is the tag the
+        # conditional exists to withhold from prereleases.
+        "latest-fallback-made-unconditional",
+        "ci.yml",
+        "            ${{ steps.meta.outputs.is_prerelease != 'true' "
+        "&& 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}\n",
+        "            ghcr.io/mikkoparkkola/mcp-gateway:latest\n",
+        CAUGHT,
+    ),
+    (
+        # Signing a mutable tag signs whatever it points at later; echoing the
+        # digest leaves the binding visible to any search for it.
+        "sign-the-tag-then-echo-the-digest",
+        "docker.yml",
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "        run: |\n"
+        '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway:latest"\n'
+        '          echo "${DIGEST}"\n',
+        CAUGHT,
+    ),
+    (
+        "digest-rebound-by-declare",
+        "docker.yml",
+        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "        run: |\n"
+        '          declare DIGEST="latest"\n'
+        '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        CAUGHT,
+    ),
 ]
 
 
