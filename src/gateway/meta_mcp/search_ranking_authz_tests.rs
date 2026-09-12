@@ -259,3 +259,180 @@ async fn high_scoring_match_beyond_the_limit_survives_truncation() {
          first collected: ranking has to precede truncation"
     );
 }
+
+/// A capability sharing no token with `QUERY`, used as the "irrelevant" arm of
+/// the usage-feedback clause.
+const IRRELEVANT: &str = "unrelated_widget";
+
+/// Fixtures for the usage-feedback clause: one irrelevant capability alongside
+/// the two ranked ones.
+const USAGE_FIXTURES: &[(&str, &str)] = &[
+    ("weak_match", "a zebracorn adjacent helper"),
+    (QUERY, "the exact name match"),
+    (IRRELEVANT, "sorting sprockets by colour"),
+];
+
+/// Give `tool` an astronomically high usage count on the fixture backend.
+///
+/// `SearchRanker::load` is the only public route to a count this large;
+/// `record_use` would need 10^12 calls. The count is chosen to exceed the
+/// usage factor's reach: `log2(10^12) * 0.15` is about 6.0, so a multiplicative
+/// boost of ~7x is applied to whatever relevance the tool scored.
+fn ranker_with_heavy_usage(tool: &str) -> Arc<SearchRanker> {
+    let ranker = Arc::new(SearchRanker::new());
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("usage.json");
+    std::fs::write(
+        &path,
+        format!(r#"[{{"server":"{CAP_BACKEND}","tool":"{tool}","count":1000000000000}}]"#),
+    )
+    .unwrap();
+    ranker.load(&path).unwrap();
+    // Guards the two tests below: a load that silently parsed nothing would
+    // leave the count at zero and make "usage did not promote it" vacuous.
+    assert_eq!(
+        ranker.usage_count(CAP_BACKEND, tool),
+        1_000_000_000_000,
+        "fixture usage count failed to load"
+    );
+    ranker
+}
+
+/// A gateway with a caller-supplied ranker, so a test can seed usage counts.
+async fn meta_with_ranker(
+    caps: &[(&str, &str)],
+    registry: ProfileRegistry,
+    ranker: Arc<SearchRanker>,
+) -> (MetaMcp, Vec<TempDir>) {
+    let (cap_backend, dirs) = capability_backend(caps).await;
+    let meta = MetaMcp::with_features(
+        Arc::new(BackendRegistry::new()),
+        None,
+        None,
+        Some(ranker),
+        Duration::from_secs(60),
+    )
+    .with_profile_registry(registry);
+    meta.set_capabilities(cap_backend);
+    (meta, dirs)
+}
+
+/// USAGE CLAUSE, irrelevant arm — `src/gateway/meta_mcp/search.rs:304`
+/// (`tool_matches_query`, which gates collection) and `ranking/mod.rs:371`
+/// (the multiplicative usage factor).
+///
+/// The clause is narrow on purpose: usage *can* reorder two relevant matches,
+/// because the factor is unbounded in the count. What it cannot do is surface a
+/// tool the query does not match — that tool never enters the candidate set, so
+/// no boost applies to it. Asserting the narrow claim keeps the test honest.
+#[tokio::test]
+async fn usage_feedback_cannot_surface_an_irrelevant_tool() {
+    let ranker = ranker_with_heavy_usage(IRRELEVANT);
+    let (meta, _dirs) = meta_with_ranker(
+        USAGE_FIXTURES,
+        registry_with_default(
+            "open",
+            RoutingProfileConfig {
+                description: "no backend or tool restrictions".to_string(),
+                ..Default::default()
+            },
+        ),
+        ranker,
+    )
+    .await;
+
+    let response = meta
+        .search_tools(&json!({ "query": QUERY }), None)
+        .await
+        .unwrap();
+
+    let names = tool_names(&response);
+    assert!(
+        !names.iter().any(|n| n == IRRELEVANT),
+        "a tool the query does not match must not be surfaced by usage feedback, \
+         however heavily used: got {names:?}"
+    );
+    assert_eq!(
+        response["total_available"], 2,
+        "only the two matching fixtures may be candidates"
+    );
+}
+
+/// USAGE CLAUSE, forbidden arm — `src/gateway/meta_mcp/search.rs:289`.
+///
+/// Authorization runs at collection time, *upstream* of the ranker, so a denied
+/// backend's tools are never scored at all. Without this test the clause rests
+/// on reading the call order; with it, the strongest possible boost is applied
+/// to a forbidden tool and it still never appears.
+#[tokio::test]
+async fn usage_feedback_cannot_promote_a_forbidden_tool() {
+    let ranker = ranker_with_heavy_usage(QUERY);
+    let (meta, _dirs) = meta_with_ranker(
+        USAGE_FIXTURES,
+        registry_with_default(
+            "locked",
+            RoutingProfileConfig {
+                description: "denies the capability backend wholesale".to_string(),
+                deny_backends: Some(vec![CAP_BACKEND.to_string()]),
+                ..Default::default()
+            },
+        ),
+        ranker,
+    )
+    .await;
+
+    let response = meta
+        .search_tools(&json!({ "query": QUERY }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        Vec::<String>::new(),
+        "a forbidden tool must stay hidden at any usage count"
+    );
+    assert_eq!(
+        response["total_available"], 0,
+        "a forbidden tool must not be scored: authorization precedes ranking"
+    );
+}
+
+/// INVARIANT B on the Code Mode path — `src/gateway/meta_mcp/search.rs:412`
+/// (the ranker block) standing before
+/// `crate::gateway::search_disclosure::finalize_search_matches`, which applies
+/// the limit.
+///
+/// Code Mode collects, ranks and truncates through its own code path; the
+/// classic-route test proves nothing about this one.
+#[tokio::test]
+async fn code_mode_ranks_before_truncating() {
+    let (cap_backend, _dirs) = capability_backend(RANKING_FIXTURES).await;
+    let meta = MetaMcp::with_features(
+        Arc::new(BackendRegistry::new()),
+        None,
+        None,
+        Some(Arc::new(SearchRanker::new())),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(true)
+    .with_profile_registry(registry_with_default(
+        "open",
+        RoutingProfileConfig {
+            description: "no backend or tool restrictions".to_string(),
+            ..Default::default()
+        },
+    ));
+    meta.set_capabilities(cap_backend);
+
+    let response = meta
+        .code_mode_search(&json!({ "query": QUERY, "limit": 1 }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        vec![format!("{CAP_BACKEND}:{QUERY}")],
+        "the single surviving Code Mode match must be the highest scoring one, \
+         not the first collected (Code Mode qualifies names as server:tool)"
+    );
+}
