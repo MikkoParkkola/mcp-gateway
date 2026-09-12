@@ -176,6 +176,7 @@ pub(crate) struct DrainOutcome {
 }
 
 impl DrainOutcome {
+    #[cfg(test)]
     pub(crate) fn is_clean(self) -> bool {
         !self.timed_out
     }
@@ -228,20 +229,4 @@ pub(crate) trait UpstreamRecovery: Send + Sync {
     /// One bounded read-only query. No retry loop, no polling across a process
     /// boundary, and no write of any kind upstream.
     async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer;
-}
-
-/// Named remaining work. I3 settles restored `working` and `input_required`
-/// rows at startup, I4 sweeps record-stamped retention, and I5 recovers a
-/// durable upstream handle under the reader's own current authorization;
-/// delivery of a committed transition to a subscribed listener (I2) is the
-/// remaining gap in this package.
-pub(crate) const REMAINING_NOTIFICATIONS: &str =
-    "I2: deliver committed task transitions to subscribed listeners";
-
-pub(crate) fn remaining_implementation() -> [&'static str; 1] {
-    [REMAINING_NOTIFICATIONS]
-}
-
-pub(crate) fn drain_timeout_default() -> Duration {
-    Duration::from_secs(30)
 }

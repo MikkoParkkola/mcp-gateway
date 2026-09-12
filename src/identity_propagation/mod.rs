@@ -45,7 +45,13 @@ use serde::{Deserialize, Serialize};
 use crate::gateway::oauth::GatewayKeyPair;
 use crate::key_server::oidc::VerifiedIdentity;
 
+mod account_strategies;
 mod token_exchange;
+
+pub(crate) use account_strategies::{
+    AccountCredential, AccountStrategyRegistry, DeclaredAccount, InstalledAccount,
+    PreparedAccountCredential,
+};
 pub use token_exchange::TokenExchangeStrategy;
 
 #[cfg(test)]
@@ -751,8 +757,8 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
 
-        // A required backend on an unimplemented strategy (vault) is rejected
-        // (no silent downgrade).
+        // Vault is implemented. Structural validation accepts its configuration;
+        // missing account authority must still fail at the runtime custody boundary.
         let cfg = IdentityPropagationConfig {
             strategy: PropagationStrategyKind::Vault,
             audience: "https://mail".to_string(),
@@ -761,7 +767,7 @@ mod tests {
             token_exchange_endpoint: None,
             token_exchange_scope: None,
         };
-        assert!(cfg.validate().is_err());
+        assert!(cfg.validate().is_ok());
 
         // A required backend on strategy token_exchange with no
         // token_exchange_endpoint is rejected — the endpoint check runs

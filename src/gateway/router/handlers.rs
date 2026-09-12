@@ -1514,6 +1514,14 @@ pub(super) async fn meta_mcp_handler(
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
                 input_capabilities: declared_capabilities,
                 retry: &retry,
+                // Already derived at the top of this handler from the
+                // same classification `initialize` advertises against;
+                // re-deriving it here is the drift `classify_request`
+                // exists to prevent.
+                era,
+                // HTTP holds the multiplexer, so this caller really can
+                // be sent a request of the gateway's own.
+                channel: state.proxy_manager.as_ref(),
                 // Always `Elicit`, including when no session was
                 // presented. HTTP can carry an asker; whether one
                 // answered is what `policy` decides. Mapping a
@@ -1589,14 +1597,85 @@ pub(super) async fn meta_mcp_handler(
             };
             execution = owned_execution;
             caller.execution = execution.as_ref();
-            if let Some(response) = replay {
+            let mut call_response = if let Some(response) = replay {
                 response
             } else {
                 state
                     .meta_mcp
                     .handle_tools_call(id, tool_name, arguments, Some(session_id.as_str()), caller)
                     .await
+            };
+
+            // Firewall: post-invocation response scan + credential redaction.
+            // A refusing verdict must stop the scan and replace the result here:
+            // this pass mutates the artifact under `Redact`, so letting a refused
+            // response continue would launder it past the delivery chokepoint.
+            //
+            // ONE inspection for the whole artifact, then the strongest action
+            // over EVERY authenticated target. Scanning per target in a loop was
+            // order-dependent under `Redact`: the first target's pass redacts the
+            // credential in place, so a later target whose policy blocks on that
+            // finding inspects an already-cleaned artifact and returns Allow —
+            // the block silently depended on which target sorted first.
+            #[cfg(feature = "firewall")]
+            {
+                let mut refused = false;
+                if let Some(ref fw) = state.firewall
+                    && let Some(ref mut result_val) = call_response.result
+                {
+                    let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+                    let correlation = crate::security::response_policy::ResponseCorrelation {
+                        session_id: &session_id,
+                        caller: caller_name,
+                        external_server: "gateway",
+                        external_tool: &external_tool,
+                    };
+                    match fw.check_response_artifact(
+                        result_val,
+                        &response_targets,
+                        &correlation,
+                        crate::security::response_policy::ResponseArtifactKind::FinalResponse,
+                        crate::security::response_policy::ResponseMutationPolicy::Redact,
+                    ) {
+                        Ok(verdict) => {
+                            if !verdict.allowed || verdict.action == FirewallAction::Block {
+                                warn!(
+                                    targets = response_targets.len(),
+                                    findings = verdict.findings.len(),
+                                    "Firewall: response blocked"
+                                );
+                                refused = true;
+                            } else if verdict.action == FirewallAction::Warn {
+                                warn!(
+                                    targets = response_targets.len(),
+                                    findings = verdict.findings.len(),
+                                    "Firewall: response warning"
+                                );
+                            }
+                        }
+                        // No authenticated target means nothing can admit this
+                        // artifact; fail closed exactly as a Block would.
+                        Err(_) => {
+                            warn!(
+                                targets = response_targets.len(),
+                                "Firewall: response inspection lacked a policy target"
+                            );
+                            refused = true;
+                        }
+                    }
+                }
+                if refused {
+                    // Not an early HTTP return: the shared owned-execution
+                    // finalization below still runs on this response.
+                    call_response = JsonRpcResponse::delivery_refusal_error(
+                        call_response.id.take(),
+                        -32600,
+                        "Response blocked by security firewall",
+                    );
+                }
             }
+
+            call_response
         }
         // Resources
         "resources/list" => {

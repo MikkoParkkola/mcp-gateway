@@ -25,6 +25,25 @@ counted twice. `gpt-review` is unavailable for this round (Codex usage-limited
 until 2026-09-12; its ledger rows read `process_status=error, exit_code=1` since
 2026-09-06T05:41Z) — an availability gap, recorded as such and never as a pass.
 
+Round 6 (2026-09-08) is the closure re-check, per the repair protocol's rule that
+a finding returns to the vendor that raised it. The open-weights leg (`kimi-k3`)
+returned SHIP-WITH-FIXES and confirmed all four round-5 dispositions as RIGHT,
+including the source-refutation of the `SessionProfileStore` finding. Its single
+residual fix — that commit `8efa02c8` did not disclose edits it made to `WIRE.12`
+and `WIRE.13` — is FALSIFIED AT SOURCE and closed without a repair: that commit
+is `1 file changed, 1 insertion(+), 1 deletion(-)`, and the changed line is the
+`WIRE.11` row. `WIRE.12` and `WIRE.13` appear in the submitted diff as context,
+not as edits.
+`gpt-review`'s finding against `WIRE.5` versus the recorded gate-once policy was
+escalated by this round and is now RULED: `R8` takes per-round gating and
+refuses the narrowing. BOTH halves land, and both cost edits: the policy below
+is amended to per-round gating, the criterion stands unnarrowed, and `WIRE.5`
+and `WIRE.13` were each repaired in
+`docs/design/2026-09-05-mrtr7-test-plan.md` — the first to parameterize the
+refusal position and state its staging conditions, the second to drop an
+approval inference its spend count cannot support. It is named in full further
+down, where the escalation was stated.
+
 ## Problem
 
 `src/gateway/input_bridge.rs` implements `InputBridge::run` and 18 acceptance
@@ -46,6 +65,11 @@ concurrency is a **separate work package** — independently designed,
 independently implemented, lower priority than this one — and whether it lands
 in 4.0.0 is decided after that design exists and carries an effort estimate,
 not now. Deferring it here is a sequencing decision, not a decision to drop it.
+
+IN, added 2026-09-08 and stated here so the move costs a visible edit: the
+governance gate is called before **every** bridged dispatch, not only the first.
+Ruled at R8; what it deletes and what it leaves standing is the Policy section
+below.
 
 IN, not out: live delivery of the question over the client's own stream.
 Release row 308 defers its own evidence with this commit as the trigger, which
@@ -91,17 +115,23 @@ list previously described `:430` as a defect inside `input_bridge.rs` while the
 findings table recorded that it is not, and those two lines disagreed.
 
 Two further findings were carried here as defects and **died at the
-requirements**, which is why the count fell from four. A timed-out prompt
-retrying the backend without an answer (`:433`) is what requirement row 320
-specifies — "abandoned at `min(remaining, 30s)`, and the rounds still remaining
-are unaffected" — and `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call`
-pins `frames == 2, calls == 2` to prove the call does **not** end. Deserializing
-prompt params into a typed `ServerRequest` (`:409`) is what row 308 forbids:
-params must reach the client whole, "nothing dropped and nothing invented", and
-a round-trip through a typed struct drops what the struct does not name. The
-reviewer's underlying worry — a backend continuing without input a person never
-gave — is real and unaddressed; changing either row is the **requester's** call,
-not a repair, and it is raised as an open question rather than made here.
+requirements**, which is why the count fell from four. **One of the two has since
+come back.** A timed-out prompt retrying the backend without an answer (`:433`)
+was what requirement row 320 specified — "abandoned at `min(remaining, 30s)`, and
+the rounds still remaining are unaffected" — and its acceptance test pinned
+`frames == 2, calls == 2` to prove the call does **not** end. On 2026-09-08 the
+release owner ruled the other way: an unanswered prompt fails the call, naming
+the entry. The requirement moves and the finding stands. GPT was right about the
+behaviour and wrong only about where the defect lived, which was in the row
+rather than in the code — scheduled question 4 records the ruling and what it
+costs. Deserializing prompt params into a typed `ServerRequest` (`:409`) is what
+row 308 forbids: params must reach the client whole, "nothing dropped and nothing
+invented", and a round-trip through a typed struct drops what the struct does not
+name. That one is still dead.
+
+The reviewer's underlying worry — a backend continuing without input a person
+never gave — was real, was raised here as the requester's call rather than
+repaired, and has now been answered in the reviewer's favour.
 
 **The merge-before-wiring wait is DELETED.** An earlier revision made this
 change wait for MIK-7388 to land first, on the ground that wiring is what makes
@@ -113,15 +143,15 @@ left to wait for.
 | the defect the wait named | where it went |
 |---|---|
 | `:430`, cancellation safety in the awaited send | RE-BOUND to this change six paragraphs above. It is a correctness property of code this change WRITES, mandated by the trait it implements — not a repair of an existing defect, and the OUT list now says so |
-| `:433`, a timed-out prompt retrying the backend without an answer | DIED AT THE REQUIREMENTS. Row 320 specifies exactly that behaviour, and `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call` pins it |
+| `:433`, a timed-out prompt retrying the backend without an answer | DIED AT THE REQUIREMENTS, THEN RESURRECTED BY THE RULING of 2026-09-08. Row 320 did specify that behaviour and its test did pin it; the release owner has since ruled the other way, so the row and the test move and the finding stands. Scheduled question 4 |
 | `:454`, a reply projection that is not kind-aware | ALREADY IN THE TREE, fixed in `60a28464` and checked off as `MIK-7388.BRIDGE.5`. `project()` takes `kind` and branches on it (`input_bridge.rs:476-495`): everything but `Elicitation` returns the result whole, and the doc comment states the reason — reading an `action` member on a roots or sampling reply would drop the rest of the answer |
 
 A blocking edge whose three grounds are one re-binding, one requirement and one
 shipped function is not a schedule; it is a sentence nobody re-read after the
-document around it moved. Deleting it is the repair. What survives is the ASK,
-unchanged and still the requester's: whether row 320's "abandoned at
-`min(remaining, 30s)`, rounds unaffected" is the behaviour they want, given that
-it lets a backend continue without input a person never gave.
+document around it moved. Deleting it is the repair. The ASK it left behind — whether row 320's
+"abandoned at `min(remaining, 30s)`, rounds unaffected" is the behaviour the
+requester wants, given that it lets a backend continue without input a person
+never gave — has since been answered, and the answer is no. Scheduled question 4.
 
 The ticket was read too, not only the tree, because a wait is drawn against a
 ticket. MIK-7388 today carries one retired identifier, one met, and three live:
@@ -182,6 +212,47 @@ MCP's `initialize` handshake is where a legacy client declares `elicitation`,
 `"capabilities"` across the router and server finds one test assertion and no
 store.
 
+**Status, 2026-09-08 — half of the recommendation below has since shipped, and
+the present tense above no longer separates the halves.** Option C is two
+pieces: a shape discriminator on `CallerContext`, and the per-session store.
+The discriminator LANDED, under the name `era`
+(`src/gateway/meta_mcp/mod.rs:173`); its own doc comment forbids re-deriving the
+era downstream, which is the drift this design argued for avoiding. The store
+did NOT. `router/handlers.rs:835` still calls `shape.declared_capabilities()`
+and passes that value straight into `input_capabilities` at `:1400`, so
+production puts the per-request SLICE into the field rows 311 and 325 require to
+hold the SESSION value. `handle_initialize` does write session-keyed state --
+a negotiated-revision binding (`src/gateway/meta_mcp/mod.rs:1236`) and a routing
+profile (`:1249`) -- but nothing about capabilities, so no declaration survives
+the handshake. (`SessionProfileStore::remove_session`,
+`src/routing_profile/mod.rs:462`, has no production caller either: the same
+leak that disqualified `SessionLifecycle` for this job.) Consequence 1 --
+a legacy client declares nothing, so the bridge can never fire for the only
+client class it exists for — therefore still holds in the tree today.
+
+The gate is where the two halves meet, and it is the edit this design implies
+without ever saying so plainly: `era` does not change what the MRTR.9 gate
+REFUSES, it changes what the gate is HANDED. A `Modern` caller declares per
+request, so the slice is the whole truth about it. A `Legacy` caller declares
+once at `initialize` and has no per-request channel at all, so the session store
+is its only truth and the slice is silence, not denial — `Some(&[])` and `None`
+are different claims, which is why `InputBridge::run` takes `declared` and
+`slice` as two arguments rather than one merged value
+(`src/gateway/input_bridge.rs:361-365`). The refusal PREDICATE is untouched in
+both directions -- only the input to `undeclared()` moves -- but the two
+directions are not symmetric in what that input may do, and flattening them is
+the fail-open bug the section below warns about. For `Modern` the permitted set
+must not move at all: a well-formed modern request whose `_meta`
+`clientCapabilities` OMITS the asked capability is refused today and must stay
+refused. The example is deliberately NOT *a modern caller that sent no
+`_meta`*: a request declaring no protocol fields in body or header is
+`RequestShape::Legacy` by construction (`src/protocol/meta.rs:85-89`,
+`classify_request` `:150`), so that caller is already on the widening branch and
+cannot illustrate the branch that must not move. For `Legacy` the
+permitted set WIDENS, and that widening is the feature -- a legacy caller
+refused today is bridged tomorrow, which is what consequence 1 above says the
+bridge exists for.
+
 ## Options for the missing store
 
 **A. Capture `initialize` client capabilities per session; pass as `declared`.**
@@ -204,8 +275,8 @@ continuation, not a bridge, and `Declared` alone cannot tell the two apart.
 gate is shape-blind — `interim.undeclared(caller.input_capabilities)` reads it with
 no modern/legacy branch — so an unconditional merge would silently widen the
 gate for modern callers too: one that declared `elicitation` at `initialize`
-and sent no per-request `_meta` is refused today and would be minted a
-continuation after the change. That is a fail-open move on a security gate
+and sent a well-formed `_meta` whose `clientCapabilities` omits it is refused
+today and would be minted a continuation after the change. That is a fail-open move on a security gate
 nobody asked for, and it is the same inversion option B was rejected for.
 So `input_capabilities` is the session value **only for `Legacy`**, which has
 no per-request channel at all — that absence is the whole reason the merge
@@ -268,7 +339,7 @@ test code is written.
 | bridge retries invoke the backend outside cost accounting (GPT, HIGH, LIKELY) | confirmed at source: `invoke.rs:1246,1369,1394` each fire once around the single dispatch at :1327. In scope — this change creates the second invocation. One dispatch helper, change surface above |
 | the merge widens MRTR.9 for modern callers while the table says it does not (synthetic, MEDIUM, CERTAIN) | confirmed at source: the gate `interim.undeclared(caller.input_capabilities)` is shape-blind. Merge scoped to `Legacy` only, option C above |
 | construction-site census says five and lists seven (synthetic, LOW) | confirmed. Count was wrong, list was right; re-enumerated by role |
-| timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, not fixed by a wiring change. **Filed as MIK-7388** with the pending-map growth, blocking MIK-7212. Both halves of that row are now superseded: the ticket WITHDREW this criterion (`BRIDGE.1`, retired) once row 320 was read at source, and round 6 deleted the blocking edge |
+| timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, not fixed by a wiring change. **Filed as MIK-7388** with the pending-map growth, blocking MIK-7212. Both halves of that row are now superseded: the ticket WITHDREW this criterion (`BRIDGE.1`, retired) once row 320 was read at source, and round 6 deleted the blocking edge. Superseded once more on 2026-09-08: the ruling upholds the behaviour this finding asked for, so the withdrawal of `BRIDGE.1` rested on a row that has now moved |
 | pending-response map grows if the outer timeout cancels after registration (GPT, HIGH) | out of this scope. **Filed as MIK-7388**, which blocks MIK-7212: neither defect is reachable until this wiring gives the bridge a caller. Recorded here as being in the same file as the row above, which it is not — `input_bridge.rs` holds no pending state, and `rg 'impl .*ClientChannel for' src/` returns nothing, so the map this names belongs to an implementor the UNWIRED decision means nobody has written. Re-bound on MIK-7388 to the production `ClientChannel` impl on 2026-09-05 — which is the impl THIS change writes, so `BRIDGE.2` is satisfied here and is not something to wait for |
 | production-path HTTP test beyond trait fakes (GPT, MEDIUM) | accepted. The acceptance rows are fake-driven; one end-to-end HTTP test is the honest evidence and belongs in the test plan |
 | compact legacy-or-modern discriminator instead of full `RequestShape` (GPT, both passes) | accepted. Recorded as the field's intended shape; `RequestShape` was shorthand, not a requirement |
@@ -602,21 +673,53 @@ superseded sentence is gone, not footnoted.
    callback — a leak this change neither causes nor fixes.
 
 4. Should a prompt no human answers still retry the backend without that
-   answer? — **deferred, and it is an ASK, not a check.** Requirement row 320
-   says yes in terms ("abandoned at `min(remaining, 30s)`, and the rounds still
-   remaining are unaffected"), and the frozen acceptance row pins it. GPT-5
-   raised the same behaviour as a HIGH defect on the ground that a backend may
-   then continue without input a person was required to give. Both readings are
-   coherent; only the requester can choose. Owner: the release owner, with this
-   design. What resolves it: the requester answering, in one line, whether an
-   abandoned prompt ends the round (today) or the call (the reviewer's reading).
-   When: before this change ships, since the behaviour it settles is reachable
-   the moment the bridge has a caller. MIK-7388 already carries this question as
-   `BRIDGE.4` and has RETIRED the `:433` criterion that assumed the reviewer's
-   reading, so the ticket is waiting on the answer, not the other way round. If
-   it resolves toward the reviewer: row 320 and its acceptance test change
-   first, this wiring is unaffected, and `:433` returns to the ticket as a
-   requirements change rather than a bug fix.
+   answer? — **RESOLVED by the release owner on 2026-09-08.** This was an ASK,
+   not a check, and it stayed deferred here until the requester answered.
+
+   Asked of: the release owner, directly, relayed through the team lead. The
+   ruling confirms the criteria-row ruling of 2026-09-07 and is recorded as
+   `BRIDGE.4` in `docs/release/2026-09-08-team-lead-rulings.md`.
+
+   The answer: **the call fails, naming the unanswered entry.** Two
+   alternatives were put and both rejected — re-invoking the backend with what
+   arrived, and re-invoking it plus a wire field marking the gap.
+
+   What it changed, and it is not small. Requirement row 320's "abandoned at
+   `min(remaining, 30s)`, and the rounds still remaining are unaffected" is the
+   losing reading, so the row and the single test asserting it move, not the
+   ruling. That test is `tests/mik_7212_mrtr7_bridge_acs.rs:1117`
+   `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call`: it stages
+   `Reply::Silent` at `:1124` and asserts `outcome.is_ok()` at `:1148`, and it
+   inverts. Its two elapsed assertions at `:1152-1163` survive unchanged —
+   they pin that the wait ended at `per_prompt` rather than sooner or at a
+   multiple of it, which stays true once the call then fails. No other test
+   asserts the drop: `:1194` scripts twelve answered replies and expects
+   `BridgeError::Deadline`, and `:1254` answers every prompt. Read that as a
+   claim about ASSERTIONS, never as the blast radius: `:1194` reaches the
+   edited line anyway, through the aggregate clamp sharing that same wait, and
+   what keeps it green is the design event below — *the timeout arm has two
+   causes and reports only one*.
+
+   In the bridge the ruling costs one branch and no new type.
+   `src/gateway/input_bridge.rs:486` is a bare `continue` in the `else` arm of
+   the per-prompt `tokio::time::timeout` at `:484`; it becomes a
+   `return Err(BridgeError::Delivery { key: prompt.key, error: DeliveryError::TimedOut })`.
+   A new `BridgeError::Unanswered { key }` would duplicate what `:199` and
+   `:185` already declare, and the enum's own doc at `:150-156` says those
+   variants exist precisely so that "a client that never answered" stays a
+   distinct fact rather than collapsing into one "failed". The asymmetry the
+   ruling removes is visible across two adjacent arms of the same loop: the
+   projection failure at `:490` already constructs `BridgeError::Delivery`,
+   while the timeout arm dropped its entry in silence. `DeliveryError::TimedOut`
+   has in fact never been constructed in this module — its one production
+   construction is `src/gateway/proxy.rs:558`, whose comment a line above says
+   the variant means "the bridge's own timeout arm". The repair is that
+   variant's first use at the site it was written for.
+
+   MIK-7388's clause claiming this requirement "is refuted at source and has
+   been withdrawn" inverts the authority — a test is not the spec when an
+   operator ruling says otherwise — and no longer stands. The team lead has
+   posted the correction to the ticket.
 
 ## What is not claimed
 
@@ -1121,8 +1224,17 @@ narrow safety channel is a design decision wearing a convenience edit costume.
 Committed at `aa601f58` in the meta-MCP invoke module. Behaviour-identical
 extraction: the governance **gate is excluded**, six emissions plus a single
 `dispatch_to_backend` are inside, and the helper is shared by the opening round
-and every bridge retry. `BackendInvoker::invoke` returns `Result<Value, Error>`.
-This is the one piece of the wiring that exists.
+and every bridge retry.
+
+**Correction, 2026-09-08.** This section also claimed
+`BackendInvoker::invoke` returns `Result<Value, Error>`, and that half is
+FALSE in the tree. `src/gateway/input_bridge.rs:334` still reads `async fn
+invoke(&self, retry_params: Value) -> Value;` — a bare `Value`, with nowhere for
+a dispatch or transport error to go. `aa601f58` touched exactly one file,
+`src/gateway/meta_mcp/invoke.rs` (+105/-56); it never opened `input_bridge.rs`.
+The widening was DECIDED at the round-3 design event above and recorded here as
+if deciding it had shipped it. It remains this change's work. `accounted_dispatch`
+(`invoke.rs:2464`) is real, so what exists is the metering, not the contract.
 
 ### D-E `cost_warnings` on first vs last round — OPEN (was D8)
 
@@ -1130,24 +1242,182 @@ Unresolved from round 5 and still unresolved. Named here so it stops being
 carried as a footnote: a retry sequence emits warnings per round, and nothing
 decides whether the caller sees the first round's or the last's.
 
-### Policy — a bridge exchange is gated ONCE (design event)
+### Policy — every bridge round is gated (design event, RULED 2026-09-08)
 
-The governance gate stays **outside** `accounted_dispatch` deliberately. A
-mid-exchange re-gate would let a budget move between a bridge request and its
-reply and refuse a half-completed exchange, leaving a `PendingSampleGuard` with
-no path to resolution. Accounting still accrues per round — `record_spend`
-writes both the `global_daily` and `tool_daily` accumulators on every dispatch —
-so the exposure is bounded to overspend within a single call, not to an
-unmetered retry loop. That bound is what makes gating once affordable.
+The governance gate is called **before every dispatch the exchange makes**, not
+only the first. Ruled at `R8 — bridge-mrtr7: WIRE.5 takes per-round gating; the
+criterion is not narrowed` (`docs/release/2026-09-08-team-lead-rulings.md`),
+which took exit (A) of the escalation below on the elimination test: after (B)
+an exchange that overspends an operator's limit stays describable and merely
+untested; after (A) it cannot be stated at all. Eliminating a mechanism is this
+lane's to do. Eliminating a criterion is not, and it was refused.
+
+That elimination is bounded to the SEQUENTIAL exchange, and the bound is stated
+rather than left to be discovered. The gate projects `current_usd + cost` and
+reserves nothing (`src/cost_accounting/enforcer.rs:217`), so two exchanges in
+flight read the same spent total and can each be admitted for a cost only one of
+them could afford. Per-round gating eliminates overspend BY ROUNDS — that is the
+claim, and it is the whole claim. Concurrent overspend across exchanges is
+untouched by it, remains describable, and is a residual of the cost accounting's
+read-then-add shape rather than of where this lane puts its gate.
+
+**Where the gate sits, precisely.** Outside `accounted_dispatch` still — D-D's
+extraction is unchanged, the helper keeps metering and the gate stays excluded
+from it (`src/gateway/meta_mcp/invoke.rs:2464`). What moves is the CALLER: the
+gate runs inside `for _ in 0..self.bounds.rounds`
+(`src/gateway/input_bridge.rs:387`) ahead of each `self.backend.invoke(..)`, so a
+refusal ends the exchange on the round it arrives on. **The invariant is ONE
+GATE CALL PER DISPATCH, not one gate call somewhere in the loop.** The pre-loop
+gate at `src/gateway/meta_mcp/invoke.rs:1413` is RETAINED — it is what admits the
+first dispatch — and the loop ADDS one call per retry, so a fully funded exchange
+under `BridgeBounds::DEFAULT` (`rounds: 3`) issues four dispatches and four gate
+calls. Nothing is moved out of the pre-loop position; a gate call is added to
+each round that did not have one. It must reach the caller as
+itself — the same `-32003` and the same block reason — which stays unwritable
+until `invoke` yields `Result<Value, Error>`. That widening was the round-3
+design event and is still this change's work, per D-D.
+
+**What this reversal DELETES, so nothing carries it forward by habit.** The
+accepted residual — "a bridged round may not be budget-refused, so an exchange
+CAN overspend by its rounds" — is gone, not mitigated. With it go the
+`3 × cost_for(tool)` overspend ceiling and the arithmetic that reconciled that
+number against four paid calls. **The four-dispatch ceiling clause R1 asked for
+on the `WIRE.13` row is withdrawn by its author** (R8), because it was derived
+from the single-gate fixture (A) deletes. It is removed rather than kept out of
+deference to the ruling that requested it.
+
+**What `WIRE.13` still asserts, and the one thing per-round gating adds.** Four
+dispatches and four `record_spend` entries stand: that total counts from zero,
+and where the gate sits does not change how many calls a fully funded exchange
+makes. What the reversal adds is a PRECONDITION on the fixture — every round must
+be inside budget for the fourth dispatch to be reachable, so an under-funded
+fixture would now end in a governance refusal while the row asserted
+`RoundsExhausted`, passing or failing for a reason it never names. The row says
+so in its own evidence column rather than leaving it to whoever writes the test.
+
+The `PendingSampleGuard` argument stays RETRACTED and must not return with the
+gate. The guard is RAII, taken inside `send_request`
+(`src/gateway/proxy.rs:532-533`), held across the await and dropped on return AND
+on unwind, so a refusal arriving mid-exchange has nothing left to strand —
+verified at source, and R1 verified it independently across `:219`, `:286` and
+`:417`. Per-round gating does not reopen that question; the lifecycle objection
+was never the reason the gate sat outside.
+
+Capping rounds does not cap the asking, and the struct's own doc says why
+(`:213-217`): one interim result may carry an arbitrary number of entries, so a
+single round reaches the same abuse with a larger array. Three further ceilings
+are on the original call rather than on a round — `requests: 8`, `aggregate:
+120s`, `per_prompt: 30s`. The per-prompt value is deliberately NOT the 120s
+elicitation constant in `destructive_confirmation`; reusing that would let one
+unanswered prompt consume the whole aggregate budget.
+
+Today every `BridgeBounds` construction site is a test
+(`tests/mik_7212_mrtr7_bridge_acs.rs:306,430-450,1118,1195`). The production
+wiring is what puts `DEFAULT` on the live path, and until it does, the ceilings
+above are properties of a struct nothing constructs.
+
+**Process status of this reversal.** It is a §P3 design event moving what an
+acceptance criterion asserts, so §P0 reopened where Scope is stated — one added
+line, above — and §P2 reopens at the `WIRE.5` and `WIRE.13` rows of
+`docs/design/2026-09-05-mrtr7-test-plan.md`. The round count does NOT reset: the
+spec moves, the history does not — `R8` and `R22` of
+`docs/release/2026-09-08-team-lead-rulings.md` (2026-09-08) both rule so. The repair
+takes no new `BridgeError` variant and no wire change — a call moved inside a
+loop, the propagation the widening already owed, and the documentation delta.
+
+### Round 6 escalation — `gpt-review` F1, `WIRE.5` versus gate-once — RULED (A), 2026-09-08
+
+Stated in full here, because the header says it is and because a team lead
+cannot rule on a summary of a finding. Everything below describes the policy
+AS IT THEN READ, before `R8`. The gate-once statements it quotes have since
+been amended above; they are preserved here in their pre-ruling form because a
+ruling that cannot be read against the text it ruled on is unauditable.
+
+- **the finding.** `WIRE.5`'s criterion reads "Every backend attempt is
+  accounted exactly once, including bridge retries, **and governance is
+  re-checked before each**", and its second fixture asserts a budget sized to
+  admit the first attempt and reject the second, with the retry never reaching
+  the backend (`docs/design/2026-09-05-mrtr7-test-plan.md:61`). The policy
+  section above THEN SAID the opposite in this same design: the gate stays outside
+  `accounted_dispatch` deliberately, an exchange is gated ONCE, and the residual
+  — "a bridged round may not be budget-refused" — is ACCEPTED as metered
+  overspend bounded at `3 × cost_for(tool)`. A plan row and a design event
+  cannot both be met. The tree agrees with neither yet: `accounted_dispatch`
+  (`src/gateway/meta_mcp/invoke.rs:2464-2560`) meters, it does not gate, so
+  there is no pre-dispatch re-check to observe.
+- **why this lane cannot settle it.** The two exits are not symmetric. (A) move
+  the design to per-round gating: it ELIMINATES the residual, and takes with it
+  the `3 × cost_for(tool)` ceiling and `WIRE.13`'s four-dispatch arithmetic. It
+  is a §P3 design event that moves what an acceptance criterion asserts, so §P0
+  and §P2 re-open on their own terms first. (B) narrow `WIRE.5`'s criterion to
+  accounting alone: one row edit, but it DROPS an acceptance criterion, and the
+  repair protocol requires the requester's recorded agreement BEFORE that
+  happens, never after.
+- **recommendation: (A).** The elimination test decides it. After (B) the
+  finding can still be stated — an exchange that overspends a limit the operator
+  set stays describable, merely untested. After (A) it cannot be stated at all.
+  Eliminating a mechanism is always this lane's to do; eliminating a criterion
+  is not.
+- **RULED (A), 2026-09-08.** `R8` in `docs/release/2026-09-08-team-lead-rulings.md`
+  takes per-round gating and refuses the narrowing, on the recommendation's own
+  test. The freeze lifts: the Policy section above is amended to the ruled shape,
+  and `WIRE.5` and `WIRE.13` are repaired in
+  `docs/design/2026-09-05-mrtr7-test-plan.md`. No test code is written against
+  either row until both review legs return on the amended material — the
+  sequence the ruling reopens is §P0, then §P2, then §P4, with the round count
+  carried rather than reset.
+- **who re-checks the repair.** `gpt-review` returned this round with `rc=0`, so
+  the finder is available and the ordinary path applies: F1 and F2 go back to
+  `gpt-review`. The finder-unavailable clock drafted here on 2026-09-06, when
+  that leg was erroring, is DELETED rather than kept dormant against a future
+  outage. Its terms are owned by the repair protocol in
+  `rules-source/workflows/development-process.md`, and a second copy of them in
+  a lane document would drift from the one that decides.
 
 ### Review provenance for this round
 
-The `gpt-review` ledger holds **no row** for this material. The most recent row
-is a different repo, run and ticket (`mcp-v4-delivery`, MIK-7212 component
-tests, 2026-09-06). The round-7 verdict is therefore `MISSING`, never a verdict
-scraped from any output file. The round-6 recorded verdict reviewed the
-**unamended** design and does not carry to this amendment; both legs re-run
-against the material above, submitted on stdin.
+Round 7 ran on 2026-09-08 against the amended material, both legs fed on
+stdin: `~/.claude/bin/gpt-review` (Codex, availability restored) and
+`~/.grok/bin/claude-review` (Claude Opus 5, `--safe-mode`). Both processes
+exited 0 and both returned SHIP-WITH-FIXES — verdict taken from the ledger row
+and the exit status, never scraped from the body (§PA). `gpt-review` raised two
+findings and one improvement; `claude-review` raised six and four. Every one is
+either a repair commit above or is recorded as falsified at source in the
+commit that closes it, and those repairs ARE the confirmation pass this round
+owes rather than a round of their own.
+
+The unreviewed baseline is disclosed rather than assumed away. The package both
+legs read was assembled at `63de240c`; every repair commit postdates both
+verdicts and has been read by neither leg. Under the repair protocol the
+closure re-check returns to the vendor that raised each finding. The round-6
+recorded verdict reviewed the **unamended** design and does not carry to this
+amendment: both legs re-run against the material as it stands at submission,
+submitted on stdin.
+
+That sentence binds the PACKAGE, not just the intent: no round may carry an
+earlier round's PART A verbatim. PART A is the design and plan **as they stand
+at submission**, read from the working tree when the package is assembled and
+never copied forward from a previous one. A leg handed a stale copy returns a
+verdict on a revision that no longer exists, which is an absence of review
+wearing a verdict line.
+
+An earlier version of this paragraph listed the three commits that had landed
+since round 1 by hash. That list was already wrong by the time anyone read it,
+and it could not have been otherwise: this branch is shared, so a commit from
+another session goes into the enumeration's blind spot without touching the
+enumeration. The rule needs a BASELINE, not an inventory. Round 1's package was
+assembled at `7cfc16bd`; everything after it postdates that package. If a
+diff-shaped section is wanted alongside PART A, it is
+`git diff 7cfc16bd..HEAD -- <the two documents>` and the header says which
+range it is, so the section stays accurate without anyone maintaining it.
+
+An off-by-one on that baseline is possible in principle — a commit whose subject
+records a round's OUTCOME postdates that round's submission, so the package may
+have been assembled at its parent rather than at it — and here it is inert:
+`7cfc16bd` touches only `docs/design/2026-08-31-sub-4-idempotency-wiring.md`, a
+different change's document (`git show --stat 7cfc16bd`). Either endpoint yields
+the same content for the two documents this range is filtered to, so the range
+stands as written.
 
 ## Round 8 — two rulings recorded, and the roots defect is worse than round 7 said
 
@@ -1248,3 +1518,120 @@ ledger row left by the kill carries a nonzero exit and is read as `ERROR`, never
 as a verdict. Round 7 and round 8 are both `MISSING` by design, and the dual
 review runs against the wiring — where the decisions are settled and the code
 exists to argue about.
+
+## Design event — the timeout arm has two causes and reports only one
+
+Found while sweeping BRIDGE.4's repair across its sibling rows, and named here
+because §P3 says a decision made during implementation gets named at the moment
+it is made rather than discovered in review.
+
+The ruling of 2026-09-08 says an unanswered prompt **fails the call, naming the
+entry**. The obvious repair is to replace the bare `continue` at
+`src/gateway/input_bridge.rs:486` with
+`Err(BridgeError::Delivery { key, error: DeliveryError::TimedOut })`. That is
+still the right shape. It is not the whole decision, because the branch it sits
+in does not fire for one reason:
+
+```rust
+let left = self.bounds.aggregate.saturating_sub(started.elapsed());   // :481
+let Ok(reply) = tokio::time::timeout(self.bounds.per_prompt.min(left), sent).await
+else { continue };                                                     // :484-486
+```
+
+`left` is the **aggregate** remainder. The wait is therefore whichever bound
+runs out first, and the branch cannot distinguish *this client went silent* from
+*the call ran out of time while this client was answering*. A `continue`
+discards both without comment, which is precisely why the ambiguity has been
+invisible: the code never had to say which one happened.
+
+Naming the failure removes that cover. Unrepaired, the aggregate's own
+exhaustion would be reported as a named silent client — and worse,
+`BridgeError::Deadline` would become unreachable from `ask`. Elapsed time can
+only cross the aggregate *inside* a wait, so the clamp fires before the
+top-of-round check at `:388-390` can ever see it. The variant the ruling did not
+touch would be swallowed by the variant it did. The requirement carrying it
+(`the aggregate budget ends a call whose rounds each answer in time`, plan row
+321) would still be stated and no longer reachable.
+
+**Recommended reading:** the branch reports which bound expired. An exhausted
+aggregate is `BridgeError::Deadline`; a silent client inside a live budget is
+`BridgeError::Delivery { key, error: DeliveryError::TimedOut }`. No new variant,
+no new type, no wire change. An earlier revision of this paragraph reassured the
+reader that "both are already constructed elsewhere" — half true, and the false
+half is the interesting one. `DeliveryError::TimedOut` is constructed at
+`src/gateway/proxy.rs:557-558` as `rx.await.map_err(|_| DeliveryError::TimedOut)`,
+a DROPPED CHANNEL rather than an elapsed clock, under a comment that defines
+itself as "what the bridge's own timeout arm means by `TimedOut`". That comment
+points at an arm which has never constructed the value. The repair makes it true
+for the first time; until then it is a §P4a casualty riding with this change,
+recorded here so a reviewer who greps the reassurance meets the asymmetry
+instead of rediscovering it.
+
+Tie at the boundary, settled here so the implementation need not guess: when
+`left == per_prompt` both bounds expire on the same instant and both readings
+fit. The aggregate wins — the discriminator is `left <= per_prompt` ->
+`Deadline`. At that instant the call has no budget left to start another wait,
+so naming an entry would name one the call was never going to hear from.
+
+**Who decides this?** Not the author. The ruling settled what happens to a
+silent client and said nothing about the aggregate, because from outside the
+loop the two do not look like the same code path. They are. And the error shape
+on `ask()`'s failure path is the release owner's call in this lane — established
+2026-09-08 by the ruling this section builds on, `R8a — BRIDGE.4: the lane's
+error shape beats the one this document specified`. Deciding it here would take
+back the authority that ruling asserted, one document later.
+
+R8a is genuinely silent, and two readings survived it — the record below says
+which was ruled:
+
+- **recommended** — the aggregate expiring is `Deadline`, because the client was
+  not silent, it was answering. Row 321 keeps its assertion unchanged and starts
+  PINNING the distinction rather than merely exercising the deadline;
+  `BridgeError::Deadline` stays reachable from `ask()`.
+- **the other** — "fail the call, naming the entry" covers any entry the call
+  abandons, including one the clamp cut short. The arm then always returns
+  `Delivery { TimedOut }`, `Deadline` genuinely leaves `ask()`, and **row 321's
+  assertion moves** — the same churn row 320's inversion has already cost.
+
+**Question, scheduled per §P1 (askable, not checkable) — RESOLVED 2026-09-08**:
+when the aggregate budget expires *inside* a prompt's wait, does the call fail
+with `BridgeError::Deadline`, or with
+`BridgeError::Delivery { key, error: DeliveryError::TimedOut }` naming the
+prompt the clamp cut short?
+
+- asked of: the release owner, via team-lead
+- the answer: `BridgeError::Deadline`, ruled at `R21 — BRIDGE.4: aggregate
+  expiry is Deadline, and the reason is attribution`
+  (`docs/release/2026-09-08-team-lead-rulings.md`). The tie-break above stands
+  as written: `left <= per_prompt` resolves to `Deadline`
+- what it changed: nothing in this document's recommendation, and one thing in
+  its REASON, which is the half worth keeping. The ruling does not rest on
+  reachability. `Delivery { key, error }` names a key, and naming a key
+  attributes the failure to that key's owner — a client that answered every
+  prompt inside its own budget did not time out, the call did. Reporting that
+  as a delivery timeout against the client's entry is a false statement about
+  which party failed, and it is read later by someone deciding whether a
+  backend is flaky. Reachability and row 321's unchanged assertion are
+  consequences, not arguments: had attribution pointed the other way, row 321
+  would have moved
+
+Two riders the ruling carries, recorded here because they bind this change and
+not the ruling's file: the `proxy.rs:557-558` comment becomes true for the
+first time under the repair and ships with it per §P4a, and the arm takes no
+new variant and no wire change — one branch and the documentation delta.
+
+**What this section settles, and what it still does not.** Row 321 keeps
+`Err(BridgeError::Deadline)` — now by ruling rather than by default, and it is
+the row that pins the distinction. Nothing here narrows §P0's FOR or drops an
+acceptance criterion. The plan correction sits beside row 320's inversion in
+`2026-09-05-mrtr7-test-plan.md`, and that inversion is now unblocked.
+
+One open item is not this lane's to close: R8a at
+`docs/release/2026-09-08-team-lead-rulings.md:169` still spells the
+silent-client shape `DeliveryError::Unanswered { key }`, and no such variant
+exists — `enum DeliveryError` at `src/gateway/input_bridge.rs:158-186` carries
+no `Unanswered`, and no inner variant carries `key` (it sits on the outer
+`BridgeError::Delivery`). R21 says "no new variant", which is consistent with
+`TimedOut` and never names it for that arm. This document implements
+`DeliveryError::TimedOut`; the correction to the rulings file belongs to its
+owner and has been reported.

@@ -58,8 +58,18 @@ before it reaches the client, and the verdict travels with the descriptor.
   assert a bound no design named. The existing composition rows stay
   observations of the current state.
 - **2020-12 meta-validation of forwarded schemas.** See the named decision.
-- Editing `docs/requirements/RELEASE-4.0.0-criteria-status.md`. Evidence is
-  reported; the team lead regrades.
+- **Schema exits that are not descriptors.** `gateway_search` at its full
+  disclosure tier copies a backend `input_schema` into a search result
+  (`src/gateway/search_disclosure.rs:136`), and a backend `tools/list` entry the
+  proxy cannot deserialize into a `Tool` is forwarded verbatim rather than
+  dropped (`src/gateway/router/backend_handlers.rs:186-203`). Neither crosses
+  `project_tool_descriptor_trust_card`, so neither carries a verdict. Named here
+  rather than left to be discovered: the same walker inspects them the day that
+  surface is decided to need one.
+- Composing a verdict for any criterion other than `SCHEMA.1c`. Ruling `R6`
+  (2026-09-08) directs this lane to write the `SCHEMA.1c` row itself, with the
+  limit stated; every other row in
+  `docs/requirements/RELEASE-4.0.0-criteria-status.md` stays untouched.
 
 ## Options considered
 
@@ -87,17 +97,32 @@ D30) on a release-readiness branch, plus its compile-time cost on every build.
   populations in tests and unasserted for forwarded ones — the state this change
   ships.
 
+**DECIDED 2026-09-08, ruling `R6`: no promotion.** A validator on the trust path
+of every emitted descriptor is a runtime supply-chain dependency the release does
+not take (`D30`), and the same instinct that keeps `#![deny(unsafe_code)]` on this
+path keeps a parser off it. The "resolves badly" branch above IS the shipped
+state, and the row says so rather than leaving a reader to infer it.
+
 ## Unknowns
 
-**U9 (askable, carried; blocking for the closure comment, not for
-implementation).** Does *"the revision's `$ref` and composition bounds"* name
-(a) a numeric limit the 2026-11-25 revision states, (b) the gateway's own limit
-on what it will publish, or (c) nothing beyond 2020-12 validity plus resolution?
-Asked of: the release owner, as confirm-or-reject of reading (c).
-Answer: **not yet recorded.** This change implements against (c) because the
-sibling design already reads it that way and U9's own text unblocks
-implementation; the row cannot be regraded MET until the answer is recorded.
-If it resolves as (a) or (b), the walker stays and a bound is added beside it.
+**U9 (askable) — RESOLVED 2026-09-08.** Does *"the revision's `$ref` and
+composition bounds"* name (a) a numeric limit the 2026-11-25 revision states,
+(b) the gateway's own limit on what it will publish, or (c) nothing beyond
+2020-12 validity plus resolution?
+
+- asked of: the release owner, as confirm-or-reject of reading (c);
+- answered by: the release team lead, ruling `R6`,
+  `docs/release/2026-09-08-team-lead-rulings.md:103`, 2026-09-08;
+- the answer: **(c), and the meta-validity half is refused on purpose.** The
+  row's value is the `$ref` bound, which the walk delivers. Meta-validity is a
+  different property, and buying it means promoting `jsonschema` from
+  dev-dependency to a runtime dependency on the trust path every emitted
+  descriptor crosses — declined under `D30`. Close the row on the walk and
+  state the limit in the row;
+- what it changed: the row is closable now rather than held for an answer, and
+  it must carry the stated limit — what the walk bounds, and that meta-validity
+  of a forwarded schema document is not checked. Had it resolved as (a) or (b),
+  the walker would have stayed and a bound been added beside it.
 
 ## Mechanism
 
@@ -108,3 +133,36 @@ one with an unresolved pointer is out of bounds and the pointers are named. The
 `$ref` walker already exists in `tests/schema_2020_12_validity.rs` as
 `dangling_refs`; it moves into `src` and the test consumes it, so one walker
 decides for both the observing tests and the emit path.
+
+## Review improvements not taken, and their disposal (§P0)
+
+Two improvements survived the review round without becoming repairs. Each names
+its disposal, so neither ages into a ticket by default.
+
+- **Hoist the inspection to the backend cache insert** (cost SMALL): compute the
+  verdict once per tool when the backend cache is populated, instead of walking
+  the schema in `ToolDescriptorTrustCard::from_tool` on every emission.
+  DISPOSAL: **recorded as an observation on `MIK-7415`** (ruling `R23`), not as a
+  ticket of its own. The two edits are not in one function — the anchor fix is in
+  the module-private free function `resolves` (`src/trust/schema_bounds.rs:136`,
+  reached from `SchemaBounds` only through `unresolved_refs`), and the hoist moves
+  the entry point `SchemaBounds::inspect_descriptor` (`:87`) out of
+  `ToolDescriptorTrustCard::from_tool` (`src/trust/descriptor.rs:58`) — but they
+  are one slice of the same walker, and filing a second ticket for the second
+  edit of one slice is the expensive default §P0 exists to stop. It is pure cost
+  — no behaviour changes — so there is no decision for a human to make, and the
+  walk is cheap on realistically sized schemas. It is not free either: the
+  closed row's
+  `by construction` claim rests on `project_tool_descriptor_trust_card` being the
+  single choke point every `tools/list` route crosses. Moving the computation
+  upstream of that projection moves what has to be proved, and the proof, not the
+  traversal, is the expensive part. Take it when a profile shows the walk on a hot
+  path; re-establish the choke-point argument in the same change.
+- **Teach `resolves` plain-name `$anchor` fragments and `$id`-relative bases**
+  (cost MEDIUM): closes the disclosed false-alarm class, where a legal 2020-12
+  backend using anchors is reported unresolved. DISPOSAL: **filed as `MIK-7415`**
+  under ruling `R23`, and explicitly NOT for 4.0.0. A ticket rather than an
+  observation because a human decides whether 4.1 closes it; not 4.0.0 because
+  new code on the trust path this late, to close a documented class that
+  over-reports and never silently passes, is the worse trade. The limit stays
+  stated in the row and in the module until that decision is made.

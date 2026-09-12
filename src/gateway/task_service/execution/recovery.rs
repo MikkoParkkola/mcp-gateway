@@ -22,16 +22,11 @@ impl TaskExecutor {
     /// The snapshots are owned: the store takes and drops its own lock inside
     /// the selector, so nothing is held across the writes below. Failure is a
     /// startup failure — a store this cannot settle is not served half-recovered.
-    pub(crate) async fn recover_interrupted(&self) -> Result<(), ServiceError> {
-        self.recover_interrupted_deferring(&[]).await
-    }
-
-    /// The same recovery, deferring rows a trusted adapter may still recover.
     ///
     /// `managed` names the adapters that are BOTH configured in
     /// `tasks.recovery_adapters` and still configured backends — computed by
     /// the caller, which is the only place that can see both lists at `open`.
-    /// An empty slice makes this byte-identical to [`Self::recover_interrupted`].
+    /// An empty slice settles every interrupted row through the I3 table.
     ///
     /// Deferral is not a trust claim and not a query: a deferred row is left
     /// exactly as the previous process left it, as a managed `working` record,
@@ -49,7 +44,7 @@ impl TaskExecutor {
             // takes the reviewed I3 treatment below, unchanged.
             if row.is_working
                 && let Some(upstream) = row.upstream.as_ref()
-                && managed.iter().any(|name| *name == upstream.backend)
+                && managed.contains(&upstream.backend)
             {
                 tracing::info!(
                     task_id = %row.id,

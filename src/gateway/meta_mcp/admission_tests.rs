@@ -86,6 +86,8 @@ fn context<'a>(policy: &'a MutablePolicy, retry: &'a RetryFields) -> MetaMcpCall
         input_capabilities: crate::protocol::meta::Declared::NONE,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         retry,
+        era: crate::protocol::meta::Era::Modern,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
 

@@ -92,6 +92,7 @@ fn root() -> tempfile::TempDir {
 
 fn valid(root: &std::path::Path) -> AccountsConfig {
     AccountsConfig {
+        adapters: Vec::new(),
         schema_version: "accounts.v1".into(),
         enabled: true,
         deployment: "single_process".into(),

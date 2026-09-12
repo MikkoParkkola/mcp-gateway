@@ -111,8 +111,8 @@ async fn marker_01_a_new_record_is_version_two_and_claims_no_dispatch() {
     let record = record_json(&path, task.id());
     assert_eq!(
         record["version"],
-        json!(2),
-        "the marker and the version that carries it ship together"
+        json!(3),
+        "the current format retains the dispatch marker introduced in version two"
     );
     assert_eq!(
         record["dispatched"],
@@ -367,7 +367,7 @@ async fn marker_04_the_marker_refuses_a_moved_revision_and_a_terminal_record() {
 /// halves are one row.
 #[tokio::test]
 async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_others() {
-    for version in ["current", "legacy", "below", "unsupported"] {
+    for version in ["current", "marker_v2", "legacy", "below", "unsupported"] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tasks");
         let store = open(&path).await;
@@ -380,11 +380,17 @@ async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_oth
         assert!(wire["ttlMs"].as_u64().is_some_and(|ttl| ttl > 0));
         assert!(wire["pollIntervalMs"].as_u64().is_some_and(|poll| poll > 0));
         let record = record_json(&path, task.id());
-        assert_eq!(record["version"], json!(2));
+        assert_eq!(record["version"], json!(3));
         store.close().await.unwrap();
 
         match version {
             "current" => {}
+            "marker_v2" => {
+                let mut seed = record.clone();
+                seed["version"] = json!(2);
+                seed.as_object_mut().unwrap().remove("upstream");
+                reseed(&path, task.id(), &seed);
+            }
             "legacy" => reseed(&path, task.id(), &as_legacy(&record)),
             "below" => {
                 let mut seed = record.clone();
@@ -393,7 +399,7 @@ async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_oth
             }
             _ => {
                 let mut seed = record.clone();
-                seed["version"] = json!(3);
+                seed["version"] = json!(4);
                 reseed(&path, task.id(), &seed);
             }
         }
@@ -480,7 +486,7 @@ async fn marker_06_a_legacy_working_row_is_not_evidence_of_a_missing_dispatch() 
     let live_store = open(&live_path).await;
     let (live_task, _) = admitted(&live_store, &admission, "k-live").await;
     let never_dispatched = record_json(&live_path, live_task.id());
-    assert_eq!(never_dispatched["version"], json!(2));
+    assert_eq!(never_dispatched["version"], json!(3));
     assert_eq!(never_dispatched["dispatched"], json!(false));
 
     // The distinction I3's split consumes: both rows are `working` with no

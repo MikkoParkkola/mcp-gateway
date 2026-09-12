@@ -538,10 +538,17 @@ impl PersonalAccountStore {
 // Names are fully qualified through `service::` on purpose: `worker.rs` already
 // imports the same six, and an import here would be one more chance to collide.
 
+/// The non-secret lease a managed credential was released under.
+///
+/// Exported unconditionally because the REST account registry RETAINS it beside
+/// the prepared credential: its recheck before the inner cache and before egress
+/// is `VaultStrategy::recheck`, the real custody release, which needs the lease
+/// this dispatch's credential came from. A lease is a binding, never authority.
+pub(crate) use service::CredentialLease;
 #[cfg(test)]
 pub(crate) use service::{
-    CredentialLease, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
-    ReleasedCredentials, TokenRefresh,
+    CredentialReleaseObserver, ProviderRefreshError, RefreshProvider, ReleasedCredentials,
+    TokenRefresh,
 };
 #[cfg(test)]
 pub(crate) use worker::CustodyHandle;
@@ -674,5 +681,136 @@ pub(crate) async fn start_custody_with_http(
     Ok(handle)
 }
 
+// ── Offline store initialization ─────────────────────────────────────────────
+//
+// The ONLY public surface of this module besides the `AccountsConfig` DTO.
+// Everything else — the store, the service, the worker, `StoreConfig` and the
+// raw key bytes it carries — stays crate-private, so `accounts init-store`
+// cannot reach past custody to the records themselves.
+
+/// What an offline initialization created, for an operator to read back.
+///
+/// Paths and non-secret names only: no key material, no key bytes, and no
+/// account identity. `secret_refs_read` names the environment variables the
+/// resolution looked up, which is what makes "which key did it read" answerable
+/// without printing what it read.
+#[derive(Clone, Eq, PartialEq)]
+pub struct InitializedStore {
+    /// `accounts.instance_id` the fresh authority was sealed for.
+    pub instance_id: String,
+    /// The configured record root.
+    pub store_dir: PathBuf,
+    /// The configured authority root.
+    pub authority_dir: PathBuf,
+    /// Environment variable NAMES read while resolving keys, sorted.
+    pub secret_refs_read: Vec<String>,
+}
+
+impl std::fmt::Debug for InitializedStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InitializedStore")
+            .field("instance_id", &self.instance_id)
+            .field("store_dir", &self.store_dir)
+            .field("authority_dir", &self.authority_dir)
+            .field("secret_refs_read", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Why offline initialization was refused. Carries no key material.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum OfflineInitError {
+    /// The configuration declares no `accounts` block at all. Initializing a
+    /// store the deployment never asked for would create custody state nothing
+    /// opens, so absence is refused rather than defaulted.
+    #[error("configuration declares no accounts block; there is no store to initialize")]
+    NotConfigured,
+    /// The `accounts` block is invalid, or a declared key reference did not
+    /// resolve against the config's own env-file overlay.
+    #[error("accounts configuration refused: {0}")]
+    Configuration(String),
+    /// The existing storage initializer refused: a configured root already
+    /// holds records or a manifest, a root is not a private directory, or
+    /// another owner holds the store locks. Existing state is never replaced,
+    /// and nothing is migrated into a store this command creates.
+    #[error("accounts store initialization refused: {0}")]
+    Refused(String),
+}
+
+/// Create a fresh empty account authority for an already-loaded configuration.
+///
+/// OFFLINE AND EXPLICIT. This is the only path that may create a store, and it
+/// is never reached by daemon startup: `serve` opens an existing authority or
+/// fails. Nothing here launches a gateway, starts the custody worker, builds an
+/// HTTP client or reaches the network, and no token is read, written or
+/// migrated — a store this creates has zero records by construction.
+///
+/// The existing initializer stays authoritative for everything it already
+/// owns: it validates and locks both roots, requires them empty, generates the
+/// random store epoch and seals the encrypted authority. No crypto, no path
+/// rule and no emptiness rule is reimplemented here; this resolves the
+/// configuration through the existing `config::resolve` and hands the resolved
+/// `StoreConfig` straight to it.
+///
+/// `overlay` is the environment the config was evaluated against — an env file
+/// loads into an overlay and is never exported, so the caller must pass the
+/// overlay its `env_files` produced rather than the process environment.
+///
+/// The store handle is dropped before returning, releasing both exclusive
+/// locks: this command initializes and exits, it does not hold custody open.
+///
+/// # Errors
+///
+/// [`OfflineInitError::NotConfigured`] when `accounts` is absent,
+/// [`OfflineInitError::Configuration`] when the block or a key reference is
+/// invalid, and [`OfflineInitError::Refused`] when the configured roots already
+/// hold state or are otherwise unusable as a private store.
+pub fn initialize_store_offline(
+    gateway_config: &crate::config::Config,
+    overlay: &crate::config::EnvOverlay,
+) -> Result<InitializedStore, OfflineInitError> {
+    let resolved = config::resolve(gateway_config.accounts.as_ref(), overlay)
+        .map_err(|error| OfflineInitError::Configuration(error.to_string()))?
+        .ok_or(OfflineInitError::NotConfigured)?;
+
+    // Read back before the resolved config is moved into the initializer. Names
+    // and paths only; `StoreConfig::keys` never leaves this function.
+    let report = InitializedStore {
+        instance_id: resolved.store.instance_id.clone(),
+        store_dir: resolved.store.store_dir.clone(),
+        authority_dir: resolved.store.authority_dir.clone(),
+        secret_refs_read: resolved.secret_refs_read.clone(),
+    };
+
+    let store = PersonalAccountStore::initialize(resolved.store)
+        .map_err(|error| OfflineInitError::Refused(error.to_string()))?;
+    // Explicit, not incidental: the locks are released here, and no worker,
+    // provider or gateway ever sees this handle.
+    drop(store);
+
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod initialization_debug_redaction_tests {
+    use super::InitializedStore;
+
+    #[test]
+    fn debug_redacts_initialization_secret_references() {
+        let canary = "PRIVATE_KEY_REFERENCE_CANARY_928734";
+        let initialized = InitializedStore {
+            instance_id: "office-gateway".into(),
+            store_dir: "account-records".into(),
+            authority_dir: "account-authority".into(),
+            secret_refs_read: vec![canary.into()],
+        };
+        let rendered = format!("{initialized:?}");
+        assert!(rendered.contains("office-gateway"));
+        assert!(rendered.contains("account-records"));
+        assert!(rendered.contains("secret_refs_read: \"[REDACTED]\""));
+        assert!(!rendered.contains(canary));
+    }
+}

@@ -1105,6 +1105,26 @@ impl Gateway {
             info!(action, "Response contract gate enabled");
         }
 
+        // ── Idempotency (MIK-7272.SUB.4) ─────────────────────────────────────
+        // Unconditional and unconfigurable. A client-supplied idempotency key
+        // is a correctness mechanism, not a preference: the only thing an
+        // operator toggle would buy is the ability to switch duplicated side
+        // effects back on. Bounds are the constants in `crate::idempotency`.
+        // This is the only production construction site of `MetaMcp`, and both
+        // `run` and `run_stdio` reach it, so the cache is `Some` on every boot.
+        // That covers ONE of the criterion's three routes: generic `tools/call`.
+        // stdio discards the retry fields before dispatch (`:2633`, `:3671`) and
+        // the direct `POST /mcp/{name}` bypass never calls `idempotency_key_for`
+        // (`backend_handlers.rs:338-353`), so both are still unprotected. SUB.4
+        // is MET only when all three are covered — see
+        // `docs/design/2026-08-31-sub-4-idempotency-wiring.md`.
+        Arc::get_mut(&mut meta_mcp)
+            .expect("no other Arc references at this point")
+            .enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                crate::idempotency::CLEANUP_INTERVAL,
+            );
+
         // ── Local identity grants (MIK-6553 free/core) ───────────────────────
         if let Some((path, grants)) =
             load_configured_identity_grants(&self.config.security.identity_grants).await?
@@ -1253,10 +1273,17 @@ impl Gateway {
         // when webhook route construction does not depend on them, populate the
         // backend in the background so health/MCP endpoints bind promptly.
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
+            // Declared synchronously, BEFORE the loader task is spawned: the
+            // declared catalogue is what the capability registration boundary
+            // checks against. Installation of the strategies themselves happens
+            // below, still before this gateway serves.
+            let account_strategies = meta_mcp.account_strategies();
+            account_bindings::declare_account_descriptors(&self.config, &account_strategies);
             let executor = Arc::new(
                 CapabilityExecutor::new()
                     .with_env(Arc::clone(&self.env))
-                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+                    .with_account_strategies(account_strategies),
             );
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
@@ -1279,16 +1306,50 @@ impl Gateway {
             let cap_backend_for_load = Arc::clone(&cap_backend);
             let webhook_registry_for_load = Arc::clone(&webhook_registry);
             let webhooks_enabled = self.config.webhooks.enabled;
-            tokio::spawn(async move {
-                // Let the HTTP listener bind before large capability scans start.
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+            // AN ACCOUNT-BOUND DEPLOYMENT SCANS BEFORE IT SERVES.
+            //
+            // The background scan below exists so a large capability directory
+            // does not delay the listener binding, and it stays the default.
+            // But when the configuration declares `accounts.descriptors`, the
+            // scan is also the ADMISSION GATE that rejects a capability whose
+            // `auth.account` names no declared descriptor or whose `auth.key`
+            // is not that descriptor's `oauth:<provider>`
+            // (`CapabilityBackend::register_capability`). Running that gate
+            // concurrently with serving would mean the first requests are
+            // answered while the catalogue is still partial — a tool that the
+            // gate is about to refuse could be absent, and a tool it will admit
+            // could be missing. So an account-bound gateway completes the whole
+            // scan HERE, before `start` returns to bind and serve, and the
+            // strategies are installed further below, still before serving.
+            let accounts_configured = self.config.accounts.as_ref().is_some_and(|accounts| {
+                accounts.enabled
+                    && accounts
+                        .descriptors
+                        .as_ref()
+                        .is_some_and(|descriptors| !descriptors.is_empty())
+            });
+
+            let scan = async move {
+                if !accounts_configured {
+                    // Let the HTTP listener bind before large capability scans start.
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
 
                 let mut total_caps = 0;
+                // Every capability the account admission gate refused during the
+                // INITIAL scan. A missing or unreadable optional directory is
+                // NOT collected here — that stays benign, exactly as before.
+                let mut refused: Vec<String> = Vec::new();
                 for dir in &capability_dirs {
-                    match cap_backend_for_load.load_from_directory(dir).await {
-                        Ok(count) => {
-                            total_caps += count;
-                            debug!(directory = %dir, count = count, "Loaded capabilities");
+                    match cap_backend_for_load
+                        .load_from_directory_reporting(dir)
+                        .await
+                    {
+                        Ok(report) => {
+                            total_caps += report.admitted;
+                            debug!(directory = %dir, count = report.admitted, "Loaded capabilities");
+                            refused.extend(report.rejected);
                         }
                         Err(e) => {
                             // Don't fail startup if capability dir doesn't exist
@@ -1312,7 +1373,33 @@ impl Gateway {
                         "Capability backend ready"
                     );
                 }
-            });
+
+                if refused.is_empty() {
+                    Ok(())
+                } else {
+                    Err(crate::Error::Config(format!(
+                        "{} capabilit{} rejected by the account admission gate: {}",
+                        refused.len(),
+                        if refused.len() == 1 { "y" } else { "ies" },
+                        refused.join("; ")
+                    )))
+                }
+            };
+
+            if accounts_configured {
+                // Completed before serving, and its refusals are FATAL: an
+                // invalid `auth.account` binding present at boot fails startup
+                // rather than being logged behind a listener that is already
+                // answering. A missing optional directory is still benign.
+                scan.await?;
+                info!("Capability scan completed before serving (accounts.descriptors configured)");
+            } else {
+                tokio::spawn(async move {
+                    if let Err(error) = scan.await {
+                        warn!(error = %error, "Capability scan reported refusals");
+                    }
+                });
+            }
 
             // Start file watcher for hot-reload
             match CapabilityWatcher::start(Arc::clone(&cap_backend), shutdown_tx.subscribe()) {
@@ -2121,20 +2208,55 @@ impl Gateway {
                 }
             };
 
+        // Account strategies must exist before stdio can admit a request, just
+        // as they do before the HTTP listener starts serving.
+        if self.config.accounts.is_some() {
+            let gateway_key_pair = Arc::new(GatewayKeyPair::generate().map_err(|error| {
+                crate::Error::Config(format!(
+                    "stdio account signing key generation failed: {error}"
+                ))
+            })?);
+            let account_custody = self.custody.as_ref().map(|custody| {
+                Arc::clone(custody) as Arc<dyn crate::personal_accounts::AccountCustody>
+            });
+            account_bindings::install_account_strategies(
+                &self.config,
+                account_custody.as_ref(),
+                &gateway_key_pair,
+                &meta_mcp,
+            )?;
+        }
+
         if self.config.capabilities.enabled {
+            let account_strategies = meta_mcp.account_strategies();
+            account_bindings::declare_account_descriptors(&self.config, &account_strategies);
             let executor = Arc::new(
                 CapabilityExecutor::new()
                     .with_env(Arc::clone(&self.env))
-                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+                    .with_account_strategies(account_strategies),
             );
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,
             ));
+            let mut refused = Vec::new();
             for dir in &self.config.capabilities.directories {
-                if let Ok(count) = cap_backend.load_from_directory(dir).await {
-                    debug!(directory = %dir, count, "Loaded capabilities (stdio)");
+                match cap_backend.load_from_directory_reporting(dir).await {
+                    Ok(report) => {
+                        debug!(directory = %dir, count = report.admitted, "Loaded capabilities (stdio)");
+                        refused.extend(report.rejected);
+                    }
+                    Err(error) => {
+                        debug!(directory = %dir, %error, "Failed to load optional capabilities (stdio)");
+                    }
                 }
+            }
+            if !refused.is_empty() {
+                return Err(crate::Error::Config(format!(
+                    "capabilities rejected by the account admission gate: {}",
+                    refused.join("; ")
+                )));
             }
             meta_mcp.set_capabilities(cap_backend);
         }
@@ -2670,6 +2792,11 @@ impl Gateway {
                 agent_id: None,
                 grant_subject: None,
                 verified_identity: None,
+                // Same `RequestShape` the `initialize` arm advertises against.
+                era: request_shape.era(),
+                // No `ProxyManager` in this scope -- it is HTTP-only --
+                // so there is no session to put a request on.
+                channel: &crate::gateway::input_bridge::NoClientChannel,
                 // stdio speaks to one process over two pipes and
                 // has no elicitation channel: there is no operator
                 // this transport can reach, so a destructive call
@@ -3003,6 +3130,64 @@ fn spawn_idle_reaper(
             }
         }
     })
+}
+
+/// The caller context every stdio `tools/call` runs under.
+///
+/// Extracted from `dispatch_single_with_sink` so the transport-specific
+/// reasoning below -- why stdio is admin, why it has no channel and no
+/// asker -- sits in one named place instead of forty lines inside a match
+/// arm. `era` is the caller's because the `initialize` arm advertises
+/// against the same `shape`.
+fn stdio_caller_context<'a>(
+    authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
+    era: crate::protocol::meta::Era,
+) -> MetaMcpCallerContext<'a> {
+    MetaMcpCallerContext {
+        // stdio has no task route: the extension's handle is read back over
+        // `tasks/get`, which only the HTTP surface serves.
+        task: None,
+        execution: None,
+        signing: None,
+        is_modern: era == crate::protocol::meta::Era::Modern,
+        protocol_revision: None,
+        credential_principal: None,
+        authorizer,
+        // Stdio has no port and no network surface: the
+        // client SPAWNED this process, so it already holds
+        // whatever the operator holds — it could edit the
+        // config file just as easily. Withholding admin
+        // here would take the management tools away from
+        // exactly the single-user setup the origin gate
+        // exists to protect, and protect nothing.
+        //
+        // Explicit since the admin gate moved to the
+        // dispatcher: it previously lived on the HTTP path
+        // alone, so stdio was never checked and the default
+        // non-admin context went unnoticed.
+        is_admin: true,
+        // stdio carries no per-request capability
+        // declaration to read, and absent means absent.
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        // Same `shape` the `initialize` arm advertises
+        // against, two arms up.
+        era,
+        // No `ProxyManager` in this scope -- it is HTTP-only
+        // -- so there is no session to put a request on.
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        // stdio speaks to one process over two pipes and
+        // has no elicitation channel: there is no operator
+        // this transport can reach, so a destructive call
+        // it cannot confirm is refused rather than asked
+        // about. Not "found no session" -- no asker can
+        // exist here at all.
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+    }
 }
 
 #[cfg(test)]
@@ -3484,24 +3669,7 @@ mod tests {
                 "gateway_kill_server",
                 json!({ "server": "row19-sentinel" }),
                 Some("stdio-session"),
-                crate::gateway::meta_mcp::MetaMcpCallerContext {
-                    task: None,
-                    signing: None,
-                    execution: None,
-                    credential_principal: None,
-                    is_modern: false,
-                    protocol_revision: None,
-                    authorizer: &authorizer,
-                    api_key_name: None,
-                    agent_id: None,
-                    grant_subject: None,
-                    verified_identity: None,
-                    is_admin: true,
-                    input_capabilities: crate::protocol::meta::Declared::NONE,
-                    retry: &crate::protocol::mrtr::NO_RETRY,
-                    confirmation:
-                        crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-                },
+                super::stdio_caller_context(&authorizer, crate::protocol::meta::Era::Legacy),
             )
             .await;
 
@@ -3903,6 +4071,25 @@ mod tests {
         async fn close(&self) -> crate::Result<()> {
             Ok(())
         }
+    }
+
+    /// MIK-7272.SUB.4 — the idempotency cache reaches the running meta-MCP on
+    /// the production boot path. A default config on purpose: the mechanism is
+    /// unconditional, so there is no section for an operator to write and
+    /// nothing for one to switch off. While the field stays `None`,
+    /// `idempotency_key_for` short-circuits and the guard in `invoke_tool` is
+    /// skipped, so a retried side-effecting call executes a second time with no
+    /// refusal and no warning.
+    #[tokio::test]
+    async fn sub4_boot_populates_the_idempotency_cache() {
+        let gateway = Gateway::new(Config::default()).await.unwrap();
+        let built = gateway.build_meta_mcp().await.unwrap();
+
+        assert!(
+            built.meta_mcp.idempotency_cache.is_some(),
+            "the boot path must populate the idempotency cache; an unpopulated \
+             one makes every client-supplied idempotency key inert"
+        );
     }
 
     /// GH475.CFG.5 — a configured threshold reaches the running budget, and a

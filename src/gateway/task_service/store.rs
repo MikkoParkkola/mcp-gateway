@@ -121,6 +121,7 @@ struct Shared {
     order: Mutex<()>,
     state: Mutex<State>,
     lease: Mutex<Option<ExclusiveFileLock>>,
+    #[cfg(test)]
     hook: Mutex<Option<CommitHook>>,
     temp: AtomicU64,
 }
@@ -144,6 +145,7 @@ impl TaskStore {
                 entries,
             }),
             lease: Mutex::new(Some(lease)),
+            #[cfg(test)]
             hook: Mutex::new(None),
             temp: AtomicU64::new(0),
         })))
@@ -336,6 +338,7 @@ impl TaskStore {
             .map(|entry| entry.record.admission.operation_digest.clone())
     }
 
+    #[cfg(test)]
     pub(super) fn ready(&self) -> bool {
         self.0.state().ready
     }

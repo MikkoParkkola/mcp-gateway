@@ -141,11 +141,12 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
             .await
         {
             Ok(()) => tracing::debug!(task_id = %id, "expired task record deleted"),
-            Err(StoreError::NotFound | StoreError::RevisionConflict) => {}
             // Terminal is absorbing, so a candidate cannot legitimately be
             // running by the time it is deleted; if one is, it is not expiry's
             // to end and the row simply stays.
-            Err(StoreError::InvalidTransition) => {}
+            Err(
+                StoreError::NotFound | StoreError::RevisionConflict | StoreError::InvalidTransition,
+            ) => {}
             Err(error) => {
                 tracing::warn!(%error, task_id = %id, "expired task record not deleted");
                 outcome = Err(ServiceError::Unavailable);
