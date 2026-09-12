@@ -24,7 +24,7 @@ the first pass. The numbers in the previous revision are withdrawn.
 | Route | Size |
 |---|---|
 | Merge `codex/v4-next-integration` | 415 conflicted paths, 1,963 commits, PR #512 `CONFLICTING/DIRTY` with CodeQL red |
-| Re-cut the three subsystems | 78 subsystem files + 31 branch-only wiring files, plus edits at 114 sites in 16 files that exist on `main` |
+| Re-cut the three subsystems | 78 subsystem files + 32 branch-only wiring files, plus edits at 119 sites in 19 files that exist on `main` |
 
 The merge route is still the worse one, but not because the re-cut is small. It
 is because the re-cut's cost is *attributable*: every file it moves belongs to a
@@ -45,7 +45,8 @@ subsystem with a release criterion behind it, and nothing else comes with it.
 These are not part of the three directories but exist only on this branch, and
 have to move with them:
 
-- accounts (15): `src/config/account_bindings.rs`,
+- accounts (16): `src/commands/accounts.rs`,
+  `src/config/account_bindings.rs`,
   `src/config/account_consumer_config_tests/raw_vault.rs`,
   `src/gateway/server/account_bindings.rs`,
   `src/gateway/server/gateway_bootstrap_tests.rs`,
@@ -82,6 +83,36 @@ Reference sites on this branch, split by which subsystem they reach:
 | `src/gateway/mod.rs` | 1 | — |
 | `src/config/env_overlay.rs` | 1 | — |
 | `src/gateway/router/tests.rs` | 1 | 2 |
+| `src/cli/mod.rs` | 2 | — |
+| `src/commands/mod.rs` | 2 | — |
+| `src/main.rs` | 1 | — |
+
+A second revision added the last four rows and `src/commands/accounts.rs`. They
+were missed because the inventory grep searched for `personal_accounts`,
+`AccountCustody` and `account_strategies`, and the CLI surface names none of
+them: `src/commands/accounts.rs` imports `InitializedStore`,
+`initialize_store_offline` and `cli::AccountsCommand`, which are re-exports
+(`src/lib.rs:101`). A grep for the subsystem's internal type names cannot see a
+caller that only touches its public facade. The command is wired at
+`src/commands/mod.rs:8` and `:29` and dispatched from `src/main.rs`, so omitting
+it ships a binary with no `mcp-gateway accounts` subcommand.
+
+`src/fs_lock.rs` is not only reference sites. `ExclusiveFileLock::try_acquire`
+(`src/fs_lock.rs:41`, with the non-unix branch at `:58`) **does not exist on
+`main`**: `git show origin/main:src/fs_lock.rs` matches it zero times. It is an
+API graft that the store's production lock path depends on at `:133`, and a
+transcription copying only lines that name an account type will drop it.
+
+These three branch-only integration tests move with the subsystem, or step 4
+re-grades against the in-crate `personal_accounts::` suite alone:
+`tests/accounts_init_store.rs`, `tests/stdio_account_startup.rs`,
+`tests/openwebui_adapter_config.rs`. The first is the file with the known
+macOS-local failure at `:117`; it is triaged in this step, not after.
+
+Re-derive the inventory from the compiler, not from a grep: transcribe, then run
+`cargo build` and `cargo test --no-run` against `main` and let every unresolved
+path name the next missing file. A symbol grep has now under-counted this
+surface twice.
 
 Each edit is transcribed against **`main`'s** copy of the file. Taking this
 branch's copy instead imports unrelated divergence: across those files the
