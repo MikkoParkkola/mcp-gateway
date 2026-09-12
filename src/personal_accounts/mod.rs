@@ -6,6 +6,21 @@
 //! fallback to legacy operator tokens. Filesystem operations are synchronous;
 //! async callers must execute custody work on a blocking worker.
 
+// The durable writer half lives in `commit`, every item of which is `cfg(unix)`
+// because the sequence depends on `flock`, `fsync` on a directory handle and
+// owner-only file modes. On a non-unix target that half is compiled out, so the
+// states it constructs and the sealing helpers it calls read as dead even though
+// the reader half still compiles. `expect` rather than `allow`: once the writer
+// half is ported and nothing here is dead any more, the unfulfilled expectation
+// is what tells the porter to delete this line.
+#![cfg_attr(
+    not(unix),
+    expect(
+        dead_code,
+        reason = "the cfg(unix) writer half in `commit` is the only consumer"
+    )
+)]
+
 pub(crate) mod config;
 mod consent;
 // Visible to the crate for the descriptor contract only: `account_key` and the
@@ -336,6 +351,10 @@ pub(crate) mod store_probe {
     }
 
     impl Recording {
+        #[expect(
+            clippy::unused_self,
+            reason = "self is the recording's exclusivity guard, not a data source; the entries live in the global state() singleton by design"
+        )]
         pub(crate) fn entries(&self) -> Vec<Entry> {
             state()
                 .as_ref()
@@ -360,6 +379,10 @@ pub(crate) mod store_probe {
         }
 
         /// Stall the next occurrence of `op` inside the store operation itself.
+        #[expect(
+            clippy::unused_self,
+            reason = "self is the recording's exclusivity guard, not a data source; the park state lives in the global state() singleton by design"
+        )]
         pub(crate) fn park(&self, op: StoreOp) -> Park {
             let (entered_tx, entered_rx) = oneshot::channel();
             let (release_tx, release_rx) = channel();
@@ -460,6 +483,13 @@ impl PersonalAccountStore {
     }
 
     /// Commit a new grant generation for an account.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn commit_grant(
         &self,
         account: &AccountKey,
@@ -485,6 +515,13 @@ impl PersonalAccountStore {
     }
 
     /// Durably tombstone the current generation before reporting success.
+    #[cfg_attr(
+        all(not(test), not(kani)),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn revoke(&self, account: &AccountKey) -> Result<(), AccountError> {
         let mut authority = self.lock_authority();
         #[cfg(test)]
@@ -507,6 +544,13 @@ impl PersonalAccountStore {
     }
 
     /// Fence a grant whose descriptor revision moved.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn mark_reconnect_required(
         &self,
         account: &AccountKey,

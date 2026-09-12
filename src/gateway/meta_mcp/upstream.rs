@@ -181,7 +181,7 @@ impl NativeUpstreamTasks {
         // adapter permanently believing the extension is absent.
         let document = match answer {
             Ok(Ok(response)) if response.error.is_none() => response.result,
-            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => return false,
+            Ok(Ok(_) | Err(_)) | Err(_) => return false,
         };
         let declared = document.is_some_and(|document| {
             document

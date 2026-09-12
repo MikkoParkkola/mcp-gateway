@@ -13,7 +13,7 @@
 //! * every terminal shape whose TTL ran out is deleted, record AND retained
 //!   idempotency key together, so the original key admits a NEW task and the
 //!   capacity the record reserved comes back;
-//! * an unexpired record, a null-TTL record, and old Working / InputRequired
+//! * an unexpired record, a null-TTL record, and old Working / `InputRequired`
 //!   records are retained unchanged while expired sentinels are actually swept;
 //! * the guard's shutdown joins a deletion that is already in flight.
 //!

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-//! Real Firewall -> MetaMcp challenge admission -> native error projection.
+//! Real Firewall -> `MetaMcp` challenge admission -> native error projection.
 //! This component does not substitute for the bridge's client-frame/retry test.
 
 use std::sync::Arc;
@@ -144,12 +144,12 @@ fn events(directory: &TempDir) -> Vec<Value> {
         .collect()
 }
 
-fn assert_projected_refusal(error: crate::Error) {
+fn assert_projected_refusal(error: &crate::Error) {
     assert!(matches!(error, crate::Error::ResponseFirewallRefused));
     assert_eq!(error.to_string(), REFUSAL);
     assert_eq!(error.to_rpc_code(), -32600);
     let response =
-        error_response_preserving_status(RequestId::String("caller-current-17".into()), &error);
+        error_response_preserving_status(RequestId::String("caller-current-17".into()), error);
     assert!(response.delivery_refusal);
     assert!(!response.confirmation_refusal);
     assert!(response.excludes_client_accounting());
@@ -172,7 +172,7 @@ fn firewall_response_challenge_error_projection() {
             .expect_err(
                 "dangerous text in either question's raw field must refuse before exposure",
             );
-        assert_projected_refusal(error);
+        assert_projected_refusal(&error);
         assert_eq!(input, original);
         assert_event(&firewall, &directory, "block", Some("prompt_injection"));
     }
@@ -211,7 +211,7 @@ fn firewall_challenge_required_redaction_is_native_refusal() {
             let error = meta
                 .enforce_firewall_challenge(&input, &targets(), &correlation())
                 .expect_err("redacting a backend question changes its bound answer contract");
-            assert_projected_refusal(error);
+            assert_projected_refusal(&error);
             assert_eq!(input, original);
             assert_event(&firewall, &directory, "block", Some("credentials"));
         }
@@ -250,7 +250,7 @@ fn firewall_challenge_empty_targets_project_only_the_generic_refusal() {
     let error = meta
         .enforce_firewall_challenge(&input, &[], &correlation())
         .expect_err("missing server-bound targets must not grant admission");
-    assert_projected_refusal(error);
+    assert_projected_refusal(&error);
     assert_eq!(input, original);
     let observed = firewall.response_inspection_counts();
     assert_eq!(observed.inspections, 0);

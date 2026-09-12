@@ -464,36 +464,41 @@ impl MetaMcp {
 mod tests {
     use super::*;
 
-    fn digest_of(name: &str, arguments: Value, task: Value, key: &str) -> String {
-        operation_digest(name, &arguments, &task, key)
+    fn digest_of(name: &str, arguments: &Value, task: &Value, key: &str) -> String {
+        operation_digest(name, arguments, task, key)
     }
 
     #[test]
     fn every_bound_field_changes_the_digest() {
-        let base = digest_of("erase", json!({"record": "a"}), json!({}), "key-a");
+        let base = digest_of("erase", &json!({"record": "a"}), &json!({}), "key-a");
         assert_ne!(
             base,
-            digest_of("read", json!({"record": "a"}), json!({}), "key-a"),
+            digest_of("read", &json!({"record": "a"}), &json!({}), "key-a"),
             "name"
         );
         assert_ne!(
             base,
-            digest_of("erase", json!({"record": "b"}), json!({}), "key-a"),
+            digest_of("erase", &json!({"record": "b"}), &json!({}), "key-a"),
             "arguments"
         );
         assert_ne!(
             base,
-            digest_of("erase", json!({"record": "a"}), json!({"ttl": 1}), "key-a"),
+            digest_of(
+                "erase",
+                &json!({"record": "a"}),
+                &json!({"ttl": 1}),
+                "key-a"
+            ),
             "task options"
         );
         assert_ne!(
             base,
-            digest_of("erase", json!({"record": "a"}), json!({}), "key-b"),
+            digest_of("erase", &json!({"record": "a"}), &json!({}), "key-b"),
             "idempotency key"
         );
         assert_eq!(
             base,
-            digest_of("erase", json!({"record": "a"}), json!({}), "key-a"),
+            digest_of("erase", &json!({"record": "a"}), &json!({}), "key-a"),
             "the same call digests the same way"
         );
     }

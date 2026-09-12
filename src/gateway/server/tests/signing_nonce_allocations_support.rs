@@ -299,6 +299,11 @@ pub(super) fn nested_arguments(target_bytes: usize) -> Value {
 /// implicit: `prepare_signing_invocation` runs before `admit_meta_sync`, so a
 /// reused nonce is refused by the NONCE store — which is why the replay
 /// assertion pins `-32001 Nonce replay detected` and not an admission error.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the json! macro clones its inputs regardless, so borrowing here saves \
+              nothing and only forces an & at every call site"
+)]
 pub(super) fn invoke(id: &str, nonce: Option<Value>, arguments: Value) -> Value {
     let mut invoke_arguments = json!({
         "server": BACKEND,

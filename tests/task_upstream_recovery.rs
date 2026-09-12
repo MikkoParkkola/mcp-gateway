@@ -6,8 +6,8 @@
 //! Named synthetic because the peer is a loopback fixture rather than the
 //! pinned SDK. It speaks the vocabulary the SDK was observed to speak, but it
 //! is NOT offered as evidence about the SDK: that proof is
-//! `task_upstream_recovery_sdk.rs`, which runs the actual pinned FastMCP
-//! TasksExtension over Docket. Everything asserted here is about this
+//! `task_upstream_recovery_sdk.rs`, which runs the actual pinned `FastMCP`
+//! `TasksExtension` over Docket. Everything asserted here is about this
 //! gateway's own store, route, authorization and counting.
 
 #![cfg(unix)]

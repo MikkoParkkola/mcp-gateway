@@ -41,7 +41,7 @@ pub(crate) struct AccountDescriptor {
     pub(crate) provider: String,
     /// Explicit absolute resource (approved table row 425).
     pub(crate) resource: String,
-    /// Exact trusted downstream OAuth issuer. Distinct from the inbound IdP.
+    /// Exact trusted downstream OAuth issuer. Distinct from the inbound `IdP`.
     pub(crate) issuer: String,
 }
 
@@ -49,12 +49,20 @@ pub(crate) struct AccountDescriptor {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum IdentityBindingError {
     #[error("account identity binding is not implemented")]
+    #[expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+    )]
     RuntimeNotImplemented,
     /// No verified principal reached this call. Never downgraded to a guess.
     #[error("request carries no verified principal")]
     MissingVerifiedPrincipal,
     /// The caller named a descriptor that is not configured.
     #[error("account descriptor is not configured")]
+    #[expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+    )]
     UnknownDescriptor,
     #[error(transparent)]
     Account(#[from] AccountError),

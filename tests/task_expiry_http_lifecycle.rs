@@ -59,6 +59,10 @@ fn assert_no_such_task(body: &Value, context: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end lifecycle scenario (start, reap, restart, verify) read as a single sequence is the point of this test"
+)]
 async fn a_configured_expiry_interval_reaps_a_real_task_and_shutdown_releases_the_store() {
     let mock = serve_backend().await;
     let temp_root = tempfile::tempdir().expect("a private root for config, store and logs");
