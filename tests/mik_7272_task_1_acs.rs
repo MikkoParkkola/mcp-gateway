@@ -2250,13 +2250,18 @@ mod ownership {
             let mut seen = String::new();
             while let Some(chunk) = stream.next().await {
                 seen.push_str(&String::from_utf8(chunk.ok()?.to_vec()).ok()?);
-                let matched = seen.contains(task_id)
-                    && match expect {
-                        Expect::TerminalStatus => seen.contains("completed"),
-                        Expect::AnyTaskEvent => seen.contains("notifications/tasks"),
-                    };
-                if matched {
-                    return Some(seen);
+                // Matched per COMPLETE SSE record, never across the whole
+                // buffer: `\n\n` ends a record, so a buffer-wide conjunction
+                // would let the task id come from one frame and the method
+                // from another and call that a match.
+                if let Some(record) = seen.split("\n\n").find(|record| {
+                    record.contains(task_id)
+                        && match expect {
+                            Expect::TerminalStatus => record.contains("completed"),
+                            Expect::AnyTaskEvent => record.contains("notifications/tasks"),
+                        }
+                }) {
+                    return Some(record.to_string());
                 }
             }
             None
