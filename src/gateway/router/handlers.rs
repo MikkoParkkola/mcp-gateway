@@ -827,9 +827,9 @@ pub(super) async fn meta_mcp_handler(
     // `Declared::NONE`, which is what the classifier already answers.
     let declared_capabilities = match era {
         crate::protocol::meta::Era::Modern => shape.declared_capabilities(),
-        crate::protocol::meta::Era::Legacy => {
-            state.meta_mcp.session_declaration(Some(session_id.as_str()))
-        }
+        crate::protocol::meta::Era::Legacy => state
+            .meta_mcp
+            .session_declaration(Some(session_id.as_str())),
     };
     // Owned: `shape` is moved ~100 lines before the caller is built. Classifier
     // output, never the duplicate-header sentinel.
