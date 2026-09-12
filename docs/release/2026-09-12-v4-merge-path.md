@@ -13,6 +13,9 @@ multi-round tool-result work, and the Windows `APPDATA`/`LOCALAPPDATA` stdio fix
 `git merge-tree --write-tree origin/main origin/codex/v4-next-integration` reports
 **109 conflicted files: 73 add/add and 36 content**.
 
+Re-measured against `origin/main` at `992b87c3` (now **12** commits ahead of the base, not 11)
+the count holds at 127 and the split is **81 add/add + 46 content** — both buckets grew.
+
 The add/add majority is not parallel reimplementation. It is squash-merge ancestry loss —
 integration's work reached `main` as squashed commits, so git sees no common blob for those
 paths and reports every one of them as "both sides added this file". The tell is the diff
@@ -30,6 +33,21 @@ Bucketing all 73 add/add files by total changed lines between the two sides:
 of the add/add set is structural noise and two thirds carry real divergence; the label alone
 does not tell you which. The genuine work is the 36 content conflicts plus the 24 add/add
 files above 50 lines.
+
+### The squash base is absent from the merge-base tree, not lost
+
+An add/add conflict offers only whole-file selection, which is why the bucket reads as
+expensive. It is not, because a legitimate three-way base is recoverable. For each add/add
+path, the commit that first added the file to `main` **is** the squash import, and the blob it
+carries is integration's copy at squash time. If `main`'s current blob still equals that blob,
+`main` never touched the file after importing it, so integration's copy is a strict descendant
+and "take integration" is *proved* rather than guessed.
+
+Applied across the bucket, that disposes of 65 of the 81 with no inspection at all. The
+remaining 16 get a real three-way merge against the recovered base: 13 auto-merge clean and 3
+conflict for genuine reasons. No file in the bucket needs a whole-file guess, and whole-file
+selection is never applied to a content conflict — where it would revert work rather than
+choose between two versions of it.
 
 ## 2. Neither branch is a superset
 
@@ -190,3 +208,20 @@ annotation is removed by the wiring work itself; `#[allow]` would outlive the fi
 suppressing. Any symbol that cannot be tied to a row stays failing and gets listed — an
 untraceable zero-caller symbol is a question, and answering it by annotation is how it stops
 being asked.
+
+## 9. A dropped construction site is indistinguishable from the dead-code cluster
+
+The failure mode a 127-file resolution most easily hides is not a compile error. Take one
+side's shorter module list and a file the other side added is orphaned; take one side's line
+and a field keeps its rename but loses the assignment that writes it. Both compile. Both
+surface as `never used` or `never constructed` — the exact signature of the dead-code cluster
+of §8, which a different worktree is separately annotating with `#[expect(dead_code)]`.
+
+Misfiled, the annotation makes the deletion permanent and invisible: the symbol stops warning,
+nothing ever constructs it, and the merge casualty is now documented as intentional scope.
+
+The discriminator is cheap and must be applied before any zero-caller symbol is charged to the
+cluster: **if `main` constructs the symbol and nothing constructs it after the merge, it is the
+merge**. The cluster's symbols are zero-caller on *both* sides; a merge casualty is zero-caller
+on exactly one. The survivor check therefore runs before the merge is committed — afterwards,
+finding one casualty means bisecting a 127-file commit.
