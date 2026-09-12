@@ -29,7 +29,7 @@ jobs:
   # Exceptions are time-boxed in .github/osv-scanner.toml.
   security-gate:
     name: Security gate (block release on known vulns)
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,7 +60,7 @@ jobs:
   # If CodeQL is added later, wire it into this same needs: chain.
   secret-leak-lint:
     name: Secret-leak lint (CWE-532)
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the leak-lint parser (fail on parser regression)
@@ -79,17 +79,30 @@ jobs:
   # and every publishing job is transitively needs:-ed to `verify`.
   release-criteria:
     name: Release criteria ledger (header matches rows)
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the counter (fail on parser regression)
         run: python3 scripts/release/test_count_release_criteria.py
       - name: Check the release-criteria ledger header against its rows
         run: python3 scripts/release/count-release-criteria.py --check
+      - name: Test supplemental acceptance checks
+        run: python3 scripts/release/test_scope_acceptance.py
+      - name: Validate supplemental scope (pending work is reported)
+        run: python3 scripts/release/check_scope_acceptance.py --check
+      - name: Require completed acceptance in publishing context
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: python3 scripts/release/check_scope_acceptance.py --publish-check
+
+  task-sdk-recovery:
+    uses: ./.github/workflows/task-sdk-recovery.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
 
   verify:
-    needs: [security-gate, secret-leak-lint, release-criteria]
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery]
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -108,7 +121,7 @@ jobs:
         run: cargo clippy --all-features -- -D warnings
 
       - name: Test
-        run: cargo test --all-features
+        run: cargo test --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
 
       - name: Verify publish package
         # The runner image replaces the crates-io source with a mirror, and
@@ -124,27 +137,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: avrea-ubuntu-latest-4-vcpu
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact: mcp-gateway-linux-x86_64
             suffix: ""
             packages: musl-tools
-          - os: avrea-ubuntu-latest-arm-4-vcpu
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             artifact: mcp-gateway-linux-aarch64
             suffix: ""
             packages: musl-tools
-          - os: avrea-macos-26-8-vcpu
+          - os: macos-latest
             target: aarch64-apple-darwin
             artifact: mcp-gateway-darwin-arm64
             suffix: ""
             packages: ""
-          - os: avrea-macos-26-8-vcpu
+          - os: macos-latest
             target: x86_64-apple-darwin
             artifact: mcp-gateway-darwin-x86_64
             suffix: ""
             packages: ""
-          - os: avrea-windows-2025-4-vcpu
+          - os: windows-2025
             target: x86_64-pc-windows-msvc
             artifact: mcp-gateway-windows-x86_64
             suffix: .exe
@@ -183,7 +196,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
@@ -261,7 +274,7 @@ jobs:
 
   publish:
     needs: release
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -281,9 +294,9 @@ jobs:
 
   npm-publish:
     needs: release
-    # GitHub-hosted on purpose. npm rejects a provenance bundle signed on a
+    # Must stay GitHub-hosted. npm rejects a provenance bundle signed on a
     # self-hosted runner ("Unsupported GitHub Actions runner environment:
-    # self-hosted"), so publishing from avrea-* costs the build attestation.
+    # self-hosted"), so a third-party runner costs the build attestation.
     # This package is a thin wrapper that needs nothing from that fleet.
     # https://docs.npmjs.com/generating-provenance-statements
     runs-on: ubuntu-latest
@@ -330,7 +343,7 @@ jobs:
 
   homebrew-update:
     needs: release
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    runs-on: ubuntu-latest
 
     steps:
       - name: Compute version and download checksums

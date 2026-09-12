@@ -19,7 +19,7 @@ jobs:
   # Exceptions are time-boxed in .github/osv-scanner.toml.
   security-gate:
     name: Security gate (block image on known vulns)
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
@@ -39,7 +39,7 @@ jobs:
   # anyway. Duplicated deliberately — a workflow cannot depend on another workflow's job.
   release-criteria:
     name: Release criteria ledger (header matches rows)
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
@@ -49,10 +49,16 @@ jobs:
         run: python3 scripts/release/test_count_release_criteria.py
       - name: Check the release-criteria ledger header against its rows
         run: python3 scripts/release/count-release-criteria.py --check
+      - name: Test supplemental acceptance checks
+        run: python3 scripts/release/test_scope_acceptance.py
+      - name: Validate supplemental scope (pending work is reported)
+        run: python3 scripts/release/check_scope_acceptance.py --check
+      - name: Require completed acceptance in publishing context
+        run: python3 scripts/release/check_scope_acceptance.py --publish-check
 
   build:
     needs: [security-gate, release-criteria]
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -124,7 +130,7 @@ jobs:
   publish-mcp-registry:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
