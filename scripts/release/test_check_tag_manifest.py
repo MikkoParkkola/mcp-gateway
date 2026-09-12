@@ -355,6 +355,27 @@ def live_lines(workflow):
     return heredocs_dropped([line for line in live if line.strip()])
 
 
+def inert_scalars_dropped(lines):
+    """`lines` with the body of every non-`run:` block scalar removed.
+
+    Applied where lines are read as COMMANDS, not where they are read as
+    structure: a folded `if:` condition is a block scalar too, and its body is
+    the condition itself.
+    """
+    kept, depth = [], None
+    for line in lines:
+        indent = len(line) - len(line.lstrip())
+        if depth is not None:
+            if indent > depth:
+                continue
+            depth = None
+        opener = re.match(r"^(\s*)(?:- )?([\w.-]+): *[|>][-+]?$", line)
+        if opener and opener.group(2) != "run":
+            depth = indent + (2 if line.lstrip().startswith("- ") else 0)
+        kept.append(line)
+    return kept
+
+
 def heredocs_dropped(lines):
     """`lines` with every heredoc body and terminator removed."""
     kept, delimiter = [], None
@@ -497,8 +518,13 @@ def env_of(block):
 
 
 def commands(workflow):
-    """A workflow's executable lines as whole commands."""
-    return joined(live_lines(workflow))
+    """A workflow's executable lines as whole commands.
+
+    A block scalar under any key but `run:` is the heredoc hazard one level
+    out: `NOTE: |` makes its body the value of a variable. It reads exactly
+    like a command and Actions never executes a character of it.
+    """
+    return joined(inert_scalars_dropped(live_lines(workflow)))
 
 
 def steps(workflow):
@@ -711,10 +737,30 @@ class WorkflowWiring(unittest.TestCase):
                 invocation = re.compile(
                     rf"(?:python3?|uv run)\s+scripts/release/{re.escape(script)}(?=\s|$)"
                 )
+                running = [c for c in live if runs(c, invocation)]
                 self.assertTrue(
-                    [c for c in live if runs(c, invocation)],
+                    running,
                     f"{workflow} never runs scripts/release/{script}",
                 )
+                for command in running:
+                    text = shell(command)
+                    # `||` in the gate's own command is fatal in both
+                    # directions: `true || python3 …` never reaches the gate,
+                    # and `python3 … || echo ignored` discards the exit status
+                    # that IS the gate. Either way the step succeeds and
+                    # nothing was checked.
+                    self.assertNotIn(
+                        "||", text, f"{workflow}: the gate's failure is optional: {text}"
+                    )
+                    # Arguments, not just the program: `--help` makes argparse
+                    # print usage and exit 0, which is a passing step that
+                    # verified nothing.
+                    piece = next(p for p in segments(text) if invocation.match(p))
+                    self.assertNotRegex(
+                        piece,
+                        r"(?:^|\s)(?:--help|-h)(?=\s|$)",
+                        f"{workflow}: the gate is invoked as help: {piece}",
+                    )
 
     def test_prerelease_skips_are_declared_where_they_are_claimed(self):
         # The three stable-only surfaces. Each is skipped by an expression
@@ -745,10 +791,13 @@ class WorkflowWiring(unittest.TestCase):
             self.assertNotIn("||", own, f"{workflow} {job}: its skip is not mandatory")
         # Affirmatively: a leading `!` matches the clause and reverses which
         # builds are tagged :latest, so the operand is read from its start.
+        # The false branch is read too. Pinning only the true branch leaves
+        # `… && ':latest' || ':latest'`, where both branches yield the same
+        # name and the condition decides nothing.
         self.assertRegex(
             condition("ci.yml", "docker"),
             r"(?<![!\w.])steps\.\w+\.outputs\.is_prerelease != 'true'"
-            r" && 'ghcr\.io/[^']*:latest'",
+            r" && 'ghcr\.io/[^']*:latest' \|\| ''",
         )
 
     def test_the_prerelease_classification_is_computed(self):
@@ -835,8 +884,18 @@ class WorkflowWiring(unittest.TestCase):
                     # matching from the `@` inward accepts
                     # `'…@${DIGEST} '`, where the single quotes bash keeps
                     # make the reference a literal the registry cannot resolve.
+                    # Read the cosign segment, not the whole `run:` body. The
+                    # body is every command the step runs, so
+                    # `cosign sign …:latest; echo "…@${DIGEST}"` satisfies a
+                    # search of it while cosign signs a mutable tag and the
+                    # digest only ever reaches `echo`.
+                    signed = next(
+                        piece
+                        for piece in segments(shell(command))
+                        if pattern.match(piece)
+                    )
                     self.assertRegex(
-                        shell(command),
+                        signed,
                         r"(?:^|\s)(?:\"[^\"]*@\$\{DIGEST\}\"|[^\s\"']*@\$\{DIGEST\})(?:\s|$)",
                         f"{workflow}: {command}",
                     )
@@ -870,10 +929,14 @@ class WorkflowWiring(unittest.TestCase):
                 # The env binding is only worth what the shell leaves of it: a
                 # `DIGEST=` assignment in the run body rebinds the name the
                 # cosign command below expands, and the env check still passes.
+                # Every declaring builtin, not just `export`: `declare`,
+                # `local`, `typeset` and `readonly` all rebind the name, and a
+                # check naming one of them invites the other four.
                 for command in block:
                     self.assertNotRegex(
                         shell(command),
-                        r"(?:^|[;&|]\s*|\bexport\s+)DIGEST=",
+                        r"(?:^|[;&|]\s*|\b(?:export|declare|local|typeset|readonly)\s+)"
+                        r"DIGEST=",
                         f"{workflow}: {name} reassigns DIGEST in its shell",
                     )
                 if not any(runs(c, COSIGN_VERIFY) for c in block):
