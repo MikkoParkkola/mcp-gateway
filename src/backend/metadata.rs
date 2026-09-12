@@ -93,6 +93,24 @@ impl Backend {
             .unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
+    /// Withhold the shared metadata cache for a `per_user` backend (MIK-7334
+    /// CATALOGUE.1).
+    ///
+    /// `PoolKey::Shared` — the transport `get_or_fetch_shared` would fetch
+    /// over — is one connection shared by every caller regardless of
+    /// identity (see `pool.rs`). A `session_mode = per_user` backend has no
+    /// per-identity catalogue fetch anywhere in this codebase today, so the
+    /// only honest fix is to withhold rather than serve a shared-connection
+    /// answer under a caller's own identity: isolation holds by
+    /// construction (no per-user catalogue fetch exists yet), not by cache
+    /// keying. This is checked once, here, because `has_cached_tools`,
+    /// `cached_tools_count`, `get_cached_tool`, and `get_cached_tools_snapshot`
+    /// all read the cache this method would otherwise populate — leaving it
+    /// empty makes every one of those readers withhold too.
+    fn withholds_shared_metadata(&self) -> bool {
+        self.session_mode() == Some(crate::identity_propagation::SessionMode::PerUser)
+    }
+
     async fn get_cached_list_shared<T, F>(
         &self,
         cache: &CachedMetadata<Vec<T>>,
@@ -103,6 +121,14 @@ impl Backend {
     where
         F: Fn(Value) -> Result<Vec<T>>,
     {
+        if self.withholds_shared_metadata() {
+            debug!(
+                backend = %self.name,
+                kind,
+                "Withholding shared metadata cache for per_user backend (MIK-7334 CATALOGUE.1)"
+            );
+            return Ok(Arc::new(Vec::new()));
+        }
         cache
             .get_or_fetch_shared(self.cache_ttl, || async {
                 // Hold the transport open for the whole fetch WITHOUT claiming
