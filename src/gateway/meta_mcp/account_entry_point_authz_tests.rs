@@ -301,7 +301,7 @@ async fn prompts_list_includes_the_same_backend_on_a_single_user_gateway() {
 
 #[tokio::test]
 async fn resources_read_refuses_a_personal_managed_backend_on_a_multi_user_gateway() {
-    let (meta, _calls) = meta_with(personal_managed_backend(), true);
+    let (meta, calls) = meta_with(personal_managed_backend(), true);
 
     let response = resources_read(&meta).await;
 
@@ -310,18 +310,28 @@ async fn resources_read_refuses_a_personal_managed_backend_on_a_multi_user_gatew
         "resources/read resolves no per-user credential, so a personal backend's \
          resource must not be read under the static credential: {response:?}"
     );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "refusal precedes dispatch: a refused route must not round-trip the \
+         backend's catalogue while resolving the URI's owner"
+    );
 }
 
 #[tokio::test]
 async fn resources_read_serves_the_same_backend_on_a_single_user_gateway() {
     // CONTROL. The URI, the owner lookup and the transport are unchanged; only
     // the principal count moves.
-    let (meta, _calls) = meta_with(personal_managed_backend(), false);
+    let (meta, calls) = meta_with(personal_managed_backend(), false);
 
     let response = resources_read(&meta).await;
 
     assert!(
         response.error.is_none(),
         "the single-user control must read the resource: {response:?}"
+    );
+    assert!(
+        calls.load(Ordering::SeqCst) > 0,
+        "the control must actually reach the backend"
     );
 }
