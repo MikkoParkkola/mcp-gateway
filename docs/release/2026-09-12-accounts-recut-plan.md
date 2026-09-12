@@ -6,7 +6,11 @@
 measurement changes its shape: there are **three** subsystems absent from the
 release line, not one plus a graft.
 
-Measured on `fix/v4-integration-ci-green` against `origin/main`.
+Measured on `fix/v4-integration-ci-green` at `92e46ed6` against `origin/main`
+at `bd1adbb4`. Every per-file figure below is `git diff --numstat` between
+those two commits, reported as additions and deletions. Commit counts, symbol
+match counts and net file lengths are not used as size measurements: they
+compress a two-sided diff into one number and hide the side that is a loss.
 
 **Revision note.** A first pass of this plan counted the wiring surface by
 grepping for the literal `personal_accounts`. That term misses every file that
@@ -86,9 +90,13 @@ reach any of the three subsystems.
 
 ## `src/idempotency.rs` must not be overwritten
 
-`main` carries it at 1,426 lines; this branch at 1,046. The branch copy is an
-**older** file with the admission module attached, not a superset. Overwriting
-loses 380 lines of release-line work. The graft is additive: add the six files
+`git diff --numstat 92e46ed6 bd1adbb4 -- src/idempotency.rs` reports **462
+additions and 82 deletions** going from this branch to `main`. The branch copy is
+an **older** file with the admission module attached, not a superset: overwriting
+`main`'s copy discards 462 lines of release-line work, and the 82 lines it would
+bring back are the admission wiring plus divergence, not a superset. The net
+figure of 380 lines quoted by an earlier revision understated the loss by
+conflating the two sides, and is withdrawn. The graft is additive: add the six files
 under `src/idempotency/`, then add the two declaring lines —
 `#[path = "idempotency/admission.rs"]` and `pub(crate) mod admission;` — into
 `main`'s copy. Neither lineage declares the module any other way.
@@ -98,13 +106,38 @@ under `src/idempotency/`, then add the two declaring lines —
 1. **`src/idempotency/` admission**, onto `main`. Smallest, and the task service
    depends on it (`store_tests/admission.rs`, `store_tests/qualification.rs`).
 2. **`src/gateway/task_service/`**, onto the result. Unblocks re-grading the
-   three `MIK-7311.LIFECYCLE` rows and `MIK-7377.SIGNING.1`.
+   three `MIK-7311.LIFECYCLE` rows. It does **not** by itself carry
+   `MIK-7377.SIGNING.1`: that criterion's cited evidence is
+   `tests/message_signing_delivery.rs` and `tests/message_signing_config.rs`,
+   both branch-only, together with `src/gateway/meta_mcp/signing_delivery_tests.rs`.
+   Those three files and the `src/attestation/` and `src/config/features/security.rs`
+   edits they exercise move in this step or the row stays ungraded. Admitting the
+   subsystem is not the same as integrating its runtime consumers.
 3. **`src/personal_accounts/`**, onto the result. Unblocks `MIK-6744.STORE.1`
    and the accounts scope rows.
 4. Re-grade the six branch-dependent rows against the release line, conjunct by
    conjunct, not by a passing test count.
-5. Dispose of the 13 held `codex/v4-*` drafts, whose unique content the three
-   PRs have by then carried across.
+5. Dispose of the 13 held `codex/v4-*` drafts **only per draft, and only once
+   its unique content has a verified landing on the release line** — the landed
+   files present at the cited paths and the criterion re-graded against them.
+   A draft with content that no step above carries keeps an explicit retained
+   disposition instead; "the re-cut carries it" is a claim to verify per draft,
+   not a blanket property of this plan.
+
+## Pre-merge validation, per extracted PR
+
+Each of steps 1–3 runs this before it merges, not after the release-line
+re-grading in step 4. A failure here is cheaper than a failure discovered by a
+later step's re-grade.
+
+| Check | How |
+|---|---|
+| Compiles | `cargo build` and `cargo clippy --all-targets -- -D warnings` clean |
+| Account wiring | every reference site in the 16-file table resolves; no `mod` declared without its file, no file added without its `mod` |
+| Cache isolation | the per-identity cache assertions in the subsystem's own tests pass on the release line's `src/backend/mod.rs`, not the branch's |
+| Reload behaviour | `src/config_reload/` tests pass with the step's new modules registered |
+| Protocol regressions | the release line's existing `tests/` suite is green, in particular the protocol files where the two trees diverged bidirectionally |
+| Ledger | `scripts/release/count-release-criteria.py` and `check_scope_acceptance.py --check` still exit 0 |
 
 Steps 1–3 are ordered by dependency, not by size. Each lands behind the normal
 review gate with its own CI run; none of them touches the files the next one
