@@ -103,6 +103,22 @@ their own blast radius stays nil; the lock is taken by their callers. Only
 `dispatch_streaming_notifications` changes shape, from `stdout: &mut W` to a
 shared handle it locks once per notification.
 
+**The lock alone is not enough, and this is the subtle part.** `InputBridge::ask`
+wraps its `send_request` call in an outer `tokio::time::timeout` and drops the
+future on expiry (`src/gateway/input_bridge.rs:492-520`). If that expiry lands
+while the channel is inside `write_all`, the future is dropped mid-frame, the
+`MutexGuard` drops with it, and the next writer appends to a partial line — a
+torn frame, which is precisely what STDIO.3 forbids, produced by the one
+mechanism meant to prevent it. A slow-reading client makes this reachable.
+
+So a started frame must not be cancellable. Each write runs in its own
+`tokio::spawn`ed task that takes the lock, writes the whole frame and returns;
+the caller awaits the `JoinHandle`. Dropping the handle cancels only the wait, not
+the task, so the frame finishes either way. `Arc<Mutex<Stdout>>` is `'static`, so
+the task needs nothing else moved into it. A write error terminates the loop the
+same way a write error terminates it today — a stdout that cannot be written is
+not a transport.
+
 Nothing here is a second synchronisation mechanism. It is the only one on this
 path.
 
@@ -136,9 +152,11 @@ loop exactly as today — so the initialize response is on the wire before any
 concurrent dispatch exists, and STDIO.2 holds structurally rather than by timing.
 Once set, each subsequent single request is `tokio::spawn`ed; the spawned task
 runs the same `dispatch_streaming_notifications` wrapper and writes its own
-response through the shared writer. Batches keep running inline: they are already
-a sequence inside `dispatch_batch_with_sink` and no requirement asks for
-concurrency across a batch.
+response through the shared writer. A batch is spawned as one task, its members
+still dispatched sequentially inside `dispatch_batch_with_sink`: no requirement
+asks for concurrency *across* a batch, but leaving the batch on the loop would
+block the only reader that can deliver an answer to a bridged call inside it — or
+to one already in flight from an earlier request.
 
 Backpressure is `InputBridge`'s own, not a queue: `BridgeBounds::DEFAULT` bounds
 each exchange with a per-prompt and an aggregate timeout
@@ -146,7 +164,21 @@ each exchange with a per-prompt and an aggregate timeout
 bounds and the number in flight is bounded by how fast a client can ask. Bounding
 the spawn itself instead — a semaphore the loop waits on — reintroduces exactly
 the stall STDIO.1 forbids, because the loop would block on capacity while the
-answer it is waiting for is the next line to read.
+answer it is waiting for is the next line to read. If an admission bound is wanted
+later it must be a non-blocking check that *refuses* over capacity, never one that
+stalls the reader; it is not proposed here because the stdio client is the process
+that spawned this one and already holds whatever the operator holds (the same
+reasoning that makes stdio `is_admin: true`, `src/gateway/server/mod.rs:2317-2326`),
+so it can exhaust this process far more directly than by queueing requests.
+
+**EOF.** The loop's existing exit path persists telemetry, drops the idle reaper
+and the health loop, awaits `warm_start_tasks.cancel()` and calls
+`backends.stop_all()` (`:1713-1729`). Spawned dispatches are not visible to any of
+that today because none exist. They are held in a `JoinSet` and awaited before
+teardown, so a client that closes stdin after issuing work still gets its
+responses rather than having its backends stopped out from under it. The wait
+inherits the same `BridgeBounds` ceiling every dispatch already has, so it is
+bounded without a second timeout.
 
 Two consequences worth naming rather than discovering:
 
@@ -189,11 +221,17 @@ a `DashMap<String, oneshot::Sender<Value>>` of questions awaiting an answer. Its
 `format!("{}{}", prompt.kind.prefix(), uuid::Uuid::new_v4())`
 (`src/gateway/input_bridge.rs:492`), with prefixes `sampling-`, `elicitation-`,
 `roots-`. The channel never mints one; it registers the id it is handed and
-matches the reply against it. These are prefixed UUID strings, structurally
-disjoint from anything a client would send as its own request id, and the
-`next_id` counter named in the earlier revision of this item belongs to the
-outbound transport (`src/transport/stdio.rs:561`) and is not on this path at all.
-Nothing further is required for item 3.
+matches the reply against it. The `next_id` counter named in the earlier revision
+of this item belongs to the outbound transport (`src/transport/stdio.rs:561`) and
+is not on this path at all, so there is no counter here to stay disjoint from.
+
+What actually keeps a client's own ids out of the bridge is the routing rule in
+§5, not the id format: a frame is a candidate answer only if it carries no
+`method` **and** its id is currently in the pending map. A client request reusing
+a bridge id still carries a `method` and is dispatched normally; a client response
+to some other gateway request carries an id that was never registered and gets
+today's `-32600`. The prefixed-UUID shape makes a collision vanishingly unlikely
+on top of that, but it is the second line of defence, not the first.
 
 **The guard is the cancellation contract, not an optimisation.** `ask` wraps every
 `send_request` in an outer `tokio::time::timeout` and abandons the future on
@@ -293,13 +331,15 @@ the stdio path ever reaches `plan`. Proposed replacement:
 > This arm does not reach stdio, and the reason is worth naming because no test
 > enforces it. A stdio caller now arrives with a real declaration
 > (`stdio_caller_context` passes `shape.declared_capabilities()`) and a real
-> channel (`StdioClientChannel`), so neither the MRTR.9 gate above nor `plan`
-> refuses it and the bridge is the right messenger. What it cannot produce is
-> `NoSession`: the stdio channel refuses that only when the session id is not
-> `STDIO_SESSION_ID`, which the one caller that builds it cannot get wrong.
-> A stdio exchange that fails therefore fails as `Delivery { TimedOut }` or
-> `Deadline`, never here. Change the stdio session id or give that channel a
-> second caller and re-read this arm.
+> channel (`StdioClientChannel`), so the bridge is the right messenger for it.
+> What this arm needs is `NoSession`, and the stdio channel produces that only
+> when the session id is not `STDIO_SESSION_ID` — which the one caller that
+> builds it cannot get wrong. Every other stdio failure is some other variant:
+> `Refused` when the client declared nothing, or nothing of the kind asked for,
+> or a mode it did not declare; `Delivery { TimedOut }` or `Deadline` when the
+> client does not answer; a projection error when it answers something
+> unreadable. Change the stdio session id or give that channel a second caller
+> and re-read this arm.
 
 The missing `MIK-7212.WIRE.10` row in the MRTR.7 test plan — named in the current
 comment as the thing that joins the two halves, and still absent — is superseded
@@ -324,6 +364,12 @@ behaviour end to end, and the two halves it was to join no longer exist as a pai
   reopened here. Pinning `era` to `Legacy` in the caller context (§6) is not that
   question: it changes one predicate with one production reader and does not touch
   what `initialize` advertises.
+- Making a capability declared at `initialize` durable for the rest of the
+  session (§11.4). Gateway-wide, both transports, no row in this scope.
+- Widening the three acceptance tests. `RELEASE-4.0.0-scope-tests.md:15-17` names
+  the surface; the rows are satisfied by the three existing ACs with `#[ignore]`
+  removed (§10), and this work package is design-only — it adds no test and edits
+  none.
 - `ConfirmationChannel::Unavailable` on stdio. Destructive-call confirmation is a
   different capability with its own row; a channel that can carry
   `elicitation/create` for MRTR does not automatically become the operator asker,
@@ -378,3 +424,18 @@ Three corrections to the record, each verified at source.
    channel call. Had this design shipped as "implement `ClientChannel` and wire it
    at the `NoClientChannel` sites", all three tests would have failed with no
    `elicitation/create` frame emitted and no channel method ever invoked.
+4. **A capability declared only at `initialize` is still not read, and that is
+   gateway-wide, not stdio's.** `caller.input_capabilities` is per-request
+   everywhere: HTTP derives it from `shape.declared_capabilities()`
+   (`src/gateway/router/handlers.rs:877`) and nothing stores the `initialize`
+   handshake's `capabilities` object for later requests to inherit — no session
+   capability store exists in this tree. A legacy client that declares
+   `elicitation` on the handshake and omits `_meta` on its `tools/call` is refused
+   by the MRTR.9 gate on HTTP today and will be refused on stdio after this
+   change, identically. The ACs are written to match that contract — the fixture
+   declares in both places and says so
+   (`tests/mik_7212_mrtr7_stdio_acs.rs:293-296`). Making the handshake's
+   declaration durable for a session is a real question, applies to both
+   transports, and is not this requirement: none of STDIO.1-3 mentions it and
+   changing it here would alter HTTP behaviour under a stdio row. Out of scope
+   (§9), recorded so the next reader does not mistake it for an oversight.
