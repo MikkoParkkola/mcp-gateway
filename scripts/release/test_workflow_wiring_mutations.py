@@ -12,6 +12,13 @@ The suite reads the copied workflows, not the ones in the working tree: a
 harness that edited them in place would leave a mutation behind on a crash.
 A case counts as caught only when an assertion failed — an exception exits
 non-zero too, and reading that as a detection would report a gap as covered.
+
+
+Scope: this corpus covers drift and refactors — a gate moved, a condition
+rewritten, a flag dropped. It does not cover deliberate obfuscation by someone
+with write access to the workflow files, who could equally delete this suite.
+A static read of shell inside YAML cannot bound that, and the meta-protection
+cannot exceed the review that guards it.
 """
 
 import os
@@ -38,6 +45,28 @@ CASES = [
         "            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \\\n"
         '            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
         "",
+        CAUGHT,
+    ),
+    (
+        "gate-behind-an-exit-on-the-line-above",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        "        run: |\n          exit 0\n          python3 scripts/release/check_tag_manifest.py",
+        CAUGHT,
+    ),
+    (
+        "gate-behind-an-exec",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        "        run: |\n          exec true\n          python3 scripts/release/check_tag_manifest.py",
+        CAUGHT,
+    ),
+    (
+        "gate-echoed-as-quoted-data",
+        "docker.yml",
+        "        run: python3 scripts/release/check_tag_manifest.py",
+        "        run: |\n          echo '\n          NOTE: |\n"
+        "            python3 scripts/release/check_tag_manifest.py\n          '",
         CAUGHT,
     ),
     (
