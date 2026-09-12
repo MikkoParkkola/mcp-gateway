@@ -113,10 +113,24 @@ Two of the five do have pre-merge work, and it is build work rather than measure
 `NFR.CONFORMANCE.1` needs the matrix widened — the existing 19-row table on integration
 (`tests/mik_7272_conformance.rs:52-292`) has role and transport axes but neither revision
 nor outcome, and covers neither modern URL-elicitation completion removal nor
-arbitrary-JSON structured results. `NFR.WORKLOAD.1` needs its harness and the 3.5.0
-baseline, which is not in the tree at all. Building both before the merge is what makes
-the post-merge validation pass a measurement rather than a project.
+arbitrary-JSON structured results. `NFR.WORKLOAD.1` needs its harness and the frozen
+3.5.0 baseline: `benchmarks/` carries no 3.5.0 measurement on either ref, so the
+comparison the acceptance text names has nothing to compare against. The version is
+specified across the requirement documents and measured nowhere. Building both before the
+merge is what makes the post-merge validation pass a measurement rather than a project.
 
-That leaves fourteen rows as genuine implementation, and the merge as the critical path
-for the other half. Draft state on all fourteen PRs, and the operator approval behind it,
-therefore gates half the release ledger rather than one merge commit.
+## 7. One row is gated on the deployment, not on the merge
+
+`NFR.SEC.7` is the single blocking row from the baseline ledger
+(`RELEASE-4.0.0-criteria-status.md`) rather than from `scope-status.json`, and its
+acceptance is a probe against the running process: the build actually listening must
+contain every security control merged for the release, compared automatically rather than
+by hand. Source inspection cannot satisfy it — it establishes that a guard is wired into
+the router, never which revision the listening process was built from. The row therefore
+closes after the deployment, behind both the merge and the release, and no amount of
+implementation closes it earlier.
+
+That leaves thirteen rows as genuine implementation. Fifteen of the twenty-eight are
+sequenced behind the merge and the deploy. Draft state on all fourteen PRs, and the
+operator approval behind it, gates more than half the release ledger rather than one
+merge commit.
