@@ -850,6 +850,46 @@ mod http {
     }
 
     async fn post_answer(state: Arc<AppState>, principal: Option<&str>, body: Value) -> Answer {
+        let response = send(state, principal, body).await;
+        let status = response.status();
+        // An admitted `subscriptions/listen` is an OPEN STREAM by design, so
+        // draining its body never returns. Content-type is what separates the
+        // two answers: a refusal is `application/json` and must be read and
+        // compared; a stream is `text/event-stream` and has no body to collect.
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        if content_type.starts_with("text/event-stream") {
+            return Answer {
+                status,
+                content_type,
+                body: Value::Null,
+            };
+        }
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body must read");
+        Answer {
+            status,
+            content_type,
+            body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        }
+    }
+
+    /// One request through the real router, answered but NOT drained.
+    ///
+    /// Split out of [`post_answer`] so a listen stream can be held open and
+    /// read frame by frame: the same headers, the same auth middleware and the
+    /// same verified identity as every other call in this suite, so a stream
+    /// row cannot pass through a door the other rows do not use.
+    pub(super) async fn send(
+        state: Arc<AppState>,
+        principal: Option<&str>,
+        body: Value,
+    ) -> axum::http::Response<Body> {
         let method = body["method"].as_str().unwrap_or_default().to_string();
         let mut builder = Request::builder()
             .method("POST")
@@ -888,36 +928,10 @@ mod http {
                 issuer: "https://idp.task-1.test".to_string(),
             });
         }
-        let response = create_router(state)
+        create_router(state)
             .oneshot(request)
             .await
-            .expect("router must answer");
-        let status = response.status();
-        // An admitted `subscriptions/listen` is an OPEN STREAM by design, so
-        // draining its body never returns. Content-type is what separates the
-        // two answers: a refusal is `application/json` and must be read and
-        // compared; a stream is `text/event-stream` and has no body to collect.
-        let content_type = response
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_string();
-        if content_type.starts_with("text/event-stream") {
-            return Answer {
-                status,
-                content_type,
-                body: Value::Null,
-            };
-        }
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("body must read");
-        Answer {
-            status,
-            content_type,
-            body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        }
+            .expect("router must answer")
     }
 }
 
@@ -1190,8 +1204,8 @@ mod ownership {
     use super::fixture;
     use super::http::{
         SUBSCRIPTION_CAPACITY, modern, poll_unattributed_until_terminal, post_against,
-        post_answer_against, post_unattributed, public_mcp_auth, state, state_from, state_holding,
-        state_over, state_public_mcp, task_id_of, task_invoke,
+        post_answer_against, post_unattributed, public_mcp_auth, send, state, state_from,
+        state_holding, state_over, state_public_mcp, task_id_of, task_invoke,
     };
 
     /// An id nothing ever created: the negative control every "indistinguishable
@@ -2108,5 +2122,117 @@ mod ownership {
         // arm removed, this arm alone fails, and the accepted cancel answers a
         // bare `{"resultType":"complete"}`.
         refused_identically(&fresh.state, "key-a", 97, "tasks/cancel", &task_id).await;
+    }
+
+    /// THE THIRD INSPECT ROUTE. `tasks/get` and `tasks/cancel` refuse a foreign
+    /// caller outright; `subscriptions/listen` does not — it narrows a foreign
+    /// `taskIds` to the empty list IN SILENCE and still answers a stream
+    /// (`src/gateway/router/handlers.rs:1050-1062`). Two streams that look
+    /// alike prove nothing about what travels down them, so this row reads the
+    /// frames.
+    ///
+    /// The owner's stream is the PERMISSIVE CONTROL and is drained FIRST: it
+    /// must carry a frame naming the task before the foreign stream is judged.
+    /// Without it, an empty foreign stream would be satisfied by a gateway that
+    /// emits no task events at all.
+    #[tokio::test]
+    async fn lifecycle_2_a_foreign_listener_receives_no_event_for_the_task() {
+        let (fixture, gate) = state_holding().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(110, "mik-7311-lifecycle-2-foreign-stream"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
+        fixture.backend.wait_for_calls(1).await;
+
+        // Both listeners are opened BEFORE the task settles, so neither can
+        // miss the event by arriving late.
+        let mut foreign = listen_stream(&fixture.state, "key-b", 112, &task_id).await;
+        let mut owner = listen_stream(&fixture.state, "key-a", 113, &task_id).await;
+
+        gate.release_all();
+
+        let carried = drain_until_status_event(&mut owner, &task_id).await;
+        assert!(
+            carried.is_some(),
+            "the owner's own stream must carry an event naming the task, or the \
+             foreign stream below is empty because nothing was ever emitted"
+        );
+
+        let leaked = drain_until_status_event(&mut foreign, &task_id).await;
+        assert!(
+            leaked.is_none(),
+            "a principal who does not own the task must receive no event naming \
+             it: {leaked:?}"
+        );
+    }
+
+    /// Open a listen stream AS `principal` and hand back its body.
+    ///
+    /// `post_against` drops the body when it returns, which is right for every
+    /// row that only needs the admission. A row that reads what travels down
+    /// the stream has to hold it.
+    async fn listen_stream(
+        state: &Arc<AppState>,
+        principal: &str,
+        request_id: i64,
+        task_id: &str,
+    ) -> axum::body::BodyDataStream {
+        let response = send(
+            Arc::clone(state),
+            Some(principal),
+            modern(
+                request_id,
+                "subscriptions/listen",
+                json!({ "taskIds": [task_id] }),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::OK,
+            "'{principal}' must be admitted — the narrowing this row is about \
+             happens INSIDE an admitted stream, so a refusal here would test \
+             something else"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream"),
+            "an admitted listen is a stream; anything else has no frames to read"
+        );
+        response.into_body().into_data_stream()
+    }
+
+    /// Read frames until one names `task_id`, or until the stream goes quiet.
+    ///
+    /// Bounded on purpose in BOTH directions: a subscription stream stays open,
+    /// so "nothing arrived" can only ever be a timeout, and the same bound is
+    /// used for the control and for the negative so the two are comparable.
+    async fn drain_until_status_event(
+        stream: &mut axum::body::BodyDataStream,
+        task_id: &str,
+    ) -> Option<String> {
+        use futures::StreamExt;
+
+        loop {
+            let chunk = tokio::time::timeout(fixture::BOUND, stream.next())
+                .await
+                .ok()??;
+            let text = String::from_utf8(chunk.expect("chunk").to_vec()).expect("utf-8");
+            // The ACK also names the taskIds the listen was accepted with, so
+            // naming the task is not enough: what is looked for is the
+            // STATUS EVENT the release produces. A row that accepted the ack
+            // would prove only that the echo is narrowed, never that an event
+            // fails to travel.
+            if text.contains(task_id) && text.contains("completed") {
+                return Some(text);
+            }
+        }
     }
 }
