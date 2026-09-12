@@ -30,6 +30,10 @@ jobs:
         run: scripts/ci/check-license-headers.sh
       - name: Verify license files ship in every packaged artifact
         run: scripts/ci/verify-artifact-licenses.sh
+      - name: Validate the hosted-runner guard
+        run: scripts/ci/check-hosted-runners.sh --self-test
+      - name: Require every job to run on a GitHub-hosted runner
+        run: scripts/ci/check-hosted-runners.sh
 
   service-template-smoke:
     name: Service template smoke
