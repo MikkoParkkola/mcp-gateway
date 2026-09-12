@@ -169,11 +169,40 @@ shipped catalogue — but it stays a **list**, and its size is reviewable in one
 screen. Each entry carries a one-line justification naming the catalogue term it
 serves.
 
-**Authoring data is separate from evaluation data.** The table is written from a
-development sample of the catalogue. The held-out corpus that grades RANKING.1
-is retained by the evaluation owner and is not consulted while choosing entries;
-freezing a corpus is not the same as holding it out, and a table tuned against
-the grading set produces evidence a release integrator cannot accept.
+**Authoring data is separate from evaluation data, and the ordering is the
+protection.** The table is written from a development sample of the catalogue.
+The corpus that grades RANKING.1 is not consulted while choosing entries. A
+table fitted against the corpus that grades it turns that corpus into training
+data wearing the word "held-out": every supported abbreviation passes because
+someone looked at the case it had to pass, the suite goes green, and the leak is
+invisible to a reviewer reading the test file because it lives in the authoring
+order, not in the code.
+
+Freeze protocol, binding on implementation:
+
+1. The corpus lands **first**, in its own commit, in its own file, before a
+   single table entry exists. Its commit SHA is recorded in this document at
+   that point. The table commit is strictly after that SHA, and the ordering is
+   auditable in `git log` by anyone grading the row.
+2. The corpus file is **not edited after the freeze**. Not to add a case the
+   table misses, not to reword one. A corpus that can still be edited is one
+   that will be edited, and re-freezing it after seeing a failure restores
+   nothing.
+3. Where the same agent writes both — the likely case here — the ordering
+   constraint is the entire protection, so it is stated as a protocol rather
+   than left to discipline.
+4. The **unsupported-match control is drawn from the same frozen corpus**. Drawn
+   afterwards from anywhere else, it is a control against a table that was
+   written knowing how to dodge it.
+
+**A perfect score is a leak signal, not a pass.** The corpus is frozen before
+the table exists, so it necessarily contains abbreviations the table will not
+carry — that is what makes the unsupported-match control real. The expected
+result is therefore bounded above by the supported fraction of the corpus and
+**cannot be 100%** unless the table was fitted to it. A run that scores every
+case is reported as evidence of leakage and sends the table back, not forward.
+No numeric pass threshold is set here: thresholds are RANKING.3's, frozen after
+the 3.5.1 baseline, and setting one in this document would pre-empt that row.
 
 Consumption rules, so two implementers cannot produce different rankings:
 
@@ -279,6 +308,16 @@ discounted to 0.8 of a literal match at the same tier (§3.2 rule 3), the
 boundary tie-break cannot cross a score difference, and `usage_factor` is
 untouched.
 
+**This design introduces no new tunable constant.** The boundary tie-break has
+no magnitude to tune — that is the point of choosing it over a multiplier
+(§3.3), and it removes the "capped below one tier step" bound that an earlier
+draft could not define. The abbreviation discount reuses the existing
+`SYNONYM_MULTIPLIER = 0.8` (§3.2 rule 3) rather than adding a second constant.
+One constant therefore remains in the blast radius, and the test plan owes it a
+test that goes **red when the constant changes** — verified by perturbing 0.8
+and confirming the failure, not by reading the assertion. A tunable whose test
+passes at every value is not covered.
+
 ### 3.5 Unicode
 
 The test plan names a **Unicode control**, and the current zero-result path
@@ -295,6 +334,14 @@ discovery search path, distinct from the `levenshtein` defect in §4.
 All new matching code operates on `char`s or whole `&str` values and takes **no
 byte-offset slices**, matching the existing glob path (`glob_match_chars`,
 `meta_mcp_helpers.rs:424`, already char-based and Unicode-safe).
+
+This rule has precedent in the same file, which is why it is a rule and not a
+preference: `levenshtein` (`meta_mcp_helpers.rs:47`) sizes its DP rows from
+`b.len()` in **bytes** and then fills them from `b.chars()`, so for any
+multi-byte input it returns `prev[b_len]` — a cell the loop never wrote. Same
+byte/char confusion, different symptom: a wrong number instead of a panic. It is
+filed standalone and is out of scope here (§4) because it is reachable only from
+`did_you_mean`, which no discovery route calls.
 
 ### 3.6 Code Mode globs
 
