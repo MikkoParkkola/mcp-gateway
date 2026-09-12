@@ -77,8 +77,9 @@ fn capacity_01_a_batch_landing_exactly_on_the_slot_limit_imports() {
     let (seed_a_id, kept_a) = existing_task(service.admit_task(task_request(PRINCIPAL, "seed-a")));
     assert_eq!(seed_a_id, "task-seed-a");
     assert_eq!(kept_a, seed_a);
-    let (seed_b_id, kept_b) = existing_task(service.admit_task(task_request(PRINCIPAL, "seed-b")));
-    assert_eq!(seed_b_id, "task-seed-b");
+    let (second_seed_id, kept_b) =
+        existing_task(service.admit_task(task_request(PRINCIPAL, "seed-b")));
+    assert_eq!(second_seed_id, "task-seed-b");
     assert_eq!(kept_b, seed_b);
 
     // The first and last imported records are recoverable by their own keys, so

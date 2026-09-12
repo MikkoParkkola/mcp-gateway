@@ -3685,15 +3685,14 @@ mod tests {
         // Built by the gate itself, not by hand: a hand-made response would
         // only prove that serde skips a field, never that the refusal the
         // gateway actually emits carries it.
-        let marked = meta
-            .handle_tools_call(
-                RequestId::Number(19),
-                "gateway_kill_server",
-                json!({ "server": "row19-sentinel" }),
-                Some("stdio-session"),
-                super::stdio_caller_context(&authorizer, crate::protocol::meta::Era::Legacy),
-            )
-            .await;
+        let marked = Box::pin(meta.handle_tools_call(
+            RequestId::Number(19),
+            "gateway_kill_server",
+            json!({ "server": "row19-sentinel" }),
+            Some("stdio-session"),
+            super::stdio_caller_context(&authorizer, crate::protocol::meta::Era::Legacy),
+        ))
+        .await;
 
         // (b) in-process, the accounting can see it.
         assert!(

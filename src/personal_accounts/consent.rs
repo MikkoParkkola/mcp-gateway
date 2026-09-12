@@ -274,10 +274,22 @@ pub(crate) mod witness {
 
     impl Recording {
         /// A position in the log, so a case can bracket exactly one call.
+        #[expect(
+            clippy::unused_self,
+            reason = "self is the held SERIAL guard: it proves a Recording is alive \
+                      for this call even though the log itself is read through the \
+                      global state() slot, not a field on self"
+        )]
         pub(crate) fn mark(&self) -> usize {
             state().as_ref().map_or(0, |state| state.log.len())
         }
 
+        #[expect(
+            clippy::unused_self,
+            reason = "self is the held SERIAL guard: it proves a Recording is alive \
+                      for this call even though the log itself is read through the \
+                      global state() slot, not a field on self"
+        )]
         pub(crate) fn since(&self, mark: usize) -> Vec<(Phase, u64)> {
             state()
                 .as_ref()
@@ -286,6 +298,12 @@ pub(crate) mod witness {
         }
 
         /// Arm the in-lock park for the next acquisition of the watched store.
+        #[expect(
+            clippy::unused_self,
+            reason = "self is the held SERIAL guard: it proves a Recording is alive \
+                      for this call even though the armed state lives in the global \
+                      state() slot, not a field on self"
+        )]
         pub(crate) fn arm_park(&self) -> Park {
             let (entered_tx, entered_rx) = channel();
             let (release_tx, release_rx) = channel();
@@ -306,6 +324,12 @@ pub(crate) mod witness {
         /// the competitor's own logged arrival, not on a sleep and not on a
         /// guess about the scheduler.
         #[track_caller]
+        #[expect(
+            clippy::unused_self,
+            reason = "self is the held SERIAL guard: it proves a Recording is alive \
+                      for this call even though the log itself is read through the \
+                      global state() slot, not a field on self"
+        )]
         pub(crate) fn wait_for_attempt_since(&self, mark: usize) -> u64 {
             let deadline = Instant::now() + DEADLOCK;
             let mut slot = state();

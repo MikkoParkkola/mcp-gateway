@@ -1816,7 +1816,7 @@ async fn get_oauth_token_without_oauth_is_none_over_cleartext() {
 // `Transport` methods and read the bytes the server received.
 // =========================================================================
 
-/// Bodies a recorder server was POSTed, in arrival order.
+/// Bodies a recorder server was `POSTed`, in arrival order.
 type RecordedBodies = Arc<RwLock<Vec<serde_json::Value>>>;
 
 /// A local server that records every request body and answers an empty result.

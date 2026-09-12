@@ -65,9 +65,16 @@ impl UpstreamRecovery for StubPeer {
     }
 }
 
-/// Recover one seeded working row and return its committed wire projection,
-/// plus the store directory so the bytes on disk can be read back.
-async fn recover(reply: Reply) -> (Value, tempfile::TempDir) {
+/// Seed a fixture store with one row already captured under an upstream
+/// handle, ready for `recover_upstream_read` to settle.
+async fn seed_capturable_task(
+    reply: Reply,
+) -> (
+    Arc<TaskService>,
+    Arc<TaskExecutor>,
+    String,
+    tempfile::TempDir,
+) {
     let directory = tempfile::tempdir().expect("a fixture store root");
     let store_dir = directory.path().join("tasks");
     let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
@@ -131,6 +138,14 @@ async fn recover(reply: Reply) -> (Value, tempfile::TempDir) {
             .await,
         "the row is recoverable only once its handle is durable"
     );
+
+    (service, executor, id, directory)
+}
+
+/// Recover one seeded working row and return its committed wire projection,
+/// plus the store directory so the bytes on disk can be read back.
+async fn recover(reply: Reply) -> (Value, tempfile::TempDir) {
+    let (service, executor, id, directory) = seed_capturable_task(reply).await;
 
     // The gateway a reader would face: the product's own gates, in the mode an
     // operator enables to act on a finding rather than annotate it.

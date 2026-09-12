@@ -16,7 +16,7 @@
 //!   `cargo test --features metrics --test message_signing_nonce_metrics_export`
 //!
 //! Scope, stated so the name cannot drift from what is proven: `NonceStore`'s
-//! limits (100_000 global, 10_000 per principal) are not settable through the
+//! limits (`100_000` global, `10_000` per principal) are not settable through the
 //! public API, so the `principal_capacity` and `global_capacity` reasons are
 //! covered by the unit half only. This binary drives admission, replay and
 //! invalid through the real public entry point — no hand-emitted product

@@ -5,6 +5,7 @@ use super::Config;
 use base64::Engine as _;
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -85,7 +86,7 @@ fn enabled_accounts_block_survives_evaluation_without_materializing_keys_or_dirs
     );
     assert_eq!(accounts["current_key_id"], "current");
     assert_eq!(accounts["limits"]["store_entries"], 10000);
-    assert_eq!(accounts["limits"]["authority_bytes"], 16777216);
+    assert_eq!(accounts["limits"]["authority_bytes"], 16_777_216);
     assert_eq!(accounts["keys"]["current"], format!("env:{CURRENT_VAR}"));
     assert_eq!(accounts["keys"]["retired"], format!("env:{RETIRED_VAR}"));
     let serialized = dumped.to_string();
@@ -212,7 +213,7 @@ fn partial_accounts_limits_preserve_unspecified_field_defaults() {
         "{fixture_keys}  limits:\n    store_entries: 5000\n"
     ));
     assert_eq!(store_only["store_entries"], 5000);
-    assert_eq!(store_only["authority_bytes"], 16777216);
+    assert_eq!(store_only["authority_bytes"], 16_777_216);
 
     let authority_only = load_limits(&format!(
         "{fixture_keys}  limits:\n    authority_bytes: 65536\n"
@@ -222,7 +223,7 @@ fn partial_accounts_limits_preserve_unspecified_field_defaults() {
 
     let omitted = load_limits(&fixture_keys);
     assert_eq!(omitted["store_entries"], 10000);
-    assert_eq!(omitted["authority_bytes"], 16777216);
+    assert_eq!(omitted["authority_bytes"], 16_777_216);
 
     let (bad_path, bad_store, bad_authority) = write_sample_accounts(
         dir,
@@ -332,9 +333,10 @@ fn legacy_secret_refs_and_port_zero_survive_alongside_account_key_references() {
 
     let env_path = write_env(dir);
     let mut env_body = fs::read_to_string(&env_path).unwrap();
-    env_body.push_str(&format!(
+    let _ = write!(
+        env_body,
         "{BEARER_VAR}={BEARER_VALUE}\n{API_KEY_VAR}={API_KEY_VALUE}\n{AGENT_SECRET_VAR}={AGENT_SECRET_VALUE}\n{ADMIN_TOKEN_VAR}={ADMIN_TOKEN_VALUE}\n"
-    ));
+    );
     fs::write(&env_path, env_body).unwrap();
 
     let config_path = write_yaml(

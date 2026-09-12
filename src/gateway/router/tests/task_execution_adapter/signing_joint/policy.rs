@@ -174,6 +174,10 @@ async fn joint_d_valid_attestation_dispatches_once_and_validates_the_production_
 /// D2 — predecessor admitted, durable Dispatched mark, then rotate (zero grace)
 /// before current policy recheck. Predecessor must not reach the backend.
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end joint-rotation scenario read as a single sequence"
+)]
 async fn joint_d_rotated_predecessor_refused_after_dispatched_mark_successor_dispatches() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, store, validator, signer) = attested_state(&mock).await;

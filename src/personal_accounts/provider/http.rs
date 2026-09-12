@@ -231,7 +231,7 @@ mod embedded_userinfo_guard_tests {
     const USER: &str = "not-a-real-user";
     const PASS: &str = "not-a-real-secret";
 
-    fn is_unacceptable(result: &Result<(), HttpError>) -> bool {
+    fn is_unacceptable(result: Result<(), HttpError>) -> bool {
         matches!(
             result,
             Err(HttpError::Terminal(TerminalFailure::Unacceptable))
@@ -255,7 +255,7 @@ mod embedded_userinfo_guard_tests {
         let url = format!("https://{USER}:{PASS}@accounts.example.com/token");
         let result = guard(&url);
         assert!(
-            is_unacceptable(&result),
+            is_unacceptable(result),
             "embedded user:pass must be Terminal(Unacceptable), not a DNS/SSRF refusal"
         );
     }
@@ -263,12 +263,12 @@ mod embedded_userinfo_guard_tests {
     #[test]
     fn username_only_is_terminal_unacceptable() {
         let url = format!("https://{USER}@accounts.example.com/token");
-        assert!(is_unacceptable(&guard(&url)));
+        assert!(is_unacceptable(guard(&url)));
     }
 
     #[test]
     fn empty_username_with_password_is_terminal_unacceptable() {
         let url = format!("https://:{PASS}@accounts.example.com/token");
-        assert!(is_unacceptable(&guard(&url)));
+        assert!(is_unacceptable(guard(&url)));
     }
 }

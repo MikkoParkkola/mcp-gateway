@@ -86,6 +86,10 @@ pub fn fixture_script() -> PathBuf {
 /// branch of `rustls-platform-verifier`; on Apple targets the verifier asks the
 /// Security framework instead and honours no such variable. Rather than assert
 /// an override the dependency does not implement, this says so and stops.
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "cfg!(...) is deliberately a compile-time constant here: it gates this test to the one target family where SSL_CERT_FILE is honoured, not a runtime condition"
+)]
 pub fn require_supported_trust_override() {
     assert!(
         cfg!(all(unix, not(target_vendor = "apple"))),

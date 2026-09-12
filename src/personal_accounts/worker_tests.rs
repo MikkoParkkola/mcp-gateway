@@ -156,10 +156,10 @@ impl<F: Future> Future for FirstPending<F> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let polled = this.inner.as_mut().poll(cx);
-        if polled.is_pending() {
-            if let Some(signal) = this.signal.take() {
-                let _ = signal.send(());
-            }
+        if polled.is_pending()
+            && let Some(signal) = this.signal.take()
+        {
+            let _ = signal.send(());
         }
         polled
     }
@@ -176,12 +176,16 @@ fn first_pending<F: Future>(inner: F) -> (FirstPending<F>, oneshot::Receiver<()>
     )
 }
 
+/// Per-account rendezvous: the signal a held call's poller fires on entry, and
+/// the receiver that releases it.
+type ProviderGates = Mutex<HashMap<String, (oneshot::Sender<()>, oneshot::Receiver<()>)>>;
+
 /// Shared provider state the test keeps a handle to. The `CustodyHandle` owns
 /// the `RefreshProvider`; the test owns this.
 #[derive(Default)]
 struct ProviderState {
     calls: Mutex<Vec<String>>,
-    gates: Mutex<HashMap<String, (oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+    gates: ProviderGates,
 }
 
 impl ProviderState {

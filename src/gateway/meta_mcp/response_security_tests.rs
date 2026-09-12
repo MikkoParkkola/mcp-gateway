@@ -107,7 +107,7 @@ fn firewall_response_typed_refusal_has_exact_rpc_code() {
 }
 
 /// MIK-7407.RESPONSE.4; FWR-20 projection component. The companion real
-/// enforce_firewall_challenge case must originate this Error from the engine.
+/// `enforce_firewall_challenge` case must originate this Error from the engine.
 #[test]
 fn firewall_response_typed_projector_sets_marker_and_preserves_safe_envelope() {
     let response =

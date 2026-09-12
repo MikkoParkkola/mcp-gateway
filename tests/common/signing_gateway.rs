@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Real gateway/backend fixture shared by signing and response-firewall tests.
 //!
-//! No AppState or signer is installed by this fixture: the shipped binary reads
+//! No `AppState` or signer is installed by this fixture: the shipped binary reads
 //! its isolated YAML and runs its production constructor.
 
 use std::path::Path;
@@ -163,7 +163,7 @@ impl HttpGateway {
     }
 
     /// Run the production CLI with explicit child-local fixture environment.
-    /// Overrides follow env_clear; they never change the test runner's process.
+    /// Overrides follow `env_clear`; they never change the test runner's process.
     pub async fn start_with_env(config: Value, env: &[(&str, &std::ffi::OsStr)]) -> Self {
         let mut config = config;
         let directory = tempfile::tempdir().expect("gateway directory");
@@ -275,6 +275,11 @@ impl HttpGateway {
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the json! macro clones its inputs regardless, so borrowing here saves \
+              nothing and only forces an & at every call site"
+)]
 pub fn invoke(id: Value, nonce: Value, arguments: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
         "name": "gateway_invoke", "arguments": {
