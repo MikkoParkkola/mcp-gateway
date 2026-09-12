@@ -36,8 +36,20 @@ const QUERY: &str = "zebracorn";
 /// so loading one capability per directory, sequentially, fixes the collection
 /// order that invariant B has to survive: `caps[0]` is collected first.
 async fn capability_backend(caps: &[(&str, &str)]) -> (Arc<CapabilityBackend>, Vec<TempDir>) {
+    capability_backend_named(CAP_BACKEND, caps).await
+}
+
+/// As `capability_backend`, with the backend's own name under test control.
+///
+/// Code Mode admits a tool when `"{server}:{tool}"` contains the query
+/// (`search.rs:186`), so the backend name decides whether zero-relevance tools
+/// enter the candidate set at all.
+async fn capability_backend_named(
+    backend_name: &str,
+    caps: &[(&str, &str)],
+) -> (Arc<CapabilityBackend>, Vec<TempDir>) {
     let backend = Arc::new(CapabilityBackend::new(
-        CAP_BACKEND,
+        backend_name,
         Arc::new(crate::capability::CapabilityExecutor::new()),
     ));
     let mut dirs = Vec::new();
@@ -279,19 +291,24 @@ const USAGE_FIXTURES: &[(&str, &str)] = &[
 /// usage factor's reach: `log2(10^12) * 0.15` is about 6.0, so a multiplicative
 /// boost of ~7x is applied to whatever relevance the tool scored.
 fn ranker_with_heavy_usage(tool: &str) -> Arc<SearchRanker> {
+    ranker_with_heavy_usage_on(CAP_BACKEND, tool)
+}
+
+/// As `ranker_with_heavy_usage`, for a backend other than `CAP_BACKEND`.
+fn ranker_with_heavy_usage_on(server: &str, tool: &str) -> Arc<SearchRanker> {
     let ranker = Arc::new(SearchRanker::new());
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("usage.json");
     std::fs::write(
         &path,
-        format!(r#"[{{"server":"{CAP_BACKEND}","tool":"{tool}","count":1000000000000}}]"#),
+        format!(r#"[{{"server":"{server}","tool":"{tool}","count":1000000000000}}]"#),
     )
     .unwrap();
     ranker.load(&path).unwrap();
     // Guards the two tests below: a load that silently parsed nothing would
     // leave the count at zero and make "usage did not promote it" vacuous.
     assert_eq!(
-        ranker.usage_count(CAP_BACKEND, tool),
+        ranker.usage_count(server, tool),
         1_000_000_000_000,
         "fixture usage count failed to load"
     );
@@ -434,5 +451,181 @@ async fn code_mode_ranks_before_truncating() {
         vec![format!("{CAP_BACKEND}:{QUERY}")],
         "the single surviving Code Mode match must be the highest scoring one, \
          not the first collected (Code Mode qualifies names as server:tool)"
+    );
+}
+
+/// A backend whose *name* contains `QUERY`, so Code Mode admits every tool on
+/// it through the `server:tool` reference match at `search.rs:186`.
+const QUERY_NAMED_BACKEND: &str = "zebracorn_hub";
+
+/// Fixtures for the zero-relevance case: `sprocket_sorter` shares no token with
+/// `QUERY`, so `score_text_relevance` gives it 0.0, yet Code Mode admits it
+/// because the backend name matches.
+const ZERO_RELEVANCE_FIXTURES: &[(&str, &str)] = &[
+    ("sprocket_sorter", "sorting sprockets by colour"),
+    ("weak_match", "a zebracorn adjacent helper"),
+];
+
+/// The poisoned-feedback pairing the criterion's test row specifies: a
+/// heavily used tool competing against an allowed relevant one under a low
+/// limit. `weak_match` carries 10^12 uses, which is enough to beat the exact
+/// name match on score alone — the control below proves it.
+fn poisoned_profile(deny_weak: bool) -> RoutingProfileConfig {
+    RoutingProfileConfig {
+        description: "allows the backend, denies one tool".to_string(),
+        deny_tools: deny_weak.then(|| vec!["weak_match".to_string()]),
+        ..Default::default()
+    }
+}
+
+/// CONTROL for the two tests below — the poison has to actually work.
+///
+/// Without a denial, 10^12 uses lift `weak_match` (relevance 2.0) to
+/// `2.0 * (1 + log2(10^12 + 1) * 0.15)`, about 13.9, above the exact-name
+/// match's 10.0. If this test ever goes green the usage boost has stopped
+/// being potent enough to promote anything, and the two denial tests below
+/// would pass whether or not authorization ran.
+#[tokio::test]
+async fn heavy_usage_outranks_the_exact_match_when_nothing_is_denied() {
+    let (meta, _dirs) = meta_with_ranker(
+        RANKING_FIXTURES,
+        registry_with_default("open", poisoned_profile(false)),
+        ranker_with_heavy_usage("weak_match"),
+    )
+    .await;
+
+    let response = meta
+        .search_tools(&json!({ "query": QUERY, "limit": 1 }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        vec!["weak_match".to_string()],
+        "the control has stopped controlling: usage feedback no longer promotes \
+         a weaker match, so the denial tests below prove nothing"
+    );
+}
+
+/// USAGE CLAUSE, the criterion's own pairing — classic route.
+///
+/// A forbidden heavily-used tool against an allowed relevant one, `limit` 1.
+/// The control above shows the forbidden tool wins on score, so the allowed
+/// tool can only survive because `profile.tool_allowed` (`search.rs:301`)
+/// removed its competitor before ranking.
+#[tokio::test]
+async fn a_forbidden_heavily_used_tool_loses_to_an_allowed_relevant_one() {
+    let (meta, _dirs) = meta_with_ranker(
+        RANKING_FIXTURES,
+        registry_with_default("locked", poisoned_profile(true)),
+        ranker_with_heavy_usage("weak_match"),
+    )
+    .await;
+
+    let response = meta
+        .search_tools(&json!({ "query": QUERY, "limit": 1 }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response["total_available"], 1,
+        "the forbidden tool must not be counted as a candidate"
+    );
+    assert_eq!(
+        tool_names(&response),
+        vec![QUERY.to_string()],
+        "an allowed relevant tool must outlast a forbidden tool with 10^12 uses"
+    );
+}
+
+/// USAGE CLAUSE, the criterion's own pairing — Code Mode route.
+#[tokio::test]
+async fn code_mode_forbidden_heavily_used_tool_loses_to_an_allowed_one() {
+    let (cap_backend, _dirs) = capability_backend(RANKING_FIXTURES).await;
+    let meta = MetaMcp::with_features(
+        Arc::new(BackendRegistry::new()),
+        None,
+        None,
+        Some(ranker_with_heavy_usage("weak_match")),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(true)
+    .with_profile_registry(registry_with_default("locked", poisoned_profile(true)));
+    meta.set_capabilities(cap_backend);
+
+    let response = meta
+        .code_mode_search(&json!({ "query": QUERY, "limit": 1 }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        vec![format!("{CAP_BACKEND}:{QUERY}")],
+        "an allowed relevant tool must outlast a forbidden tool with 10^12 uses \
+         on the Code Mode route too"
+    );
+}
+
+/// USAGE CLAUSE, the form of the boost — `src/ranking/mod.rs:371`.
+///
+/// The three tests above would all stay green if the usage factor became
+/// additive rather than multiplicative, because every tool they score has
+/// non-zero relevance. This one does not: `sprocket_sorter` is admitted by the
+/// Code Mode backend-name match while scoring 0.0 relevance, so
+/// `0.0 * (1 + factor)` keeps it at zero and `weak_match` survives `limit` 1.
+/// Under `relevance + factor` the zero-relevance tool would score about 6.0
+/// against `weak_match`'s 2.0 and take the slot. This is the test that pins
+/// "usage feedback cannot promote an irrelevant tool" to the construct that
+/// makes it true.
+#[tokio::test]
+async fn a_zero_relevance_candidate_cannot_be_lifted_by_usage() {
+    let (cap_backend, _dirs) =
+        capability_backend_named(QUERY_NAMED_BACKEND, ZERO_RELEVANCE_FIXTURES).await;
+    let meta = MetaMcp::with_features(
+        Arc::new(BackendRegistry::new()),
+        None,
+        None,
+        Some(ranker_with_heavy_usage_on(
+            QUERY_NAMED_BACKEND,
+            "sprocket_sorter",
+        )),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(true)
+    .with_profile_registry(registry_with_default(
+        "open",
+        RoutingProfileConfig {
+            description: "no backend or tool restrictions".to_string(),
+            ..Default::default()
+        },
+    ));
+    meta.set_capabilities(cap_backend);
+
+    let all = meta
+        .code_mode_search(&json!({ "query": QUERY }), None)
+        .await
+        .unwrap();
+    // Guards the assertion below: if the backend-name match stopped admitting
+    // the zero-relevance tool, the test would pass by absence rather than by
+    // the multiplicative form holding it at zero.
+    assert!(
+        tool_names(&all)
+            .iter()
+            .any(|n| n == &format!("{QUERY_NAMED_BACKEND}:sprocket_sorter")),
+        "fixture premise broken: the zero-relevance tool is no longer admitted, \
+         so this test cannot observe what it claims: got {:?}",
+        tool_names(&all)
+    );
+
+    let response = meta
+        .code_mode_search(&json!({ "query": QUERY, "limit": 1 }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        vec![format!("{QUERY_NAMED_BACKEND}:weak_match")],
+        "a zero-relevance candidate must stay at zero however heavily used: the \
+         usage factor is multiplicative, not additive"
     );
 }
