@@ -78,10 +78,16 @@ function headers() {
   return h;
 }
 
+// Request ids only have to be unique within one connection, and the runtime's
+// per-iteration counter does not exist during setup(), where the handshake is
+// rehearsed. A plain counter is defined everywhere the script runs.
+let rpcSeq = 0;
+
 function rpc(method, params, trend) {
+  rpcSeq += 1;
   const body = JSON.stringify({
     jsonrpc: "2.0",
-    id: `${__VU}-${__ITER}-${method}`,
+    id: `${rpcSeq}-${method}`,
     method,
     params,
   });
