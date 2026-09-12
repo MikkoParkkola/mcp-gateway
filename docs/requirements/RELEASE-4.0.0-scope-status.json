@@ -3,21 +3,29 @@
   "criteria": [
     {
       "id": "GH462.CONFIG.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "tests/gh462_config_preservation.rs"
+      ],
+      "note": "Graded 2026-09-12. cargo test --features webui,config-export,firewall --test gh462_config_preservation: test result: ok. 44 passed; 0 failed; 0 ignored. Clause coverage: invalid edit refused and original bytes unchanged by gh462_rejected_mutation_leaves_valid_config_exactly_unchanged (tests/gh462_config_preservation.rs:167); missing versus valid versus invalid distinguished by gh462_shared_loader_distinguishes_missing_valid_and_invalid_files (:293); first setup refuses an invalid config by gh462_setup_refuses_invalid_config_before_empty_discovery (:621) with the valid-config positive control gh462_valid_config_control_reaches_empty_discovery (:631)."
     },
     {
       "id": "GH452.SESSION.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "tests/gh452_session_owner.rs",
+        "docs/release/gh452-session-ownership-evidence.json"
+      ],
+      "note": "Graded 2026-09-12. cargo test --features webui,config-export,firewall --test gh452_session_owner: test result: ok. 11 passed; 0 failed; 0 ignored. Clause coverage: non-disclosure by gh452_session_3_foreign_and_unknown_are_indistinguishable (tests/gh452_session_owner.rs:307); ownership enforcement by gh452_session_2_owner_deletes_post_created_session_once (:267) and gh452_session_7_public_session_rejects_authenticated_nonowner (:476); the surviving-session positive control by gh452_session_1_foreign_delete_preserves_original_stream_and_calls (:249)."
     },
     {
       "id": "MIK-7377.SIGNING.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "tests/message_signing_delivery.rs",
+        "tests/message_signing_config.rs"
+      ],
+      "note": "Graded 2026-09-12. cargo test --features webui,config-export,firewall --test message_signing_config --test message_signing_delivery: test result: ok. 14 passed; 0 failed; 0 ignored and test result: ok. 5 passed; 0 failed; 0 ignored. signing_1_real_http_startup_installs_the_configured_signer (tests/message_signing_delivery.rs:59) starts a real HTTP gateway with a valid key, forces real backend dispatch and inspects the emitted _signature: version 2, nonce, key_id, hmac-sha256 alg, delivery-bounded timestamp and a 64-char lowercase hex MAC. The produces-validated-signatures branch is therefore proven, not the rejection fallback. Invalid-key rejection by signing_2_enabled_config_rejects_short_and_zero_keys (:39); disabled baseline retains unsigned delivery by signing_6_disabled_dormant_secret_preserves_unsigned_calls (:160); missing-reference refusal without leak by signing_config_missing_current_reference_is_refused_without_leak (tests/message_signing_config.rs:211)."
     },
     {
       "id": "MIK-7334.CATALOGUE.1",
@@ -51,9 +59,13 @@
     },
     {
       "id": "MIK-7311.LIFECYCLE.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "tests/mik_7272_task_1_acs.rs",
+        "tests/task_expiry_http_lifecycle.rs",
+        "docs/requirements/scope-grading-2026-09-12.md"
+      ],
+      "note": "Graded 2026-09-12. cargo test --test mik_7272_task_1_acs: test result: ok. 20 passed; 0 failed; 0 ignored; and cargo test --test task_expiry_http_lifecycle: test result: ok. 1 passed; 0 failed; 0 ignored. Clause coverage: public-route dispatch by dispatch::ac_task_1_1_a_created_task_id_resolves_immediately; polling payloads by ac_task_1_2_each_status_carries_its_own_payload_and_no_other; input by dispatch::ac_task_1_3_an_accepted_update_acknowledges_with_an_empty_result and dispatch::ac_task_1_3_an_input_response_with_no_outstanding_request_is_refused; cooperative cancellation gated to the pinned revision by ac_task_1_5_tasks_cancel_is_gated_as_a_2026_07_28_method; terminal outcomes by ac_task_1_6_a_failed_task_carries_an_error_object_not_a_string and ac_task_1_6_an_is_error_tool_result_is_completed_and_not_failed; extension negotiation by capabilities::ac_task_1_10_initialize_advertises_the_tasks_extension_to_a_2026_peer; expiry by a_configured_expiry_interval_reaps_a_real_task_and_shutdown_releases_the_store."
     },
     {
       "id": "MIK-7311.LIFECYCLE.2",
@@ -63,15 +75,21 @@
     },
     {
       "id": "MIK-7311.LIFECYCLE.3",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "tests/task_upstream_recovery.rs",
+        "docs/requirements/scope-grading-2026-09-12.md"
+      ],
+      "note": "Graded 2026-09-12. cargo test --test task_upstream_recovery: test result: ok. 10 passed; 0 failed; 0 ignored. Clause coverage: a returned handle resolves after restart within the retention window and only for its owner by a_durable_handle_survives_reopen_and_only_its_owner_reads_it; durable identity and descriptor by a_captured_handle_is_recorded_at_version_three_with_its_descriptor; pre-read refusal without a task id by a_read_without_a_task_id_is_refused_before_anything_else."
     },
     {
       "id": "MIK-7311.LIFECYCLE.4",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "tests/task_upstream_recovery.rs",
+        "src/gateway/task_service/execution/upstream.rs"
+      ],
+      "note": "Graded 2026-09-12. cargo test --no-fail-fast --features webui,config-export,firewall --test task_upstream_recovery: test result: ok. 10 passed; 0 failed; 0 ignored; finished in 31.82s. The suite performs a real process restart (Gateway::start, terminate, restart on the same port with a second log). Clause coverage: no silent replay by the_original_operation_is_submitted_once_and_never_resubmitted (tests/task_upstream_recovery.rs:122), which asserts a restart and three reads may not re-run the operation; recovery of a live upstream job by unavailable_then_live_then_complete_reuses_the_one_handle (:236); durable owner-checked identity across restart by a_durable_handle_survives_reopen_and_only_its_owner_reads_it (:176); the explicit interrupted/unknown execution outcome by with_no_configured_adapter_the_conservative_branch_is_unchanged (:358), which reads the task back after restart and asserts the row is settled (status completed) and that the answer carries an executionOutcome field rather than a guessed result, with the durable record holding no upstream handle; refusal-before-the-wire when trust is withdrawn by an_adapter_untrusted_at_restart_causes_zero_queries (:412); envelope confusion excluded by a_gateway_envelope_is_never_mistaken_for_an_upstream_job (:511)."
     },
     {
       "id": "MIK-7311.LIFECYCLE.5",
@@ -81,9 +99,14 @@
     },
     {
       "id": "MIK-6744.STORE.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "src/personal_accounts/store_tests.rs",
+        "src/personal_accounts/service_refresh_tests.rs",
+        "src/personal_accounts/vault.rs",
+        "docs/requirements/scope-grading-2026-09-12.md"
+      ],
+      "note": "Graded 2026-09-12. cargo test --lib personal_accounts::: test result: ok. 157 passed; 0 failed; 1 ignored; 4576 filtered out. Clause coverage by module inside that passing set: principal/backend/resource keying plus load and save in src/personal_accounts/store_tests.rs; refresh in service_refresh_tests.rs; at-rest protection in vault.rs and storage.rs; wire bounds in wire_bound_tests.rs; no silent loss under crash and repair in crash_tests.rs, repair_tests.rs and fence_tests.rs. The single ignored test in the module was not identified and this verdict does not rest on it. One integration test in a neighbouring file is red on this machine: init_store_creates_an_empty_store_and_a_second_run_refuses_without_touching_it panics at tests/accounts_init_store.rs:117 with \"personal account storage configuration is invalid\", and the panic is on the FIRST run, so the test never reaches the never-replaced assertion. It reproduces unchanged on the base branch in a clean worktree with a private build directory, which places it before this work rather than in it, and CI runs cargo test --all-features (.github/workflows/ci.yml:199) green on this branch. Treated as a macOS-local environment defect, not evidence against this row. It is filed and must be triaged before release."
     },
     {
       "id": "MIK-6744.STORE.2",
@@ -117,9 +140,13 @@
     },
     {
       "id": "MIK-3274.RANKING.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "src/ranking/tests.rs",
+        "src/ranking/scoring.rs",
+        "docs/requirements/scope-grading-2026-09-12.md"
+      ],
+      "note": "Graded 2026-09-12. cargo test --lib ranking::: test result: ok. 66 passed; 0 failed; 0 ignored; 4668 filtered out. Implementation in src/ranking/mod.rs and src/ranking/scoring.rs; abbreviation and word-boundary discovery, exact-identifier reliability and Code Mode glob reliability are all inside that passing set. Graded by running the module, not by counting attributes."
     },
     {
       "id": "MIK-3274.RANKING.2",
@@ -199,7 +226,7 @@
     {
       "id": "reference_personal_account_journey",
       "status": "resolved",
-      "selection": "Open WebUI on Spark \u2192 gateway \u2192 Google Workspace",
+      "selection": "Open WebUI on Spark → gateway → Google Workspace",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md"
       ]
