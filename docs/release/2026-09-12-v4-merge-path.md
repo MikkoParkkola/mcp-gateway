@@ -225,3 +225,44 @@ cluster: **if `main` constructs the symbol and nothing constructs it after the m
 merge**. The cluster's symbols are zero-caller on *both* sides; a merge casualty is zero-caller
 on exactly one. The survivor check therefore runs before the merge is committed — afterwards,
 finding one casualty means bisecting a 127-file commit.
+
+## 10. Five of the seven conflicting PRs carry no net content
+
+Rebased onto integration at `825f3be1`, on throwaway local branches with nothing pushed, the
+conflicting half of the queue collapses:
+
+| PR | conflicts resolved | own commits surviving | result |
+|---|---|---|---|
+| 501, 504, 507, 513, 510 | 7, 6, 7, 7, 1 | 0 | tree identical to integration |
+| 499 | 0 (rebased clean) | 1 | 2 files, +221 lines, tests only |
+
+Verified at source rather than reported: `rebase/501`, `/504`, `/507`, `/510` and `/513` all
+resolve to tree `e5a48218`, which is integration's own tree. One tree, five branches.
+
+This is not a resolution that produced a no-op. Git dropped 7 of the 15 commits itself, by
+patch-id, before any conflict was touched — their contents were already upstream. The 8 that
+were resolved came out empty because the regions git auto-merged were already present too: a
+novel line outside a conflict region would have applied cleanly and kept its commit alive.
+Judgment only ever chose between conflicted hunks, and in each one integration held the newer
+version rather than merely a different one.
+
+Consequence for the ledger: five open PRs are bookkeeping, not work. They close as
+already-landed. Closing beats force-pushing an empty branch, which would leave five PRs showing
+a zero diff, and four of the refs have live worktrees on them.
+
+### Taking the PR's side would have reverted three hardening decisions
+
+Each of these reads as an *addition* in the diff, which is what makes it dangerous — the side
+with more code is the older intent:
+
+- `src/personal_accounts/config/adapters.rs` — integration deliberately removed
+  `#[derive(Debug)]` from `AdapterConfig` and `GatewayCredential`, which hold the literal
+  bearer token. `#507` and `#513` add it back.
+- `src/personal_accounts/mod.rs` — integration replaced the derived `Debug` on
+  `InitializedStore` with a redacting one. `#510` restores the derive.
+- `src/gateway/openwebui_adapter.rs` — integration checks `allowed_api_key_names` per
+  installation across candidates sharing a header; `#513`'s older version checks once.
+
+Nothing in a conflict marker says which side is newer intent. The check that settles it is
+confirming the surviving side still carries the control — integration keeps the
+per-installation check at `openwebui_adapter.rs:343` — before dropping the other.
