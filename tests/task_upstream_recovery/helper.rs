@@ -8,7 +8,9 @@
 //! FastMCP + Docket proof lives in `task_upstream_recovery_sdk.rs` and runs the
 //! actual SDK; nothing in this file is offered as evidence about the SDK.
 
-// One fixture, two targets: each uses a subset of it.
+// One consumer: `tests/task_upstream_recovery.rs`. Scaffolding it does not
+// drive yet is marked `expect(dead_code)` so the annotation self-deletes
+// the moment a case starts using the item.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -29,6 +31,10 @@ pub const PROTOCOL_VERSION: &str = "2026-07-28";
 pub const TASKS_EXTENSION: &str = "io.modelcontextprotocol/tasks";
 pub const CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
 pub const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+#[expect(
+    dead_code,
+    reason = "read only by tasks_get_attested, which no case in this target drives yet"
+)]
 pub const RECOVERY_META: &str = "io.mcp-gateway/recovery";
 
 pub const BACKEND: &str = "upstream";
@@ -47,6 +53,10 @@ pub enum Upstream {
     Working,
     Unavailable,
     Completed,
+    #[expect(
+        dead_code,
+        reason = "peer answer state; no case in this target drives the peer to a failed task"
+    )]
     Failed,
 }
 
@@ -84,6 +94,10 @@ impl Peer {
         *self.state.lock() = next;
     }
 
+    #[expect(
+        dead_code,
+        reason = "peer payload override; no case in this target sets a custom payload yet"
+    )]
     pub fn set_payload(&self, payload: Value) {
         *self.payload.lock() = payload;
     }
@@ -327,6 +341,10 @@ pub fn free_port() -> u16 {
 
 /// Every durable record body, parsed. The store is the assertion surface for
 /// the handle/marker/version table.
+#[expect(
+    dead_code,
+    reason = "store assertion surface; no case in this target reads the records yet"
+)]
 pub fn durable_records(root: &Path) -> Vec<Value> {
     let Ok(entries) = std::fs::read_dir(store_dir(root)) else {
         return Vec::new();
@@ -558,6 +576,10 @@ pub fn tasks_get(id: i64, task_id: &str) -> Value {
 
 /// The same read, carrying a fresh attestation token in the namespaced field
 /// the addendum defines. Never persisted, never reused.
+#[expect(
+    dead_code,
+    reason = "attested-recovery read fixture; no case in this target drives it yet"
+)]
 pub fn tasks_get_attested(id: i64, task_id: &str, token: &str) -> Value {
     let mut body = tasks_get(id, task_id);
     body["params"]["_meta"][RECOVERY_META] = json!({ "attestation": token });
