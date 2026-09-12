@@ -25,9 +25,17 @@
 //!
 //! - **Elicitation supported**: the client receives an `elicitation/create`
 //!   message; the call is aborted unless the client responds `"accept"`.
-//! - **Elicitation not supported / no session**: the action proceeds after a
-//!   `WARN` log entry.  This matches the MCP spec guidance that servers MUST NOT
-//!   break when a client omits optional capabilities.
+//! - **Elicitation not supported / no session**: the two eras answer
+//!   differently, and this fork is what the rest of the module turns on. A
+//!   **modern** request is REFUSED: the caller carries
+//!   [`ConfirmationPolicy::for_modern`], which is [`ConfirmationPolicy::REFUSE`],
+//!   and the gate returns JSON-RPC `-32001` without running the tool. A
+//!   **legacy** request PROCEEDS after a `WARN` log entry
+//!   ([`ConfirmationPolicy::for_legacy`]), unchanged — a 2025 client that never
+//!   declared elicitation has been served that way for the life of the gateway,
+//!   and that matches the MCP spec guidance that servers MUST NOT break when a
+//!   client omits optional capabilities. Which era a request belongs to is
+//!   decided at the edge that can see it, not here.
 //!
 //! # Usage
 //!
@@ -35,7 +43,9 @@
 //! match require_destructive_confirmation(&proxy, session_id, "kill server 'payments'").await {
 //!     ConfirmationOutcome::Confirmed => { /* execute */ }
 //!     ConfirmationOutcome::Declined  => return /* abort, surface denial */ ,
-//!     ConfirmationOutcome::Unsupported => { /* proceed with warning already logged */ }
+//!     // Nobody could be asked. Refuse or proceed is the CALLER's decision,
+//!     // taken from the era's ConfirmationPolicy; the WARN is logged either way.
+//!     ConfirmationOutcome::Unsupported => { /* consult ConfirmationPolicy */ }
 //! }
 //! ```
 
@@ -60,7 +70,9 @@ pub enum ConfirmationOutcome {
     /// The operator declined or cancelled; abort execution.
     Declined,
     /// Elicitation could not be delivered (no session, timeout, transport
-    /// failure).  The caller should proceed with a warning already emitted.
+    /// failure).  The warning is already emitted; whether the call then
+    /// proceeds is the caller's decision, taken from [`ConfirmationPolicy`] —
+    /// a legacy request proceeds, a modern one is refused.
     Unsupported,
 }
 

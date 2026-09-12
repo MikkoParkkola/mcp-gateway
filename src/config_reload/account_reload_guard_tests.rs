@@ -77,6 +77,7 @@ fn config(reference: Option<&str>, id: &str, descriptor: AccountDescriptor) -> C
     Config {
         backends,
         accounts: Some(AccountsConfig {
+            adapters: Vec::new(),
             schema_version: "accounts.v1".to_string(),
             enabled: true,
             deployment: "single_process".to_string(),

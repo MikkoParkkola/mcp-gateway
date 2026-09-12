@@ -4,6 +4,37 @@ Six lanes asked for rulings on the same day. Each is recorded here because a rul
 delivered only to a mailbox reaches one agent; the lanes that inherit the consequence
 read the repository. Each ruling names what was verified, at source, before it was made.
 
+Three lanes in one day asked for a ruling on a section that was already ruled. That is a
+defect in this file, not in those lanes: a document nobody can search is a document nobody
+reads twice. Find the question below before asking it.
+
+| # | lane | the question it answers |
+|---|---|---|
+| R1 | `bridge-mrtr7` | can a mid-exchange refusal strand a pending sample? (no — `WIRE.5` stands) |
+| R2 | `sub4-idempotency` | does the replay cache keep a config gate? (no — enabled unconditionally) |
+| R3 | `control4-lifecycle` | wire the lifecycle reaper or delete it? |
+| R4 | `confirm-gate` | which lane owns `CONFIRM.2`, and is the seam note still written? |
+| R5 | `envelope-meta` | may phase 2 start on a tree holding another lane's dirty files? |
+| R6 | `ext1-otel1` | can `SCHEMA.1c` close without adding a runtime dependency? |
+| R7 | `sub4-idempotency` | who repairs a replay path that is already live? |
+| R8 | `bridge-mrtr7` | is `WIRE.5` narrowed by per-round gating? (no) |
+| R8a | `bridge-mrtr7` | which `DeliveryError` variant a silent client produces — `TimedOut`, not `Deadline` |
+| R9 | `control4-lifecycle` | how does the reaper reach its collaborator? (parameter, not global) |
+| R10 | `confirm-gate` | rewrite a commit contaminated by a peer's file? (no — `CONFIRM.1a` says which PARTIAL) |
+| R11 | `envelope-meta` | is a third review round owed? (no) |
+| R12 | `control4-lifecycle` | may reaper wiring edit `src/gateway/streaming.rs`? (U3 granted) |
+| R13 | team lead | the `$ref` criteria for MIK-7414 were mis-stated, and are amended here |
+| R14 | release | when does the DoD functional pass run, and who owns it? |
+| R15 | any | a stale comment a ticket *cites* has a consumer, and gets fixed |
+| R16 | `envelope-meta` | which package owns an uncommitted criteria row? (E) |
+| R17 | any | who owns a `cargo fmt` failure? (the commit that introduced it) |
+| R18 | package F | is the soak on the release critical path? (no — but a FAILING run is §11) |
+| R19 | package F | when is the benchmark candidate pinned, and is a rehearsal discarded? |
+| R20 | package F | is rustc 1.98.1 against a 1.98.0 pin a void run? (no) |
+| R21 | `bridge-mrtr7` | `BRIDGE.4` aggregate expiry is `Deadline`; the reason is attribution |
+| R22 | `bridge-mrtr7` | `WIRE.5` is ruled twice; a residual is stated as one sentence |
+| R23 | `ext1-otel1` | package E's `$anchor` work: one ticket, one observation, neither built for 4.0.0 |
+
 ## R1 — `bridge-mrtr7`: the sampling-guard objection falls; `WIRE.5` stands
 
 The lane proposed dropping `WIRE.5`'s second fixture on the grounds that a mid-exchange
@@ -376,3 +407,385 @@ If something in the lane's escalation survives R1 and R8, the lane states **that
 - **Hoisting `SchemaBounds::inspect` out of `from_tool` to the backend cache insert (SMALL) — record as an observation on that same ticket.** Not its own ticket: anyone working the anchor code is already inside this function and can hoist while there. Two tickets for two edits in one function is the expensive default the §P0 table exists to stop.
 
 The row stays closed. Neither of these reopens a reviewed row.
+
+### R24 — `NFR.SEC.3`: `rotatable` is per-replica. Branch (c). `test-plan.md:301` stands
+
+Asked by lane `ext1-otel1`, deferred to the team lead by
+`docs/design/2026-09-06-nfr-sec3-key-rotation.md` with the trigger *before any
+implementation begins*. No prior ruling covered it.
+
+**(c) — per-replica lazy rotation inside `mint`.** The criterion reads
+"continuation envelope versioned, key rotatable, verification keys retained for
+the max lifetime" (`RELEASE-4.0.0-criteria-status.md:366`). It says nothing about
+where the key material comes from, and per-replica rotation meets it as written:
+an age check off the `now` already injected, retire and mint a fresh kid, drop
+retained keys older than `CONTINUATION_LIFETIME_SECS` in the same pass.
+
+**(b) is refused, and not on preference.** Operator-supplied shared key material
+would make the `MRTR.5` row at `RELEASE-4.0.0-test-plan.md:301` *unsatisfiable* --
+that row asserts a token minted by one `AppState` is `NotAuthentic` on a second
+built through the production constructor **from the same configuration**, decided
+before any ledger lookup. Shared configured keys make that refusal impossible. The
+row is the one the cross-replica claim rests on, so (b) does not add a feature; it
+withdraws an accepted criterion and re-opens `MRTR.5` mid-release. Branch (b)'s
+substance -- durable ledger, reload-driven rotation, in-flight continuity -- is
+already MIK-7312, sequenced after this release.
+
+`test-plan.md:301` stands as written. `MRTR.5` is untouched. The design's decision
+to decline three of the four pieces of branch (b) is ruled correct by the same
+answer, so it needs no separate §P3 event.
+
+The design's §P4a citation of a criteria cell reading "Branch (b) is the one taken"
+is **stale** -- that string does not exist in the ledger, and the live row frames the
+gap as (c) does. Correcting another lane's artefact is not `ext1-otel1`'s work;
+recording it here is enough.
+
+Acceptance-criterion identifiers for this criterion are the lane's to author with
+the §P2 test plan (`MIK-7417.SEC3.<n>`), reviewed with the plan. Not a question.
+
+### R25 — `CONTROL.4` T6: the negative half stays, and it may not generate another round
+
+`control4-lifecycle` is right that T6's no-idle-log half is D7's design preference
+rather than a `CONTROL.4` acceptance criterion, and right that three rounds each
+finding a defect in the previous round's repair is the shape the repair protocol
+answers with DELETE.
+
+It is now green and correct. Deleting a correct mechanism costs a change and a
+review round to remove work already paid for, so it stays -- but the signal is not
+discarded: **one more finding against T6's negative half, its marker, or the
+marker-ordering constraint, and the response is deletion, not repair.** No fourth
+patch round on that mechanism. The positive count assertion was never in dispute
+and survives either way.
+
+### R26 — nobody pushes; the diverged branch is reconciled once, by the team lead
+
+`fix/mrtr2-continuation-handle` is DIVERGED, not behind: 19 remote commits no
+session here holds, 166 local. Reported by `sub4-idempotency`, whose refusal to
+rebase unilaterally is correct -- a rebase rewrites six sessions' commits.
+
+No lane pushes. Reconciliation is one team-lead **merge**, never a rebase, at
+release-candidate time, and the ratification gate requires an operator-minted stamp
+in a terminal regardless. Lanes keep committing locally with `git commit -o <paths>`.
+
+Clippy on `tests/common/mod.rs` (three errors at `:13`, `:23`, `:38`, from
+`fe06e167` and `46adb8cd`) belongs to `ext1-otel1` -- they are its own COMPAT.1
+commits. It may not commit that file yet: the envelope-meta lane holds an
+uncommitted `SPEC_ENCODING_TABLE` hunk there, and `commit -o` on the path would
+publish another lane's unreviewed work. Sequence: envelope-meta lands its hunk
+first, then `ext1-otel1` fixes its own three lints.
+
+## R27 — the release has 19 open blocking criteria, not 20, and `blocking` is a property
+
+Recount of `docs/requirements/RELEASE-4.0.0-criteria-status.md` by column, not by
+memory: 21 rows carry `blocking = yes`. Two of them are already `MET` --
+`MIK-6865.SCHEMA.1c` and `NFR.SEC.1`. Nineteen are open.
+
+That column marks a criterion as release-gating **by nature**. It is not a gap
+flag, and a row does not lose its `yes` when it reaches `MET`; the header count
+of 21 counts the property, and 183 minus 21 gives the 162 "met or non-blocking"
+on the same line. A `MET` row carrying `yes` is therefore correct and needs no
+repair -- the reading that finds a contradiction there has read the column as a
+gap flag.
+
+`NFR.PERF.1` is `no`, and has been through every revision of the file that git
+records; `c4f13034` recorded that ruling deliberately. It is a real gap and it
+stays in the full-scope plan, but it is **not on the release critical path**.
+Package F may not be escalated as gating work, and no other package waits on it.
+
+Four rows had evidence prose whose piped `rg` alternations split their own table
+cells, one of them swallowing a status field. Rewritten as `-e` arguments in
+`91b2b07b`; every row now holds seven fields (main table) or eight (NFR table,
+which carries the extra `T` column, so its status is field five and the main
+table's is field four).
+
+## R28 — the hunk was not envelope-meta's, and `commit -o` was the wrong tool
+
+I told `envelope-meta` to land the uncommitted `SPEC_ENCODING_TABLE` addition in
+`tests/common/mod.rs` so `ext1-otel1` could commit three clippy fixes in the same
+file. That instruction was wrong twice over, and the lane refused it with evidence
+rather than following it. The refusal was correct and the instruction is retracted.
+
+**Wrong owner.** The uncommitted work is one coherent three-file change, not a
+stray hunk: `tests/common/mod.rs` gains the `pub const`, `tests/mik_7214_acs.rs`
+deletes its private copy for a `use common::SPEC_ENCODING_TABLE`, and
+`tests/mik_7214_header_9_acs.rs` gains
+`a_modern_named_call_encodes_a_name_a_header_cannot_carry_raw`. That is a fixture
+being promoted to shared so a HEADER.4a encoding case can consume it — the case
+row 113 of the criteria ledger already names as a sibling session's then-uncommitted
+work. `envelope-meta`'s five commits this cycle are all one docs file and it has run
+no cargo command. Committing it would have put one lane's signature on another's
+unreviewed work: precisely the harm R26 exists to prevent, with the names swapped.
+
+**Wrong tool, so the sequencing was never needed.** `git commit -o <path>` commits
+the whole working-tree content of that path, foreign hunks included, which is why
+the instruction reached for an ordering between lanes. Hunks are separable. The
+addition sits at `+210`; the three clippy errors are at `:13`, `:23` and `:38`, so
+under `git diff -U0` they are disjoint and each lane can stage its own.
+
+**Standing mechanism for this shared worktree.** Six sessions share one index, so
+staging into it and committing has a race whose failure mode is publishing a peer's
+work. Use a private index instead, and refuse the commit if the branch moved:
+
+```sh
+idx=$(mktemp -u); export GIT_INDEX_FILE=$idx
+git read-tree HEAD
+git diff -U0 -- <your paths> > /tmp/mine.patch   # edit down to YOUR hunks
+git apply --cached --unidiff-zero /tmp/mine.patch
+git diff --cached --stat                          # must match your edited-line count
+tree=$(git write-tree); unset GIT_INDEX_FILE; rm -f "$idx"
+c=$(git commit-tree "$tree" -p HEAD -m "type(scope): summary")
+git update-ref refs/heads/$(git branch --show-current) "$c" HEAD
+```
+
+`update-ref` with an expected old value refuses rather than clobbering if a peer
+committed in the interval. `commit -o` stays correct for a file a lane owns whole,
+which is every docs commit this release has made; this is for a file two lanes are
+inside at once.
+
+**The hunk itself.** It stays uncommitted until its author claims it. Nobody's
+lints wait on it. If no lane claims it within the hour, `envelope-meta` may adopt
+it as material for HEADER.4a — reading it as a test before trusting it, per §P2 —
+and the commit body must say it was adopted from the working tree with the author
+unidentified, so the record does not imply authorship it cannot support.
+
+## R29 — package B's remaining slices belong to envelope-meta
+
+`envelope-meta` asked whether the SSE GET era re-assert and the HEADER.4a outbound
+encoding are its work at all, having opened no design or test plan for either: its
+§P0 scope this cycle was the docs catch-up.
+
+They are its work. A cycle's §P0 scope bounds one change; it does not reassign a
+package. Package B is `HEADER.9a`, `HEADER.9b` and `CONTROL.3b`, and it has been
+`envelope-meta`'s since the gap plan was written. Start at the design step, as
+asked — the two gaps sit at *design done, no failing test*, which is where §P2
+begins, not where it ends.
+
+Three things the lane established that the board should carry:
+
+- The SSE GET gap is verified at source: `establish_sse_connection`
+  (`src/transport/http/mod.rs:924`) calls `build_mcp_headers(HeaderMode::Sse, None)`
+  at `:927` and never reaches `finalise_modern_headers`, so a modern peer
+  reconnecting the stream is handed the handshake version. `HeaderMode::Close` is
+  not a third gap — the design decided it legacy.
+- `CONTROL.3b` is *past* implementation (`044896aa` wires `merge_client_meta`) with
+  one test missing: no case drives a real client `params._meta` through
+  `handle_request` to `invoke.rs:1865`. That is a retrofit, so it owes the §P2
+  falsifier probe rather than a free failure. Nobody should estimate it as a
+  ten-minute test.
+- All three rows stay PARTIAL and blocking. The count in R27 does not move.
+
+## R30 — 525 evidence anchors, none of which names when it was read
+
+`confirm-gate` found eight anchors in the `CONFIRM.1a` cell sitting twelve lines
+low. The cell had been rewritten fifteen minutes after `5182b3fc` added seventeen
+lines of doc comment to the file it cites, and its headline said its citations had
+been re-verified at source. They had been read — just not after the commit that
+moved them. The lane found five more of the same in its own seam note. Both are
+fixed (`56ca3fd1`, `33efb4aa`).
+
+The lane's generalisation is right and it is not confined to that lane: on a branch
+where six sessions commit within the hour, **"re-verified today" is not a freshness
+claim.** Measured across the whole ledger: 525 `path:line` anchors, 129 distinct
+files, 161 rows. Zero of them name a commit.
+
+That is the release gate's own evidence. An anchor that has silently drifted does
+not read as wrong — it reads as a citation, and a reviewer who spot-checks one that
+happens to be stale learns nothing about the other 524.
+
+**Two rules, from now.**
+
+1. A cell citing `path:line` names the symbol it expects to find there, and the
+   commit it was read at: `` `src/gateway/x.rs:99 for_modern` @ 9ceaeb54 ``. The
+   symbol is what makes the anchor checkable by something other than a person; the
+   sha is what makes staleness detectable without re-reading.
+2. No row is quoted as release evidence until its anchors have been re-read against
+   the revision being released, or verified mechanically under rule 1.
+
+**Rule 1 is worth nothing without the checker, so the checker is the deliverable.**
+`perf-baseline` owns it: extract every `path:line` plus its named symbol from the
+ledger, assert the file has that line and that the line's neighbourhood contains
+the symbol, report every anchor that fails. That lane spent this cycle building an
+evidence apparatus designed to be ungameable and is parked until R14 fires; this is
+the same problem one level up, and it is the difference between a ledger a reader
+can trust and one a reader can only sample.
+
+Backfilling 525 anchors by hand is not ordered and would not be done. The checker
+reports which are stale; only those get re-read. Anchors written from now carry
+their sha, so the backlog is bounded and shrinking rather than growing.
+
+## R31 — "strict CI green" cannot mean what R14 said while §P2 is in force
+
+`control4-lifecycle` disclosed that `cargo test` on this branch no longer builds
+`mik_7215_control4_reap_count_acs`: T3 asserts on a count `reap` does not return
+yet. That red is correct. §P2 requires the failing test first, and a test that
+fails because the surface is absent is the free, real failure the rule exists to
+buy.
+
+It also makes R14's trigger unsatisfiable. R14 releases the scored NFR.PERF.1 run
+on `MRTR.7a/7b MET plus strict CI green`, and strict CI cannot go green while any
+lane is correctly mid-TDD. Six lanes writing tests first means a permanent red, so
+the trigger as written would hold the scored run until the last implementation on
+the branch landed — which is after the moment the measurement is useful.
+
+Two rules cannot both be obeyed, so one of them was wrong. It was mine.
+
+**R14's trigger now reads: no UNREGISTERED red.** A lane landing a deliberately
+red target registers it, in the same commit, in `docs/release/expected-red.md`:
+the target name, the criterion it belongs to, whether it is compile-red or
+assert-red, and the commit that introduced it. The trigger is satisfied when every
+red in strict CI appears in that register and `MRTR.7a/7b` are MET.
+
+The register is what stops "intended red" being a claim anyone can make about any
+failure after seeing it. A red that is genuinely expected can be declared before it
+is observed; one declared afterwards is a story about a failure. Same asymmetry as
+§P2's own: order is what carries the proof, not effort.
+
+Registration is not a licence to leave it red. Every entry owes a green, and an
+entry whose criterion reaches MET while the entry still stands is a contradiction
+the RC check must catch — the register is a debt list, and it must be empty at RC.
+
+`control4-lifecycle`'s second disclosure stands as its own small rule: **a compile
+error is one error for the whole file, so a compile-red row proves the surface is
+absent and says nothing about whether its assertion can discriminate.** Every
+compile-red row owes one falsifier probe at green time — break the single operand
+it exists to pin, watch that row go red on its own assertion. The lane found this
+in its own test plan and relabelled every row by kind rather than being told. T3 is
+the one row where compile-red is the whole evidence, because there the signature
+*is* the criterion.
+
+The `gpt-20260908T144154Z` SHIP does not cover the corrected plan, and relaunching
+both legs rather than carrying the verdict forward was right: a self-found
+correction committed after a verdict is a new delta, not a confirmation pass.
+
+## R32 — SUB.4's design is finished at revision 6; the remaining work is code
+
+MIK-7272.SUB.4 stays UNWIRED because two of its three routes are unbuilt, not
+because anything about them is still undecided. Route 1 landed on the production
+boot path in `7851736d` (`server/mod.rs:742`), and the criteria ledger records it
+at line 288. The design document reached revision 6, both review legs returned
+`SHIP-WITH-FIXES` with `rc=0`, and the document's own §P4 paragraph states that
+none of the three findings moved a decision.
+
+A review round that moves no decision changes nothing about what gets built. That
+is the stuckness test in `development-process.md`, stated there as: a round that
+only tightens edges means you are polishing a protocol that should be code.
+
+RULING: `docs/design/2026-08-31-sub-4-idempotency-wiring.md` is frozen at revision 6.
+No revision 7. Routes 2 and 3 are built against it as written. A finding that would
+have produced revision 7 becomes a code-level finding on the implementing change,
+where it is cheaper to answer and lands with a test.
+
+The one exit: a finding that changes what routes 2 and 3 must DO — not how the
+document explains them. That reopens §P0 on its own terms and is a scope move, not
+a revision. Anything else is recorded as residual risk in the row and does not
+block.
+
+Evidence for the wider pattern, measured over the three hours to `1003b393`:
+174 commits, of which 23 touch `src/` or `tests/`. 59 are design or test-plan
+edits. 11 carry reversal language — retract, reverse, un-kill, falsify, withdraw.
+Package G holds 17 of the 23 code commits, so the fleet's code throughput is
+concentrated in one package. How the remaining 6 distribute across the other
+packages is not something commit scopes settle, and this ruling does not claim it.
+
+This ruling binds SUB.4 only. It is not a general licence to stop designing: the
+other open criteria have not reached revision 6 with two passing legs, and for
+most of them the design is still the cheapest place to be wrong.
+
+## R33 — a design that has passed two adversarial legs is frozen; findings move to the code
+
+R32 froze one design. Writing a separate ruling for each lane would make me the
+bottleneck and would arrive one lane too late every time, so this is the general
+form. R32 stands as its first application.
+
+RULING: once a design document has returned a passing verdict from both review
+legs, it is frozen. Not finished, not perfect — frozen, meaning further findings
+about it are routed rather than absorbed.
+
+| the finding says | where it goes |
+|---|---|
+| the document explains this badly | nowhere; it is not a defect in what gets built |
+| this mechanism has a defect | the implementing change, as a code finding with a test |
+| routes/clauses must do something DIFFERENT | back to me; §P0 scope move, not a revision |
+| this is worth remembering, nobody must act | the ledger row, as residual risk, non-blocking |
+
+The first row is the one that matters. Both legs return `SHIP-WITH-FIXES` on
+almost every round, and a `SHIP-WITH-FIXES` whose fixes are doc-level is a passing
+verdict wearing a to-do list. Absorbing it produces another revision, another pair
+of legs, and no change to what gets built.
+
+SECOND APPLICATION — MIK-7212.MRTR.7a/7b. `docs/design/2026-09-05-mrtr7-bridge-wiring.md`
+is 1,637 lines describing how to wire `InputBridge::run` into the production path,
+its header still reads `Status: design, not implemented`, and it took 23 of the last
+three hours' commits. It has been reviewed three times; round 2 returned
+SHIP-WITH-FIXES from both legs, each naming a doc-level fix INSIDE THE DESIGN. It is
+frozen. Build it.
+
+One carve-out, because that design's third round earned it: `gpt-review` named three
+defects the wiring would ACTIVATE rather than inherit. Those are mechanism findings,
+not document findings, and they are in scope for the implementing change — they do
+not reopen the design.
+
+WHAT THIS IS NOT: a claim that designs are wasteful here. The design-first order has
+been paying — it converged SUB.4's hard questions in six revisions and caught defects
+that would have shipped. The failure this rules on is narrower and only appears at
+the end: a design that has already passed keeps attracting rounds, because a reviewer
+asked to review will always find something, and a document is always improvable. The
+gate for stopping is not "is it perfect" but "would another round change what gets
+built". After two passing legs, the answer is almost always no.
+
+Lanes hold this themselves. Nobody needs my sign-off to stop revising a design that
+has passed; you need it only to change what the design requires.
+
+## R34 — the orphaned SPEC_ENCODING_TABLE change lands whole, with a custodian
+
+R26 ordered `tests/common/mod.rs` committed first so a sibling lane's clippy fixes could
+follow. That sequencing is WITHDRAWN. The reason envelope-meta gave for holding is correct
+and does not depend on who wrote the code: `HEAD:tests/mik_7214_acs.rs` still declares its
+own `const SPEC_ENCODING_TABLE`, so committing the shared copy alone puts two live
+transcriptions of the specification's encoding table in the tree — the exact defect the
+hunk's own doc comment names — and `#![allow(dead_code)]` at `tests/common/mod.rs:8` keeps
+it silent. A rule that produces the defect it was written to prevent is wrong, not subtle.
+
+Two facts settled it, both verified at source:
+
+- `git diff -U0 -- tests/common/mod.rs` returns ONE hunk, `@@ -207,3 +207,29 @@`. Nothing at
+  `:13`, `:23`, `:38`. The sibling lane's lints are not in the working diff at all, so the
+  sequencing R26 existed to enable was solving a problem the tree does not have.
+- Ownership is not findable, and that is stronger than a disclaimer. `header-9` is not in the
+  lane roster, and both author-side files were last written Sep 7 (08:43 and 14:24) while the
+  fleet committed 174 times in the three hours to Sep 8 18:00. That is an ended session.
+
+An abandoned coherent change gets a CUSTODIAN: one lane lands all three files in one commit
+and says in the commit body that it did not author them. This does not weaken the shared-tree
+rule. The forbidden act there is sweeping a peer's edits into your commit UNNOTICED; a
+disclosed custodial landing, after the author has been cold for a day and is unaddressable,
+is its opposite. Conditions: build and run the tests first — signing code you did not write
+without executing it is how an orphan becomes a regression — and name the paths explicitly,
+because a fourth dirty file in that directory belongs to a live lane.
+
+## R35 — plain-http backend URLs carrying credentials are refused at startup, no override
+
+Operator decision, 2026-09-08, asked and answered.
+
+CodeQL alerts #90 and #91 (`src/transport/http/mod.rs:643`, `:826`) are still OPEN as of
+2026-09-08. The guard that answers them lives on `fix/mrtr2-continuation-handle` (PR #473),
+where `require_secure_oauth_target` appears three times in that file against zero on `main`.
+Code scanning runs through GitHub default setup (`state: configured`, weekly plus
+default-branch pushes), so the alerts close when #473 lands and the next analysis runs on
+`main` — not before. Stated as a prediction because that is what it is.
+
+A backend address that embeds a username and password over unencrypted `http` exposes those
+credentials to anyone on the path. The gateway REFUSES to start, naming the offending
+address. Addresses resolving to the local machine are exempt: there is no network segment to
+observe. There is NO opt-out setting.
+
+The opt-out was considered and rejected on the grounds that decides it: a flag that suppresses
+a startup error is pasted in to make the error go away and never removed, so the unsafe path
+survives and the alerts stay open. Warning-only was rejected because startup-log warnings are
+not read, and shipping a known credential-exposure path in a release we are calling ready is
+not a trade — it is the thing the release is supposed to have fixed.
+
+This is a BREAKING CHANGE and is meant to be. A site running a plain-http backend with inline
+credentials will fail to start on upgrade and must move to `https` or take the credentials out
+of the URL. 4.0.0 is a major version, which is when a breaking security fix is cheapest; the
+migration note ships with the change, not after it.

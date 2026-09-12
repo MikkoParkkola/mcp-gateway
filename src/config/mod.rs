@@ -539,6 +539,34 @@ impl Config {
         let mut config: Self = figment
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
+        // ORDER MATTERS, AND IT DID NOT BEFORE.
+        //
+        // `expand_env_vars` below INLINES `auth.bearer_token` and
+        // `auth.api_keys[].key`: after it, a credential written `env:SHARED`
+        // holds the VALUE `SHARED` had, and the `env:` spelling is gone. The
+        // structural alias check inside `validate_with_env` compares an
+        // adapter's `env:SHARED` reference against that gateway text, so on
+        // this path it was comparing a reference against plaintext and never
+        // matched. With a DISABLED store the material half is deliberately
+        // skipped, so the one variable wired into both places was accepted in
+        // silence — the very case the structural check exists to catch, and the
+        // one an operator only discovers on the day they enable custody.
+        //
+        // Running it here, before any inlining, is the only point on this path
+        // where BOTH sides are still references. The call inside
+        // `validate_with_env` stays exactly where it is: callers that parse and
+        // validate without ever inlining (and the reload/validation entry
+        // points) reach only that one, and re-running a text-only check costs
+        // nothing. Nothing else moves — allowlist semantics and runtime wiring
+        // are untouched by this.
+        {
+            let gateway_credentials = config.gateway_credentials();
+            crate::personal_accounts::config::validate_adapter_gateway_reference_separation(
+                config.accounts.as_ref(),
+                &gateway_credentials,
+            )
+            .map_err(|error| Error::ConfigValidation(error.to_string()))?;
+        }
         let secret_refs = match expansion {
             Expansion::Resolve => {
                 let refs = config.expand_env_vars(&overlay);
@@ -698,6 +726,18 @@ impl Config {
                     seen.insert(name.to_string());
                 }
             }
+            // Adapter signing references, recorded the same way and for the
+            // same reason as the account keys above: NAMES only, and the
+            // `env:` spelling stays in the config so a rewrite cannot persist
+            // signing material. Until now an adapter secret was the one
+            // startup-only secret this set did not mention, so a reload that
+            // compares these names across overlays could not report a rotated
+            // adapter secret that no running holder can take.
+            for adapter in &accounts.adapters {
+                if let Some(name) = adapter.hmac_secret_ref.strip_prefix("env:") {
+                    seen.insert(name.to_string());
+                }
+            }
         }
         seen
     }
@@ -772,6 +812,16 @@ impl Config {
         // descriptor never causes an account secret to be read.
         crate::personal_accounts::config::validate_descriptors(self.accounts.as_ref())
             .map_err(|error| Error::ConfigValidation(error.to_string()))?;
+        // Structural half of the approved "no reuse with gateway authentication
+        // secrets" rule: one variable wired into both an adapter and a gateway
+        // credential is one secret whatever it holds, so this is decided from
+        // the text and reads nothing, disabled store included.
+        let gateway_credentials = self.gateway_credentials();
+        crate::personal_accounts::config::validate_adapter_gateway_reference_separation(
+            self.accounts.as_ref(),
+            &gateway_credentials,
+        )
+        .map_err(|error| Error::ConfigValidation(error.to_string()))?;
         // Consumer side of the same contract: every `backends[*].account`
         // reference resolves to a declared descriptor key, and a managed
         // consumer carries no second answer to "how is this backend
@@ -782,7 +832,41 @@ impl Config {
             Ok(_) | Err(crate::personal_accounts::config::AccountsConfigError::NotEnabled) => {}
             Err(error) => return Err(Error::ConfigValidation(error.to_string())),
         }
+        // Material half of the same rule, and only where material is resolved:
+        // two differently NAMED variables holding one value, or a literal
+        // gateway credential, are invisible to the reference check above.
+        crate::personal_accounts::config::validate_adapter_gateway_material_separation(
+            self.accounts.as_ref(),
+            overlay,
+            &gateway_credentials,
+        )
+        .map_err(|error| Error::ConfigValidation(error.to_string()))?;
         Ok(())
+    }
+
+    /// The gateway authentication credentials AS CONFIGURED, for the adapter
+    /// separation checks.
+    ///
+    /// Borrowed spec text, never a resolved value: `resolve_bearer_token` and
+    /// `resolve_key` read `std::env` directly rather than the overlay this load
+    /// was evaluated against, and the `auto` bearer mints a fresh random token
+    /// per call. Handing over the configured text lets the checks resolve
+    /// through the overlay and skip `auto` deliberately.
+    fn gateway_credentials(&self) -> Vec<crate::personal_accounts::config::GatewayCredential<'_>> {
+        use crate::personal_accounts::config::GatewayCredential;
+
+        let mut credentials: Vec<GatewayCredential<'_>> = Vec::new();
+        if let Some(token) = self.auth.bearer_token.as_deref() {
+            credentials.push(GatewayCredential::BearerToken(token));
+        }
+        for (index, api_key) in self.auth.api_keys.iter().enumerate() {
+            credentials.push(GatewayCredential::ApiKey {
+                index,
+                name: api_key.name.as_str(),
+                spec: api_key.key.as_str(),
+            });
+        }
+        credentials
     }
 
     /// Refuse to start when an enabled agent's key material cannot reject

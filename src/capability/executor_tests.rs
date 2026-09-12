@@ -2019,3 +2019,79 @@ async fn cache_4_executor_modern_revision_hits_the_inner_cache() {
         "the modern entry must still be live"
     );
 }
+
+/// GH78.RL.1 — an OAuth token-refresh transport failure must not carry the
+/// token endpoint's credential into the error text.
+///
+/// `perform_token_refresh` POSTs `refresh_token` and, when the keychain holds
+/// one, `client_secret`. The failure message embedded the endpoint twice: once
+/// verbatim, and once more inside a `reqwest::Error`, whose `Display` appends
+/// `" for url (...)"`. A token endpoint is operator-configured and a
+/// query-string credential is a common shape there, so both copies reached
+/// every sink the returned `Error::Config` reaches.
+///
+/// `send_with_retry` has stripped the URL since `redact_url` landed; this leg
+/// was the one outbound call in `executor/` that had not.
+#[tokio::test]
+async fn an_oauth_refresh_transport_error_drops_the_endpoint_credential() {
+    let executor = CapabilityExecutor::new();
+    let storage =
+        crate::oauth::TokenStorage::new(std::env::temp_dir().join("gh78_oauth_refresh_redaction"))
+            .unwrap();
+
+    let err = executor
+        .perform_token_refresh(
+            "gh78",
+            "refresh-token-value",
+            "http://127.0.0.1:1/token?api_key=CANARY",
+            &storage,
+            None,
+        )
+        .await
+        .expect_err("a closed port must fail the refresh");
+
+    let rendered = err.to_string();
+    assert!(
+        !rendered.contains("CANARY"),
+        "token-endpoint credential survived into the refresh error: {rendered}"
+    );
+    assert!(
+        rendered.contains("127.0.0.1"),
+        "redaction must keep the host an operator acts on: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn an_oauth_refresh_parse_error_drops_the_endpoint_credential() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!(
+        "http://{}/token?api_key=PARSE_CANARY_78491",
+        listener.local_addr().unwrap()
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/token", post(|| async { "invalid-json" })),
+        )
+        .await
+        .unwrap();
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let storage = crate::oauth::TokenStorage::new(directory.path().to_owned()).unwrap();
+    let error = CapabilityExecutor::new()
+        .perform_token_refresh(
+            "parse-fixture",
+            "fixture-refresh",
+            &endpoint,
+            &storage,
+            None,
+        )
+        .await
+        .expect_err("invalid JSON must refuse refresh");
+    server.abort();
+    let rendered = error.to_string();
+    assert!(rendered.contains("Failed to parse OAuth refresh response"));
+    assert!(rendered.contains("parse-fixture"));
+    assert!(!rendered.contains("PARSE_CANARY_78491"));
+    assert!(!rendered.contains("fixture-refresh"));
+}

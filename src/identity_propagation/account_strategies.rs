@@ -655,6 +655,32 @@ mod lifetime_tests {
         }
     }
 
+    #[test]
+    fn execution_context_debug_redacts_prepared_credential_headers() {
+        let secrets = [
+            "Bearer fixture-token-never-log-1839",
+            "fixture-api-key-never-log-2940",
+        ];
+        let mut credential = external(1_800_000_060, 1_800_000_000);
+        credential.headers = vec![
+            ("Authorization".to_string(), secrets[0].to_string()),
+            ("X-Api-Key".to_string(), secrets[1].to_string()),
+        ];
+        let context = crate::capability::CapabilityExecutionContext::default()
+            .with_account_credential(Arc::new(credential));
+        let output = format!("{context:?}");
+        assert!(output.contains("PreparedAccountCredential"));
+        assert!(output.contains("Authorization"));
+        assert!(output.contains("X-Api-Key"));
+        assert!(output.contains("<redacted>"));
+        for secret in secrets {
+            assert!(
+                !output.contains(secret),
+                "execution context exposed credential material"
+            );
+        }
+    }
+
     /// THE REGRESSION, at the predicate itself. An external credential whose
     /// published expiry is in the past looks exactly like `expires_at <=
     /// minted_at`, which the old universal reading treated as "no lifetime
