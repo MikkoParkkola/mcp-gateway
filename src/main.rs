@@ -60,7 +60,7 @@ async fn main() -> ExitCode {
         // Offline and synchronous on purpose: initializing custody state must
         // not share a dispatch path with anything that starts the gateway.
         Some(Command::Accounts(accounts_cmd)) => {
-            commands::run_accounts_command(accounts_cmd, config_path.as_deref())
+            commands::run_accounts_command(&accounts_cmd, config_path.as_deref())
         }
         Some(Command::Stats { url }) => {
             let effective_url = resolve_stats_url(

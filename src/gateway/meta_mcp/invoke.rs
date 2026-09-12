@@ -1074,114 +1074,7 @@ impl MetaMcp {
         result: Value,
     ) -> Result<Value> {
         let mut result = result;
-        // === POST-INVOKE: Response contract gate (issue #133, D1) ===
-        //
-        // Validates the response against the per-tool contract declared in
-        // config.  Default-deny (fail_closed=true) can block responses from
-        // tools with no declared contract.
-        //
-        // Runs BEFORE D2 anomaly screening so contract violations abort early.
-        if let Some(ref contract_cfg) = self.response_contract {
-            let text = crate::security::response_inspect::extract_text_from_result(&result);
-            let tool_entry = contract_cfg.tools.get(tool);
-
-            // fail_closed: no contract declared for this tool → treat as violation
-            if contract_cfg.fail_closed && tool_entry.is_none() {
-                let effective_action_mode = contract_cfg.action_mode;
-                warn!(
-                    server,
-                    tool,
-                    trace_id,
-                    reason = "no_contract_declared",
-                    detail = "fail_closed is enabled and no contract is declared for this tool",
-                    "Response contract violation"
-                );
-                if effective_action_mode {
-                    return Err(Error::json_rpc(
-                        -32603,
-                        format!(
-                            "Tool '{tool}' on server '{server}' response blocked by contract gate: \
-                             no contract declared and fail_closed is enabled."
-                        ),
-                    ));
-                }
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert(
-                        "_contract_violation".to_string(),
-                        serde_json::Value::Bool(true),
-                    );
-                    obj.insert(
-                        "_contract_reason".to_string(),
-                        serde_json::Value::String("no_contract_declared".to_string()),
-                    );
-                }
-            } else if !text.is_empty() {
-                // Build effective contract merging global defaults with per-tool overrides.
-                let effective_max_bytes = tool_entry
-                    .and_then(|e| e.max_bytes)
-                    .or(contract_cfg.default_max_bytes);
-                let effective_action_mode = tool_entry
-                    .and_then(|e| e.action_mode)
-                    .unwrap_or(contract_cfg.action_mode);
-                let patterns: &[String] =
-                    tool_entry.map_or(&[], |e| e.forbidden_patterns.as_slice());
-
-                let forbidden_patterns = if patterns.is_empty() {
-                    regex::RegexSet::empty()
-                } else {
-                    match regex::RegexSet::new(patterns) {
-                        Ok(set) => set,
-                        Err(e) => {
-                            warn!(
-                                server,
-                                tool,
-                                trace_id,
-                                error = %e,
-                                "Failed to compile forbidden_patterns for tool contract — skipping pattern check"
-                            );
-                            regex::RegexSet::empty()
-                        }
-                    }
-                };
-
-                let contract = crate::security::response_contract::ToolResponseContract {
-                    max_bytes: effective_max_bytes,
-                    forbidden_patterns,
-                    action_mode: effective_action_mode,
-                };
-
-                if let Some(violation) = contract.validate(&text) {
-                    warn!(
-                        server,
-                        tool,
-                        trace_id,
-                        reason = violation.reason,
-                        detail = %violation.detail,
-                        "Response contract violation"
-                    );
-                    if violation.should_block {
-                        return Err(Error::json_rpc(
-                            -32603,
-                            format!(
-                                "Tool '{tool}' on server '{server}' response blocked by contract gate: \
-                                 {} — {}",
-                                violation.reason, violation.detail
-                            ),
-                        ));
-                    }
-                    if let Some(obj) = result.as_object_mut() {
-                        obj.insert(
-                            "_contract_violation".to_string(),
-                            serde_json::Value::Bool(true),
-                        );
-                        obj.insert(
-                            "_contract_reason".to_string(),
-                            serde_json::Value::String(violation.reason.to_string()),
-                        );
-                    }
-                }
-            }
-        }
+        self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
         //
@@ -1232,6 +1125,126 @@ impl MetaMcp {
         }
 
         Ok(self.apply_context_integrity(server, tool, api_key_name, trace_id, result))
+    }
+
+    /// The response contract gate (issue #133, D1), split out of
+    /// [`Self::apply_response_gates`] purely to keep that function under the
+    /// line budget — logic, ordering and return semantics are unchanged.
+    ///
+    /// Validates the response against the per-tool contract declared in
+    /// `config`. Default-deny (`fail_closed=true`) can block responses from
+    /// tools with no declared contract.
+    ///
+    /// Runs BEFORE D2 anomaly screening so contract violations abort early.
+    fn apply_response_contract_gate(
+        &self,
+        server: &str,
+        tool: &str,
+        trace_id: &str,
+        result: &mut Value,
+    ) -> Result<()> {
+        let Some(ref contract_cfg) = self.response_contract else {
+            return Ok(());
+        };
+        let text = crate::security::response_inspect::extract_text_from_result(result);
+        let tool_entry = contract_cfg.tools.get(tool);
+
+        // fail_closed: no contract declared for this tool → treat as violation
+        if contract_cfg.fail_closed && tool_entry.is_none() {
+            let effective_action_mode = contract_cfg.action_mode;
+            warn!(
+                server,
+                tool,
+                trace_id,
+                reason = "no_contract_declared",
+                detail = "fail_closed is enabled and no contract is declared for this tool",
+                "Response contract violation"
+            );
+            if effective_action_mode {
+                return Err(Error::json_rpc(
+                    -32603,
+                    format!(
+                        "Tool '{tool}' on server '{server}' response blocked by contract gate: \
+                         no contract declared and fail_closed is enabled."
+                    ),
+                ));
+            }
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "_contract_violation".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+                obj.insert(
+                    "_contract_reason".to_string(),
+                    serde_json::Value::String("no_contract_declared".to_string()),
+                );
+            }
+        } else if !text.is_empty() {
+            // Build effective contract merging global defaults with per-tool overrides.
+            let effective_max_bytes = tool_entry
+                .and_then(|e| e.max_bytes)
+                .or(contract_cfg.default_max_bytes);
+            let effective_action_mode = tool_entry
+                .and_then(|e| e.action_mode)
+                .unwrap_or(contract_cfg.action_mode);
+            let patterns: &[String] = tool_entry.map_or(&[], |e| e.forbidden_patterns.as_slice());
+
+            let forbidden_patterns = if patterns.is_empty() {
+                regex::RegexSet::empty()
+            } else {
+                match regex::RegexSet::new(patterns) {
+                    Ok(set) => set,
+                    Err(e) => {
+                        warn!(
+                            server,
+                            tool,
+                            trace_id,
+                            error = %e,
+                            "Failed to compile forbidden_patterns for tool contract — skipping pattern check"
+                        );
+                        regex::RegexSet::empty()
+                    }
+                }
+            };
+
+            let contract = crate::security::response_contract::ToolResponseContract {
+                max_bytes: effective_max_bytes,
+                forbidden_patterns,
+                action_mode: effective_action_mode,
+            };
+
+            if let Some(violation) = contract.validate(&text) {
+                warn!(
+                    server,
+                    tool,
+                    trace_id,
+                    reason = violation.reason,
+                    detail = %violation.detail,
+                    "Response contract violation"
+                );
+                if violation.should_block {
+                    return Err(Error::json_rpc(
+                        -32603,
+                        format!(
+                            "Tool '{tool}' on server '{server}' response blocked by contract gate: \
+                             {} — {}",
+                            violation.reason, violation.detail
+                        ),
+                    ));
+                }
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert(
+                        "_contract_violation".to_string(),
+                        serde_json::Value::Bool(true),
+                    );
+                    obj.insert(
+                        "_contract_reason".to_string(),
+                        serde_json::Value::String(violation.reason.to_string()),
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Inner implementation executed within a trace-ID scope.
@@ -1356,19 +1369,16 @@ impl MetaMcp {
         // resolved `cache_binding` (user+audience) is mixed into every cache key
         // so per-user results cache in ISOLATION rather than leaking across users
         // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
-        let caller_credential = match self
+        let caller_credential = if let Some(idp_cfg) = self
             .backends
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         {
-            Some(idp_cfg) => {
-                self.resolve_caller_credential(server, &idp_cfg, verified_identity)
-                    .await?
-            }
-            None => {
-                self.refuse_unbound_account_backend(server)?;
-                CallerCredential::default()
-            }
+            self.resolve_caller_credential(server, &idp_cfg, verified_identity)
+                .await?
+        } else {
+            self.refuse_unbound_account_backend(server)?;
+            CallerCredential::default()
         };
 
         // ADR-008 INV-2 fail-closed guard. On a multi-user gateway, a backend
@@ -2543,51 +2553,13 @@ impl MetaMcp {
                 // so per-user results cache in isolation instead of being dropped
                 // (IDP.8 — replaces the earlier blanket cache bypass).
                 if !cred.headers.is_empty() {
-                    // Fail-closed hardening: a minted credential must never
-                    // reach the caller without a durable audit record, so an
-                    // audit-write failure here aborts the mint instead of
-                    // proceeding to `Ok(CallerCredential{..})`.
-                    //
-                    // Operator-misconfig fail-OPEN guard: the audit helper
-                    // treats `logger = None` (transparency log disabled) as a
-                    // no-op `Ok(())`. On a `required` backend that would let a
-                    // minted per-user credential go on the wire with NO audit
-                    // record — the "no mint without a durable audit record"
-                    // guarantee silently evaporating via misconfiguration. When
-                    // propagation is REQUIRED but no transparency log is
-                    // configured, fail closed on the SAME path as an audit-write
-                    // failure rather than mint blind. (Non-required backends
-                    // keep the `None -> Ok(())` best-effort behavior — a mint
-                    // there is not covered by the durable-record guarantee.)
-                    if idp_cfg.required && audit_logger.is_none() {
-                        return Err(Error::Internal(format!(
-                            "identity-propagation is required for backend '{server}' but no \
-                             transparency log is configured; refusing to mint a per-user \
-                             credential without a durable audit record"
-                        )));
-                    }
-                    if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
-                        audit_logger,
-                        "idp_mint",
-                        &subject_id,
+                    Self::audit_minted_credential(
                         server,
-                        Some(audience),
-                        None,
-                    ) {
-                        // CWE-209: `audit_err` can carry the transparency-log
-                        // filesystem path / IO detail. Keep it in the server log
-                        // only; return a generic client-facing message so the
-                        // sensitive detail never reaches the JSON-RPC caller
-                        // (mirrors the direct route in backend_handlers.rs).
-                        tracing::warn!(
-                            server,
-                            error = %audit_err,
-                            "identity-propagation mint audit write failed"
-                        );
-                        return Err(Error::Internal(format!(
-                            "identity-propagation audit unavailable for backend '{server}'"
-                        )));
-                    }
+                        idp_cfg,
+                        audit_logger,
+                        &subject_id,
+                        audience,
+                    )?;
                 }
                 Ok(CallerCredential {
                     headers: cred.headers,
@@ -2596,6 +2568,61 @@ impl MetaMcp {
             }
             Err(e) => refuse(format!("credential minting failed: {e}")),
         }
+    }
+
+    /// Fail-closed hardening: a minted credential must never reach the caller
+    /// without a durable audit record, so an audit-write failure here aborts
+    /// the mint instead of letting it proceed. Split out of
+    /// [`Self::resolve_caller_credential`] purely to keep that function under
+    /// the line budget — logic and ordering are unchanged.
+    ///
+    /// Operator-misconfig fail-OPEN guard: the audit helper treats `logger =
+    /// None` (transparency log disabled) as a no-op `Ok(())`. On a `required`
+    /// backend that would let a minted per-user credential go on the wire
+    /// with NO audit record — the "no mint without a durable audit record"
+    /// guarantee silently evaporating via misconfiguration. When propagation
+    /// is REQUIRED but no transparency log is configured, fail closed on the
+    /// SAME path as an audit-write failure rather than mint blind.
+    /// (Non-required backends keep the `None -> Ok(())` best-effort
+    /// behavior — a mint there is not covered by the durable-record
+    /// guarantee.)
+    fn audit_minted_credential(
+        server: &str,
+        idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
+        audit_logger: Option<&crate::security::TransparencyLogger>,
+        subject_id: &str,
+        audience: &str,
+    ) -> Result<()> {
+        if idp_cfg.required && audit_logger.is_none() {
+            return Err(Error::Internal(format!(
+                "identity-propagation is required for backend '{server}' but no \
+                 transparency log is configured; refusing to mint a per-user \
+                 credential without a durable audit record"
+            )));
+        }
+        if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
+            audit_logger,
+            "idp_mint",
+            subject_id,
+            server,
+            Some(audience),
+            None,
+        ) {
+            // CWE-209: `audit_err` can carry the transparency-log filesystem
+            // path / IO detail. Keep it in the server log only; return a
+            // generic client-facing message so the sensitive detail never
+            // reaches the JSON-RPC caller (mirrors the direct route in
+            // backend_handlers.rs).
+            tracing::warn!(
+                server,
+                error = %audit_err,
+                "identity-propagation mint audit write failed"
+            );
+            return Err(Error::Internal(format!(
+                "identity-propagation audit unavailable for backend '{server}'"
+            )));
+        }
+        Ok(())
     }
 
     /// Resolve the account credential a CAPABILITY tool needs, before any

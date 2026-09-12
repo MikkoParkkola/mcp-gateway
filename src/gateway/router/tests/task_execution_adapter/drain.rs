@@ -223,9 +223,9 @@ async fn a_queued_owned_handoff_that_has_never_been_polled_is_not_a_clean_drain(
     ));
 
     // Step 1. No await, no yield, from here to the drain poll below.
-    let begun = poll_once(&mut begin);
+    let begin_poll = poll_once(&mut begin);
     assert!(
-        begun.is_pending(),
+        begin_poll.is_pending(),
         "begin parks on its oneshot after enqueuing the handoff; a ready answer \
          means the child already ran and this row observes nothing"
     );

@@ -18,7 +18,7 @@
 //!
 //! THE ONE EXPLICIT SEAM. `CapabilityExecutionContext::verified_identity` is
 //! handed the fixture principal directly in the executor-level cases. That is
-//! the verification-context seam the increment adds; the MetaMcp control in the
+//! the verification-context seam the increment adds; the `MetaMcp` control in the
 //! sibling test file is what proves the gateway actually fills it from
 //! `MetaMcpCallerContext` rather than from a `GrantSubject`, an API key or a
 //! display name.
@@ -58,7 +58,7 @@ use crate::personal_accounts::config::{AccountsConfig, AccountsLimits, Descripto
 
 use super::account_resolver_fixture::{descriptor, identity};
 
-/// The capability backend name. The MetaMcp control addresses it as the server
+/// The capability backend name. The `MetaMcp` control addresses it as the server
 /// half of a `server:tool` reference, exactly as a client would.
 pub(super) const CAPABILITIES: &str = "capabilities";
 /// The one capability every case invokes. ONE tool and ONE argument set for
@@ -238,7 +238,7 @@ pub(super) fn shared(id: &str) -> crate::personal_accounts::config::AccountDescr
 /// A gateway whose account strategies were installed by the PRODUCTION
 /// installer, with the transparency log the mint path requires.
 ///
-/// Returns the `MetaMcp` (the MetaMcp control needs it) and the registry both
+/// Returns the `MetaMcp` (the `MetaMcp` control needs it) and the registry both
 /// consumers share. The registry is the SAME object the installer wrote to and
 /// the same one the executor reads, so an MCP backend and a REST capability
 /// naming one descriptor hold one strategy instance, not two.
@@ -627,7 +627,7 @@ fn caller(verified_identity: Option<&VerifiedIdentity>) -> MetaMcpCallerContext<
     }
 }
 
-/// THE MetaMcp action: the real Code Mode dispatch entry, which routes through
+/// THE `MetaMcp` action: the real Code Mode dispatch entry, which routes through
 /// `invoke_tool` and reaches the capability backend exactly as production
 /// traffic does. The identity handed in is a fixture principal; what the control
 /// proves is that the gateway carries THAT value to the executor rather than

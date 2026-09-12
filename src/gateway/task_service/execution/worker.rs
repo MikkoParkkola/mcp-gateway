@@ -226,8 +226,7 @@ async fn run_dispatched(
                 &principal,
                 &id,
                 revision,
-                job,
-                handle,
+                (job, handle),
                 &mut cancel_rx,
             )
             .await;
@@ -249,10 +248,10 @@ async fn follow_upstream_job(
     principal: &str,
     id: &str,
     revision: u64,
-    job: crate::gateway::meta_mcp::upstream::DirectJob,
-    handle: String,
+    dispatched: (crate::gateway::meta_mcp::upstream::DirectJob, String),
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
+    let (job, handle) = dispatched;
     let captured = executor
         .capture_upstream(
             principal,

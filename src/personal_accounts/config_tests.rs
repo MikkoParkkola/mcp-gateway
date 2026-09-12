@@ -104,7 +104,7 @@ fn valid(root: &std::path::Path) -> AccountsConfig {
             ("current".into(), format!("env:{KEY_VAR}")),
             ("retired".into(), format!("env:{RETIRED_VAR}")),
         ]),
-        descriptors: Default::default(),
+        descriptors: Option::default(),
         limits: AccountsLimits {
             store_entries: 10_000,
             authority_bytes: 16_777_216,
@@ -222,6 +222,10 @@ fn omitted_accounts_enables_no_custody_and_reads_nothing() {
 /// block, so a refusal names the rule that fired instead of the first one a
 /// combined-invalid fixture happens to hit.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one axis-by-axis refusal table read as a single sequence is the point of the test"
+)]
 fn each_unsafe_axis_is_refused_on_its_own() {
     let tmp = root();
     let base = valid(tmp.path());
@@ -441,10 +445,11 @@ fn no_rendering_on_the_resolution_path_reveals_key_material() {
         .expect("current key present")
         .clone();
     let rendered = format!("{resolved:?}");
-    let hex_key = key_bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let hex_key = key_bytes.iter().fold(String::new(), |mut acc, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{byte:02x}");
+        acc
+    });
     let raw_key = String::from_utf8_lossy(&key_bytes).to_string();
 
     for (label, needle) in [

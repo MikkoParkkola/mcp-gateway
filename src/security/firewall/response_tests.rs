@@ -620,7 +620,7 @@ fn firewall_response_immutable_challenge_unchanged_and_disabled_controls() {
     assert!(audit_entries(&path).is_empty());
 }
 
-/// MIK-7407.RESPONSE.3/.4; FWR-20. InputRequired's opaque state and
+/// MIK-7407.RESPONSE.3/.4; FWR-20. `InputRequired`'s opaque state and
 /// questions remain immutable; unrelated safe metadata may still be redacted.
 #[test]
 fn firewall_response_modern_input_required_protects_state_and_questions() {

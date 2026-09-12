@@ -69,6 +69,9 @@ const SECRET_VALUE: &str = "client-secret-value";
 const REFRESH_TOKEN: &str = "refresh-token-alpha";
 const NOW: u64 = 1_700_000_000;
 
+/// One metadata location and the answer scripted for it, as `TraceHttp::new` expects.
+type MetadataScript = Vec<(&'static str, Result<HttpResponse, HttpError>)>;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Call {
     Metadata(String),
@@ -87,10 +90,7 @@ struct TraceHttp {
 }
 
 impl TraceHttp {
-    fn new(
-        metadata: Vec<(&str, Result<HttpResponse, HttpError>)>,
-        token: Result<HttpResponse, HttpError>,
-    ) -> Self {
+    fn new(metadata: MetadataScript, token: Result<HttpResponse, HttpError>) -> Self {
         Self {
             metadata: metadata
                 .into_iter()
@@ -196,6 +196,10 @@ impl Trace {
     }
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every call site needs a Result<HttpResponse, HttpError> for the fixture table; the wrapper exists only to avoid writing Ok(...) at each of the many call sites"
+)]
 fn ok(body: &str) -> Result<HttpResponse, HttpError> {
     Ok(HttpResponse {
         status: 200,
@@ -203,6 +207,10 @@ fn ok(body: &str) -> Result<HttpResponse, HttpError> {
     })
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every call site needs a Result<HttpResponse, HttpError> for the fixture table; the wrapper exists only to avoid writing Ok(...) at each of the many call sites"
+)]
 fn status(code: u16, body: &str) -> Result<HttpResponse, HttpError> {
     Ok(HttpResponse {
         status: code,
@@ -518,11 +526,7 @@ async fn hostile_or_broken_metadata_refuses_bootstrap_at_its_boundary_without_fa
         GOOGLE_REVOKE,
     );
 
-    let rows: Vec<(
-        &str,
-        Vec<(&str, Result<HttpResponse, HttpError>)>,
-        Vec<String>,
-    )> = vec![
+    let rows: Vec<(&str, MetadataScript, Vec<String>)> = vec![
         // Reached the second location, got a document swapping only the token
         // URL. Rejected there; no further location is consulted.
         (

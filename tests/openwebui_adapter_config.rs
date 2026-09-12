@@ -404,7 +404,7 @@ fn an_absent_adapter_block_leaves_the_legacy_accounts_config_untouched() {
         adapters.is_none()
             || adapters
                 .and_then(serde_yaml::Value::as_sequence)
-                .is_some_and(|list| list.is_empty()),
+                .is_some_and(std::vec::Vec::is_empty),
         "an absent adapters block must default to nothing, not to a populated \
          entry: {accounts:?}"
     );
@@ -491,7 +491,7 @@ fn an_adapter_without_a_kind_is_refused() {
 ///
 /// The issuer is what a signed assertion is bound to; accepting an alternative
 /// spelling would let assertions minted for some other issuer identity be
-/// verified as Open WebUI's, which is exactly the confusion the literal exists
+/// verified as Open `WebUI`'s, which is exactly the confusion the literal exists
 /// to prevent.
 #[test]
 fn a_wrong_issuer_is_refused() {
@@ -989,7 +989,7 @@ fn the_unapproved_draft_field_spellings_are_refused() {
 /// assert comparison behaviour, and randomness is a property of the operator's
 /// secret, not of this file.
 fn filler_32(tag: char) -> String {
-    std::iter::repeat(tag).take(32).collect()
+    std::iter::repeat_n(tag, 32).collect()
 }
 
 /// Base64 of 32 bytes, the shape `accounts.keys` requires.

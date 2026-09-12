@@ -295,10 +295,10 @@ fn create_directory(path: &Path) -> Result<(), AccountError> {
     let parent = path.parent().ok_or(AccountError::InvalidConfiguration)?;
     create_directory(parent)?;
     let result = fs::DirBuilder::new().mode(0o700).create(path);
-    if let Err(error) = result {
-        if error.kind() != std::io::ErrorKind::AlreadyExists {
-            return Err(AccountError::StorageUnavailable);
-        }
+    if let Err(error) = result
+        && error.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(AccountError::StorageUnavailable);
     }
     private_directory(path)?;
     sync_directory(parent)
