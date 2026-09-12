@@ -3131,24 +3131,17 @@ fn spawn_idle_reaper(
     })
 }
 
-/// The caller context every stdio `tools/call` runs under.
+/// A test fixture approximating the caller context a stdio `tools/call`
+/// runs under -- why stdio is admin, why it has no channel and no asker --
+/// in one named place instead of forty lines per test.
 ///
-/// Extracted from `dispatch_single_with_sink` so the transport-specific
-/// reasoning below -- why stdio is admin, why it has no channel and no
-/// asker -- sits in one named place instead of forty lines inside a match
-/// arm. `era` is the caller's because the `initialize` arm advertises
-/// against the same `shape`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Unwired by a ratified design decision, not by oversight: the MRTR.7 \
-                  bridge design puts legacy stdio callers out of scope because stdio's \
-                  serial read loop deadlocks any bridged call \
-                  (docs/design/2026-09-05-mrtr7-bridge-wiring.md:61,290,312). Delete \
-                  this helper if stdio is never made concurrent; see issue #533."
-    )
-)]
+/// NOT the production path. `dispatch_tools_call` builds its own context
+/// inline (`mod.rs:2762`) and carries the negotiated `protocol_revision`,
+/// which this fixture hardcodes to `None`. An earlier doc comment here
+/// claimed the helper had been extracted from `dispatch_single_with_sink`;
+/// it never was, and no production arm calls it. Assert production stdio
+/// behaviour against the dispatcher, not against this.
+#[cfg(test)]
 fn stdio_caller_context<'a>(
     authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
     era: crate::protocol::meta::Era,

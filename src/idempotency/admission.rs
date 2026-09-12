@@ -299,9 +299,12 @@ impl ExecutionAdmission {
         not(test),
         expect(
             dead_code,
-            reason = "No production caller; kept for the admission tests that pin \
-                      reclaim accounting. Delete with those tests if the accounting \
-                      assertion moves elsewhere."
+            reason = "Superseded, not deferred: production already reclaims inline \
+                      under slot pressure (`state.reclaim(now)` at admission.rs:279 \
+                      and :711), so no caller needs this wrapper. It is retained \
+                      because the admission tests have no other way to trigger and \
+                      observe `State::reclaim`, which production does run. Delete it \
+                      with those tests if that accounting moves elsewhere."
         )
     )]
     pub(crate) fn reclaim_completed(&self) -> usize {
