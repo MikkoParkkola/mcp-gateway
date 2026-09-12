@@ -151,8 +151,8 @@ async fn denied_backend_never_enters_the_candidate_set() {
     );
     assert_eq!(
         response["total_available"], 0,
-        "denied tools must not be counted as candidates: authorization has to run \
-         at collection time, before the candidate set is built"
+        "denied tools must not be counted as candidates, so the denial is not a \
+         late filter over an already-counted set"
     );
 }
 
@@ -200,8 +200,9 @@ async fn permissive_profile_sees_the_same_capabilities() {
 /// the guard, so the classic path passing proves nothing about this one. Code
 /// Mode finalises through `crate::gateway::search_disclosure::finalize_search_matches`,
 /// which emits no pre-truncation count, so this test asserts only that nothing
-/// leaks; the collection-time claim is carried by the classic-path test's
-/// `total_available`.
+/// leaks. The classic-path test's `total_available` carries the stronger claim:
+/// denied tools are absent from the count, which rules out a filter applied
+/// after counting but not a filter applied just before it.
 #[tokio::test]
 async fn code_mode_denied_backend_contributes_no_matches() {
     let (cap_backend, _dirs) = capability_backend(RANKING_FIXTURES).await;
@@ -482,9 +483,9 @@ fn poisoned_profile(deny_weak: bool) -> RoutingProfileConfig {
 ///
 /// Without a denial, 10^12 uses lift `weak_match` (relevance 2.0) to
 /// `2.0 * (1 + log2(10^12 + 1) * 0.15)`, about 13.9, above the exact-name
-/// match's 10.0. If this test ever goes green the usage boost has stopped
-/// being potent enough to promote anything, and the two denial tests below
-/// would pass whether or not authorization ran.
+/// match's 10.0. If this test ever fails the usage boost has stopped being
+/// potent enough to promote anything, and the two denial tests below would
+/// pass whether or not authorization ran.
 #[tokio::test]
 async fn heavy_usage_outranks_the_exact_match_when_nothing_is_denied() {
     let (meta, _dirs) = meta_with_ranker(
@@ -813,8 +814,8 @@ async fn denied_mcp_backend_never_enters_the_candidate_set() {
     );
     assert_eq!(
         response["total_available"], 0,
-        "denied MCP backend tools must not be counted as candidates: \
-         authorization has to run at collection time"
+        "denied MCP backend tools must not be counted as candidates, so the \
+         denial is not a late filter over an already-counted set"
     );
 }
 
