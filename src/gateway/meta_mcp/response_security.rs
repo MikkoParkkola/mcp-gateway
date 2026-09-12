@@ -161,8 +161,10 @@ impl super::MetaMcp {
         expect(
             dead_code,
             reason = "Implemented and tested, but never called from the response \
-                      dispatch path. Wire-or-delete ruling pending in issue #532; \
-                      this expectation is removed when that issue resolves."
+                      dispatch path. The legacy-client elicitation bridge it guards is \
+                      MIK-7212.MRTR.7a/7b, a hard release gate under NFR.COMPAT.1 \
+                      (docs/requirements/RELEASE-4.0.0-blocking-rollup.md:190). Wiring \
+                      is tracked in issue #532; remove this expectation when it lands."
         )
     )]
     pub(crate) fn enforce_firewall_challenge(

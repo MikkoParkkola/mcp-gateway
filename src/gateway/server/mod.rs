@@ -3142,9 +3142,11 @@ fn spawn_idle_reaper(
     not(test),
     expect(
         dead_code,
-        reason = "Implemented and documented at docs/architecture/bridge-wiring.md:334, \
-                  but the stdio request path never calls it. Wire-or-delete ruling \
-                  pending in issue #533 (MIK-7387)."
+        reason = "Unwired by a ratified design decision, not by oversight: the MRTR.7 \
+                  bridge design puts legacy stdio callers out of scope because stdio's \
+                  serial read loop deadlocks any bridged call \
+                  (docs/design/2026-09-05-mrtr7-bridge-wiring.md:61,290,312). Delete \
+                  this helper if stdio is never made concurrent; see issue #533."
     )
 )]
 fn stdio_caller_context<'a>(
