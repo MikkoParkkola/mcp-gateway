@@ -294,6 +294,39 @@ pub trait ClientChannel: Send + Sync {
     ) -> Result<Value, DeliveryError>;
 }
 
+/// A [`ClientChannel`] for a transport that cannot reach a client at all.
+///
+/// A null object rather than an `Option<&dyn ClientChannel>` on the caller
+/// context: an `Option` puts the "is there anywhere to send this" decision at
+/// every read site, where one site forgetting it fails open. Here the answer
+/// is the channel itself, and the only thing it can do is refuse.
+///
+/// Stdio carries this. The stdio dispatcher runs with no `ProxyManager` in
+/// scope — that type is HTTP-only — so there is no session to put a request on
+/// and [`DeliveryError::NoSession`] is the literal truth, not a stand-in for
+/// one. Refusing here is also what MIK-7387 will change: until it lands, an
+/// initialized stdio caller stays refused. Two halves, proven separately: the
+/// stdio caller context sets this channel (grep `NoClientChannel` under
+/// `src/gateway/server/`), and the refusal it then yields is pinned over the
+/// whole admitted method set in `tests/mik_7212_mrtr7_bridge_acs.rs`. No test
+/// joins the two end to end yet; that row is `MIK-7212.WIRE.10` in the MRTR.7
+/// test plan and lands with the bridge's integration tests.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoClientChannel;
+
+#[async_trait::async_trait]
+impl ClientChannel for NoClientChannel {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> Result<Value, DeliveryError> {
+        Err(DeliveryError::NoSession)
+    }
+}
+
 /// The backend end: re-invoke the tool call with the answers collected so far.
 #[async_trait::async_trait]
 pub trait BackendInvoker: Send + Sync {
@@ -430,11 +463,19 @@ impl InputBridge<'_> {
 
     /// Put one round's prompts to the client and collect what came back.
     ///
-    /// A prompt that outlives its wait is dropped rather than failing the
-    /// call: the bound exists so one silent client cannot hold the exchange
-    /// open, and the backend is still owed the round it asked for. A client
-    /// that *answered* something unusable is the other case, and that one ends
-    /// the call, because an answer the gateway cannot read is not silence.
+    /// A prompt that outlives its wait ends the call, and WHICH bound ended the
+    /// wait is which failure it is. The wait is the shorter of `per_prompt` and
+    /// the aggregate remainder, so when the remainder is the shorter one the
+    /// budget is gone and no key owns that — [`BridgeError::Deadline`]. When
+    /// the budget is still live, the silence belongs to the prompt that was in
+    /// flight and is attributed to its key.
+    ///
+    /// The prompt is never simply skipped. Doing so retried the backend with
+    /// that key absent, which is the shape a question nobody asked also has, so
+    /// a client that stopped answering reached the backend as one that was
+    /// never consulted. A client that *answered* something unusable is a third
+    /// case and has always ended the call, because an answer the gateway cannot
+    /// read is not silence.
     async fn ask(
         &self,
         session_id: &str,
@@ -445,12 +486,23 @@ impl InputBridge<'_> {
         for prompt in prompts {
             let id = format!("{}{}", prompt.kind.prefix(), uuid::Uuid::new_v4());
             let left = self.bounds.aggregate.saturating_sub(started.elapsed());
+            let wait = self.bounds.per_prompt.min(left);
             let sent =
                 self.channel
                     .send_request(session_id, &id, prompt.kind.method(), prompt.params);
-            let Ok(reply) = tokio::time::timeout(self.bounds.per_prompt.min(left), sent).await
-            else {
-                continue;
+            let Ok(reply) = tokio::time::timeout(wait, sent).await else {
+                // `min` yields `left` exactly when `left <= per_prompt`, the tie
+                // included, which is the discriminator R8a spells: the aggregate
+                // remainder was the binding bound, so the budget is spent and
+                // there is no key to blame for it.
+                return Err(if wait == left {
+                    BridgeError::Deadline
+                } else {
+                    BridgeError::Delivery {
+                        key: prompt.key,
+                        error: DeliveryError::TimedOut,
+                    }
+                });
             };
             let answer = reply
                 .and_then(|reply| Self::project(prompt.kind, &reply))

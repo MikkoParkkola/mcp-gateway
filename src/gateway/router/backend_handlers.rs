@@ -844,8 +844,12 @@ pub(super) async fn backend_handler(
             // direct-route clients must receive the ID they supplied.
             response.id = Some(id.clone());
             if method == "tools/list" {
-                normalize_tools_list_response(&name, &mut response);
+                // Redaction FIRST, then the trust stamp. The firewall may remove
+                // a `$defs` entry a surviving `$ref` points at, so a verdict
+                // computed before it can say `within` about a document the
+                // client never receives.
                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
+                normalize_tools_list_response(&name, &mut response);
             } else if method == "tools/call" {
                 scan_direct_backend_response(
                     &state,

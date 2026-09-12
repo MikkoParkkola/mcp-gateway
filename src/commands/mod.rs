@@ -5,6 +5,7 @@
 //! Each public function corresponds to a top-level `Command` variant and
 //! returns an `ExitCode` so `main` can remain a thin dispatcher.
 
+mod accounts;
 #[cfg(feature = "webui")]
 mod add_remove;
 mod cap;
@@ -25,6 +26,7 @@ mod stats;
 mod trust;
 mod upgrade;
 
+pub use accounts::run_accounts_command;
 #[cfg(feature = "webui")]
 pub use add_remove::{run_add_command, run_get_command, run_list_command, run_remove_command};
 pub use cap::run_cap_command;

@@ -53,6 +53,7 @@ const ASSERTION_TTL_SECS: i64 = 300;
 /// custody. No claim is made that a gateway opened this store.
 fn accounts_config(ids: &[&str]) -> AccountsConfig {
     AccountsConfig {
+        adapters: Vec::new(),
         schema_version: "accounts.v1".to_string(),
         enabled: true,
         deployment: "single_process".to_string(),
@@ -250,6 +251,8 @@ fn caller<'a>(verified_identity: Option<&'a VerifiedIdentity>) -> MetaMcpCallerC
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
 

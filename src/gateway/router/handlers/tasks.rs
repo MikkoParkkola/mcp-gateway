@@ -276,6 +276,8 @@ async fn recover_from_upstream(
                 crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
             retry: &crate::protocol::mrtr::NO_RETRY,
             task: None,
+            era: crate::protocol::meta::Era::Modern,
+            channel: &crate::gateway::input_bridge::NoClientChannel,
         };
         // A fresh token for THIS read, from the gateway-namespaced recovery
         // field. Missing or expired denies before any query; nothing spent is

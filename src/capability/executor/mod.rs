@@ -73,6 +73,15 @@ pub struct CapabilityExecutor {
     /// Shared authorization-policy generation. Bumpers clone this Arc;
     /// readers use the `u64` snapshot on [`CapabilityExecutionContext`].
     pub(super) policy_epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
+    /// The gateway's per-descriptor account strategies, when this executor
+    /// belongs to a gateway.
+    ///
+    /// `None` for a standalone executor: there is then no account catalogue,
+    /// and a capability naming one fails CLOSED at execution rather than
+    /// resolving the gateway-held `oauth:<provider>` token. This is a handle on
+    /// the ONE registry the shared installer wrote to — not a second store.
+    pub(super) account_strategies:
+        Option<Arc<crate::identity_propagation::AccountStrategyRegistry>>,
 }
 
 /// Maximum number of send attempts (1 initial + 2 retries) for transient
@@ -215,6 +224,7 @@ impl CapabilityExecutor {
             health: crate::failsafe::HealthTracker::new("capabilities"),
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
+            account_strategies: None,
         }
     }
 
@@ -245,6 +255,44 @@ impl CapabilityExecutor {
         self
     }
 
+    /// Resolve `auth.account` references against the gateway's per-descriptor
+    /// account strategies.
+    ///
+    /// The SAME registry the shared installer wrote to, so a REST capability
+    /// and an MCP backend naming one descriptor reach one strategy instance.
+    #[must_use]
+    pub(crate) fn with_account_strategies(
+        mut self,
+        registry: Arc<crate::identity_propagation::AccountStrategyRegistry>,
+    ) -> Self {
+        self.account_strategies = Some(registry);
+        self
+    }
+
+    /// TEST SEAM: swap the outbound HTTP client.
+    ///
+    /// The production client pins DNS, which a fixture's `localhost` endpoint
+    /// cannot satisfy. Swapping the CLIENT — the same thing the existing
+    /// `cacheable_counting_executor` fixture does by writing the field directly
+    /// — is what lets a warm-cache test run WITHOUT `allow_loopback_egress`,
+    /// which disables caching outright. This relaxes no SSRF check: the URL
+    /// still goes through `validate_capability_url_for_context`, and the flag
+    /// that opens IP-literal egress is untouched. `cfg(test)` only, so no
+    /// production path can reach it.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_test_http_client(mut self, client: Client) -> Self {
+        self.client = client;
+        self
+    }
+
+    /// The account catalogue this executor validates and resolves against.
+    pub(crate) fn account_strategies(
+        &self,
+    ) -> Option<&crate::identity_propagation::AccountStrategyRegistry> {
+        self.account_strategies.as_deref()
+    }
+
     /// Whether outbound transport is currently considered healthy.
     #[must_use]
     pub fn is_healthy(&self) -> bool {
@@ -273,6 +321,7 @@ impl CapabilityExecutor {
             health: crate::failsafe::HealthTracker::new("capabilities"),
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
+            account_strategies: None,
         }
     }
 
@@ -332,6 +381,21 @@ impl CapabilityExecutor {
         let provider = capability
             .primary_provider()
             .ok_or_else(|| Error::Config("No primary provider configured".to_string()))?;
+
+        // THE ACCOUNT IS RESOLVED BEFORE ANY CACHE IS CONSULTED.
+        //
+        // A cache key built before the account is known cannot name the account
+        // holder, so the first caller's cached result would be handed to the
+        // next one. This resolves the capability's PRIMARY `auth.account`
+        // reference — carrying the credential the invoke path already resolved
+        // when there is one, and rechecking it against the same registry either
+        // way — and publishes its opaque binding onto the context the key below
+        // is built from. A capability with no account reference, and an explicit
+        // `shared` descriptor, are untouched: both keep the existing key and the
+        // existing static credential path. Every other refusal returns HERE,
+        // before a lookup, so a request that may not have this account can
+        // neither be served from cache nor reach the wire.
+        let context = self.prepare_account_context(capability, context).await?;
 
         // Check cache first. Loopback-relaxed fetches never enter the store.
         // The key uses the invoke-path snapshot on `context` (revision, profile,
@@ -466,7 +530,9 @@ impl CapabilityExecutor {
 
         // Add headers; skip Authorization when auth.param is set (credential
         // goes as a query param instead of a header).
-        let headers = self.build_headers(config, &capability.auth, params).await?;
+        let headers = self
+            .build_headers(config, &capability.auth, params, context)
+            .await?;
         request = request.headers(headers);
 
         // Inject auth credential as a query parameter when auth.param is specified
@@ -474,7 +540,7 @@ impl CapabilityExecutor {
         if let Some(ref param_name) = capability.auth.param
             && capability.auth.required
         {
-            let credential = self.fetch_credential(&capability.auth).await?;
+            let credential = self.fetch_credential(&capability.auth, context).await?;
             request = request.query(&[(param_name.as_str(), credential.as_str())]);
         }
 
@@ -578,6 +644,7 @@ impl CapabilityExecutor {
         config: &RestConfig,
         auth: &super::AuthConfig,
         params: &Value,
+        context: &CapabilityExecutionContext,
     ) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
 
@@ -599,7 +666,7 @@ impl CapabilityExecutor {
 
         // Skip header injection when auth.param is set (credential goes as query param).
         if auth.required && auth.param.is_none() {
-            self.inject_auth(&mut headers, auth).await?;
+            self.inject_auth(&mut headers, auth, context).await?;
         }
 
         Ok(headers)
@@ -615,8 +682,30 @@ impl CapabilityExecutor {
         &self,
         headers: &mut HeaderMap,
         auth: &super::AuthConfig,
+        context: &CapabilityExecutionContext,
     ) -> Result<()> {
-        let credential = self.fetch_credential(auth).await?;
+        // A recognized `auth.account` is resolved through the SHARED identity
+        // resolver — the same strategy instance an MCP backend bound to that
+        // descriptor holds — and its headers go on the wire VERBATIM: the
+        // provider's own `token_type` is authority this executor must not
+        // reformat, and a strategy may mint more than one header. `Ok(None)`
+        // means either no account reference or an explicit `shared` descriptor,
+        // both of which continue on the existing static path below. Any refusal
+        // returns here and never reaches it.
+        if let Some(account_headers) = self.resolve_account_headers(auth, context).await? {
+            for (name, value) in account_headers {
+                let header_name: HeaderName = name.parse().map_err(|_| {
+                    Error::Config("Invalid account credential header name".to_string())
+                })?;
+                let header_value: HeaderValue = value
+                    .parse()
+                    .map_err(|_| Error::Config("Invalid credential format".to_string()))?;
+                headers.insert(header_name, header_value);
+            }
+            return Ok(());
+        }
+
+        let credential = self.fetch_credential(auth, context).await?;
 
         let header_name: HeaderName = auth
             .header

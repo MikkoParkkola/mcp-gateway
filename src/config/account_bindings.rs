@@ -159,25 +159,7 @@ fn compile_one(
         DescriptorMode::PersonalManaged => {
             validate_managed_consumer(name, reference, backend)?;
             let account = account_key_descriptor(name, reference, descriptor)?;
-            let propagation = IdentityPropagationConfig {
-                // The EXISTING kind, not a new one: managed custody dispatches
-                // through the same `IdentityPropagation` trait every other
-                // strategy does.
-                strategy: PropagationStrategyKind::Vault,
-                // The descriptor's own RFC 8707 resource is the audience the
-                // credential is scoped to; it is also half of the account key,
-                // so cache isolation and custody addressing cannot drift.
-                audience: account.resource.clone(),
-                // A managed account is one person's credential. There is no
-                // best-effort mode: without the account there is nothing to
-                // downgrade to that would still be that person.
-                required: true,
-                // A backend that answered as one user must not reuse that
-                // session for the next one (IDP.7).
-                session_mode: SessionMode::PerUser,
-                token_exchange_endpoint: None,
-                token_exchange_scope: None,
-            };
+            let propagation = managed_propagation(&account);
             (Some(propagation), Some(account))
         }
         DescriptorMode::External => {
@@ -288,4 +270,208 @@ fn validate_managed_consumer(name: &str, reference: &str, backend: &BackendConfi
         )));
     }
     Ok(())
+}
+
+/// The propagation a `personal_managed` descriptor compiles to.
+///
+/// ONE function, because there are now two consumers of that compilation — the
+/// backend reference above and the descriptor itself below — and a second copy
+/// of the audience, the required flag or the session mode would be a second
+/// policy nobody validated.
+fn managed_propagation(account: &AccountKeyDescriptor) -> IdentityPropagationConfig {
+    IdentityPropagationConfig {
+        // The EXISTING kind, not a new one: managed custody dispatches
+        // through the same `IdentityPropagation` trait every other
+        // strategy does.
+        strategy: PropagationStrategyKind::Vault,
+        // The descriptor's own RFC 8707 resource is the audience the
+        // credential is scoped to; it is also half of the account key,
+        // so cache isolation and custody addressing cannot drift.
+        audience: account.resource.clone(),
+        // A managed account is one person's credential. There is no
+        // best-effort mode: without the account there is nothing to
+        // downgrade to that would still be that person.
+        required: true,
+        // A backend that answered as one user must not reuse that
+        // session for the next one (IDP.7).
+        session_mode: SessionMode::PerUser,
+        token_exchange_endpoint: None,
+        token_exchange_scope: None,
+    }
+}
+
+/// One configured descriptor, compiled WITHOUT reference to any backend.
+///
+/// A REST capability names a descriptor MAP KEY directly and may be that
+/// account's only consumer, so installation cannot be conditional on some MCP
+/// backend also naming it.
+#[derive(Clone, Debug)]
+pub(crate) struct CompiledDescriptor {
+    /// The `accounts.descriptors` map key.
+    pub(crate) descriptor_id: String,
+    /// The descriptor's logical OAuth provider id.
+    pub(crate) provider: String,
+    /// The declared mode, as written.
+    pub(crate) mode: DescriptorMode,
+    /// `None` for `shared`: existing static behaviour is preserved exactly.
+    pub(crate) propagation: Option<IdentityPropagationConfig>,
+    /// The five-field account-key descriptor, for `personal_managed` only.
+    pub(crate) account: Option<AccountKeyDescriptor>,
+}
+
+/// Compile every declared descriptor, or refuse.
+///
+/// # Errors
+///
+/// [`Error::ConfigValidation`] for a managed descriptor missing the
+/// resource/issuer the account key is built from, or an external descriptor
+/// with no `external_strategy`. `validate_descriptors` refuses both earlier;
+/// this re-checks rather than unwrapping, because a compile that panicked on an
+/// unvalidated `Config` would turn an operator error into a crash.
+pub(crate) fn compile_descriptors(config: &Config) -> Result<Vec<CompiledDescriptor>> {
+    let Some(descriptors) = config
+        .accounts
+        .as_ref()
+        .and_then(|accounts| accounts.descriptors.as_ref())
+    else {
+        return Ok(Vec::new());
+    };
+    descriptors
+        .iter()
+        .map(|(id, descriptor)| compile_descriptor(id, descriptor))
+        .collect()
+}
+
+/// Compile one declared descriptor.
+fn compile_descriptor(id: &str, descriptor: &AccountDescriptor) -> Result<CompiledDescriptor> {
+    let (propagation, account) = match descriptor.mode {
+        DescriptorMode::PersonalManaged => {
+            let (Some(resource), Some(issuer)) =
+                (descriptor.resource.as_deref(), descriptor.issuer.as_deref())
+            else {
+                return Err(Error::ConfigValidation(format!(
+                    "personal_managed account descriptor '{id}' is missing the resource/issuer \
+                     the account key is built from"
+                )));
+            };
+            let account = AccountKeyDescriptor {
+                descriptor_id: id.to_string(),
+                provider: descriptor.provider.clone(),
+                resource: resource.to_string(),
+                issuer: issuer.to_string(),
+            };
+            (Some(managed_propagation(&account)), Some(account))
+        }
+        DescriptorMode::External => {
+            let strategy = descriptor.external_strategy.clone().ok_or_else(|| {
+                Error::ConfigValidation(format!(
+                    "external account descriptor '{id}' declares no external_strategy"
+                ))
+            })?;
+            (Some(strategy), None)
+        }
+        // Existing shared behaviour, preserved verbatim.
+        DescriptorMode::Shared => (None, None),
+    };
+    Ok(CompiledDescriptor {
+        descriptor_id: id.to_string(),
+        provider: descriptor.provider.clone(),
+        mode: descriptor.mode,
+        propagation,
+        account,
+    })
+}
+
+/// The backend configurations a gateway actually runs with, keyed by registry
+/// name.
+///
+/// The reload path constructs replacement backends from whatever config it is
+/// handed, so it must be handed THIS one. A bound backend rebuilt from the raw
+/// config carries no `identity_propagation` at all, which is not a downgrade to
+/// a shared credential but the absence of any credential — discovered by a
+/// caller, at dispatch.
+///
+/// An unresolvable reference yields no binding and therefore the raw config.
+/// That is not a fallback: `Config::validate_with_env` refuses such a file
+/// before it is published, and a backend that still reached dispatch with an
+/// unresolved reference is refused by `refuse_unbound_account_backend`.
+pub(crate) fn effective_backends(config: &Config) -> BTreeMap<String, BackendConfig> {
+    let bound = compile(config).unwrap_or_default();
+    config
+        .backends
+        .iter()
+        .map(|(name, backend)| {
+            let effective = bound
+                .get(name)
+                .map_or_else(|| backend.clone(), |bound| bound.effective(backend));
+            (name.clone(), effective)
+        })
+        .collect()
+}
+
+/// Why a reload must not apply an account-binding change in place.
+///
+/// Returns `Some(reason)` when applying the file live would let a running
+/// backend keep credentials that no longer describe its account. Changing a
+/// descriptor's authority, resource, issuer, client id or requested scopes
+/// changes the descriptor revision every existing lease was minted under, and
+/// repointing a backend at another account is a different person's credential.
+///
+/// Eager metadata/authority replacement is NOT implemented in this slice. The
+/// honest answer is therefore the existing restart-required posture applied as
+/// a fail-closed guard BEFORE any registry mutation — not a live replacement
+/// that quietly keeps the old credentials.
+///
+/// `None` for an unchanged binding and for any edit that leaves every
+/// referenced descriptor identical, so ordinary reloads are unaffected.
+pub(crate) fn reload_binding_refusal(old: &Config, new: &Config) -> Option<String> {
+    let old_descriptors = old
+        .accounts
+        .as_ref()
+        .and_then(|accounts| accounts.descriptors.as_ref());
+    let new_descriptors = new
+        .accounts
+        .as_ref()
+        .and_then(|accounts| accounts.descriptors.as_ref());
+
+    let mut names: Vec<&String> = old.backends.keys().chain(new.backends.keys()).collect();
+    names.sort();
+    names.dedup();
+
+    for name in names {
+        let before = old.backends.get(name).and_then(|b| b.account.as_deref());
+        let after = new.backends.get(name).and_then(|b| b.account.as_deref());
+        if before != after {
+            return Some(format!(
+                "backend '{name}' changes its account binding (from '{}' to '{}'). The installed \
+                 strategy is built from the descriptor it was bound to, so applying this live \
+                 would either keep the previous account's credential or dispatch with none. \
+                 Restart to apply it.",
+                before.unwrap_or("none"),
+                after.unwrap_or("none")
+            ));
+        }
+        let Some(reference) = after else {
+            continue;
+        };
+        let unchanged = match (
+            old_descriptors.and_then(|d| d.get(reference)),
+            new_descriptors.and_then(|d| d.get(reference)),
+        ) {
+            (Some(before), Some(after)) => before == after,
+            // Unresolved on both sides is not this guard's refusal to make:
+            // `Config::validate_with_env` refuses that file outright.
+            (None, None) => true,
+            _ => false,
+        };
+        if !unchanged {
+            return Some(format!(
+                "account descriptor '{reference}', which backend '{name}' is bound to, changed. \
+                 Its authority, resource, issuer, client id and requested scopes define the \
+                 account key and the descriptor revision every existing lease was minted under, \
+                 so those credentials cannot be reused. Restart to apply it."
+            ));
+        }
+    }
+    None
 }
