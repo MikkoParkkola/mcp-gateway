@@ -374,6 +374,14 @@ mod capabilities {
 // ===========================================================================
 
 mod http {
+    /// The subscription ceiling every fixture in this file is built with.
+    ///
+    /// Read back by `available()` to tell "the listener went away" apart from
+    /// "the listener was never admitted", so the two uses must agree: a second
+    /// copy of this number would turn a fixture change into a test that spins
+    /// to its deadline instead of failing on what changed.
+    pub const SUBSCRIPTION_CAPACITY: usize = 64;
+
     use std::sync::Arc;
 
     use axum::body::Body;
@@ -552,7 +560,7 @@ mod http {
 
         // One registry, shared between the state the router reads and the
         // executor that publishes through it.
-        let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+        let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY));
         let tasks_dir = store_root.join("tasks");
         let deadline = tokio::time::Instant::now() + fixture::BOUND;
         let (tasks, task_executor) = loop {
@@ -1139,8 +1147,9 @@ mod ownership {
 
     use super::fixture;
     use super::http::{
-        modern, poll_unattributed_until_terminal, post_against, post_unattributed, public_mcp_auth,
-        state, state_from, state_holding, state_over, state_public_mcp, task_id_of, task_invoke,
+        SUBSCRIPTION_CAPACITY, modern, poll_unattributed_until_terminal, post_against,
+        post_unattributed, public_mcp_auth, state, state_from, state_holding, state_over,
+        state_public_mcp, task_id_of, task_invoke,
     };
 
     /// An id nothing ever created: the negative control every "indistinguishable
@@ -1653,13 +1662,6 @@ mod ownership {
     // stays invisible to every other one.
     // =======================================================================
 
-    /// The subscription ceiling this suite's fixtures are built with. The
-    /// registry hands out one permit per open stream and takes it back when the
-    /// stream is dropped, so the count is the only in-process observable that
-    /// tells "the listener went away" apart from "the listener was never
-    /// admitted".
-    const SUBSCRIPTION_CAPACITY: usize = 64;
-
     /// Both not-found verbs, each anchored to a KNOWN refusal rather than to
     /// two agreeing unknowns.
     ///
@@ -1709,50 +1711,6 @@ mod ownership {
             shape(fabricated),
             "'{method}' on another principal's task must be byte-identical to an id \
              that never existed"
-        );
-    }
-
-    /// The third admission path, asserted for disclosure and labelled for what
-    /// it cannot prove.
-    ///
-    /// `subscriptions/listen` narrows a foreign `taskIds` to the empty list IN
-    /// SILENCE rather than refusing (`src/gateway/router/handlers.rs:1050-1062`),
-    /// so both answers here are streams. That makes this pair an assertion that
-    /// the narrowing discloses nothing — NOT the discriminating oracle for a
-    /// privacy row. The two not-found refusals are.
-    async fn listen_discloses_nothing(
-        state: &Arc<AppState>,
-        principal: &str,
-        id_from: i64,
-        real_task: &str,
-    ) {
-        let (_, foreign) = post_against(
-            Arc::clone(state),
-            principal,
-            modern(
-                id_from,
-                "subscriptions/listen",
-                json!({ "taskIds": [real_task] }),
-                true,
-            ),
-        )
-        .await;
-        let (_, absent) = post_against(
-            Arc::clone(state),
-            principal,
-            modern(
-                id_from + 1,
-                "subscriptions/listen",
-                json!({ "taskIds": [FABRICATED_ID] }),
-                true,
-            ),
-        )
-        .await;
-        assert_eq!(
-            shape(foreign),
-            shape(absent),
-            "listening on another principal's task must be byte-identical to \
-             listening on an id that never existed"
         );
     }
 
@@ -1889,7 +1847,15 @@ mod ownership {
         refused_identically(&fixture.state, "key-b", 65, "tasks/get", &task_id).await;
         refused_identically(&fixture.state, "key-b", 67, "tasks/cancel", &task_id).await;
 
-        listen_discloses_nothing(&fixture.state, "key-b", 69, &task_id).await;
+        // NOT asserted here: a foreign `subscriptions/listen`. The route
+        // narrows a foreign `taskIds` to the empty list IN SILENCE rather than
+        // refusing (`src/gateway/router/handlers.rs:1050-1062`), so both the
+        // foreign and the fabricated answer are streams with no readable body
+        // over this helper — a comparison of the two cannot fail, whatever the
+        // gateway does. `ac_task_1_12_subscription_admission_hides_another_
+        // principals_task` already carries that pair, with the same ceiling
+        // recorded on it. The discriminating oracles for THIS row are the two
+        // refusals above.
 
         // A foreign cancel that mutated the task WHILE answering not-found
         // would satisfy every assertion above. The whole answer is compared,
@@ -1943,6 +1909,70 @@ mod ownership {
             "one create, one dispatch: no read, refusal or cancel re-runs the tool"
         );
         gate.release_all();
+    }
+
+    /// THE OTHER HALF OF "SURVIVES". The row above proves the RECORD outlives
+    /// the connection; it cannot prove the WORK does, because the backend is
+    /// held for its whole life and the task is then cancelled. Here the held
+    /// dispatch is released AFTER the stream is gone, and the task runs to a
+    /// completed result — a gateway that abandoned the worker with the client
+    /// would leave the record `working` for ever and fail on the bound.
+    #[tokio::test]
+    async fn lifecycle_2_a_task_whose_client_vanished_still_runs_to_completion() {
+        let (fixture, gate) = state_holding().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(100, "mik-7311-lifecycle-2-completes"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
+        fixture.backend.wait_for_calls(1).await;
+
+        let (status, admitted) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(
+                102,
+                "subscriptions/listen",
+                json!({ "taskIds": [task_id.clone()] }),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::OK,
+            "the owner's listen must be admitted: {admitted}"
+        );
+        await_no_open_subscriptions(&fixture.state).await;
+
+        // The work was held until after the connection was lost, so what
+        // finishes it can only be the gateway's own executor.
+        gate.release_all();
+
+        let settled = poll_until_terminal(&fixture.state, "key-a", 103, &task_id).await;
+        assert_eq!(
+            settled.pointer("/result/status").and_then(Value::as_str),
+            Some("completed"),
+            "a task whose client vanished must still reach a terminal completed \
+             status: {settled}"
+        );
+        assert_eq!(
+            settled
+                .pointer("/result/result/structuredContent/marker")
+                .and_then(Value::as_str),
+            Some("mik-7272-backend-answered"),
+            "the stored result must be the BACKEND's answer — a terminal status \
+             carrying no result is a task that was closed, not one that ran: \
+             {settled}"
+        );
+        assert_eq!(
+            fixture.backend.calls(),
+            1,
+            "the release finishes the dispatch already in flight; it does not \
+             start a second one"
+        );
     }
 
     /// A whole gateway is lost and a second one opens over the same store.
