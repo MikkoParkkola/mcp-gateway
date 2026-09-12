@@ -24,8 +24,8 @@ exactly what a reviewer is entitled to reject.
 |---|---|
 | Backend fixture | `benchmarks/workload/mcp_backend.py` |
 | Workload script | `benchmarks/workload/k6_workload.js` |
-| Gateway config (cells A-D) | `benchmarks/workload/gateway.workload.yaml` |
-| Gateway config (cell E) | `benchmarks/workload/gateway.workload.mixed.yaml` |
+| Gateway config template (cells A-D) | `benchmarks/workload/gateway.workload.yaml` |
+| Gateway config template (cell E) | `benchmarks/workload/gateway.workload.mixed.yaml` |
 | Runner | `benchmarks/workload/run_workload.sh` |
 | Evaluator | `benchmarks/workload/eval_workload.py` |
 | Evaluator self-check | `benchmarks/workload/test_eval_workload.py` |
@@ -151,10 +151,21 @@ git diff v3.5.0 HEAD -- examples/minimal.yaml examples/servers.yaml   # empty
 The `backends.<name>.command` stdio registration shape is unchanged across
 the range, and `--port` / `MCP_GATEWAY_PORT` is defined identically at
 `v3.5.0` and HEAD (`src/cli/mod.rs`). Cells therefore share **one
-byte-identical config**, `benchmarks/workload/gateway.workload.yaml`, with
-the port supplied per cell on the command line. Byte-identity is a stronger
-guarantee than three configs argued to be equivalent, and it is what the
-gating cells A, B and C run.
+byte-identical config**, rendered once per run from
+`benchmarks/workload/gateway.workload.yaml`, with the port supplied per cell
+on the command line. Byte-identity is a stronger guarantee than three configs
+argued to be equivalent, and it is what the gating cells A, B and C run.
+
+The committed file is a **template**, not the file the gateway loads. The
+gateway expands `${VAR}` in a backend's `headers` and `env` and in
+`capabilities.directories`, but **not** in `command`
+(`src/config/mod.rs::expand_env_vars`, read at freeze). A
+`${WORKLOAD_FIXTURE}` left in `command` would reach the shell verbatim and
+every cell would void at backend start. The runner therefore substitutes the
+fixture's absolute path once into `<run>/config/`, and all four gating cells
+load that single rendered file — so byte-identity is preserved, not traded
+away. `<run>/config.sha256` records the digest of both template and rendered
+file, which is what §11 pins.
 
 Cell E is the single exception: `gateway.workload.mixed.yaml` differs in
 exactly one token, pinning the fixture to a legacy protocol version while the
@@ -302,8 +313,10 @@ Filled before the first measured rep; empty pins void the run.
 | `benchmarks/workload/eval_workload.py` | (pinned at freeze) |
 | `benchmarks/workload/mcp_backend.py` | (pinned at freeze) |
 | `benchmarks/workload/k6_workload.js` | (pinned at freeze) |
-| `benchmarks/workload/gateway.workload.yaml` | (pinned at freeze) |
-| `benchmarks/workload/gateway.workload.mixed.yaml` | (pinned at freeze) |
+| `benchmarks/workload/gateway.workload.yaml` (template) | (pinned at freeze) |
+| `benchmarks/workload/gateway.workload.mixed.yaml` (template) | (pinned at freeze) |
+| `<run>/config/gateway.workload.yaml` (rendered) | (pinned at first rep) |
+| `<run>/config/gateway.workload.mixed.yaml` (rendered) | (pinned at first rep) |
 | k6 image digest | (pinned at freeze) |
 | cell A checkout SHA | (pinned at freeze) |
 | cell B checkout SHA | (pinned at freeze) |

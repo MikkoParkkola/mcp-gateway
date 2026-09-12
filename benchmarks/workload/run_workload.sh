@@ -43,12 +43,48 @@ MODERN_PROTOCOL="2026-07-28"
 # cell -> ref port config client-protocol
 cell_ref()    { case "$1" in A) echo "$REF_A";; B) echo "$REF_B";; *) echo "$REF_C";; esac; }
 cell_port()   { case "$1" in A) echo 39420;; B) echo 39421;; C) echo 39422;; D) echo 39423;; E) echo 39424;; esac; }
-cell_config() { case "$1" in E) echo "$HERE/gateway.workload.mixed.yaml";; *) echo "$HERE/gateway.workload.yaml";; esac; }
+# The gateway expands ${VAR} in a backend's `headers`, `env` and in
+# `capabilities.directories` -- NOT in `command` (src/config/mod.rs,
+# expand_env_vars). A ${WORKLOAD_FIXTURE} left in `command` would be passed to
+# the shell verbatim and every cell would void at backend start. So the
+# committed files are templates and the runner renders them once per run, with
+# the fixture's absolute path substituted. One render is shared by A, B, C and
+# D, which keeps the gating cells on a single byte-identical config file rather
+# than three files argued to be equivalent.
+CONFIG_DIR=""
+cell_config() { case "$1" in E) echo "$CONFIG_DIR/gateway.workload.mixed.yaml";; *) echo "$CONFIG_DIR/gateway.workload.yaml";; esac; }
+
+render_configs() {
+  local run="$1"
+  CONFIG_DIR="$run/config"
+  mkdir -p "$CONFIG_DIR"
+  local fixture="$HERE/mcp_backend.py"
+  [[ -f "$fixture" ]] || die "fixture not found at $fixture"
+  local name
+  for name in gateway.workload.yaml gateway.workload.mixed.yaml; do
+    python3 - "$HERE/$name" "$CONFIG_DIR/$name" "$fixture" <<'PY'
+import sys
+src, dst, fixture = sys.argv[1:4]
+text = open(src).read()
+if "${WORKLOAD_FIXTURE}" not in text:
+    raise SystemExit(f"void: {src} has no ${{WORKLOAD_FIXTURE}} placeholder")
+open(dst, "w").write(text.replace("${WORKLOAD_FIXTURE}", fixture))
+PY
+    sha256_of "$HERE/$name" "$CONFIG_DIR/$name" >> "$run/config.sha256"
+  done
+}
 cell_proto()  { case "$1" in D|E) echo "$MODERN_PROTOCOL";; *) echo "$LEGACY_PROTOCOL";; esac; }
 
 ARMS_DIR="${ARMS_DIR:-$HOME/perf-workload/arms}"
 
 die() { echo "void: $*" >&2; exit 3; }
+
+# Spark is Linux and has sha256sum; the fallback keeps the script runnable for
+# a dry read on a Mac rather than dying on the first digest.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"
+  else shasum -a 256 "$@"; fi
+}
 
 # --- build ------------------------------------------------------------------
 # --release --locked, deliberately outside CI's RUSTFLAGS: -Dwarnings. The
@@ -59,7 +95,10 @@ build_arm() {
   local sha; sha="$(git -C "$REPO" rev-parse "$ref")"
 
   echo "[build] cell $cell ref $ref sha $sha"
-  rm -rf "$dir"
+  # Retire the administrative entry too. `rm -rf` alone leaves a stale record in
+  # the shared worktree list that every other agent on this repo would see.
+  git -C "$REPO" worktree remove "$dir" 2>/dev/null || rm -rf "$dir"
+  git -C "$REPO" worktree prune
   git -C "$REPO" worktree add --detach "$dir" "$sha" >/dev/null
   ( cd "$dir" && cargo build --release --locked --features "$FEATURES" )
   echo "$sha" > "$dir/.checkout_sha"
@@ -77,6 +116,9 @@ do_build() {
 
 # --- gateway lifecycle ------------------------------------------------------
 GW_PID=""
+GW_PORT=""
+
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3>&- 2>/dev/null || true; return 0; }; return 1; }
 
 stop_gateway() {
   if [[ -n "$GW_PID" ]] && kill -0 "$GW_PID" 2>/dev/null; then
@@ -84,6 +126,16 @@ stop_gateway() {
     wait "$GW_PID" 2>/dev/null || true
   fi
   GW_PID=""
+  # The next rep voids on any listener, so wait for this cell's port to close
+  # rather than charging a lingering socket to the following arm.
+  if [[ -n "${GW_PORT:-}" ]]; then
+    local waited=0
+    while port_open "$GW_PORT"; do
+      sleep 0.2; waited=$((waited + 1))
+      [[ $waited -lt 100 ]] || break
+    done
+    GW_PORT=""
+  fi
 }
 trap stop_gateway EXIT
 
@@ -99,16 +151,17 @@ start_gateway() {
   # One gateway at a time. A second listener on any cell port voids the run.
   local other
   for other in 39420 39421 39422 39423 39424; do
-    if (exec 3<>"/dev/tcp/127.0.0.1/$other") 2>/dev/null; then
-      exec 3>&- 2>/dev/null || true
+    if port_open "$other"; then
       die "$rep: port $other already has a listener"
     fi
   done
 
   export WORKLOAD_FIXTURE="$HERE/mcp_backend.py"
+  [[ -n "$CONFIG_DIR" && -f "$config" ]] || die "$rep: config not rendered at $config"
 
   # argv is recorded here, before the process starts.
   GW_ARGV="$bin --config $config --port $port"
+  GW_PORT="$port"
   "$bin" --config "$config" --port "$port" \
     > "$run/$rep.gateway.stdout" 2> "$run/$rep.gateway.stderr" &
   GW_PID=$!
@@ -147,9 +200,13 @@ json.dump({
 }, open(path, "w"), indent=2)
 PY
 
-  # D1: three separate paths, no shared descriptor anywhere.
+  # D1: three separate paths, no shared descriptor anywhere. The script mount
+  # stays read-only; k6's own outputs go to a separate writable mount, so
+  # nothing is written back into the committed harness directory and there is
+  # no post-run rename to race against.
   docker run --rm --network host \
     -v "$HERE:/scripts:ro" \
+    -v "$run:/out" \
     -e BASE_URL="http://127.0.0.1:$port" \
     -e BACKEND_NAME="$BACKEND_NAME" \
     -e TOOL_NAME="$TOOL_NAME" \
@@ -158,13 +215,12 @@ PY
     -e SCENARIO=load \
     "$K6_IMAGE" run \
       --summary-trend-stats="avg,min,med,p(50),p(90),p(95),p(99),max" \
-      --summary-export="/scripts/.export.json" \
-      --out "json=/scripts/.stream.json" \
+      --summary-export="/out/$rep.summary.json" \
+      --out "json=/out/$rep.raw.json" \
       /scripts/k6_workload.js \
       > "$run/$rep.k6.txt" 2> "$run/$rep.k6.err" || die "$rep: k6 exited non-zero"
 
-  mv "$HERE/.export.json" "$run/$rep.summary.json"
-  mv "$HERE/.stream.json" "$run/$rep.raw.json"
+  [[ -s "$run/$rep.summary.json" ]] || die "$rep: k6 wrote no summary export"
 
   stop_gateway
   [[ "$measured" == "measured" ]] || rm -f "$run/$rep.summary.json"
@@ -174,6 +230,7 @@ PY
 do_measure() {
   local run="$1"
   mkdir -p "$run"
+  render_configs "$run"
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \
     "$(cat "$ARMS_DIR/A/.checkout_sha")" "$(cat "$ARMS_DIR/B/.checkout_sha")" \
@@ -212,9 +269,21 @@ PY
   echo "[done] run dir $run"
 }
 
+# One cell, one rep, discarded. Proves the plumbing -- config render, backend
+# spawn, health shape, k6 write path -- before twelve reps are spent finding out
+# the same thing. Its output is never scored.
+do_smoke() {
+  local run="$1" cell="${2:-C}"
+  mkdir -p "$run"
+  render_configs "$run"
+  run_rep "$cell" "smoke-$cell" "$run" warmup
+  echo "[smoke] ok: cell $cell plumbing clean; see $run/smoke-$cell.health.json"
+}
+
 case "${1:-}" in
   build)   do_build ;;
+  smoke)   do_smoke "${2:?run dir required}" "${3:-C}" ;;
   measure) do_measure "${2:?run dir required}" ;;
   all)     do_build; do_measure "${2:?run dir required}" ;;
-  *) echo "usage: $0 {build|measure|all} <run-dir>" >&2; exit 2 ;;
+  *) echo "usage: $0 {build|smoke|measure|all} <run-dir> [cell]" >&2; exit 2 ;;
 esac
