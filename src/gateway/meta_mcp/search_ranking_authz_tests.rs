@@ -629,3 +629,261 @@ async fn a_zero_relevance_candidate_cannot_be_lifted_by_usage() {
          usage factor is multiplicative, not additive"
     );
 }
+
+// ============================================================================
+// INVARIANT A on the MCP-backend routes
+//
+// `collect_search_capability_matches` and `collect_code_mode_capability_matches`
+// guard the *capability* backend. The MCP-backend collectors are separate code
+// with their own copies of the guard, so everything above leaves them unpinned.
+//
+// The arrange never touches `CachedMetadata::store_shared` (`pub(super)`).
+// `collect_search_backend_matches` reads the cache through
+// `backend_tools_for_discovery(&backend, false)` — `allow_empty_cache_fetch` is
+// false, so an empty cache yields nothing and the search would pass vacuously.
+// Calling `Backend::get_tools_shared()` once in arrange fills `tools_cache` over
+// the transport, through production code, exactly as a live backend would.
+// ============================================================================
+
+/// An MCP backend name containing `QUERY`, so Code Mode admits its tools: Code
+/// Mode matches against the qualified `server:tool` (`search.rs:186`).
+const MCP_BACKEND: &str = "zebracorn_hub";
+
+/// Tools for the MCP-backend fixtures. `weak_match` is served FIRST, so a
+/// collector that leaked would leak in this order.
+const MCP_TOOLS: &[(&str, &str)] = &[
+    ("weak_match", "a zebracorn adjacent helper"),
+    (QUERY, "the exact name match"),
+];
+
+/// A transport that serves one canned `tools/list` and nothing else.
+///
+/// `Backend::set_transport_for_test` is an existing production test hook; this
+/// is the `tools/list` counterpart of `ToolCallTestTransport` in `tests.rs`.
+struct ToolsListTestTransport {
+    tools: Value,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for ToolsListTestTransport {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        assert_eq!(method, "tools/list", "fixture serves only tools/list");
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            crate::protocol::RequestId::Number(1),
+            json!({ "tools": self.tools }),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A registered MCP backend whose tool cache is warm.
+async fn mcp_backend(name: &str, tools: &[(&str, &str)]) -> Arc<crate::backend::Backend> {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+
+    let backend = Arc::new(Backend::new(
+        name,
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let payload: Vec<Value> = tools
+        .iter()
+        .map(|(n, d)| json!({ "name": n, "description": d, "inputSchema": { "type": "object" } }))
+        .collect();
+    backend.set_transport_for_test(Arc::new(ToolsListTestTransport {
+        tools: json!(payload),
+    }));
+
+    // Warms `tools_cache` through production code. Guards every assertion
+    // below: a cold cache makes the search collect nothing and every
+    // "nothing leaked" claim vacuous.
+    let warmed = backend
+        .get_tools_shared()
+        .await
+        .expect("fixture backend tools/list failed");
+    assert_eq!(
+        warmed.len(),
+        tools.len(),
+        "fixture backend cache did not warm"
+    );
+    backend
+}
+
+/// A gateway whose only backend is a warm MCP backend (no capabilities).
+async fn meta_with_mcp_backend(registry: ProfileRegistry, code_mode: bool) -> MetaMcp {
+    let backends = Arc::new(BackendRegistry::new());
+    assert!(
+        backends.register(mcp_backend(MCP_BACKEND, MCP_TOOLS).await),
+        "fixture backend failed to register"
+    );
+    MetaMcp::with_features(
+        backends,
+        None,
+        None,
+        Some(Arc::new(SearchRanker::new())),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(code_mode)
+    .with_profile_registry(registry)
+}
+
+/// CONTROL — the warm MCP backend is discoverable when the profile allows it.
+///
+/// Without this, a cold cache and a working guard are indistinguishable: both
+/// yield an empty match list, and the two denial tests below would pass for the
+/// wrong reason.
+#[tokio::test]
+async fn permissive_profile_sees_the_mcp_backend_tools() {
+    let meta = meta_with_mcp_backend(
+        registry_with_default(
+            "open",
+            RoutingProfileConfig {
+                description: "no backend or tool restrictions".to_string(),
+                ..Default::default()
+            },
+        ),
+        false,
+    )
+    .await;
+
+    let response = meta
+        .search_tools(&json!({ "query": QUERY }), None)
+        .await
+        .unwrap();
+
+    let mut names = tool_names(&response);
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["weak_match".to_string(), QUERY.to_string()],
+        "both MCP backend tools must be discoverable when the profile allows them"
+    );
+    assert_eq!(
+        response["total_available"], 2,
+        "both MCP backend tools must be counted as candidates"
+    );
+}
+
+/// INVARIANT A on the classic MCP-backend route —
+/// `src/gateway/meta_mcp/search.rs:329` (`collect_search_backend_matches`, the
+/// `profile.backend_allowed(&backend.name)` guard).
+///
+/// `total_available` is the pre-truncation candidate count, so zero here means
+/// the tools were never collected, not collected then filtered.
+#[tokio::test]
+async fn denied_mcp_backend_never_enters_the_candidate_set() {
+    let meta = meta_with_mcp_backend(
+        registry_with_default(
+            "locked",
+            RoutingProfileConfig {
+                description: "denies the MCP backend wholesale".to_string(),
+                deny_backends: Some(vec![MCP_BACKEND.to_string()]),
+                ..Default::default()
+            },
+        ),
+        false,
+    )
+    .await;
+
+    let response = meta
+        .search_tools(&json!({ "query": QUERY }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        Vec::<String>::new(),
+        "a denied MCP backend must contribute no matches"
+    );
+    assert_eq!(
+        response["total_available"], 0,
+        "denied MCP backend tools must not be counted as candidates: \
+         authorization has to run at collection time"
+    );
+}
+
+/// INVARIANT A on the Code Mode MCP-backend route —
+/// `src/gateway/meta_mcp/search.rs:238` (`collect_code_mode_backend_matches`).
+///
+/// Code Mode finalises through `finalize_search_matches`, which emits no
+/// pre-truncation count, so this asserts survivor absence only.
+#[tokio::test]
+async fn code_mode_denied_mcp_backend_contributes_no_matches() {
+    let meta = meta_with_mcp_backend(
+        registry_with_default(
+            "locked",
+            RoutingProfileConfig {
+                description: "denies the MCP backend wholesale".to_string(),
+                deny_backends: Some(vec![MCP_BACKEND.to_string()]),
+                ..Default::default()
+            },
+        ),
+        true,
+    )
+    .await;
+
+    let response = meta
+        .code_mode_search(&json!({ "query": QUERY }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        Vec::<String>::new(),
+        "a denied MCP backend must contribute no Code Mode matches"
+    );
+}
+
+/// INVARIANT A, mixed authorization on the MCP-backend route — the
+/// `profile.tool_allowed(&t.name)` filter that follows the backend guard
+/// (`src/gateway/meta_mcp/search.rs:341`).
+///
+/// The backend stays ALLOWED and one tool is denied, so a denied tool competes
+/// against an allowed relevant one rather than against an empty result. The
+/// permissive control above proves both are otherwise discoverable.
+#[tokio::test]
+async fn a_forbidden_mcp_tool_loses_to_an_allowed_one() {
+    let meta = meta_with_mcp_backend(
+        registry_with_default(
+            "partial",
+            RoutingProfileConfig {
+                description: "allows the backend, denies one tool".to_string(),
+                deny_tools: Some(vec![QUERY.to_string()]),
+                ..Default::default()
+            },
+        ),
+        false,
+    )
+    .await;
+
+    let response = meta
+        .search_tools(&json!({ "query": QUERY }), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&response),
+        vec!["weak_match".to_string()],
+        "the denied tool must be absent while its allowed sibling survives"
+    );
+    assert_eq!(
+        response["total_available"], 1,
+        "the denied tool must not be counted as a candidate"
+    );
+}
