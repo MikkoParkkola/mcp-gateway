@@ -169,9 +169,9 @@ CASES = [
         "prerelease-skip-moved-onto-a-step",
         "release.yml",
         "    if: needs.verify.outputs.is_prerelease != 'true'\n"
-        "    runs-on: avrea-ubuntu-latest-4-vcpu\n\n"
+        "    runs-on: ubuntu-latest\n\n"
         "    steps:\n      - name: Download checksums for the verified tag\n",
-        "    runs-on: avrea-ubuntu-latest-4-vcpu\n\n"
+        "    runs-on: ubuntu-latest\n\n"
         "    steps:\n      - name: Download checksums for the verified tag\n"
         "        if: needs.verify.outputs.is_prerelease != 'true'\n",
         CAUGHT,
