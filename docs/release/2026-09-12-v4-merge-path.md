@@ -46,6 +46,16 @@ origin/codex/v4-next-integration -- src/` returns three hits and all three are i
 nowhere. `MIK-7387.STDIO.1`-`.3` therefore cost more on integration than on `main`: the
 work is to restore a production call site as well as to implement the channel.
 
+A third loss sits in the gate itself. `main` runs
+`cargo clippy --all-targets --all-features -- -D warnings` at `.github/workflows/ci.yml:180`;
+the same line on integration reads `cargo clippy --all-features -- -D warnings`. Integration
+does not lint test, bench or example targets at all. Two consequences follow. Any lint count
+measured against integration's CI is an undercount of what `main`'s CI will demand the moment
+the branches meet, so a branch that is green there can go red on merge without a line of
+source changing. And `--all-targets` is the command this repository documents as its gate, so
+the weaker line is the drift, not the stronger one. Restore it in the same pass that resolves
+the merge, and measure the lint backlog against the restored command.
+
 ## 3. The stacked PRs are small; their diffs are not
 
 Every PR targeting `codex/v4-next-integration` carries 1-4 commits. The five-figure diffs
