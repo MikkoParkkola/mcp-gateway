@@ -31,7 +31,21 @@ line. The "56 -> 46 open" figure is withdrawn.
 
 Not open, despite reading as open:
 - `MIK-7272.ORDER.3b`, `NFR.COMPAT.3` — N/A.
-- `NFR.SEC.7` — phantom; recorded in `RELEASE-4.0.0-blocking-rollup.md`.
+- `MIK-7214.HEADER.7-9`, `MIK-7217.DISCOVER`, `MIK-7246.CONFIRM` — rows in the
+  audit summary table, not criteria rows. A regex anchored on `| MIK-` picks
+  them up and inflates both numerator and denominator.
+
+`NFR.SEC.7` is neither of those. Its two halves grade against different
+artefacts and only one of them is closed:
+
+- **Candidate build** — verified on the release line and recorded in
+  `RELEASE-4.0.0-blocking-rollup.md`. Calling the whole row a phantom on that
+  evidence, as an earlier revision of this document did, is withdrawn.
+- **Listening install** — open. The criterion and the rollup both retain the
+  deployment obligation, and the running process reports `3.4.0-f30539af`,
+  which predates the control commit `5d25f104`. Cutover plus a live drift
+  check remains a deployment gate and an operator decision; it is not closed
+  by the build being clean.
 - `MIK-7214.HEADER.7-9`, `MIK-7217.DISCOVER`, `MIK-7246.CONFIRM` — rows in the
   audit summary table, not criteria rows. A regex anchored on `| MIK-` picks
   them up and inflates both numerator and denominator.
