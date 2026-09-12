@@ -45,6 +45,14 @@ impl SessionLifecycle {
     ///
     /// The callback receives the session ID string when a session disconnects.
     /// Name is used for debug logging only.
+    ///
+    /// **Precondition (D5):** `reap` is unconditional — it fires a handler even
+    /// while a request for the same key is in flight, because no lock protects
+    /// a key between `track` and its deadline. A registered handler may
+    /// therefore only reclaim state whose loss is indistinguishable from an
+    /// eviction the caller's own bookkeeping already tolerates (a cache entry,
+    /// a `DashMap` slot rebuilt on next use) — never state a live request
+    /// depends on to complete correctly.
     pub fn register(
         &self,
         name: impl Into<String>,
@@ -154,6 +162,45 @@ impl SessionLifecycle {
     pub fn handler_count(&self) -> usize {
         self.callbacks.read().len()
     }
+}
+
+/// Idle deadline written by a tracking write site: `now + IDLE_TTL`.
+///
+/// 300s, matching the shipped `PER_USER_IDLE_TTL`
+/// (`gateway/server/mod.rs`). A STATED ASSUMPTION (MIK-7215 CONTROL.4,
+/// team-lead ruling 2026-09-07/R3): no cadence knob is added beside it —
+/// reaping rides the host loop's own `session_reaper_interval`, so a second
+/// interval constant here would have no reader.
+pub const IDLE_TTL: u64 = 300;
+
+/// Build the one production `SessionLifecycle` and register its one real
+/// consumer today, `Firewall::on_session_end`.
+///
+/// The single named function startup and tests both call (MIK-7215
+/// CONTROL.4 D8): a test that registers its own handler instead of calling
+/// this would prove a fixture, not the wiring. `firewall` is `None` when the
+/// firewall is disabled or the feature build has none configured — the
+/// lifecycle is still created (the host reaper always runs), it simply has
+/// nothing to fire.
+///
+/// The callback captures `firewall` as `Weak`: the handle this function
+/// returns is stored on `AppState` beside `firewall` itself, and a strong
+/// `Arc` inside the callback would close a reference cycle through the state
+/// that owns both.
+#[cfg(feature = "firewall")]
+pub fn wire_session_lifecycle(
+    firewall: Option<&Arc<crate::security::firewall::Firewall>>,
+) -> Arc<SessionLifecycle> {
+    let lifecycle = Arc::new(SessionLifecycle::new());
+    if let Some(fw) = firewall {
+        let weak = Arc::downgrade(fw);
+        lifecycle.register("firewall_anomaly_cleanup", move |session_id| {
+            if let Some(fw) = weak.upgrade() {
+                fw.on_session_end(session_id);
+            }
+        });
+    }
+    lifecycle
 }
 
 #[cfg(test)]

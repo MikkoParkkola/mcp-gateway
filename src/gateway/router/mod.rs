@@ -116,6 +116,12 @@ pub struct AppState {
     /// Security firewall — bidirectional request/response scanning (RFC-0071).
     #[cfg(feature = "firewall")]
     pub firewall: Option<Arc<Firewall>>,
+    /// TTL-reaping registry for per-caller cleanup the 2026 path's removal of
+    /// protocol sessions left with no disconnect event to fire it (MIK-7215
+    /// CONTROL.4). Not cfg-gated on `firewall`: the host reaper always calls
+    /// `reap` on this handle; which features registered a consumer on it is
+    /// a separate question the map does not need to answer.
+    pub session_lifecycle: Arc<crate::gateway::session_lifecycle::SessionLifecycle>,
     /// Per-agent identity configuration (OWASP ASI03).
     pub agent_identity_config: AgentIdentityConfig,
     /// Durable control-plane store (grants/policies + governance audit log).

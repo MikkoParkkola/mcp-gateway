@@ -21,7 +21,7 @@ use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::Result;
@@ -102,7 +102,17 @@ impl NotificationMultiplexer {
     /// Must be called once after the multiplexer has been placed in an `Arc`.
     /// All call sites in `server.rs`, `webhooks.rs`, and `proxy.rs` do this
     /// immediately, so the reaper always runs in production.
-    pub fn spawn_reaper_on(self: &Arc<Self>) {
+    ///
+    /// `lifecycle` rides the same tick (MIK-7215 CONTROL.4 D1/D1a): the 2026
+    /// path removed protocol sessions, so `SessionLifecycle::on_disconnect`
+    /// has no disconnect left to fire it, and this loop is the only
+    /// maintenance cadence a reclaim can hang off without a second loop
+    /// nothing schedules. A parameter rather than a field so the compiler —
+    /// not a silent default — catches a call site that forgot to supply one.
+    pub fn spawn_reaper_on(
+        self: &Arc<Self>,
+        lifecycle: Arc<crate::gateway::session_lifecycle::SessionLifecycle>,
+    ) {
         let weak = Arc::downgrade(self);
         let ttl = self.config.session_ttl;
         let interval = self.config.session_reaper_interval;
@@ -120,6 +130,16 @@ impl NotificationMultiplexer {
                 };
 
                 mux.reap_expired_sessions(ttl);
+
+                // MIK-7215 CONTROL.4 D7: a count-carrying `info!` only when the
+                // sweep reclaimed something, plus an unconditional `trace!`
+                // marker LAST — after the conditional `info!` — so an observer
+                // can tell an empty sweep from a sweep that never ran at all.
+                let reclaimed = lifecycle.reap(crate::protocol::continuation::now_unix_secs());
+                if reclaimed > 0 {
+                    info!(reclaimed, "Session-lifecycle reap completed");
+                }
+                trace!("Session-lifecycle reap tick complete");
             }
         });
     }
@@ -756,7 +776,7 @@ mod tests {
         };
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
-        multiplexer.spawn_reaper_on();
+        multiplexer.spawn_reaper_on(Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new()));
 
         let (id, rx) = multiplexer.get_or_create_session(Some("auto-reap-session"));
         drop(rx); // Drop receiver immediately
@@ -788,7 +808,7 @@ mod tests {
         };
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
-        multiplexer.spawn_reaper_on();
+        multiplexer.spawn_reaper_on(Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new()));
 
         // WHEN: drop the only strong reference
         drop(multiplexer);

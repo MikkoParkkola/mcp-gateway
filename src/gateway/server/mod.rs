@@ -1437,11 +1437,39 @@ impl Gateway {
             meta_mcp.set_playbook_engine(engine);
         }
 
+        // MIK-7215 CONTROL.4 (D1a/D8): built here, ahead of its original position
+        // beside the rest of the firewall wiring below, because the session
+        // reaper's tick (next block) is the maintenance loop this change hangs
+        // the identity-TTL reap on, and that loop must be handed a lifecycle
+        // handle at spawn time. Moving this block costs nothing else: it reads
+        // only `self.config` and `self.env`, both already available here.
+        #[cfg(feature = "firewall")]
+        let firewall_arc: Option<Arc<Firewall>> = {
+            let fw_cfg = self.config.security.firewall.clone();
+            let fw_enabled = fw_cfg.enabled;
+            let tt = if fw_cfg.anomaly_detection {
+                Some(Arc::new(TransitionTracker::new()))
+            } else {
+                None
+            };
+            let fw = Arc::new(Firewall::from_config(fw_cfg, tt).with_env(Arc::clone(&self.env)));
+            if fw_enabled {
+                info!("Security firewall enabled (RFC-0071)");
+            }
+            Some(fw)
+        };
+        #[cfg(feature = "firewall")]
+        let session_lifecycle =
+            crate::gateway::session_lifecycle::wire_session_lifecycle(firewall_arc.as_ref());
+        #[cfg(not(feature = "firewall"))]
+        let session_lifecycle =
+            Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+
         let multiplexer = Arc::new(NotificationMultiplexer::new(
             Arc::clone(&self.backends),
             self.config.streaming.clone(),
         ));
-        multiplexer.spawn_reaper_on();
+        multiplexer.spawn_reaper_on(Arc::clone(&session_lifecycle));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let auth_config = Arc::new(ResolvedAuthConfig::try_from_config(&self.config.auth)?);
 
@@ -1663,23 +1691,8 @@ impl Gateway {
             }
         }
 
-        // The transition tracker is only used when anomaly_detection=true; pass
-        // a fresh tracker so the firewall has its own dedicated state.
-        #[cfg(feature = "firewall")]
-        let firewall_arc: Option<Arc<Firewall>> = {
-            let fw_cfg = self.config.security.firewall.clone();
-            let fw_enabled = fw_cfg.enabled;
-            let tt = if fw_cfg.anomaly_detection {
-                Some(Arc::new(TransitionTracker::new()))
-            } else {
-                None
-            };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, tt).with_env(Arc::clone(&self.env)));
-            if fw_enabled {
-                info!("Security firewall enabled (RFC-0071)");
-            }
-            Some(fw)
-        };
+        // MIK-7215 CONTROL.4: `firewall_arc` and `session_lifecycle` are built
+        // earlier now, beside the session-reaper spawn — see the comment there.
 
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).
@@ -1829,6 +1842,7 @@ impl Gateway {
             config_path: self.config_path.clone(),
             #[cfg(feature = "firewall")]
             firewall: firewall_arc,
+            session_lifecycle,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
             tasks: task_service,

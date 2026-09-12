@@ -1315,6 +1315,22 @@ pub(super) async fn meta_mcp_handler(
                     } else {
                         session_id.clone()
                     };
+                    // MIK-7215 CONTROL.4 (D3/D4): the write site for the
+                    // identity-TTL reap that replaces disconnect-driven
+                    // cleanup on the 2026 path. Keyed on `control_identity` —
+                    // the same value `check_request` scores on below — not
+                    // re-derived from `session_owner_key` directly, so the two
+                    // stay equal by construction if that chain ever changes.
+                    // Guarded the same way `observe` itself guards an empty
+                    // identity (`anomaly.rs`): nothing is tracked for a caller
+                    // the detector would never score either.
+                    if !control_identity.is_empty() {
+                        state.session_lifecycle.track(
+                            control_identity.clone(),
+                            crate::protocol::continuation::now_unix_secs()
+                                + crate::gateway::session_lifecycle::IDLE_TTL,
+                        );
+                    }
                     let verdict = fw.check_request(
                         &session_id,
                         target.server,

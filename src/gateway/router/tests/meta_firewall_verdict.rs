@@ -200,6 +200,7 @@ async fn app_state_with_rules(
         )),
         export_status: None,
         transparency_log: None,
+        session_lifecycle: Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new()),
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks: task_service,
         task_executor,

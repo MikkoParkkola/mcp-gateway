@@ -389,6 +389,7 @@ mod http {
             )),
             export_status: None,
             transparency_log: None,
+            session_lifecycle: Arc::new(mcp_gateway::gateway::session_lifecycle::SessionLifecycle::new()),
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
             tasks,
             task_executor,

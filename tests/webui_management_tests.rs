@@ -154,6 +154,7 @@ async fn make_app_state(
         )),
         export_status: None,
         transparency_log: None,
+        session_lifecycle: Arc::new(mcp_gateway::gateway::session_lifecycle::SessionLifecycle::new()),
         dashboard_bootstrap: std::sync::Arc::new(
             mcp_gateway::gateway::auth::DashboardBootstrap::new(),
         ),
@@ -238,6 +239,7 @@ async fn make_app_state_with_reload(
             )),
             export_status: None,
             transparency_log: None,
+            session_lifecycle: Arc::new(mcp_gateway::gateway::session_lifecycle::SessionLifecycle::new()),
             dashboard_bootstrap: std::sync::Arc::new(
                 mcp_gateway::gateway::auth::DashboardBootstrap::new(),
             ),

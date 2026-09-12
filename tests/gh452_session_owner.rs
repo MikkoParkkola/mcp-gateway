@@ -114,6 +114,7 @@ async fn state(
         live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config)),
         export_status: None,
         transparency_log: None,
+        session_lifecycle: Arc::new(mcp_gateway::gateway::session_lifecycle::SessionLifecycle::new()),
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
         subscriptions,
     });

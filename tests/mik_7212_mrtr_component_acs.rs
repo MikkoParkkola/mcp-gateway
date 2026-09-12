@@ -137,6 +137,7 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
         live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
         export_status: None,
         transparency_log: None,
+        session_lifecycle: Arc::new(mcp_gateway::gateway::session_lifecycle::SessionLifecycle::new()),
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
         tasks,
         task_executor,
