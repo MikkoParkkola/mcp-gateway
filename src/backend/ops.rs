@@ -10,9 +10,10 @@ use serde_json::Value;
 use super::Backend;
 use super::registry::{BackendLifecycle, BackendRuntimeState, BackendRuntimeStatus, BackendStatus};
 use crate::config::TransportConfig;
-use crate::failsafe::with_retry;
+use crate::failsafe::{RetryPolicy, with_retry};
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
+use crate::transport::{ResendPermission, resend_permission};
 use crate::{Error, Result};
 
 impl Backend {
@@ -134,6 +135,38 @@ impl Backend {
         headers
     }
 
+    /// This request's resend decision: the permission the transport carries,
+    /// and the retry policy this layer may resend under.
+    ///
+    /// ADR-012 consequence 2: a call is retried only where the resend
+    /// predicate grants permission, because a failure that is not provably
+    /// pre-dispatch may have left the side effect committed. The decision is
+    /// made here rather than in `is_retryable` because only this level knows
+    /// the method and the tool: the primitive is shared with
+    /// `send_with_retry`, whose callers must keep retrying.
+    ///
+    /// The permission comes from [`resend_permission`], the same predicate the
+    /// transport's session-expiry recovery uses, so the two resend sites cannot
+    /// drift apart. Both halves come out of ONE derivation, so the retry policy
+    /// and the recovery beneath it cannot disagree about one request.
+    fn resend_decision(
+        &self,
+        failsafe: &crate::failsafe::Failsafe,
+        method: &str,
+        params: Option<&Value>,
+    ) -> (ResendPermission, RetryPolicy) {
+        let permission = resend_permission(method, params, &self.resend_permitted.read());
+        let configured = &failsafe.retry_policy;
+        let policy = match permission {
+            ResendPermission::Permitted => configured.clone(),
+            ResendPermission::Denied => RetryPolicy {
+                enabled: false,
+                ..configured.clone()
+            },
+        };
+        (permission, policy)
+    }
+
     /// Send a request, adding per-request outbound headers (e.g. a propagated
     /// end-user identity credential -- MIK-6704). The headers are forwarded by
     /// value to the transport's `request_with_headers`, never stored on the
@@ -157,6 +190,13 @@ impl Backend {
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
+        // MIK-7272.SUB.2b / ADR-014 §2: never hand a backend the client's own
+        // progress token. This sits here for the same reason the param mirror
+        // below does -- meta-MCP invoke and the router's direct backend route
+        // both funnel through this function, and minting in one dispatcher
+        // would leave the sibling route forwarding the caller's token.
+        let params = substitute_progress_token(params);
+
         // SEP-2243 (MIK-7214.HEADER.5): mirror the arguments a tool's schema
         // declares onto `Mcp-Param-*` headers. This sits here, not in each
         // dispatcher, because every tools/call — the MCP provider, meta-MCP
@@ -178,21 +218,19 @@ impl Backend {
         let key = self.pool_key_for(identity_key);
         let entry = self.pooled_entry(&key);
 
-        // Check THIS slot's failsafe, not the backend's.
-        if !entry.failsafe.can_proceed() {
-            telemetry_metrics::gauge!(
-                "mcp_backend_circuit_state",
-                "backend" => self.name.clone()
-            )
-            .set(0.0_f64);
-            tracing::warn!(backend = %self.name, ?key, "Request rejected by circuit breaker");
-            return Err(Error::CircuitOpen(self.name.clone()));
-        }
+        // Check THIS slot's failsafe, not the backend's. The gauge is set once
+        // from the same decision both branches read, so an open breaker cannot
+        // be reported closed by a later edit to only one of them.
+        let can_proceed = entry.failsafe.can_proceed();
         telemetry_metrics::gauge!(
             "mcp_backend_circuit_state",
             "backend" => self.name.clone()
         )
-        .set(1.0_f64);
+        .set(if can_proceed { 1.0_f64 } else { 0.0_f64 });
+        if !can_proceed {
+            tracing::warn!(backend = %self.name, ?key, "Request rejected by circuit breaker");
+            return Err(Error::CircuitOpen(self.name.clone()));
+        }
 
         // Acquire semaphore
         let _permit = self.semaphore.acquire().await.map_err(|_| {
@@ -215,15 +253,16 @@ impl Backend {
         // attempt) can hand a borrow to each attempt's future without tying the
         // closure to the caller's borrow lifetime (MIK-6784).
         let identity_key = identity_key.map(str::to_string);
-        let result = with_retry(&entry.failsafe.retry_policy, &name, || {
+        let (perm, policy) = self.resend_decision(&entry.failsafe, method, params.as_ref());
+        let result = with_retry(&policy, &name, || {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();
-            let extra_headers = extra_headers.clone();
-            let identity_key = identity_key.clone();
+            let hdrs = extra_headers.clone();
+            let id = identity_key.clone();
             async move {
                 transport
-                    .request_with_headers(&method, params, &extra_headers, identity_key.as_deref())
+                    .request_with_headers(&method, params, &hdrs, id.as_deref(), perm)
                     .await
             }
         })
@@ -571,6 +610,27 @@ impl Backend {
         self.shared_entry().failsafe.circuit_breaker.stats()
     }
 
+    /// Drive this backend's canonical Shared-slot circuit breaker open.
+    ///
+    /// The counterpart to [`Self::reset_circuit_breaker`], for the one caller
+    /// that has decided a backend is failing without having a failed request to
+    /// show for it: the health probe's unserved escalation (MIK-7217,
+    /// OUTBOUND.2), whose evidence is a run of complete answers that served
+    /// nothing. Expressed as the configured number of failures rather than a
+    /// state write, so the breaker's own accounting - open event, failure
+    /// count, the half-open timer - stays the single description of why it is
+    /// open.
+    pub(crate) fn trip_circuit_breaker(&self, reason: &str) {
+        let entry = self.shared_entry();
+        let threshold = entry.failsafe.circuit_breaker.stats().failure_threshold;
+        for _ in 0..threshold {
+            entry
+                .failsafe
+                .circuit_breaker
+                .record_failure(reason, std::time::Duration::ZERO);
+        }
+    }
+
     /// Force this backend's canonical Shared-slot circuit breaker back to
     /// `Closed` (MIK-5983; slot-scoped per MIK-6735 fix 1).
     ///
@@ -593,5 +653,120 @@ impl Backend {
     /// fix 1).
     pub fn health_metrics(&self) -> crate::failsafe::HealthMetrics {
         self.shared_entry().failsafe.health_metrics()
+    }
+}
+
+/// Replace the caller's `_meta.progressToken` with a gateway-minted one,
+/// recording the pair so the notification carrying it back can be restored.
+///
+/// `params` travels unchanged when the request carries no progress token, or
+/// when the call runs outside a request scope -- health probes, warm-up
+/// handshakes and the reaper have no client to translate back to.
+fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
+    let mut params = params?;
+    let client = params
+        .get("_meta")
+        .and_then(|meta| meta.get("progressToken"))
+        .cloned();
+    let Some(client) = client else {
+        return Some(params);
+    };
+    let Some(minted) = crate::transport::notification_sink::mint_progress_token(&client) else {
+        // A caller token reaching a backend unsubstituted is exactly what this
+        // function exists to prevent, so say so. Expected for the probe and
+        // reaper routes, which have no client; on a client-carrying route it
+        // is a wiring gap, and only a log makes it visible before the backend
+        // starts echoing a token the gateway cannot attribute.
+        // ci-allow-secret-log: an MCP progress token is a caller-chosen correlation id, not a credential; the value is what makes the miss attributable
+        tracing::debug!(
+            token = %client,
+            "outbound call carries a caller progress token but runs outside a request scope; forwarding it unchanged"
+        );
+        return Some(params);
+    };
+    if let Some(Value::Object(meta)) = params.get_mut("_meta") {
+        meta.insert("progressToken".to_string(), Value::String(minted));
+    }
+    Some(params)
+}
+
+#[cfg(test)]
+mod progress_token_substitution_tests {
+    use super::*;
+    use crate::transport::notification_sink::{collect, publish, translate_back};
+    use serde_json::json;
+
+    fn token_of(params: &Value) -> Value {
+        params["_meta"]["progressToken"].clone()
+    }
+
+    /// The security property itself: what leaves for the backend is never the
+    /// value the client sent.
+    #[tokio::test]
+    async fn inside_a_scope_the_callers_token_never_reaches_the_backend() {
+        let ((), _) = collect(async {
+            let outbound =
+                substitute_progress_token(Some(json!({ "_meta": { "progressToken": 7 } })))
+                    .expect("params survive");
+            let sent = token_of(&outbound);
+            assert_ne!(sent, json!(7), "the caller's own token went out");
+            assert!(
+                sent.as_str().is_some_and(|t| t.starts_with("gw-")),
+                "outbound token was {sent:?}"
+            );
+        })
+        .await;
+    }
+
+    /// A health probe or the reaper has no client to translate back to, so its
+    /// `_meta` travels exactly as built.
+    #[tokio::test]
+    async fn outside_a_scope_params_travel_unchanged() {
+        let params = json!({ "_meta": { "progressToken": 7 }, "name": "t" });
+        assert_eq!(
+            substitute_progress_token(Some(params.clone())),
+            Some(params)
+        );
+    }
+
+    /// The gateway never synthesises a token a client did not ask for.
+    #[tokio::test]
+    async fn a_call_with_no_token_gains_none() {
+        let ((), _) = collect(async {
+            let params = json!({ "_meta": { "traceparent": "00-a-b-01" } });
+            assert_eq!(
+                substitute_progress_token(Some(params.clone())),
+                Some(params)
+            );
+        })
+        .await;
+    }
+
+    /// The pair, end to end: whatever the mint sent out, the notification
+    /// coming back carries the client's own value again -- byte- and
+    /// type-identically. This is the contract the stdio backend leg relies on,
+    /// since it captures under the token this function wrote and republishes
+    /// it into the same scope.
+    #[tokio::test]
+    async fn a_minted_token_round_trips_to_the_callers_value() {
+        let ((), drained) = collect(async {
+            let outbound =
+                substitute_progress_token(Some(json!({ "_meta": { "progressToken": 7 } })))
+                    .expect("params survive");
+            let mut back = crate::protocol::JsonRpcNotification {
+                jsonrpc: "2.0".to_string(),
+                method: "notifications/progress".to_string(),
+                params: Some(json!({ "progressToken": token_of(&outbound), "progress": 1 })),
+            };
+            translate_back(&mut back);
+            publish(vec![back]);
+        })
+        .await;
+
+        assert_eq!(drained.len(), 1);
+        assert_eq!(
+            drained[0].params.as_ref().unwrap()["progressToken"],
+            json!(7)
+        );
     }
 }

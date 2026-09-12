@@ -1,0 +1,702 @@
+<!--
+SPDX-FileCopyrightText: 2026 Mikko Parkkola
+SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+-->
+# Design — an era-gated backend health probe (MIK-7217.OUTBOUND.1, .2)
+
+Status: design, awaiting review. Governs cluster **L** of
+`docs/requirements/RELEASE-4.0.0-blocking-rollup.md`. Supersedes nothing.
+Prior art it must not re-litigate: `docs/design/2026-08-31-discover-outbound-era-probe.md`,
+which wired the **start-path** era probe (DISCOVER.4/.5). This design is about the
+**recurring** health probe, a different call site with different constraints.
+
+## 1. The two requirements, and why today's code meets neither
+
+`MIK-7217.OUTBOUND.1` — the gateway MUST NOT send a peer a method that peer's era
+removed. `MIK-7217.OUTBOUND.2` — a health probe MUST distinguish a served response
+from a refusal, and MUST record neither as the other.
+
+The probe is `Backend::health_probe` (`src/backend/lifecycle.rs:1016`), driven every
+`failsafe.interval` (default 10s, `src/config/features/failsafe.rs:151`) from the
+scheduler at `src/gateway/server/mod.rs:2204`, over every backend that is running or
+circuit-tripped.
+
+**OUTBOUND.1 fails by construction.** The call is
+`transport.request("ping", None)` at `:1053`, with no era read anywhere on the path.
+`ping` is in `REMOVED_IN_2026_07_28` (`src/protocol/meta.rs:253`), and the comment two
+lines above names this very probe as the reason the gateway still *serves* `ping`
+inbound. The era is available — it is attached to the transport at `lifecycle.rs:380` —
+but every reader of `outbound_era` shapes headers or notifications; none gates a method.
+
+**OUTBOUND.2 fails in two opposite directions at once**, because `:1053` matches on the
+transport `Result` and never inspects the body. The same `-32601` refusal is classified
+by how the peer carried it:
+
+| carriage | path | today's outcome | why it is wrong |
+| --- | --- | --- | --- |
+| in-band (200 + error body; every stdio refusal — `src/transport/stdio.rs:620-625`) | `Ok(Ok(_))` `:1054` | success, and **resets a tripped breaker** `:1055-1061` | a probe that cannot fail measures the socket, not the service |
+| as a status (HTTP non-2xx → `Err`, `src/transport/http/mod.rs:1275-1295`; 404 is the shape `MIK-7215.STATELESS.5b` obliges a conformant peer to use, and `.6a` names `ping` among the methods the modern path must refuse) | `Ok(Err(e))` `:1064` | failure, and **`force_restart()`** `:1066` | rebuilds the transport of a working backend every 10s |
+
+Both are conditional on a peer classified `Era::Modern`. `protocol::era::classify`
+(`src/protocol/era.rs:93`) requires positive evidence, so the population may be empty
+today; this arms itself when the first modern peer appears.
+
+They must be fixed together. Gating the method alone leaves the outcome check broken for
+whatever replaces `ping`. Fixing the outcome check alone converts a silent false-healthy
+into a permanent false-unhealthy on HTTP.
+
+## 2. Ruling 1 — the modern liveness method is `server/discover`
+
+The readiness board recorded this as the open decision. Ruled here.
+
+**Candidates considered.**
+
+- **`tools/list`.** Defined in 2026-07-28, read-only, and already survives the probe's
+  empty-permitted-set predicate (`src/transport/http/mod.rs:1409-1417` names it as one of
+  the two methods that legitimately reach that entry point). Rejected on cost: it returns
+  every tool's full schema. The measured local gateway answers `tools/list` with the whole
+  registry; making that a 10s heartbeat over every backend buys nothing a small document
+  does not.
+- **Transport-level liveness only** (drop the request, check the socket). Rejected because
+  it is the defect: it is precisely what today's `Ok(Ok(_))` degenerates into, and it
+  cannot see a backend that is connected and not serving — the failure
+  `a-health-signal-from-request-outcomes-cannot-see-a-dead-component` describes.
+- **`server/discover`.** Selected.
+
+**Why `server/discover`.**
+
+1. It already exists and is already issued against every backend on the start path, so
+   this adds no new outbound surface — only a second call site for one that is proven.
+2. Its response is a small fixed-shape metadata document, not a registry dump. At a 10s
+   interval this is the same order of cost as `ping`.
+3. It is the one method a 2026 peer must implement. That makes a refusal *informative*
+   rather than expected: a `-32601` to `server/discover` says the peer is not modern,
+   which is a classification error to correct, not a health verdict.
+
+**Legacy peers keep `ping`.** `Era::Legacy` (including unknown/unreachable, which
+`classify` deliberately folds into legacy) still gets `ping`: it is defined for them, and
+sending `server/discover` to a 2025 peer is the mirror-image conformance defect.
+
+**Per-tick load is asserted, not measured, and the design says so.** The claim above is
+a shape argument (small document, existing call site), not a benchmark. The test plan
+below carries a measurement obligation; if it shows the per-tick discover is too heavy,
+that data reopens this ruling rather than selecting a contingency drafted blind. An
+earlier revision named one - serve the probe from "the existing `EraCache` TTL" and
+re-probe on expiry - and it was wrong twice over: `EraCache` has no TTL and no expiry
+(`src/protocol/era.rs`), and a probe that sends nothing between expiries would suspend
+both arms of OUTBOUND.2 for modern peers, leaving no transport fault observable and a
+tripped breaker with no path back. Found by adversarial review, 2026-09-11.
+
+## 3. Ruling 2 - a reset needs positive evidence of service
+
+Replace the two-arm match at `:1053` with a three-way classification that reads the body
+on both transports. The organising rule: **reviving a tripped breaker is a claim that the
+backend is serving, and only a served result is evidence for it.**
+
+| observation | verdict | breaker | transport |
+| --- | --- | --- | --- |
+| a JSON-RPC **result** | serving | reset if tripped | keep |
+| a JSON-RPC **error**, any code, in-band *or* carried as a status | **answered, not served**: the peer parsed the request and declined to fulfil it | **unchanged** - neither reset nor tripped; counts toward the escalation bound below | keep |
+| transport fault or timeout | not serving | trip | `force_restart()` |
+
+**The middle row arrives in two shapes, and the match must cover both.** A JSON-RPC
+error carried in band is not an `Err` at all: `Transport::request` returns
+`Ok(JsonRpcResponse)` with the `error` field populated, and the stdio and WebSocket
+transports both do this (`src/transport/stdio.rs:589`, `src/transport/websocket.rs:501`).
+A status-carried one, after the change below, arrives as `Err(Error::JsonRpc { .. })` from
+the HTTP transport. So the classification cannot be written as a match on `Result` alone:
+the `Ok` arm must inspect `response.error` before calling it a served result, and the
+`Err` arm must separate `Error::JsonRpc` from every other error. An implementation that
+covers only the `Ok` shape restarts every HTTP backend that declines a probe - the exact
+behaviour this ruling removes - while passing any row driven by a stdio fixture. Found by
+reading the transports, 2026-09-11.
+
+The middle row is the whole point of OUTBOUND.2, and it is deliberately wider than
+`-32601`. An earlier draft of this design ruled that any error *other than*
+method-not-found proved the peer was serving, on the reasoning that a peer which parses
+and answers is alive. That is the defect restated: a backend wedged into answering
+`-32603 Internal error` to every probe would revive its own tripped breaker every tick,
+and the probe would again be measuring the parser rather than the service. Found by
+adversarial review, 2026-09-11.
+
+The opposite over-correction - trip on `-32603` - is the other half of the same defect.
+A backend whose `server/discover` handler is broken while `tools/call` works would be
+restarted every tick for a fault that never touched the traffic path. Neither reading is
+safe, which is exactly why the outcome belongs in a third arm rather than being forced
+into health or fault. Because the arm is code-agnostic, no table of JSON-RPC code ranges
+has to be maintained or re-litigated at implementation time.
+
+**A refusal additionally invalidates the era.** `-32601` to `server/discover` is not just
+an unserved answer; it is evidence the era classification was wrong, and
+`protocol::era::classify` already reads that code as legacy evidence
+(`src/protocol/era.rs:120-126`). So the refusal case also invalidates the cached era, **to
+unknown, which §2 folds into legacy** - so the next tick sends `ping`, not another
+`server/discover`. An earlier revision said the next tick "re-runs `server/discover`",
+which would have put a removed-in-reverse method on the wire to a peer the gateway had
+just reclassified as legacy - the mirror image of the OUTBOUND.1 defect this design
+exists to close. Found by adversarial review, 2026-09-11. Re-classification back to
+modern comes only from positive evidence on the ordinary path (a discovery document, or
+one of the three recognised modern error codes), never from an absence, which is
+`classify`'s existing rule and not one this design may relax. Every middle-row
+outcome also emits a `warn!` and a
+`mcp_health_probe_unserved_total{backend,code,era,carriage}` counter carrying the
+JSON-RPC code, the era the gateway believed, and the carriage - in-band error or HTTP
+status - so the new state is triageable per backend without log archaeology.
+
+**The invalidation is an existing mechanism, not a new one.**
+`Backend::reprobe_if_contradicted` (`src/backend/era.rs:110-145`) already does exactly what
+the paragraph above rules: it reads an ordinary response's error, drops the cached verdict
+when `contradicts_modern(method, code)` holds - which is `-32601` against `server/discover`
+and nothing else (`src/backend/era.rs:72`) - and spawns one detached re-probe. It is
+symmetric, so it also covers the return path row 9b pins: a `Legacy` verdict contradicted
+by one of the three modern-only codes is dropped the same way. **The probe does not call
+it**, because `health_probe` reaches `transport.request` directly (`:1053`) rather than
+through the dispatch path that does. So the implementation here is one call, not a second
+invalidation path, and building a second one would duplicate a rule that already has an
+owner.
+
+Two consequences follow and both are behavioural, which is how rows 9 and 9b assert them.
+First, the re-probe is detached and sends `server/discover` of its own accord; that is the
+*classification* probe, not the liveness tick, and it is the positive-evidence path §2
+requires. Whether it has finished by the next tick does not change what that tick sends: a
+completed re-probe leaves `Legacy`, an unfinished one leaves the era unresolved, and §2
+folds both onto `ping`. Second, `reprobe_if_contradicted` takes a `&JsonRpcResponse`, which
+the in-band shape has and the status-carried shape does not. Row 6b's carriage therefore
+needs the code lifted out of `Error::JsonRpc` and offered to the same judgment rather than
+a parallel one - the one piece of new plumbing this ruling actually adds. Found by reading
+`src/backend/era.rs`, 2026-09-11.
+
+**The middle arm is bounded - an unserved answer cannot be permanent.** Left unbounded,
+the third arm is a new failure mode: a backend wedged into answering errors would never
+trip a breaker, never rebuild, and its only trace would be a counter nobody reads. So:
+
+1. **Each unserved answer** - record neither; warn; increment the counter; on `-32601`,
+   invalidate the cached era so the next tick re-classifies.
+2. **Consecutive unserved answers** are counted per backend, in the same per-backend
+   state that holds the `EraCache` (`src/backend/lifecycle.rs:134`), and updated only on
+   the probe task's own path. A tick that outlasts the interval does not start a second
+   probe for the same backend; the next tick observes the run in flight and skips, so
+   "consecutive" means consecutive answers, never overlapping ones. The counter resets on
+   any outcome that is not an unserved answer - a served result, a transport fault, or a
+   `force_restart()` - so the count only ever measures an uninterrupted run of them, and
+   a rebuilt backend starts from zero.
+3. **Three consecutive** (30s at the default interval) escalate to the fault arm: trip the
+   breaker and `force_restart()`.
+
+Three is justified twice over, once per half of the arm. **For a refusal** it is the
+smallest count that cannot be reached without a completed re-classification: probe
+(`server/discover` refused, era invalidated) -> probe (`ping`, the liveness method of the
+era the peer was just re-classified into, refused) -> probe (refused again). A peer that
+refuses the modern liveness method *and* the legacy one is not serving under either
+reading, which is a stronger statement than either probe makes alone. An earlier revision
+described tick 2 as a second `server/discover`; §3's invalidation rule forbids that, and
+the bound is sounder without it. **For every other error code** there is no re-classification to wait for, so the
+count carries the whole argument on its own: three consecutive unserved answers span 30s
+at the default interval, which separates a handler that threw once from one that is
+wedged, and the reset on a served result means a backend that flaps between errors and
+results never escalates at all. The threshold is a constant, not a config knob - no
+requirement asks for one, and an unbounded arm is the defect, not a tuning surface.
+
+**This requires the HTTP transport to stop flattening a refusal into a string, and that
+change is shared.** A non-2xx response whose body is a JSON-RPC error is currently
+`Err(safe_http_status_error(..))` (`src/transport/http/mod.rs:1275-1295`), which discards
+the code. The existing `ProtocolVersionRejected` branch immediately above is the
+precedent: that code path was added for exactly this reason - a version refusal carried as
+a status had its body dropped before anyone could read it. The same treatment, one branch
+wider: parse the body for a JSON-RPC error object before falling back to the status
+string.
+
+`transport.request` has ten callers besides the probe, so the shape and the blast radius
+are named here rather than discovered at implementation time. Found by adversarial review,
+2026-09-11.
+
+- **The shape is the existing `Error::JsonRpc { code, message }`**, not a new variant. A
+  status-carried error is the same thing as an in-band one; giving it a second
+  representation would oblige every caller to learn both.
+- **Admitted only on three signals together**, the same discipline the
+  `ProtocolVersionRejected` branch above already applies: the body parses as JSON, it
+  carries a JSON-RPC `error` object, and its `id` echoes the request's. Anything else -
+  a proxy error page, a truncated body, a forged id - stays `safe_http_status_error`, so
+  the status string remains the fallback rather than the exception.
+- **`classify_dispatch_error` is unaffected in category, improved in detail.** Both
+  `Error::Transport(msg)` and `Error::JsonRpc { message, .. }` already map to
+  `ErrorCategory::BackendError` (`src/gateway/meta_mcp/invoke.rs:3427` and the arm three
+  lines below it), so a caller's recovery hint keeps its category and gains the peer's own
+  message in place of the string `HTTP 404`.
+- **Retryability changes, deliberately.** `Error::Transport(_)` is retryable in both
+  classifiers (`src/chains/retry.rs:188`, `src/failsafe/retry.rs:99`); `Error::JsonRpc` is
+  in neither. A status-carried peer error therefore stops being retried. That is the
+  correct reading - a peer that parsed the request and declined it will decline the retry
+  identically, and `retry.rs:180-185` states the rule this follows: plain `Transport`
+  is retryable because it means "failed, cause unknown", which a JSON-RPC error is not -
+  but it is a behaviour change on every non-probe caller and row 16 pins it.
+
+**Two independent reviews disagree on this arm, and the wider rule is the one that
+ships.** One held that any error other than method-not-found proves the peer is serving,
+so only a refusal belongs in the middle; the other held that a peer wedged into
+`-32603` would revive its own breaker forever under that rule. Both describe a real
+failure, and they are not symmetric: the narrow rule's failure mode is a tripped breaker
+revived by a backend that never served anything, which is silent and unbounded; the wide
+rule's failure mode is a modern backend whose liveness method errors being restarted
+after three ticks, which is loud, bounded, and correct if the liveness method really is
+broken. The wide rule plus the bound is therefore the shipping rule, and this paragraph
+is the record that the narrow one was considered and rejected rather than missed.
+
+**Ruling 2b - session recovery survives the new variant by teaching the classifier.**
+The rule above changes which `Error` variant a non-2xx with a JSON-RPC error body
+produces, and `is_session_expired_error` (`src/transport/http/mod.rs:164-170`) decides
+whether to drop a stale session and re-initialize by matching `Error::Transport` text
+against the `session expired` marker or a leading `http 404`. A remote that invalidates
+its session on token refresh and reports that as a well-formed JSON-RPC error under a 404
+is recovered today and would stop being recovered under the rule as written. Rows 16 and
+16d together make an implementation choose: 16 requires the refusal to reach the caller as
+`Error::JsonRpc` and terminal, 16d requires the same response shape carrying a session
+code to still re-initialize.
+
+**The classifier grows an `Error::JsonRpc` arm; the transport keeps parsing 404 bodies.**
+The arm matches a session code or a session message and nothing else - `-32015`, a
+case-insensitive `session not found`, or the `SESSION_EXPIRED_MARKER` string
+`session expired` (`src/security/http_diagnostics.rs:15`). The first two are the signals
+`is_session_expired_response` already reads from a 200-carried error; the third is not
+one of those - it mirrors the `Transport` arm immediately above so a peer that words its
+expiry as "session expired" reaches the same verdict on both carriages
+(`src/transport/http/mod.rs:186-194`). Three constraints fix this shape:
+
+- *`-32600` does not come along.* `is_session_expired_response` accepts it because a
+  200-carried `Invalid Request` was observed to mean session-not-found on real remotes,
+  but on the `Err` path `-32600` is the ordinary malformed-request refusal and lifting it
+  would restart a peer on every protocol error. The asymmetry is deliberate and is the
+  reason the two classifiers are not merged.
+- *404 bodies keep being parsed.* The cheap alternative - exempt 404 from body parsing and
+  leave session recovery untouched - is unavailable, because 404 is the refusal carriage
+  `STATELESS.5b` names. Exempting it makes the status-carried arm unreachable on the real
+  HTTP path while rows 5 and 16d both stay green, since row 5's mock returns
+  `Err(Error::JsonRpc)` directly and never enters `src/transport/http`.
+- *The existing marker path is preserved, not extended.* `safe_status_text` already tags
+  any status whose untrusted body carried `-32015` or `session not found`, 502 included,
+  and that path still produces `Error::Transport` with the marker. The new arm covers only
+  responses the new parse converts to `Error::JsonRpc` before the marker path sees them.
+
+The existing regression test (`request_reinitializes_session_and_retries_on_http_404`,
+`src/transport/http/tests.rs:780`) cannot referee this: it answers with a bare text body,
+which the new rule leaves alone, so it passes either way. Neither can the 16/16d pair as
+first written - 16 used a 405 and 16d a session-shaped 404, so a 404 *refusal* never had
+to become `Error::JsonRpc`. Row 16e supplies the referee: a 404 carrying `-32601` with an
+echoing id is `Error::JsonRpc`, is not retried, and does not re-initialize. Residual: the
+message half of the arm is an unstandardized string match, so a remote that says "session
+gone" is not recovered - the code half is the reliable signal and the message half is
+carried only because `is_session_expired_response` already carries it.
+
+Opened while writing rows 16 and 16d and closed by two independent reviews, 2026-09-11.
+
+**Residual (recorded, not fixed here).** Three sit outside this design's scope:
+
+- *A legacy peer that refuses `ping` restarts every third tick, where today it passes.*
+  The 2025 revision obliges a receiver to answer `ping`, so such a peer is
+  non-conformant - but it exists, and today's "any answer is health" rule hides it. Under
+  this design its refusal is an unserved answer on the legacy arm and it escalates. That
+  is the intended trade: the escalation is loud and bounded, where the status quo is a
+  silent false-healthy, and a peer that answers no liveness method has no liveness signal
+  to preserve. Recorded rather than exempted, because exempting `-32601` on the legacy arm
+  would re-open the wedged-backend hole the bound exists to close.
+
+- *An intermediary can forge the middle row* - **closed in this design, not deferred.** A
+  proxy or load balancer answering a non-2xx with its own JSON-RPC-shaped body would be
+  read as the peer declining, masking a dead origin behind a live intermediary, and a
+  forged `-32601` would additionally poison a modern peer's era. The id-echo condition in
+  §3's transport rule is the mitigation and it ships here: a body whose JSON-RPC `id` does
+  not echo the request's is not honoured. An earlier revision left this as future work
+  while row 12 already asserted it - three places disagreeing about whether the check
+  existed. Found by adversarial review, 2026-09-11.
+- *A modern peer that omits `server/discover` is classified legacy and then sent `ping`.*
+  That is `classify`'s existing rule (`src/protocol/era.rs:120-126`, ruled 2026-08-29 and
+  reviewed with `docs/design/2026-08-31-discover-outbound-era-probe.md`), not a rule this
+  design introduces, and §5 keeps it out of scope. The escalation bound limits the damage:
+  such a peer trips after three ticks rather than looping silently in the wrong era.
+
+## 4. Ruling 3 - the same gate covers the other three outbound removals
+
+An earlier revision deferred this: it said `ping` was "the only unconditional outbound use
+of a removed method found on this path" and left a sweep as separate work. The sweep has
+since been run, and that deferral cannot stand - OUTBOUND.1 says the gateway MUST NOT send
+a peer a method that peer's era removed, so a criterion graded on `ping` alone would go MET
+while three removed methods still reach modern backends ungated. Found by adversarial
+review, 2026-09-11.
+
+`REMOVED_IN_2026_07_28` (`src/protocol/meta.rs:253-261`) lists five methods.
+`notifications/roots/list_changed` has no outbound sender: the one function that builds it,
+`Proxy::broadcast_roots_changed` (`src/gateway/proxy.rs:457`), hands it to
+`StreamingManager::broadcast`, which iterates *client* sessions, not backends
+(`src/gateway/streaming.rs`), and the whole repository contains no caller of it outside its
+own unit test. Its doc comment said "to all backends" and was wrong about its own
+behaviour; corrected in this change rather than deferred, because a comment claiming a
+backend fan-out of a removed method is exactly what a reader auditing OUTBOUND.1 would
+trust. Not a send. The other
+four methods are all genuinely sent to backends:
+
+| method | outbound call site | shape today | with the gate |
+| --- | --- | --- | --- |
+| `ping` | `src/backend/lifecycle.rs:1053` | health probe, every 10s | §2: `server/discover` on the modern arm |
+| `logging/setLevel` | `src/gateway/meta_mcp/protocol.rs:310` | fan-out over backends, `warn!` on error | skip the modern backend, one `warn!` per skipped backend per call, with the era named |
+| `resources/subscribe` | `src/gateway/meta_mcp/resources.rs:389` | forwarded per client request | refuse in the gateway with `-32601` |
+| `resources/unsubscribe` | `src/gateway/meta_mcp/resources.rs:423` | forwarded per client request | refuse in the gateway with `-32601` |
+
+**The client-visible error *code* does not change, which is what makes this mechanical -
+and the rest of the answer does.** The gateway's refusal carries the same `-32601` the
+peer would have sent, but its `message` and `data` are gateway-authored rather than
+relayed, and it arrives one round trip earlier. A client keying on the code is unaffected;
+a client keying on the peer's prose is not, which is the real delta and the level any
+compatibility assessment has to start from. Found by adversarial review, 2026-09-11. A
+modern peer that receives one of these three answers `-32601` by definition - that is what
+"the revision removed it" means - and both resource call sites already surface a backend
+error object straight back to the caller (`resources.rs:391-395`, `:425-429`). Refusing in
+the gateway produces the same code the peer would have produced, one round trip earlier and
+without putting a removed method on the wire. The `logging/setLevel` site already tolerates
+a per-backend failure without failing the request, so skipping a backend is the same
+outcome its `warn!` arm produces today.
+
+Each gateway-side refusal or skip emits
+`mcp_gateway_removed_method_refused_total{backend,method,era}`, the §4 counterpart to §3's
+`mcp_health_probe_unserved_total`. Without it the only trace of a newly refused method is
+a support ticket, and these four sites are where a wrong era classification turns into
+client-visible behaviour.
+
+The gate is one read of the era already attached to the transport (`lifecycle.rs:380`),
+the same read §2 adds to the probe. No new state, no new config.
+
+**Which era, explicitly: the backend's.** Two different eras are in scope at these call
+sites. The one that governs is the peer's, held in the backend's `EraCache`
+(`src/backend/lifecycle.rs:134`) and reached through the `Backend` the call site already
+has. The other is the *client*-facing era on the meta-MCP context
+(`src/gateway/meta_mcp/mod.rs:177`), which says what the caller speaks and says nothing
+about what the peer accepts. Gating on it would be silent and wrong in both directions: a
+legacy client talking to a modern backend would still put `resources/subscribe` on the
+wire, and a modern client talking to a legacy backend would be refused a method that
+backend supports. The `Backend` already exposes the accessor these sites need -
+`cached_era()` (`src/backend/era.rs:80`), which reads the cache and never probes, so a
+gate built on it cannot turn a client request into a classification probe. An earlier
+revision of this section said no accessor existed and that adding one was part of this
+change; it was wrong about the code it was gating, corrected 2026-09-11. What the gate
+rows do add is `resolve_era_for_test` (`src/backend/era.rs:90`), a `#[cfg(test)]` wrapper
+that lets a row outside `crate::backend` build a peer whose era came from its own answer
+rather than from a setter.
+
+**Constructing a modern-era backend in a test.** `EraCache` has no setter - an era is
+committed only by a completed classification - so rows 13 to 15 drive the fixture rather
+than assigning to it: a mock transport whose `server/discover` answer is
+positive evidence leaves the cache `Probed`/`Modern`. Two shapes qualify and both are
+cheap: a discovery document naming a modern revision in `supportedVersions`, or an error
+carrying one of `UNSUPPORTED_PROTOCOL_VERSION`, `HEADER_MISMATCH` or
+`MISSING_REQUIRED_CLIENT_CAPABILITY` (`src/protocol/era.rs:93-121`). Not `-32601`: that is
+`classify`'s legacy evidence, and a fixture built on it would classify the backend
+`Legacy` and pass rows 13 to 15 without ever exercising the gate. Stated here because a row that cannot construct its own
+precondition fails for a setup reason and reads as the gate working.
+
+## 5. What this does not do
+
+- It does not touch the **inbound** `ping` the gateway serves. `MIK-7215.STATELESS.6a`
+  governs that, and `src/protocol/meta.rs:253` keeps `ping` served for legacy clients.
+- It does not change the start-path era probe or `EraCache` semantics, beyond invalidating
+  a cached era that a refusal proves wrong.
+- It does not translate `resources/subscribe` into the `subscriptions/listen` that
+  replaced it. Gating stops the removed method reaching a modern peer; giving modern peers
+  a working subscription path is `MIK-7272.SUB.*` work, governed elsewhere.
+- It does not touch the legacy path for any of the four methods. A 2025 peer is served
+  exactly as today.
+
+## 6. Test plan (to be reviewed as a test plan before any implementation)
+
+The **fail-first** column records whether the row can fail against `HEAD`. A row that
+passes today guards behaviour this change must *preserve*; calling it fail-first would be
+false, and an earlier draft of this plan claimed all of rows 1-8 were - four of them were
+regression guards. Found by adversarial review, 2026-09-11. Only the fail-first rows are
+evidence that the fix did anything; only the regression rows are evidence it broke nothing.
+
+Two conventions apply to every row rather than being repeated in each. **Carriage:**
+rows 4 and 5 run the classification assertions on both carriages explicitly, and
+"both carriages" means the two *shapes* named in section 3 - an `Ok(JsonRpcResponse)`
+carrying an `error` field, and an `Err(Error::JsonRpc { .. })` - not two fixtures that
+differ only in a label; rows 6
+through 12 use the in-band (stdio) carriage unless the row names HTTP, and their
+fail-first half is the counter assertion, which no carriage satisfies at HEAD.
+**Observability:** every row asserting a middle-arm outcome also asserts the `warn!` and
+the `mcp_health_probe_unserved_total{backend,code,era,carriage}` labels the outcome is
+supposed to carry, including the era the gateway believed and the carriage; row 13
+asserts §4's per-skipped-backend `warn!` and row 15b the
+`mcp_gateway_removed_method_refused_total` labels. A counter
+without its labels is not the triage surface §3 and §4 promise, and would otherwise pass
+the suite. Found by adversarial review, 2026-09-11.
+
+| # | what it pins | fail-first against HEAD | why |
+| --- | --- | --- | --- |
+| 1 | `Era::Modern` backend is probed with `server/discover`; `ping` never reaches the wire | **yes** | HEAD sends `ping` unconditionally (`lifecycle.rs:1053`) |
+| 2 | `Era::Legacy` backend is probed with `ping` | no - regression guard | HEAD already sends `ping` to everything, so it passes for the wrong reason; it exists to catch the mirror-image defect after row 1 lands |
+| 3 | unreachable/unclassified backend takes the legacy arm | no - regression guard | same; pins `classify`'s "silence is not modern" rule at this call site |
+| 4 | in-band `-32601` (stdio): tripped breaker **unchanged**, no restart | **yes** | HEAD reads `Ok(Ok(_))` as success and resets the breaker (`:1054-1061`). The counter assertion this cell used to carry is deferred to rows 10 to 11b: the consecutive-unserved count does not exist at HEAD, and a test that fails to compile records no fail-first evidence |
+| 5 | `-32601` carried as an HTTP 404 body: same assertions as row 4 | **yes** | HEAD reads `Ok(Err(_))` as a fault and calls `force_restart()` (`:1064-1066`). Same counter deferral as row 4 |
+| 6 | `-32603` on a tripped breaker: breaker **unchanged**, no restart, **and `cached_era()` still `Some(Era::Modern)`** | **yes** | HEAD resets on any in-band answer; this is the row that pins §3's widened middle arm, and the one an implementation narrowing it back to `-32601` would break. The era assertion is what stops the widened arm from widening invalidation with it: only method-not-found is evidence about era, so an implementation wiring invalidation to "any unserved answer" must fail here. The era half is a **second-stage pin**: the row fails at HEAD on the breaker assertion - row 4's defect - and HEAD has no invalidation path to get the era wrong, so the era assertion only starts discriminating once the widened arm lands. The same holds for row 6b, which fails at HEAD on the restart. Recorded from the fail-first run, 2026-09-11 |
+| 6b | a `-32603` carried as an HTTP 500 with a JSON-RPC error body and an echoing `id`: **unserved**, same three assertions as row 6, **no restart**, and **`cached_era()` still `Some(Era::Modern)`** | **yes** | HEAD reads every non-2xx as a fault and restarts (`:1064-1066`). This is the cell where the two halves of §3 meet - the widened arm *and* the status carriage - and an implementation that faults on any parsed code except `-32601` passes every other row while restarting backends §3 says not to restart. The era half is the second intersection: §3 invalidates on `-32601` only, and an implementation wiring invalidation to any parsed status-carried error passes rows 6, 9 and the first half of this one. Found by adversarial review, 2026-09-11 |
+| 7 | closed socket / timeout still trips and restarts | no - regression guard | current behaviour; guards against fixing 4-6 by making everything healthy. It is also the **control for the restart observable**: every "no restart" cell above is a negative, and this is the only row that makes the observable move. Counting `Transport::close()` calls does not work and the first draft of these rows did - the probe holds an internal-activity lease for its whole duration, so `force_restart` always takes its busy branch and defers the close to a task gated on `Arc::strong_count`, which a test holding the mock keeps above the threshold forever. The rows read the pool slot instead, which `force_restart` empties before any branch. Found by this row failing, 2026-09-11 |
+| 8 | a `ping` result on the legacy arm resets a tripped breaker | no - regression guard | current behaviour for a result; guards against fixing rows 4 to 6 by making nothing healthy |
+| 8b | a valid `server/discover` result on the modern arm resets a tripped breaker too | **yes** | HEAD never sends `server/discover` from the probe, so this half cannot pass today and marking it a regression guard alongside row 8 gave one row two before-states. It stops an implementation from wiring the reset into the legacy branch only. Found by adversarial review, 2026-09-11 |
+| 9 | after a `-32601` to `server/discover`, **`cached_era()` is no longer `Some(Era::Modern)`** - the accessor alone | **yes** | no invalidation path exists on this call site, and naming the method is what makes the re-classification rule falsifiable rather than implied. The accessor is the fail-first half and the method is not: HEAD sends `ping` unconditionally, so "the next tick sends `ping`" is already true at HEAD and would mark this row fail-first on an assertion that is green before any fix. It becomes a real pin only once row 1 lands, and it is then a re-observation of rows 1 and 2, which already pin method selection as a function of the era - so the row drops it rather than carrying a duplicate. It could not be observed cleanly in any case: the invalidation spawns a **detached** classification probe, and that probe's own `server/discover` reaches the same mock at a time no test controls, so an assertion over the recorded methods would be racing it. The judgment itself lives in `reprobe_if_contradicted`, which the probe must be wired to rather than reimplement. Found by adversarial review, 2026-09-11; narrowed while writing the row, same day |
+| 9b | re-classification is possible in both directions, **and the evidence arrives off the probe path**: after the row 9 invalidation, the start path's `resolve_era` answers `server/discover` with a document naming a modern revision, `cached_era()` returns to `Some(Era::Modern)`, and the following health tick sends `server/discover` again - with **no probe-side `server/discover` on the wire between the invalidation and the re-classification** | **yes** | the invalidation path does not exist at HEAD, so neither does its inverse. The driver is named because the obvious fixture - re-probing through the health tick - contradicts row 9 and would teach the suite the mirror-image OUTBOUND.1 defect. Found by adversarial review, 2026-09-11. Without this row an implementation that invalidates and never re-classifies leaves every peer permanently legacy and still passes rows 1 through 9. The re-classification half is a **second-stage pin**: the row fails at HEAD on the invalidation assertion - row 9's defect - and only starts discriminating once invalidation lands. Recorded from the fail-first run, 2026-09-11 |
+| 9c | a served `ping` after the row 9 invalidation leaves `cached_era()` not `Some(Era::Modern)` - the accessor alone, for the reason row 9 gives | **yes** | §3 rules that re-classification comes only from positive evidence and never from an absence. A `ping` result is an absence of evidence about the era, and an implementation reading any successful probe as "the peer is fine, restore what we thought" sends the modern liveness method to a peer just reclassified as legacy. No row otherwise closes it. Found by adversarial review, 2026-09-11 |
+| 9e | the same refusal carried by the status line (`Err(Error::JsonRpc)` with `-32601`) against a **modern** cache drops the cached verdict exactly as the in-band one does | **yes** | the status-carried arm is the one new piece of era plumbing §3 adds, and nothing else reaches it from a modern cache: row 9 is in-band only and row 5 starts from a legacy cache. Without it an HTTP peer refusing `server/discover` under a 404 keeps a `Modern` cache and is probed forever with the method it just refused. Found by adversarial review, 2026-09-11 |
+| 9d | the escalation sequence §3 uses to justify the bound, end to end: `server/discover` refused `-32601` (era invalidated, count 1), `ping` refused (count 2), `ping` refused (count 3, trip and `force_restart()`) | **yes** | the bound's own worked example, and the one sequence that crosses an era invalidation. An implementation that resets the unserved count when it invalidates the era leaves a refuse-everything backend permanently wedged and green, and passes rows 10 through 11b unchanged. Found by adversarial review, 2026-09-11. The crossing-an-invalidation half is a **second-stage pin**: at HEAD the row fails on `is_circuit_tripped()` being false because the probe never records a failure at all (`lifecycle.rs:1053`, whose doc comment says the breaker is left for organic traffic to trip), which is the same undifferentiated state rows 10 through 11b own. The count-survives-invalidation half only starts discriminating once the counter and its accessor land. Recorded from the fail-first run, 2026-09-11 |
+| 10 | escalation: unserved answers 1 and 2 leave the breaker unchanged, the third trips and restarts | **yes** | no counter exists |
+| 10b | `force_restart()` resets the count: after an escalation, two further unserved answers must **not** trip a second time | **yes** | no counter exists. §3 rule 2 makes "a rebuilt backend starts from zero" load-bearing for the three-count arithmetic, and an implementation that never clears the counter restarts every tick after the first escalation |
+| 10c | a probe whose answer is delayed past one full interval: exactly one request is in flight on the wire, the tick that lands during it is skipped, and the escalation count advances by one - not two | **yes** | no counter and no in-flight guard exist. §3 rule 2 defines "consecutive" over answers rather than ticks, and an implementation counting ticks escalates a healthy-but-slow backend to a restart every 30s |
+| 11 | escalation counter resets on a served result: two unserved answers, one served result, two more unserved answers must **not** trip, **and `mcp_health_probe_unserved_total` for that backend reads 4, while the consecutive-unserved count reads 0** - the lifetime counter and the consecutive count are two values and rows 11 and 11b assert both, through a test accessor for the latter | **yes** | the counter assertion is what makes this fail at HEAD. "Must not trip" is vacuously true of HEAD, which resets on every in-band answer and never trips - an earlier revision marked this row fail-first on that vacuous half alone. Found by adversarial review, 2026-09-11 |
+| 11b | escalation counter resets on a **transport fault** too: two unserved answers, then a closed socket, which trips and restarts per row 7 - and on the rebuilt backend two further unserved answers must **not** trip, **with the consecutive-unserved count reading 2, not 4, while `mcp_health_probe_unserved_total` reads 4** | **yes** | §3 rule 2 lists three reset paths and an implementation resetting only on a served result passes rows 10 and 11 while violating it. An earlier revision of this row asserted the socket fault itself must not trip, which contradicts §3's fault arm and would have failed against a correct implementation. Found by adversarial review, 2026-09-11 |
+| 12 | HTTP non-2xx whose body is absent, not JSON, valid JSON carrying no `error` member, or carries an `id` that does not echo the probe's: **transport fault** - trip and `force_restart()` | no - regression guard | HEAD already trips and restarts on every non-2xx, so this row passes today and would be a false fail-first claim; it exists to catch the new body-parsing branch widening past what it was scoped to. Without it, an implementation that reads a proxy's 502 text page as an unserved answer stops restarting dead backends, and this row is also what pre-pins the `id`-echo mitigation named in the residual |
+| 13 | `logging/setLevel` fan-out skips a modern backend and forwards to a legacy one in the same call | **yes** | `protocol.rs:310` forwards to every backend with no era read |
+| 14 | `resources/subscribe` against a modern backend is refused by the gateway with `-32601` and **never reaches the transport**; against a legacy backend it is forwarded unchanged | **yes** | `resources.rs:389` forwards unconditionally |
+| 15 | `resources/unsubscribe`, same two assertions | **yes** | `resources.rs:423` forwards unconditionally |
+| 15b | rows 13 to 15 with a **legacy client** talking to a **modern** backend: still skipped or refused | **yes** | no gate exists at all, so this half fails today. §4 names two eras in scope at these call sites; an implementation gating on the meta-MCP client era (`src/gateway/meta_mcp/mod.rs:177`) instead of the backend's `EraCache` passes rows 13 to 15 unchanged and is wrong in both directions. Found by adversarial review, 2026-09-11 |
+| 15c | rows 13 to 15 with a **modern client** talking to a **legacy** backend: still forwarded, before and after | no - regression guard | the mirror half, and it passes at HEAD, which forwards everything. Split from 15b so neither verdict masks the other: a row mixing a must-fail assertion with a must-pass one has no honest before-state. Found by adversarial review, 2026-09-11 |
+| 16 | a **non-probe** caller of `transport.request` receiving a status-carried JSON-RPC error sees `Error::JsonRpc` with the peer's code, `ErrorCategory::BackendError` unchanged, and **no retry** | **yes** | the shared half of §3's transport change. This is the row that makes the blast radius on the other ten callers a decision rather than an accident. Its assertions read the variant and the retry decision, never the message: `Error::JsonRpc` and `Error::Transport` render identically on purpose (`src/error.rs:159`), so a row comparing rendered errors would pass whichever branch ran. It does assert the `message` *field* carries the peer's own message rather than the rendered status, which is the improvement §3 claims and would otherwise ship unobserved. The row uses **405**, not 404: 404 is the status `is_session_expired_error` keys on, so a 404 here would make this row and row 16d the same response shape and the two verdicts would stop being independent. 400 and 426 are avoided for the same reason against the version-mismatch branch. The `ErrorCategory` half is asserted in `invoke.rs`'s own test module rather than here: `classify_dispatch_error` is module-private, and a transport-side row cannot reach it. Both variants already map to `BackendError` (`invoke.rs:3428` and `:3434`), so that half is a regression guard wherever it lives |
+| 16b | the same caller receiving a non-2xx whose body is absent, unparseable, or carries a foreign `id` still sees `Error::Transport` and is still retried | no - regression guard | the other half of the same branch, and it passes today. Split from row 16 so each half has one verdict: a single row mixing a must-fail assertion with a must-pass one has no honest before-state |
+| 16c | `classify_dispatch_error` maps a JSON-RPC refusal and a transport fault to the same `ErrorCategory::BackendError` | no - regression guard | the half of row 16 that lives where the classifier is reachable. Split out rather than dropped: a client-facing category that moves when the variant moves is a behaviour change §3 does not claim, and it is invisible from the transport tests |
+| 16d | a non-2xx whose body carries the **session-expiry** refusal as a JSON-RPC error still drops the stale session, re-initializes, and carries the request through | no - regression guard | the blast radius the other ten callers hide. `is_session_expired_error` (`src/transport/http/mod.rs:164`) reads `Error::Transport` text and matches a message starting `http 404`; the new branch turns exactly this response into `Error::JsonRpc`, at which point the classifier stops firing and a remote that invalidates its session on token refresh is never recovered. The existing `request_reinitializes_session_and_retries_on_http_404` cannot see this - it answers with a bare text body, which the new branch leaves alone, so it keeps passing through the regression. An implementation must either keep the session signature on the `Transport` side of the branch or teach the classifier the new variant; §3 named neither. Found while writing rows 16 and 16b, 2026-09-11 |
+| 16e | a **404** carrying `-32601` with an echoing `id`, sent with a stale session present, reaches the caller as `Error::JsonRpc`, is asked once, and drives no re-initialization | **yes** | the referee for §3's ruling 2b. Rows 16 (405) and 16d (session-shaped 404) cannot settle it between them: neither forces a 404 *refusal* to become `Error::JsonRpc`, so a design exempting 404 from body parsing keeps both green while making the status-carried arm unreachable on the real HTTP path. Found by adversarial review, 2026-09-11 |
+| M | per-probe wall time and response size for `server/discover` against a real backend, against `ping`, at the default interval | measurement, not a gate | the evidence for §2's load claim, which is asserted there and unproven until this exists. Emit it as a histogram rather than a one-off reading, so the claim stays verified and the `EraCache` fallback decision has data on every release |
+
+Rows 1, 4, 5, 6, 6b, 8b, 9, 9b, 9c, 9d, 10, 10b, 10c, 11, 11b, 13, 14, 15, 15b and 16 must be observed failing against `HEAD` before the
+implementation lands - a test that passes before the fix is testing something else, see
+`a-test-first-suite-can-encode-an-inverted-oracle`. Rows 2, 3, 7, 8, 12, 15c, 16b, 16c and 16d must pass both
+before and after.
+
+## 7. Fail-first record
+
+Twenty-five of the thirty-two rows are written and have been observed against `HEAD` -
+nineteen on 2026-09-11, and six more (9e, 13, 14, 15, 15c, 16e) the same day after two
+independent reviews asked for them. Six of those twenty-five are second-stage pins rather than fail-first evidence for the half they name -
+rows 6, 6b, 8b, 9b, 9c and 9d - so the coverage this section records is nineteen rows, not twenty-five.
+Rows 6b, 8b and 9c were added to that list on 2026-09-11 after two independent reviews; each cell
+says which sibling's defect it actually observes.
+The rest are listed below as outstanding, with what each is waiting on. This section
+records verdicts only - it is not an implementation report, and no production code has
+changed.
+
+Command: `cargo test --lib row_`. Result after the six rows the reviews added, 2026-09-11:
+of the twenty-five rows written, **sixteen failed and nine passed** - every must-fail row
+failed and every must-pass row passed, with no row landing on the wrong side. (The run
+reports 22 passed / 16 failed because `row_` is a substring filter and also matches
+thirteen unrelated tests elsewhere in the crate; those are not part of this record.) The
+first nineteen were observed on `2b52fdbc` with the same verdicts: eleven failed, eight
+passed. The fourteen backend rows were
+first observed under the narrower `backend::tests::row_` filter on `a0b1e5db`, with the
+same verdicts.
+
+| row | observed | line | the assertion that decided it |
+| --- | --- | --- | --- |
+| 1 | **failed** | `tests.rs:1107` | recorded methods were `["ping"]`, expected `["server/discover"]` |
+| 2 | passed | - | regression guard, as designed |
+| 3 | passed | - | regression guard, as designed |
+| 4 | **failed** | `tests.rs:1174` | "an unserved answer is not evidence of health and must not reset the breaker" |
+| 5 | **failed** | `tests.rs:1197` | "a status-carried decline is still a decline, not a fault" |
+| 6 | **failed** | `tests.rs:1223` | `backend.is_circuit_tripped()` - row 4's defect, as the cell predicts |
+| 6b | **failed** | `tests.rs:1245` | "a status-carried -32603 is still a decline, not a fault" - row 5's defect. SECOND-STAGE PIN: at HEAD every status-carried answer restarts, so this row cannot yet separate its own half - that the widened middle arm covers `-32603` as well as `-32601` - from row 5's, that a status-carried answer is not a fault at all. It discriminates once row 5's parse-and-unserved path lands |
+| 7 | passed | - | regression guard, as designed |
+| 8 | passed | - | regression guard, as designed |
+| 8b | **failed** | `tests.rs:1304` | recorded methods were `["ping"]`, expected `["server/discover"]` - which is ROW 1'S ASSERTION, not this row's. SECOND-STAGE PIN: the half this row exists to pin, that a `server/discover` result resets the breaker, receives no fail-first evidence at all, because HEAD already treats every result as healthy and resets. It discriminates only once the modern arm sends `server/discover` |
+| 9 | **failed** | `tests.rs:1337` | "a peer that does not know server/discover is not modern, whatever the probe said" |
+| 9b | **failed** | `tests.rs:1378` | "the -32601 to server/discover must drop the cached verdict" - row 9's defect |
+| 9c | **failed** | `tests.rs:1358` | "an answered ping is an absence of evidence about the era, not positive evidence" - SECOND-STAGE PIN on row 9. The era is still `Some(Era::Modern)` here because nothing at HEAD ever drops it, which is row 9's defect; this row cannot distinguish "a served ping did not set the era" from "no invalidation path exists" until row 9's half lands |
+| 9e | **failed** | `tests.rs:1363` | "a refusal carried by the status line is the same evidence as an in-band one" - its own half: the status-carried arm is the one new piece of era plumbing section 3 adds, and no other written row reaches it from a modern cache |
+| 9d | **failed** | `tests.rs:1416` | `is_circuit_tripped()` false - the probe records no failures at all |
+| 13 | **failed** | `era_gate_tests.rs:151` | `logging/setLevel` reached the modern peer's wire; the legacy half of the same call passed, so the failure is the gate's absence and not a broken fan-out |
+| 14 | **failed** | `era_gate_tests.rs:177` | `resources/subscribe` was forwarded and answered, where a modern peer must be refused in the gateway |
+| 15 | **failed** | `era_gate_tests.rs:206` | `resources/unsubscribe`, same |
+| 15c | passed | - | regression guard: a legacy peer still receives both verbs, which is what keeps the gate from becoming a blanket refusal |
+| 12 | passed | - | all four non-refusal body shapes stay `Error::Transport`, as designed |
+| 16 | **failed** | `http/tests.rs:2233` | the `other =>` arm: HEAD yields a variant other than `Error::JsonRpc`. The panic is on the VARIANT and not on the ask count, so the retry baseline this row also carries is untainted. That baseline is not itself fail-first evidence: `assert_eq!(hits, 1)` never executes at HEAD, and once the variant changes it is satisfied for free, because `is_retryable` has no `JsonRpc` arm (`src/failsafe/retry.rs:96-105`). The no-retry half is a second-stage pin on the same footing as rows 6, 9b and 9d |
+| 16e | **failed** | `http/tests.rs:2286` | HEAD yields `Transport("HTTP 404 Not Found")`: the 404 refusal never becomes `Error::JsonRpc`, which is the ruling 2b referee rows 16 and 16d cannot supply between them |
+| 16b | passed | - | an opaque 502 stays `Error::Transport` and is still asked three times |
+| 16c | passed | - | regression guard: both variants already map to `ErrorCategory::BackendError` |
+| 16d | passed | - | the session-recovery regression this row exists to catch is absent at HEAD, which is the point - it must still pass afterwards |
+
+Every must-fail row that is written failed, and every must-pass row passed. Six rows
+(6, 6b, 8b, 9b, 9c, 9d) failed on a **sibling row's defect** rather than on the half they
+exist to pin; each cell now says so, and each names the landing that turns it into a real
+discriminator. The distinction matters because a row failing for the wrong reason is
+evidence about the row above it, not about itself - counting all six as fail-first
+evidence would overstate the coverage by six, which is what a first reading of this
+section did before two reviews put the number right.
+
+### Outstanding
+
+| rows | waiting on |
+| --- | --- |
+| ~~10, 10b, 10c, 11, 11b~~ | **written 2026-09-11**, once `unserved_counts_for_test` existed to name. Row 10b was the only one of the five that failed against the landed mechanism rather than against `HEAD`: the escalation tripped and rebuilt the transport without clearing the count it had just acted on, so the count stood at the threshold and every subsequent answer escalated again - the tolerance spent once and never again. Observed `left: 3, right: 0` at `tests.rs:1639`, fixed at `lifecycle.rs:1187`. These rows also carried the counter assertions deferred out of rows 4 to 6b, and they are what turn rows 6, 9b and 9d into discriminating pins. Original entry: the consecutive-unserved counter and an accessor for it. These rows also carry the counter assertions deferred out of rows 4 to 6b, and they are what turns rows 6, 9b and 9d into discriminating pins |
+| 15b | a caller-era parameter these three handlers do not take. `handle_logging_set_level`, `handle_resources_subscribe` and `handle_resources_unsubscribe` receive an id and params and no caller context, so the meta-MCP client era (`src/gateway/meta_mcp/mod.rs:177`) is not reachable from the call site - and that field has no production reader yet, by its own doc comment. The row's discriminator, "an implementation that gates on the client era instead of the backend's passes 13 to 15 and is still wrong", therefore cannot be expressed as a test today: a wrong implementation has nothing to read. Recorded as unwritable-at-this-entry-point rather than deferred, because the thing it would pin is currently unreachable, not merely unbuilt. Found while writing rows 13 to 15c, 2026-09-11 |
+| M | the per-probe wall-time and response-size measurement §2's load claim rests on |
+
+### Post-implementation run
+
+`cargo test --lib row_`: **43 passed, 0 failed** - every row that must fail at `HEAD`
+passes against the landed mechanism, and every regression guard stayed green. The run
+reports 43 rather than 32 because `row_` is a substring filter that also matches unrelated
+tests elsewhere in the crate. The progression across the implementation, same command:
+22 passed / 16 failed at `HEAD`, 33 / 5 after the probe arms landed, 35 / 3 after the
+transport parse, 38 / 0 after the three gateway gates, 43 / 0 with rows 10 to 11b written.
+
+Row 15b stays outstanding and unwritable for the reason its cell gives: the discriminator
+it would pin has nothing to read at these call sites. Measurement M stays outstanding.
+
+### Implementation review
+
+Reviewed against the landed implementation, not the design: the whole diff on stdin,
+plus the rows that pin it. `gpt-review` is credit-exhausted until 2026-09-15, so the
+non-Claude pair for this round was to be kimi and grok. Only kimi returned: the
+grok run stopped after three orientation lines with no verdict and a 264-byte run
+file, which is the vendor outage already on record, not a silent pass. One vendor
+reviewed this implementation, and the second opinion the process asks for is owed
+rather than obtained.
+
+kimi: **ship**, with one behavioural narrowing to repair before production and one
+asymmetry to carry.
+
+F1, repaired in this change. Converting a non-2xx whose body is the peer's own
+JSON-RPC error into `Error::JsonRpc` moved that answer off the transport arm of
+`is_session_expired_error`, and the new arm tested only the `-32015` code and the
+words "session not found". A peer that words its expiry as "session expired" used to
+match as a bare `HTTP 404` and matched nothing afterwards, so it lost session
+recovery by the accident of having sent a body that parses. The two arms now read the
+same marker set, and `session_expired_detection_matches_known_signatures` asserts both
+directions: the worded expiry matches, an ordinary method-not-found refusal does not.
+
+F2, carried as a residual. The start-path probe maps every `Err` to
+`ProbeOutcome::NoAnswer`, so a status-carried method-not-found classifies as no answer
+there while its in-band twin classifies `Legacy`. The repair is to route
+`Err(Error::JsonRpc)` through `refusal_code` before the fallback, and it belongs with
+a row that pins the two carriages against each other rather than bolted onto this
+change. The consequence today is bounded: a start-path probe that cannot classify
+falls through to the same unserved accounting every other unanswered probe takes.
+
+## 8. Stage state
+
+Fail-first test writing is complete to the extent `HEAD` allows: nineteen rows written and
+observed, eleven outstanding because the symbols they would name do not exist yet (§7).
+
+The gate now is review, not more rows. The design was amended after the review that passed
+earlier - §3 gained the open ruling, §7 gained rows 16c and 16d and the second-stage-pin
+admissions - so that review does not cover the current text, and the tests have never been
+reviewed as tests. The pair is grok and kimi; `gpt-review` is credit-exhausted until
+2026-09-15. Scope handed to them: the §3 ruling first, then the tests as tests, then whether
+deferring the eleven unwritable rows forfeits their fail-first guarantee. Payload is the whole
+of this document plus `src/backend/tests.rs:980-1430`, `src/transport/http/tests.rs:2120-2400`
+and `src/gateway/meta_mcp/invoke.rs:3645-3685`.
+
+Implementation stays blocked until the §3 ruling is resolved. It is not an operator question:
+the operator pre-authorised deciding it with the advisor models. The two candidate resolutions
+are named in §3 - keep the session signature on the `Transport` side, or teach
+`is_session_expired_error` the `JsonRpc` variant - and rows 16 and 16d together will referee
+whichever lands, which is why both exist.
+
+### 8.1 Candidate resolution for the §3 ruling - NOT yet reviewed
+
+Recorded here rather than in §3 because the review running against this document was
+launched on the §3 text as it stands, and amending that text mid-review would leave the
+verdicts describing a document that no longer exists. Whichever resolution lands, it lands
+in §3 after the verdicts are in.
+
+The ruling named two options - keep the session signature on the `Transport` side, or teach
+`is_session_expired_error` the `JsonRpc` variant - and both are worse than a third the
+codebase already contains. `is_session_expired_error` has a sibling, `is_session_expired_response`
+(`src/transport/http/mod.rs:187`), added by MIK-6040 / #247 for remotes that encode the expiry
+as a JSON-RPC error under a **200**. Its body is a pure predicate over the error member:
+`code == -32015 || code == -32600 || message` containing `"session not found"`. The two are
+selected by a single `match` on the result at `:1473-1476`: `Err` goes to the first, `Ok` to
+the second.
+
+§3's parse change keeps a status-carried refusal in the `Err` arm and only changes its variant,
+so `is_session_expired_error` is still the classifier that must answer, and it returns false on
+anything that is not `Error::Transport`. The fix is to lift the predicate out of
+`is_session_expired_response` into one `is_session_expired_signature(code, message)` and give
+`is_session_expired_error` an `Error::JsonRpc { code, message }` arm that calls it. Both
+classifiers keep their current answers on every input they answer today; neither call site moves.
+
+This is worth stating plainly because it inverts what §3 currently claims about its own risk.
+The ruling reads as though the parse change endangers session recovery. Under this resolution
+it *extends* it: today a remote answering **404 with a `-32015` body** is rescued only by the
+`starts_with("http 404")` string test, and a remote answering **502 with a `-32015` body** is
+rescued by nothing at all, because the status is not 404 and the error never reaches the
+response-side classifier. After the change both are rescued by the signature itself, which is
+what the two MIK-6040 codes were written to recognise in the first place.
+
+What it costs: the existing guard `request_reinitializes_session_and_retries_on_http_404`
+(`src/transport/http/tests.rs:780`) answers bare non-JSON text, so it passes through the
+regression either way and cannot referee this. Row 16d is the row that does, and it must keep
+its JSON-RPC error body for that reason. A row for the 502-carried signature does not exist and
+should be added when this lands - it is the half that only becomes reachable after the change,
+so it is not a fail-first row for §3 and cannot be written as one.
+
+#### 8.1.1 The shared predicate must be narrowed on the `Err` side
+
+The factoring in §8.1 is not safe as a straight lift, and the reason is `-32600`.
+
+`is_session_expired_response` (`src/transport/http/mod.rs:187`) matches three signals:
+`code == -32015`, `code == -32600`, or a message containing `"session not found"`. The middle
+one is the standard JSON-RPC "Invalid request" code - by far the most general code in the
+protocol - and today it can only reach session recovery from a **200** body, which is a
+deliberate choice a peer had to make: encoding a protocol-level refusal inside a success.
+That carriage is what makes `-32600` credible as an expiry signal rather than as noise.
+
+§3's change removes that constraint without meaning to. A non-2xx carrying `-32600` currently
+becomes `Error::Transport` and is inert; afterwards it becomes `Error::JsonRpc` and, under a
+naive lift, would drop the session and force a re-handshake. This is reachable, not theoretical:
+the version-mismatch branch at `:1288-1291` requires **three** conditions together - a
+`BAD_REQUEST` or `UPGRADE_REQUIRED` status, the version phrasing, *and* a parseable supported
+list - so a plain `400` carrying `-32600` and no version list falls straight through to
+`safe_http_status_error` at `:1295` and into the new variant. A 500 or 502 carrying `-32600`
+does the same. The result would be a gateway that re-initializes its session on an ordinary
+malformed-request error, which is a worse defect than the one §3 set out to fix.
+
+So the `Err`-side arm takes the narrow signature only - `code == -32015`, or the message
+containing `"session not found"` - and leaves `-32600` to the 200-carried classifier where its
+carriage justifies it. The shared helper therefore has to be parameterised by carriage rather
+than being one predicate both sides call unchanged, and that is a change to the §8.1 shape, not
+a detail of it.
+
+Two consequences for the rows. Row 16 already uses **405** and a `-32601`, so it is unaffected
+and stays as written. The row this earns is a new one: a non-2xx carrying `-32600` must reach
+the caller as `Error::JsonRpc` **and leave the session bucket intact** - the assertion that
+separates the narrow signature from the naive lift. It cannot be written fail-first, because at
+`HEAD` the variant it asserts does not occur; it lands with the implementation, and §7's
+outstanding list gains it.
+
+### 8.2 The deferral of rows 10-15c was wrong, and is withdrawn
+
+§7 lists eleven rows as outstanding on the grounds that the symbols they would name do not
+exist at `HEAD`, so a test naming them would not compile and would record nothing. That
+reasoning is sound and the premise was not checked. It is false for most of the eleven.
+
+`cached_era()` exists - `src/backend/era.rs:80` - and row 9c already calls it. `is_circuit_tripped()`
+exists - `src/backend/ops.rs:626`, with its own test at `src/backend/tests.rs:109` - and rows 6,
+6b and 9d already call it. The §4 handlers rows 13-15c would drive are present and callable:
+`protocol.rs:310`, `resources.rs:389` and `:423`. Only `consecutive_unserved` is genuinely
+absent - `rg` over `src/` returns nothing for it - and it is the one symbol the deferral was
+actually justified by.
+
+So the split that §7 already applies elsewhere applies here too, and the eleven rows are not
+one population:
+
+- **Writable now, behaviourally**: rows 13, 14, 15, 15b, 15c drive existing handlers against a
+  modern-era fixture and assert on observable output, naming no new symbol. The behavioural
+  cores of rows 10, 10b, 10c, 11 and 11b - trips on the third consecutive unserved answer, the
+  count resets on a restart, one request in flight - run on `is_circuit_tripped()` and the
+  mock's recorded methods, which is the same observable surface rows 4 through 9d already use.
+- **Genuinely deferred**: the assertions that read `consecutive_unserved` directly, and the
+  metric-label assertions. Those land with the mechanism.
+
+Why this matters more than the row count. Evidence that the fix *changed the measured behaviour*
+is available exactly once, before the fix. Written afterwards, with the implementation in view,
+these rows invite the inverted oracle this plan already cites as a known failure - a suite that
+encodes what the code does rather than what the requirement demands, and passes for that reason.
+The deferral traded an irrecoverable observation for a compile error that mostly was not there.
+
+The corrected outstanding list is therefore: rows 10-11b's counter-reading halves, the metric
+assertions, the `-32600` session row from §8.1.1, and nothing else. Rows 13-15c and the
+behavioural halves of 10-11b are to be written and observed against `HEAD` before implementation.

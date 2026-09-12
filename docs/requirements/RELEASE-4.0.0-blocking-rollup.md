@@ -183,22 +183,25 @@ raised them, judged all four closed, and raised nothing new.
 How far each cluster has actually got — design, test plan, review, code, owner —
 is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
 
-Clusters A, D, F, G, H and I have cleared, and the residue emptied on 2026-09-10: every row they named is met or non-blocking in the ledger, so they no longer appear here. What each of them was, and how it closed, is kept in the ownership table and the notes below. This table names only what still blocks.
+Clusters A, C, D, F, G, H, I, J and L have cleared — C last, on 2026-09-11, when `SUB.2b` went non-blocking in the ledger on its own `MET (caveat)` status — and the residue emptied on 2026-09-10: every row they named is met or non-blocking in the ledger, so they no longer appear here. What each of them was, and how it closed, is kept in the ownership table and the notes below. This table names only what still blocks. Cluster J closed on 2026-09-11 by ruling rather than by code: the clause it carried was amended to the behaviour the predicate implements, because the clause had no source in the issue it is named after and satisfying it literally would have restored the behaviour that issue was opened to remove. The ruling, its residual and its reversion trigger are in the ledger cell. Cluster L closed on 2026-09-11 by code, the day it was opened: the probe now chooses its method from the peer's era, a refusal is scored as unserved by either carriage, and the client-chosen method on `POST /mcp/{name}` -- a fifth call site the sweep had not found -- gates on the same mechanism as the three it did. Both rows are MET and non-blocking in the ledger, with the pinning tests cited there.
 
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
-| C | MIK-7272 revision surface | `SUB.2` (own-stream clause), `SUB.4` | 2 | two half-wirings. `SUB.2b` is absent on the outbound leg only: the inbound legs now capture rather than discard (`parse_sse_response` returns `Result<SseExchange>`, `src/transport/http/mod.rs:312`; progress-token match, `src/transport/stdio.rs:416-431`). It stays blocking because the captured notifications have no production consumer, and the inbound scaffold does not merge alone. `SUB.4` is no longer unwired — all three routes reach a guard as of `5dd2b48c` — but it is PARTIAL rather than MET: the direct `POST /mcp/{name}` route RELEASES the client's key when the backend call fails (`backend_handlers.rs:862-867`, `idempotency.rs:562-571`), which is the broken-stream case the criterion is written about. What it now waits on is a decision about uncertain execution, not more wiring. `EXT.1`, `OTEL.1`, `TASK.1` and `MRTR.10` left this cluster as their wiring landed, and `ORDER.2` left it on 2026-09-08 |
+| K | deployed-build control drift | `NFR.SEC.7` | 1 | both halves of a new row, added 2026-09-11 for MIK-7265, which had no requirement governing it. The origin guard `src/gateway/router/origin_guard.rs` is merged (added by `5d25f104`, 2026-08-28; `55970c2b` two days earlier only adds a tunnel-hostname unit test to it) and wired at `src/gateway/router/mod.rs:313`, with the policy built from live config at `:216`, so this is not unbuilt protocol work; a drift check cannot ask the process what it runs: there is no `build.rs` in the crate and no git sha is compiled in - `env!("CARGO_PKG_VERSION")` is the only provenance the binary carries (`src/gateway/server/support.rs`), so `3.4.0` is all it can report, and the commit is knowable only from the install artefact's path (`~/.local/libexec/mcp-gateway/3.4.0-f30539af`). Built 2026-09-11: `scripts/dev/check-control-drift.py` with the manifest `security-controls.toml`, the probe rows in `scripts/dev/test_check_control_drift.py` and the reviewed design at `docs/design/2026-09-11-merged-versus-listening-drift-check.md`. The checker therefore probes behaviour on the wire and uses the reported version only to corroborate, via `git merge-base --is-ancestor <control commit> v<version>`. Verified both ways the same day: a gateway built from this tree refuses the foreign `Origin` and the foreign `Host` and answers the legitimate request, exit 0; the listening install answers all three with 200, exit 1, noting `5d25f104 is NOT in v3.4.0`. What remains is the first half only — an install of a build that carries the guard. That is a deployment, and it is the operator's call; the row stays blocking until the live endpoint passes the check. |
 
-Cluster C carries one prerequisite that is not visible in its row. `SUB.4`'s activation is
-blocked on the idempotency key binding the calling principal: `identity_suffix`
-(`src/gateway/meta_mcp/invoke.rs:1128-1132`) is empty whenever identity propagation is off, which
-is the shipped default, so two authenticated callers derive one KEY — not one fingerprint, which
-is the same for both because the calls genuinely are the same `(server, tool, arguments)` — and the
-second is served the first's stored response. Three moves are needed, not one: the fallback chain
-`caller_principal` already uses (`:1140-1142`); the relocation into `derive_key` that SUB.4's own
-"Constraints, measured" already decided; and a suffix that is hashed or length-prefixed rather than
-concatenated raw after a client-supplied key, since without that third move the second one hands a
-forgeable binding to the population it just started binding. Provenance and the full derivation:
+Cluster C's `SUB.4` prerequisite — the idempotency key binding the calling principal — closed, and
+all three moves it named are in source (re-verified 2026-09-11). It was recorded because
+`identity_suffix` was empty whenever identity propagation is off, which is the shipped default, so
+two authenticated callers derived one KEY — not one fingerprint, which is the same for both because
+the calls genuinely are the same `(server, tool, arguments)` — and the second was served the first's
+stored response. Move 1, the fallback chain: `retry_identity_suffix`
+(`src/gateway/meta_mcp/support.rs:80-89`) selects the propagated binding, else the verified subject,
+and is empty only for a caller with neither. Move 2, one composition site: `idempotency_key_for`
+(`:48-62`) is where the suffix meets the key. Move 3, the forgeability guard: the client key is
+LENGTH-PREFIXED, `{len}:{key}{projection}{identity}{step}` (`:59-61`), so a client that supplies
+`mykey|sub:victim` derives `19:mykey|sub:victim` and cannot reach the victim's `5:mykey|sub:victim`.
+The two arms are tagged (`idp:` vs `sub:`) so a binding cannot collide with an actor id that reads
+the same. Provenance and the original derivation:
 `docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.md`, which found it while
 withdrawing its own duplicate of this wiring on 2026-09-06.
 
@@ -332,6 +335,34 @@ The accumulated diff also carries new production emission code
 dual-vendor gate. Commit is not merge, so nothing is violated yet — the review is due before
 push, and its material is the diff, not the design documents.
 
+
+### A second one: two open tickets that no requirement row governed — closed 2026-09-11
+
+`MIK-7320` and `MIK-7265` appeared zero times in `RELEASE-4.0.0-requirements.md`, zero times in
+`RELEASE-4.0.0-criteria-status.md`, and zero times in this file. Both were carried as open release
+work by `RELEASE-4.0.0-near-done-triage.md` — MIK-7320 at 3 of 3 ACs with an evidence comment and
+PR #464 outstanding, MIK-7265 correctly Blocked with its own deliverable, the drift-check script,
+unbuilt. The requirements document names fifteen tickets and neither was among them, so the
+criteria ledger's "every functional requirement ID has a row" was true and still left these two
+outside every gate that counts rows. A release declared ready on the criteria count would have
+shipped with one unmerged PR and one unbuilt deliverable, and nothing in the count would have
+gone red.
+
+Both are now gated. `NFR.SEC.7` (cluster K, blocking) governs MIK-7265's merged-versus-listening
+drift. DoD item 8 governs MIK-7320's substance, by defining "full suite" as `--all-features` —
+the feature set under which its fixture red appears at all. What does **not** follow is that the
+class is closed: the gap was found by comparing two documents by hand, and nothing runs that
+comparison.
+
+The same 2026-09-11 comparison found the reverse failure too, and it is the more dangerous of the
+two. This file and the triage both use the label `DISCOVER`, for different lists: the criteria
+ledger grades `MIK-7217.DISCOVER` 11 of 11 MET, while the triage grades MIK-7217 at 1 of 8 against
+`MCP728.DISCOVER.1-8`, the ticket's own acceptance set. Both gradings are correct. A reader who
+takes the first as "the discovery ticket is done" is wrong by seven criteria, and the collision is
+invisible from inside either document. `MIK-7256` fails the same way in the other direction: 26
+acceptance criteria reduced to a single requirement row, `NFR.SEC.6`, graded MET on mechanism while
+the triage records 17 of the 26 with no verifying test.
+
 ## Who owns what, 2026-09-01
 
 The clusters above describe the work. This section says who is doing it, because the gap that
@@ -351,6 +382,8 @@ who owns the work.
 | E performance vs 3.5.0 | run on `spark` 2026-09-03; `NFR.PERF.2` closed, `NFR.PERF.1` needs an end-to-end harness that does not exist. **2026-09-06**: the operator's 2026-09-05 ruling lifted `NFR.PERF.1`'s blocking flag on the headroom argument (worst shared case +6.07% against a 10% P99 bound); the row stays PARTIAL but no longer gates the release, and the cluster is closed — see its removal note above |
 | F compat and surface facts | the operator settled the surface questions on 2026-09-02: `NFR.COMPAT.1` became a code change and `NFR.COMPAT.3` was waived on the record. What is left is work, not a decision — the default flip and the dual-role matrix. **2026-09-06**: the default flip is done and `NFR.OBS.5` is met; the dual-role matrix and `NFR.COMPAT.1` are what remain, plus a new hard release gate on the `MIK-7212.MRTR.7a`/`7b` bridge, which the flip landed ahead of |
 | G stdio dispatch path | unowned. `NFR.OBS.1` and `NFR.OBS.2` have both closed and left the cluster; what remains is `MIK-7246.CONFIRM.1a`, whose code is in the tree and which waits on the dual-vendor review verdict, not on an agent |
+| K deployed-build control drift | unowned. Neither half is protocol work: one is a deployment, the other a drift-check script that exists nowhere in the tree |
+| L outbound era gating | `sub2b-outbound`, design first |
 | — residue | `residue-r` takes the decision rows; `HEADER.9a`/`9b` belong to the header increment and wait on B |
 
 ### Three blocking rows have no owning ticket, 2026-09-06
@@ -461,6 +494,16 @@ criterion needs the operator's recorded agreement, and on 2026-09-02 **it was gi
 criterion is waived for this field**. The enforcement ships, the row leaves cluster F, and the
 release notes carry the break rather than the criterion swallowing it. The waiver is recorded
 for this field only — `NFR.COMPAT.3` still binds every other configuration surface.
+
+**2026-09-11, evidence that narrows what the waiver had to cover.** The field is absent from
+the whole `v3.5.1` tree — `git grep -l exposed_meta_tools v3.5.1` returns nothing — and arrives
+with `0f04a179` (#473) on the release line, defaulting to an empty list (`src/config/mod.rs:1365`)
+which restricts nothing. No configuration an operator could be running today sets it, so the
+enforcement cannot require anyone to edit configuration for existing behaviour to continue,
+which is the thing `NFR.COMPAT.3` forbids. The waiver stands as recorded — withdrawing an
+operator decision is the operator's call, not a consequence of this note — but the break it
+authorised has no population. The release notes accordingly describe the field as new rather
+than as a breaking change.
 
 ### The count is checked, not asserted
 
@@ -926,3 +969,558 @@ emit the byte-identical message on the wire. Nothing external breaks, so the
 question the escalation raised does not arise; the frozen message needs a comment
 saying why it is frozen, or someone tidies it away and reopens the defect. If the
 operator later prefers the clean break, that is a further change, not a rework.
+
+## 2026-09-11 — the count is 2, and they are different kinds of work
+
+`scripts/release/count-release-criteria.py --blocking` returns `MIK-7272.SUB.2b` and
+`NFR.SEC.7`. The clusters above were written when the count was 28 and are retained as the
+record of how it came down; this section states where it stands, not how it got here.
+
+The two are not the same kind of problem, and treating them as one queue is what would
+stall the release. One is unwritten code. The other is a deployment nobody has performed.
+
+### `MIK-7272.SUB.2b` — ABSENT, and the absence is one leg
+
+Request-scoped notifications must flow on the response stream of their own request. The
+inbound leg exists and is scaffold, not absence -- but the symbol this rollup first cited for
+it, `parse_sse_response` at `transport/http/mod.rs:312`, no longer exists anywhere in `src`.
+Commit `fbca1bc9` replaced the buffer-the-whole-body parse with an incremental decoder, so
+the live citation is `src/transport/http/sse_decoder.rs` (`decode` at `:188`, `drain_events`
+at `:246`), which publishes notifications as each event completes instead of returning them
+alongside the response. The outbound leg is what the ledger calls ABSENT, and it is
+the work in flight on `feat/sub2b-outbound-mint`. The standing merge constraint is that the
+inbound capture scaffold ships with the outbound emitter or not at all, which is why PR #528
+is Draft rather than mergeable.
+
+Closing it is ordinary engineering with a reviewed design already on the record. No operator
+decision is pending on it. A review obligation is — see the next section; it blocks the merge,
+not the engineering.
+
+### `NFR.SEC.7` — PARTIAL, and the open half is not a code change
+
+Second half MET. The drift check exists, is reviewed, and discriminates: each probe requires
+both that the request the control exists to refuse IS refused and that a legitimate request
+on the same path succeeds, so an auth wall or a wedged process cannot read as the control
+firing.
+
+First half unchanged and re-verified today against the live endpoint:
+
+    python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp
+    origin-guard: FAIL: the refused request was answered 200; legitimate request 200
+      [provenance: 5d25f104 is NOT in v3.4.0 -- the build predates the control]
+    host-guard:   FAIL: the refused request was answered 200; legitimate request 200
+
+The process behind that socket is `~/.local/libexec/mcp-gateway/3.4.0-f30539af`. It answers a
+foreign `Origin` and a foreign `Host` with the full tool list because it predates `5d25f104`.
+Nothing in this repository can close that half: the guard is already merged, and the listening
+build is old. **Closing it is deploying a current build to that install, which is the
+operator's call.** The criterion stays blocking until the live endpoint passes.
+
+Pass the checker a full URL. A bare `host:port` makes `urlparse` read `127.0.0.1` as the
+scheme, and the run reports `endpoint unreachable ([Errno 61] Connection refused)` — which
+is honest about having no verdict, but reads at a glance like the install is down.
+
+### Gates no criterion owns
+
+The Base-tree CI gap section above states the structural point: every criterion row asserts a
+behaviour of the gateway, and none asserts that the tree compiles clean or that a human read
+it. So the gate's count of 2 is the count of *criterion* blockers, not of things that block
+the release. Three such gates were on the record. Their state today:
+
+- **Base-tree clippy, 5 errors (recorded 2026-09-07) — CLOSED.** CI runs the gate command
+  verbatim (`cargo clippy --all-targets --all-features -- -D warnings`,
+  `.github/workflows/ci.yml:180`) and the `Clippy (pedantic)` job is green on `origin/main`
+  at `738c7cee` (2026-09-11), alongside `Format`, `Tests`, `Kani` and the ledger job. The
+  2026-09-07 record no longer reproduces on the base tree.
+- **The `blocked_response_value` lint blocker — CLOSED** by `e0f9396b`, an ancestor of HEAD,
+  which dropped the superseded blocked-response payload builder; the symbol has no remaining
+  matches in `src/`. The note recorded against it in `criteria-status.md` earlier on
+  2026-09-11 is therefore stale. The ledger is frozen while the push is held, so the
+  correction is recorded here rather than edited into it.
+- **A final review of the committed tree — OPEN, and it is the one that still binds.**
+  `grok-review` and `kimi-review` both returned SHIP on the second round of the patch, but
+  three changes landed after that verdict: a comment correction, a `let`-else in the direct
+  route, and boxing the dispatch future at two call sites to clear `clippy::large_futures`.
+  The boxing is the substantive one — it changes allocation on the dispatch path — and no
+  reviewer has seen it. Two further commits, `e0f9396b` and `645371b4`, landed after that
+  record was written. The obligation is a review of the committed tree, not of the patch that
+  produced it (`docs/design/2026-09-11-sub2b-progress-token-mint.md:225-232`).
+
+The branch's own lint gate is green as it stands. `cargo clippy --all-targets --all-features
+-- -D warnings` re-linted the crate (not a cache replay: `Checking mcp-gateway`, 56.9s) and
+returned zero warnings and zero errors. That measurement covers the worktree *including* the
+outbound-emitter worker's uncommitted edits, which is the tree that will become the commit,
+and is not a statement about any of those edits in isolation.
+
+One scheduling fact falls out of that last item and is not a judgement call: `gpt-review` is
+credit-exhausted for the period, quoting `try again at Sep 15th, 2026`. The delivery process
+asks for two independent non-Claude reviewers and one is unavailable until then, so both the
+design gate and the implementation gate stand at one reviewer of two. Either the release
+waits for 2026-09-15, or a second non-Claude reviewer other than `gpt-review` is used. That is
+a release-owner choice, and it is the only gate here with a date attached to it.
+
+### Not blockers, recorded so they are not re-litigated
+
+`NFR.PERF.1` is PARTIAL with its blocking flag deliberately lifted under the release owner's
+2026-09-05 ruling: 4.0.0 ships on the headroom argument, worst shared case +6.07% against a
+10% P99 bound. The grade stays PARTIAL because the wording genuinely is not met. Its residual
+binds: no P50 or P99 may be quoted publicly until an end-to-end harness produces one.
+
+`MIK-6865`'s nested-key defect is **ungoverned by any v4.0.0 criterion** and is not release
+work. `SCHEMA.1a/1b/1c` govern schemas the gateway EMITS and are MET on evidence at HEAD
+(`ac_schema_1_no_meta_tool_nests_an_object_inside_an_array` and
+`ac_schema_1_the_detector_finds_the_shape_it_is_looking_for` in
+`tests/mik_7272_exploit_acs.rs`, `tests/schema_2020_12_validity.rs`,
+`unresolved_refs` in `src/trust/schema_bounds.rs`). The defect concerns arguments the gateway
+ACCEPTS — undeclared keys at depth >= 2 — and `additionalProperties` has zero hits across
+`docs/requirements/`. Its fix is stranded on `origin/fix/mik-6865-schema-key-invention`
+(3 commits, 16 files, 1204 insertions, no PR), whose merge is the operator's call and not a
+release gate. Worth one line when the ledger is writable: the `#[ignore]` at
+`tests/mik_6865_nested_key_probe.rs:62` is what kept a live defect invisible behind a green
+suite — the depth-1 falsifier at line 83 is not ignored and passes, so refusal works at the
+top level and stops recursing below it.
+
+### What closing all of it requires
+
+Ordered by who has to act, because the two queues do not block each other and running them
+in series is the only way this slips.
+
+**Engineering, in flight.** Finish the `MIK-7272.SUB.2b` outbound emitter on
+`feat/sub2b-outbound-mint` against the reviewed design. It merges together with the inbound
+capture scaffold or not at all, so PR #528 leaves Draft only when both legs are in. Nothing
+here needs a decision.
+
+**Operator, not code.** Deploy a build containing `5d25f104` to the install behind
+`127.0.0.1:39401`, which currently runs `3.4.0-f30539af`. Then
+`python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp` must return pass on
+both `origin-guard` and `host-guard`. `NFR.SEC.7` stays blocking until it does, and no
+change in this repository can move it.
+
+**Review, dated.** A final review of the committed tree by two independent non-Claude
+reviewers. `gpt-review` is unavailable until 2026-09-15; `grok-review` and `kimi-review` have
+seen an earlier round and would be re-reviewing, which satisfies the letter of the gate for
+the commits they have not seen. Choosing between waiting and substituting a second reviewer
+is the release owner's call.
+
+**Bookkeeping, once the push is unheld.** Correct the stale `blocked_response_value` note in
+`criteria-status.md`, and add the `tests/mik_6865_nested_key_probe.rs:62` `#[ignore]` line
+noted above. Neither is a gate; both are cheap and both decay if deferred.
+
+Release-ready means all four, not the gate's count of 2. Three of the four can proceed right
+now: the outbound emitter, the operator deployment, and the review -- the last because the
+gate asks for two independent non-Claude reviewers, not for `gpt-review` in particular, and
+substituting the second one has since been exercised (see the corrections section below).
+Only bookkeeping waits, and it waits on the push hold rather than on anything technical.
+
+### Corrections from the 2026-09-11 review of this document
+
+Reviewed by `grok-review` and `kimi-review`. `gpt-review` was unavailable, so the second
+independent reviewer was substituted rather than waited for -- see the last item below for
+what that does to the dated gate. Both reviews were scoped to commits `c74c56a6` and
+`1b83de13`, this file only; the peer's transport work was declared out of scope.
+
+**The `urlparse` mechanism given for the `check-control-drift.py` gotcha is wrong for the
+example it uses.** The paragraph above says that passing a bare `127.0.0.1:39401` makes
+`urlparse` read `127.0.0.1` as the scheme. It does not. A URL scheme may not begin with a
+digit, so `urlparse('127.0.0.1:39401')` returns `scheme=''` with the whole string in `path`.
+The scheme misreading is real but needs a *hostname*: `urlparse('localhost:39401')` returns
+`scheme='localhost'`, `path='39401'`. Verified by running both. The operational advice is
+unchanged and still necessary -- pass a full URL -- but the reason a bare authority fails is
+that it has no netloc at all, not that the address is mistaken for a scheme.
+
+**`MIK-7272.SUB.2b` is recorded `MET (caveat)` in the ledger while its acceptance binary is
+red at `HEAD`.** Commit `f14e6954` flipped the verdict cell from `ABSENT` to `MET (caveat)`.
+Against a clean tree at `1b83de13`, `cargo test --test mik_7272_sub2b_acs` reports
+`5 passed; 3 failed; 2 ignored`. The three failures are
+`s02_stdio_message_reaches_its_own_call_before_the_result`,
+`s02_stdio_progress_reaches_its_own_call_before_the_result` and
+`s03_progress_stdio_each_call_sees_only_its_own_token`. All three fail on one mechanism,
+and it is neither delivery nor correlation: `Gateway::run_stdio` awaits each dispatch inline
+inside its read loop (`src/gateway/server/mod.rs:1648`, from `513647be`, 2026-03-24), so a
+second request sent while the first is still parked is never read. Each of the three rows
+sends one. `s03`'s panic reads `call B's token must appear exactly once: [String("token-A")]`
+because call B was never dispatched at all -- not because its token was mis-routed. The row's own evidence cell was not rewritten to
+match the new verdict and still contains the sentence *"The verdict stays ABSENT because
+`SseExchange.notifications` has NO production consumer"* -- itself naming a type removed in
+`fbca1bc9`, per the SSE citation correction above -- so the cell now argues against its own
+grade on a mechanism that no longer exists. This is recorded here rather than fixed in `criteria-status.md` because the row is
+a peer's in-flight work and the ledger is frozen; whoever lands the next SUB.2b commit owns
+reconciling the two. Until then the gate's `187 met or non-blocking` counts a row whose
+acceptance tests do not pass.
+
+One qualification on the three failures, so the next reader does not treat them as a break:
+they are not a regression from `f14e6954`. They were written red on purpose, by
+`94291d83 test(sub2b): failing acceptance rows for S-02 and S-03 over stdio` and
+`43bd88de`, as the failing half of a test-first sequence, and `f14e6954` turned five of them
+green. The binary holds ten cases, not eight: the remaining two are `#[ignore]`d by design as
+the reproduction and the discriminator for the open client-leg defect, so they are declared
+pending rather than silently passing. So the defect is not that the code broke -- it is that the ledger verdict was
+advanced to `MET (caveat)` while three of the criterion's own acceptance rows are still in
+their pre-implementation state. The engineering work is exactly what this document already
+describes as in flight; only the grade is ahead of it.
+
+The three rows are not one disposition, and reading them as one costs either a hidden gap or
+a permanently red job. `s02`'s two rows hold **one** call in flight -- the test says so at
+`tests/mik_7272_sub2b_acs.rs:540` -- and their second request is `RELEASE_TOOL`, teardown that
+unparks the slow call so it can return. Their criterion assert is already green before it:
+the backend's notification does reach the stdio client mid-call. What they need is a release
+path that is not a JSON-RPC request, and the fixture already owns one -- `releases` is an
+`Arc<Semaphore>` the harness holds, so a handle that adds a permit directly retires the
+dependency. The fixture comment claiming "a second call in flight is the only way to release
+the first" describes the current fixture, not a constraint. `s03` is the opposite: its two
+calls carry `token-A` and `token-B` and the criterion IS per-call isolation, which cannot be
+demonstrated without two calls in flight. That row is genuinely blocked on the serve loop and
+is the honest `#[ignore]`, with `513647be` named as the reason and a concurrent-serve-loop
+ticket filed. Ignoring all three would repeat the pattern this document already flags at
+`tests/mik_6865_nested_key_probe.rs:62`: an `#[ignore]` that kept a live defect invisible
+behind a green suite.
+
+**The review gate is not date-bound; it is bound to `gpt-review` specifically.** The
+requirement is two independent non-Claude reviewers. This document's own text records that
+the release owner may either wait for 2026-09-15 or substitute a second reviewer, and the
+substitution has now been exercised: `grok-review` and `kimi-review` both ran against
+`c74c56a6`/`1b83de13`. So the closing summary above is too pessimistic about that workstream
+-- it waits only if the release owner requires that the second reviewer be `gpt-review`
+rather than any non-Claude reviewer. That is a standards question for the release owner, not
+a blocked dependency, and it is the last open question in this document.
+
+## 2026-09-11, later — the implementation review, and what is left after it
+
+The corrections above were reviewed as a *document*. The transport work they describe had
+not itself been sent to a non-Claude reviewer. It has now, in two passes, because one
+commit could not be reviewed inside the other's range.
+
+### Pass one — the emitter and the fixture gate
+
+Payload: `f14e6954~1..364f4373`, src and tests, with the acceptance binary's measured state
+quoted. `kimi-review` returned **SHIP**, zero FINDINGs, three IMPROVEMENTs. Output at
+`~/.claude/data/reviews/runs/synthetic-20260911T145637Z-898.md`.
+
+The reviewer also reported that the two `Box::pin` call sites the payload asked it to
+examine (`src/gateway/server/mod.rs:1675`, `:1696`) were **not in the diff it was given**.
+That was correct and it is the most useful thing in the review. `git log -S'Box::pin(Self::dispatch_single_with_sink'`
+puts the boxing in `0a477a4b`, and `git merge-base --is-ancestor 0a477a4b f14e6954` confirms
+it is an ancestor — outside the range, so the SHIP verdict did not cover it. A review payload
+built from a range chosen by its newest commit silently excludes the ancestor that did the
+thing you most wanted looked at.
+
+### Pass two — the commit the first pass could not see
+
+Payload: `0a477a4b` alone, src only, 2 files, 189 insertions, with the three questions the
+change actually raises stated up front: whether the boxing is correct on the hot dispatch
+path, whether a concurrently-written notification and the main loop can interleave a partial
+line on the shared stdout, and whether stdio registration drains on every exit path including
+cancellation — the last being a HIGH finding from the *design* review that the
+implementation was supposed to close with an RAII guard.
+
+The payload put that second question the wrong way round and the reviewer corrected it: it
+described `run_stdio` as spawning a writer, and nothing is spawned.
+`dispatch_streaming_notifications` (`src/gateway/server/mod.rs:1694`) runs a `select!` in the
+*same* task, holding `&mut stdout` as the single owner, and every write is awaited in order.
+A partial line cannot interleave, and the notification path's lifetime is the dispatch's own.
+Verified at source: the only `tokio::spawn` calls in that file are elsewhere.
+
+### Disposition of the three IMPROVEMENTs
+
+None are code changes in this window, and each is recorded here so the next reader does not
+re-derive them.
+
+**"tool invoked" is emitted before the paths that can still refuse.** True:
+`src/gateway/meta_mcp/invoke.rs:1530` logs it, and the cost-governance budget check and the
+firewall below it can both return an error without a dispatch. This is not new and it is not
+being reordered for the release. The `tracing::info!` line is the OWASP ASI03 per-agent audit
+record and it deliberately records the *attempt*; every refusal below it emits its own
+`warn` and its own client-visible log. Moving the line would change what the audit trail
+means, on a path that is on every tool call, at a release gate. The ADR-014 §3 `emit_log`
+beside it mirrors the existing semantics exactly, which is the correct behaviour for a change
+whose whole purpose is to put the existing audit vocabulary on the caller's own stream.
+
+**The ADR-008 INV-2 refusal sentence is written out three times** — once in `tracing::warn!`,
+once in the `emit_log` payload, once in the `-32001` error (`invoke.rs:1334-1360`). Real
+duplication, real drift risk, and a `const` would retire it. Left alone: it is a cosmetic
+refactor of a security-refusal path with no behavioural test distinguishing the three copies,
+which is not a change to make in a release window.
+
+**`is_gateway_own` hardcodes the `"gateway."` prefix** at `tests/mik_7272_sub2b_acs.rs:399`,
+duplicating `GATEWAY_INVOKE_LOGGER`. Correct, and the file is a peer's in-flight work; it is
+not edited from this lane. Recorded for whoever lands the next commit in that binary.
+
+### Where the release gate actually stands
+
+`python3 scripts/release/count-release-criteria.py` — *149 criteria, 189 rows, 187 met or
+non-blocking, 2 blocking*, exit 0. Neither remaining blocker is engineering work.
+
+**`MIK-7272.SUB.2b`, row 230.** The engineering is done. On the committed tree at
+`364f4373`, `cargo test --test mik_7272_sub2b_acs` reports `7 passed; 0 failed; 3 ignored`,
+and the full suite with `--all-features --no-fail-fast` is 96 binaries with 0 failing (lib:
+4268 passed). `clippy --all-targets --all-features -- -D warnings` exits 0 and `fmt --check`
+is clean. What keeps the row blocking is the cell itself: it still carries `blocking: yes`
+and an evidence paragraph arguing for a verdict two commits behind. The ledger is frozen and
+the row is a peer's, so the flip belongs to whoever lands next in it — not to this document.
+
+**`NFR.SEC.7`.** Still the same shape, and still not a code change.
+`python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp` run today reports
+*2 probed, 1 uncovered, 2 failing*, with both failures annotated `5d25f104 is NOT in v3.4.0 --
+the build predates the control`. The origin guard and the host guard answer a refused request
+`200` because the binary serving `127.0.0.1:39401` is `3.4.0-f30539af` and does not contain
+them. Closing this means deploying a build that includes `5d25f104` and re-running the check.
+That is not done from an agent lane: replacing the live gateway binary restarts the process
+other sessions are routing MCP traffic through.
+
+So the path to a green gate is two actions, both outside this lane: a ledger-cell flip that
+the acceptance evidence already supports, and one deploy.
+
+### Pass two's verdict, and the one thing it opens
+
+`kimi-review` returned **SHIP** on `0a477a4b`, output at
+`~/.claude/data/reviews/runs/synthetic-20260911T150153Z-15208.md`. Two of the three
+questions came back clean and both were checked against the tree rather than taken on the
+reviewer's word. The `Box::pin` sites are correct: one heap allocation per dispatch, in
+exchange for not carrying a tens-of-kilobyte future on the reader loop's frame, and the
+`Box::pin` + `tokio::pin!` pair is sound. The stdout question is answered by the correction
+above — single owner, ordered writes, no interleaving possible.
+
+**The third question is a real gap, and it is the design review's HIGH finding only
+half-closed.** `StdioTransport::request` registers a progress token before the write
+(`src/transport/stdio.rs:605`) and drains it after the outcome (`:629-634`). That covers a
+write error and an internal timeout, and there is a test for the write-error case
+(`stdio_request_drains_its_registration_even_when_the_write_fails`, `:1257`). It does **not**
+cover cancellation. If the future is dropped mid-`await` — an outer timeout, a task abort —
+the drain line is never reached and the `captured_notifications` entry survives for the
+transport's lifetime. The asymmetry is visible in the same function: the `pending` map *is*
+cancellation-safe, because `PendingRequestGuard` (`src/transport/mod.rs:185`) removes its
+entry on `Drop`, and the comment at `:611-617` says so in as many words. The registration
+map got the explicit drain and not the guard.
+
+Consequence is bounded and is growth, not misrouting: keys are minted `gw-<uuid>` and never
+collide, so a stranded entry cannot capture another call's notifications — it just never goes
+away. Graded MEDIUM, before-production rather than release-blocking.
+
+The fix is the pattern the file already uses: a second drop guard mirroring
+`PendingRequestGuard`, holding the token and publishing (or discarding) the captured vector
+on `Drop`, so the success path, the error path and the dropped-future path all drain through
+one place. `src/transport/stdio.rs` is the peer's in-flight file and is not edited from this
+lane; the finding has been handed over with that shape.
+
+Four SMALL improvements are recorded and not taken in this window: `write_notification`
+serializes twice (`to_value` then `to_string` inside `write_response`); the liveness test
+hangs rather than fails if the implementation regresses to drain-after-resolve, and wants a
+`tokio::time::timeout` around `next_line().await`; a `try_recv` drain loop after each `recv()`
+would batch writes under a burst; and the post-loop comment "anything still queued is
+everything that will ever arrive" holds only while no sink sender can outlive the scope, an
+invariant that belongs at `notification_sink::scope` rather than in a comment beside the
+loop. The fifth, a suspected duplicate forwarding rule in the SSE transport, was raised
+without tree access and is not confirmed here.
+
+### The second reviewer on both passes, and the NOW finding it found
+
+Until this point each pass carried **one** reviewer. The gate this document sets is two
+independent non-Claude reviewers, so neither pass was closed by the paragraphs above:
+`kimi-review`'s SHIP on the emitter and its SHIP on `0a477a4b` were one half each.
+`grok-review` is the second half, and it did not agree.
+
+**Pass one, `grok-review`: SHIP-WITH-FIXES**, output at
+`~/.claude/data/reviews/runs/grok-20260911T145630Z-290.md`. One FINDING, gated NOW:
+`set_request_log_level` returned early when the declaration was absent, leaving whatever the
+previous caller wrote in the task-local slot. Verified at source before acting on it, and the
+path is real rather than theoretical:
+
+- `dispatch_batch_with_sink` (`src/gateway/server/mod.rs:2047`) loops the items of a JSON-RPC
+  batch sequentially, and every item runs `dispatch_single_with_sink`, which calls
+  `set_request_log_level` at `:1925`.
+- The whole batch is wrapped in **one** `notification_sink::scope` at `:1788`, and `scope`
+  mints exactly one `LEVEL` slot (`src/transport/notification_sink.rs:72`).
+- So a batch whose first item declared `debug` and whose second declared nothing left the
+  second item reading `debug`. ADR-014 §4 gives absence a defined meaning — silence — and for
+  every item after the first it did not hold.
+
+The unparseable path already wrote `None` into the slot; only the absent path skipped the
+write, which is what made the omission easy to miss. Fixed by making absence overwrite like
+every other outcome, with a test that performs the two sequential sets inside one scope
+(`a_second_declaration_of_nothing_clears_the_first`). The function is not on the peer's
+in-flight list, so the repair was taken here rather than handed over.
+
+**Pass two, `grok-review`: SHIP**, output at
+`~/.claude/data/reviews/runs/grok-20260911T150156Z-15632.md`. It reached the registration
+drain gap independently and graded it HIGH rather than MEDIUM — but it also supplied the
+reachability the section above left open: the gap **cannot fire on the sequential `run_stdio`
+loop this change serves**, because nothing there drops the future. The trigger it names is a
+cancellable caller, an HTTP client disconnect being the likely one. That keeps the finding
+before-production rather than release-blocking and tells the peer which caller the guard has
+to survive. It also names a second entry point the earlier pass missed: the `?` on
+`serde_json::to_string` sits after the registration insert, so that error return leaves the
+entry behind as well.
+
+Three further SMALL improvements from the same pass, recorded and not taken:
+`dispatch_streaming_notifications` reimplements `notification_sink::collect`'s
+select-then-`try_recv` loop instead of sharing one driver, so a later cancellation or
+close-order fix can land in only one copy; `Box::pin` is written at both stdio dispatch arms
+(`src/gateway/server/mod.rs:1675,1696`) where pinning once inside the helper would stop a
+third arm forgetting it; and `write_response` issues the JSON and its trailing newline as two
+`write_all` calls, which a future concurrent stdout handle could split.
+
+Two more, from pass one, on the acceptance suite itself: the stdio S-02 row skips the gateway
+audit line without ever asserting it was delivered, so a broken stdio setter would still pass
+the row, and the S-02 documentation still describes releasing the parked call with a second
+JSON-RPC call, which the fixture-gate change replaced. Both live in
+`tests/mik_7272_sub2b_acs.rs`, the peer's file, and are handed over rather than edited here.
+
+### What the NOW finding cost, and the flake it uncovered
+
+The repair is eight lines: absence now falls through the same `and_then` the parse uses, so
+every outcome — a level, a typo, nothing at all — writes the slot instead of two of the three
+writing it. The test was checked the only way a test of a removed early return can be
+checked: the early return was put back, the row was run against it, and it failed with the
+inherited level in the delivered frame. Then the repair was restored and the module went
+green at twelve.
+
+Putting a row between two existing ones also tripped a race that had been sitting there:
+`DROPPED` is a process-wide counter, `a_policy_drop_is_not_counted_as_an_overflow` reads a
+baseline from it and `an_overfull_sink_drops_and_counts_instead_of_blocking` adds exactly
+eight to it, and nothing made the two take turns. The full suite had been passing on an
+ordering that happened to keep them apart. They now share the repo's own async-serialisation
+idiom (`tests/nfr_obs_records.rs:39`), which is the right lock because the guard has to be
+held across the scope's awaits. The counter stays global: it is an operator-facing total, and
+making it per-request to settle a test would change what it means.
+
+## 2026-09-11, later still — NFR.SEC.7 measured against a build from this tree
+
+The count is now **1 blocking**: the peer's `1144de47` dropped `MIK-7272.SUB.2b` to
+non-blocking on the ledger's own rule, and `903bc41e` closed the registration-drain finding
+with the drop guard both reviewers asked for. `NFR.SEC.7` is what is left.
+
+Earlier in the day the drift check ran against the listening install and came back
+`2 probed, 1 uncovered, 2 failing`, with both guards answering `200` where a `403` was
+required and the provenance line saying `5d25f104 is NOT in v3.4.0 -- the build predates the
+control`. That reads like a missing control and is not one. The process answering on
+`127.0.0.1:39401` is `3.4.0-f30539af`, installed from `~/.local/libexec/mcp-gateway/`, and it
+was built before the guards existed. The check was telling the truth about the install and
+nothing at all about the tree.
+
+So the tree was asked directly. A gateway built from this worktree
+(`cargo build --all-features --bin mcp-gateway`) was started on a spare port with a config of
+its own, and the same script was pointed at it:
+
+```
+$ python3 scripts/dev/check-control-drift.py http://127.0.0.1:39471/mcp
+origin-guard: refused 403; legitimate request 200 [provenance unavailable: v4.0.0 is not a tag in this repository]
+host-guard:   refused 403; legitimate request 200 [provenance unavailable: v4.0.0 is not a tag in this repository]
+unsafe-code-denied: uncovered -- a compile-time lint leaves no signal on the wire; drift is caught by the build, not by a request
+2 probed, 1 uncovered, 0 failing
+```
+
+Both halves of both probes decided: the request the control exists to refuse was refused with
+a `403`, and the legitimate request along the same path still returned `200`, so neither
+refusal is an auth wall or a wedged process reading as a control. `/health` on that instance
+reported `4.0.0`. The provenance line is unavailable rather than negative for the honest
+reason that `v4.0.0` is not yet a tag here — which is the same sentence as "this is the build
+being released, not one already released".
+
+**What this changes.** `NFR.SEC.7` is two facts, and only one of them was ever a code
+question. The control is merged, unconditional, and enforcing on the wire in a v4.0.0 build —
+measured, not inferred. "Unconditional" is a source fact rather than a probe result, and it is
+the stronger of the two: `src/gateway/router/mod.rs:312-315` attaches the middleware to the
+fully merged router with no enabling flag, and `OriginPolicy::from_live`
+(`src/gateway/router/origin_guard.rs:76`) reads configuration only to decide *which* origins
+are allowed — there is no setting that switches the gate off. That matters because the probed
+instance was not running on the written YAML alone: its startup log shows 196 capabilities
+loaded from `~/github/mcp-gateway-private/capabilities`, a path the probe config never named,
+so an ambient config layer was in force during the measurement. It could not have enabled or
+disabled the guard, because nothing can. What remains is that the install on 39401 has not
+been rebuilt from it, and rebuilding it means restarting the gateway that other sessions are
+holding MCP connections to. That is an operator action with a blast radius outside this lane,
+not an engineering gap, and the release-readiness question it leaves is "when is the install
+cut over", not "does the control exist".
+
+The local instance was stopped after the probe and the install on 39401 was re-checked
+afterwards: still `3.4.0`, still healthy, 32 backends, untouched.
+
+## 2026-09-11 — what this lane verified, and the one suite it did not run
+
+The absence-clears-the-slot repair (`e8c941ca`) and the registration drop guard
+(`903bc41e`) were verified with: the library unit suite (4229 passed, 0 failed, 3 ignored),
+clippy at `--all-targets --all-features -- -D warnings` (exit 0), and a format check
+(exit 0). The repair's own test was checked against a restored early return — it failed with
+the inherited level present in the delivered frame, and passed once the repair was back.
+
+The acceptance binary `tests/mik_7272_sub2b_acs.rs` was **not** re-run in this lane. It is the
+test target closest to the change, exercising the classify-and-set seam on both transports, so
+its absence is a real gap in this lane's evidence rather than a formality. Its last recorded
+result stands from earlier the same day at `364f4373`: 7 passed, 0 failed, 3 ignored — which
+predates both commits above. The file is owned by a concurrent lane and is not edited from
+here; that lane holds the current result.
+
+## 2026-09-11 — the post-fix review of `e8c941ca`, and which reviewer legs are alive
+
+### Verdict
+
+`grok-review` reviewed `e8c941ca` (the absence-clears-the-slot repair plus its test) as a
+post-fix pass, scoped to the repair and explicitly excluding `903bc41e`, the acceptance binary
+and `src/transport/stdio.rs`. Verdict **SHIP**, no FINDING at any gate. Its reasoning on the
+two questions the payload asked:
+
+- clearing the slot is a no-op for the HTTP caller, whose scope is minted per request and
+  already seeded `None`; the overwrite is only load-bearing for a stdio batch item following a
+  declared predecessor.
+- serialising the two `DROPPED` observers is the right fix for a process-wide operator counter;
+  per-scope was correctly rejected.
+
+Two IMPROVEMENTs, both SMALL and neither blocking:
+
+| # | Where | What |
+|---|---|---|
+| 1 | `src/transport/notification_sink.rs:345` | the new row never proves the *first* declaration wrote, so a no-op `Some(...)` would leave the seeded silence and the assertion would still pass. A publish-and-assert between the two calls makes the row self-sufficient. |
+| 2 | `src/transport/notification_sink.rs:140` | the rewritten comment says absence-is-silence would fail for every item after the first. It fails only for an *undeclared* item following a *declared* predecessor. |
+
+Improvement 2 is a factual error in a comment this lane wrote and is worth repairing on its own
+terms; improvement 1 strengthens a test that currently leans on a sibling row.
+
+### Reviewer availability has swapped since §12 of the dod-check
+
+`docs/requirements/RELEASE-4.0.0-dod-check.md` §12 records the grok leg as dead
+(`402`, Grok Build balance exhausted). That is **stale**. As of this date grok runs and returns
+a verdict, and `gpt-review` is the leg that is down: it exits 0 with reviewer-shaped preamble and
+no verdict, the tail reading `You've hit your usage limit … try again at Sep 15th, 2026`. Exit 0
+from `gpt-review` is therefore not evidence of a clean review — the tail of the output has to be
+read before a verdict is recorded.
+
+Neither outage is an authorship bar, so neither removes a vendor from the eligible set. The
+second leg for this commit is `kimi-review`, dispatched against the same payload; its result is
+recorded below when it lands.
+
+### Two ledgers disagree, and both are true
+
+| Ledger | Reading | Scope |
+|---|---|---|
+| `scripts/release/count-release-criteria.py` | 149 criteria, 189 rows, 188 met or non-blocking, **1 blocking** (`NFR.SEC.7`) | the criteria table only |
+| dod-check §4 / D1 | the suite is **FAIL** at the head it was measured against — 14 failures | the test suites |
+
+Quoting "1 blocking" without the suite row beside it overstates readiness. One of the 14 is a
+real finding rather than a deliberate red: `every_cited_test_exists` in `mik_7272_conformance`
+fails because the conformance evidence for "Multi Round-Trip Requests replace server-initiated
+requests" cites `mik_7212_acs::inflight::ac_mrtr_6_a_retry_landing_elsewhere_is_sent_to_the_holder`,
+and row 6's routing variant was deleted at `6e744936` without its citation.
+
+That citation is **repaired at this head**, and the count stays at one. The conformance binary
+runs green — 7 passed, 0 failed — with `every_cited_test_exists` among the passing rows. The
+citation at `tests/mik_7272_conformance.rs:150` now names
+`mik_7212_acs::inflight::ac_mrtr_6_a_retry_landing_on_another_replica_fails_explicitly`, which
+is defined at `tests/mik_7212_acs.rs:449`.
+
+Searching for the *deleted* test's name and finding only prose does not establish that the check
+still fails — the citation had been moved to a surviving row, so the search was answering a
+question about a name rather than about the check. The discriminator is running the binary, which
+costs one command. The dod-check's 14-failure row is stale in this respect too.
+
+### Which dod-check rows are stale at this head
+
+`docs/requirements/RELEASE-4.0.0-dod-check.md` is a point-in-time record measured at `c3083368`
+and is not edited retroactively. At this head the following rows no longer describe the tree:
+
+- **§12 (reviewer legs)** — inverted, as above: grok alive, gpt down until 2026-09-15.
+- **the suite figures** — measured at `c3083368`, which predates `903bc41e`, `e8c941ca` and
+  `aee7dfd3`. The current library unit figure from this lane is 4229 passed, 0 failed, 3 ignored.
+- **the `NFR.SEC.7` row** — superseded twice since, first by the code/deploy split and then by
+  the correction that the origin guard is unconditional rather than default-on.
+
+The H1–H11, D1–D30 and §1–13 tables themselves stand; only these rows have moved.

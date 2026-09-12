@@ -23,18 +23,19 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use super::Transport;
+use super::{ResendPermission, Transport, resend_permission};
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
 use crate::protocol::era::Era;
 use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::{
-    JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
-    RequestId, SUPPORTED_VERSIONS, is_version_mismatch_error, is_version_token,
-    negotiate_best_version, parse_supported_versions_from_error,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    SUPPORTED_VERSIONS, is_version_mismatch_error, is_version_token, negotiate_best_version,
+    parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
-    SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
+    RedirectEvidence, SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
+    safe_request_error_for,
 };
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
@@ -143,6 +144,10 @@ fn evaluate_redirect(base: &Url, target: &Url, previous_hops: usize) -> Redirect
     RedirectDecision::Follow
 }
 
+/// `Session not found`, as the rust-mcp-sdk and the remotes that copied it
+/// report an invalidated MCP session. Both carriages key on it.
+const SESSION_NOT_FOUND_CODE: i32 = -32015;
+
 /// Detect the session-expiry signature in a transport error (MIK-5982).
 ///
 /// Matches the safe markers emitted at the HTTP boundary:
@@ -161,11 +166,95 @@ fn evaluate_redirect(base: &Url, target: &Url, previous_hops: usize) -> Redirect
 /// instead returns HTTP 200 with the expiry encoded as a JSON-RPC `error`
 /// member, use [`is_session_expired_response`] (MIK-6040, #247).
 fn is_session_expired_error(err: &Error) -> bool {
-    let Error::Transport(msg) = err else {
-        return false;
-    };
-    let lower = msg.to_lowercase();
-    lower.contains(SESSION_EXPIRED_MARKER) || lower.starts_with("http 404")
+    match err {
+        Error::Transport(msg) => {
+            let lower = msg.to_lowercase();
+            lower.contains(SESSION_EXPIRED_MARKER) || lower.starts_with("http 404")
+        }
+        // A non-2xx whose body was the peer's own JSON-RPC error no longer
+        // reaches this classifier as a status string: [`peer_refusal`] hands the
+        // caller the peer's code instead. Without this arm the parse would have
+        // taken session recovery away from every remote that invalidates a
+        // session with a JSON body - the marker path above can only see errors
+        // that stayed opaque. The membership test is the same one
+        // [`is_session_expired_response`] applies to the 200 carriage, minus
+        // `-32600`: on this path a malformed-request refusal is what it says it
+        // is, and treating it as an expiry would re-initialize and retry every
+        // one of them.
+        Error::JsonRpc { code, message, .. } | Error::JsonRpcRetryable { code, message, .. } => {
+            let lower = message.to_lowercase();
+            // The marker set is the Transport arm's, mirrored: a peer that words
+            // its expiry as "session expired" reaches one arm or the other
+            // depending only on whether its body happened to parse, and the two
+            // carriages must not disagree about what the peer said.
+            *code == SESSION_NOT_FOUND_CODE
+                || lower.contains("session not found")
+                || lower.contains(SESSION_EXPIRED_MARKER)
+        }
+        _ => false,
+    }
+}
+
+/// Whether a non-2xx status is the peer saying "not now" rather than "not ever".
+///
+/// A refusal carried as a status is normally terminal: a peer that declines
+/// `resources/subscribe` with a 405 declines the retry identically, and
+/// [`peer_refusal`] hands the caller that refusal so it stops asking. The
+/// transient statuses are the exception — an overloaded peer answering 429 or
+/// 503 is asking to be asked again, and it may carry that answer in a
+/// JSON-RPC error body like any other. Converting those to `Error::JsonRpc`
+/// would make them terminal for every caller on this transport, so they keep
+/// the peer's code in [`Error::JsonRpcRetryable`] instead: the probe reads the
+/// code, the retry classifiers read the carriage. Flattening them back to a
+/// single variant is what this predicate exists to prevent.
+fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::REQUEST_TIMEOUT | reqwest::StatusCode::TOO_MANY_REQUESTS
+    ) || status.is_server_error()
+}
+
+/// The peer's own JSON-RPC error, if that is what this non-2xx body is.
+///
+/// The MCP HTTP binding lets a peer refuse with a status rather than a 200, so
+/// a body that parses as a JSON-RPC error *answering this request* is an answer
+/// and not a fault: retrying it asks a peer that has already replied, and
+/// restarting the transport tears down a connection that is working. The
+/// `id` test is what keeps that narrow. A proxy's error page, a gateway's own
+/// JSON, or an error correlated to some other call are none of them this call's
+/// answer, and each stays [`safe_http_status_error`]'s opaque transport fault.
+///
+/// The peer's `message` does reach the caller here, which the surrounding
+/// status-error path deliberately avoids for untrusted bodies. The exposure is
+/// the one the 200 carriage already accepts: a JSON-RPC error member is the
+/// peer's own text about its own refusal, and it is surfaced verbatim when the
+/// same refusal arrives with a 200.
+///
+/// The status and the body answer different questions. The body says what the
+/// peer replied; the status says whether that reply was final. A transient
+/// status keeps both facts in [`Error::JsonRpcRetryable`], because the health
+/// probe reads the code and the retry classifiers read the carriage
+/// (MIK-7217, OUTBOUND.2).
+fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Option<Error> {
+    let response: JsonRpcResponse = serde_json::from_str(body).ok()?;
+    if response.id.as_ref() != Some(id) {
+        return None;
+    }
+    let error = response.error?;
+    Some(if status_invites_a_retry(status) {
+        Error::JsonRpcRetryable {
+            code: error.code,
+            message: error.message,
+            status: status.as_u16(),
+            data: error.data,
+        }
+    } else {
+        Error::JsonRpc {
+            code: error.code,
+            message: error.message,
+            data: error.data,
+        }
+    })
 }
 
 /// Detect the session-expiry signature in a *successful-transport* JSON-RPC
@@ -185,7 +274,7 @@ fn is_session_expired_error(err: &Error) -> bool {
 /// the stale `MCP-Session-Id`, send a fresh `InitializeRequest`, and retry once.
 fn is_session_expired_response(resp: &JsonRpcResponse) -> bool {
     resp.error.as_ref().is_some_and(|e| {
-        e.code == -32015
+        e.code == SESSION_NOT_FOUND_CODE
             || e.code == -32600
             || e.message.to_lowercase().contains("session not found")
     })
@@ -235,6 +324,22 @@ pub struct HttpTransport {
 
     /// Request ID counter
     request_id: AtomicU64,
+    /// Redirect hops this client has followed, ever (MIK-7272.SUB.4).
+    ///
+    /// Incremented by the redirect policy closure on the `Follow` arm, which
+    /// reqwest runs before it dials the next hop. The JSON-RPC dispatch site
+    /// samples it either side of `send()`: an unchanged count proves the
+    /// request never left the origin it was addressed to, which is what makes
+    /// a connect failure there provably pre-dispatch. A 307 re-submits the
+    /// body, so a connect failure *after* a hop says nothing about whether the
+    /// redirecting origin already executed the call.
+    ///
+    /// Client-global, not per-request: a concurrent peer request's hop inflates
+    /// the delta and the sampling request degrades to the coarse
+    /// `Error::Transport`, i.e. today's terminal settlement. That is the
+    /// fail-safe direction -- the counter can only ever cost a retry, never
+    /// license one.
+    redirects_followed: Arc<AtomicU64>,
     /// Connected flag
     connected: AtomicBool,
     /// Request timeout (used in client builder)
@@ -271,72 +376,6 @@ enum HeaderMode<'a> {
 fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
     header::HeaderValue::from_str(&format!("Bearer {token}"))
         .map_err(|_| Error::OAuth("OAuth token is not a valid HTTP header value".into()))
-}
-
-/// One request's SSE exchange: its response, and the notifications the server
-/// sent on that request's own stream ahead of it, in arrival order.
-///
-/// The two travel together out of one call because that is what makes stream
-/// order free: capture and result leave the parse as a single value, so no
-/// second delivery path can reorder them. `MIK-7272.SUB.2b`.
-#[derive(Debug)]
-pub(crate) struct SseExchange {
-    /// The response frame that ended the scan.
-    pub(crate) response: JsonRpcResponse,
-    /// Notifications seen on this request's stream, in the order they arrived.
-    ///
-    /// SCAFFOLD, and labelled one: no production path reads this yet. The only
-    /// caller of `parse_sse_response` — `send_request_with_headers` — maps it
-    /// away, and the consumer
-    /// that will read it — the `Accept`-negotiated event-stream body in
-    /// `gateway::router::handlers::meta_mcp_handler` — is the outbound half of
-    /// `MIK-7272.SUB.2b` and lands next. Until then the field is proven only by
-    /// the unit tests, so the lib build cannot see it read.
-    // ponytail: allow lifts the moment the outbound consumer lands; if it has
-    // not, this attribute is the evidence that SUB.2b is still half-built.
-    #[allow(dead_code)]
-    pub(crate) notifications: Vec<JsonRpcNotification>,
-}
-
-/// Extract the JSON-RPC response carried by an SSE body, with the notifications
-/// that preceded it on the same stream.
-///
-/// A server may interleave notifications on a request's own stream ahead of the
-/// final response. They are CAPTURED, not skipped: they belong to this request
-/// and the caller is entitled to them (`MIK-7272.SUB.2b`). An inbound *request*
-/// is still refused: it is a call addressed to this client, never this call's
-/// result.
-///
-/// Returns a transport error when the body carries no response frame, or when a
-/// payload does not deserialize as a JSON-RPC message.
-fn parse_sse_response(text: &str) -> Result<SseExchange> {
-    let mut notifications = Vec::new();
-    for line in text.lines() {
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let message: JsonRpcMessage = serde_json::from_str(data.trim())
-            .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")))?;
-        match message {
-            JsonRpcMessage::Response(response) => {
-                return Ok(SseExchange {
-                    response,
-                    notifications,
-                });
-            }
-            JsonRpcMessage::Notification(notification) => {
-                debug!(method = %notification.method, "Notification on response stream");
-                notifications.push(notification);
-            }
-            JsonRpcMessage::Request(request) => {
-                return Err(Error::Transport(format!(
-                    "Peer sent request '{}' on the response stream",
-                    request.method
-                )));
-            }
-        }
-    }
-    Err(Error::Transport("No data in SSE response".to_string()))
 }
 
 /// Re-assert on a modern peer's request what the revision requires of it.
@@ -532,6 +571,8 @@ impl HttpTransport {
         if oauth_client.is_some() {
             require_secure_oauth_target(&base_origin)?;
         }
+        let redirects_followed = Arc::new(AtomicU64::new(0));
+        let redirect_counter = Arc::clone(&redirects_followed);
         let client = Client::builder()
             .timeout(timeout)
             .pool_max_idle_per_host(10)
@@ -546,7 +587,10 @@ impl HttpTransport {
                 ) {
                     RedirectDecision::Stop => attempt.stop(),
                     RedirectDecision::Reject(msg) => attempt.error(msg),
-                    RedirectDecision::Follow => attempt.follow(),
+                    RedirectDecision::Follow => {
+                        redirect_counter.fetch_add(1, Ordering::SeqCst);
+                        attempt.follow()
+                    }
                 },
             ))
             .build()
@@ -561,6 +605,7 @@ impl HttpTransport {
             sessions: RwLock::new(HashMap::new()),
             single_tenant_hint: AtomicBool::new(false),
             request_id: AtomicU64::new(1),
+            redirects_followed,
             connected: AtomicBool::new(false),
             timeout,
             streamable_http,
@@ -1249,6 +1294,11 @@ impl HttpTransport {
             finalise_modern_headers(&mut headers, &request.method, request.params.as_ref())?;
         }
 
+        // Sample the redirect counter either side of the send: an unchanged
+        // count is the proof that a connect failure here is pre-dispatch
+        // (MIK-7272.SUB.4). Sampled as late as possible so a peer request's
+        // hop has the narrowest window to inflate the delta.
+        let redirects_before = self.redirects_followed.load(Ordering::SeqCst);
         let response = self
             .client
             .post(&message_url)
@@ -1256,7 +1306,15 @@ impl HttpTransport {
             .json(request)
             .send()
             .await
-            .map_err(|e| safe_request_error("Request failed", &e))?;
+            .map_err(|e| {
+                let evidence = if self.redirects_followed.load(Ordering::SeqCst) == redirects_before
+                {
+                    RedirectEvidence::NoRedirectFollowed
+                } else {
+                    RedirectEvidence::MayHaveRedirected
+                };
+                safe_request_error_for("Request failed", &e, evidence)
+            })?;
 
         // Extract session ID from response headers if this caller's bucket is
         // empty (MIK-6784: store under the caller's identity key, never a shared
@@ -1322,6 +1380,9 @@ impl HttpTransport {
             {
                 return Err(Error::ProtocolVersionRejected { supported });
             }
+            if let Some(refusal) = peer_refusal(&body, &request.id, status) {
+                return Err(refusal);
+            }
             return Err(safe_http_status_error(status, &body));
         }
 
@@ -1333,16 +1394,17 @@ impl HttpTransport {
             .unwrap_or("");
 
         if content_type.contains("text/event-stream") {
-            // Parse SSE response - extract JSON from "data:" line
-            let text = response
-                .text()
-                .await
-                .map_err(|e| safe_request_error("Failed to read SSE response", &e))?;
-
-            // ponytail: caller still wants only the response. The captured
-            // notifications are dropped HERE and nowhere else, so the outbound
-            // consumer lands by changing this one line. `MIK-7272.SUB.2b`.
-            parse_sse_response(&text).map(|e| e.response)
+            // Decoded incrementally, not buffered. A backend that interleaves
+            // notifications ahead of its result holds the body open until the
+            // result exists, so `.text()` here could not observe a
+            // notification until the call it belongs to had already finished
+            // -- the liveness `MIK-7272.SUB.2b` asks for is unreachable from a
+            // complete body. Each frame is published as its chunk arrives.
+            use futures::TryStreamExt;
+            let stream = response
+                .bytes_stream()
+                .map_err(|e| safe_request_error("Failed to read SSE response", &e));
+            sse_decoder::decode_sse_exchange(stream).await
         } else {
             // Parse JSON response
             response
@@ -1437,7 +1499,15 @@ impl HttpTransport {
 #[async_trait]
 impl Transport for HttpTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        self.request_with_headers(method, params, &[], None).await
+        // This entry point carries no tool context, so it runs the shared
+        // predicate against an EMPTY permitted set: every `tools/call` is
+        // denied, while the side-effect-free methods that actually reach here
+        // (metadata discovery's `tools/list`, lifecycle's `ping`) keep the
+        // session recovery MIK-5982/MIK-6040 added for them.
+        let permission =
+            resend_permission(method, params.as_ref(), &std::collections::HashSet::new());
+        self.request_with_headers(method, params, &[], None, permission)
+            .await
     }
 
     async fn request_with_headers(
@@ -1446,6 +1516,7 @@ impl Transport for HttpTransport {
         params: Option<Value>,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
+        resend: ResendPermission,
     ) -> Result<JsonRpcResponse> {
         // Read the era once, here, and carry it into the send. Reading it
         // inside the header builder instead would leave the body half of the
@@ -1495,13 +1566,43 @@ impl Transport for HttpTransport {
             Ok(resp) => is_session_expired_response(resp),
         };
         if had_session && session_expired {
+            // Heal the session on BOTH branches: it really is dead, and leaving
+            // the stale bucket in place poisons every later call through this
+            // identity — including the ones that ARE allowed to be resent.
+            self.sessions.write().remove(bucket);
+            if self.initialize().await.is_err() {
+                // The caller asked about their request, not about our
+                // handshake; surfacing the re-initialization's error instead
+                // would hide what actually failed.
+                return result;
+            }
+            if resend == ResendPermission::Denied {
+                let tool = request
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("-");
+                warn!(
+                    url = %sanitize_url_for_diagnostics(&self.base_url),
+                    method = %method,
+                    tool = %tool,
+                    reason = "no explicit readOnlyHint/idempotentHint annotation",
+                    "Backend session expired; session healed but the call was NOT resent"
+                );
+                telemetry_metrics::counter!(
+                    "mcp_resend_denied_total",
+                    "site" => "http_session_expiry",
+                    "method" => method.to_string()
+                )
+                .increment(1);
+                return result;
+            }
             warn!(
                 url = %sanitize_url_for_diagnostics(&self.base_url),
                 method = %method,
                 "Backend session expired; re-initializing and retrying once"
             );
-            self.sessions.write().remove(bucket);
-            self.initialize().await?;
             return self
                 .send_request_with_headers(&request, extra_headers, identity_key, era)
                 .await;
@@ -1600,5 +1701,10 @@ impl Drop for HttpTransport {
     }
 }
 
+mod sse_decoder;
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sse_decoder_tests;

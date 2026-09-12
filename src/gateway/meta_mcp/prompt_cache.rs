@@ -221,6 +221,13 @@ pub fn tool_schema_fingerprint(tools: &[Value]) -> String {
 /// trace context and this hop has no cache key. Absent, never empty: a backend
 /// is entitled to read the presence of `_meta` as meaning something.
 ///
+/// `progressToken` is relayed, and is the only inbound field that is. A
+/// progress token is the caller's own correlation handle: a backend that never
+/// receives one cannot emit progress the caller can match, and the
+/// notification arrives carrying `null` instead. It is relayed only as a
+/// string or a number, the two shapes the specification allows, so the one
+/// permitted field cannot become a hole for an arbitrary object.
+///
 /// Nothing else from `inbound_meta` is relayed. The gateway already strips
 /// peer-supplied `_meta.provenance` from backend responses; the same refusal
 /// applies on the way out.
@@ -234,6 +241,13 @@ pub fn build_outbound_meta(inbound_meta: Option<&Value>, cache_key: Option<&str>
             _ => None,
         })
         .unwrap_or_default();
+
+    if let Some(token) = inbound_meta
+        .and_then(|meta| meta.get("progressToken"))
+        .filter(|token| token.is_string() || token.is_number())
+    {
+        meta.insert("progressToken".to_string(), token.clone());
+    }
 
     if let Some(key) = cache_key {
         meta.insert(
@@ -529,6 +543,26 @@ mod tests {
             ["baggage", "prompt_cache_key", "traceparent", "tracestate"]
         );
         assert_eq!(outbound["prompt_cache_key"], json!("my-key"));
+    }
+
+    #[test]
+    fn a_progress_token_is_relayed_and_only_in_the_two_shapes_the_spec_allows() {
+        // The caller's handle has to survive the hop or the backend emits
+        // progress carrying `null`, which no caller can match to its call.
+        assert_eq!(
+            build_outbound_meta(Some(&json!({ "progressToken": "tok-a" })), None),
+            Some(json!({ "progressToken": "tok-a" }))
+        );
+        assert_eq!(
+            build_outbound_meta(Some(&json!({ "progressToken": 7 })), None),
+            Some(json!({ "progressToken": 7 }))
+        );
+        // The one permitted field is not a hole: a token of any other shape is
+        // refused rather than passed through to the backend.
+        assert_eq!(
+            build_outbound_meta(Some(&json!({ "progressToken": { "smuggled": 1 } })), None),
+            None
+        );
     }
 
     #[test]

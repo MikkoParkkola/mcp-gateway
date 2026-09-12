@@ -114,6 +114,15 @@ stream, ahead of the final response, and delete the `allow(dead_code)`. The row'
 evidence text needs rewriting at the same time, because a reader who trusts it
 today would go looking for a capture path that already exists.
 
+**Superseded on 2026-09-11 — read the `2026-09-11` section below before acting
+on this one.** Two findings above are no longer true. The HTTP consumer has
+since landed: `decode_sse_exchange` publishes each notification as it decodes
+(`src/transport/http/sse_decoder.rs:264`), reached from the incremental arm in
+`src/transport/http/mod.rs:1305-1317`, so "no production path reads it" holds
+for stdio only. And the stdio line numbers here are the worktree's, not
+`HEAD`'s; at `HEAD` the pair sits at `src/transport/stdio.rs:445,460`. The
+later section splits the verdict by tree, which is the one to act on.
+
 ## 2. `MIK-7272.SUB.4` — covered on two routes of three, not one
 
 A side-effecting call re-issued after a broken stream with a new request id must
@@ -904,3 +913,455 @@ classifying every run by the three shapes in the table above, which will replace
 the sampled counts with branch-complete ones and answer the question section J
 leaves open: whether the compile-failure shape, the one no flag rescues, is rare
 or routine.
+
+## 2026-09-11: where the release stands now, and the ordered path out
+
+Re-derived today against the worktree, not against the sections above. The count
+moved and the red set shrank; both are recorded here rather than edited into the
+09-09 prose, so the earlier state stays readable.
+
+**Ledger.** `scripts/release/count-release-criteria.py --check` exits 0 and reports
+**146 criteria, 186 rows, 184 met or non-blocking, 2 blocking**. `--blocking` names
+them: `MIK-7272.SUB.2b` and `GH475.RL.5`. Of the three that blocked on 09-09,
+`MIK-7272.SUB.4` is MET (corrected 2026-09-10 from a flip two reviewers had rejected)
+and `MIK-7246.CONFIRM.2` no longer carries a blocking flag. `GH475.RL.5` is new to the
+blocking set and is not code: the predicate's `throttled` arm is deliberate and
+recorded, and whether the criterion text or the predicate moves is a question already
+with the requester at [#482](https://github.com/MikkoParkkola/mcp-gateway/issues/482).
+
+**CI.** The last run on `fix/gh517-protocol-negotiation` (`34541872175`, 2026-09-11
+01:26Z) is red on the Tests job with **three** rows, not sixteen: `s02_stdio_progress_*`,
+`s02_stdio_message_*` and `s03_progress_stdio_*` — `1 passed; 3 failed` in that binary.
+All three are the stdio outbound leg of `SUB.2b`. Section D's sixteen are therefore
+closed. Twenty commits are unpushed, so CI has not seen the newest work at all.
+
+**Correction: the emitter is not missing — it is uncommitted.** The `SUB.2b` row has
+described the stdio outbound emitter as unbuilt, and against `HEAD` that is still exactly
+true. Against the *worktree* it is not: a peer lane holds 682 uncommitted insertions
+across `src/transport/stdio.rs`, `src/gateway/server/mod.rs` and `src/gateway/streaming.rs`
+that build it. Both readings are correct about different trees, and conflating them is how
+this section nearly recorded the opposite verdict. Split by tree:
+
+At `HEAD` — the tree CI measured when it produced the three red rows:
+
+- `take_captured_notifications` (`src/transport/stdio.rs:445`) is still present and still
+  the end-of-call drain, published at `:621`. ADR-014 §3 requires it deleted.
+- `dispatch_with_notifications` does not exist in `src/gateway/server/mod.rs` at all. The
+  client-facing stdio leg — the task that writes notifications to stdout while the call is
+  still running — is absent. That single absence explains all three red rows.
+
+In the worktree, uncommitted, owned by another lane:
+
+- `take_captured_notifications` is gone, definition and call sites both.
+- `register_progress_token` (`:451`) takes the request's sender from the ambient sink and
+  `capture_notification` (`:474`) sends per notification (`:487`) — the per-request channel
+  §3 asks for, not a `Vec`.
+- `dispatch_with_notifications` (`src/gateway/server/mod.rs:1970`) scopes the sink around
+  dispatch and runs a concurrent stdout writer, established *inside* the per-request spawn
+  (`:1806-1838`), so the `tokio::task_local!` at `src/transport/notification_sink.rs:34` is
+  live where the transport reads it.
+
+The HTTP half is committed and needs no such split: `decode_sse_exchange` publishes each
+notification as its chunk decodes (`src/transport/http/sse_decoder.rs:264`), reached from
+the incremental arm at `src/transport/http/mod.rs:1305-1317`, and `first_event_wins_stream`
+(`src/gateway/streaming.rs:705`) forwards before the result. The caller's `progressToken`
+is relayed outbound rather than dropped (`src/gateway/meta_mcp/prompt_cache.rs:246-249`).
+
+The consequence for the plan is that nobody should build this emitter. It exists; it is
+unlanded. The blocker is a commit, not a design.
+
+**And one of the three rows is not in scope either way.** ADR-014 §2 states that
+`notifications/message` *from a backend* stays unattributable over stdio, because it
+carries no progress token and therefore has no key. `s02_stdio_message_*` asserts exactly
+that case, so it tests something the ADR declined to build. That reading predicted an
+`#[ignore]`; the measurement says otherwise — see the correction below, and do not act
+on the `#[ignore]` suggestion. §3's outbound emitter carries "the backend's
+`notifications/progress` and, over HTTP, its `notifications/message`" — so
+`s02_stdio_progress_*` and `s03_progress_stdio_*` are the real two. This reading is a
+property of the ADR and holds against both trees.
+
+**A gap the machine check cannot see.** The ledger's own rule is "a criterion is
+BLOCKING unless it is MET or N/A", and the counter enforces vocabulary on the blocking
+column only — `MET`, `PARTIAL`, `ABSENT` and the rest are never matched against a
+pattern. Two rows exploit that without meaning to: `MIK-7246.CONFIRM.1a:247` and
+`MIK-7246.CONFIRM.2:249` both read status `PASS`, a token the vocabulary block does not
+define, and both are flagged `no`. Under the stated rule neither is MET and neither is
+N/A, so both should be blocking; under the script both are silently fine. The evidence
+in those two cells is substantive — the risk is the token, not the criterion. The repair
+is a status-column regex in `count-release-criteria.py` beside the existing blocking-column
+guard, and a restatement of the two rows by whoever owns their evidence. Until that runs,
+"2 blocking" is a count over rows whose status words were never checked.
+
+**The HTTP half of `SUB.2b` has an open defect with no measurement.** Recorded in
+`docs/design/2026-09-11-sub2b-http-liveness.md`: a fixture whose second notification
+exists only after an intervening client call yields one notification and stalls, while
+the same row with the second notification on a timer passes. The stream leg therefore
+forwards two notifications and the layer that drops the gated one is unidentified. The
+two reproduction rows in `tests/mik_7272_sub2b_acs.rs` are `#[ignore]`d and unrun; their
+`PROBE-A`/`PROBE-B` labels separate "the intervening call was never serviced" from "it
+was serviced and no frame followed", which is the measurement that names the layer.
+
+**Order of work, from here.**
+
+1. Land the stdio outbound emitter that already exists uncommitted. This is the whole of
+   the stdio blocker and it needs no design: the peer lane holding those 682 insertions
+   commits them, with pathspec, and CI measures the result. Nothing else in this plan can
+   turn `s02_stdio_progress_*` or `s03_progress_stdio_*` green, and no other lane should
+   write into those three files while they are dirty.
+2. Measure, then fix, whatever survives that commit. The HTTP half's defect is unlocalised
+   and stays that way until the discriminating rows run: the `#[ignore]`d PROBE rows, plus
+   `s02_stdio_progress_*` once step 1 lands. **The lane that wrote this section cannot run
+   the `mik_7272_sub2b_acs` integration binary** — it is denied there — so the measurement
+   has to come from elsewhere. Whoever picks it up runs that binary twice, once with the
+   ignored rows enabled and once filtered to the stdio progress row, both with captured
+   output, and reads which `PROBE` label fires. Until then every claim about *which* layer
+   drops the frame is unevidenced. (The `s02_stdio_message_*` sentence that stood here
+   recommended an `#[ignore]`; it is withdrawn — the row passes. See the correction
+   below.)
+3. Add the status-column guard to the counter and restate `CONFIRM.1a` and `CONFIRM.2` in
+   the ledger's own vocabulary. Cheap, and it is what makes step 5's number mean anything.
+4. Close `GH475.RL.5` by decision at [#482](https://github.com/MikkoParkkola/mcp-gateway/issues/482).
+   No code moves until the requester answers which side gives.
+5. Push and let CI run. Twenty unpushed commits are twenty commits of unmeasured surface;
+   a green local suite on a shared, dirty worktree is not the same observation.
+6. Cluster F last: `NFR.COMPAT.1` is a default change the board sequences behind clusters
+   A and C, and `NFR.PERF.1`'s residual stands — no P50 or P99 may be quoted publicly for
+   this release until an end-to-end harness produces one.
+
+Steps 3 and 4 are independent of 1 and 2 and are the only ones this lane can advance;
+step 1 belongs to the lane holding the uncommitted emitter, and step 2 needs a lane where
+the integration binary runs. Nothing
+here reopens a decision the release owner has made; the `NFR.PERF.1` headroom ruling and
+the ADR-014 narrowing both stand as recorded.
+
+### 2026-09-11, later: landing the emitter does not close `SUB.2b`, and the last red row is faithful
+
+Step 1 above says the stdio work is a commit rather than a build. Half of that
+survives and half does not. The emitter half is real and uncommitted, as recorded.
+The *correlation* half is neither built nor merely uncommitted — what sits in the
+worktree implements the design ADR-014 §2 explicitly retired.
+
+Read at source, in the peer-held worktree copy of `src/transport/stdio.rs:602-607`:
+
+> Register before the write: the reader task can route a notification back before
+> `write_message` returns. **Never minted here** — only a token the caller supplied
+> is honoured (MIK-7272.SUB.2b, option (i)).
+
+ADR-014 §2 heads the paragraph that overturns exactly that rule —
+*"**Superseded: "the gateway never mints a token."**"* — and gives three reasons,
+each cited to the map it guards: the key space collapses `Number` and `String` into
+one entry, `register_progress_token` is a bare `insert` that overwrites a live
+owner, and a caller reusing its token on a later call inherits the earlier call's
+late notifications. The decision it records is a minted `gw-<uuid>` registered as
+`minted → (the caller's token, the request's bounded sender)`, translated back on
+capture so the client still sees its own token byte-identically, with a drop guard
+removing the entry on every exit path.
+
+No minted token reaches the registration map. The claim is made at the map's only
+entrance rather than by pattern-matching a name: `register_progress_token` has one
+production call site, `src/transport/stdio.rs:607`, and it passes
+`request_progress_token(...)`, which reads `_meta.progressToken` off the outbound
+request and substitutes nothing (`stdio.rs:584-589` in the worktree, `:570-575` at
+`HEAD` — identical on both). Whatever a mint were called, it could not be registered
+without going through that line. (A repo-wide search for the `gw-` prefix finds only
+session ids at `src/gateway/streaming.rs:193,203` and trace ids at
+`src/gateway/meta_mcp/tests.rs:78`, but a prefix search cannot carry this claim: a
+mint spelled any other way would be invisible to it.)
+
+That is why `s02_stdio_progress_reaches_its_own_call_before_the_result` is red, and
+it is red for the right reason. Its final assertion
+(`tests/mik_7272_sub2b_acs.rs:515-520`) requires the token the backend sees to
+differ from the client's, citing this ADR section by name. The row is a faithful
+acceptance test for a decision the code has not caught up with — not a row to
+amend, and not a row an `#[ignore]` may cover.
+
+Commit `aaad0281` ("relay the caller progress token to the backend", 2026-09-11
+04:09) is adjacent but not the cause. It supplies an outbound token where a backend
+previously received `null`, which the HTTP leg needs and correlates structurally
+anyway. On the stdio leg the ADR's mint would overwrite that value before the write.
+The conflict is not between the commit and the ADR; it is that the mint step, which
+both would sit under, is absent.
+
+**So step 1 becomes two.** Landing the emitter (still the peer lane's commit) clears
+delivery. Correlation is a second, smaller change in the same file: mint per outbound
+request that carries progress, register the minted key against the caller's token and
+sender, translate back at `capture_notification`, guard the removal, and rewrite the
+`:602-607` comment that still cites option (i) as live. Until it lands, `SUB.2b`
+stays blocking on both trees, and no count that assumes otherwise is safe.
+
+**And step 2's two parked rows have an answer, from a lane where the binary runs.**
+Both `#[ignore]`d PROBE rows were measured on 2026-09-11 by the lane holding
+`src/gateway/streaming.rs`. The timer row passes. The two-gate row fails, and not on
+the notification path: its debug log shows both notifications decoded and published,
+then the *second* `release` call answered from the response cache with no backend
+request behind it, so the fixture's second permit is never added and the result frame
+never comes. Giving that call a distinguishing argument makes the row pass in full.
+The mechanism is corroborated here at source rather than taken on report:
+`response_cache_key_for` takes `&arguments` (`src/gateway/meta_mcp/invoke.rs:1453-1468`),
+so two byte-identical calls are one cache entry. The row asks one cached call to have a
+side effect twice, which no gateway change can satisfy. A second defect in the same row:
+its PROBE labels can never fire, because the helper bounds its own read with the same
+duration the row wraps around it and always wins the race. Both are test defects; the
+rows stay parked until they are fixed, and neither is evidence about the product.
+
+### 2026-09-11, correction: the stdio message row passes, and the absence claim is narrower than it read
+
+Two claims in the sections above were stated more widely than what was checked. Both are
+corrected here rather than edited away, because the wider versions were relayed to another
+lane and someone may be acting on them.
+
+**The `#[ignore]` recommendation for `s02_stdio_message_*` is withdrawn.** Two sections
+above told whoever picks up the stdio work that the row "needs an `#[ignore]` carrying the
+ADR reference, not an implementation". The ADR reasoning behind that is sound — ADR-014 §2
+does leave a backend `notifications/message` unattributable over stdio, and the row's own
+doc comment says it tests exactly that case — but the conclusion was never measured against
+the suite. It has been now. The HTTP lane ran the whole binary at `6fc9471b`, unfiltered:
+`7 passed; 1 failed; 2 ignored`, the sole failure being
+`s02_stdio_progress_reaches_its_own_call_before_the_result` and the two ignored being the
+parked PROBE rows. `s02_stdio_message_reaches_its_own_call_before_the_result` is listed
+`ok`. It is out of
+scope for the criterion *and* green, which owes no test edit at all. An `#[ignore]` applied
+to it would have parked a passing row on the strength of a document.
+
+**"No minted progress token exists anywhere in `src/`" overstated its own evidence.** The
+search behind it matched the literal `gw-` prefix. A mint assembled any other way — a
+`const` prefix, a bare `Uuid::new_v4()`, a helper in a module the search did not name —
+would not appear in it, so the sentence claimed more than a prefix search can carry. The
+claim is now made at the registration map's only entrance instead:
+`register_progress_token` has one production call site, `src/transport/stdio.rs:607`, and
+what it passes is `request_progress_token(...)`, which reads `_meta.progressToken` off the
+outbound request and substitutes nothing — `stdio.rs:584-589` in the worktree and
+`:570-575` at `HEAD`, byte-identical. However a mint were spelled, it could not reach the
+map without going through that line. The conclusion is unchanged and the correlation half
+of SUB.2b stays unbuilt; only the reach of the evidence changes.
+
+The pattern in both is the same: a document was read correctly and then allowed to answer a
+question only a measurement can answer.
+
+### 2026-09-11, ruling: who owns the correlation half, and what the worktree now says about step 5
+
+**The correlation half of SUB.2b belongs to the stdio lane, not to the lane that fixed the
+HTTP leg.** The mint, the `minted → (caller token, sender)` registration, the translate-back
+and the drop guard all land in `src/transport/stdio.rs`, which carries 153 changed lines of
+that lane's uncommitted emitter — the same seam, not an adjacent one. A second session
+editing into it is how work gets swept. The HTTP lane asked rather than assumed, which was
+right; the answer is no, and the reason is the file, not the competence.
+
+What that lane does instead is the design for the half, now, while the file is dirty: it
+touches nothing, it is step 1 of this plan's own order, and it converts a wait into
+progress. Two constraints the design has to satisfy rather than caveat. The drop guard's
+"every exit path" includes the transport error paths and a panic in the reader task — a
+guard that leaks one entry per panicked reader is unattributable map growth later. And the
+translate-back has to survive ADR-014 §2 reason (1): `capture_notification` collapses
+`Number(n).to_string()` and `String(s)` into one `String` key, so byte-identical return of
+the client's own token is a property to prove, not to assume. If the stdio lane turns out
+parked, the half moves with its design already reviewed and nothing is wasted.
+
+**Step 5 got harder while nobody was looking.** Earlier in the day this worktree carried
+three modified files. It now carries fifteen modified and five untracked, spanning at least
+MIK-6744 identity plumbing, MIK-7116, MIK-7406 signing validation and the sub4 resend
+design — several lanes, all mid-flight. A push or a review payload taken from here would
+carry all of it, so "push and read CI" is not a step someone can take unilaterally when
+they judge their own work ready; it needs the tree, not just one lane, to be quiet. Anyone
+reaching step 5 should re-count before assuming the earlier three-file picture still holds.
+
+One worktree-specific trap, found while checking that: `git status --porcelain` reported
+` M src/gateway/streaming.rs` for a file whose `git diff` is empty and whose content is
+fully committed in `d6087aca`. That is a stale stat entry in the shared index, not content.
+In a worktree this busy, confirm a reported modification with `git diff` on the path before
+treating it as somebody's in-flight work.
+
+### 2026-09-11, correction: the run quoted above was a stale capture
+
+The `6 passed; 2 failed; 0 ignored` cited in the correction section — and repeated in the
+`SUB.2b` ledger row — was read out of a captured run file from earlier in the day, before
+the HTTP leg was measured clean. It was quoted as if current. It is not, and it named
+`s02_progress_http_reaches_its_own_call_before_the_result` as a failure. That row passes,
+and has passed in every run the HTTP lane has recorded; a reader taking the number at face
+value would have gone hunting an HTTP defect that three independent measurements say does
+not exist.
+
+The current figure, whole binary at `6fc9471b`, unfiltered: `7 passed; 1 failed; 2 ignored`.
+The sole failure is `s02_stdio_progress_reaches_its_own_call_before_the_result`, the
+correlation row this plan documents as genuinely unbuilt. The two ignored are the parked
+PROBE rows. Every HTTP row is green, and so is
+`s02_stdio_message_reaches_its_own_call_before_the_result` — which is the row the
+withdrawal above turns on, so that conclusion is unaffected and now rests on a current
+measurement rather than an old one.
+
+The failure mode is worth naming, because it is the same one the correction section was
+written to fix, one level down. That section faulted a document for answering a question
+only a measurement can answer; the fix then reached for a measurement that had gone stale
+and used it the same way. A captured run file is evidence about the tree it ran against. It
+carries a commit, and if the quote does not carry one too, it is not yet evidence about
+now.
+
+### 2026-09-11, ruling: ADR-014 governs the correlation half, and its owner just died
+
+`b9e1fb95` ("docs(adr): mint stdio progress tokens instead of the caller's", +181/-55) is
+the design of record for the correlation half. It decides the mint, the
+`minted → (caller token, sender)` entry and the translate-back, and at `:158` it already
+requires the drop guard to cover "cancellation alike", for the stated reason that the
+registration would otherwise outlive the sink. A second design document written today
+(`docs/design/2026-09-11-sub2b-stdio-minted-progress-token.md`) is **subordinate**: it is an
+implementation plan, not a competing design, and it is deliberately not going through an
+independent design review. One criterion carrying two separately-reviewed documents is
+several rounds spent reconciling two texts that are each individually correct.
+
+Two things in it are worth keeping, because the ADR does not decide them at that
+granularity. Store the caller's original `Value` rather than its string form — that is what
+makes the translate-back byte-identical across the `Number`/`String` collapse the ADR names
+as reason (1). And generalise the existing `PendingRequestGuard` over its value type instead
+of adding a second near-identical guard. Both are implementation choices and belong at the
+call site, not in a document.
+
+The subordinate doc's drop-guard section is worth reading as what it actually found: not a
+gap in the ADR, but a gap in *today's code* against what the ADR already demands. The
+release after `outcome` is a plain statement, so it covers `Ok`, transport error and
+timeout, and does not cover the future being dropped mid-await. That path leaks one entry
+and holds the caller's sink open. A panicked reader task costs one `request_timeout` per
+in-flight call and no map growth, because the guard still drops on that path.
+
+**Ownership is now uncertain.** `row6-mint-2` answered that it was working the row and that
+no new design was needed — correct — and then failed on the 32000-token output ceiling,
+which lands no writes. `row6-mint` has not answered. The half may be unowned; a status
+request is out to `row6-mint`, and the lane that wrote the subordinate doc is next in line
+with the analysis already done. Whoever takes it cannot start until `stdio-concurrent`
+commits the emitter, because the work lands in the same file.
+
+One operational note, since it cost an owner: an agent killed by the output ceiling
+persists nothing. On a criterion this long-running, commit each piece as it works rather
+than reporting a large result at the end.
+
+### 2026-09-11, amendment: the guard change is two files, and two doc comments ride on it
+
+The ruling above called the `PendingRequestGuard` generalisation an implementation choice
+that "belongs at the call site". That understated where it lands, and the corrected scope is
+verified here at `HEAD`. The guard is declared at `src/transport/mod.rs:180` with `Drop` at
+`:199`, and it has two existing construction sites: `src/transport/stdio.rs:619` and
+`src/transport/websocket.rs:515`. Adding a value-type parameter edits the declaration in
+`transport/mod.rs`; the websocket site infers it and compiles unchanged. Both of those files
+are clean in this worktree — only `stdio.rs` is dirty — so the change crosses no other
+lane's in-flight work.
+
+Two doc comments describe that guard from outside the transport module and must be re-read
+rather than assumed: `src/gateway/proxy.rs:96` and `src/gateway/input_bridge.rs:291`, the
+first of which says in as many words that the guard "is typed to the …". A generic parameter
+is exactly the kind of change that leaves such a sentence quietly false, and a stale comment
+is model input for the next agent to read the file.
+
+The generalisation is still the right call rather than a second near-identical struct, and
+the codebase says so itself: the comment at `websocket.rs:511-514` already gives the guard's
+purpose as keeping "a request future dropped by an OUTER timeout or task abort" from
+stranding its entry — the same cancellation case the correlation half needs. The motivation
+is not new; only the second map is.
+
+Related correction from the same lane, recorded because the earlier reasoning is quoted
+above: the reader-panic path is bounded by the existing release statement after `outcome`
+and needs no guard. RAII is for cancellation alone — the future dropped mid-await, where
+that statement is never reached.
+
+## Four stdio observation reds belong to an in-flight refactor, not to HEAD
+
+`cargo test --lib stdio_` reports `34 passed; 4 failed` in this worktree. The four:
+
+- `gateway::server::tests::stdio_initialize_records_requested_revision`
+- `stdio_observation::ac_obs_1_stdio_records_the_revision_and_that_meta_carried_it`
+- `stdio_observation::ac_obs_1_stdio_records_the_revision_the_handshake_negotiated`
+- `stdio_observation::ac_obs_1_stdio_records_the_answer_not_the_ask`
+
+Three of the four fail the same way — `0 record(s) captured` — and the assertion message
+names the discriminator itself: empty means the tracing capture never delivered,
+non-empty means the record site ran without `protocol_revision`. Empty is what we observe.
+
+The fourth fails differently, and an earlier revision of this section wrongly folded it
+into the same message. `stdio_initialize_records_requested_revision` panics at
+`src/gateway/server/mod.rs:2807` on a counter comparison —
+`after.by_revision.get("2026-07-28") > before.by_revision.get("2026-07-28")` — and it
+lives outside `mod stdio_observation`. A shared cause is plausible, because a counter that
+never increments is what an observation site that never runs produces, but it is inference
+from the failure shape, not a shared message. The three and the one must be re-checked
+separately once the file is committed.
+
+Two hypotheses were separated before anything was read as a product defect.
+
+Shared-subscriber contention is ruled out: a serial re-run
+(`cargo test --lib stdio_ -- --test-threads=1`) reproduces the same four failures with
+the same counts, so the reds are not an artefact of tests racing for a global tracing
+subscriber.
+
+Ownership is the uncommitted work, not the committed tree. All four test functions exist
+at `HEAD` (`b5e0914b`) as well as in the worktree, so they are not new red tests arriving
+with the change; what moved is the code under them. `src/gateway/server/mod.rs` is dirty
+by 528 insertions and 157 deletions, and the diff lifts the stdio observation call out of
+the dispatch body into a new `Gateway::observe_stdio_inbound`, invoked before the request
+is spawned. The deleted lines are the old site — `classify_and_observe`,
+`session_negotiated_revision`, `observe_inbound_request` inside the per-request dispatch;
+the added lines are the same three calls inside the extracted function, reached from two
+call sites in the read loop. A capture that sees zero records is what a half-landed move
+of exactly that site produces.
+
+Evidence class: inferred from the diff and from the introducing commits, two sources.
+Existing at `HEAD` is not the same claim as passing at `HEAD`, and in this repo lanes do
+land deliberate red acceptance tests; `ac_obs_1_` is acceptance-criterion naming. The
+introducing subjects discriminate: `git log -S` puts `mod stdio_observation` and the three
+`ac_obs_1_*` tests in `0f04a179 feat(protocol): v4.0.0 multi-round tool result readiness
+(#473)` and the fourth in `4c0525da feat(telemetry): measure MCP revision use (#480)`.
+Both are `feat` merges, not the `test(...): RED` subject this repo uses when a lane lands
+a test against an absent surface. Confirming green-at-`HEAD` outright would need a run in
+a detached worktree at `HEAD`, which is a full rebuild of the crate; it is queued rather
+than skipped, and is not worth blocking on while the owning lane is still editing the
+file, because the answer would be stale on arrival.
+
+Consequence for the release gate: these four are not counted as a release defect and not
+attributed to any criteria row. They are the `stdio-concurrent` lane's own red, mid-edit,
+and the lane has been given the failing names, the serial-run result, and the moved-site
+pointer. The number to quote in a readiness verdict is the one measured after that file is
+committed; `34 passed; 4 failed` is evidence about a work-in-progress tree and says nothing
+about the product.
+
+## The uncommitted SUB.2b outbound work implements the rule ADR-014 supersedes
+
+`MIK-7272.SUB.2b` is one of the two rows still blocking. The ledger grades its
+outbound leg `ABSENT`. That grade is right about the criterion and wrong about the
+disk: 129 uncommitted insertions across `src/transport/stdio.rs` and
+`src/transport/notification_sink.rs` are work on this row, frozen since 02:52 UTC
+on 2026-09-11 with the rest of the worktree.
+
+What is there: `notification_sink::current_sender` and `notification_sink::send`,
+`Transport::release_progress_token`, an `async fn registered(...)`, and five tests —
+`stdio_routes_a_progress_notification_to_the_call_that_supplied_its_token`, the
+`..._to_only_the_call_that_supplied_the_token` variant,
+`..._a_notification_to_the_caller_before_its_call_finishes`,
+`stdio_request_releases_its_registration_even_when_the_write_fails` and
+`stdio_drops_a_progress_notification_no_caller_asked_for`.
+
+What is not there: a mint. Every added line greps clean for `mint`, `uuid`, `gw-`,
+`next_id` and any counter, and `src/transport/mod.rs` is unmodified, so
+`PendingRequestGuard` carries no generic parameter. The scheme on disk registers the
+caller's own token and passes a backend's token through when it matches.
+
+`docs/adr/ADR-014-request-scoped-notifications.md:116-132` retires exactly that rule,
+under the heading *"Superseded: the gateway never mints a token"*, with three defects
+cited at source: `capture_notification` folds `Value::Number(n)` through
+`n.to_string()` into the same `String` key as `Value::String(s)`; `register_progress_token`
+is a bare `insert` that overwrites a live owner when two in-flight calls supply the same
+token; and a reused token outlives its request.
+
+The tests are blind to all three. The only token literals in the diff are `"tok-a"`,
+`"tok-b"` and `"tok-stray"` — every case uses distinct tokens, so none exercises the
+collision the ADR is about, and none varies the JSON type. A green suite here is not
+evidence about the criterion; it is evidence about the cases chosen.
+
+Consequence for the release gate: `ABSENT` stands. Closing this row needs the minted
+token and the translate-back, not a commit of what is on disk. The uncommitted diff is
+snapshotted at `~/github/.agent-snapshots/2026-09-11-sub2b-outbound-uncommitted.patch`
+so the parked lane's work survives, and the owning lane has been asked to commit it
+under an honest subject — the routing half landing, not the criterion closing.
+
+Related routing correction: the HTTP correlation half does not exist. `ADR-014:113`
+gives HTTP as "none needed — the connection is the key", because the backend's
+notifications arrive interleaved on the response body of the request that opened it,
+and `:192-195` names the incremental-decoder work instead, which shipped in
+`fbca1bc9`, `416d7cbc` and `958b2659`. Minting is a stdio answer to stdio's multiplexed
+stdout. The correlation half lives in `src/transport/stdio.rs` and nowhere else.

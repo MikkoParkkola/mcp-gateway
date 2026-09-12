@@ -1,0 +1,17 @@
+{
+  "criterion": "MCPGW.SCHEMA.1",
+  "issue": "MIK-6865",
+  "date": "2026-09-10",
+  "surface": "validate_arguments (src/capability/schema_validator/mod.rs:117)",
+  "schema_shape": "nested-object-in-array",
+  "invented_keys_tested": ["type", "requireUnique", "in_file", "oldText2", "additionalProperties"],
+  "accepted_silently": 5,
+  "total": 5,
+  "rate": 1.0,
+  "gate": "rate >= 0.05 -> proceed with mitigation",
+  "verdict": "RED",
+  "falsifier": "depth-1 undeclared key IS refused, so the validator is not vacuously permissive",
+  "root_cause": "validate_object reads only top-level `properties`; validate_property never recurses into `items`",
+  "present_on": ["origin/main", "fix/gh517-protocol-negotiation"],
+  "fix_exists_unmerged": "origin/fix/mik-6865-schema-key-invention"
+}

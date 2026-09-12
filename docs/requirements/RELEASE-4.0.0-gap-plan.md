@@ -79,8 +79,8 @@ blocking count includes them, which is exactly where work hides.
 
 | row | what the qualifier holds | disposal |
 |---|---|---|
-| `DISCOVER.7` | `src/lib.rs:23` still lists `2024-10-07` in a crate doc-comment | one-line deletion; do it with the DISCOVER wiring |
-| `DISCOVER.1` | the stdio arm passes `modern_enabled: false`, so a stdio client sees the legacy tool list | self-documented at `src/gateway/server/mod.rs:1687-1693`; decide before release whether stdio ships modern |
+| `DISCOVER.7` | ~~`src/lib.rs:23` still lists `2024-10-07` in a crate doc-comment~~ | CLOSED 2026-09-11: `src/lib.rs:18-22` lists the four spec-defined revisions only; the qualifier is dropped from the ledger |
+| `DISCOVER.1` | the stdio arm passes `modern_enabled: false`, so a stdio client sees the legacy list | NOT a pending decision. The call site (`src/gateway/server/mod.rs:1944-1951`, re-read 2026-09-11; the `:1687-1693` cite above it had drifted) records why: the stateless revision is specified over streamable HTTP, and advertising it on a transport whose modern path is not wired would be a claim the gateway cannot honour. Ship as a stated limitation in the release notes |
 | `ORDER.3` | the classification is on record, the remediation it prescribes is not | already counted as ORDER.2 |
 | `CONTROL.5` | every removed mechanism names a replacement; two replacements are not built | already counted as CONTROL.2 and .3 |
 

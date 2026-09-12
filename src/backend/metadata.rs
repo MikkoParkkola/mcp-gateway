@@ -136,10 +136,55 @@ impl Backend {
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
         self.get_cached_list_shared(&self.tools_cache, "tools/list", "tools", |result| {
             let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
-            prepare_tool_metadata(&self.name, &mut tools);
+            // Discovery is where the explicit annotations are still readable,
+            // and it always precedes a `tools/call` (ADR-012 A1).
+            *self.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
             Ok(tools)
         })
         .await
+    }
+
+    /// Record the tools whose backend-declared annotations grant resend
+    /// permission explicitly (ADR-012 A1).
+    ///
+    /// The internal discovery path writes this from `get_tools_shared`, but the
+    /// direct `/mcp/{name}` route forwards `tools/list` itself and never goes
+    /// through it. A client that only ever uses that route therefore left the
+    /// set empty, and `resend_policy_for` denied retries to explicitly
+    /// retry-safe tools. The permitted set must be captured before
+    /// `normalize_tool_annotations` runs, which is why the caller passes the
+    /// return value of `prepare_tool_metadata` rather than the tools.
+    // The direct-route caller in `gateway::router::backend_handlers` is not on
+    // this branch yet. `expect` rather than `allow` so the gate errors the
+    // moment that caller lands and this marker must come off.
+    #[expect(
+        dead_code,
+        reason = "direct-route caller lands with the resend plumbing"
+    )]
+    pub(crate) fn set_resend_permitted(&self, permitted: std::collections::HashSet<String>) {
+        *self.resend_permitted.write() = permitted;
+    }
+
+    /// Snapshot of the tools currently recorded as explicitly resend-permitted.
+    ///
+    /// Clones under the read lock, like [`Self::get_cached_tools_snapshot`], so
+    /// the caller never holds a guard. The dispatch-path reader
+    /// (`Backend::resend_decision`) deliberately does NOT use this: it passes the
+    /// guard straight to `resend_permission`, which is cheaper and runs on every
+    /// dispatched request.
+    ///
+    /// This exists so a route that writes the set can prove it wrote it, which
+    /// is a test's job: the production readers all take the guard directly, so
+    /// under `--all-targets` the lib target compiles this away rather than
+    /// carrying an accessor nothing calls.
+    #[cfg(test)]
+    #[must_use]
+    #[expect(
+        dead_code,
+        reason = "direct-route caller lands with the resend plumbing"
+    )]
+    pub(crate) fn resend_permitted_snapshot(&self) -> std::collections::HashSet<String> {
+        self.resend_permitted.read().clone()
     }
 
     /// # Errors

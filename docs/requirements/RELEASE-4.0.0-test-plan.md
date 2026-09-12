@@ -61,6 +61,12 @@ the ticket's own stop-the-line, and row D3.b is what enforces it.
 **Every case can fail, and four are worth naming:**
 
 - **The `2024-10-07` row fails on today's code.** That is not a defect in the plan; it is the plan finding a defect before the feature is written. The gateway advertises a protocol revision the specification has never defined. Either it is a typo for `2024-11-05` that has been advertised to every client since, or it is a private extension nobody documented. Resolve before implementing, because the discovery document repeats whatever this list says.
+  **Resolved 2026-09-11:** it was neither a typo nor a documented extension. It was inert for
+  negotiation all along — `negotiate_version` matches exactly, so no conforming client could
+  ever request it — but `server/discover` published it as a claim. It is removed from
+  `SUPPORTED_VERSIONS` (`src/protocol/mod.rs:32-37`) and from the crate docs (`src/lib.rs:18-22`),
+  and `tests/integration.rs:26,37` pins both the absence and the unchanged `2025-11-25` fallback.
+  Nothing is rejected that was previously accepted; see [`docs/UPGRADING-4.0.md`](../UPGRADING-4.0.md) §3.
 - **DISCOVER.3's golden fixture is captured, not written by hand.** A hand-written expectation of the handshake is a second implementation of it, and it agrees with whatever the author believed rather than with what shipped. Capture happens before the first line of discovery code, from the unchanged tree, and pins its Cargo feature set.
 - **The timeout row needs a stalling fixture with a bounded deadline.** A backend that never answers and a test that waits forever are indistinguishable from a passing test that hangs CI.
 - **DISCOVER.5 asserts a probe counter, never elapsed time.** Timing assertions are the classic flaky test, and a cache that is merely slow would pass one.

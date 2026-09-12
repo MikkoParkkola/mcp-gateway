@@ -693,6 +693,13 @@ impl Firewall {
     }
 }
 
+/// Generic refusal text served in place of a blocked response.
+///
+/// Deliberately says nothing about what matched: the finding detail belongs in
+/// the audit log, not in a payload handed to the caller that triggered it.
+pub const BLOCKED_RESPONSE_MESSAGE: &str =
+    "Security firewall blocked this response: backend content failed a content scan";
+
 impl FirewallVerdict {
     /// Construct an unconditional allow verdict (used when scanning is disabled).
     fn allow() -> Self {
@@ -717,6 +724,27 @@ impl FirewallVerdict {
                 .findings
                 .iter()
                 .all(|f| f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::High)
+    }
+
+    /// Returns `true` when a blocking verdict must stop the response payload
+    /// from being served (MIK/GH517 RESPONSE.1).
+    ///
+    /// A blocked verdict whose findings are *all* `ScanType::Credentials` does
+    /// not stop the response: [`redactor::Redactor`] already rewrote those
+    /// matches in place, so the payload handed onward is the neutralised one
+    /// and the shipped redact-and-serve contract stands. Anything else — prompt
+    /// injection above all — is still hostile in the payload, so the response
+    /// is refused rather than forwarded.
+    ///
+    /// This infers remediation from the scan type because [`Finding`] carries
+    /// no remediation flag; adding one is the cleaner fix if a future scanner
+    /// also rewrites in place.
+    pub fn blocks_response(&self) -> bool {
+        !self.allowed
+            && self
+                .findings
+                .iter()
+                .any(|f| f.scan_type != ScanType::Credentials)
     }
 }
 

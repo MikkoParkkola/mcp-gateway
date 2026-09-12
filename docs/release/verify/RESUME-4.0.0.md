@@ -3,6 +3,19 @@
 Written at a session boundary so the next session can start cold. Plan and
 rationale: `RELEASE-4.0.0-CLOSE-PLAN.md`. Shard contract: `PR473-REVIEW-BRIEF.md`.
 
+> **Stale — do not resume from the table below.** It records branch
+> `fix/mrtr2-continuation-handle` at `7bdd733c`, which is not the release line. The release
+> line is `feat/sub2b-outbound-mint` (PR #528), and the counter there reads
+> `149 criteria, 189 rows, 188 met or non-blocking, 1 blocking`, not 21. Every command in
+> the right-hand column still works and is still the way to re-check; only the recorded
+> answers have moved.
+>
+> Current entry points:
+> [`RELEASE-4.0.0-gap-assessment-2026-09-11.md`](../../requirements/RELEASE-4.0.0-gap-assessment-2026-09-11.md)
+> for readiness and the two ledgers, and
+> [`RELEASE-4.0.0-blocking-rollup.md`](../../requirements/RELEASE-4.0.0-blocking-rollup.md)
+> for which recorded rows have since gone stale.
+
 ## Where things stand
 
 | fact | how to re-check |

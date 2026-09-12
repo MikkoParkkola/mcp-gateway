@@ -429,6 +429,51 @@ async fn resolve_notification_identity_key(
     binding
 }
 
+/// Dispatch a direct-route request to a backend inside a notification scope.
+///
+/// The scope is the only reason this wrapper exists: without one,
+/// `mint_progress_token` returns `None` and `Backend::request*` hands the
+/// backend the caller's own `_meta.progressToken` (MIK-7272.SUB.2b / ADR-014
+/// section 2), which is precisely what the mint exists to prevent. This route
+/// has no client-facing stream, so the drained notifications are discarded --
+/// unscoped they were already dropped inside `publish`, so scoping changes
+/// nothing about delivery and buys the substitution.
+async fn dispatch_in_scope(
+    backend: &crate::backend::Backend,
+    method: &str,
+    id: &RequestId,
+    params: Option<Value>,
+    propagated_headers: &[(String, String)],
+    identity_key: Option<&str>,
+) -> crate::Result<JsonRpcResponse> {
+    // Unlike the three meta-dispatch call sites (each gating one hardcoded
+    // method), `method` here is client-chosen: this is the one place every
+    // direct-route request funnels through, so it is the one place that must
+    // refuse whatever the peer's era removed before it reaches the wire
+    // (MIK-7217, OUTBOUND.1). The refusal carries the caller's own id rather
+    // than relying on the callers to restamp it: a refusal never reaches the
+    // transport, so there is no gateway correlation id here to replace, and an
+    // `id: null` error is one a direct-route client cannot correlate at all.
+    if crate::gateway::meta_mcp::era_removed_method(backend, method).await {
+        return Ok(JsonRpcResponse::error(
+            Some(id.clone()),
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            format!("{method} was removed in protocol revision 2026-07-28"),
+        ));
+    }
+    let (response, _discarded) = crate::transport::notification_sink::collect(async {
+        if propagated_headers.is_empty() && identity_key.is_none() {
+            backend.request(method, params).await
+        } else {
+            backend
+                .request_with_headers(method, params, propagated_headers, identity_key)
+                .await
+        }
+    })
+    .await;
+    response
+}
+
 /// Backend handler (POST /mcp/{name})
 #[allow(clippy::too_many_lines)]
 pub(super) async fn backend_handler(
@@ -789,6 +834,10 @@ pub(super) async fn backend_handler(
                 let response = JsonRpcResponse::success(id.clone(), cached);
                 return build_http_response(&response, StatusCode::OK);
             }
+            Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
+                let response = cached_error_response(Some(id.clone()), &error);
+                return build_http_response(&response, StatusCode::OK);
+            }
             Ok(Some(crate::idempotency::GuardOutcome::Proceed(reservation))) => {
                 idem_reservation = Some(reservation);
             }
@@ -822,18 +871,15 @@ pub(super) async fn backend_handler(
         ) {
             Some(Ok(Some(sanitized_params))) => {
                 // Forward the sanitized params to the backend
-                let forward = if propagated_headers.is_empty() && identity_key.is_none() {
-                    backend.request(&method, Some(sanitized_params)).await
-                } else {
-                    backend
-                        .request_with_headers(
-                            &method,
-                            Some(sanitized_params),
-                            &propagated_headers,
-                            identity_key.as_deref(),
-                        )
-                        .await
-                };
+                let forward = dispatch_in_scope(
+                    &backend,
+                    &method,
+                    &id,
+                    Some(sanitized_params),
+                    &propagated_headers,
+                    identity_key.as_deref(),
+                )
+                .await;
                 return match forward {
                     Ok(mut response) => {
                         record_client_success(&state, client.as_ref());
@@ -864,6 +910,12 @@ pub(super) async fn backend_handler(
                         error!(backend = %name, error = %e, "Backend request failed");
                         let response =
                             JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+                        // Dispatched failures settle as terminal: a transport
+                        // failure after the backend acted is indistinguishable
+                        // from one before it (ADR-012 consequence 1). A failure
+                        // the gateway raised before dispatch is the exception —
+                        // see `settle_direct_failure`.
+                        settle_direct_failure(idem_reservation.as_mut(), &e, &response);
                         build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
                     }
                 };
@@ -874,18 +926,15 @@ pub(super) async fn backend_handler(
     }
 
     // Forward to backend
-    let forward = if propagated_headers.is_empty() && identity_key.is_none() {
-        backend.request(&method, params.clone()).await
-    } else {
-        backend
-            .request_with_headers(
-                &method,
-                params.clone(),
-                &propagated_headers,
-                identity_key.as_deref(),
-            )
-            .await
-    };
+    let forward = dispatch_in_scope(
+        &backend,
+        &method,
+        &id,
+        params.clone(),
+        &propagated_headers,
+        identity_key.as_deref(),
+    )
+    .await;
     match forward {
         Ok(mut response) => {
             record_client_success(&state, client.as_ref());
@@ -922,6 +971,10 @@ pub(super) async fn backend_handler(
             record_client_failure(&state, client.as_ref());
             error!(backend = %name, error = %e, "Backend request failed");
             let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+            // Without this the reservation is dropped unsettled, which releases
+            // the key and lets a retry re-execute a side effect the backend may
+            // already have performed (ADR-012 consequence 1).
+            settle_direct_failure(idem_reservation.as_mut(), &e, &response);
             build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -932,17 +985,65 @@ pub(super) async fn backend_handler(
 /// second time. Called after the response scan and provenance stamp so the
 /// replay is byte-identical to what the first caller received.
 ///
-/// Only a successful result settles. On an error the reservation's `Drop`
-/// releases the key, which is what keeps the failed call retryable.
+/// Both terminal outcomes settle. A JSON-RPC error from a call that was
+/// dispatched is an outcome, not an absence of one: the backend answered, so
+/// the side effect may have landed, and releasing the key would hand the
+/// caller's retry a clean slate for a mutation that may already have committed
+/// (ADR-012 consequence 1). The retry is served the same error instead.
 fn settle_direct_idempotency(
     reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
     response: &JsonRpcResponse,
 ) {
-    if let Some(reservation) = reservation
-        && response.error.is_none()
-        && let Some(result) = response.result.as_ref()
-    {
+    let Some(reservation) = reservation else {
+        return;
+    };
+    if let Some(error) = response.error.as_ref() {
+        if let Ok(error) = serde_json::to_value(error) {
+            reservation.fail(&error);
+        }
+        return;
+    }
+    if let Some(result) = response.result.as_ref() {
         reservation.complete(result);
+    }
+}
+
+/// Settle a failed direct-route call, releasing the key when the gateway can
+/// prove the request never reached the backend.
+///
+/// ADR-012 consequence 1 caches a dispatched failure so a retry cannot duplicate
+/// a side effect that may already have committed. A refusal the gateway raised
+/// itself — an open circuit, an unknown backend or tool — carries no such
+/// ambiguity: nothing ran, so caching it for the entry's whole lifetime would
+/// deny the caller a retry of work that provably never happened. See
+/// [`crate::Error::is_pre_dispatch`] for why that allowlist stays tight.
+fn settle_direct_failure(
+    reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    error: &crate::Error,
+    response: &JsonRpcResponse,
+) {
+    if error.is_pre_dispatch() {
+        if let Some(reservation) = reservation {
+            reservation.release();
+        }
+        return;
+    }
+    settle_direct_idempotency(reservation, response);
+}
+
+/// Rebuild the JSON-RPC error response stored under an idempotency key.
+///
+/// `data` is lifted back out of the stored error object because a backend puts
+/// the machine-readable half of its refusal there — a retry-after hint, a
+/// validation path. [`crate::idempotency::cached_error_parts`] returns only the
+/// code and message, so a replay that used it alone answered the retry with a
+/// strictly poorer error than the first caller received, which defeats the
+/// point of replaying it at all.
+fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcResponse {
+    let (code, message) = crate::idempotency::cached_error_parts(error);
+    match error.get("data") {
+        Some(data) => JsonRpcResponse::error_with_data(id, code, message, data.clone()),
+        None => JsonRpcResponse::error(id, code, message),
     }
 }
 
@@ -1150,3 +1251,180 @@ pub(super) async fn costs_handler(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod idempotency_settlement_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::{cached_error_response, settle_direct_failure};
+    use crate::Error;
+    use crate::idempotency::{GuardOutcome, IdempotencyCache, enforce};
+    use crate::protocol::JsonRpcResponse;
+
+    fn reserve(cache: &Arc<IdempotencyCache>) -> crate::idempotency::IdempotencyReservation {
+        match enforce(cache, "key", "fingerprint").expect("a fresh key is admitted") {
+            GuardOutcome::Proceed(reservation) => reservation,
+            other => panic!("expected Proceed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pre_dispatch_failure_frees_the_key_for_a_retry() {
+        // GIVEN a reserved key whose call the circuit breaker refused outright.
+        let cache = Arc::new(IdempotencyCache::new());
+        let mut reservation = reserve(&cache);
+        let error = Error::CircuitOpen("backend".to_string());
+        let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
+
+        // WHEN the failure is settled.
+        settle_direct_failure(Some(&mut reservation), &error, &response);
+
+        // THEN the key is admissible again. Asserted while the reservation is
+        // still alive on purpose: `Drop` releases an unsettled reservation too,
+        // so an assertion after the drop passes without the explicit release.
+        assert!(
+            matches!(
+                enforce(&cache, "key", "fingerprint"),
+                Ok(GuardOutcome::Proceed(_))
+            ),
+            "a refusal raised before dispatch must not consume the key"
+        );
+    }
+
+    #[test]
+    fn dispatched_failure_is_cached_as_terminal() {
+        // GIVEN a reserved key whose call reached the backend and failed.
+        let cache = Arc::new(IdempotencyCache::new());
+        let mut reservation = reserve(&cache);
+        let error = Error::Transport("connection reset".to_string());
+        let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
+
+        // WHEN the failure is settled.
+        settle_direct_failure(Some(&mut reservation), &error, &response);
+
+        // THEN a retry replays the error instead of re-running the side effect.
+        assert!(
+            matches!(
+                enforce(&cache, "key", "fingerprint"),
+                Ok(GuardOutcome::CachedError(_))
+            ),
+            "ADR-012 consequence 1: a dispatched failure settles as terminal"
+        );
+    }
+
+    #[test]
+    fn replayed_error_carries_the_stored_data_field() {
+        // GIVEN a stored error whose machine-readable half lives in `data`.
+        let stored =
+            json!({"code": -32000, "message": "rate limited", "data": {"retry_after": 30}});
+
+        // WHEN the replay response is rebuilt.
+        let response = cached_error_response(None, &stored);
+
+        // THEN the retry sees the same error the first caller did.
+        let error = response.error.expect("a stored error replays as an error");
+        assert_eq!(error.code, -32000);
+        assert_eq!(error.message, "rate limited");
+        assert_eq!(error.data, Some(json!({"retry_after": 30})));
+    }
+
+    #[test]
+    fn replayed_error_without_data_stays_data_free() {
+        // GIVEN a stored error that carried no `data` (the field is skipped when
+        // `None`, so it is absent rather than null).
+        let stored = json!({"code": -32603, "message": "boom"});
+
+        // WHEN the replay response is rebuilt.
+        let response = cached_error_response(None, &stored);
+
+        // THEN no `data` key is invented.
+        let error = response.error.expect("a stored error replays as an error");
+        assert_eq!(error.data, None);
+    }
+}
+
+#[cfg(test)]
+mod direct_route_scope_tests {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::backend::Backend;
+    use crate::config::BackendConfig;
+    use crate::protocol::RequestId;
+    use crate::transport::Transport;
+
+    /// Records the params as the backend would see them on the wire.
+    struct Recorder(Mutex<Option<Value>>);
+
+    #[async_trait]
+    impl Transport for Recorder {
+        async fn request(
+            &self,
+            _method: &str,
+            params: Option<Value>,
+        ) -> crate::Result<JsonRpcResponse> {
+            *self.0.lock().unwrap() = params;
+            Ok(JsonRpcResponse::success(RequestId::Number(1), json!({})))
+        }
+
+        async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+            Ok(())
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        async fn close(&self) -> crate::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn recording_backend() -> (Arc<Backend>, Arc<Recorder>) {
+        let backend = Arc::new(Backend::new(
+            "direct",
+            BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(5),
+        ));
+        let recorder = Arc::new(Recorder(Mutex::new(None)));
+        backend.set_transport_for_test(recorder.clone() as Arc<dyn Transport>);
+        (backend, recorder)
+    }
+
+    /// `POST /mcp/{name}` is a client request like any other, so the token the
+    /// backend sees must be the gateway's own. The mint no-ops outside a
+    /// request scope, so dropping the wrapper here would be silent -- this row
+    /// is what makes it loud.
+    #[tokio::test]
+    async fn a_call_on_this_route_sends_the_backend_a_minted_token() {
+        let (backend, recorder) = recording_backend();
+
+        dispatch_in_scope(
+            &backend,
+            "tools/call",
+            &RequestId::Number(1),
+            Some(json!({ "name": "t", "_meta": { "progressToken": 7 } })),
+            &[],
+            None,
+        )
+        .await
+        .expect("the recording transport answers");
+
+        let sent = recorder.0.lock().unwrap().clone().expect("params recorded");
+        let token = &sent["_meta"]["progressToken"];
+        assert_ne!(
+            token,
+            &json!(7),
+            "the caller's own token reached the backend"
+        );
+        assert!(
+            token.as_str().is_some_and(|t| t.starts_with("gw-")),
+            "backend was sent {token:?}"
+        );
+    }
+}

@@ -51,6 +51,8 @@ jobs:
         run: python3 scripts/release/count-release-criteria.py --check
       - name: Test supplemental acceptance checks
         run: python3 scripts/release/test_scope_acceptance.py
+      - name: Test the tag/manifest publish gate
+        run: python3 scripts/release/test_check_tag_manifest.py
       - name: Validate supplemental scope (pending work is reported)
         run: python3 scripts/release/check_scope_acceptance.py --check
       - name: Require completed acceptance in publishing context
@@ -62,10 +64,24 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # keyless cosign signing (OIDC), tag pushes only
+    # Read by publish-mcp-registry, which cannot re-derive them: the gate below
+    # only runs on a tag, and that job's condition needs the classification.
+    outputs:
+      is_prerelease: ${{ steps.channel.outputs.is_prerelease }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check tag against manifest and classify the channel
+        id: channel
+        # Tag pushes only; branch and PR builds publish no versioned artifact.
+        # This workflow fires on the same tag as release.yml and ci.yml and can
+        # read neither one's outputs, so it runs the shared gate itself rather
+        # than trusting that another workflow blocked first.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/release/check_tag_manifest.py
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -83,6 +99,20 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # latest=auto is the action's default, pinned here because the
+          # prerelease channel depends on it: it withholds :latest on a
+          # prerelease semver, so `docker pull` with no tag cannot land on a
+          # candidate. It governs :latest and nothing else.
+          #
+          # {{major}}.{{minor}} is withheld by a separate mechanism: for a
+          # prerelease the action discards the configured pattern and compiles
+          # {{version}} instead (metadata-action src/meta.ts, the
+          # semver.prerelease branch), so the row below yields :4.0.0-rc.1 and
+          # never :4.0. No floating pointer therefore lands on a candidate:
+          # the exact version and the immutable :SHA tag from the row below
+          # are the only references that reach it, and both are opt-in.
+          flavor: |
+            latest=auto
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -118,6 +148,7 @@ jobs:
           trivyignores: .trivyignore
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -127,8 +158,91 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # On a tag, this job and ci.yml's `docker` job both push
+      # ghcr.io/mikkoparkkola/mcp-gateway:VERSION from the same commit. Neither
+      # can depend on the other — a workflow cannot read another workflow's job
+      # (see the release-criteria comment above) — so there is no ordering, and
+      # the last push owns the name. ci.yml signs and attests its own digest and
+      # verifies by digest, so that check stays green even when :VERSION has
+      # since been repointed at this job's digest. Two builds of one commit are
+      # not guaranteed to produce the same digest, so the unsigned outcome is
+      # reachable: the name a user pulls could carry no signature at all.
+      #
+      # The fix is for this publisher to sign what it publishes, which makes the
+      # guarantee hold whichever push landed last. The alternatives were worse:
+      # giving this job a distinct tag reopens "two names, one commit, only one
+      # signed"; dropping :VERSION here breaks publish-mcp-registry, which pulls
+      # that exact reference to read the server-name annotation
+      # (modelcontextprotocol/registry internal/validators/registries/oci.go)
+      # and cannot wait for ci.yml's much longer dependency chain.
+      #
+      # Consequence to know: :VERSION is signed by one of two identities,
+      # this workflow or ci.yml, both at the pushed tag. Verification below
+      # pins this workflow's own identity; a consumer checks both.
+      #
+      # Scoped to tags. Branch and PR images are out of scope — the collision
+      # being closed is on release tags, and :main has never been signed.
+      #
+      # Residual: the push above lands before these steps run, so a run that
+      # fails or is cancelled can leave :VERSION public and unsigned. Failed or
+      # cancelled, not a silent pass. Closing it needs push-by-digest plus tag
+      # promotion in both publishers (issue #529) — see the "What this does not
+      # close" section of docs/release/v4.0.0-prerelease-channel.md before
+      # moving these steps into their own job.
+      - name: Install cosign
+        if: startsWith(github.ref, 'refs/tags/v')
+        # Pinned release, so flag behavior cannot drift under a v3 default.
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: v2.5.2
+
+      - name: Install syft (SBOM)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+
+      - name: Cosign keyless-sign the pushed image by digest
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+
+      - name: Generate + attest an SBOM (SPDX JSON) for the pushed image
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          syft "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}" -o spdx-json > sbom.spdx.json
+          test -s sbom.spdx.json
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson \
+            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+
+      - name: Verify the signature + SBOM attestation
+        if: startsWith(github.ref, 'refs/tags/v')
+        # Verifying what this job just signed is not a tautology: it fails the
+        # release when the identity, the issuer or the Rekor round-trip is
+        # misconfigured, which is otherwise discovered by a consumer.
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          # Exact signer identity: THIS workflow file at the pushed tag ref, so
+          # a different workflow with OIDC cannot satisfy the check.
+          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/docker.yml@${{ github.ref }}
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-identity "${IDENTITY}" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+          cosign verify-attestation --type spdxjson \
+            --certificate-identity "${IDENTITY}" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+
   publish-mcp-registry:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Skipped on a prerelease. The MCP Registry is a discovery surface where
+    # nobody opts in to a version, so listing a release candidate there exposes
+    # it to every client that browses the registry.
+    if: startsWith(github.ref, 'refs/tags/v') && needs.build.outputs.is_prerelease != 'true'
     needs: build
     runs-on: avrea-ubuntu-latest-4-vcpu
     permissions:

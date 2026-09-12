@@ -127,6 +127,45 @@ pub enum Error {
     #[error("Transport error (permanent): {0}")]
     TransportPermanent(String),
 
+    /// A transport failure the gateway can prove happened *before* any byte of
+    /// the request reached the backend.
+    ///
+    /// `Transport` conflates two failures ADR-012 must keep apart: "could not
+    /// connect" and "the stream died after the request was written". The
+    /// second may have executed a side effect, so consequence 1 settles it as
+    /// terminal. The first provably did not, and settling it terminal denies a
+    /// caller a retry of work that never ran.
+    ///
+    /// Constructed at exactly one site --
+    /// [`crate::security::safe_request_error_for`] -- and only when reqwest
+    /// reports `is_connect()` AND the caller supplies
+    /// [`crate::security::RedirectEvidence::NoRedirectFollowed`], which the
+    /// transport derives from a redirect counter sampled either side of the
+    /// send. A request that followed a redirect stays `Transport`: a 307
+    /// re-submits the body, so the side effect may already have run at the
+    /// origin that redirected.
+    ///
+    /// The counter, not `reqwest::Error::url()`, is what carries this. An
+    /// earlier revision compared the error's URL against the posted URL; that
+    /// comparison is equal whether or not a hop was taken, because reqwest
+    /// back-fills the original URL on the error path and only advances it on
+    /// the success path. Do not reintroduce it.
+    ///
+    /// The narrow construction is the point. This variant is on the
+    /// `is_pre_dispatch` allowlist, where a wrong `true` licenses a second
+    /// execution of a side effect, so it must not grow the free-form
+    /// construction surface that keeps `BackendUnavailable` off that list.
+    ///
+    /// Its `Display` is byte-identical to [`Error::Transport`]'s, deliberately:
+    /// this is an internal classification and the wire contract must not
+    /// change. The cost is that no log line and no assertion message can tell
+    /// the two apart -- only the variant can. That is how an earlier revision
+    /// shipped the classifier with no production caller and a green suite
+    /// underneath it, so a behavioural row, not a unit test that inspects the
+    /// variant, is what pins this distinction.
+    #[error("Transport error: {0}")]
+    TransportConnect(String),
+
     /// Protocol error
     #[error("Protocol error: {0}")]
     Protocol(String),
@@ -170,6 +209,30 @@ pub enum Error {
         data: Option<serde_json::Value>,
     },
 
+    /// A JSON-RPC error the peer carried on a status that invites a retry.
+    ///
+    /// Two independent facts, and a caller breaks if either is dropped. The
+    /// code is the peer's own answer, so the health probe must score it as an
+    /// unserved answer rather than as a transport fault and tear down a
+    /// backend that is up and merely declining. The status says the peer has
+    /// not finished answering, so the retry classifiers must keep retrying it
+    /// rather than hand an overloaded peer's "ask again" to a client as its
+    /// considered reply. Flattening this to `Transport` loses the code;
+    /// filing it as `JsonRpc` loses the retry.
+    #[error("JSON-RPC error {code} carried on retryable status {status}: {message}")]
+    JsonRpcRetryable {
+        /// Error code the peer sent
+        code: i32,
+        /// Error message the peer sent
+        message: String,
+        /// The HTTP status that carried it
+        status: u16,
+        /// Additional error data the peer sent, kept at parity with
+        /// [`Error::JsonRpc`]: a refusal that exhausts its retries must
+        /// surface the same payload its in-band twin would have carried.
+        data: Option<serde_json::Value>,
+    },
+
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
@@ -201,11 +264,41 @@ impl Error {
         }
     }
 
+    /// True only for failures the gateway can prove it raised *before* the
+    /// request reached the backend.
+    ///
+    /// ADR-012 consequence 1 settles a dispatched failure as terminal, because
+    /// a transport failure after the backend acted is indistinguishable from
+    /// one before it. That reasoning does not extend to a request that never
+    /// left: caching it would deny the caller a retry of work that provably
+    /// never ran.
+    ///
+    /// The allowlist is deliberately tight and the default is "dispatched".
+    /// Misjudging a pre-dispatch failure as dispatched costs a retry;
+    /// misjudging the reverse admits a second execution of a side effect.
+    ///
+    /// `TransportConnect` earns its place by construction, not by variant: it
+    /// exists only where reqwest proved the connection was never established
+    /// on an unredirected request. See its doc comment for why a redirected
+    /// request is excluded.
+    #[must_use]
+    pub fn is_pre_dispatch(&self) -> bool {
+        matches!(
+            self,
+            Self::CircuitOpen(_)
+                | Self::BackendNotFound(_)
+                | Self::ToolNotFound(_)
+                | Self::TransportConnect(_)
+        )
+    }
+
     /// Convert to JSON-RPC error code
     #[must_use]
     pub fn to_rpc_code(&self) -> i32 {
         match self {
-            Self::JsonRpc { code, .. } | Self::Forbidden { code, .. } => *code,
+            Self::JsonRpc { code, .. }
+            | Self::JsonRpcRetryable { code, .. }
+            | Self::Forbidden { code, .. } => *code,
             Self::Json(_) => -32700,     // Parse error
             Self::Protocol(_) => -32600, // Invalid request
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
@@ -213,6 +306,9 @@ impl Error {
             | Self::CircuitOpen(_)
             | Self::BackendTimeout(_)
             | Self::Transport(_)
+            // A connect failure is the same class on the wire; the variant
+            // exists for settlement, not for the caller.
+            | Self::TransportConnect(_)
             // Same class as `Transport` to a JSON-RPC caller: a backend-side
             // failure, not a gateway fault. Omitting it reported a missing
             // backend command as an internal error.
@@ -261,6 +357,24 @@ mod rpc_code_tests {
             Error::Transport("connection refused".to_string()).to_rpc_code(),
             -32000,
             "the two transport variants must look the same to a JSON-RPC caller"
+        );
+    }
+
+    #[test]
+    fn a_refusal_keeps_the_peers_code_whichever_carriage_brings_it() {
+        // A peer code recovered from a 429/503 body is the peer's answer, not a
+        // gateway fault: omitting the retryable variant here reported an
+        // exhausted backend refusal as INTERNAL and sent operators after the
+        // wrong process.
+        assert_eq!(
+            Error::JsonRpcRetryable {
+                code: -32601,
+                message: "method not found".to_string(),
+                status: 503,
+                data: None,
+            }
+            .to_rpc_code(),
+            -32601,
         );
     }
 }

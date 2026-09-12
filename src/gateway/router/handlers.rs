@@ -576,9 +576,49 @@ pub(super) async fn health_handler(
     }
 }
 
-/// Meta-MCP handler (POST /mcp)
-#[allow(clippy::too_many_lines)]
+/// Meta-MCP handler (POST /mcp).
+///
+/// `Accept` ALONE decides the body shape (S-01): a stream carrying only the
+/// result frame is a conforming answer, so branching on whether the backend
+/// happened to raise a notification would give one `Accept` two body types.
+///
+/// The dispatch runs inside a notification sink, and the sink IS the request
+/// scoping (S-03): two concurrent POSTs are two tasks, so a backend
+/// notification can only ever be appended to the call that provoked it.
+/// `MIK-7272.SUB.2b`.
 pub(super) async fn meta_mcp_handler(
+    state: State<Arc<AppState>>,
+    http_request: axum::http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    let offers_event_stream = http_request
+        .headers()
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/event-stream"));
+
+    let dispatch = async {
+        Box::pin(meta_mcp_dispatch(state, http_request))
+            .await
+            .into_response()
+    };
+
+    if offers_event_stream {
+        // Scope rather than collect: the client offered a stream, so the first
+        // notification decides the body shape instead of waiting for dispatch.
+        let (scoped, rx) = crate::transport::notification_sink::scope(dispatch);
+        crate::gateway::streaming::first_event_wins_stream(scoped, rx).await
+    } else {
+        // Still scoped, and still drained alongside: `publish` sheds on a full
+        // sink, and a client that did not offer a stream must not make a
+        // backend's notifications count against that depth.
+        let (response, _notifications) =
+            crate::transport::notification_sink::collect(dispatch).await;
+        response
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn meta_mcp_dispatch(
     State(state): State<Arc<AppState>>,
     http_request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
@@ -835,6 +875,13 @@ pub(super) async fn meta_mcp_handler(
     // moved by the per-method check below, ~100 lines before the caller context
     // is built.
     let declared_capabilities = shape.declared_capabilities();
+
+    // ADR-014 §4. Set here, beside the other shape-derived facts and above
+    // every early return below, so a later reordering cannot silently darken
+    // the emitter: the dispatch this scopes is already inside the sink opened
+    // by `meta_mcp_handler`, and a request that never reaches the checks below
+    // still declared what it declared.
+    crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
 
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
@@ -1438,6 +1485,8 @@ pub(super) async fn meta_mcp_handler(
                         &dispatch_tool,
                         &arguments,
                     );
+                    #[cfg(feature = "firewall")]
+                    let mut blocked_task_response = false;
                     let mut task_response = dispatch_state
                         .meta_mcp
                         .handle_tools_call(
@@ -1501,7 +1550,26 @@ pub(super) async fn meta_mcp_handler(
                                     "Firewall: response warning"
                                 );
                             }
+                            if verdict.blocks_response() {
+                                warn!(
+                                    server = target.server,
+                                    tool = target.tool,
+                                    findings = verdict.findings.len(),
+                                    "Firewall: task response blocked"
+                                );
+                                blocked_task_response = true;
+                                break;
+                            }
                         }
+                    }
+
+                    #[cfg(feature = "firewall")]
+                    if blocked_task_response {
+                        task_response = JsonRpcResponse::error(
+                            task_response.id.clone(),
+                            -32600_i32,
+                            crate::security::firewall::BLOCKED_RESPONSE_MESSAGE,
+                        );
                     }
 
                     // Settled once, and the response decides which way -- not
@@ -1547,6 +1615,10 @@ pub(super) async fn meta_mcp_handler(
                 );
             }
 
+            // Set by the post-invocation response scan below; acted on once the
+            // mutable borrow of `call_response.result` has ended.
+            #[cfg(feature = "firewall")]
+            let mut blocked_response = false;
             let mut call_response = state
                 .meta_mcp
                 .handle_tools_call(
@@ -1626,7 +1698,29 @@ pub(super) async fn meta_mcp_handler(
                             "Firewall: response warning"
                         );
                     }
+                    // Recorded, not acted on here: `result_val` borrows
+                    // `call_response`, so the refusal is built once the
+                    // borrow ends.
+                    if verdict.blocks_response() {
+                        warn!(
+                            server = target.server,
+                            tool = target.tool,
+                            findings = verdict.findings.len(),
+                            "Firewall: response blocked"
+                        );
+                        blocked_response = true;
+                        break;
+                    }
                 }
+            }
+
+            #[cfg(feature = "firewall")]
+            if blocked_response {
+                call_response = JsonRpcResponse::error(
+                    call_response.id.clone(),
+                    -32600_i32,
+                    crate::security::firewall::BLOCKED_RESPONSE_MESSAGE,
+                );
             }
 
             call_response

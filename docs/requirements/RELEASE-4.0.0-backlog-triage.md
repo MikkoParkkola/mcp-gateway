@@ -181,3 +181,35 @@ than a finding. The remaining two are 439, which reports backend names and
 counts instead of configured values and belongs to the same credential-
 disclosure class as MIK-7221 and MIK-7222, and 438, this release's own
 dual-generation design note.
+
+### Currency re-check — 2026-09-11
+
+The table above is the state on 2026-08-29. Three of its rows have since resolved, and eight
+issues have been filed that it could not have covered.
+
+**Resolved since.** Issue **437** closed COMPLETED on 2026-09-04, so the `0600` readability check
+it constrained is no longer a pending constraint on MIK-7245 — the mode change and the startup
+check landed together as that disposition required. PRs **439** and **438** are both merged. Of the
+ten pull requests open on 2026-08-29, none remains open: the eight dependency bumps merged once
+their bases were current, which is what the stale-red diagnosis predicted.
+
+**Open pull requests are now 14, all drafts** — the 13 held `codex/v4-*` branches, each carrying its
+held disposition as a comment, plus #528, this release's own branch.
+
+**Filed since, with no disposition in the table above.**
+
+| issue | filed | disposition |
+|---|---|---|
+| 475 | 2026-09-04 | **In 4.0.0.** Fully represented in the criteria ledger as 50 `GH475.*` rows; the issue stays open until the release ships rather than because work is outstanding |
+| 481 | 2026-09-05 | **Needs a scope decision.** The body asserts "blocking 4.0.0", and the criteria ledger carries no `GH481.*` row — so nothing in the release's own accounting blocks on it. The ledger is the authority on what blocks, and it records exactly one blocking criterion (NFR.SEC.7). Either the issue's claim is stale or a criterion is missing; that is a decision, not a defect, and it is recorded here rather than resolved silently |
+| 482 | 2026-09-05 | **Explicitly deferred, and already documented.** The over-broad `is_rate_limited` substring match is stated as a known boundary in `docs/UPGRADING-4.0.md` §4: narrowing it needs a rate-limit co-signal and is not in 4.0.0. Narrowing it would move `GH475.RL.6`, an agreed acceptance criterion |
+| 523 | 2026-09-11 | **Post-release.** POSIX `shlex::split` mangles Windows backslash paths in stdio `command` strings. Filed in the course of #522 and fixed by #527 |
+| 524 | 2026-09-11 | **Post-release.** Windows CI compiles and never runs a test (`ci.yml:182-189`). A gap in the gate, not in 4.0.0 behaviour |
+| 525 | 2026-09-11 | **Post-release.** The Windows arm of the stdio environment allowlist has no test; the only test over that function is `#[cfg(unix)]` |
+| 526 | 2026-09-11 | **Post-release.** A stdio child that dies before `initialize` reports a request timeout while the cause sits unread in its stderr |
+| 527 | 2026-09-11 | **Post-release.** One parser for a configured stdio command, used by spawn and doctor alike. Fixes 523 |
+
+None of 481, 482 or 523–527 carries a criterion row in the release ledger, so none of them is in
+4.0.0 scope by the release's own accounting. The five Windows issues are one cluster from a single
+investigation and are best sequenced together after the release, with 524 first — a gate that never
+runs a test is what let the other four stay invisible.

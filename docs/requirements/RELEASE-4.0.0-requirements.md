@@ -89,6 +89,8 @@ Verification codes: **T** automated test · **M** measurement · **I** inspectio
 | MIK-7217.DISCOVER.6 | Backend warm-start MUST continue to retry on its existing schedule. Discovery makes each probe cheaper; it does not make an unbound port answer. | `src/gateway/server/warmstart.rs`; RFC-0060 U3 | T |
 | MIK-7217.DISCOVER.7a | The advertised version list MUST contain only revisions the specification defines. | Verified 2026-08-29: introduced by `e12431a0` (2026-01-26), whose own message claims *"Support 2024-11-05 (latest) and 2024-10-07 versions"*. The specification has never defined `2024-10-07`. | T, I |
 | MIK-7217.DISCOVER.7b | `2024-10-07` MUST be removed from `SUPPORTED_VERSIONS`, its tests and `docs/ARCHITECTURE.md`. | Verified 2026-08-29: introduced by `e12431a0` (2026-01-26), whose own message claims *"Support 2024-11-05 (latest) and 2024-10-07 versions"*. The specification has never defined `2024-10-07`. | T, I |
+| MIK-7217.OUTBOUND.1 | The gateway MUST NOT send a peer a method that peer's era removed. Concretely: the backend health probe MUST NOT send `ping` to a backend classified `Era::Modern`, and liveness on a modern connection MUST be established by a method the revision still defines; and the same gate MUST cover every other outbound use of a method in `REMOVED_IN_2026_07_28` - `logging/setLevel` and the two `resources/subscribe`/`unsubscribe` forwards. | Spec §5 major change, read in the client direction. `MIK-7215.STATELESS.6a` already binds the gateway as a *server*; nothing bound it as a *client*, and the outbound probe is unconditional. The second clause is explicit because the first one alone is gradeable on `ping` while three removed methods still reach modern peers. | T |
+| MIK-7217.OUTBOUND.2 | A health probe MUST classify the peer's answer, not the envelope that carried it. (a) Only a JSON-RPC result MUST count as a successful probe and reset a tripped circuit breaker. (b) A JSON-RPC error, of any code and however carried, MUST NOT reset a tripped breaker and MUST NOT be recorded as a transport fault; a method-not-found refusal MUST additionally invalidate the cached era. (c) Only a transport fault or a timeout MUST trip the breaker and rebuild the transport. (d) Consecutive answers that are neither results nor faults MUST escalate to (c) at a bounded count, so no backend stays unclassified indefinitely. | A transport that answers is not a backend that works, and a backend that declines one method is not a backend that is down. Reviving a tripped breaker is a claim the backend is serving, and only a served result is evidence for it: a peer wedged into answering `-32603` every tick would otherwise revive its own breaker forever. Tripping on that same error is the opposite error, restarting a backend whose traffic path works. Which of the two wrong readings today's code produces depends only on carriage - in-band it reads as healthy, as an HTTP status it reads as a fault. | T |
 
 ### 3.2 Stateless request handling
 
@@ -281,6 +283,7 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | NFR.SEC.4 | Deterministic fixtures MUST cover tamper, expiry, replay, wrong principal, wrong original request, key rotation, oversized state and arrival at a replica that does not hold the exchange — each failing closed, and failing for the stated reason. | T |
 | NFR.SEC.5 | `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo audit` and the secret scan MUST be clean. `#![deny(unsafe_code)]` MUST hold. | T |
 | NFR.SEC.6 | The four open security defects in the manifest — MIK-7249, MIK-7256, MIK-7262, MIK-7222 — MUST be closed in this release. | T |
+| NFR.SEC.7 | The build actually listening MUST contain every security control merged for this release, and the merged-versus-listening comparison MUST be automated rather than performed once by hand. A control's effective date is its install date, not its merge date, so the evidence is a probe against the running process: source inspection establishes that the guard is wired into the router, never which revision the listening process was built from. Raised by MIK-7265, whose 2026-08-28 probe returned the full tool list to a foreign `Origin` against an install that predated the DNS-rebinding guard by ten days. | T, M |
 
 ### 4.3 Performance
 
@@ -383,7 +386,9 @@ none here. Full statements in RFC-0061 §Unknowns.
 5. NFR.PERF.1 measured, not asserted.
 6. Two independent frontier-model reviews, from different vendors, recorded against the final change.
 7. The nineteen manifest tickets carry per-criterion verdicts; the six already-fixed tickets are closed; the three superseded tickets are re-scoped.
-8. `cargo clippy -D warnings`, `cargo fmt --check` and the full suite are green.
+8. `cargo clippy -D warnings`, `cargo fmt --check` and the full suite are green. "Full suite"
+   means `--all-features`: MIK-7320 found a fixture red under `--all-features` that the default
+   feature set never compiled, so a green default run is not evidence for this item.
 9. Every supplemental scope criterion and required decision is complete:
    `python3 scripts/release/check_scope_acceptance.py --release` succeeds.
 

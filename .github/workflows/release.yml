@@ -23,7 +23,7 @@ jobs:
   # `cargo audit` on every PR/push (RustSec advisories); this re-scans the
   # Cargo.lock against OSV at tag time so a known fixable vuln cannot ship via
   # the release/publish path, which `cargo audit` does not currently gate. Every
-  # publishing job below is transitively `needs:`-ed to `verify`, which
+  # publishing job below names `verify` in its own `needs:`, and `verify`
   # `needs:` this gate — so the GitHub release, crates.io publish, npm publish,
   # and Homebrew formula bump all block if a known fixable vuln is present.
   # Exceptions are time-boxed in .github/osv-scanner.toml.
@@ -76,7 +76,7 @@ jobs:
   # not. ci.yml runs the same script report-only on every PR, because the
   # ledger is edited mid-flight; here it blocks, because a tag is the point
   # after which a wrong count is a published claim. `verify` needs: this gate,
-  # and every publishing job is transitively needs:-ed to `verify`.
+  # and every publishing job names `verify` in its own needs:.
   release-criteria:
     name: Release criteria ledger (header matches rows)
     runs-on: avrea-ubuntu-latest-4-vcpu
@@ -88,6 +88,8 @@ jobs:
         run: python3 scripts/release/count-release-criteria.py --check
       - name: Test supplemental acceptance checks
         run: python3 scripts/release/test_scope_acceptance.py
+      - name: Test the tag/manifest publish gate
+        run: python3 scripts/release/test_check_tag_manifest.py
       - name: Validate supplemental scope (pending work is reported)
         run: python3 scripts/release/check_scope_acceptance.py --check
       - name: Require completed acceptance in publishing context
@@ -98,9 +100,38 @@ jobs:
   verify:
     needs: [security-gate, secret-leak-lint, release-criteria]
     runs-on: avrea-ubuntu-latest-4-vcpu
+    # Every publishing job reads these to decide stable vs prerelease channel.
+    # `needs` exposes only direct dependencies, so each consumer names `verify`
+    # directly; reaching it transitively would read these as empty strings and
+    # publish a release candidate as final.
+    outputs:
+      tag: ${{ steps.channel.outputs.tag }}
+      version: ${{ steps.channel.outputs.version }}
+      is_prerelease: ${{ steps.channel.outputs.is_prerelease }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check tag against manifest and classify the channel
+        id: channel
+        # First, so a tag/manifest mismatch stops the run before anything is
+        # built, let alone published. On workflow_dispatch GITHUB_REF_NAME is
+        # the dispatch branch, so the input has to be passed explicitly.
+        #
+        # The input reaches the shell as an environment value, never as
+        # interpolated script text: `${{ inputs.tag }}` expanded inside `run:`
+        # is substituted before bash parses the line, so a dispatch tag
+        # containing shell metacharacters would execute as code on the runner
+        # that holds the publishing credentials.
+        # https://docs.github.com/en/actions/concepts/security/script-injections
+        #
+        # On a tag push `inputs.tag` renders empty and the gate falls back to
+        # $GITHUB_REF_NAME, which is the tag. That fallback is keyed on
+        # emptiness rather than on the argument being absent, so passing `""`
+        # here is the normal release path, not a degenerate one.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: python3 scripts/release/check_tag_manifest.py --tag "$INPUT_TAG"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -190,7 +221,7 @@ jobs:
           path: ${{ matrix.artifact }}${{ matrix.suffix }}
 
   release:
-    needs: build
+    needs: [build, verify]
     runs-on: avrea-ubuntu-latest-4-vcpu
     permissions:
       contents: write
@@ -221,14 +252,14 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: MCP Gateway ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.verify.outputs.tag }}
+          name: MCP Gateway ${{ needs.verify.outputs.tag }}
           body: |
             ## Installation
 
             ### Cargo (Recommended)
             ```bash
-            cargo install mcp-gateway
+            cargo install mcp-gateway --version ${{ needs.verify.outputs.version }}
             ```
 
             ### Manual Download
@@ -265,10 +296,10 @@ jobs:
           files: |
             release/*
           draft: false
-          prerelease: false
+          prerelease: ${{ needs.verify.outputs.is_prerelease == 'true' }}
 
   publish:
-    needs: release
+    needs: [release, verify]
     runs-on: avrea-ubuntu-latest-4-vcpu
 
     steps:
@@ -288,7 +319,7 @@ jobs:
           CARGO_REGISTRIES_CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   npm-publish:
-    needs: release
+    needs: [release, verify]
     # GitHub-hosted on purpose. npm rejects a provenance bundle signed on a
     # self-hosted runner ("Unsupported GitHub Actions runner environment:
     # self-hosted"), so publishing from avrea-* costs the build attestation.
@@ -316,7 +347,7 @@ jobs:
       - name: Sync npm package version to git tag
         working-directory: npm
         env:
-          TAG_REF: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG_REF: ${{ needs.verify.outputs.tag }}
         run: |
           TAG="${TAG_REF}"
           VERSION="${TAG#v}"
@@ -334,23 +365,36 @@ jobs:
         # root, which npm does not read from this subdirectory. Name the real
         # registry on the command line so publish targets npmjs.org, which is
         # also the only registry the trusted publisher can authenticate to.
-        run: npm publish --access public --provenance --registry https://registry.npmjs.org
+        #
+        # A prerelease goes to the `next` dist-tag so `npm install
+        # @mikkoparkkola/mcp-gateway` keeps resolving to the last stable, and
+        # `@next` is the opt-in. --provenance stays on both paths: an rc adopter
+        # gets the same attestation as a final release.
+        env:
+          DIST_TAG: ${{ needs.verify.outputs.is_prerelease == 'true' && 'next' || 'latest' }}
+        run: npm publish --access public --provenance --tag "${DIST_TAG}" --registry https://registry.npmjs.org
 
   homebrew-update:
-    needs: release
+    needs: [release, verify]
+    # Skipped on a prerelease. The tap carries one stable formula, so bumping it
+    # to an rc pushes the candidate to every `brew upgrade` — the ungraded
+    # exposure this channel exists to prevent. Nothing depends on this job, so a
+    # skip does not read as a failure.
+    if: needs.verify.outputs.is_prerelease != 'true'
     runs-on: avrea-ubuntu-latest-4-vcpu
 
     steps:
-      - name: Compute version and download checksums
+      - name: Download checksums for the verified tag
         id: meta
+        # Tag and version come from `verify`, which already derived and
+        # validated them against the manifest. Re-deriving them here would give
+        # this job two sources of truth: the channel decision above reads
+        # verify's classification while the artifacts read a local expansion, so
+        # a divergence would fetch one release's checksums under another's
+        # channel rule.
         env:
-          TAG_REF: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ needs.verify.outputs.tag }}
         run: |
-          TAG="${TAG_REF}"
-          VERSION="${TAG#v}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
           curl --fail --location --silent --show-error \
             "https://github.com/MikkoParkkola/mcp-gateway/releases/download/${TAG}/SHA256SUMS.txt" \
             -o SHA256SUMS.txt
@@ -375,8 +419,8 @@ jobs:
 
       - name: Rewrite formula
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
-          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          TAG: ${{ needs.verify.outputs.tag }}
           SHA_DARWIN_ARM64: ${{ steps.meta.outputs.sha_darwin_arm64 }}
           SHA_DARWIN_X86_64: ${{ steps.meta.outputs.sha_darwin_x86_64 }}
           SHA_LINUX_AARCH64: ${{ steps.meta.outputs.sha_linux_aarch64 }}
@@ -458,7 +502,7 @@ jobs:
       - name: Commit and push formula bump
         working-directory: homebrew-tap
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.verify.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

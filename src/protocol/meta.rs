@@ -449,6 +449,17 @@ impl RequestShape {
             _ => Declared::NONE,
         }
     }
+
+    /// The minimum log level this request declared, if it declared one.
+    ///
+    /// `None` for a legacy or malformed request, which is the same answer
+    /// ADR-014 §4 gives an omitted key: absence means silence, not everything.
+    pub fn declared_log_level(&self) -> Option<&str> {
+        match self {
+            RequestShape::Modern(f) => f.log_level.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 impl RequestFields {

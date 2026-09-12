@@ -1,6 +1,6 @@
 # Architecture
 
-`mcp-gateway` v2.7.0 -- Rust, 2,554 tests, dynamic tool counts across backends.
+`mcp-gateway` v4.0.0 -- Rust, dynamic tool counts across backends.
 
 ## System Overview
 
@@ -286,7 +286,7 @@ On dispatch failure, the idempotency entry is removed (`idem_cache.remove(key)`)
 | `kill_switch` | `src/kill_switch.rs` | Operator kill switch + per-backend sliding-window error budget with auto-kill |
 | `oauth` | `src/oauth/` | OAuth 2.0 Authorization Code + PKCE flow for backend authentication |
 | `playbook` | `src/playbook.rs`, `src/playbook/` | Multi-step tool chains: YAML-defined, variable interpolation, error strategies |
-| `protocol` | `src/protocol/` | MCP JSON-RPC types for versions 2024-10-07 through 2025-11-25 |
+| `protocol` | `src/protocol/` | MCP JSON-RPC types. The handshake negotiates 2024-11-05 through 2025-11-25; 2026-07-28 (`MODERN_VERSIONS`) is served only on the stateless `POST /mcp` path |
 | `ranking` | `src/ranking.rs` | Search scoring: text relevance tiers, synonym expansion, usage-based boost, persistence |
 | `registry` | `src/registry.rs` | Community capability registry: discovery and installation from local/GitHub sources |
 | `secrets` | `src/secrets.rs` | Credential resolution: `{keychain.SERVICE}`, `{env.VAR}`, `{oauth:provider}` |

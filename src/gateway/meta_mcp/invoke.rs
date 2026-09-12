@@ -30,6 +30,11 @@ use crate::provider::transforms::ResponseTransform;
 use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
+/// `logger` field on every `notifications/message` this module raises
+/// (ADR-014 §3). One name for both sites: a caller filtering on the logger
+/// wants the tool-invocation channel, not one name per outcome.
+const GATEWAY_INVOKE_LOGGER: &str = "gateway.invoke";
+
 /// The per-user identity-propagation credential resolved once for a single
 /// dispatch (MIK-6704 / ADR-007). Carries the headers to put on the wire and
 /// the cache binding to isolate cached results by user+audience. The default
@@ -1332,6 +1337,20 @@ impl MetaMcp {
                 "refused: multi-user gateway would serve a gateway-held OAuth token \
                  that is not isolated per user (ADR-008 INV-2)"
             );
+            // ADR-014 §3: the same fact, on the caller's own stream. A refusal
+            // the client can see beats one it has to ask an operator to read
+            // out of a log, and the `-32001` below carries the remedy but not
+            // the severity.
+            crate::transport::notification_sink::emit_log(
+                crate::protocol::LoggingLevel::Warning,
+                GATEWAY_INVOKE_LOGGER,
+                &serde_json::json!({
+                    "message": "refused: multi-user gateway would serve a gateway-held \
+                                OAuth token that is not isolated per user (ADR-008 INV-2)",
+                    "server": server,
+                    "tool": tool,
+                }),
+            );
             return Err(Error::json_rpc(
                 -32001,
                 format!(
@@ -1403,6 +1422,17 @@ impl MetaMcp {
             (&self.idempotency_cache, &idem_key, &idem_fingerprint)
         {
             match enforce(idem_cache, key, fingerprint)? {
+                // A dispatched call that failed is terminal: serving the stored
+                // error is what stops the retry re-running a side effect that
+                // may already have committed (ADR-012 consequence 1).
+                GuardOutcome::CachedError(error) => {
+                    let (code, message) = crate::idempotency::cached_error_parts(&error);
+                    debug!(
+                        server,
+                        tool, key, trace_id, "Idempotency cache hit (failed)"
+                    );
+                    return Err(Error::json_rpc(code, message));
+                }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(server, tool, key, trace_id, "Idempotency cache hit");
                     if let Some(ref stats) = self.stats {
@@ -1505,6 +1535,21 @@ impl MetaMcp {
             tool     = %tool,
             trace_id = %trace_id,
             "tool invoked"
+        );
+        // ADR-014 §3: the audit line, on the stream of the request that asked
+        // for it. Same fields as the `tracing` call above, deliberately -- a
+        // caller correlating its own invocations should not have to map one
+        // vocabulary onto another.
+        crate::transport::notification_sink::emit_log(
+            crate::protocol::LoggingLevel::Info,
+            GATEWAY_INVOKE_LOGGER,
+            &serde_json::json!({
+                "message": "tool invoked",
+                "agent_id": agent_label,
+                "server": server,
+                "tool": tool,
+                "trace_id": trace_id,
+            }),
         );
         debug!(server, tool, trace_id, "Invoking tool");
 
@@ -1634,7 +1679,22 @@ impl MetaMcp {
                 }
             }
             Err(e) => {
-                if let Some(reservation) = idem_reservation.as_mut() {
+                // ADR-012 consequence 1: a reservation may be released only
+                // when the backend cannot have acted, because a released key
+                // readmits the retry that would execute the side effect a
+                // second time. `is_pre_dispatch()` is that allowlist, and it
+                // is deliberately tight (`src/error.rs`); every other dispatch
+                // error is a call that may already have acted, so its
+                // reservation stays live and is settled as a terminal failure
+                // by the commit below.
+                //
+                // `take()` is load-bearing rather than stylistic: a released
+                // reservation left in the `Option` would be picked up by that
+                // commit and re-inserted as a completed entry, which makes the
+                // release a no-op and the key permanently wrong.
+                if e.is_pre_dispatch()
+                    && let Some(mut reservation) = idem_reservation.take()
+                {
                     reservation.release();
                 }
                 // Classify the error and convert to a structured tool-level
@@ -1653,7 +1713,8 @@ impl MetaMcp {
                     },
                 );
                 // Still record the error budget failure (already done above via
-                // `record_error_budget`).  Idempotency key was cleaned up above.
+                // `record_error_budget`).  The idempotency reservation is left
+                // for the commit below unless the refusal was pre-dispatch.
                 attach_recovery(
                     json!({
                         "isError": true,
@@ -1676,9 +1737,11 @@ impl MetaMcp {
         // The backend has acted. Every early return below this point must settle
         // the idempotency key as completed rather than release it: a released key
         // readmits the retry that would execute the side effect a second time.
-        // `release()` on the dispatch-error path above has already settled, so
-        // this is a no-op there. The stored value withholds the response body on
-        // purpose — a gate below may be about to block it.
+        // The dispatch-error path above releases only a refusal that provably
+        // never reached the backend, and takes the reservation when it does, so
+        // a dispatched failure arrives here still live and is settled by this
+        // commit. The stored value withholds the response body on purpose — a
+        // gate below may be about to block it.
         //
         // An interim result is excluded because there the backend has said it
         // did *not* act: it stopped to ask. Settling one would be false and
@@ -3395,7 +3458,7 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
             (ErrorCategory::NotFound, format!("Not found: '{name}'"))
         }
         Error::BackendTimeout(msg) => (ErrorCategory::Timeout, msg.clone()),
-        Error::BackendUnavailable(msg) | Error::Transport(msg) => {
+        Error::BackendUnavailable(msg) | Error::Transport(msg) | Error::TransportConnect(msg) => {
             (ErrorCategory::BackendError, msg.clone())
         }
         // Protocol errors carry upstream HTTP failures as their message
@@ -3619,6 +3682,29 @@ mod error_classification_tests {
             assert!(
                 matches!(classify_from_detail(Some(s)), ErrorCategory::BackendError),
                 "expected BackendError for {s:?}"
+            );
+        }
+    }
+
+    /// Row 16c - the client-facing category must not move when a status-carried
+    /// refusal starts arriving as `Error::JsonRpc` instead of `Error::Transport`.
+    /// Both already map to `BackendError`; this pins that, because the transport
+    /// rows cannot reach this classifier.
+    #[test]
+    fn row_16c_a_json_rpc_refusal_and_a_transport_fault_share_one_category() {
+        use super::classify_dispatch_error;
+        use crate::Error;
+
+        for error in [
+            Error::json_rpc(-32601, "Method not found: server/discover"),
+            Error::Transport("HTTP 404".to_string()),
+        ] {
+            assert!(
+                matches!(
+                    classify_dispatch_error(&error).0,
+                    ErrorCategory::BackendError
+                ),
+                "expected BackendError for {error:?}"
             );
         }
     }
@@ -4332,6 +4418,7 @@ mod identity_propagation_enforcement_tests {
             _params: Option<Value>,
             extra_headers: &[(String, String)],
             identity_key: Option<&str>,
+            _resend: crate::transport::ResendPermission,
         ) -> crate::Result<crate::protocol::JsonRpcResponse> {
             *self.captured.lock() = extra_headers.to_vec();
             self.captured_identity

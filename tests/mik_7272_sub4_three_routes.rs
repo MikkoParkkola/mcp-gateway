@@ -86,6 +86,40 @@ fn answer(request: &Value, calls: &AtomicUsize) -> Value {
     })
 }
 
+/// Like [`spawn_counting_backend`], except `tools/call` is answered with a
+/// JSON-RPC error. `initialize` and `tools/list` still succeed, so the failure
+/// is unambiguously post-dispatch: the call reached the backend and the backend
+/// answered.
+async fn spawn_erroring_backend(calls: Arc<AtomicUsize>) -> String {
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
+            let calls = Arc::clone(&calls);
+            async move { axum::Json(answer_with_error(&request, &calls)) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the fixture backend must bind a loopback port");
+    let address = listener.local_addr().expect("the bound port must be known");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{address}/")
+}
+
+fn answer_with_error(request: &Value, calls: &AtomicUsize) -> Value {
+    if request.get("method").and_then(Value::as_str) == Some("tools/call") {
+        let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
+        return json!({
+            "jsonrpc": "2.0",
+            "id": request.get("id").cloned().unwrap_or(Value::Null),
+            "error": { "code": -32000, "message": format!("backend refused call-{n}") }
+        });
+    }
+    answer(request, calls)
+}
+
 fn register_backend(state: &Arc<AppState>, url: &str) {
     let config = BackendConfig {
         enabled: true,
@@ -344,5 +378,41 @@ async fn direct_route_refuses_a_malformed_key() {
         calls.load(Ordering::SeqCst),
         0,
         "a refused frame must not reach the backend at all"
+    );
+}
+
+/// `MIK-7272.SUB.4.DIRECT.5` — a dispatched call answered with a backend error
+/// KEEPS its key: the retry is served that error and the backend is called
+/// once.
+///
+/// This is the criterion's own clause. A transport failure after the backend
+/// has performed the side effect is indistinguishable from one before it, so
+/// releasing the key on failure hands the retry a clean slate and the mutation
+/// lands twice (ADR-012 consequence 1).
+///
+/// The delivery count is the load-bearing assertion. An implementation that
+/// wedged the key as in-flight would also keep the retry away from the backend,
+/// but it would answer 409 rather than replaying the error, so both halves are
+/// asserted.
+#[tokio::test]
+async fn direct_route_keeps_the_key_of_a_dispatched_call_that_errored() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let url = spawn_erroring_backend(Arc::clone(&calls)).await;
+    let state = state_with_idempotency();
+    register_backend(&state, &url);
+
+    let (_, first) = post_direct(&state, call_body(1, Some(key("k-error"))), None).await;
+    let (_, second) = post_direct(&state, call_body(2, Some(key("k-error"))), None).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the retry of a dispatched call that errored must not reach the backend \
+         a second time; first={first}, second={second}"
+    );
+    assert_eq!(
+        second.get("error").and_then(|e| e.get("message")),
+        first.get("error").and_then(|e| e.get("message")),
+        "the retry must be served the stored error, not a fresh one and not a 409"
     );
 }
