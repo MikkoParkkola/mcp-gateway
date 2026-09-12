@@ -92,14 +92,34 @@ dated <2026-09-06. scope-status.json rows both `pending`/`evidence:[]` — cite,
   2020-12 schema validator/falsifier, relevant to the "invalid schema tool withheld" test-row clause) —
   not yet cross-read against the scope-mismatch finding above.
 
+## gitnexus_impact (MUST, now run — repo had to be indexed first: `npx gitnexus analyze`, none existed)
+- `get_cached_list_shared` (backend/metadata.rs): upstream impact 8 symbols, **risk LOW**, 1 module
+  (Backend), 0 processes affected. Safe fix point for CATALOGUE.1.
+- `handle_tools_list_for_session` (meta_mcp/mod.rs): upstream impact 32 symbols, **risk HIGH** — 4
+  processes incl. `run_stdio`, `handle_tools_list_filtered` (spec-preview), and test
+  `b01_a_two_modern_connections_are_shown_the_same_tool_set` (tests.rs) which explicitly asserts two
+  connections see the SAME tool set — a fix here must not break that invariant for the *unscoped* case.
+- `build_routing_instructions` (meta_mcp_helpers.rs): upstream impact 23 symbols, **risk HIGH** — same
+  test process affected.
+- **HIGH-risk warning surfaced per project MUST**: editing either `handle_tools_list_for_session` or
+  `build_routing_instructions` signature/call-graph directly is HIGH risk. → **Fix plan revised to
+  minimize blast radius**: add filtering as a thin POST-PROCESSING step at the existing dispatch layer
+  (`handle_tools_list_with_params`/router `handlers.rs` call site, which already has the
+  `AuthenticatedClient`) using the already-existing `client.can_access_backend`/`check_tool_scope`, rather
+  than threading a new param through `build_instructions`/`build_routing_instructions`'s internals. Same
+  filter reused for the routing-guide string (filter `caps` list passed to `build_routing_instructions`,
+  which only needs the already-filtered capability list, not a new param on the function itself) — LOW
+  risk, no signature change to the HIGH-risk functions themselves.
+- `b01_a_two_modern_connections_are_shown_the_same_tool_set` must keep passing for two UNSCOPED
+  connections (both admin, or both no-scope) — the fix only changes behavior when
+  `allowed_tools`/`denied_tools`/`backends` scope is actually set on the client.
+
 ## Next steps (in order)
-1. Read `src/gateway/router/authorization.rs` ~100-140 → confirms tools/list scope-filtering status.
-2. Confirm/deny the backend_handlers.rs resources/prompts shared-cache leak lead above.
-3. Run `gitnexus_impact` on `get_cached_list_shared` and on `build_instructions`/`build_routing_instructions`
-   (owed MUST, not yet done).
-4. Write design doc (2 short sections, one per criterion) with the corrected fix shapes above.
-5. gpt-review/kimi-review the brief.
-6. Failing tests first, then implement, then `gitnexus_detect_changes`, then commit.
+1. advisor() gate on this fix plan before writing code (design decision: post-filter at dispatch vs.
+   threading param — reopening design per new HIGH-risk finding).
+2. Design doc (2 short sections) + gpt-review/kimi-review the brief.
+3. Failing tests first (scope-mismatch tools/list case; catalogue per-identity fetch-bypass case), then
+   implement, then `gitnexus_detect_changes`, then commit.
 
 Status: **mid-investigation, zero code changes**. This file itself is the durable checkpoint requested by
 team lead after output-token-ceiling kills on peer agents.
