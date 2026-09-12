@@ -743,6 +743,46 @@ async fn get_tools_does_not_cache_json_rpc_error_response() {
     assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
 }
 
+// MIK-7334.CATALOGUE.1 — a `session_mode = per_user` backend has no
+// per-identity catalogue fetch anywhere in this codebase yet, so the shared
+// `PoolKey::Shared` metadata cache (one connection, shared by every caller)
+// must be withheld rather than served under a caller's own identity. No
+// transport is configured: if the guard did not short-circuit, this test
+// would fail with a transport error instead of an empty, uncached result.
+#[tokio::test]
+async fn per_user_backend_withholds_shared_tool_cache() {
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+    };
+
+    let backend = Backend::new(
+        "test",
+        BackendConfig {
+            identity_propagation: Some(IdentityPropagationConfig {
+                strategy: PropagationStrategyKind::SignedAssertion,
+                audience: "aud".to_string(),
+                required: false,
+                session_mode: SessionMode::PerUser,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
+            }),
+            ..Default::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+
+    let tools = backend.get_tools().await.expect("withheld, not errored");
+
+    assert!(
+        tools.is_empty(),
+        "per_user backend must not serve the shared cache"
+    );
+    assert!(!backend.has_cached_tools());
+    assert_eq!(backend.cached_tools_count(), 0);
+    assert!(backend.get_cached_tool("anything").is_none());
+}
+
 // --- MIK-7214.HEADER.8 — tools violating an `x-mcp-header` constraint are
 // excluded from `tools/list`, on the same tool-metadata path as the
 // destructive-annotation gate.
