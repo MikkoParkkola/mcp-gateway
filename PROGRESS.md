@@ -37,12 +37,15 @@ dated <2026-09-06. scope-status.json rows both `pending`/`evidence:[]` — cite,
   `session_mode=per_user`, rather than identity-keying 4 caches. Ceiling to state explicitly in
   design+comment: "per-identity catalogues remain unfetched; isolation holds by construction (no
   per-user catalogue fetch exists yet), not by cache keying."
-- **OPEN, not yet checked** (advisor's sharper lead, do this before writing code): does the direct route
-  in `backend_handlers.rs` actually call `get_resources_shared()`/`get_prompts_shared()` (the ONE shared
-  cache) *after* resolving per-user creds for `resources/list`/`prompts/list`? backend_handlers.rs:593-598
-  lists those as caller-data methods needing per-user creds, but metadata.rs:159-232 still serves them
-  from the single shared cache — need to confirm whether that's a live cross-identity leak (sharper than
-  "unkeyed cache") or dead code on that path.
+- **RESOLVED, dead lead**: read `backend_handlers.rs:806-894` in full. The direct route is a raw
+  passthrough — every method incl. `resources/list`/`prompts/list` forwards live via
+  `backend.request_with_headers(&method, params, &propagated_headers, identity_key)` (877-888), NEVER
+  through `get_resources_shared`/`get_prompts_shared`/any cache. So isolation on THIS route is correct
+  and matches the line-625 comment ("direct route keeps no per-user cache" — because it keeps no cache at
+  all, live forward every time). The metadata caches in `backend/metadata.rs` are used exclusively by the
+  meta_mcp AGGREGATION path (`gateway_list_tools`, meta `tools/list`, `gateway_search`), which is the
+  sole locus of the CATALOGUE.1 gap. No live cross-identity leak found; original single-shared-cache
+  finding stands as the only fix target.
 
 ## DISCOVERY.1 — verdict: not_met (evidence solid, framing corrected by advisor)
 - `src/gateway/search_disclosure.rs` (full file, 296L): L0/L1/L2 tiered disclosure works correctly — NOT
@@ -67,10 +70,24 @@ dated <2026-09-06. scope-status.json rows both `pending`/`evidence:[]` — cite,
 - `check_tool_scope`/`can_access_backend` callers found: `authorization.rs:113` (`can_access_backend`),
   `:131` (`check_tool_scope`); `backend_handlers.rs:460`; `config/features/auth.rs:181` (separate impl);
   `ui/control_plane.rs:757`.
-- **OPEN, not yet checked** (queued next before compaction hit): open `src/gateway/router/authorization.rs`
-  ~lines 100-140 to confirm which JSON-RPC method(s) it gates — tools/call only, or also tools/list? This
-  determines whether the served tools/list itself already filters by scope while the routing guide text
-  doesn't (a sharper, more precise mismatch than a blanket "no filtering anywhere").
+- **RESOLVED**: `authorization.rs::authorize_tool_target` gates `gateway_invoke`/`gateway_execute`
+  targets only (tools/CALL path), never tools/list. Confirmed via full grep of
+  `can_access_backend`/`check_tool_scope` call sites: only `authorization.rs:113,131` (call path),
+  `backend_handlers.rs:460` (direct per-backend HTTP route, not meta tools/list), and
+  `ui/control_plane.rs:757` (control-plane UI). **tools/list itself is unfiltered by client scope —
+  confirmed, not just the routing guide text.**
+- **Smoking-gun evidence, self-documented**: `meta_mcp/mod.rs:1377-1394` `shadow_tools_list_assembly`
+  builds a `ListFilters{principal: false, ...}` telemetry record with the comment (verbatim): "No
+  principal filter shapes this list. `multi_user` guards dispatch of a gateway-held token (ADR-008
+  INV-2); it does not remove a tool from the answer, so the constant is what the assembly did, not an
+  assumption about the transport." This is the codebase itself asserting, as an intentional invariant,
+  that `tools/list` never filters by caller identity/scope — enforcement is invoke-time only
+  (`check_tool_scope`/`can_access_backend` in `authorization.rs`). That is exactly the disagreement the
+  test row (scope-tests.md:60) names: "served list ... and invoke permissions agree" — a tool can be
+  served that invocation would then reject for that same caller's scope. Confirmed not_met with a
+  precise, citable root cause (not a vague "no filtering anywhere").
+- `handle_tools_list_for_session` (mod.rs:1398-1466): assembles meta-tools + surfaced tools + (spec-preview)
+  session-promoted tools — no `AuthenticatedClient`/session scope param anywhere in the signature or body.
 - `tests/tool_list_tests.rs` (43L), `tests/schema_2020_12_validity.rs` (517L, hits @150/159/170/275 —
   2020-12 schema validator/falsifier, relevant to the "invalid schema tool withheld" test-row clause) —
   not yet cross-read against the scope-mismatch finding above.
