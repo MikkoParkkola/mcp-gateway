@@ -374,6 +374,12 @@ jobs:
           tags: |
             ghcr.io/mikkoparkkola/mcp-gateway:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.is_prerelease != 'true' && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}
+          # Same reason as docker.yml: without a per-build value the runtime
+          # stage's `apt-get upgrade` is restored from the shared gha cache, and
+          # a release image ships whatever packages were current when that layer
+          # was first built.
+          build-args: |
+            APT_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
