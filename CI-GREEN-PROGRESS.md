@@ -66,3 +66,33 @@
     *Required check, recorded on the gate rather than landed here.* The suppression removes the compiler's tripwire exactly where it matters: today the only thing keeping `enforce_firewall_challenge` honest is that its tests exist, and if they are deleted or the control is stubbed, the expectation stays fulfilled and CI stays green where plain `dead_code` would have failed the build. The durable replacement is an architecture test asserting every `ResponseArtifactKind` and `ResponseMutationPolicy` variant is either reachable from a non-test call path **or** named in a short allowlist the gate reads — green today with `BridgeChallenge`/`Immutable` allowlisted against `MIK-7212.MRTR.7a/7b`, red the moment anyone adds a new unwired security artifact kind, and driving the allowlist to empty becomes the mechanical exit condition for the gate. It is **not** landed in this PR: the only way to answer "reachable from production" at test time is to scan sources, which is a new mechanism with its own failure modes, and it belongs with the wiring whose exit condition it defines. Recorded as a required check on `MIK-7212.MRTR.7a/7b`.
 
     *Form verification.* `cargo clippy --all-features --all-targets` reports **zero** `unfulfilled_lint_expectation` and zero `dead_code` in the six touched files — the one lint this mechanism can itself create. That is a targeted check of the annotations, not an adoption of the unrelated ~193 test-unit lints, which stay red by design.
+
+## 11. Post-dead_code CI state (2026-09-12, run 34702671433 on PR #531)
+
+17 of 21 checks pass. Four red, all four also red on the base branch's last real
+run (34256087775, 2026-09-08), so all are pre-existing relative to the merge
+target. This PR turns four previously-red base jobs green: Service template
+smoke, First-use usability smoke, task-sdk-recovery, Public claims.
+
+| Job | Build config | Failure | Sites |
+|---|---|---|---|
+| Clippy (pedantic) | `--all-targets --all-features` | 17 pedantic lints | lib, mixed dirs |
+| Kani | Kani cfg | `unfulfilled_lint_expectation` x9 | all `src/personal_accounts/` |
+| Tests | `cargo test --all-features` | dead_code x4 + unused import x1 | `personal_accounts/{config,identity,worker}.rs`, `router/tests/.../policy.rs` |
+| Windows check | `--target x86_64-pc-windows-*` | `cannot find macro boundary` x14 | `src/personal_accounts/commit.rs` |
+
+Kani's 9 sites are the pre-existing `#[cfg_attr(not(test), expect(dead_code))]`
+annotations landed by 76659582 for the per-user-OAuth cluster. They hold under
+the default-feature lib build and do not hold under Kani's configuration, so
+`-D unfulfilled-lint-expectations` turns each into an error. `expect` is doing
+exactly what it was chosen to do — reporting that its premise no longer holds in
+that build — which means the annotation needs a cfg predicate matching the
+configurations in which the code is genuinely unreachable, not removal.
+
+Windows is a real platform bug, not a lint: the `boundary` macro is not in scope
+for the Windows target in `personal_accounts/commit.rs`.
+
+Scope note: the peer session holds
+`src/gateway/router/tests/task_execution_adapter/signing_joint/policy.rs` dirty,
+so the one unused-import error in Tests is not mine to fix. Every other file
+named above is clean in this worktree.
