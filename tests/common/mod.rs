@@ -37,6 +37,11 @@ pub fn modern(method: &str, params: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag gates an independent NFR row; grouping them would force \
+              every case to name fields it does not vary"
+)]
 pub struct Fixture {
     pub auth: AuthConfig,
     pub agent_auth_enabled: bool,

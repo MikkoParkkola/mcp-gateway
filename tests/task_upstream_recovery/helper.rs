@@ -5,10 +5,12 @@
 //! a temporary config directory and store.
 //!
 //! The peer here is a SYNTHETIC control and is named as one. The real pinned
-//! FastMCP + Docket proof lives in `task_upstream_recovery_sdk.rs` and runs the
+//! `FastMCP` + Docket proof lives in `task_upstream_recovery_sdk.rs` and runs the
 //! actual SDK; nothing in this file is offered as evidence about the SDK.
 
-// One fixture, two targets: each uses a subset of it.
+// One consumer: `tests/task_upstream_recovery.rs`. Scaffolding it does not
+// drive yet is marked `expect(dead_code)` so the annotation self-deletes
+// the moment a case starts using the item.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -29,6 +31,10 @@ pub const PROTOCOL_VERSION: &str = "2026-07-28";
 pub const TASKS_EXTENSION: &str = "io.modelcontextprotocol/tasks";
 pub const CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
 pub const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+#[expect(
+    dead_code,
+    reason = "read only by tasks_get_attested, which no case in this target drives yet"
+)]
 pub const RECOVERY_META: &str = "io.mcp-gateway/recovery";
 
 pub const BACKEND: &str = "upstream";
@@ -47,6 +53,10 @@ pub enum Upstream {
     Working,
     Unavailable,
     Completed,
+    #[expect(
+        dead_code,
+        reason = "peer answer state; no case in this target drives the peer to a failed task"
+    )]
     Failed,
 }
 
@@ -84,6 +94,10 @@ impl Peer {
         *self.state.lock() = next;
     }
 
+    #[expect(
+        dead_code,
+        reason = "peer payload override; no case in this target sets a custom payload yet"
+    )]
     pub fn set_payload(&self, payload: Value) {
         *self.payload.lock() = payload;
     }
@@ -97,12 +111,11 @@ impl Peer {
                 tokio::time::sleep(POLL_GAP).await;
             }
         };
-        if tokio::time::timeout(OBSERVE_BOUND, observe).await.is_err() {
-            panic!(
-                "the peer saw {} tasks/get within {OBSERVE_BOUND:?}, expected at least {at_least}",
-                self.queries()
-            );
-        }
+        assert!(
+            tokio::time::timeout(OBSERVE_BOUND, observe).await.is_ok(),
+            "the peer saw {} tasks/get within {OBSERVE_BOUND:?}, expected at least {at_least}",
+            self.queries()
+        );
     }
 }
 
@@ -273,7 +286,7 @@ pub fn write_config(root: &Path, fixture: &Fixture<'_>) -> PathBuf {
     config.tasks.store_dir = root.join("tasks").display().to_string();
     config.tasks.default_ttl_ms = 3_600_000;
     config.tasks.expiry_interval = Duration::from_secs(3_600);
-    config.tasks.recovery_adapters = fixture.adapters.clone();
+    config.tasks.recovery_adapters.clone_from(&fixture.adapters);
 
     config.backends.insert(
         BACKEND.to_string(),
@@ -327,6 +340,10 @@ pub fn free_port() -> u16 {
 
 /// Every durable record body, parsed. The store is the assertion surface for
 /// the handle/marker/version table.
+#[expect(
+    dead_code,
+    reason = "store assertion surface; no case in this target reads the records yet"
+)]
 pub fn durable_records(root: &Path) -> Vec<Value> {
     let Ok(entries) = std::fs::read_dir(store_dir(root)) else {
         return Vec::new();
@@ -334,10 +351,12 @@ pub fn durable_records(root: &Path) -> Vec<Value> {
     entries
         .filter_map(Result::ok)
         .filter(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("task-") && name.ends_with(".json"))
+            entry.file_name().to_str().is_some_and(|name| {
+                name.starts_with("task-")
+                    && Path::new(name)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            })
         })
         .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
         .filter_map(|body| serde_json::from_str::<Value>(&body).ok())
@@ -361,7 +380,7 @@ pub fn durable_record(root: &Path, task_id: &str) -> Value {
 }
 
 /// The committed status inside the private snapshot
-/// (`TaskSnapshot { task: TaskWire { status, .. } }`, camelCase, snake_case
+/// (`TaskSnapshot { task: TaskWire { status, .. } }`, `camelCase`, `snake_case`
 /// status values).
 pub fn record_status(record: &Value) -> Option<&str> {
     record.pointer("/model/task/status").and_then(Value::as_str)
@@ -445,12 +464,11 @@ impl Gateway {
                 tokio::time::sleep(POLL_GAP).await;
             }
         };
-        if tokio::time::timeout(READY_BOUND, ready).await.is_err() {
-            panic!(
-                "the gateway never answered on {url} within {READY_BOUND:?}\n{}",
-                self.logs()
-            );
-        }
+        assert!(
+            tokio::time::timeout(READY_BOUND, ready).await.is_ok(),
+            "the gateway never answered on {url} within {READY_BOUND:?}\n{}",
+            self.logs()
+        );
     }
 
     pub async fn post(&self, client: &reqwest::Client, body: &Value) -> Value {
@@ -558,6 +576,10 @@ pub fn tasks_get(id: i64, task_id: &str) -> Value {
 
 /// The same read, carrying a fresh attestation token in the namespaced field
 /// the addendum defines. Never persisted, never reused.
+#[expect(
+    dead_code,
+    reason = "attested-recovery read fixture; no case in this target drives it yet"
+)]
 pub fn tasks_get_attested(id: i64, task_id: &str, token: &str) -> Value {
     let mut body = tasks_get(id, task_id);
     body["params"]["_meta"][RECOVERY_META] = json!({ "attestation": token });

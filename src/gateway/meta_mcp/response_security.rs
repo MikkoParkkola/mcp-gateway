@@ -156,6 +156,19 @@ impl super::MetaMcp {
 impl super::MetaMcp {
     /// Admit the whole client-visible question artifact without rewriting it.
     /// The bridge supplies authenticated targets and excludes opaque state.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Implemented and tested, but never called from the response \
+                      dispatch path. The legacy-client elicitation bridge it guards is \
+                      MIK-7212.MRTR.7a/7b, a hard release gate under NFR.COMPAT.1 \
+                      (docs/requirements/RELEASE-4.0.0-blocking-rollup.md:190): 4.0.0 \
+                      must not ship serving the modern revision by default while that \
+                      bridge is unreachable from production. The gate tracks the \
+                      wiring; delete this suppression by hand when it lands."
+        )
+    )]
     pub(crate) fn enforce_firewall_challenge(
         &self,
         challenge: &serde_json::Value,

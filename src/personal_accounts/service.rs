@@ -139,6 +139,13 @@ impl ConsentExpectation {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum AccountServiceError {
     #[error("account service runtime is not implemented")]
+    #[cfg_attr(
+        all(not(test), not(kani)),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     RuntimeNotImplemented,
     #[error("account is not connected")]
     ConnectOffer,
@@ -151,6 +158,13 @@ pub(crate) enum AccountServiceError {
     #[error("credential lease is no longer valid")]
     LeaseRetired,
     #[error("stale consent was fenced by a later grant or revoke")]
+    #[cfg_attr(
+        all(not(test), not(kani)),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     StaleConsentFenced,
     #[error("refresh provider is unavailable")]
     ProviderUnavailable,
@@ -216,11 +230,25 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn store(&self) -> &PersonalAccountStore {
         &self.store
     }
 
     /// Account key → lease, or a typed refusal. Storage failure is never absence.
+    #[cfg_attr(
+        all(not(test), not(kani)),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn resolve(
         &self,
         account: &AccountKey,
@@ -288,6 +316,13 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
     }
 
     /// Durably revoke, then bar new leases and release eligibility.
+    #[cfg_attr(
+        all(not(test), not(kani)),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn invalidate(&self, account: &AccountKey) -> Result<(), AccountServiceError> {
         self.store.revoke(account)?;
         Ok(())
@@ -297,6 +332,13 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
     ///
     /// One store call, on purpose. Reading the state here and committing after
     /// would be the TOCTOU the guarded entrypoint exists to remove.
+    #[cfg_attr(
+        all(not(test), not(kani)),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     pub(crate) fn commit_grant_if(
         &self,
         account: &AccountKey,

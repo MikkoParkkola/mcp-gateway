@@ -394,11 +394,21 @@ mod http {
     }
 
     /// A modern `tools/call`, same shape, for a named tool.
+    /// The `params._meta` key carrying an idempotency key, spelled out here
+    /// the way every other scanner in this suite spells it
+    /// (`crate::protocol::mrtr::IDEMPOTENCY_KEY_META` in the gateway): a test
+    /// that imports the constant cannot catch a rename of the wire contract.
+    const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+
     fn modern_tools_call(id: i64, name: &str, arguments: Value) -> Value {
         let mut request = modern_tools_list(id);
         request["method"] = json!("tools/call");
         request["params"]["name"] = json!(name);
         request["params"]["arguments"] = arguments;
+        // A modern call that could mutate is inadmissible without an explicit
+        // idempotency key, and that refusal precedes every branch the rows
+        // below observe. Keyed by `id` so no two rows share an operation.
+        request["params"]["_meta"][IDEMPOTENCY_KEY_META] = json!(format!("acs-{id}"));
         request
     }
 
@@ -739,6 +749,10 @@ mod http {
                     "arguments": { "server": "any-backend" },
                     "_meta": {
                         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        // Without this the call is refused for a missing
+                        // idempotency key before it reaches the confirmation
+                        // branch this row is about.
+                        IDEMPOTENCY_KEY_META: "acs-confirm-1",
                         "io.modelcontextprotocol/clientCapabilities": {},
                         "io.modelcontextprotocol/clientInfo": {
                             "name": "ExampleClient", "version": "1.0.0"
@@ -1001,6 +1015,10 @@ mod http {
                     "arguments": { "server": "row17-sentinel" },
                     "_meta": {
                         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        // Without this the call is refused for a missing
+                        // idempotency key before it reaches the confirmation
+                        // branch this row is about.
+                        IDEMPOTENCY_KEY_META: "acs-confirm-1",
                         "io.modelcontextprotocol/clientCapabilities": {},
                         "io.modelcontextprotocol/clientInfo": {
                             "name": "ExampleClient", "version": "1.0.0"

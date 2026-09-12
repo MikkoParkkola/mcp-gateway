@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! SIGNING.2: production `serve --stdio` must wire reload context (and LiveEnv).
+//! SIGNING.2: production `serve --stdio` must wire reload context (and `LiveEnv`).
 //!
 //! Current stdio omits `set_reload_context`; HTTP already has it. These tests
 //! speak the public CLI/MCP surface only so an unwired process is semantic RED.
@@ -385,7 +385,7 @@ async fn stdio_reload_refuses_replay_window_edit_keeping_backend_and_key() {
 async fn stdio_reload_refuses_key_id_edit_keeping_backend_and_key() {
     refuse_signing_edit(
         |config| {
-            config["security"]["message_signing"]["key_id"] = json!("stdio-reload-rotated-key-id")
+            config["security"]["message_signing"]["key_id"] = json!("stdio-reload-rotated-key-id");
         },
         &[KEY, PREVIOUS, ROTATED],
     )

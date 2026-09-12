@@ -528,15 +528,14 @@ async fn gateway_search_is_callable_regardless_of_code_mode_flag() {
     // GIVEN: code mode disabled, but calling gateway_search explicitly
     let meta = make_meta_mcp();
     let args = json!({ "query": "nonexistent_xyz_404" });
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(99),
-            "gateway_search",
-            args,
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(99),
+        "gateway_search",
+        args,
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
     // THEN: no JSON-RPC error (-32601 unknown tool), just zero results
     assert!(
         response.error.is_none(),
@@ -1088,15 +1087,14 @@ async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
     // GIVEN: code mode disabled, calling gateway_execute with no tool/chain
     let meta = make_meta_mcp();
     let args = json!({});
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(100),
-            "gateway_execute",
-            args,
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(100),
+        "gateway_execute",
+        args,
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
     // THEN: returns an error (not -32601 unknown tool)
     // The response wraps the error as tool content (is_error=true) OR as RPC error
     // Either way, there should not be a -32601 "Unknown tool" error
@@ -1352,24 +1350,23 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
     let mm = MetaMcp::new(Arc::clone(&registry));
     mm.set_reload_context(reload_ctx);
 
-    let resp = mm
-        .handle_tools_call(
-            RequestId::Number(7),
-            "gateway_reload_config",
-            json!({}),
-            None,
-            // Admin, because reloading config is admin-gated at the dispatcher.
-            // The default context is non-admin, and this test is about what the
-            // reload REPORTS, not about the gate — an operator running it holds
-            // a credential.
-            MetaMcpCallerContext {
-                is_admin: true,
-                input_capabilities: crate::protocol::meta::Declared::NONE,
-                retry: &crate::protocol::mrtr::NO_RETRY,
-                ..allow_all_ctx()
-            },
-        )
-        .await;
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(7),
+        "gateway_reload_config",
+        json!({}),
+        None,
+        // Admin, because reloading config is admin-gated at the dispatcher.
+        // The default context is non-admin, and this test is about what the
+        // reload REPORTS, not about the gate — an operator running it holds
+        // a credential.
+        MetaMcpCallerContext {
+            is_admin: true,
+            input_capabilities: crate::protocol::meta::Declared::NONE,
+            retry: &crate::protocol::mrtr::NO_RETRY,
+            ..allow_all_ctx()
+        },
+    ))
+    .await;
 
     assert!(
         resp.error.is_none(),
@@ -1622,15 +1619,14 @@ async fn tools_call_surfaced_tool_on_missing_backend_returns_error() {
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(surfaced);
 
     // WHEN: calling the surfaced tool
-    let resp = mm
-        .handle_tools_call(
-            RequestId::Number(1),
-            "pinned_tool",
-            json!({"arg": "val"}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "pinned_tool",
+        json!({"arg": "val"}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     // THEN: returns a backend-not-found error (not "Unknown tool" -32601)
     // The proxy dispatch was reached (surfaced tool map hit) and the backend was absent
@@ -1655,15 +1651,14 @@ async fn tools_call_unknown_non_surfaced_tool_returns_32601() {
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new()));
 
     // WHEN
-    let resp = mm
-        .handle_tools_call(
-            RequestId::Number(1),
-            "totally_unknown_xyz",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "totally_unknown_xyz",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     // THEN: -32601 "Unknown tool" error
     let err = resp.error.expect("Expected an RPC error for unknown tool");
@@ -1681,15 +1676,14 @@ async fn tools_call_surfaced_tool_name_bypasses_meta_tool_dispatch() {
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(surfaced);
 
     // WHEN: calling the surfaced tool
-    let resp = mm
-        .handle_tools_call(
-            RequestId::Number(1),
-            "my_surfaced_tool",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "my_surfaced_tool",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     // THEN: NOT a -32601 "Unknown tool" error — the surfaced map was consulted first
     if let Some(err) = &resp.error {
@@ -1714,15 +1708,14 @@ async fn colliding_name_is_dispatched_as_meta_tool_not_proxy() {
     assert!(mm.surfaced_tools.is_empty(), "Collision should be dropped");
 
     // WHEN: calling gateway_list_servers
-    let resp = mm
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_list_servers",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_list_servers",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     // THEN: dispatched as the real meta-tool, not proxied → success
     assert!(
@@ -2532,15 +2525,14 @@ fn a_playbook_carries_the_caller_identity() {
 async fn global_meta_tool_is_refused_at_the_dispatcher() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
 
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_reload_config",
-            json!({}),
-            Some("sess-dispatcher"),
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_reload_config",
+        json!({}),
+        Some("sess-dispatcher"),
+        allow_all_ctx(),
+    ))
+    .await;
 
     let message = response
         .error
@@ -2563,20 +2555,19 @@ async fn global_meta_tool_is_refused_at_the_dispatcher() {
 async fn global_meta_tool_reaches_an_admin_caller() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
 
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_reload_config",
-            json!({}),
-            Some("sess-dispatcher-admin"),
-            crate::gateway::meta_mcp::MetaMcpCallerContext {
-                is_admin: true,
-                input_capabilities: crate::protocol::meta::Declared::NONE,
-                retry: &crate::protocol::mrtr::NO_RETRY,
-                ..allow_all_ctx()
-            },
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_reload_config",
+        json!({}),
+        Some("sess-dispatcher-admin"),
+        crate::gateway::meta_mcp::MetaMcpCallerContext {
+            is_admin: true,
+            input_capabilities: crate::protocol::meta::Declared::NONE,
+            retry: &crate::protocol::mrtr::NO_RETRY,
+            ..allow_all_ctx()
+        },
+    ))
+    .await;
 
     let message = response
         .error
@@ -2725,15 +2716,14 @@ fn exposure_only_invoke() -> MetaMcp {
 
 #[tokio::test]
 async fn unexposed_meta_tool_is_refused_on_call() {
-    let response = exposure_only_invoke()
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_list_tools",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(exposure_only_invoke().handle_tools_call(
+        RequestId::Number(1),
+        "gateway_list_tools",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     let error = response
         .error
@@ -2752,16 +2742,18 @@ async fn unexposed_admin_meta_tool_is_refused_as_unrecognized_not_as_admin_only(
     // admin gate placed before the exposure check answers `-32600 requires
     // admin access` and discloses exactly what the allow-list hides. The caller
     // here is non-admin, which is the case that reaches that gate first.
-    let response = MetaMcp::new(Arc::new(BackendRegistry::new()))
-        .with_exposed_meta_tools(&["gateway_invoke".to_string()])
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_kill_server",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(
+        MetaMcp::new(Arc::new(BackendRegistry::new()))
+            .with_exposed_meta_tools(&["gateway_invoke".to_string()])
+            .handle_tools_call(
+                RequestId::Number(1),
+                "gateway_kill_server",
+                json!({}),
+                None,
+                allow_all_ctx(),
+            ),
+    )
+    .await;
 
     let error = response
         .error
@@ -2781,16 +2773,18 @@ async fn exposed_meta_tool_still_runs() {
     // Without this the refusal above passes for a gateway that refuses
     // everything. Same subject as the refusal test, so the allow-list is the
     // only difference between them.
-    let response = MetaMcp::new(Arc::new(BackendRegistry::new()))
-        .with_exposed_meta_tools(&["gateway_list_tools".to_string()])
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_list_tools",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(
+        MetaMcp::new(Arc::new(BackendRegistry::new()))
+            .with_exposed_meta_tools(&["gateway_list_tools".to_string()])
+            .handle_tools_call(
+                RequestId::Number(1),
+                "gateway_list_tools",
+                json!({}),
+                None,
+                allow_all_ctx(),
+            ),
+    )
+    .await;
 
     assert!(
         response.error.is_none(),
@@ -2826,15 +2820,14 @@ fn unexposed_meta_tool_is_not_listed() {
 async fn no_allow_list_exposes_everything() {
     // The default an existing deployment gets: configuring nothing must not
     // start refusing meta-tools.
-    let response = make_meta_mcp()
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_list_tools",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(make_meta_mcp().handle_tools_call(
+        RequestId::Number(1),
+        "gateway_list_tools",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     assert!(
         response.error.is_none(),
@@ -2848,15 +2841,14 @@ async fn unexposed_code_mode_tool_is_refused_on_call() {
     // builder from the rest of the meta-tools, and was outside the governed
     // set, so an allow-list naming only `gateway_invoke` still left it
     // callable. Both builders are governed now.
-    let response = exposure_only_invoke()
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_execute",
-            json!({"tool": "mem:read", "arguments": {}}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(exposure_only_invoke().handle_tools_call(
+        RequestId::Number(1),
+        "gateway_execute",
+        json!({"tool": "mem:read", "arguments": {}}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     let error = response
         .error
@@ -2873,15 +2865,14 @@ async fn the_refusal_does_not_name_the_allow_list() {
     // indistinguishable from the unrecognised-tool fallback. Asserting only the
     // error code lets someone reword the message to "not exposed" and ship a
     // disclosure oracle with every other test still green.
-    let response = exposure_only_invoke()
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_list_tools",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(exposure_only_invoke().handle_tools_call(
+        RequestId::Number(1),
+        "gateway_list_tools",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     // Compared against the fallback the dispatcher actually produces, not
     // against a transcription of it. A literal here asserts today's wording and
@@ -2890,15 +2881,14 @@ async fn the_refusal_does_not_name_the_allow_list() {
     // outside the governed set passes the exposure check (`is_exposed`,
     // meta_mcp_tool_defs.rs:830) and reaches the fallback, so both answers come
     // from one fixture and one dispatcher.
-    let fallback = exposure_only_invoke()
-        .handle_tools_call(
-            RequestId::Number(1),
-            "nobody_implemented_this",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let fallback = Box::pin(exposure_only_invoke().handle_tools_call(
+        RequestId::Number(1),
+        "nobody_implemented_this",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     let error = response.error.expect("an unexposed meta-tool is refused");
     let fallback_error = fallback
@@ -3801,15 +3791,14 @@ async fn a_near_miss_of_a_hidden_tool_is_not_answered_with_its_name() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
         .with_exposed_meta_tools(&["gateway_search".to_string()]);
     // WHEN: a caller mistypes a HIDDEN tool by one character
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_kill_serve",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_kill_serve",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
     // THEN: the refusal names neither the hidden tool nor any other hidden one
     let message = response
         .error
@@ -3834,15 +3823,14 @@ async fn a_near_miss_of_a_hidden_tool_is_not_answered_with_its_name() {
 async fn a_near_miss_of_an_exposed_tool_still_gets_its_suggestion() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
         .with_exposed_meta_tools(&["gateway_search".to_string()]);
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_searh",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_searh",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
     let message = response
         .error
         .expect("an unrecognised tool is refused")
@@ -4783,6 +4771,10 @@ async fn meta_with_echo_hidden_by_a_stale_cache(url: &str) -> MetaMcp {
 #[cfg(feature = "spec-preview")]
 #[tokio::test]
 async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() {
+    // Control: the same promotion over a legacy connection, which keeps its own
+    // session id, must be visible to that connection.
+    const LEGACY: Option<&str> = Some("legacy-a");
+
     let url = start_invokable_mock().await;
     let meta = meta_with_echo_hidden_by_a_stale_cache(&url).await;
 
@@ -4822,7 +4814,6 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
 
     // Control: the same promotion over a legacy connection, which keeps its own
     // session id, must be visible to that connection.
-    const LEGACY: Option<&str> = Some("legacy-a");
     let legacy_invoked = meta
         .invoke_tool(
             &json!({"server": "mock", "tool": "echo", "arguments": {}}),
@@ -4975,15 +4966,14 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
         "the staged set in the default state is not what the cases pin"
     );
 
-    let set = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_set_state",
-            json!({"state": TARGET_STATE}),
-            sess,
-            allow_all_ctx(),
-        )
-        .await;
+    let set = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_set_state",
+        json!({"state": TARGET_STATE}),
+        sess,
+        allow_all_ctx(),
+    ))
+    .await;
     assert!(
         set.error.is_none(),
         "a session-bearing connection must be able to hold a state, or the \
@@ -5066,15 +5056,14 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
     // Driven through the real meta-tool, not `SessionStateStore::set_state`:
     // the defect is the argument passed at `mod.rs:1689`, and a fixture
     // touching the store directly bypasses the line under test.
-    let set = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_set_state",
-            json!({"state": TARGET_STATE}),
-            MODERN_SESSIONLESS,
-            allow_all_ctx(),
-        )
-        .await;
+    let set = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_set_state",
+        json!({"state": TARGET_STATE}),
+        MODERN_SESSIONLESS,
+        allow_all_ctx(),
+    ))
+    .await;
     order2_fsm::assert_refusal(&meta, &set);
 
     // Q4: the write is refused, not filtered on read.
@@ -5157,15 +5146,14 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
     // Connection A. Driven through the real meta-tool: the defect is the
     // argument passed at `mod.rs:1689`, and a fixture touching
     // `SessionStateStore::set_state` directly bypasses the line under test.
-    let set = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_set_state",
-            json!({"state": TARGET_STATE}),
-            MODERN_SESSIONLESS,
-            allow_all_ctx(),
-        )
-        .await;
+    let set = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_set_state",
+        json!({"state": TARGET_STATE}),
+        MODERN_SESSIONLESS,
+        allow_all_ctx(),
+    ))
+    .await;
     order2_fsm::assert_refusal(&meta, &set);
 
     // Q4: A's write is refused outright, not accepted and dropped.
@@ -5445,15 +5433,14 @@ async fn b02_a_set_profile_does_not_change_the_connections_tool_list() {
         &meta.handle_tools_list_for_session(RequestId::Number(1), MODERN_SESSIONLESS),
     );
 
-    let set = meta
-        .handle_tools_call(
-            RequestId::Number(2),
-            "gateway_set_profile",
-            json!({"profile": NARROW_PROFILE}),
-            MODERN_SESSIONLESS,
-            allow_all_ctx(),
-        )
-        .await;
+    let set = Box::pin(meta.handle_tools_call(
+        RequestId::Number(2),
+        "gateway_set_profile",
+        json!({"profile": NARROW_PROFILE}),
+        MODERN_SESSIONLESS,
+        allow_all_ctx(),
+    ))
+    .await;
 
     let refusal = set
         .error
@@ -5520,16 +5507,16 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
         MATCH_ALL_QUERY,
         legacy_a,
     ));
-    let legacy_b_tools = tools_list_set(&meta.handle_tools_list_filtered(
+    let unnarrowed_tools = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(4),
         MATCH_ALL_QUERY,
         legacy_b,
     ));
     assert!(
-        legacy_a_tools.len() < legacy_b_tools.len()
-            && legacy_a_tools.iter().all(|t| legacy_b_tools.contains(t)),
+        legacy_a_tools.len() < unnarrowed_tools.len()
+            && legacy_a_tools.iter().all(|t| unnarrowed_tools.contains(t)),
         "premise: '{NARROW_PROFILE}' must strictly narrow the filtered list too, or this \
-         case passes for a query that decides everything: {legacy_a_tools:?} vs {legacy_b_tools:?}"
+         case passes for a query that decides everything: {legacy_a_tools:?} vs {unnarrowed_tools:?}"
     );
 
     meta.handle_initialize(

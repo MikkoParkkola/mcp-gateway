@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The pinned FastMCP + fastmcp-tasks + pydocket peer, as an owned child.
+//! The pinned `FastMCP` + fastmcp-tasks + pydocket peer, as an owned child.
 //!
 //! Its Docket backend is the caller-supplied Redis service, so the job is held
 //! by a task runtime that is neither this test nor the gateway. The child is
