@@ -92,7 +92,12 @@ sha256_of() {
 build_arm() {
   local cell="$1" ref; ref="$(cell_ref "$cell")"
   local dir="$ARMS_DIR/$cell"
-  local sha; sha="$(git -C "$REPO" rev-parse "$ref")"
+  # `^{commit}` is load-bearing: v3.5.0 and v3.5.1 are ANNOTATED tags, so a bare
+  # rev-parse yields the tag object (7197dbbf for v3.5.0), not the commit
+  # (32f135a6) that the NFR.PERF.1 contract pins as the baseline. Recording the
+  # tag object would put an identifier in .checkout_sha that matches neither the
+  # sibling contract nor `git rev-parse HEAD` inside the built worktree.
+  local sha; sha="$(git -C "$REPO" rev-parse "${ref}^{commit}")"
 
   echo "[build] cell $cell ref $ref sha $sha"
   # Retire the administrative entry too. `rm -rf` alone leaves a stale record in
