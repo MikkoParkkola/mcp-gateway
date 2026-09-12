@@ -2965,9 +2965,17 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     // to a principal the gateway can name, and an API key name is not one
     // (`principal_fingerprint` reads the OIDC identity alone) -- so `alice`
     // alone would exit on the unnameable-caller refusal (MRTR.2).
+    //
+    // It is on the modern era because since MRTR.7's bridge landed a legacy
+    // caller holding a session is bridged instead of minted, and a bridged
+    // exchange ends this call rather than handing back the handle this test is
+    // named for.
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         input_capabilities: declaring(&json!({"elicitation": {}})),
         verified_identity: Some(&NAMED_CALLER),
+        is_modern: true,
+        protocol_revision: Some("2026-07-28"),
+        era: crate::protocol::meta::Era::Modern,
         ..allow_all_ctx_named(Some("alice"), Some("agent-1"))
     };
     let result = meta
@@ -3423,13 +3431,38 @@ fn allow_all_ctx_declaring(
     }
 }
 
-/// The same caller, unnameable: no API key, no agent, no verified identity.
+/// The same caller on the modern era, which is the only era that still reaches
+/// the continuation mint.
+///
+/// A sibling rather than an `era` parameter on [`allow_all_ctx_declaring`],
+/// and deliberately not an edit to that helper: three MRTR.9 tests pass
+/// `Declared::NONE` through it to prove a *legacy* client is refused what it
+/// never declared. Modern + `NONE` is refused too, so flipping the shared
+/// helper would leave those three green while quietly moving them off the case
+/// they were written for.
+///
+/// `protocol_revision` moves with `era`: a caller claiming the modern era while
+/// naming a 2025 revision is a shape no client can present, and the cache keys
+/// off the revision.
+fn modern_ctx_declaring(
+    declared: crate::protocol::meta::Declared,
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        is_modern: true,
+        protocol_revision: Some("2026-07-28"),
+        era: crate::protocol::meta::Era::Modern,
+        ..allow_all_ctx_declaring(declared)
+    }
+}
+
+/// The same modern caller, unnameable: no API key, no agent, no verified
+/// identity.
 fn anonymous_ctx_declaring(
     declared: crate::protocol::meta::Declared,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
         verified_identity: None,
-        ..allow_all_ctx_declaring(declared)
+        ..modern_ctx_declaring(declared)
     }
 }
 
@@ -3476,6 +3509,12 @@ fn book_flight() -> serde_json::Value {
 // gateway's sealed envelope rather than the backend's own string. Asserting
 // only `resultType` here would have passed unchanged the day minting landed —
 // a case that cannot fail is worse than one that breaks.
+//
+// Modern caller: since MRTR.7's bridge landed, a legacy caller with a session
+// is bridged rather than minted (the question is put to the client inside this
+// call), so the mint this test is about is reachable only on the modern era.
+// The legacy half of that split is
+// `a_legacy_caller_with_no_live_channel_cannot_be_asked` below.
 #[tokio::test]
 async fn a_declared_input_request_passes_the_gateway_gate() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
@@ -3484,7 +3523,7 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
+            &modern_ctx_declaring(declaring(&json!({"elicitation": {}}))),
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3541,6 +3580,10 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
 // guards against — recording the jti at mint time would need `mint_continuation`
 // (`src/gateway/meta_mcp/invoke.rs:372`) to become async, an edit larger than the
 // defect, so the probe stages the effect rather than the cause.
+//
+// Modern caller for the same reason as
+// `a_declared_input_request_passes_the_gateway_gate`: the mint whose ledger
+// this reads is modern-only since MRTR.7's bridge landed.
 #[tokio::test]
 async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
@@ -3549,7 +3592,7 @@ async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
+            &modern_ctx_declaring(declaring(&json!({"elicitation": {}}))),
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3682,6 +3725,12 @@ async fn a_refusals_required_capabilities_survive_the_response_boundary() {
 // other unnameable caller also holds — which is not a binding — so the
 // exchange is refused instead. Without this case the refusal ships unexercised
 // and the choice between refusing and approximating is untested.
+//
+// Modern, because the refusal is a property of the mint: the bridge a legacy
+// caller now takes hands back no envelope, so there is nothing to bind to a
+// principal and nothing to replay. An unnameable *legacy* caller is therefore
+// bridged rather than refused — recorded as an assumption in the MRTR.7 design
+// doc rather than decided here.
 #[tokio::test]
 async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
@@ -3698,6 +3747,34 @@ async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
         err.to_rpc_code(),
         -32003,
         "the refusal must reuse the gateway's existing refusal code"
+    );
+}
+
+// The legacy half of the split the three tests above moved off, kept because
+// the case is reachable in production and nothing else covers it: an HTTP
+// client that declared `elicitation` at `initialize` and whose event stream
+// dropped before the `tools/call`. The gateway's declaration gate passes — the
+// client did declare — and the bridge is entered, so the call can no longer
+// end in a continuation the client could redeem later. It ends in a delivery
+// failure instead, and the distinct wording is the point: a client that was
+// asked and said no gets `BridgeError::Refused`'s sentence, not this one.
+#[tokio::test]
+async fn a_legacy_caller_with_no_live_channel_cannot_be_asked() {
+    let meta = MetaMcp::new(backend_asking_for_elicitation());
+
+    let err = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            // `allow_all_ctx_declaring` is legacy and carries `NoClientChannel`.
+            &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
+        )
+        .await
+        .expect_err("a question that cannot be delivered must fail the call");
+    assert_eq!(err.to_rpc_code(), -32603, "{err:?}");
+    assert!(
+        err.to_string().contains("was not answered"),
+        "the failure must name delivery, not the client's own refusal: {err:?}"
     );
 }
 
