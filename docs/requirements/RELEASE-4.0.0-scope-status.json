@@ -182,14 +182,6 @@
       "note": "Graded partial on origin/main@738c7cee. Outside the modules origin/codex/v4-next-integration@dbc06304 touches, so the main-branch verdict carries. Impl: src/gateway/meta_mcp/search.rs:200 (backend_allowed filter before collection), src/gateway/meta_mcp/search.rs:763-771 (rank() called before matches.truncate(limit)), src/ranking/mod.rs:376-401 (exclusion_for sets score=0.0 and results.retain drops excluded; score = text_relevance * (1.0 + usage_factor) * multiplier() so a 0.0 relevance stays 0.0 regardless of usage) Both invariants (authorization-before-collection, rank-before-truncate, multiplicative usage boost) are implemented and citable, but no test asserts either ordering or exercises a forbidden-but-used vs allowed-but-relevant pairing with a low limit and poisoned/global feedback. src/ranking/tests.rs (63 tests) and tests/discovery_tests.rs/tests/security_tests.rs never call backend_allowed or exclusion_for."
     },
     {
-      "id": "MIK-3274.RANKING.3",
-      "status": "pending",
-      "evidence": [
-        "src/ranking/mod.rs"
-      ],
-      "note": "Graded not_met on origin/main@738c7cee. Outside the modules origin/codex/v4-next-integration@dbc06304 touches, so the main-branch verdict carries. Impl: src/ranking/mod.rs:421 (evaluate_offline is a fixture comparator against deterministic offline cases, not a held-out-quality/discovery-turns/invalid-invocation/token measurement) Acceptance requires thresholds frozen after a baseline measurement and before ranking implementation; no such freeze exists anywhere in the repo. benchmarks/results/ holds only one unrelated file (mik-6977-live-agent-2026-09-04.json), and docs/requirements/RELEASE-4.0.0-performance-contract.md freezes only the workload (latency) rows, never ranking-quality thresholds. Ranking already shipped (src/ranking/mod.rs exists on this branch), so the required before-implementation freeze cannot now be produced."
-    },
-    {
       "id": "MIK-7332.DISCOVERY.1",
       "status": "pending",
       "evidence": [
@@ -215,7 +207,7 @@
         "src/control_plane/store.rs",
         "src/security/transparency_log.rs"
       ],
-      "note": "Graded not_met on origin/main@738c7cee. Outside the modules origin/codex/v4-next-integration@dbc06304 touches, so the main-branch verdict carries. Impl: src/control_plane/store.rs:742-767 (FileControlPlaneStore::read_audit does std::fs::read_to_string(&path) — the FULL audit file, every call, before any filter/offset/limit is applied); src/control_plane/store.rs:112-134 (AuditFilter/page_audit: 'the first `limit` events in chain order', offset skips 'leading (oldest, chain-order) events' — i.e. oldest-first, not newest-first); src/security/transparency_log.rs:63-75,653 (MAX_AUDIT_READ_BYTES/MAX_TAIL_SCAN_BYTES bound a *different* audit surface, the transparency-log CLI `show_session_entries`, not this store) The control-plane audit store (the one with actor/action filters and offset/limit paging that the acceptance describes) has no work bound at all: read_audit loads the entire audit file into memory on every call regardless of how selective the filter is — exactly the 'unsupported O(N) promise' the criterion forbids, with no index, scan-budget, or cursor. Its own doc comments lock in oldest-first ('chain order'), not newest-first. The only bounded-read code (transparency_log.rs, cited under the same MIK-6710 ticket number) belongs to a separate, session-only CLI path with no actor/action filter or pagination, so it does not satisfy this store's selective-query clause either. No test in src/control_plane/store.rs (read_audit_honors_offset_limit_and_filters, invalid_filter_errors) measures records/bytes examined, compares to a full-scan oracle, or exercises a large log with a rare/no-match filter."
+      "note": "Graded not_met on origin/main@738c7cee. Outside the modules origin/codex/v4-next-integration@dbc06304 touches, so the main-branch verdict carries. Impl: src/control_plane/store.rs:742-767 (FileControlPlaneStore::read_audit does std::fs::read_to_string(&path) \u2014 the FULL audit file, every call, before any filter/offset/limit is applied); src/control_plane/store.rs:112-134 (AuditFilter/page_audit: 'the first `limit` events in chain order', offset skips 'leading (oldest, chain-order) events' \u2014 i.e. oldest-first, not newest-first); src/security/transparency_log.rs:63-75,653 (MAX_AUDIT_READ_BYTES/MAX_TAIL_SCAN_BYTES bound a *different* audit surface, the transparency-log CLI `show_session_entries`, not this store) The control-plane audit store (the one with actor/action filters and offset/limit paging that the acceptance describes) has no work bound at all: read_audit loads the entire audit file into memory on every call regardless of how selective the filter is \u2014 exactly the 'unsupported O(N) promise' the criterion forbids, with no index, scan-budget, or cursor. Its own doc comments lock in oldest-first ('chain order'), not newest-first. The only bounded-read code (transparency_log.rs, cited under the same MIK-6710 ticket number) belongs to a separate, session-only CLI path with no actor/action filter or pagination, so it does not satisfy this store's selective-query clause either. No test in src/control_plane/store.rs (read_audit_honors_offset_limit_and_filters, invalid_filter_errors) measures records/bytes examined, compares to a full-scan oracle, or exercises a large log with a rare/no-match filter."
     },
     {
       "id": "NFR.CONFORMANCE.1",
@@ -267,9 +259,17 @@
     {
       "id": "reference_personal_account_journey",
       "status": "resolved",
-      "selection": "Open WebUI on Spark → gateway → Google Workspace",
+      "selection": "Open WebUI on Spark \u2192 gateway \u2192 Google Workspace",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md"
+      ]
+    },
+    {
+      "id": "defer_ranking_quality_freeze",
+      "status": "resolved",
+      "selection": "Re-target MIK-3274.RANKING.3 at 4.1.0. The criterion requires thresholds frozen before ranking implementation; ranking already shipped, so the freeze cannot be produced on this branch. Operator decision 2026-09-12: move it rather than grade it not_met or rewrite it into thresholds chosen after the results are visible.",
+      "evidence": [
+        "docs/requirements/RELEASE-4.1.0-deferred-ranking-quality-freeze.md"
       ]
     }
   ]

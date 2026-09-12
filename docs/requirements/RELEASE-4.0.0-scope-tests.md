@@ -56,7 +56,6 @@ this documentation change does not initiate either.
 |---|---|
 | MIK-3274.RANKING.1 | Held-out abbreviations and word boundaries over realistic conflicting tool names; exact identifier, unsupported match, Unicode and Code Mode glob controls. |
 | MIK-3274.RANKING.2 | Both public discovery routes, forbidden highly-used tool versus allowed relevant tool, low requested result limit and poisoned/global feedback; assert authorization precedes disclosure and ranking precedes truncation. |
-| MIK-3274.RANKING.3 | Capture 3.5.1 baseline and freeze corpus/thresholds before changes; report top-k selection, completed-task rate, discovery turns, invalid calls and total task tokens, with exclusions and repetitions. |
 | MIK-7332.DISCOVERY.1 | Admin/nonadmin and configured/unconfigured features: served list, routing guide, tiered schema detail and invoke permissions agree; surfaced tools actually appear and execute; invalid schema tool is withheld while healthy backend tools remain. |
 | MIK-7235.PIN.1 | Check catalogue classification completeness; verify selected pins with the shipped command; tamper a pinned file and require rejection; intentionally unpinned development file remains supported. |
 | MIK-6710.AUDIT.1 | Large log plus rare/no-match filters and pagination: measure records/bytes examined or index work, compare ordered results to a small full-scan oracle, and prove bounded behavior never silently truncates filtered results. |

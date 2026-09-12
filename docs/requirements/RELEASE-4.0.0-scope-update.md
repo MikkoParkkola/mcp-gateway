@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 31
+Approved supplemental criteria: 30
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -47,7 +47,6 @@ protocol requirements additionally use the pinned specifications linked below.
 | MIK-6746.CONTRACT.1 | Gateway and downstream authorization boundaries conform to the current audience rules; document and test supported client mechanisms and route parity before expanding credential forwarding. | ACCOUNTS |
 | MIK-3274.RANKING.1 | Fuzzy ranking improves supported abbreviation and word-boundary discovery while exact identifiers, existing relevant matches and Code Mode globs remain reliable. | DISCOVERY |
 | MIK-3274.RANKING.2 | Both discovery routes apply authorization before disclosure and rank before truncation; usage feedback cannot promote an irrelevant or forbidden tool over a relevant allowed tool. | DISCOVERY |
-| MIK-3274.RANKING.3 | Held-out selection quality, discovery turns, invalid invocations and total completed-task tokens meet thresholds frozen after baseline measurement and before ranking implementation. | DISCOVERY |
 | MIK-7332.DISCOVERY.1 | Authorization-derived exposure, tiered disclosure, schema validity and configured surfaced tools work together on the served consumer surface with consistent guides and invocation permissions. | DISCOVERY |
 | MIK-7235.PIN.1 | Classify the shipped catalogue before pinning, pin its stable high-privilege subset, record intentional exclusions and maintain re-pin checks. | OPERATIONS |
 | MIK-6710.AUDIT.1 | Audit reads have a documented work bound with newest-first/filter semantics preserved; selective queries use an index or explicit scan-budget/cursor behavior rather than an unsupported O(N) promise. | OPERATIONS |
