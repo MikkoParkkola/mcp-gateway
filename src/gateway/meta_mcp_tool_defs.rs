@@ -6,6 +6,9 @@
 //! interface. Kept separate from the helper utilities so the schema definitions
 //! can be updated without touching the routing/search logic.
 
+pub(crate) use super::tool_total::ToolTotal;
+
+pub(crate) use super::meta_mcp_tool_builders::{build_list_tools_tool, build_search_tools_tool};
 use serde_json::{Value, json};
 
 use crate::protocol::{Tool, ToolAnnotations};
@@ -15,7 +18,7 @@ use crate::protocol::{Tool, ToolAnnotations};
 // ============================================================================
 
 /// Annotations for read-only, idempotent, closed-world discovery meta-tools.
-fn read_only_annotations(title: &str) -> ToolAnnotations {
+pub(crate) fn read_only_annotations(title: &str) -> ToolAnnotations {
     ToolAnnotations {
         title: Some(title.to_string()),
         read_only_hint: Some(true),
@@ -37,93 +40,6 @@ fn build_list_servers_tool(server_count: usize) -> Tool {
         input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
         output_schema: None,
         annotations: Some(read_only_annotations("List Servers")),
-        role: None,
-        projection: None,
-    }
-}
-
-/// Build the `gateway_list_tools` meta-tool definition.
-fn build_list_tools_tool(tool_count: usize, server_count: usize) -> Tool {
-    Tool {
-        name: "gateway_list_tools".to_string(),
-        title: Some("List Tools".to_string()),
-        description: Some(format!(
-            "List tools from a specific backend, or omit server to list all {tool_count} tools \
-         across {server_count} backends. Returns names and descriptions — use \
-         gateway_search_tools for ranked results with full schemas."
-        )),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "server": {
-                    "type": "string",
-                    "description": "Name of backend server. Omit to list ALL tools across all backends."
-                },
-                "role": {
-                    "type": "string",
-                    "enum": ["selector", "extractor", "enricher", "action"],
-                    "description": "Optional: only return tools of this role. selector=search/list, extractor=get/read, enricher=adds context, action=mutates state. Untagged tools are classified by name + read-only hint."
-                }
-            },
-            "required": []
-        }),
-        output_schema: None,
-        annotations: Some(read_only_annotations("List Tools")),
-        role: Some(crate::projection::Role::Selector),
-        projection: None,
-    }
-}
-
-/// JSON output schema describing the `gateway_search_tools` response structure.
-fn search_tools_output_schema() -> serde_json::Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "matches": {
-                "type": "array",
-                "description": "Ranked list of matching tools",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "server":      { "type": "string", "description": "Backend server name" },
-                        "tool":        { "type": "string", "description": "Tool name" },
-                        "description": { "type": "string", "description": "Tool description" },
-                        "score":       { "type": "number", "description": "Relevance score (higher is more relevant)" }
-                    },
-                    "required": ["server", "tool", "description", "score"]
-                }
-            }
-        },
-        "required": ["matches"]
-    })
-}
-
-/// Build the `gateway_search_tools` meta-tool definition.
-fn build_search_tools_tool(tool_count: usize, server_count: usize) -> Tool {
-    Tool {
-        name: "gateway_search_tools".to_string(),
-        title: Some("Search Tools".to_string()),
-        description: Some(format!(
-            "Search {tool_count} tools across {server_count} servers by keyword. Returns ranked \
-         matches (name, description, score) while avoiding the prompt bloat of loading every tool \
-         definition upfront. Ranking diagnostics are omitted unless explain is true. \
-         Supports multi-word queries and synonym expansion."
-        )),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string", "description": "Search keyword" },
-                "limit": { "type": "integer", "description": "Maximum results (default 10)", "default": 10 },
-                "explain": {
-                    "type": "boolean",
-                    "description": "Include ranking diagnostics (reasons and signals). Default false.",
-                    "default": false
-                }
-            },
-            "required": ["query"]
-        }),
-        output_schema: Some(search_tools_output_schema()),
-        annotations: Some(read_only_annotations("Search Tools")),
         role: None,
         projection: None,
     }
@@ -194,9 +110,9 @@ pub(crate) fn require_gateway_invoke_nonce(tools: &mut [Tool]) {
 ///
 /// # Arguments
 ///
-/// * `tool_count` — total number of tools cached across all connected backends
+/// * `tool_count` — total tools, or `None` while any backend is unenumerated
 /// * `server_count` — number of connected backend servers
-pub(crate) fn build_base_tools(tool_count: usize, server_count: usize) -> Vec<Tool> {
+pub(crate) fn build_base_tools(tool_count: ToolTotal, server_count: usize) -> Vec<Tool> {
     vec![
         build_list_servers_tool(server_count),
         build_list_tools_tool(tool_count, server_count),
@@ -627,7 +543,7 @@ pub(crate) struct MetaToolGates {
 /// (`docs/design/2026-09-16-meta-tool-surface-compaction.md` §7).
 pub(crate) fn build_meta_tools(
     gates: MetaToolGates,
-    tool_count: usize,
+    tool_count: ToolTotal,
     server_count: usize,
 ) -> Vec<Tool> {
     let mut tools = build_base_tools(tool_count, server_count);
@@ -855,7 +771,7 @@ fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
                 playbooks: true,
                 profiles: true,
             },
-            0,
+            ToolTotal::Unknown,
             0,
         )
         .into_iter()
@@ -959,7 +875,7 @@ impl MetaToolExposure {
 /// output, so `tools/list` and `tools/call` cannot disagree about a tool.
 pub(crate) fn build_meta_tools_filtered(
     gates: MetaToolGates,
-    tool_count: usize,
+    tool_count: ToolTotal,
     server_count: usize,
     exposure: &MetaToolExposure,
 ) -> Vec<Tool> {

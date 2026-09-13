@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use dashmap::DashMap;
 use tracing::warn;
@@ -61,6 +62,8 @@ pub struct BackendStatus {
     pub transport: String,
     /// Number of cached tools
     pub tools_cached: usize,
+    /// `false` = not enumerated yet, so `tools_cached == 0` means "unknown".
+    pub tools_known: bool,
     /// Circuit breaker state
     pub circuit_state: String,
     /// Total request count
@@ -316,6 +319,85 @@ impl BackendRegistry {
 impl Default for BackendRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Backend {
+    /// Get backend status.
+    ///
+    /// Reports the canonical Shared slot's circuit/health state (MIK-6735
+    /// fix 1): this is the backend-wide, single-tenant view -- the same one
+    /// `status()` reported before per-user slots existed -- and deliberately
+    /// does not aggregate across per-user slots, which each fail
+    /// independently and are not surfaced individually here.
+    /// Coarse lifecycle state, distinct from health.
+    ///
+    /// `running: bool` cannot express "stopped on purpose". Reporting a
+    /// deliberately-stopped backend as unhealthy would trip its circuit breaker
+    /// and show it as broken while it behaves exactly as configured; reporting
+    /// it as healthy would hide that its process is gone.
+    ///
+    /// A backend is `Dormant` only if it opted into being stopped when idle,
+    /// its transport is released, and nothing is actually wrong with it. If the
+    /// breaker is open or the health tracker says otherwise, it is `Unhealthy`
+    /// regardless — a real failure is never disguised as a nap.
+    #[must_use]
+    pub fn lifecycle(&self) -> BackendLifecycle {
+        if self.is_running() {
+            return BackendLifecycle::Running;
+        }
+        let entry = self.shared_entry();
+        if self.is_circuit_tripped() || !entry.failsafe.health_metrics().healthy {
+            return BackendLifecycle::Unhealthy;
+        }
+        // Dormant only if the reaper actually stopped it. Inferring from
+        // configuration alone would report a backend whose first start FAILED as
+        // sleeping: nothing has updated the failsafe yet, so it still looks
+        // healthy, and "never came up" would be indistinguishable from "resting".
+        if entry
+            .stopped_when_idle
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return BackendLifecycle::Dormant;
+        }
+        BackendLifecycle::NotStarted
+    }
+
+    /// The per-request timeout this backend was configured with.
+    ///
+    /// Exposed so callers that wrap a backend call in a ceiling of their own can
+    /// derive it from the operator's setting instead of hard-coding a number
+    /// that silently pre-empts any backend configured to take longer.
+    #[must_use]
+    pub fn request_timeout(&self) -> std::time::Duration {
+        self.config.timeout
+    }
+
+    /// Get backend status.
+    ///
+    /// Reports the canonical Shared slot's circuit/health state (MIK-6735
+    /// fix 1): this is the backend-wide, single-tenant view -- the same one
+    /// `status()` reported before per-user slots existed -- and deliberately
+    /// does not aggregate across per-user slots, which each fail
+    /// independently and are not surfaced individually here.
+    pub fn status(&self) -> BackendStatus {
+        let entry = self.shared_entry();
+        let health = entry.failsafe.health_metrics();
+        let (tools_cached, tools_known) = self.cached_tools_count_and_known();
+        BackendStatus {
+            name: self.name.clone(),
+            running: self.is_running(),
+            lifecycle: self.lifecycle(),
+            transport: self.config.transport.transport_type().to_string(),
+            tools_cached,
+            tools_known,
+            circuit_state: entry.failsafe.circuit_breaker.state().as_str().to_string(),
+            request_count: self.request_count.load(Ordering::Relaxed),
+            healthy: health.healthy,
+            consecutive_failures: health.consecutive_failures,
+            latency_p95_ms: health.latency_p95_ms,
+            runtime: self.runtime_status(),
+        }
     }
 }
 

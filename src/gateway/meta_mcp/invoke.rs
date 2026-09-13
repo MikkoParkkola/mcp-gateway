@@ -3702,20 +3702,16 @@ impl MetaMcp {
             .as_ref()
             .ok_or_else(|| Error::json_rpc(-32603, "Statistics not enabled for this gateway"))?;
 
-        let mut total_tools: usize = self
-            .backends
-            .all()
-            .iter()
-            .map(|b| b.cached_tools_count())
-            .sum();
+        let all_backends = self.backends.all();
+        // Publish completeness: an unenumerated backend contributes 0.
+        let tools_known = all_backends.iter().all(|b| b.cached_tools_known());
+        let mut total_tools: usize = all_backends.iter().map(|b| b.cached_tools_count()).sum();
         if let Some(cap) = self.get_capabilities() {
             total_tools += cap.get_tools().len();
         }
 
         let snapshot = stats.snapshot(total_tools);
-        let mut response = build_stats_response(&snapshot);
-
-        let all_backends = self.backends.all();
+        let mut response = build_stats_response(&snapshot, tools_known);
 
         let safety: Vec<Value> = all_backends
             .iter()

@@ -719,7 +719,7 @@ async fn get_tools_singleflight_coalesces_concurrent_requests() {
 
     assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
     assert!(backend.has_cached_tools());
-    assert_eq!(backend.cached_tools_count(), 1);
+    assert_eq!(backend.cached_tools_count_and_known(), (1, true));
     assert_eq!(
         backend.get_cached_tool("echo").map(|tool| tool.name),
         Some("echo".to_string())

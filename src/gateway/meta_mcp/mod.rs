@@ -62,6 +62,7 @@ use super::meta_mcp_helpers::{
 use super::meta_mcp_tool_defs::{
     MetaToolExposure, MetaToolGates, build_meta_tools_filtered, require_gateway_invoke_nonce,
 };
+use super::tool_total::tool_total;
 use super::webhooks::WebhookRegistry;
 
 pub(crate) mod admission;
@@ -1570,16 +1571,16 @@ impl MetaMcp {
 
     fn build_instructions(&self) -> String {
         let backends = self.backends.all();
-        let mut tool_count: usize = backends.iter().map(|b| b.cached_tools_count()).sum();
+        let mut tool_total = tool_total(&backends);
         let mut server_count = backends.len();
 
         if let Some(cap) = self.get_capabilities() {
-            tool_count += cap.get_tools().len();
+            tool_total = tool_total.plus(cap.get_tools().len());
             server_count += 1;
         }
 
         let mut instructions =
-            build_discovery_preamble(tool_count, server_count, &self.meta_tool_exposure);
+            build_discovery_preamble(tool_total, server_count, &self.meta_tool_exposure);
 
         if let Some(cap) = self.get_capabilities() {
             let caps = cap.list_capabilities();
@@ -1589,17 +1590,6 @@ impl MetaMcp {
             }
         }
         instructions
-    }
-
-    /// Compute live (`tool_count`, `server_count`) from the cached backend statuses.
-    ///
-    /// Uses only the in-memory cache — no I/O.  Both counts are 0 when the
-    /// registry is empty (e.g. in unit tests).
-    fn backend_counts(&self) -> (usize, usize) {
-        let backends = self.backends.all();
-        let server_count = backends.len();
-        let tool_count = backends.iter().map(|b| b.status().tools_cached).sum();
-        (tool_count, server_count)
     }
 
     /// Handle `tools/list` — Code Mode returns 2 tools; Traditional returns full set.
@@ -1660,7 +1650,8 @@ impl MetaMcp {
         let mut tools = if self.code_mode_enabled {
             self.meta_tool_exposure.filter(build_code_mode_tools())
         } else {
-            let (tool_count, server_count) = self.backend_counts();
+            let backends = self.backends.all();
+            let (tool_count, server_count) = (tool_total(&backends), backends.len());
             build_meta_tools_filtered(
                 MetaToolGates {
                     // The collector is always attached, so its presence was
@@ -2411,6 +2402,10 @@ mod account_rest_tests;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tools_known_tests.rs"]
+mod tools_known_tests;
 
 #[cfg(test)]
 #[path = "authz_tests.rs"]
