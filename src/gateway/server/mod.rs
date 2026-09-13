@@ -66,6 +66,49 @@ use support::{log_startup_banner, serve_tls, shutdown_signal};
 /// State owner for the single client on a long-lived stdio connection.
 const STDIO_SESSION_ID: &str = "stdio-session";
 
+/// Clonable handle to the one task that owns stdout on a stdio session.
+///
+/// Concurrent dispatches cannot each hold `stdout`: two interleaved writes
+/// would splice one JSON-RPC frame into another. Every producer holds a clone
+/// of this sender instead, and the writer task serialises the frames.
+///
+/// The queue is unbounded on purpose. A bounded one would make `send` await,
+/// and a notification has to be orderable ahead of its own dispatch's response
+/// from inside a synchronous notification scope (`queue_notification`).
+#[derive(Clone)]
+struct StdioWriter(tokio::sync::mpsc::UnboundedSender<serde_json::Value>);
+
+impl StdioWriter {
+    /// Queue one whole JSON-RPC frame for stdout.
+    ///
+    /// `Err` means the writer task is gone, i.e. stdout is closed; a caller
+    /// with nowhere left to report drops the error rather than fail its
+    /// request.
+    fn send(
+        &self,
+        value: serde_json::Value,
+    ) -> std::result::Result<(), tokio::sync::mpsc::error::SendError<serde_json::Value>> {
+        self.0.send(value)
+    }
+}
+
+/// Spawn the task that owns stdout, returning the producer handle and the
+/// task's join handle.
+///
+/// The task ends once every `StdioWriter` clone has dropped and the queue is
+/// drained, so awaiting the join handle is what guarantees a queued frame
+/// reached stdout before `run_stdio` returns.
+fn spawn_stdio_writer() -> (StdioWriter, tokio::task::JoinHandle<()>) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+    let task = tokio::spawn(async move {
+        let mut stdout = tokio::io::stdout();
+        while let Some(value) = rx.recv().await {
+            Gateway::write_response(&mut stdout, &value).await;
+        }
+    });
+    (StdioWriter(tx), task)
+}
+
 fn expand_home_path(path: &str) -> PathBuf {
     if path == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -2318,9 +2361,11 @@ impl Gateway {
 
         // ── Read → dispatch → write loop ────────────────────────────────────
         let stdin = tokio::io::stdin();
-        let stdout = tokio::io::stdout();
         let mut reader = BufReader::new(stdin).lines();
-        let mut stdout = stdout;
+        // stdout belongs to one task from here on. Nothing in this loop writes
+        // it directly, so a dispatch can be moved off the reader without two
+        // writers ever interleaving halves of a frame.
+        let (writer, writer_task) = spawn_stdio_writer();
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -2341,7 +2386,7 @@ impl Gateway {
                         "id": null,
                         "error": {"code": -32700, "message": format!("Parse error: {e}")}
                     });
-                    Self::write_response(&mut stdout, &err_resp).await;
+                    drop(writer.send(err_resp));
                     continue;
                 }
             };
@@ -2360,13 +2405,13 @@ impl Gateway {
                         session_id,
                         &mut protocol_telemetry_sink,
                     )),
-                    &mut stdout,
+                    &writer,
                 )
                 .await;
                 Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
                 if !responses.is_empty() {
                     let batch_resp = serde_json::Value::Array(responses);
-                    Self::write_response(&mut stdout, &batch_resp).await;
+                    drop(writer.send(batch_resp));
                 }
                 continue;
             }
@@ -2381,18 +2426,25 @@ impl Gateway {
                     session_id,
                     protocol_telemetry_sink.as_mut(),
                 )),
-                &mut stdout,
+                &writer,
             )
             .await;
             Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
 
             if let Some(response) = response_opt {
-                Self::write_response(&mut stdout, &response).await;
+                drop(writer.send(response));
             }
         }
 
         info!("stdio: EOF reached, shutting down");
         Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
+        // Drop the last producer handle so the writer task sees the queue close,
+        // then await it: a frame still queued here has not reached stdout yet,
+        // and tearing the backends down first would race the client's last read.
+        drop(writer);
+        if let Err(error) = writer_task.await {
+            warn!(%error, "stdio writer task did not finish cleanly");
+        }
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
         // so leaving either running keeps the registry alive after run_stdio
@@ -2466,38 +2518,43 @@ impl Gateway {
     /// Installing the scope is also what makes the mint reachable on stdio —
     /// `mint_progress_token` returns `None` outside one, and the client's own
     /// token would then travel to the backend unchanged.
-    async fn dispatch_streaming_notifications<F, W>(fut: F, stdout: &mut W) -> F::Output
+    async fn dispatch_streaming_notifications<F>(fut: F, writer: &StdioWriter) -> F::Output
     where
         F: Future,
-        W: tokio::io::AsyncWrite + Unpin,
     {
         let (scoped, mut notifications) = crate::transport::notification_sink::scope(fut);
         tokio::pin!(scoped);
         let output = loop {
             tokio::select! {
                 Some(notification) = notifications.recv() => {
-                    Self::write_notification(stdout, &notification).await;
+                    Self::queue_notification(writer, &notification);
                 }
                 output = &mut scoped => break output,
             }
         };
         // The scope's sender drops with `scoped`, so anything still queued is
-        // everything that will ever arrive; write it before the response.
+        // everything that will ever arrive; queue it before the response.
         while let Ok(notification) = notifications.try_recv() {
-            Self::write_notification(stdout, &notification).await;
+            Self::queue_notification(writer, &notification);
         }
         output
     }
 
-    /// Serialise one notification onto the client's stream. A notification
-    /// that cannot be serialised is dropped with a warning rather than
-    /// failing the request it belongs to.
-    async fn write_notification<W: tokio::io::AsyncWrite + Unpin>(
-        stdout: &mut W,
+    /// Queue one notification for the writer task. A notification that cannot
+    /// be serialised is dropped with a warning rather than failing the request
+    /// it belongs to.
+    ///
+    /// Synchronous, and deliberately so: the queue is unbounded, so ordering a
+    /// notification ahead of its dispatch's response costs no await inside the
+    /// notification scope.
+    fn queue_notification(
+        writer: &StdioWriter,
         notification: &crate::protocol::JsonRpcNotification,
     ) {
         match serde_json::to_value(notification) {
-            Ok(value) => Self::write_response(stdout, &value).await,
+            // A closed writer means stdout is gone; the dispatch still runs to
+            // completion, it just has nowhere to report.
+            Ok(value) => drop(writer.send(value)),
             Err(error) => warn!(
                 %error,
                 method = %notification.method,
