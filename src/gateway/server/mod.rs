@@ -2397,6 +2397,29 @@ impl Gateway {
 
             // Handle batch requests (array of JSON-RPC calls)
             if request.is_array() {
+                // A batch carrying `initialize` stays on the reader for the same
+                // reason a bare one does: it binds the session's protocol
+                // revision, and a request spawned before that binding lands is
+                // classified against an unbound session.
+                if Self::carries_initialize(&request) {
+                    let responses = Self::dispatch_streaming_notifications(
+                        Box::pin(Self::dispatch_batch_with_sink(
+                            &meta_mcp,
+                            &tool_policy,
+                            &mtls_policy,
+                            request,
+                            session_id,
+                            &mut protocol_telemetry_sink,
+                        )),
+                        &writer,
+                    )
+                    .await;
+                    Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
+                    if !responses.is_empty() {
+                        drop(writer.send(serde_json::Value::Array(responses)));
+                    }
+                    continue;
+                }
                 let meta_mcp = Arc::clone(&meta_mcp);
                 let tool_policy = Arc::clone(&tool_policy);
                 let mtls_policy = Arc::clone(&mtls_policy);
@@ -2431,7 +2454,7 @@ impl Gateway {
             // `initialize` stays on the reader: it binds the session's protocol
             // revision, and every request dispatched after it is classified
             // against that binding, so it cannot race the requests that follow.
-            if request.get("method").and_then(serde_json::Value::as_str) == Some("initialize") {
+            if Self::carries_initialize(&request) {
                 let response_opt = Self::dispatch_streaming_notifications(
                     Box::pin(Self::dispatch_single_with_sink(
                         &meta_mcp,
@@ -3133,6 +3156,18 @@ impl Gateway {
             &mut sink,
         )
         .await
+    }
+
+    /// Whether this frame binds the session's protocol revision: a bare
+    /// `initialize`, or a batch carrying one.
+    fn carries_initialize(request: &serde_json::Value) -> bool {
+        fn is_initialize(request: &serde_json::Value) -> bool {
+            request.get("method").and_then(serde_json::Value::as_str) == Some("initialize")
+        }
+        match request.as_array() {
+            Some(entries) => entries.iter().any(is_initialize),
+            None => is_initialize(request),
+        }
     }
 
     async fn dispatch_batch_with_sink(
