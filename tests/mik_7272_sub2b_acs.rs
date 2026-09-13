@@ -326,6 +326,7 @@ impl StdioSession {
     }
 
     async fn send(&mut self, message: &Value) {
+        let message = with_idempotency_key(message.clone());
         self.stdin
             .write_all(format!("{message}\n").as_bytes())
             .await
@@ -505,9 +506,8 @@ async fn s02_stdio_progress_reaches_its_own_call_before_the_result() {
         .await;
     assert!(
         notification.is_some(),
-        "no notifications/progress reached the client before the read bound; \
-         the call is still blocked in the fixture, which is what an \
-         implementation that flushes at the end looks like from here"
+        "no notifications/progress reached the client before the read bound. \
+         Frames seen instead: {before_notification:?}"
     );
     // Only now — the fixture cannot return until this lands, so reaching the
     // result at all proves the notification preceded it.
@@ -584,7 +584,8 @@ async fn s02_stdio_message_reaches_its_own_call_before_the_result() {
         .await;
     assert!(
         notification.is_some(),
-        "no notifications/message reached the client before the read bound"
+        "no notifications/message reached the client before the read bound. \
+         Frames seen instead: {before_notification:?}"
     );
     // Released through the fixture's own gate, not as a second JSON-RPC call:
     // `Gateway::run_stdio` awaits each dispatch inline, so an id-3 release
