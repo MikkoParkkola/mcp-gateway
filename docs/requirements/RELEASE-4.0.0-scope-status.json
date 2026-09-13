@@ -42,14 +42,10 @@
       "id": "MIK-7387.STDIO.1",
       "status": "pending",
       "evidence": [
-        "src/gateway/server/mod.rs:2838",
-        "src/gateway/server/mod.rs:2848",
-        "src/gateway/server/mod.rs:3335",
-        "src/gateway/server/mod.rs:3342",
-        "src/gateway/server/mod.rs:2328",
-        "src/gateway/server/stdio_channel.rs:35",
-        "tests/mik_7212_mrtr7_stdio_acs.rs:356",
-        "tests/mik_7212_mrtr7_bridge_acs.rs:1673",
+        "src/gateway/server/mod.rs",
+        "src/gateway/server/stdio_channel.rs",
+        "tests/mik_7212_mrtr7_stdio_acs.rs",
+        "tests/mik_7212_mrtr7_bridge_acs.rs",
         "docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md"
       ],
       "note": "ABSENT, graded conjunct-by-conjunct 2026-09-13. All four conjuncts fail and no un-ignored test asserts any of them. Size medium; the keystone is design sections 1 and 2 of docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md (spawn-per-dispatch plus a single stdout writer), which closes STDIO.1, .2 and .3 together.\n\nC1 a declared client input request: ABSENT. Both stdio caller contexts hardcode input_capabilities: Declared::NONE (src/gateway/server/mod.rs:2838, :3335).\n\nC2 reaches a legacy stdio client: ABSENT. Both contexts pass NoClientChannel (mod.rs:2848, :3342 -- `rg -n 'channel: &'` returns exactly those two, so the enumeration is exhaustive), so every bridged ask returns DeliveryError::NoSession. The real StdioClientChannel exists (src/gateway/server/stdio_channel.rs:35) but is marked dead-code and constructed only in its own test module; its six unit tests pin the mechanism on a hand-built struct, not the production stdio path, and are rejected as evidence for this row.\n\nC3 the answer reaches the backend: ABSENT. Only transport-agnostic and HTTP rows exist; tests/mik_7212_mrtr7_bridge_acs.rs has zero stdio hits and instead pins the refusal at :1673-1681.\n\nC4 the gateway keeps reading: ABSENT. The serve loop (mod.rs:2328) awaits each dispatch inline and is strictly sequential, so a reply arriving on stdin during a dispatch could never be read.\n\nThe only asserting test is #[ignore]d as this row's own spec, and src/.../input_bridge.rs:314-322 self-declares the gap. Unmerged work: none -- the channel is built-and-unwired on the release line."
@@ -58,11 +54,9 @@
       "id": "MIK-7387.STDIO.2",
       "status": "pending",
       "evidence": [
-        "src/gateway/server/mod.rs:2189",
-        "src/gateway/server/mod.rs:2328",
-        "src/gateway/server/stdio_channel.rs:31",
-        "tests/mik_7212_mrtr7_stdio_acs.rs:421",
-        "tests/mik_7212_mrtr7_stdio_acs.rs:440",
+        "src/gateway/server/mod.rs",
+        "src/gateway/server/stdio_channel.rs",
+        "tests/mik_7212_mrtr7_stdio_acs.rs",
         "docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md"
       ],
       "note": "ABSENT, graded conjunct-by-conjunct 2026-09-13. Vacuous rather than trivially true: nothing outbound is ever written on stdio, so ordering cannot be satisfied by the sequential loop. Size medium, same keystone as STDIO.1.\n\nC1 an input request is emitted to a legacy stdio client at all (enabling precondition): ABSENT. StdioClientChannel (src/gateway/server/stdio_channel.rs:35) carries #[expect(dead_code)] at :31-34 with the reason 'MIK-7387 concurrent dispatch is the consumer'; rg finds references only inside its own file.\n\nC2 the request is written strictly after the initialize response: ABSENT. run_stdio (src/gateway/server/mod.rs:2189, loop at :2328) dispatches each line inline and awaits it: no spawn, no stdout writer task, no initialize gate. The asserting test ac_mrtr_7a_bridged_request_follows_the_initialize_response (tests/mik_7212_mrtr7_stdio_acs.rs:422) is #[ignore]d at :421 with the reason that this row is its spec. A self-declared spec is not coverage.\n\nC3 it holds under back-to-back inbound frames with the handshake still unwritten: ABSENT. The same ignored row is the only thing that sends initialize and the asking call without waiting between them (:426-427).\n\nThe repository agrees the property is vacuous: row 323 asserts question.is_some() before comparing positions (:440-446), and row 324's comment states a framing check would be 'vacuously true of the empty output today'.\n\nUnmerged work: none. Commits 416a3319 (channel) and 09bcea17 (design) are already ancestors of HEAD; feat/v4-mrtr-bridge-wiring wires the input bridge into the HTTP invoke path only and touches neither run_stdio, stdio_channel.rs nor the stdio AC rows; codex/v4-stdio-account-wiring is unrelated account admission. The design records the blast radius as LOW, 17 impacted symbols, one file, which contradicts the prior grading document's unexplained 'large'."
@@ -71,13 +65,9 @@
       "id": "MIK-7387.STDIO.3",
       "status": "pending",
       "evidence": [
-        "src/gateway/server/mod.rs:2317",
-        "src/gateway/server/mod.rs:2433",
-        "src/gateway/server/mod.rs:2848",
-        "src/gateway/server/stdio_channel.rs:39",
-        "tests/mik_7212_mrtr7_stdio_acs.rs:356",
-        "tests/mik_7212_mrtr7_stdio_acs.rs:421",
-        "tests/mik_7212_mrtr7_stdio_acs.rs:471",
+        "src/gateway/server/mod.rs",
+        "src/gateway/server/stdio_channel.rs",
+        "tests/mik_7212_mrtr7_stdio_acs.rs",
         "docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md"
       ],
       "note": "ABSENT, graded conjunct-by-conjunct 2026-09-13. Size medium, same keystone as STDIO.1 and .2: the stdout-owning writer task plus spawned non-initialize dispatch.\n\nC1 concurrent: ABSENT. run_stdio (src/gateway/server/mod.rs:2317-2400) is a strictly sequential read-await-write loop with no spawn, writer task or mpsc, and the production call sites still pass NoClientChannel (:2848, :3342), so no bridged outbound traffic can exist at all.\n\nC2 complete frames: ABSENT as specified. write_response (mod.rs:2433) emits whole frames but only sequentially, and the row-324 parse assertion is vacuous by the test file's own doc comment ('vacuously true of the empty output today').\n\nC3 non-interleaved: ABSENT. The design's single-writer section is unbuilt and StdioClientChannel.writer (src/gateway/server/stdio_channel.rs:39) is expect(dead_code, reason = 'MIK-7387 concurrent dispatch is the consumer'); its six unit tests pin pending-map bookkeeping, never stdout.\n\nAll three MIK-7387 acceptance rows are #[ignore]d on every ref (tests/mik_7212_mrtr7_stdio_acs.rs:356, :421, :471), so no conjunct has an asserting test.\n\nUnmerged work: none. `git log --all -S\"UnboundedSender<Value>\" -- src/gateway/server/mod.rs` is empty and `-S'ignore = \"MIK-7387'` returns only the commits that add the markers; nothing anywhere un-ignores them."
@@ -257,16 +247,12 @@
       "id": "MIK-6710.AUDIT.1",
       "status": "pending",
       "evidence": [
-        "src/gateway/control_plane/store.rs:742",
-        "src/gateway/control_plane/store.rs:334",
-        "src/gateway/control_plane/store.rs:118",
-        "src/gateway/control_plane/store.rs:55",
-        "src/gateway/ui/control_plane.rs:669",
-        "src/security/transparency_log.rs:55",
-        "src/security/transparency_log.rs:684",
-        "docs/requirements/RELEASE-4.0.0-scope-tests.md:62"
+        "src/control_plane/store.rs",
+        "src/gateway/ui/control_plane.rs",
+        "src/security/transparency_log.rs",
+        "docs/requirements/RELEASE-4.0.0-scope-tests.md"
       ],
-      "note": "ABSENT, graded conjunct-by-conjunct 2026-09-13. Three of four conjuncts are absent and the fourth is non-load-bearing. Size medium: a newest-first bounded read over the NDJSON audit log (reverse tail scan plus a continuation cursor), a byte/scan cap on the file backend, and one operator-facing doc line. The bounded-vs-full-scan oracle is already specified at docs/requirements/RELEASE-4.0.0-scope-tests.md:62.\n\nC1 documented work bound: ABSENT. No document states a bound. The only bounds are in-code comments: src/security/transparency_log.rs:55-64 (MAX_AUDIT_READ_BYTES, a 256 MiB memory cap) and src/gateway/control_plane/store.rs:55-57 (MAX_AUDIT_LIMIT, an output page cap). A memory cap and an output cap are neither a work bound nor documentation of one.\n\nC2 newest-first preserved: ABSENT. The shipped order is the opposite of the criterion. src/gateway/control_plane/store.rs:118 documents offset as skipping the OLDEST chain-order events, store.rs:209-215 documents read_audit as chain order, and src/security/transparency_log.rs:684 yields append order. No test asserts newest-first.\n\nC3 filter semantics preserved: MET but non-load-bearing. Real filter tests exist (src/gateway/control_plane/store.rs:1003, src/security/transparency_log.rs:1031) but both are tagged MIK-6685.STORE.*, so they are evidence for a different criterion; counting them here borrows another criterion's coverage. 'Preserved' is in any case a rider on a bound that does not exist.\n\nC4 selective queries via index, scan budget or cursor: ABSENT, and the file backend is worse than unbounded-in-theory. FileControlPlaneStore::read_audit (src/gateway/control_plane/store.rs:742) does an uncapped whole-file read_to_string and parses every line; page_audit (store.rs:334) then filters, skips and takes. skip/take bounds OUTPUT, not WORK: skipping N rows still examines N rows. There is no index, cursor or scan budget (`rg -i 'scan_budget|audit.*cursor' src/` returns only unrelated protocol negotiation). The WebUI reaches this path unbounded at src/gateway/ui/control_plane.rs:669.\n\nLive defect, wider than the criterion: commit bb99cb77 ('fix(audit): bound transparency-log reads against memory DoS (6710)') capped the transparency-log reader and left the control-plane store reader uncapped. Same memory-DoS class, fixed on one side only. Closing C4 also closes that gap.\n\nUnmerged work: none. `git branch -a --list '*audit*'` is empty and the only 6710 commit, bb99cb77, is already contained in chore/v4-reconcile-main.\n\nSupersedes the 2026-09-12 prose grade at docs/release/scope-grading-2026-09-12.md:72, which reached ABSENT from an empty grep and never found the control-plane path. store.rs:742 is positive evidence of an O(N)-per-query path, not an absence of hits."
+      "note": "ABSENT, graded conjunct-by-conjunct 2026-09-13. Three of four conjuncts are absent and the fourth is non-load-bearing. Size medium: a newest-first bounded read over the NDJSON audit log (reverse tail scan plus a continuation cursor), a byte/scan cap on the file backend, and one operator-facing doc line. The bounded-vs-full-scan oracle is already specified at docs/requirements/RELEASE-4.0.0-scope-tests.md:62.\n\nC1 documented work bound: ABSENT. No document states a bound. The only bounds are in-code comments: src/security/transparency_log.rs:55-64 (MAX_AUDIT_READ_BYTES, a 256 MiB memory cap) and src/control_plane/store.rs:55-57 (MAX_AUDIT_LIMIT, an output page cap). A memory cap and an output cap are neither a work bound nor documentation of one.\n\nC2 newest-first preserved: ABSENT. The shipped order is the opposite of the criterion. src/control_plane/store.rs:118 documents offset as skipping the OLDEST chain-order events, store.rs:209-215 documents read_audit as chain order, and src/security/transparency_log.rs:684 yields append order. No test asserts newest-first.\n\nC3 filter semantics preserved: MET but non-load-bearing. Real filter tests exist (src/control_plane/store.rs:1003, src/security/transparency_log.rs:1031) but both are tagged MIK-6685.STORE.*, so they are evidence for a different criterion; counting them here borrows another criterion's coverage. 'Preserved' is in any case a rider on a bound that does not exist.\n\nC4 selective queries via index, scan budget or cursor: ABSENT, and the file backend is worse than unbounded-in-theory. FileControlPlaneStore::read_audit (src/control_plane/store.rs:742) does an uncapped whole-file read_to_string and parses every line; page_audit (store.rs:334) then filters, skips and takes. skip/take bounds OUTPUT, not WORK: skipping N rows still examines N rows. There is no index, cursor or scan budget (`rg -i 'scan_budget|audit.*cursor' src/` returns only unrelated protocol negotiation). The WebUI reaches this path unbounded at src/gateway/ui/control_plane.rs:669.\n\nLive defect, wider than the criterion: commit bb99cb77 ('fix(audit): bound transparency-log reads against memory DoS (6710)') capped the transparency-log reader and left the control-plane store reader uncapped. Same memory-DoS class, fixed on one side only. Closing C4 also closes that gap.\n\nUnmerged work: none. `git branch -a --list '*audit*'` is empty and the only 6710 commit, bb99cb77, is already contained in chore/v4-reconcile-main.\n\nSupersedes the 2026-09-12 prose grade at docs/release/scope-grading-2026-09-12.md:72, which reached ABSENT from an empty grep and never found the control-plane path. store.rs:742 is positive evidence of an O(N)-per-query path, not an absence of hits."
     },
     {
       "id": "NFR.CONFORMANCE.1",
