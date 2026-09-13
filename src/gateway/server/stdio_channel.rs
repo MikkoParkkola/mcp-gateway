@@ -30,7 +30,7 @@ use crate::transport::PendingRequestGuard;
 // construct it, so an unconditional expectation would go unfulfilled there.
 #[cfg_attr(
     not(test),
-    allow(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")
+    expect(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")
 )]
 pub(crate) struct StdioClientChannel {
     /// Outbound requests awaiting a reply, keyed by the id we minted.
@@ -43,7 +43,7 @@ pub(crate) struct StdioClientChannel {
 
 #[cfg_attr(
     not(test),
-    allow(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")
+    expect(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")
 )]
 impl StdioClientChannel {
     /// Build a channel that queues its frames on `writer`.
