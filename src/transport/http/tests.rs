@@ -2004,7 +2004,13 @@ async fn ordinary_request_still_declares_empty_capabilities() {
     });
 
     transport
-        .request_with_headers("tools/call", Some(params), &[], None)
+        .request_with_headers(
+            "tools/call",
+            Some(params),
+            &[],
+            None,
+            ResendPermission::Denied,
+        )
         .await
         .expect("the recorder answers a well-formed result");
 

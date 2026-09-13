@@ -3715,8 +3715,10 @@ async fn an_unconfirmable_destructive_call_is_refused_and_marked() {
         None,
         &ctx,
     )
-    .await
-    .expect("a destructive call nobody can confirm is refused");
+    .await;
+    let super::GateOutcome::Refuse(refusal) = refusal else {
+        panic!("a destructive call nobody can confirm is refused");
+    };
 
     // THEN: refused with -32001, and the message names the action rather than
     // stopping at the generic prefix. The prefix alone was what both HTTP-level
@@ -3744,7 +3746,7 @@ async fn a_non_destructive_call_is_not_judged_by_this_gate() {
     // WHEN/THEN: the gate declines to answer at all, so `Unavailable` refuses
     // destructive calls specifically rather than refusing everything -- which a
     // test asserting only the refusal above cannot tell apart.
-    assert!(
+    assert!(matches!(
         super::destructive_confirmation_gate(
             &RequestId::Number(1),
             "gateway_list_servers",
@@ -3752,9 +3754,9 @@ async fn a_non_destructive_call_is_not_judged_by_this_gate() {
             None,
             &ctx,
         )
-        .await
-        .is_none()
-    );
+        .await,
+        super::GateOutcome::Proceed
+    ));
 }
 
 #[test]
