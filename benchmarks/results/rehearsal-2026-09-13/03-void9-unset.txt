@@ -1,0 +1,3 @@
+$ env -u K6_IMAGE_DIGEST ./run_workload.sh smoke /tmp/x
+void: K6_IMAGE_DIGEST is unset; pin a sha256: digest, never a tag
+EXIT=3
