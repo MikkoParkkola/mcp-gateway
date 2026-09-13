@@ -2366,6 +2366,10 @@ impl Gateway {
         // it directly, so a dispatch can be moved off the reader without two
         // writers ever interleaving halves of a frame.
         let (writer, writer_task) = spawn_stdio_writer();
+        // Dispatches live here instead of on the reader, so a slow backend call
+        // stops holding up the next line of stdin. Drained at EOF: dropping the
+        // set would abort a dispatch that still owes the client a response.
+        let mut tasks = tokio::task::JoinSet::new();
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -2393,50 +2397,90 @@ impl Gateway {
 
             // Handle batch requests (array of JSON-RPC calls)
             if request.is_array() {
-                // Boxed: the dispatch future is tens of kilobytes and this one
-                // lives across the `select!` in the helper, so leaving it inline
-                // would put the whole thing on the reader loop's stack frame.
-                let responses = Self::dispatch_streaming_notifications(
-                    Box::pin(Self::dispatch_batch_with_sink(
+                let meta_mcp = Arc::clone(&meta_mcp);
+                let tool_policy = Arc::clone(&tool_policy);
+                let mtls_policy = Arc::clone(&mtls_policy);
+                let writer = writer.clone();
+                // The reader keeps the sink: a spawned dispatch observes into the
+                // global revision registry either way, and the sink is only the
+                // handle that flushes it, so the EOF flush below covers this one.
+                tasks.spawn(async move {
+                    let mut sink = None;
+                    // Boxed: the dispatch future is tens of kilobytes and this one
+                    // lives across the `select!` in the helper, so leaving it inline
+                    // would put the whole thing on the task's stack frame.
+                    let responses = Self::dispatch_streaming_notifications(
+                        Box::pin(Self::dispatch_batch_with_sink(
+                            &meta_mcp,
+                            &tool_policy,
+                            &mtls_policy,
+                            request,
+                            session_id,
+                            &mut sink,
+                        )),
+                        &writer,
+                    )
+                    .await;
+                    if !responses.is_empty() {
+                        drop(writer.send(serde_json::Value::Array(responses)));
+                    }
+                });
+                continue;
+            }
+
+            // `initialize` stays on the reader: it binds the session's protocol
+            // revision, and every request dispatched after it is classified
+            // against that binding, so it cannot race the requests that follow.
+            if request.get("method").and_then(serde_json::Value::as_str) == Some("initialize") {
+                let response_opt = Self::dispatch_streaming_notifications(
+                    Box::pin(Self::dispatch_single_with_sink(
                         &meta_mcp,
                         &tool_policy,
                         &mtls_policy,
                         request,
                         session_id,
-                        &mut protocol_telemetry_sink,
+                        protocol_telemetry_sink.as_mut(),
                     )),
                     &writer,
                 )
                 .await;
                 Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
-                if !responses.is_empty() {
-                    let batch_resp = serde_json::Value::Array(responses);
-                    drop(writer.send(batch_resp));
+
+                if let Some(response) = response_opt {
+                    drop(writer.send(response));
                 }
                 continue;
             }
 
-            // Single request
-            let response_opt = Self::dispatch_streaming_notifications(
-                Box::pin(Self::dispatch_single_with_sink(
-                    &meta_mcp,
-                    &tool_policy,
-                    &mtls_policy,
-                    request,
-                    session_id,
-                    protocol_telemetry_sink.as_mut(),
-                )),
-                &writer,
-            )
-            .await;
-            Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
+            // Every other single request
+            let meta_mcp = Arc::clone(&meta_mcp);
+            let tool_policy = Arc::clone(&tool_policy);
+            let mtls_policy = Arc::clone(&mtls_policy);
+            let writer = writer.clone();
+            tasks.spawn(async move {
+                let response_opt = Self::dispatch_streaming_notifications(
+                    Box::pin(Self::dispatch_single_with_sink(
+                        &meta_mcp,
+                        &tool_policy,
+                        &mtls_policy,
+                        request,
+                        session_id,
+                        None,
+                    )),
+                    &writer,
+                )
+                .await;
 
-            if let Some(response) = response_opt {
-                drop(writer.send(response));
-            }
+                if let Some(response) = response_opt {
+                    drop(writer.send(response));
+                }
+            });
         }
 
         info!("stdio: EOF reached, shutting down");
+        // Drain before the writer closes: an in-flight dispatch still owes the
+        // client a response, and dropping the set would abort it mid-call.
+        while tasks.join_next().await.is_some() {}
         Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
         // Drop the last producer handle so the writer task sees the queue close,
         // then await it: a frame still queued here has not reached stdout yet,
