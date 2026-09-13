@@ -179,6 +179,36 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
 
+  feature-combos:
+    name: Feature combination ${{ matrix.combo }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The supported build combinations recorded in
+        # docs/release/v4.0.0-supported-matrix.md. `check` covers
+        # `--all-features --all-targets`; this job pins the rest, including the
+        # default feature set users actually get: every optional feature must
+        # compile both alone and on top of the defaults.
+        combo:
+          - "--features default"
+          - "--no-default-features"
+          - "--no-default-features --features a2a"
+          - "--no-default-features --features firewall"
+          - "--no-default-features --features webui"
+          - "--features spec-preview"
+          - "--features task-sdk-recovery"
+          - "--features runtime-substrate"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      # Library and binaries only: the test targets are written against the
+      # default feature set and do not compile without it.
+      - run: cargo clippy ${{ matrix.combo }} -- -D warnings
+
   windows-check:
     name: Windows check
     runs-on: windows-2025
