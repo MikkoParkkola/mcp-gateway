@@ -28,9 +28,12 @@ def summary(p50, p99, *, http_err=0.0, semantic=1.0, checks=1.0):
     return {
         "metrics": {
             "mcp_tools_call_latency": {"p(50)": p50, "p(99)": p99},
-            "http_error_rate": {"rate": http_err},
-            "semantic_assertion_rate": {"rate": semantic},
-            "checks": {"rate": checks},
+            # k6's --summary-export spells a Rate metric "value", never
+            # "rate". The fixtures use the real spelling so a parse defect
+            # cannot hide behind a shape the load generator never emits.
+            "http_error_rate": {"value": http_err},
+            "semantic_assertion_rate": {"value": semantic},
+            "checks": {"value": checks},
         }
     }
 

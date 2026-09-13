@@ -108,10 +108,12 @@ def check_rep(run: Path, rep: str, pins: dict) -> dict:
     if rate(summary, "semantic_assertion_rate") < 1.0:
         raise Void(f"{rep}: semantic assertion rate below 100%")
 
-    # Void 4: k6 check pass rate.
-    checks = summary.get("metrics", {}).get("checks", {})
-    checks_rate = checks.get("rate")
-    if checks_rate is None or float(checks_rate) < 0.99:
+    # Void 4: k6 check pass rate. Read through rate(), which accepts both the
+    # "rate" and "value" spellings; k6's --summary-export only ever writes
+    # "value", so a direct .get("rate") here is None on every real run and
+    # voids every rep before any of them can be graded.
+    checks_rate = rate(summary, "checks")
+    if checks_rate < 0.99:
         raise Void(f"{rep}: checks pass rate {checks_rate} below 0.99")
 
     return {
