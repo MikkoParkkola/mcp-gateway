@@ -177,15 +177,12 @@ fn signing_config(backend_url: &str, require_nonce: bool) -> Config {
     config.security.message_signing.key_id = "stdio-allocation-checkpoint".to_string();
     config.cache.enabled = true;
     config.cache.default_ttl = Duration::from_secs(300);
-    // Stdio carries no authenticated identity, so an explicit idempotency key
-    // cannot be admitted on this adapter at all: `admit_operation` demands a
-    // verified principal for a keyed operation and refuses with
-    // `-32003 A verified execution principal is required`. The supported
-    // answer is the operator-configured exact read-only target, which takes
-    // the unkeyed path (`SyncAdmission::Unprotected`). The echo fixture really
-    // is read-only, and this is the existing API — no identity is manufactured,
-    // no production policy is changed, and the backend's own `readOnlyHint`
-    // annotation remains untrusted: only this exact server/tool pair counts.
+    // The echo fixture really is read-only, so declaring it takes the unkeyed
+    // path (`SyncAdmission::Unprotected`) and keeps this file about signing
+    // nonces rather than admission. This is no longer a workaround for stdio
+    // being unadmittable: stdio now carries `STDIO_CREDENTIAL_PRINCIPAL`, so a
+    // keyed mutating call is admitted there. The backend's own `readOnlyHint`
+    // annotation remains untrusted — only this exact server/tool pair counts.
     config.idempotency.read_only_tools = vec![crate::config::IdempotencyReadOnlyTool {
         server: BACKEND.to_string(),
         tool: TOOL.to_string(),
