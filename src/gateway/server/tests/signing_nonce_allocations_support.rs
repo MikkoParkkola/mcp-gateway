@@ -242,6 +242,12 @@ impl Fixture {
             .build_meta_mcp()
             .await
             .expect("the production builder must accept this configuration");
+        // The meta-tool roster is a process-wide one-time initialisation that
+        // the dispatcher touches before any refusal arm runs. Built here, in
+        // front of every meter, because the budget below is per refused
+        // dispatch: leaving it to the first dispatch would charge one refusal
+        // for a cost the process pays once and no later refusal pays at all.
+        let _ = built.meta_mcp.exposes_meta_tool("gateway_invoke");
         Self {
             meta: built.meta_mcp,
             tool_policy: built.tool_policy,
