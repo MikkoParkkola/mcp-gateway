@@ -39,6 +39,9 @@ use mcp_gateway::security::{
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+/// The one credential this fixture accepts.
+const API_KEY: &str = "control-3b-key";
+
 /// The backend and tool every case here invokes.
 const BACKEND: &str = "backend";
 const TOOL: &str = "tool";
@@ -58,7 +61,28 @@ const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 /// life of the service: dropping it here would delete the records under a state
 /// the test is still posting to. Callers bind it for the whole test.
 async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::TempDir) {
-    let config = Config::default();
+    let mut config = Config::default();
+    // A modern `tools/call` carrying an idempotency key is admitted only for a
+    // principal the gateway verified (`meta_mcp/admission.rs:161`), and an
+    // anonymous modern caller cannot omit the key either. So the criterion's
+    // path is reachable only as an authenticated client, and the client is what
+    // the log entry is correlated against.
+    config.auth = mcp_gateway::config::AuthConfig {
+        enabled: true,
+        bearer_token: None,
+        api_keys: vec![mcp_gateway::config::ApiKeyConfig {
+            key: API_KEY.to_string(),
+            name: "control-3b-client".to_string(),
+            rate_limit: 0,
+            backends: Vec::new(),
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+        }],
+        public_paths: Vec::new(),
+        client_circuit_breaker: None,
+        single_user: false,
+    };
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::clone(&backends),
@@ -211,6 +235,12 @@ fn call_body(meta: Value) -> Value {
     let mut meta = meta;
     meta["io.modelcontextprotocol/protocolVersion"] = json!("2026-07-28");
     meta["io.modelcontextprotocol/clientCapabilities"] = json!({});
+    // A modern `tools/call` carries an explicit idempotency key or it is
+    // refused -32602 before the invocation runs, and a refused call writes no
+    // log entry — which is the one way an assertion about the correlation key
+    // passes on an empty log. Spelled literally rather than imported: the
+    // gateway's own constant would make a rename invisible here.
+    meta["io.mcp-gateway/idempotency-key"] = json!("control-3b");
     json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -234,6 +264,7 @@ async fn post(state: &Arc<AppState>, body: &Value) -> (StatusCode, Value) {
         .header("mcp-protocol-version", "2026-07-28")
         .header("mcp-method", "tools/call")
         .header("mcp-name", "gateway_invoke")
+        .header("authorization", format!("Bearer {API_KEY}"))
         .body(Body::from(serde_json::to_vec(body).expect("body")))
         .expect("request");
     let response = create_router(Arc::clone(state))
