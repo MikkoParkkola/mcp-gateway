@@ -14,6 +14,7 @@
 
 use dashmap::DashMap;
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
@@ -26,6 +27,8 @@ pub(crate) struct StdioClientChannel {
     pending: DashMap<String, oneshot::Sender<Value>>,
     /// The only handle to stdout. Frames are queued, never written here.
     writer: mpsc::UnboundedSender<Value>,
+    /// Set once the client is gone, and never cleared.
+    closed: AtomicBool,
 }
 
 impl StdioClientChannel {
@@ -34,6 +37,7 @@ impl StdioClientChannel {
         Self {
             pending: DashMap::new(),
             writer,
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -71,7 +75,13 @@ impl StdioClientChannel {
     /// Dropping the senders wakes each waiting `send_request` with a closed
     /// receiver, which is the same signal a vanished HTTP session produces
     /// (`src/gateway/proxy.rs:523`) and lands as [`DeliveryError::TimedOut`].
+    ///
+    /// Terminal: the flag is set before the map is cleared, so a prompt that
+    /// registers during the EOF drain sees it and fails fast. Clearing alone
+    /// would let that prompt wait out the bridge's full timeout inside the
+    /// bounded drain, which is the response loss the drain exists to prevent.
     pub(crate) fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
         self.pending.clear();
     }
 }
@@ -94,6 +104,15 @@ impl ClientChannel for StdioClientChannel {
         // nor the error path below runs; without the guard the entry leaks for
         // the life of the session.
         let _cleanup = PendingRequestGuard::new(&self.pending, id);
+
+        // Checked after registration, never before: `close` sets the flag and
+        // then clears the map, so a registration that survives the clear is
+        // one whose check has not run yet. Reading the flag here catches both
+        // orders; reading it first would race with the clear and leave an
+        // entry nothing will ever resolve.
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(DeliveryError::NoSession);
+        }
 
         let mut frame = json!({ "jsonrpc": "2.0", "id": id, "method": method });
         // Absent params stays absent: an empty object is a params member the
@@ -214,6 +233,33 @@ mod tests {
         assert!(
             matches!(outcome, Err(DeliveryError::TimedOut)),
             "a prompt outstanding when the client vanishes must not hang: {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_prompt_raised_after_close_fails_instead_of_waiting() {
+        // The EOF drain is bounded and runs after `close`. A dispatch that
+        // reaches its bridged question inside that window must not register an
+        // entry nothing can resolve and then wait out the bridge's timeout —
+        // that spends the drain and loses the response it was drained for.
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let channel = StdioClientChannel::new(tx);
+        channel.close();
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            channel.send_request("stdio", "elicit-4", "elicitation/create", None),
+        )
+        .await
+        .expect("the prompt waited for a client that is gone");
+
+        assert!(
+            matches!(outcome, Err(DeliveryError::NoSession)),
+            "a prompt raised after the client is gone must fail fast: {outcome:?}"
+        );
+        assert!(
+            channel.pending.is_empty(),
+            "the refused prompt left its pending entry behind"
         );
     }
 }

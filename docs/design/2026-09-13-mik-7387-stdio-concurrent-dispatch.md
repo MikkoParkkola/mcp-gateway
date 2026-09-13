@@ -97,7 +97,7 @@ timed-out prompt is the expected cause and is not an error.
 ### 4. `StdioClientChannel`
 
 ```
-pending: DashMap<String, oneshot::Sender<JsonRpcResponse>>
+pending: DashMap<String, oneshot::Sender<Value>>
 writer:  mpsc::UnboundedSender<Value>
 ```
 
@@ -164,10 +164,17 @@ Today's sequential loop answers every request it reads. Concurrency must not
 quietly weaken that.
 
 On **normal EOF** the order is: stop reading; fail every still-pending client
-reply (the client that would have answered them is gone, so
-`DeliveryError::NoSession` is the truth again); await the dispatch `JoinSet` to
-completion under a bounded timeout; close the writer channel and await the
+reply; await the dispatch `JoinSet` to completion under a bounded timeout; close the writer channel and await the
 writer task, which flushes what is queued; only then drop the backend guards.
+
+`close` is terminal, and that is what makes the drain bounded in practice
+rather than only on paper. Waking the prompts already outstanding lands them as
+`DeliveryError::TimedOut` — the dropped sender is the same signal a vanished
+HTTP session produces. A prompt raised *after* the close, by a dispatch that
+reaches its question inside the drain window, is refused with
+`DeliveryError::NoSession`: without the terminal flag it would register an
+entry nothing can resolve and wait out the bridge's own timeout, spending the
+drain that exists to deliver its response.
 
 `AbortOnDrop` stays, demoted to what it is good at: the cancellation path, where
 `run_stdio`'s own future is dropped and there is no one left to flush to.
@@ -187,16 +194,34 @@ dispatch stays invisible until EOF.
 
 ## Acceptance
 
-The three rows above with their `#[ignore]` attributes removed, plus the two
-existing stdio suites unchanged and still green — `tests/stdio_tests.rs` and
-`tests/nfr_compat_2_stdio_client_session.rs`, which are the regression evidence
-that concurrency did not cost sequential correctness — plus `cargo fmt --check`
-and `cargo clippy --all-targets -- -D warnings` clean.
+**Corrected during implementation.** The three rows above are *not* acceptance
+for this work package, and the first draft of this section was wrong to claim
+them. Each needs an outbound `elicitation/create` frame on the pipe, which needs
+a production caller of `InputBridge` — and there is none. `rg -n 'InputBridge'
+src/` returns the definition (`src/gateway/input_bridge.rs:348` and `:359`) and
+two doc-comments, zero constructions; `rg -n '\.channel\b' src/` returns one
+reader, `src/gateway/input_bridge.rs:491`. The interim arm of
+`src/gateway/meta_mcp/invoke.rs` never mentions the bridge: `:1779` computes
+`InputRequired::from_result` and `:1852` mints a continuation envelope in its
+place, which is what goes back to the client. Both design reviews graded the
+mechanism; neither asked whether the component under test had a caller.
 
-One test is added beyond the three rows, for the §6 behaviour they do not cover:
-a request in flight when stdin closes still receives its response. Nothing in
-the acceptance rows exercises EOF, so without it the drain is unpinned and the
-next refactor re-introduces the abort.
+The rows therefore keep their `#[ignore]`, with a reason naming that line. They
+are acceptance for the wiring commit that follows this one, which also unblocks
+`MIK-7388.CANCEL.1` (`docs/requirements/RELEASE-4.0.0-scope-update.md:36`) —
+cancelling a *real* bridged exchange needs the same caller.
+
+Acceptance for this package, the transport half, is:
+
+- `tests/stdio_tests.rs` and `tests/nfr_compat_2_stdio_client_session.rs`
+  unchanged and still green — the regression evidence that concurrency did not
+  cost sequential correctness;
+- one test added for the §6 behaviour no acceptance row covers,
+  `ac_mrtr_7a_request_in_flight_when_stdin_closes_still_gets_its_response`: a
+  request in flight when stdin closes still receives its response. Nothing in
+  the three rows exercises EOF, so without it the drain is unpinned and the next
+  refactor re-introduces the abort;
+- `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
 
 ## Blast radius
 
