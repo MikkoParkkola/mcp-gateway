@@ -168,6 +168,51 @@ impl Drop for EchoBackend {
 // ── The gateway under test ───────────────────────────────────────────────────
 
 fn signing_config(backend_url: &str, require_nonce: bool) -> Config {
+    let mut config = signing_config_for(backend_url, require_nonce, Target::ReadOnlyCached);
+    config.cache.default_ttl = Duration::from_secs(300);
+    config
+}
+
+/// Which admission arm the configured target can reach.
+///
+/// An enum rather than a second `bool` on `start`, because the two values
+/// select behaviour rather than toggle a setting, and `start(true, false)`
+/// would say nothing about which of them is which at the call site.
+#[derive(Clone, Copy)]
+pub(super) enum Target {
+    /// The read-only, cached target the allocation checkpoint measures. An
+    /// unkeyed call against it is `Unprotected`.
+    ReadOnlyCached,
+    /// A mutating target with the response cache off. Needed to observe the
+    /// keyed arms honestly: against a cached read-only target, "the second
+    /// call did not reach the backend" is also satisfied by a cache hit, so
+    /// the row would be measuring the cache instead of the dispatcher.
+    MutatingUncached,
+}
+
+fn signing_config_for(backend_url: &str, require_nonce: bool, target: Target) -> Config {
+    let mut config = signing_config_base(backend_url, require_nonce);
+    match target {
+        Target::ReadOnlyCached => {
+            config.cache.enabled = true;
+            // The echo fixture really is read-only, so declaring it takes the
+            // unkeyed path (`SyncAdmission::Unprotected`). The backend's own
+            // `readOnlyHint` annotation remains untrusted — only this exact
+            // server/tool pair counts.
+            config.idempotency.read_only_tools = vec![crate::config::IdempotencyReadOnlyTool {
+                server: BACKEND.to_string(),
+                tool: TOOL.to_string(),
+            }];
+        }
+        Target::MutatingUncached => {
+            config.cache.enabled = false;
+            config.idempotency.read_only_tools = Vec::new();
+        }
+    }
+    config
+}
+
+fn signing_config_base(backend_url: &str, require_nonce: bool) -> Config {
     let mut config = Config::default();
     config.server.modern_protocol = true;
     config.security.message_signing.enabled = true;
@@ -175,18 +220,6 @@ fn signing_config(backend_url: &str, require_nonce: bool) -> Config {
     config.security.message_signing.require_nonce = require_nonce;
     config.security.message_signing.replay_window = 300;
     config.security.message_signing.key_id = "stdio-allocation-checkpoint".to_string();
-    config.cache.enabled = true;
-    config.cache.default_ttl = Duration::from_secs(300);
-    // The echo fixture really is read-only, so declaring it takes the unkeyed
-    // path (`SyncAdmission::Unprotected`) and keeps this file about signing
-    // nonces rather than admission. This is no longer a workaround for stdio
-    // being unadmittable: stdio now carries `STDIO_CREDENTIAL_PRINCIPAL`, so a
-    // keyed mutating call is admitted there. The backend's own `readOnlyHint`
-    // annotation remains untrusted — only this exact server/tool pair counts.
-    config.idempotency.read_only_tools = vec![crate::config::IdempotencyReadOnlyTool {
-        server: BACKEND.to_string(),
-        tool: TOOL.to_string(),
-    }];
     config.backends.insert(
         BACKEND.to_string(),
         BackendConfig {
@@ -230,8 +263,22 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) async fn start(require_nonce: bool) -> Self {
+        Self::start_with(signing_config, require_nonce).await
+    }
+
+    /// A fixture whose target is mutating and uncached, for the rows that
+    /// observe the keyed admission arms.
+    pub(super) async fn start_mutating() -> Self {
+        Self::start_with(
+            |url, require_nonce| signing_config_for(url, require_nonce, Target::MutatingUncached),
+            false,
+        )
+        .await
+    }
+
+    async fn start_with(config_for: fn(&str, bool) -> Config, require_nonce: bool) -> Self {
         let backend = EchoBackend::start().await;
-        let config = signing_config(&backend.url, require_nonce);
+        let config = config_for(&backend.url, require_nonce);
         let gateway = Gateway::new(config)
             .await
             .expect("the production constructor must accept this configuration");
