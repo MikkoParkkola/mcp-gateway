@@ -29,7 +29,7 @@ Command environment for every cargo run below:
 | MIK-7387.STDIO.1 | ABSENT | `cargo test --test mik_7212_mrtr7_stdio_acs` -> `test result: ok. 0 passed; 0 failed; 3 ignored`. `ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads` carries `#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec"]`; its doc comment states the gateway "never asked anything at all, which is exactly today's behaviour". The file is a specification, not evidence. | large — the MIK-7387 work package itself |
 | MIK-7387.STDIO.2 | ABSENT | Same binary, same ignore: `ac_mrtr_7a_bridged_request_follows_the_initialize_response` is in the 3 ignored, 0 passed. | large — same package |
 | MIK-7387.STDIO.3 | ABSENT | Same binary, same ignore: `ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames` is in the 3 ignored, 0 passed. | large — same package |
-| MIK-7388.CANCEL.1 | PARTIAL | `cargo test --test mik_7212_mrtr7_bridge_acs` -> `ok. 25 passed; 0 failed; 0 ignored`, covering bridged-round accounting, request/aggregate budgets, retry bound, decline/error refusals, malformed accepts, and two `mik_7388_*` answer-shape rows. No passing test cancels a live bridged exchange and asserts pending-state reclamation or non-delivery to another exchange. | medium — one test: cancel mid-exchange, assert pending map drained and no cross-delivery |
+| MIK-7388.CANCEL.1 | MET | `cargo test --test mik_7212_mrtr7_bridge_acs` -> `ok. 28 passed; 0 failed; 0 ignored`, including `mik_7388_cancel_1_a_cancelled_exchange_cannot_be_answered_into_another`: it cancels one of two live bridged exchanges on one session, POSTs the cancelled answer back, and asserts the refusal leaves the survivor's pending entry untouched, the survivor receives its own reply, and both entries are reclaimed. Mutating `resolve_pending` to deliver to the first pending entry fails this test and only this test. | — |
 
 ## Rows 9-13 (TASKS)
 
@@ -91,13 +91,13 @@ the result of looking for the artifact the criterion names.
 
 | Bucket | Count | IDs |
 |---|---|---|
-| MET | 10 | GH462.CONFIG.1, GH452.SESSION.1, MIK-7377.SIGNING.1, MIK-7311.LIFECYCLE.1, MIK-7311.LIFECYCLE.2, MIK-7311.LIFECYCLE.3, MIK-7311.LIFECYCLE.4, MIK-6745.JOURNEY.3, MIK-3274.RANKING.2, NFR.RELEASEGATE.1 |
-| PARTIAL | 11 | MIK-7334.CATALOGUE.1, MIK-7388.CANCEL.1, MIK-7311.LIFECYCLE.5, MIK-6744.STORE.1, MIK-6744.STORE.2, MIK-6745.JOURNEY.2, MIK-6746.CONTRACT.1, MIK-7332.DISCOVERY.1, MIK-7235.PIN.1, NFR.CONFORMANCE.1, NFR.BUILD.1 |
+| MET | 11 | GH462.CONFIG.1, GH452.SESSION.1, MIK-7377.SIGNING.1, MIK-7311.LIFECYCLE.1, MIK-7311.LIFECYCLE.2, MIK-7311.LIFECYCLE.3, MIK-7311.LIFECYCLE.4, MIK-6745.JOURNEY.3, MIK-3274.RANKING.2, NFR.RELEASEGATE.1, MIK-7388.CANCEL.1 |
+| PARTIAL | 10 | MIK-7334.CATALOGUE.1, MIK-7311.LIFECYCLE.5, MIK-6744.STORE.1, MIK-6744.STORE.2, MIK-6745.JOURNEY.2, MIK-6746.CONTRACT.1, MIK-7332.DISCOVERY.1, MIK-7235.PIN.1, NFR.CONFORMANCE.1, NFR.BUILD.1 |
 | ABSENT | 10 | MIK-7387.STDIO.1, .2, .3, MIK-6745.JOURNEY.1, MIK-3274.RANKING.1, MIK-3274.RANKING.3, MIK-6710.AUDIT.1, NFR.WORKLOAD.1, NFR.UPGRADE.1, NFR.DEMO.1 |
 | IMPLEMENTED-UNTESTED | 0 | — |
 | NO-REQUIREMENT | 0 | — |
 
-Row count check: 10 MET + 11 PARTIAL + 10 ABSENT = 31 = the approved supplemental
+Row count check: 11 MET + 10 PARTIAL + 10 ABSENT = 31 = the approved supplemental
 criteria count in `RELEASE-4.0.0-scope-update.md`.
 
 ## Verdict changes against the previous (attribute-counting) pass

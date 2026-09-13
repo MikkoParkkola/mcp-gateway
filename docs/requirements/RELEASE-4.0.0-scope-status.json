@@ -58,9 +58,11 @@
     },
     {
       "id": "MIK-7388.CANCEL.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "src/gateway/proxy.rs"
+      ],
+      "note": "Graded 2026-09-13. cargo test --test mik_7212_mrtr7_bridge_acs: test result: ok. 28 passed; 0 failed; 0 ignored. The criterion rests on mik_7388_cancel_1_a_cancelled_exchange_cannot_be_answered_into_another (src/gateway/proxy.rs), which runs two prompts on one session, aborts one, and POSTs the cancelled exchange its late answer: the refusal must not consume the survivor's pending entry, the survivor must receive its own reply, and both entries must be reclaimed. Mutation check: rewriting resolve_pending to deliver to the first pending entry regardless of id fails this test and no other test in the binary, so the assertions are load-bearing rather than incidental."
     },
     {
       "id": "MIK-7311.LIFECYCLE.1",
@@ -251,7 +253,7 @@
     {
       "id": "reference_personal_account_journey",
       "status": "resolved",
-      "selection": "Open WebUI on Spark \u2192 gateway \u2192 Google Workspace",
+      "selection": "Open WebUI on Spark → gateway → Google Workspace",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md"
       ]
