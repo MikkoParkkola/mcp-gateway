@@ -104,9 +104,22 @@
     },
     {
       "id": "MIK-7311.LIFECYCLE.5",
-      "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "status": "met",
+      "evidence": [
+        "src/gateway/task_service/service.rs",
+        "src/gateway/task_service/store.rs",
+        "src/gateway/task_service/store_tests.rs",
+        "src/gateway/task_service/store_tests/durability.rs",
+        "src/gateway/task_service/service_tests/adapter_facade.rs",
+        "src/gateway/task_service/runtime_tests/expiry/cases.rs",
+        "src/gateway/task_service/execution.rs",
+        "src/protocol/tasks.rs",
+        "src/protocol/tasks/lifecycle_tests.rs",
+        "src/protocol/tasks/snapshot_tests.rs",
+        "src/gateway/router/tests/task_execution_adapter/confirmation/review_regressions.rs",
+        "tests/task_expiry_http_lifecycle.rs"
+      ],
+      "note": "MET, graded conjunct-by-conjunct 2026-09-13. The prior PARTIAL was an instrument error, not a code gap: that pass searched only the tests/ integration binaries -- its own note says the clauses have 'no passing named test in either task binary' -- while 10 of the 12 pinning tests are #[cfg(test)] modules inside src/, reachable only through cargo test --lib. No remedial work: every conjunct has a production construct and at least one named test that fails if the construct is removed. This row carried no sized gap, so the count falls by one and the weighted total does not move.\n\nC1 creation is bounded by count, per-principal and per-record bytes: MET. src/gateway/task_service/service.rs:113-115 and store.rs:640-648 (fits()); pinned by store_04_count_and_byte_reservations_reject_before_write (src/gateway/task_service/store_tests.rs:669) and x5_a_new_key_refused_for_capacity_writes_no_record_and_frees_the_key, which asserts the wire code -32603.\n\nC2 retained results are bounded in aggregate: MET. store.rs:70-86 (StoreLimits) and store.rs:645 (reserved > limits.logical_bytes). The store-wide branch is discriminating, not incidental: store_tests.rs:720-760 opens a store at records:4, per_principal:4, logical_bytes:4096 and is refused on the SECOND record, so only the logical budget can produce the refusal. store_04_startup_enforces_every_limit_against_the_stored_directory (durability.rs:287) re-enforces it on reopen.\n\nC3 retention has a bounded lifetime: MET. protocol/tasks.rs:226-234 plus the sweep at store.rs:1031-1064; pinned by expiry_deletes_every_expired_terminal_row_with_its_key_and_capacity (runtime_tests/expiry/cases.rs:14), a companion that retains unexpired and null-TTL rows across real sweeps (:125), and tests/task_expiry_http_lifecycle.rs:66 against a real reaper.\n\nC4 a cancellation racing a settlement loses: MET. protocol/tasks.rs:262-264 and store.rs:416-431; pinned by cancel_01 (store_tests.rs:153) and x3_a_cancel_during_dispatch_is_terminal_and_the_late_answer_does_not_overwrite_it (lifecycle.rs:93).\n\nC5 cancellation promises no undo of committed work: MET. protocol/tasks.rs:407-409, execution.rs:237-246, handlers/tasks.rs:77-79; pinned by c_cancel_that_loses_to_settlement_is_answered_from_the_committed_view (router/tests/task_execution_adapter/confirmation/review_regressions.rs:265), which asserts status == Completed and answer.revision == settled_revision.\n\nIndependent verification of the grading, not the grader's own run: both previously-unpinned rows were re-run here. store_04_count_and_byte_reservations_reject_before_write -> test result: ok. 1 passed; 0 failed. c_cancel_that_loses_to_settlement_is_answered_from_the_committed_view -> test result: ok. 1 passed; 0 failed. The C2 assertion was read at source before the grade was accepted."
     },
     {
       "id": "MIK-6744.STORE.1",
@@ -197,14 +210,15 @@
       "id": "MIK-7235.PIN.1",
       "status": "pending",
       "evidence": [
-        "C1 classify the shipped catalogue: ABSENT. No privilege or stability classification of the 125 shipped YAMLs exists in code, catalogue metadata or docs. The nearest walker, src/capability/definition/mod.rs:1224, classifies on caller-addressed external state, which is delivery-destination registration, not pin privilege, and nothing consumes it for pinning.",
-        "C2 pin the stable high-privilege subset: ABSENT as selection, present as machinery. src/capability/hash.rs:62,73 and src/commands/cap.rs:26,117 pin and verify, covered by cap_pin_writes_valid_hash_and_roundtrips_through_loader (src/commands/cap.rs:647). The pinned set is the inverse of the criterion: 6 of 125 files carry a sha256 line and all six are read-only knowledge fetchers, while 18 unpinned capabilities mutate external state, among them gmail_send_email, slack_post_message and stripe_create_payment_intent.",
-        "C3 record intentional exclusions: ABSENT. The only artifact is a runtime count of unpinned files for a log line (src/capability/loader.rs:189, tested at :302). A count does not name which files are deliberately unpinned or why.",
-        "C4 maintain re-pin checks: PARTIAL. One standing check covers one of the six pinned files (tests/wolfram_llm_tests.rs:237); mismatch rejection is real at src/capability/parser.rs:48-58 with a tamper row at :278 and an unpinned development file still loading at :299. No CI re-pin step exists in .github/workflows, scripts/ or xtask.",
-        "Doc/behaviour mismatch found while grading: src/commands/cap.rs:113-116 claims the loader refuses to start or hot-reload a changed file. It does neither. src/capability/loader.rs:97-105 catches the error and continues with a warning, and src/gateway/../capability/watcher.rs:167 has the same shape. Tampered content cannot execute, so this is not a fail-open hole, but a tampered high-privilege tool reads as a missing tool behind one warning among 125 files.",
-        "Validation: cargo test --lib --all-features capability:: -> 371 passed, 0 failed. cargo test --test wolfram_llm_tests --all-features -> 11 passed, 0 failed."
+        "src/capability/definition/mod.rs",
+        "src/capability/hash.rs",
+        "src/capability/loader.rs",
+        "src/capability/parser.rs",
+        "src/commands/cap.rs",
+        "src/gateway/../capability/watcher.rs",
+        "tests/wolfram_llm_tests.rs"
       ],
-      "note": "PARTIAL, graded conjunct-by-conjunct 2026-09-13. Three of four conjuncts are catalogue-policy work that was never done; the fourth is one re-pin check over one of six pinned files. Size medium (3): a classification pass, a recorded exclusion list, pins for the high-privilege subset and one CI re-pin check over all pinned files. The hash, parser and cap pin machinery already ships."
+      "note": "PARTIAL, graded conjunct-by-conjunct 2026-09-13. Three of four conjuncts are catalogue-policy work that was never done; the fourth is one re-pin check over one of six pinned files. Size medium (3): a classification pass, a recorded exclusion list, pins for the high-privilege subset and one CI re-pin check over all pinned files. The hash, parser and cap pin machinery already ships.\n\nC1 classify the shipped catalogue: ABSENT. No privilege or stability classification of the 125 shipped YAMLs exists in code, catalogue metadata or docs. The nearest walker, src/capability/definition/mod.rs:1224, classifies on caller-addressed external state, which is delivery-destination registration, not pin privilege, and nothing consumes it for pinning.\n\nC2 pin the stable high-privilege subset: ABSENT as selection, present as machinery. src/capability/hash.rs:62,73 and src/commands/cap.rs:26,117 pin and verify, covered by cap_pin_writes_valid_hash_and_roundtrips_through_loader (src/commands/cap.rs:647). The pinned set is the inverse of the criterion: 6 of 125 files carry a sha256 line and all six are read-only knowledge fetchers, while 18 unpinned capabilities mutate external state, among them gmail_send_email, slack_post_message and stripe_create_payment_intent.\n\nC3 record intentional exclusions: ABSENT. The only artifact is a runtime count of unpinned files for a log line (src/capability/loader.rs:189, tested at :302). A count does not name which files are deliberately unpinned or why.\n\nC4 maintain re-pin checks: PARTIAL. One standing check covers one of the six pinned files (tests/wolfram_llm_tests.rs:237); mismatch rejection is real at src/capability/parser.rs:48-58 with a tamper row at :278 and an unpinned development file still loading at :299. No CI re-pin step exists in .github/workflows, scripts/ or xtask.\n\nDoc/behaviour mismatch found while grading: src/commands/cap.rs:113-116 claims the loader refuses to start or hot-reload a changed file. It does neither. src/capability/loader.rs:97-105 catches the error and continues with a warning, and src/gateway/../capability/watcher.rs:167 has the same shape. Tampered content cannot execute, so this is not a fail-open hole, but a tampered high-privilege tool reads as a missing tool behind one warning among 125 files.\n\nValidation: cargo test --lib --all-features capability:: -> 371 passed, 0 failed. cargo test --test wolfram_llm_tests --all-features -> 11 passed, 0 failed."
     },
     {
       "id": "MIK-6710.AUDIT.1",
