@@ -2480,7 +2480,13 @@ impl Gateway {
         info!("stdio: EOF reached, shutting down");
         // Drain before the writer closes: an in-flight dispatch still owes the
         // client a response, and dropping the set would abort it mid-call.
-        while tasks.join_next().await.is_some() {}
+        // ponytail: unbounded set — one task per line, no concurrency cap; bound
+        // it if a client can flood stdin.
+        while let Some(joined) = tasks.join_next().await {
+            if let Err(error) = joined {
+                warn!(%error, "stdio dispatch task did not finish cleanly");
+            }
+        }
         Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
         // Drop the last producer handle so the writer task sees the queue close,
         // then await it: a frame still queued here has not reached stdout yet,
