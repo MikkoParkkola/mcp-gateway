@@ -1209,6 +1209,8 @@ impl Gateway {
         }
 
         // ── Shared MetaMcp initialisation ────────────────────────────────────
+        // `data_dir` is read only by the cost-governance persistence tasks.
+        #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
         let BuiltMetaMcp {
             meta_mcp,
             tool_policy,
@@ -1683,6 +1685,8 @@ impl Gateway {
 
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).
+        // Only the cost-governance shutdown tasks consume this clone.
+        #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
         let meta_mcp_for_shutdown = Arc::clone(&meta_mcp);
 
         let control_plane_store =

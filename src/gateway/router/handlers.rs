@@ -1599,6 +1599,8 @@ pub(super) async fn meta_mcp_handler(
             };
             execution = owned_execution;
             caller.execution = execution.as_ref();
+            // `call_response` is mutated only by the firewall response scan below.
+            #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
             let mut call_response = if let Some(response) = replay {
                 response
             } else {

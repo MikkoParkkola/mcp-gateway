@@ -3157,6 +3157,10 @@ impl MetaMcp {
     /// `gateway_get_stats` — gateway statistics with per-backend error budget
     /// and circuit-breaker status.
     #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
+    // The admin flag only decides whether cost figures are included, and that
+    // block is feature-gated. Relaxed in exactly the build where its one use
+    // disappears, so dropping that use under the feature still warns.
+    #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
     pub(super) async fn get_stats(&self, _args: &Value, caller_is_admin: bool) -> Result<Value> {
         let stats = self
             .stats

@@ -169,6 +169,10 @@ impl super::MetaMcp {
                       wiring; delete this suppression by hand when it lands."
         )
     )]
+    #[cfg_attr(
+        not(feature = "firewall"),
+        allow(clippy::unused_self, clippy::unnecessary_wraps)
+    )]
     pub(crate) fn enforce_firewall_challenge(
         &self,
         challenge: &serde_json::Value,

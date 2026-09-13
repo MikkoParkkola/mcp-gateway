@@ -917,6 +917,7 @@ impl MetaMcp {
 
     /// No-op tool-list scan when the `firewall` feature is disabled.
     #[cfg(not(feature = "firewall"))]
+    #[allow(clippy::unused_self)]
     pub(super) fn scan_tool_list_value(&self, _value: &mut serde_json::Value) {}
 
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
