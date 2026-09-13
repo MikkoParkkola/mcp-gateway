@@ -8,7 +8,7 @@ Status: design, not implemented. Scope: `src/control_plane/store.rs`,
 
 ## What this is for
 
-The acceptance oracle (`docs/release/RELEASE-4.0.0-scope-tests.md:62`) is a
+The acceptance oracle (`docs/requirements/RELEASE-4.0.0-scope-tests.md:62`) is a
 conjunction. All four parts must hold at once, and today none of them do for
 the path a user actually hits:
 
@@ -36,7 +36,7 @@ operators reach.
 The defect is therefore a gap, not a misfire: **the cap covers the CLI audit
 readers and does not cover the reader `GET /ui/api/control-plane` reaches** —
 `FileControlPlaneStore::read_audit` (`store.rs:741`), consumed by
-`merge_store_into_snapshot` (`gateway/ui/control_plane.rs:669`), is still
+`merge_store_into_snapshot` (`gateway/ui/control_plane.rs:626`), is still
 uncapped, and C2/C4 fail there.
 
 ### Out of scope
@@ -65,7 +65,7 @@ uncapped, and C2/C4 fail there.
 
 Read path, as it actually runs:
 
-1. `merge_store_into_snapshot` (`gateway/ui/control_plane.rs:669`) is the sole
+1. `merge_store_into_snapshot` (`gateway/ui/control_plane.rs:626`) is the sole
    production caller of the trait method. It requests a page for the UI.
 2. `ControlPlaneStore::read_audit` (`store.rs:209-213`) takes an
    `&AuditFilter` and returns `Vec<ControlPlaneAuditEvent>` — no notion of a
@@ -175,6 +175,18 @@ budget ran out", and the scan hands back a cursor that cannot advance. Scaled
 so no plausible audit entry approaches it — crossing it means the file is
 damaged, not that the workload grew.
 
+**The two bounds are related, and the relationship is checked.**
+`MAX_AUDIT_RECORD_BYTES * 2 <= MAX_AUDIT_SCAN_BYTES` is a **required
+invariant**, not an accident of the numbers chosen above (1 MiB and 8 MiB
+satisfy it with room to spare). A budget that cannot hold two records cannot
+paginate: one record's worth is spent validating the cursor anchor (§3), and
+if what remains cannot hold another whole record, every resumed page returns
+zero events and a cursor identical in effect to the one it was given. A
+64 KiB budget with a 48 KiB record cap stalls forever on a log of two 40 KiB
+records. The `with_read_bounds` constructor below asserts the invariant and
+panics on violation — a test that configures an unpaginable store should fail
+at construction, not deadlock in a walk.
+
 **The budget must be injectable.** Proving boundedness with the production
 constant would need a fixture in the hundreds of megabytes, and
 `cargo test --quiet` is a repo gate. Give `FileControlPlaneStore` a
@@ -223,15 +235,24 @@ collide that way. Note that `audit_event_from_entry` (`store.rs:310`) drops
 both chain fields, so the cursor is minted from the **raw JSON line**, not
 from the reconstructed `ControlPlaneAuditEvent`.
 
-**Anchor validation is itself bounded.** Resuming reads the single record at
-`next_end` and hashes it — one record, capped by the same per-record bound
-below. It is never a scan, so validating a cursor cannot cost more than the
-page it precedes, and the advertised byte bound covers validation plus scan.
+**Anchor validation is itself bounded, and its bytes are charged.** Resuming
+reads the single record at `next_end` and hashes it — one record, capped by
+the same per-record bound below. It is never a scan. The bytes it reads are
+added to `stats.bytes_examined` and deducted from the scan budget for that
+call, so the documented "at most 8 MiB per read" stays true on a resumed read
+and not only on a first page.
 
-When the record at `next_end` does not hash to the anchor — rotation,
-truncation, external rewrite — or when the file is shorter than `next_end`,
-absent, or empty, the read fails with `StoreError::StaleCursor` rather than
-returning a page from a different log. **`StaleCursor` is terminal for that
+Validation demands a **complete, newline-terminated record beginning exactly
+at `next_end` that hashes to the anchor**. Anything else is
+`StoreError::StaleCursor`: the file is shorter than `next_end`, absent, or
+empty; there is a record there but it hashes differently; or — the case an
+earlier draft's two-condition check missed — the file is longer than
+`next_end` but truncation cut through the anchored record itself, so the bytes
+at `next_end` never reach a newline. That last shape is why the test is
+"a whole record that hashes right", not "`len >= next_end` and a hash
+compare". Note that at the anchor position an unterminated or over-long region
+is `StaleCursor`, not `OversizedRecord`: the question being asked is "is this
+cursor still valid", and the answer is no. **`StaleCursor` is terminal for that
 traversal.** The caller does not "recover" it: a hash anchor does not survive
 rotation, so there is no way to locate where the old traversal had reached.
 The caller must start a new traversal from the newest end and treat it as
@@ -255,6 +276,13 @@ advertises a bound it keeps re-paying. Two rules make progress structural:
    explicit `StoreError::OversizedRecord { offset }`, naming the byte offset
    the scan could not get past, so an operator gets a diagnosis instead of a
    page that silently omits everything older than the bad record.
+
+   **Offset 0 terminates a line.** The oldest record in the file has no
+   preceding newline, and it is not malformed for that reason. Rule 2 fires
+   only when `MAX_AUDIT_RECORD_BYTES` is exhausted without reaching *either* a
+   newline *or* offset 0. Omitting that half would make the oldest record of
+   every log an `OversizedRecord` the moment a walk reached it, turning the
+   last page of every complete traversal into an error.
 
 ### 4. The result type is exhaustive, not `Option`
 
@@ -281,6 +309,16 @@ pub enum AuditPageEnd {
 }
 ```
 
+**The three ends are ordered, so the ambiguous call has one answer.** A page
+can fill on the same call that drains the budget. The limit wins:
+`events.len() == filter.limit` is `LimitReached`, whatever the budget did,
+because a full page is a complete answer to the request that was made and the
+resume cursor is the same either way (a resumed call is issued a fresh
+budget). `BudgetExhausted` is reserved for a page that did **not** fill and
+did **not** reach the oldest entry — the only case where the caller was given
+less than it asked for. Without that precedence rule the same log and filter
+could report incompleteness or not depending on where a block boundary fell.
+
 An enum, not a bool — the repo rule on behaviour-selecting parameters, and it
 makes the incompleteness invariant hold by construction:
 
@@ -296,20 +334,54 @@ record, counting it, and logging a warning. Three variants of "the page ended"
 cannot rescue that: a page with evidence quietly omitted would still come back
 `Complete`, which is precisely the claim C4 is supposed to make unfalsifiable.
 
-**So malformed records keep today's fail-closed handling.** `read_audit`
-already returns `StoreError::Corrupt` for an audit line that is not valid JSON
+**So malformed records keep today's fail-closed handling — this preserves a
+safeguard, it does not add one.** `read_audit` already returns
+`StoreError::Corrupt` for an audit line that is not valid JSON
 (`store.rs:757`) and for one tagged `AUDIT_KIND` that does not reconstruct
-(`store.rs:763`), with the comment "a malformed one fails closed rather than
-silently vanishing from the view". This design does not touch that. Degraded
+(`store.rs:763`), and the existing source already carries the reasoning in a
+comment: "a malformed one fails closed rather than silently vanishing from the
+view". The skip-and-warn draft was therefore a **regression of a documented,
+already-reasoned safeguard**, not a missing precaution — which is the framing
+to review it under, because keeping a decision the codebase already made is a
+much lower bar to clear than making a new one. This design does not touch
+it. Degraded
 reads already have a signalling path to the client — `store_read_degraded`
-(`gateway/ui/control_plane.rs:609-670`) — and a corrupt audit log is exactly
+(`gateway/ui/control_plane.rs:609-614`) — and a corrupt audit log is exactly
 what it is for. Lines of other kinds are still skipped, as they are today;
 "not ours" and "ours and broken" stay different outcomes.
 
-The UI already has the precedent to copy: `store_read_degraded`
-(`gateway/ui/control_plane.rs:609-670`) exists so "a client cannot mistake a
-failed read for an authoritative empty result (MIK-6701)". `BudgetExhausted`
-surfaces through the same field, with the same reasoning.
+**The consumer must degrade on an incomplete page, and that is an edit this
+design owns.** `store_read_degraded` (computed at
+`gateway/ui/control_plane.rs:609-614`, surfaced to the client at `:136`)
+exists so "a client cannot mistake a failed read for an authoritative empty
+result (MIK-6701)". But `merge_store_into_snapshot` (`:626`) sets `degraded`
+only in `Err` arms, and its `read_audit` match (`:669-674`) assigns
+`snapshot.audit_events` on **any** `Ok`. `BudgetExhausted` is an `Ok`. Ship
+the store change alone and a truncated audit view renders as an authoritative
+one — the same defect class MIK-6701 closed, one level down and harder to see,
+because "empty" at least looks suspicious while "30 of the newest events"
+looks like an answer.
+
+So `merge_store_into_snapshot` changes with the store:
+
+```rust
+match store.read_audit(&AuditFilter::new(200)) {
+    Ok(page) => {
+        degraded |= matches!(page.end, AuditPageEnd::BudgetExhausted(_));
+        snapshot.audit_events = page.events;
+    }
+    Err(e) => { /* unchanged */ }
+}
+```
+
+`BudgetExhausted` only — **not** `LimitReached`. A page that fills its
+requested limit of 200 is exactly what the UI asked for; today's `read_audit`
+already returns the newest 200 and nobody calls that degraded. Marking every
+log with more than 200 events permanently degraded would make the flag mean
+"you have a busy gateway" and train operators to ignore the one signal that
+should mean something. Acceptance case 9 covers this at the consumer, not at
+the store — a store-level assertion cannot catch a consumer that ignores the
+field.
 
 ### 5. Ordering ruling
 
@@ -323,7 +395,7 @@ suite asserts both backends agree on it.
 Two facts, kept separate on purpose:
 
 - **The enumerated consumer is safe.** `merge_store_into_snapshot`
-  (`gateway/ui/control_plane.rs:669`) is the only in-tree production consumer
+  (`gateway/ui/control_plane.rs:626`) is the only in-tree production consumer
   of `read_audit`, and newest-first is the order it wants. An `rg` over the
   tree found no other production consumer that depends on the current
   oldest-first order.
@@ -402,28 +474,41 @@ has to mean to be worth grading.
 | Empty or missing file, **no cursor** | Fresh install | `Complete` with zero events and zero stats. An empty page must be distinguishable from a failed read; that is what `Complete` asserts |
 | Empty or missing file, **with a cursor** | The log was rotated or truncated between pages | `StoreError::StaleCursor`, never `Complete`. Reporting success here would claim "you have now seen everything" to a caller that lost unread history (§3) |
 | A single record larger than the budget | External writer, or a pathological entry | `StoreError::OversizedRecord { offset }` — no complete record means no anchor, so `BudgetExhausted` would hand back a cursor that cannot advance (§3) |
+| Incomplete page reaching the UI | `BudgetExhausted` is an `Ok`, and the consumer degrades only on `Err` today | `merge_store_into_snapshot` degrades on `BudgetExhausted` (§4). Untouched, a truncated audit view renders as authoritative — the MIK-6701 defect class one level down, and less visible than the empty view it closed |
 | Budget vs. a very rare filter | A filter matching one event a year ago will never fill a page inside 8 MiB | This is `BudgetExhausted`, not a bug — the caller walks cursors. C3 asks that the query stay *bounded*, not that it stay complete |
 
 ## Acceptance
 
-Mapped to `docs/release/RELEASE-4.0.0-scope-tests.md:62` conjunct by conjunct.
+Mapped to `docs/requirements/RELEASE-4.0.0-scope-tests.md:62` conjunct by conjunct.
 
 **Oracle helper.** `full_scan_oracle(path, filter)` — parse every `AUDIT_KIND`
-line from a small fixture, reverse, apply the filter predicates, take the
-limit. Deliberately the naive implementation, so it cannot share a bug with
-the thing it grades.
+line from a small fixture, reverse, apply the filter predicates, return **all**
+matches. It does **not** apply the limit: a test that wants a limited oracle
+takes it at the call site. Baking `take(limit)` into the helper is how the
+completeness walk (case 4) would quietly grade itself against a truncated
+answer, which is the one comparison it exists to prevent. Deliberately the
+naive implementation, so it cannot share a bug with the thing it grades.
 
-1. **C2 — page-proportional cost.** 2 MiB log, 64 KiB injected budget
-   (§2), unfiltered page of 50. Assert the page is full, `end` is
-   `LimitReached(_)`, and `stats.bytes_examined.unwrap() <= 64 * 1024`.
-   Asserting `end` matters: without it the test also passes when the page
-   filled *because* the budget ran out, which is the opposite of C2.
-2. **C3 — rare filter stays bounded.** Same log, a filter matching exactly one
-   event near the *oldest* end. Assert `stats.bytes_examined.unwrap() <=
+1. **C2 — page-proportional cost.** Two fixtures sharing the *same newest 50
+   events*, one 2 MiB and one 8 MiB, each read with an unfiltered page of 50
+   and a 1 MiB injected budget. Assert (a) both pages are full with `end ==
+   LimitReached(_)`, (b) `bytes_examined` is **equal** across the two logs,
+   and (c) `bytes_examined <= block_size + bytes_of_the_50_returned_records`.
+   Equality across log sizes is what actually falsifies C2: page cost must not
+   move when the log grows. The previous form — one log, a 64 KiB budget,
+   assert `bytes_examined <= 64 KiB` — could not fail, because the budget *is*
+   the ceiling and one 64 KiB block is the floor of any page; a scan that
+   drained the entire budget after the page had filled passed it. The injected
+   budget here is deliberately an order of magnitude above the expected cost,
+   so draining it is visible instead of definitional.
+2. **C3 — rare filter stays bounded.** The 2 MiB fixture with a 64 KiB
+   injected budget, and a filter matching exactly one event near the *oldest*
+   end. Here the budget-shaped ceiling is the right assertion — C3 asks that
+   the query stay bounded, not that it stay cheap. Assert `stats.bytes_examined.unwrap() <=
    64 * 1024` and `end` is `BudgetExhausted(_)` — the query stopped, and said
    so, rather than scanning 2 MiB to return one row.
-3. **C3 — no-match filter stays bounded.** A filter matching nothing. Same
-   byte assertion; assert `events.is_empty()` **and** `end` is
+3. **C3 — no-match filter stays bounded.** Same fixture and budget as case 2,
+   a filter matching nothing. Same byte assertion; assert `events.is_empty()` **and** `end` is
    `BudgetExhausted(_)`, which is the pair that distinguishes "nothing here"
    from "nothing found yet".
 4. **C4 — completeness invariant.** Walk cursors until `end == Complete`,
@@ -434,19 +519,32 @@ the thing it grades.
    that duplicates a boundary record or returns pages out of order, and the
    release criterion asks for ordered equivalence. Three walks, same assertion:
    (a) pages ending on the limit, (b) pages forced to end on a budget boundary
-   by a small injected budget, so every `BudgetExhausted` resume is exercised,
-   and (c) a walk with an append landing between two pages — the appended event
-   is newer than the cursor, so it must appear in **neither** the walk nor the
-   oracle snapshot taken at walk start, and the sequences must still match
-   exactly.
+   by a small injected budget, so every `BudgetExhausted` resume is exercised —
+   and assert the byte bound on **every** page of that walk, not just the
+   first, which is what proves cursor validation is charged against the budget
+   (§3) rather than being free on resume; and (c) a walk with an append landing
+   between two pages — the appended event is newer than the cursor, so it must
+   appear in **neither** the walk nor the oracle snapshot taken at walk start,
+   and the sequences must still match exactly.
+
+   Case (c) needs one more assertion or it is vacuous: equality to the
+   start-of-walk oracle is also true of a run where the append never landed.
+   So after the walk, re-run the oracle and assert the appended event **is**
+   present there and is its newest element. That makes the append's arrival
+   observable, and the pair — present afterwards, absent from the walk — is
+   the actual isolation claim.
 5. **Ordering (§5).** Small log, both backends, same filter: assert the event
    sequences are identical and newest-first. Lives in the conformance suite so
    `InMemoryControlPlaneStore` is held to it too.
-6. **`StaleCursor` in all three shapes.** Take a cursor, then (a) truncate the
-   file behind it, (b) replace it with a different log (rotation), (c) empty
-   it. Each re-read asserts `StoreError::StaleCursor` — specifically *not*
+6. **`StaleCursor` in all four shapes.** Take a cursor, then (a) truncate the
+   file behind it so `len < next_end`, (b) replace it with a different log
+   (rotation), (c) empty it, and (d) truncate it so `len > next_end` but the
+   cut lands *inside* the anchored record, which no length comparison and no
+   hash compare on a complete record would catch. Each re-read asserts
+   `StoreError::StaleCursor` — specifically *not*
    `Complete`-with-zero-events for (c), which is the case where an empty file
-   would otherwise look like a finished walk.
+   would otherwise look like a finished walk, and specifically not
+   `OversizedRecord` for (d), whose question is cursor validity (§3).
 7. **`records_examined` portability.** Both backends report a non-zero
    `records_examined` for a filtered query that matches nothing — the
    in-memory backend must not report zero work for work it did.
@@ -455,7 +553,26 @@ the thing it grades.
    `StoreError::OversizedRecord`, not a
    `BudgetExhausted` page. And across any cursor walk, assert each successive
    cursor's boundary is strictly smaller than the last — the property that
-   makes a walk terminate.
+   makes a walk terminate. Separately, assert `with_read_bounds` panics when
+   `max_record * 2 > scan_budget` (§2) — an unpaginable store must fail at
+   construction.
+9. **The consumer degrades on an incomplete page.** At
+   `merge_store_into_snapshot`, not at the store: a double returning
+   `BudgetExhausted` must make the function return `true` and the response
+   carry `store_read_degraded` (the existing test-module store double at
+   `control_plane.rs:1558` already provides the shape). Positive control: a
+   double returning `LimitReached` with a full page must **not** degrade, or
+   the flag means "busy gateway" instead of "incomplete view" (§4). A
+   store-level assertion cannot catch a consumer that drops the field, which
+   is exactly the defect this case exists for.
+10. **Malformed records fail closed, whatever the filter says.** Three
+    fixtures: (a) an `AUDIT_KIND` line that is not valid JSON, (b) one that is
+    valid JSON but does not reconstruct into a `ControlPlaneAuditEvent`, and
+    (c) case (b) where the record would have been *excluded by the filter
+    anyway*. All three assert `StoreError::Corrupt` — (c) is the one that
+    matters, because an implementation that tests the filter before parsing
+    would pass (a) and (b) while silently dropping evidence, which is the §4
+    invariant restated as a test.
 
 ## Blast radius
 
@@ -471,10 +588,17 @@ risk, 7 impacted symbols, all at d=1, exact match.** Breakdown:
   (proc_96, proc_212); module cluster `Control_plane`.
 
 **The graph under-reports.** The sole production consumer,
-`merge_store_into_snapshot` (`gateway/ui/control_plane.rs:669`), does **not**
+`merge_store_into_snapshot` (`gateway/ui/control_plane.rs:626`), does **not**
 appear in the impact result — it was found by `rg`. Recording that is the
 honest version of the CLAUDE.md impact-analysis requirement: the tool was run,
 and it missed the one caller that matters. Verify by grep before editing.
+
+**So the implementation commit touches two files, not one.**
+`gateway/ui/control_plane.rs` is not merely "a caller that must compile": its
+degradation logic changes, because `BudgetExhausted` is an `Ok` that today's
+`Ok` arm would render as an authoritative view (§4). A commit that lands the
+store change and leaves the consumer compiling-but-unchanged ships the
+regression rather than the fix.
 
 **This change spends another criterion's evidence.** `AuditFilter.offset`
 (`store.rs:115`) is `pub` and re-exported at `src/control_plane/mod.rs:22`.
