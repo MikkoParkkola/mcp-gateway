@@ -2473,7 +2473,14 @@ enum GateOutcome {
 
 impl GateOutcome {
     /// The boxing lives here so the arms below read as what they answer.
-    fn refuse(response: JsonRpcResponse) -> Self {
+    ///
+    /// The accounting marker is set here rather than by each arm, because every
+    /// arm owes it for the same reason: the destructive action did not run, so
+    /// neither a strike nor a success reset describes what happened. The
+    /// in-band ask is a success frame and would otherwise reset a breaker the
+    /// caller had genuinely tripped.
+    fn refuse(mut response: JsonRpcResponse) -> Self {
+        response.confirmation_refusal = true;
         Self::Refuse(Box::new(response))
     }
 }
