@@ -55,6 +55,9 @@ pub struct Fixture {
     /// the falsifier for the block below.
     #[cfg(feature = "firewall")]
     pub firewall: Option<Arc<mcp_gateway::security::firewall::Firewall>>,
+    /// The registry the route tracks scored identities in. `None` is the
+    /// shipped router-test state: nothing is tracked and no sweep runs.
+    pub session_lifecycle: Option<Arc<mcp_gateway::gateway::session_lifecycle::SessionLifecycle>>,
 }
 
 impl Default for Fixture {
@@ -73,6 +76,7 @@ impl Default for Fixture {
             modern_protocol: true,
             #[cfg(feature = "firewall")]
             firewall: None,
+            session_lifecycle: None,
         }
     }
 }
@@ -111,7 +115,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
 
     let app = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
-        session_lifecycle: None,
+        session_lifecycle: f.session_lifecycle,
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
         backends,

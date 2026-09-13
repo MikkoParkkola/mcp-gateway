@@ -51,7 +51,7 @@ fn assert_envelope_refusal(status: StatusCode, body: &Value, message: &str) {
 // ============================================================================
 #[tokio::test]
 async fn a_modern_frame_without_the_jsonrpc_field_is_refused() {
-    let app = state(Fixture::default());
+    let (app, _store_dir) = state(Fixture::default()).await;
     let (status, body) = post(
         &app,
         json!({ "id": 1, "method": "tools/list", "params": params() }),
@@ -66,7 +66,7 @@ async fn a_modern_frame_without_the_jsonrpc_field_is_refused() {
 
 #[tokio::test]
 async fn a_modern_frame_declaring_a_wrong_jsonrpc_version_is_refused() {
-    let app = state(Fixture::default());
+    let (app, _store_dir) = state(Fixture::default()).await;
     let (status, body) = post(
         &app,
         json!({ "jsonrpc": "1.0", "id": 1, "method": "tools/list", "params": params() }),
@@ -94,7 +94,7 @@ async fn a_modern_frame_declaring_a_wrong_jsonrpc_version_is_refused() {
 // ============================================================================
 #[tokio::test]
 async fn a_modern_frame_without_a_method_is_refused() {
-    let app = state(Fixture::default());
+    let (app, _store_dir) = state(Fixture::default()).await;
     let (status, body) = post(
         &app,
         json!({ "jsonrpc": "2.0", "id": 1, "params": params() }),
@@ -112,7 +112,7 @@ async fn a_modern_frame_without_a_method_is_refused() {
 // ============================================================================
 #[tokio::test]
 async fn a_modern_request_without_an_id_is_refused() {
-    let app = state(Fixture::default());
+    let (app, _store_dir) = state(Fixture::default()).await;
     let (status, body) = post(
         &app,
         json!({ "jsonrpc": "2.0", "method": "tools/list", "params": params() }),

@@ -253,6 +253,7 @@ fn backend_for(name: &str, url: &str, arm: ForwardArm) -> Backend {
         oauth: None,
         secrets: Vec::new(),
         passthrough: matches!(arm, ForwardArm::Fallback),
+        account: None,
         allow_cleartext_credentials: false,
         runtime_profile: None,
         identity_propagation: None,

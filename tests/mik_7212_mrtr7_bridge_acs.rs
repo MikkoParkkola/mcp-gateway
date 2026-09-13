@@ -204,13 +204,14 @@ impl FakeBackend {
 
 #[async_trait::async_trait]
 impl BackendInvoker for FakeBackend {
-    async fn invoke(&self, retry_params: Value) -> Value {
+    async fn invoke(&self, retry_params: Value) -> Result<Value, BridgeError> {
         self.calls.lock().expect("calls").push(retry_params);
-        self.results
+        Ok(self
+            .results
             .lock()
             .expect("results")
             .pop_front()
-            .unwrap_or_else(completed)
+            .unwrap_or_else(completed))
     }
 }
 
