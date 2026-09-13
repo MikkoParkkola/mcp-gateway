@@ -58,6 +58,15 @@ uncapped, and C2/C4 fail there.
   an acceptable answer. Neither is on the request path that serves a web
   client. Bounding `audit show` the same way `read_audit` is bounded here is a
   reasonable follow-up ticket; it is not this one.
+- **No change to how the UI expresses "there are more events".** The audit
+  view requests a limit of 200 and, after §4, a page that fills that limit is
+  reported as `LimitReached` and is *not* degraded — correctly, because it is
+  the truncation the caller asked for. But the rendered view still shows 200
+  events with nothing distinguishing "this is the whole log" from "this is the
+  newest 200 of nine thousand". That is a smaller honesty gap than the one §4
+  closes (a truncation nobody asked for and nobody can see), and it is a
+  second follow-up ticket rather than a reason to widen this design: fixing it
+  means a UI affordance, not a store contract.
 - No edit to `docs/control_plane.md` in this commit — §8 specifies the exact
   line the implementation commit pastes there.
 
@@ -184,8 +193,30 @@ if what remains cannot hold another whole record, every resumed page returns
 zero events and a cursor identical in effect to the one it was given. A
 64 KiB budget with a 48 KiB record cap stalls forever on a log of two 40 KiB
 records. The `with_read_bounds` constructor below asserts the invariant and
-panics on violation — a test that configures an unpaginable store should fail
-at construction, not deadlock in a walk.
+panics on violation **for exactly as long as both bounds are compile-time
+constants reached only from in-process construction; the moment either value
+becomes operator-configurable, this assertion must be rewritten as a validated
+load-time error naming both values, never a panic** — a test that configures
+an unpaginable store should fail at construction, not deadlock in a walk, but
+a gateway must not die because a YAML file holds two numbers in the wrong
+order.
+
+**A panic is only correct because nothing operator-facing can reach it.**
+Both bounds are compile-time constants and `with_read_bounds` is in-process
+and test-only: production builds the store at
+`gateway/server/mod.rs:163` with a directory and a logger, and the one
+operator-facing struct on that path, `TransparencyLogConfig`
+(`transparency_log.rs:83-93`), exposes `enabled`, `path`, `key_id` and
+`shared_secret` — no budget. A bad pair is therefore a programming error in
+test or wiring code, and loud-and-immediate is the right failure.
+
+That condition is written into the invariant rather than filed as a caveat on
+purpose. Both the trace above and a repo-wide search agree the panic is safe
+today, but that proof is contingent on one fact a single future commit can
+change without noticing, and the person making the budget tunable must meet
+the sentence while editing the constructor — not find it afterwards in a
+review. A panic reachable from a YAML file is a denial of service triggered by
+a typo.
 
 **The budget must be injectable.** Proving boundedness with the production
 constant would need a fixture in the hundreds of megabytes, and
@@ -437,13 +468,16 @@ specified here and pasted by the implementation commit into
 `docs/control_plane.md` § Current Limits (currently ending at line 106),
 verbatim:
 
-> - A single audit read examines at most 8 MiB of the audit log by default,
->   regardless of how large the log has grown. A query that reaches that budget before
+> - A single audit read examines at most 8 MiB of the audit log, regardless of
+>   how large the log has grown. A query that reaches that budget before
 >   filling its page reports the page as incomplete and returns a cursor to
 >   resume from; it never returns a short page as if it were the whole answer.
 
 Phrased as a claim an operator can rely on, which is what "documented bound"
-has to mean to be worth grading.
+has to mean to be worth grading. **Not "by default"** — that wording was in an
+earlier draft and it implies a knob. There is none: 8 MiB is a compile-time
+constant, injectable in tests only (§2), and telling an operator otherwise
+invites a support question whose answer is "you cannot".
 
 ### 9. Rejected
 
