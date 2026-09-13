@@ -21,7 +21,7 @@
 
 use serde_json::{Value, json};
 
-use super::signing_nonce_allocations_support::{BACKEND, Fixture, SESSION, TOOL, error_of, invoke};
+use super::signing_nonce_allocations_support::{Fixture, SESSION, error_of, invoke};
 
 /// The production stdio entry point, called exactly as `run_stdio` calls it.
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
@@ -61,12 +61,16 @@ fn assert_ok(phase: &str, response: &Value) {
 // ── Unprotected ──────────────────────────────────────────────────────────────
 
 /// An unkeyed call against an operator-declared read-only target is
-/// `Unprotected`: it dispatches, and it holds no lease.
+/// `Unprotected`: it dispatches.
 ///
 /// Without this row the `Unprotected` arm has no dispatcher coverage at all —
-/// the other three rows all carry a key.
+/// the other three rows all carry a key. The arm's other obligation, that it
+/// holds no lease, is NOT asserted here: `dispatch_single_with_sink` does not
+/// return the `Option<SyncLease>` that `dispatch_tools_call` produces, so the
+/// lease is unobservable from the production entry point. See D24/D26 in
+/// `docs/release/v4.0.0-dispatcher-regression-design.md`.
 #[tokio::test]
-async fn unprotected_dispatches_once_and_holds_no_lease() {
+async fn an_unkeyed_read_only_call_dispatches_exactly_once() {
     let fixture = Fixture::start(false).await;
 
     let response = dispatch(&fixture, invoke("u1", None, json!({}))).await;
@@ -183,15 +187,22 @@ async fn a_conflicting_key_is_refused_before_the_backend_is_reached() {
         code, 409,
         "a reused key with different arguments must be refused: {conflict} ({message})"
     );
+    // The code alone does not attribute the refusal. `backend_handlers.rs:824`
+    // runs a SECOND idempotency guard downstream of this arm, and
+    // `idempotency.rs:842` answers a mismatched key with its own 409 before the
+    // backend — so a dispatcher that fell through this arm would still produce
+    // 409 with a count of 1. The message is what separates the two producers.
+    // Substring, not equality: `Error::json_rpc` renders as
+    // `JSON-RPC error 409: <text>`, so pinning the whole string would pin the
+    // wrapper's formatting alongside the identity of the refuser.
+    assert!(
+        message.contains("belongs to another execution or representation"),
+        "the refusal must come from the dispatcher's admission arm \
+         (`meta_mcp/admission.rs:200`), not the downstream guard: {conflict}"
+    );
     assert_eq!(
         fixture.backend.tools_call_count(),
         1,
         "the refused call must not have reached the backend"
     );
-}
-
-/// Named so a reader checking coverage of `BACKEND`/`TOOL` finds them used.
-#[test]
-fn the_fixture_target_is_the_one_these_rows_configure() {
-    assert_eq!((BACKEND, TOOL), ("nonce_backend", "echo"));
 }
