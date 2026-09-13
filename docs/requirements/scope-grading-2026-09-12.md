@@ -97,7 +97,7 @@ the result of looking for the artifact the criterion names.
 | IMPLEMENTED-UNTESTED | 0 | — |
 | NO-REQUIREMENT | 0 | — |
 
-Row count check: 10 MET + 10 PARTIAL + 11 ABSENT = 31 = the approved supplemental
+Row count check: 10 MET + 11 PARTIAL + 10 ABSENT = 31 = the approved supplemental
 criteria count in `RELEASE-4.0.0-scope-update.md`.
 
 ## Verdict changes against the previous (attribute-counting) pass

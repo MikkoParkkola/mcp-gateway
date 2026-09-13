@@ -1115,6 +1115,113 @@ mod tests {
         );
     }
 
+    /// MIK-7388.CANCEL.1 — cancelling one bridged exchange reclaims its pending
+    /// state and cannot hand its answer to another exchange.
+    ///
+    /// The sibling above proves the map is drained. Drainage alone does not
+    /// settle the criterion: the map is keyed by request id, so what it leaves
+    /// open is what a late POST-back for a cancelled id does to the exchange
+    /// still parked beside it. Two concurrent prompts on one session are the
+    /// smallest arrangement where a mis-keyed delivery is observable — a
+    /// resolve that matched on session alone, or one that took the first
+    /// waiting entry, would answer the survivor with the cancelled call's
+    /// reply and every single-exchange test would still pass.
+    #[tokio::test]
+    async fn mik_7388_cancel_1_a_cancelled_exchange_cannot_be_answered_into_another() {
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-cross"));
+        let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
+
+        // GIVEN: two exchanges in flight on one session, neither of them
+        // answered. The proxy timeout is far beyond anything this test does,
+        // so no timeout arm can be what cleans up.
+        let prompt = |session: &str| {
+            let proxy = Arc::clone(&proxy);
+            let session = session.to_string();
+            tokio::spawn(async move {
+                proxy
+                    .forward_sampling_with_response(
+                        &session,
+                        &never_answered_sampling_params(),
+                        Duration::from_secs(30),
+                    )
+                    .await
+            })
+        };
+        // Receiving each prompt proves its entry is registered and the call is
+        // parked on its receiver, and yields the id the client would answer.
+        macro_rules! next_id {
+            () => {{
+                let delivered = tokio::time::timeout(Duration::from_millis(500), rx_session.recv())
+                    .await
+                    .expect("the session must receive the prompt")
+                    .expect("channel open");
+                assert_eq!(delivered.data["method"], "sampling/createMessage");
+                delivered.data["id"]
+                    .as_str()
+                    .expect("a prompt carries its own id")
+                    .to_string()
+            }};
+        }
+
+        let cancelled = prompt(&session);
+        let id_cancelled = next_id!();
+        let survivor = prompt(&session);
+        let id_survivor = next_id!();
+        assert_ne!(id_cancelled, id_survivor, "each prompt must get its own id");
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            2,
+            "precondition: two in-flight exchanges"
+        );
+
+        // WHEN: one is cancelled mid-await and its answer arrives afterwards.
+        // Joining the aborted handle is what makes this deterministic: abort()
+        // only requests cancellation, and the future is not dropped until the
+        // task is reaped.
+        cancelled.abort();
+        let _ = cancelled.await;
+        let late = json!({
+            "role": "assistant",
+            "content": {"type": "text", "text": "for the cancelled call"},
+        });
+        let delivered = proxy.resolve_pending(&id_cancelled, &session, late.clone());
+
+        // THEN: the cancelled exchange is gone, and refusing its answer is not
+        // done by consuming somebody else's entry.
+        assert!(
+            !delivered,
+            "a cancelled exchange has no caller left to deliver to"
+        );
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            1,
+            "the surviving exchange must still be pending"
+        );
+
+        // AND: the survivor answers as itself, with its own reply.
+        let own = json!({
+            "role": "assistant",
+            "content": {"type": "text", "text": "for the surviving call"},
+        });
+        assert!(
+            proxy.resolve_pending(&id_survivor, &session, own.clone()),
+            "the surviving exchange must still be answerable"
+        );
+        let got = tokio::time::timeout(Duration::from_millis(500), survivor)
+            .await
+            .expect("the surviving call must return")
+            .expect("its task must not panic")
+            .expect("it must succeed");
+        assert_eq!(got, own, "the survivor must receive its own answer");
+        assert_ne!(got, late, "and never the cancelled exchange's");
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "both entries reclaimed"
+        );
+    }
+
     /// MIK-7212 WIRE-11 (elicitation): the sibling of the sampling case above.
     ///
     /// `forward_elicitation_with_response` registers in the SAME
