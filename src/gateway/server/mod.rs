@@ -2857,6 +2857,10 @@ impl Gateway {
         }
     }
 
+    /// Long by construction: the single place a `tools/call` is admitted,
+    /// dispatched and accounted for, and splitting it would put the policy
+    /// checks and the outcome they gate in different functions.
+    #[expect(clippy::too_many_lines, reason = "one admission path, kept whole")]
     async fn dispatch_tools_call(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
