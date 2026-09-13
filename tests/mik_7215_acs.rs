@@ -801,9 +801,7 @@ mod http {
         // the gate names the action, so this asserts the whole action phrase,
         // not just the argument inside it.
         let description = body
-            .pointer(
-                "/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1/description",
-            )
+            .pointer("/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1/description")
             .and_then(Value::as_str)
             .unwrap_or_default();
         assert!(
