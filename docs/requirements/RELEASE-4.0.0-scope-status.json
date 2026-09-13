@@ -196,8 +196,15 @@
     {
       "id": "MIK-7235.PIN.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "C1 classify the shipped catalogue: ABSENT. No privilege or stability classification of the 125 shipped YAMLs exists in code, catalogue metadata or docs. The nearest walker, src/capability/definition/mod.rs:1224, classifies on caller-addressed external state, which is delivery-destination registration, not pin privilege, and nothing consumes it for pinning.",
+        "C2 pin the stable high-privilege subset: ABSENT as selection, present as machinery. src/capability/hash.rs:62,73 and src/commands/cap.rs:26,117 pin and verify, covered by cap_pin_writes_valid_hash_and_roundtrips_through_loader (src/commands/cap.rs:647). The pinned set is the inverse of the criterion: 6 of 125 files carry a sha256 line and all six are read-only knowledge fetchers, while 18 unpinned capabilities mutate external state, among them gmail_send_email, slack_post_message and stripe_create_payment_intent.",
+        "C3 record intentional exclusions: ABSENT. The only artifact is a runtime count of unpinned files for a log line (src/capability/loader.rs:189, tested at :302). A count does not name which files are deliberately unpinned or why.",
+        "C4 maintain re-pin checks: PARTIAL. One standing check covers one of the six pinned files (tests/wolfram_llm_tests.rs:237); mismatch rejection is real at src/capability/parser.rs:48-58 with a tamper row at :278 and an unpinned development file still loading at :299. No CI re-pin step exists in .github/workflows, scripts/ or xtask.",
+        "Doc/behaviour mismatch found while grading: src/commands/cap.rs:113-116 claims the loader refuses to start or hot-reload a changed file. It does neither. src/capability/loader.rs:97-105 catches the error and continues with a warning, and src/gateway/../capability/watcher.rs:167 has the same shape. Tampered content cannot execute, so this is not a fail-open hole, but a tampered high-privilege tool reads as a missing tool behind one warning among 125 files.",
+        "Validation: cargo test --lib --all-features capability:: -> 371 passed, 0 failed. cargo test --test wolfram_llm_tests --all-features -> 11 passed, 0 failed."
+      ],
+      "note": "PARTIAL, graded conjunct-by-conjunct 2026-09-13. Three of four conjuncts are catalogue-policy work that was never done; the fourth is one re-pin check over one of six pinned files. Size medium (3): a classification pass, a recorded exclusion list, pins for the high-privilege subset and one CI re-pin check over all pinned files. The hash, parser and cap pin machinery already ships."
     },
     {
       "id": "MIK-6710.AUDIT.1",
@@ -256,7 +263,7 @@
     {
       "id": "reference_personal_account_journey",
       "status": "resolved",
-      "selection": "Open WebUI on Spark → gateway → Google Workspace",
+      "selection": "Open WebUI on Spark \u2192 gateway \u2192 Google Workspace",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md"
       ]
