@@ -462,3 +462,54 @@ async fn sub4_playbook_dispatch_uses_admitted_definition() {
         ]
     );
 }
+
+/// The paired falsifier for the stdio credential principal: a keyed modern
+/// mutating call is admitted under the stdio constant, and the same call under
+/// the principal an unauthenticated HTTP caller actually carries is still
+/// refused. Both halves live in one test on purpose. The hazard the constant
+/// introduces is not that stdio stops working — a broken stdio half fails
+/// loudly elsewhere — but that a later "default the principal when it is
+/// missing" ungates anonymous HTTP while every stdio row stays green.
+///
+/// Scope, so this row is not over-trusted: it pins the *gate*, not the
+/// transport wiring. That stdio actually passes the constant is asserted end to
+/// end by the acceptance rows in `tests/mik_7272_sub2b_acs.rs`, which drive a
+/// spawned child over a real pipe; that HTTP passes the authenticated
+/// principal is `src/gateway/router/handlers.rs:1572`.
+///
+/// The anonymous principal is read from [`anonymous_client`] rather than
+/// written out as `""`, so the row keeps testing the real wiring if that
+/// constructor ever stops producing an empty string.
+#[test]
+fn stdio_principal_admits_a_keyed_mutation_and_anonymous_http_still_cannot() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let policy = MutablePolicy::new(SECOND);
+    let retry = RetryFields {
+        idempotency_key: Some("paired-falsifier-key".into()),
+        ..RetryFields::default()
+    };
+    let args = json!({"server":FIRST.0, "tool":FIRST.1, "arguments":{"record":"original"}});
+    let mut caller = context(&policy, &retry);
+
+    caller.credential_principal = Some(crate::gateway::server::STDIO_CREDENTIAL_PRINCIPAL);
+    assert!(
+        admit(&meta, &caller, "gateway_invoke", &args, 1).is_ok(),
+        "a keyed modern mutating call must be admittable over stdio"
+    );
+
+    let anonymous = crate::gateway::auth::anonymous_client();
+    for (label, principal) in [
+        (
+            "an unauthenticated HTTP caller",
+            Some(anonymous.principal.as_str()),
+        ),
+        ("a caller with no credential at all", None),
+    ] {
+        caller.credential_principal = principal;
+        let error = refusal(admit(&meta, &caller, "gateway_invoke", &args, 2));
+        assert!(
+            matches!(error, Error::JsonRpc { code: -32003, .. }),
+            "{label} must still be refused a keyed mutation: {error}"
+        );
+    }
+}

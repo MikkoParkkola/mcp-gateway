@@ -3290,7 +3290,7 @@ fn spawn_idle_reaper(
 /// and no second process can share the namespace this names. This is not an
 /// authorization decision — reaching the gateway over stdio already grants
 /// full tool access. If the ledger ever gains shared storage, revisit it.
-const STDIO_CREDENTIAL_PRINCIPAL: &str = "stdio";
+pub(crate) const STDIO_CREDENTIAL_PRINCIPAL: &str = "stdio";
 
 /// A test fixture approximating the caller context a stdio `tools/call`
 /// runs under -- why stdio is admin, why it has no channel and no asker --

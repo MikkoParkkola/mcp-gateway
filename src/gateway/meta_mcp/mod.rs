@@ -285,6 +285,15 @@ pub struct MetaMcp {
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
     /// One bounded execution owner shared by the meta and direct transports.
+    ///
+    /// The ledger is in-memory and owned per [`MetaMcp`]: `State.entries` is a
+    /// plain `HashMap` behind a `Mutex` (`src/idempotency/admission.rs:72-86`),
+    /// with no shared storage and no persistence across a restart. That is what
+    /// makes a constant caller principal safe to use as a key namespace on a
+    /// single-client transport — see `STDIO_CREDENTIAL_PRINCIPAL`
+    /// (`src/gateway/server/mod.rs`), where two stdio processes cannot collide
+    /// because they do not share this map. If the ledger ever gains shared
+    /// storage, every constant namespace has to be revisited first.
     pub(super) execution_admission: Arc<crate::idempotency::admission::ExecutionAdmission>,
     pub(super) idempotency_config: RwLock<crate::config::IdempotencyConfig>,
     /// Continuation keys, spent-ledger and held legacy exchanges.
