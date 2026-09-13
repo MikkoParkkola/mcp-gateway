@@ -164,8 +164,15 @@
     {
       "id": "MIK-6746.CONTRACT.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/gateway/oauth/jwt.rs",
+        "src/gateway/oauth/agents.rs",
+        "src/oauth/client/mod.rs",
+        "src/oauth/client/tests.rs",
+        "src/personal_accounts/config/adapters.rs",
+        "docs/requirements/RELEASE-4.0.0-scope-tests.md"
+      ],
+      "note": "PARTIAL, graded conjunct-by-conjunct 2026-09-13. The verdict is unchanged but the reasons are different from the previous pass.\n\nC1 inbound/gateway boundary: PARTIAL. check_audience_claim exists (src/gateway/oauth/jwt.rs:249, rejecting an absent aud at :465) but enforcement is opt-in -- `pub audience: Option<String>` (src/gateway/oauth/agents.rs:45) applied only under `if let Some(ref expected_aud)` (jwt.rs:166-167), with every fixture at None and no startup check rejecting None. A backend with no configured audience accepts any correctly-signed token.\n\nC2 downstream/outbound boundary: MET. RFC 8707 resource indicators are bound in src/oauth/client/mod.rs (:685, :724, :755, :771, :789) and tested in src/oauth/client/tests.rs (:587, :652, :707, :727, :746).\n\nC3 mechanisms documented: PARTIAL. ADR-008:123-124 documents the mechanism, but scope-update.md:65 requires the custom header be reconciled rather than copied into new work; ADR-008 promotes it to primary and records no reconciliation.\n\nC4 mechanisms tested: PARTIAL across the six cells of scope-tests.md:46 -- wrong audience PARTIAL (unit-only, no route-level refusal), issuer/backend swap ABSENT, absent identity PARTIAL, mixed credential strategies PARTIAL (config flags only), direct/meta parity ABSENT, expiry not applicable to this row because the gateway forwards an opaque header and never parses it.\n\nC5 direct/meta route parity: ABSENT. The passthrough symbols appear only in backend_handlers and personal_accounts/config/adapters.rs:163 -- nothing in src/gateway/meta_mcp/, and no parity test or doc.\n\nC6 the ordering clause 'before expanding credential forwarding': NOT MET. Forwarding is already primary while C1, C3, C4 and C5 are short, so the gate fires on the conjunction.\n\nDecisive structural finding: the only passthrough ingress is the gateway-specific header x-mcp-passthrough-authorization, and scope-tests.md:46 states that a custom header alone cannot pass the standard-interoperability cell. That cell is therefore ABSENT by construction until a standards-based ingress exists.\n\nVerified here rather than taken from the grading agent: `rg -c 'resource_indicator' src/` returns src/oauth/client/mod.rs:5 and src/oauth/client/tests.rs:4, which falsifies the claim at scope-grading-2026-09-12.md:61 that no RFC 8707 symbol exists anywhere in src/. That correction falsifies the row's stated reason only; the PARTIAL verdict survives on C1, C3, C4, C5 and C6.\n\nSize: medium-to-large. Parity tests and the reconciliation write-up are cheap; making inbound audience validation mandatory (an Option<String> threaded through agents.rs and every fixture, so a config-contract change with migration) and adding a standards-based downstream credential path are real build work.\n\nNot graded: whether any deployment profile outside src/gateway/oauth/ makes audience mandatory; live request behaviour (no gateway was started); integration-test binaries, since only --lib filters were run."
     },
     {
       "id": "MIK-3274.RANKING.1",
@@ -244,8 +251,13 @@
     {
       "id": "NFR.UPGRADE.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "src/commands/upgrade.rs",
+        "docs/release/4.0.0-upgrade-path-qa-2026-09-05.md",
+        "docs/UPGRADING-4.0.md",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "ABSENT, graded conjunct-by-conjunct 2026-09-13. The criterion (scope-update.md:56) asks for an upgrade from 3.5.1 exercising modern-off and rollback with config, credentials, permissions, mounts and active callers preserved per the documented lifecycle.\n\nSeven of nine conjuncts are ABSENT, one is PARTIAL and one is a real rehearsal of a different mechanism. PARTIAL: config preservation is functionally proven but generically -- docs/release/4.0.0-upgrade-path-qa-2026-09-05.md MIG.1 drives the upgrade twice and compares a sha256 of gateway.yaml before and after, byte-identical, re-driven at 073790da. It is not from 3.5.1 and not bundled with the other preserved properties. ABSENT: no 3.5.1 rehearsal exists at all -- verified here, src/commands/upgrade.rs:102-115 holds exactly two MIGRATIONS entries, applies_below 3.0.0 and 4.0.0, both notice: true, and the only rehearsal document drives 2.0.0 and 3.9.0 stamps. Credentials, permissions, mounts and active callers have no rehearsal; the rollback claim at docs/UPGRADING-4.0.md:94-99 is a written assertion rather than an executed pass; and the 'documented migration contract' the test plan names does not exist as a document.\n\nAdjacent but not this criterion: kind-rollback-smoke.sh and the K8s job at .github/workflows/ci.yml:150-169 are a real apply/upgrade/rollout-undo rehearsal that passes today. It exercises a Kubernetes Deployment rollout with substituted pause images, not the gateway's own version-stamp, config, credential, permission, mount and caller lifecycle, so it cannot carry this row.\n\nSize: large (8), and arguably a floor: it needs 3.5.1 config and token fixtures, an isolated deployment harness, verification of five preserved properties, a modern-off plus rollback sequence, and the migration contract document authored first so there is something to diff against."
     },
     {
       "id": "NFR.RELEASEGATE.1",
@@ -263,8 +275,11 @@
     {
       "id": "NFR.DEMO.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "docs/requirements/RELEASE-4.0.0-scope-update.md",
+        "docs/requirements/RELEASE-4.0.0-scope-tests.md"
+      ],
+      "note": "ABSENT, graded conjunct-by-conjunct 2026-09-13. The criterion (scope-update.md:58) asks for recorded demonstrations of five scenarios: mixed-era interaction, a reconnectable task, isolated personal accounts, useful large-catalogue discovery, and error-budget diagnosis/recovery, each carrying versions with expected and actual observations (scope-tests.md:72).\n\nAll five recording conjuncts are ABSENT, and the versions/expected/actual conjunct is moot because no recording exists to carry it. An ABSENT conjunct is graded on a cited search with a null result, not on an impression: `rg -uu --hidden --no-ignore -n 'mixed-era|reconnectable|error-budget|large-catalogue'` finds the five scenario phrases nowhere but the criterion text and the grading document that quotes it, and `fd -uu -e cast -e mp4 -e gif -e asciinema .` returns exactly three artifacts -- demo.gif, docs/mcp-gateway-demo-opt.gif and docs/mcp-gateway-demo.gif -- reproduced here. All three are README marketing assets driven by demo.tape, a VHS script whose content is the context-token pitch, and none is one of the five required scenarios. No demo-recording job exists in ci.yml, release.yml or docker.yml.\n\nSize: large (8) holds. demo.tape plus VHS is a real re-runnable pipeline, so the recording mechanism is not the gap -- five live-environment scenarios with version and expected/actual write-ups are. The mixed-era scenario additionally depends on the legacy stdio bridge, which is mid-flight on this branch, and recording a scenario whose mechanism is still moving would have to be redone."
     },
     {
       "id": "NFR.BUILD.1",
