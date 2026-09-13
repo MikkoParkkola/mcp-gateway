@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Personal-account authorization parity across the public meta entry points
 //! (MIK-6745.JOURNEY.3).
 //!
