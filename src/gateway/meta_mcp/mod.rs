@@ -1877,18 +1877,28 @@ impl MetaMcp {
             );
         }
 
-        if let Some(response) =
-            destructive_confirmation_gate(&id, tool_name, &arguments, session_id, &caller).await
-        {
-            return response;
-        }
+        let confirmed_in_band =
+            match destructive_confirmation_gate(&id, tool_name, &arguments, session_id, &caller)
+                .await
+            {
+                GateOutcome::Refuse(response) => return *response,
+                GateOutcome::Proceed => false,
+                GateOutcome::ProceedConfirmed => true,
+            };
 
         if let Some(intent) = caller.task.take() {
             return self.begin_task(id, tool_name, arguments, intent).await;
         }
 
-        self.dispatch_below_gate(id, tool_name, arguments, session_id, &caller)
-            .await
+        self.dispatch_below_gate(
+            id,
+            tool_name,
+            arguments,
+            session_id,
+            &caller,
+            confirmed_in_band,
+        )
+        .await
     }
 
     async fn begin_task(
@@ -1924,6 +1934,7 @@ impl MetaMcp {
         arguments: Value,
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
+        confirmed_in_band: bool,
     ) -> JsonRpcResponse {
         self.dispatch_below_gate_shaped(
             id,
@@ -1932,6 +1943,7 @@ impl MetaMcp {
             session_id,
             caller,
             ResultShape::Wrapped,
+            confirmed_in_band,
         )
         .await
     }
@@ -1968,6 +1980,10 @@ impl MetaMcp {
             session_id,
             caller,
             ResultShape::Native,
+            // A task worker dispatches what was admitted on the request
+            // thread; the confirmation, if there was one, was spent there and
+            // this context carries no `requestState` to spend again.
+            false,
         )
         .await
     }
@@ -1980,13 +1996,21 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
         shape: ResultShape,
+        confirmed_in_band: bool,
     ) -> JsonRpcResponse {
         // T2.4: a call naming a backend tool directly — because an operator
         // surfaced it, or because it is a retry of an exchange this gateway
         // opened — is routed BEFORE the meta-tool match.
-        if let Some(response) = self
-            .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, caller)
-            .await
+        //
+        // Skipped for a retry the gate just redeemed: the envelope is a
+        // single-use handle and the gate spent it, so routing this call by its
+        // `requestState` would present an already-spent continuation to a
+        // second consumer and the approved action would die as a stale retry.
+        // A retry that reaches here confirmed is, by construction, ours.
+        if !confirmed_in_band
+            && let Some(response) = self
+                .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, caller)
+                .await
         {
             return response;
         }
@@ -2426,21 +2450,48 @@ async fn redeem_confirmation(
     Ok(())
 }
 
-/// Returns the refusal to send, or `None` when the call may proceed.
+/// The gate's three answers.
+///
+/// Three rather than an `Option<JsonRpcResponse>`, because a confirmed retry is
+/// not the same as an ungoverned call: it carries a `requestState` the caller
+/// echoed back, and the routing that reads one belongs to the backend path, not
+/// to a meta-tool the gateway itself executes.
+enum GateOutcome {
+    /// The call does not run. This is the answer to send.
+    Refuse(Box<JsonRpcResponse>),
+    /// Nothing to confirm, or confirmation obtained out of band. Dispatch
+    /// normally.
+    Proceed,
+    /// A retry whose in-band confirmation was opened and spent here.
+    ProceedConfirmed,
+}
+
+impl GateOutcome {
+    /// The boxing lives here so the arms below read as what they answer.
+    fn refuse(response: JsonRpcResponse) -> Self {
+        Self::Refuse(Box::new(response))
+    }
+}
+
+/// Whether the call may run, and if so whether it spent a confirmation here.
+///
+/// Long by construction: one arm per `ConfirmationChannel` variant, and each
+/// arm's refusal is only meaningful next to the others it is not.
+#[expect(clippy::too_many_lines, reason = "one arm per confirmation channel")]
 async fn destructive_confirmation_gate(
     id: &RequestId,
     tool_name: &str,
     arguments: &Value,
     session_id: Option<&str>,
     caller: &MetaMcpCallerContext<'_>,
-) -> Option<JsonRpcResponse> {
+) -> GateOutcome {
     use crate::gateway::destructive_confirmation::{
         ConfirmationChannel, ConfirmationOutcome, ConfirmationPolicy, describe_destructive_action,
         require_destructive_confirmation,
     };
 
     if !crate::gateway::destructive_confirmation::is_destructive_meta_tool(tool_name) {
-        return None;
+        return GateOutcome::Proceed;
     }
 
     let action_desc = describe_destructive_action(tool_name, arguments);
@@ -2463,7 +2514,7 @@ async fn destructive_confirmation_gate(
         // there is no one to elicit from, and producing an "unsupported"
         // outcome would only re-enter a policy written for a channel
         // that does exist.
-        ConfirmationChannel::Unavailable => return Some(refused(&action_desc)),
+        ConfirmationChannel::Unavailable => return GateOutcome::refuse(refused(&action_desc)),
         ConfirmationChannel::Elicit { proxy, policy } => {
             let outcome = require_destructive_confirmation(
                 proxy,
@@ -2478,7 +2529,7 @@ async fn destructive_confirmation_gate(
                 // accounting and was never counted; marking it keeps
                 // that true, so exercising the safety control cannot
                 // walk a caller toward a tripped breaker.
-                return Some(confirmation_refusal_response(
+                return GateOutcome::refuse(confirmation_refusal_response(
                     id,
                     format!("Operator declined: {action_desc}"),
                 ));
@@ -2489,7 +2540,7 @@ async fn destructive_confirmation_gate(
             if outcome == ConfirmationOutcome::Unsupported
                 && policy.on_unconfirmable() == ConfirmationPolicy::REFUSE
             {
-                return Some(refused(&action_desc));
+                return GateOutcome::refuse(refused(&action_desc));
             }
         }
         // The asker is the caller itself, one round-trip away: the gate answers
@@ -2502,7 +2553,7 @@ async fn destructive_confirmation_gate(
         // refusal it replaces.
         ConfirmationChannel::InBand { continuation } => {
             let Some(principal) = confirmation_principal(caller) else {
-                return Some(refused(&action_desc));
+                return GateOutcome::refuse(refused(&action_desc));
             };
             let digest = confirmation_digest(tool_name, arguments);
 
@@ -2511,7 +2562,7 @@ async fn destructive_confirmation_gate(
                     .await
                     .is_err()
                 {
-                    return Some(refused(&action_desc));
+                    return GateOutcome::refuse(refused(&action_desc));
                 }
                 // Only JSON `true` confirms. Absent, `false`, `"yes"`, `1` —
                 // all decline, fail-closed. A malformed answer is deliberately
@@ -2525,9 +2576,9 @@ async fn destructive_confirmation_gate(
                     .and_then(Value::as_bool)
                     == Some(true)
                 {
-                    return None;
+                    return GateOutcome::ProceedConfirmed;
                 }
-                return Some(confirmation_refusal_response(
+                return GateOutcome::refuse(confirmation_refusal_response(
                     id,
                     format!("Operator declined: {action_desc}"),
                 ));
@@ -2547,13 +2598,13 @@ async fn destructive_confirmation_gate(
                 .await
             else {
                 warn!(tool = %tool_name, "No slot to hold this confirmation open");
-                return Some(refused(&action_desc));
+                return GateOutcome::refuse(refused(&action_desc));
             };
             let Ok(envelope) = continuation.keyring().mint(&payload) else {
                 warn!(tool = %tool_name, "Confirmation envelope mint refused");
-                return Some(refused(&action_desc));
+                return GateOutcome::refuse(refused(&action_desc));
             };
-            return Some(JsonRpcResponse::success(
+            return GateOutcome::refuse(JsonRpcResponse::success(
                 id.clone(),
                 json!({
                     "resultType": "input_required",
@@ -2569,7 +2620,7 @@ async fn destructive_confirmation_gate(
             ));
         }
     }
-    None
+    GateOutcome::Proceed
 }
 
 #[cfg(test)]
