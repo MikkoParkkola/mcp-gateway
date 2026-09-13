@@ -148,18 +148,21 @@ pub trait Transport: Send + Sync {
 /// The entry is meant to live exactly as long as the request does, so the guard
 /// removes it on drop. On the success path the reader has already removed the
 /// entry, making the removal a harmless no-op.
-pub(crate) struct PendingRequestGuard<'a> {
-    pending: &'a DashMap<String, oneshot::Sender<JsonRpcResponse>>,
+///
+/// Generic over the reply payload: the stdio transport's map carries
+/// [`JsonRpcResponse`], and the gateway's stdio client channel carries the raw
+/// reply frame as a `Value`, because that is what `ClientChannel::send_request`
+/// hands back (`src/gateway/proxy.rs:523`). One guard, both maps — a second
+/// copy of this type is a second place for the cancellation contract to rot.
+pub(crate) struct PendingRequestGuard<'a, T = JsonRpcResponse> {
+    pending: &'a DashMap<String, oneshot::Sender<T>>,
     key: String,
 }
 
-impl<'a> PendingRequestGuard<'a> {
+impl<'a, T> PendingRequestGuard<'a, T> {
     /// Wrap a `pending` map entry so it is removed when the guard drops.
     #[must_use]
-    pub(crate) fn new(
-        pending: &'a DashMap<String, oneshot::Sender<JsonRpcResponse>>,
-        key: &str,
-    ) -> Self {
+    pub(crate) fn new(pending: &'a DashMap<String, oneshot::Sender<T>>, key: &str) -> Self {
         Self {
             pending,
             key: key.to_string(),
@@ -167,7 +170,7 @@ impl<'a> PendingRequestGuard<'a> {
     }
 }
 
-impl Drop for PendingRequestGuard<'_> {
+impl<T> Drop for PendingRequestGuard<'_, T> {
     fn drop(&mut self) {
         self.pending.remove(&self.key);
     }

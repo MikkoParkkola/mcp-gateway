@@ -10,6 +10,7 @@ mod persistence;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
+mod stdio_channel;
 mod support;
 // Two questions leave this module, both to `config_reload`, and each is
 // exported under the question it answers. A reload asks about the config that

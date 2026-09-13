@@ -109,11 +109,17 @@ visibility widening), enqueues the request frame, then awaits the receiver.
 The guard is not stylistic. `InputBridge::ask` wraps every call in
 `tokio::time::timeout`; on expiry the future is dropped and neither the success
 nor the error path runs, so a hand-rolled map leaks one entry per timed-out
-prompt for the life of the session. Reusing the guard means reusing the map type
-it is written against, which is why `pending` holds `JsonRpcResponse` and the
-reply is parsed into that type before delivery rather than passed as a raw
-`Value`. `cancelled_request_does_not_strand_pending_entry`
+prompt for the life of the session.
+`cancelled_request_does_not_strand_pending_entry`
 (`src/transport/stdio.rs:815`) already pins the guard's behaviour.
+
+The map carries the **raw reply frame** as a `Value`, not a `JsonRpcResponse`.
+That is what the only other `ClientChannel` implementation returns
+(`ProxyManager::send_request`, `src/gateway/proxy.rs:523`); the `result`/`error`
+projection happens downstream in `InputBridge::ask`, and projecting here would
+give the bridge a different input on stdio than on HTTP. `PendingRequestGuard`
+is therefore made generic over its payload — one guard, two maps, rather than a
+second copy of the cancellation contract to keep in sync.
 
 The channel is an `Arc<StdioClientChannel>` created before the loop and **cloned
 into each spawned dispatch task**, which builds its caller context from `&*arc`
