@@ -229,14 +229,36 @@ pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) ->
     }))
 }
 
+/// The first revision that removed the session handshake. Every revision at or
+/// after it is stateless by construction, which is what the fail-forward
+/// default in [`declares_modern_era`] compares against — a year prefix would
+/// stop being true on 2027-01-01.
+pub const FIRST_STATELESS_VERSION: &str = "2026-07-28";
+
+/// Whether a value has the shape a protocol revision is spelled in: an ISO
+/// calendar date such as `2026-07-28`. The shape check is what makes the
+/// lexical comparison in [`declares_modern_era`] sound — ISO dates order
+/// correctly as plain strings, arbitrary text does not.
+fn is_revision_shaped(version: &str) -> bool {
+    let b = version.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[8..].iter().all(u8::is_ascii_digit)
+}
+
 /// Whether a protocol-version value declares the stateless era at all.
 ///
-/// Broader than [`MODERN_VERSIONS`] on purpose: a client naming a 2026 revision
-/// this build does not serve has still declared itself stateless, and treating
-/// it as legacy would hand it a session its own revision deleted.
+/// Broader than [`MODERN_VERSIONS`] on purpose: a client naming a revision at
+/// or after the first stateless one that this build does not serve has still
+/// declared itself stateless, and treating it as legacy would hand it a
+/// session its own revision deleted.
 #[must_use]
 pub fn declares_modern_era(version: &str) -> bool {
-    MODERN_VERSIONS.contains(&version) || version.starts_with("2026-")
+    MODERN_VERSIONS.contains(&version)
+        || (is_revision_shaped(version) && version >= FIRST_STATELESS_VERSION)
 }
 
 /// Revisions the **stateless** path can serve.
@@ -859,7 +881,7 @@ mod declared_capabilities_tests {
 /// security argument is.
 #[cfg(test)]
 mod declared_parse_boundary_tests {
-    use super::{Declared, ElicitationMode, classify_request};
+    use super::{Declared, ElicitationMode, classify_request, declares_modern_era};
     use serde_json::{Value, json};
 
     fn declaring(capabilities: &Value) -> Declared {
@@ -966,5 +988,27 @@ mod declared_parse_boundary_tests {
         assert_eq!(absent, Some(ElicitationMode::Form));
         assert_eq!(null, absent, "an explicit null is not a fifth thing");
         assert_eq!(ElicitationMode::from_params(None), absent);
+    }
+
+    /// The row the fail-forward default exists for: a revision minted after
+    /// 2026 is still stateless, and a year-prefix test stops seeing it.
+    #[test]
+    fn a_2027_revision_declares_the_modern_era() {
+        assert!(declares_modern_era("2027-03-01"));
+    }
+
+    /// The other side of the boundary: a pre-stateless revision negotiates a
+    /// session, and reading it as modern would delete that handshake.
+    #[test]
+    fn a_2025_revision_does_not() {
+        assert!(!declares_modern_era("2025-11-25"));
+    }
+
+    /// The shape check earns its place here: plain text sorts above the
+    /// constant, and a bare comparison would wave it through.
+    #[test]
+    fn a_non_revision_string_does_not() {
+        assert!(!declares_modern_era("2026"));
+        assert!(!declares_modern_era("banana"));
     }
 }
