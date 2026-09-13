@@ -2818,7 +2818,7 @@ impl Gateway {
             signing: None,
             is_modern,
             protocol_revision,
-            credential_principal: None,
+            credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
             authorizer: stdio_authorizer,
             // Stdio has no port and no network surface: the
             // client SPAWNED this process, so it already holds
@@ -3280,6 +3280,18 @@ fn spawn_idle_reaper(
     })
 }
 
+/// The admission ledger namespaces a client-chosen idempotency key under a
+/// principal. Stdio has no OIDC identity and no credential to derive one from,
+/// so without a value here every modern mutating call is refused `-32003` and
+/// the transport can carry no keyed write at all. A constant is sufficient
+/// rather than a stopgap: a stdio process serves exactly the one client that
+/// spawned it, and each process owns a separate in-memory
+/// `ExecutionAdmission` (`src/idempotency/admission.rs`), so no second caller
+/// and no second process can share the namespace this names. This is not an
+/// authorization decision — reaching the gateway over stdio already grants
+/// full tool access. If the ledger ever gains shared storage, revisit it.
+const STDIO_CREDENTIAL_PRINCIPAL: &str = "stdio";
+
 /// A test fixture approximating the caller context a stdio `tools/call`
 /// runs under -- why stdio is admin, why it has no channel and no asker --
 /// in one named place instead of forty lines per test.
@@ -3303,7 +3315,7 @@ fn stdio_caller_context<'a>(
         signing: None,
         is_modern: era == crate::protocol::meta::Era::Modern,
         protocol_revision: None,
-        credential_principal: None,
+        credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
         authorizer,
         // Stdio has no port and no network surface: the
         // client SPAWNED this process, so it already holds
