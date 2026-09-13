@@ -2134,6 +2134,7 @@ mod health_predicate_tests {
             lifecycle: crate::backend::BackendLifecycle::Running,
             transport: "http".to_string(),
             tools_cached: 0,
+            tools_known: true,
             circuit_state: circuit.to_string(),
             request_count: 0,
             healthy,

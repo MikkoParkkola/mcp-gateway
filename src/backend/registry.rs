@@ -61,6 +61,8 @@ pub struct BackendStatus {
     pub transport: String,
     /// Number of cached tools
     pub tools_cached: usize,
+    /// `false` = not enumerated yet, so `tools_cached == 0` means "unknown".
+    pub tools_known: bool,
     /// Circuit breaker state
     pub circuit_state: String,
     /// Total request count

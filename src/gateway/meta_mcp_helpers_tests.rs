@@ -217,7 +217,8 @@ fn build_initialize_result_passes_instructions_through() {
 
 #[test]
 fn discovery_preamble_contains_all_four_meta_tools() {
-    let preamble = build_discovery_preamble(10, 2, &MetaToolExposure::expose_all());
+    let preamble =
+        build_discovery_preamble(ToolTotal::Exact(10), 2, &MetaToolExposure::expose_all());
     assert!(preamble.contains("gateway_search_tools"));
     assert!(preamble.contains("gateway_list_tools"));
     assert!(preamble.contains("gateway_list_servers"));
@@ -226,10 +227,8 @@ fn discovery_preamble_contains_all_four_meta_tools() {
 
 #[test]
 fn discovery_preamble_contains_first_keyword() {
-    // GIVEN: any tool/server counts
-    // WHEN: building the preamble
-    // THEN: "FIRST" appears to emphasize search-before-invoke pattern
-    let preamble = build_discovery_preamble(0, 0, &MetaToolExposure::expose_all());
+    let preamble =
+        build_discovery_preamble(ToolTotal::Exact(0), 0, &MetaToolExposure::expose_all());
     assert!(
         preamble.contains("FIRST"),
         "preamble must include FIRST to guide agent behavior"
@@ -239,7 +238,8 @@ fn discovery_preamble_contains_first_keyword() {
 #[test]
 fn discovery_preamble_includes_tool_count() {
     // GIVEN: 42 tools across 3 backends
-    let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
+    let preamble =
+        build_discovery_preamble(ToolTotal::Exact(42), 3, &MetaToolExposure::expose_all());
     // THEN: the count appears in the text
     assert!(
         preamble.contains("42 tools"),
@@ -248,9 +248,70 @@ fn discovery_preamble_includes_tool_count() {
 }
 
 #[test]
+fn discovery_preamble_omits_the_total_when_nothing_is_enumerated() {
+    // GIVEN: no backend has been enumerated, so no total is known yet
+    let preamble = build_discovery_preamble(ToolTotal::Unknown, 3, &MetaToolExposure::expose_all());
+    // THEN: the backend count is still stated — it is always real — but no tool
+    // total is asserted, because "0 tools" would read as an empty gateway.
+    assert!(
+        preamble.contains("3 backends"),
+        "backend count does not depend on enumeration"
+    );
+    assert!(
+        !preamble.contains("0 tools"),
+        "an unknown total must not be reported as zero"
+    );
+    assert!(
+        preamble.contains("manages tools across"),
+        "the preamble must still say the fleet has tools"
+    );
+}
+
+#[test]
+fn discovery_preamble_states_a_floor_when_only_some_backends_are_enumerated() {
+    // GIVEN: two of three backends enumerated, contributing 42 tools between them
+    let preamble =
+        build_discovery_preamble(ToolTotal::AtLeast(42), 3, &MetaToolExposure::expose_all());
+
+    assert!(
+        preamble.contains("at least 42 tools"),
+        "a partial total must be stated as a floor, not omitted: {preamble}"
+    );
+    assert!(preamble.contains("3 backends"));
+}
+
+#[test]
+fn discovery_preamble_states_the_exact_total_once_every_backend_is_enumerated() {
+    // GIVEN: every backend enumerated
+    let preamble =
+        build_discovery_preamble(ToolTotal::Exact(42), 3, &MetaToolExposure::expose_all());
+    // THEN: no hedging language — this is the real total
+    assert!(preamble.contains("42 tools"));
+    assert!(!preamble.contains("at least"));
+}
+
+#[test]
+fn tool_total_phrase_distinguishes_the_three_states() {
+    assert_eq!(ToolTotal::Unknown.phrase(), "tools");
+    assert_eq!(ToolTotal::AtLeast(7).phrase(), "at least 7 tools");
+    assert_eq!(ToolTotal::Exact(7).phrase(), "7 tools");
+}
+
+#[test]
+fn tool_total_plus_widens_a_known_total_but_never_invents_one() {
+    // Capability tools are known independently of the backend cache, so they
+    // widen an existing floor and the exact total alike...
+    assert_eq!(ToolTotal::AtLeast(7).plus(3), ToolTotal::AtLeast(10));
+    assert_eq!(ToolTotal::Exact(7).plus(3), ToolTotal::Exact(10));
+    // ...but a gateway with nothing enumerated still has no number to state.
+    assert_eq!(ToolTotal::Unknown.plus(3), ToolTotal::Unknown);
+}
+
+#[test]
 fn discovery_preamble_includes_server_count() {
     // GIVEN: 42 tools across 3 backends
-    let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
+    let preamble =
+        build_discovery_preamble(ToolTotal::Exact(42), 3, &MetaToolExposure::expose_all());
     assert!(
         preamble.contains("3 backends"),
         "preamble must include backend/server count"
@@ -260,7 +321,8 @@ fn discovery_preamble_includes_server_count() {
 #[test]
 fn discovery_preamble_with_zero_counts_is_valid() {
     // GIVEN: no tools or backends yet (empty gateway)
-    let preamble = build_discovery_preamble(0, 0, &MetaToolExposure::expose_all());
+    let preamble =
+        build_discovery_preamble(ToolTotal::Exact(0), 0, &MetaToolExposure::expose_all());
     assert!(preamble.contains("0 tools"));
     assert!(preamble.contains("0 backends"));
 }
@@ -523,7 +585,7 @@ fn build_meta_tools_returns_only_the_ungated_surface_with_every_gate_off() {
             playbooks: false,
             profiles: false,
         },
-        0,
+        ToolTotal::Exact(0),
         0,
     );
     // 4 base + 2 kill-switch + 1 disabled-caps + 1 set-state + 1 reload-capabilities = 9
@@ -560,7 +622,7 @@ fn build_meta_tools_with_stats_enumerates_everything_but_webhook_status() {
             playbooks: false,
             profiles: false,
         },
-        0,
+        ToolTotal::Exact(0),
         0,
     );
     // 4 base + 1 stats + 2 kill-switch + 1 disabled-caps + 1 set-state + 1 reload-capabilities = 10
@@ -588,7 +650,7 @@ fn build_meta_tools_includes_reload_when_enabled() {
             playbooks: false,
             profiles: false,
         },
-        0,
+        ToolTotal::Exact(0),
         0,
     );
     // 4 base + 2 kill-switch + 1 disabled-caps + 1 reload + 1 set-state + 1 reload-capabilities = 10
@@ -610,7 +672,7 @@ fn build_meta_tools_all_enabled_includes_reload() {
             playbooks: false,
             profiles: false,
         },
-        0,
+        ToolTotal::Exact(0),
         0,
     );
     // 4 base + 1 stats + 2 kill-switch + 1 disabled-caps + 1 reload + 1 set-state + 1 reload-capabilities = 11
@@ -626,7 +688,7 @@ fn build_meta_tools_all_enabled_includes_reload() {
 
 #[test]
 fn build_base_tools_all_have_descriptions() {
-    let tools = build_base_tools(10, 2);
+    let tools = build_base_tools(ToolTotal::Exact(10), 2);
     for tool in &tools {
         assert!(
             tool.description.is_some(),
@@ -638,7 +700,7 @@ fn build_base_tools_all_have_descriptions() {
 
 #[test]
 fn build_base_tools_all_have_object_input_schema() {
-    let tools = build_base_tools(10, 2);
+    let tools = build_base_tools(ToolTotal::Exact(10), 2);
     for tool in &tools {
         assert_eq!(
             tool.input_schema["type"], "object",
@@ -788,7 +850,7 @@ fn expose_all_reproduces_the_unfiltered_preamble() {
          - gateway_list_servers -- list all backends with status\n";
 
     assert_eq!(
-        build_discovery_preamble(42, 3, &MetaToolExposure::expose_all()),
+        build_discovery_preamble(ToolTotal::Exact(42), 3, &MetaToolExposure::expose_all()),
         expected
     );
 }
@@ -840,21 +902,12 @@ fn empty_extensions_are_omitted_so_discovery_stays_additive() {
 
 #[test]
 fn ac_ext_1_a_the_builder_serializes_the_map_it_was_given() {
-    // GIVEN: an extension identifier the production source can never emit.
-    // `ExtensionSet::gateway_declares()` returns `vec![Extension::Tasks]`, so a
-    // builder that ignored its argument and read `discovery_extensions()`
-    // directly would still satisfy every assertion phrased against
-    // `io.modelcontextprotocol/tasks`. A probe identifier is what separates
-    // "the parameter is wired" from "the wire value happens to be right".
     let mut probe = std::collections::HashMap::new();
     probe.insert("example.test/probe".to_string(), serde_json::json!({}));
 
     // WHEN: the builder serializes those capabilities.
     let wire = serde_json::to_value(build_server_capabilities(probe)).unwrap();
 
-    // THEN: the serialized map is exactly the injected one — the literal key is
-    // present and it is the only key. Asserting against `discovery_extensions()`
-    // here would compare the function to itself and pass on any implementation.
     let extensions = wire
         .get("extensions")
         .and_then(serde_json::Value::as_object)
