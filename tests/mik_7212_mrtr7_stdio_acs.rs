@@ -89,6 +89,23 @@ fn saw_method(received: &Received, method: &str) -> bool {
 /// produce a line that does not parse.
 const QUESTION_BYTES: usize = 96 * 1024;
 
+/// The `_meta` key the client carries its idempotency key under.
+///
+/// `src/gateway/meta_mcp/admission.rs:157` refuses a modern, non-read-only call
+/// without one, and operator decision 7
+/// (`docs/requirements/RELEASE-4.0.0-operator-decisions.md:37`) puts it here, on
+/// both routes: the key is the client's to send. A call that omits it is refused
+/// before it reaches a backend, so every row below would measure the admission
+/// gate rather than the bridge.
+const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+
+/// The backend's delay before answering a call that asks for it.
+///
+/// Long enough that a second request sent straight after the first is answered
+/// while the first is still in the backend, and short enough to sit well inside
+/// `READ_TIMEOUT`.
+const BACKEND_SLOW_CALL_DELAY: Duration = Duration::from_millis(500);
+
 /// The backend's delay before answering `initialize`.
 ///
 /// Row 323 needs the client-visible handshake to still be outstanding when the
@@ -111,6 +128,12 @@ async fn spawn_fixture_backend() -> (String, Received) {
             async move {
                 if request.get("method").and_then(Value::as_str) == Some("initialize") {
                     tokio::time::sleep(BACKEND_INITIALIZE_DELAY).await;
+                }
+                // The delay is requested by the caller's arguments rather than
+                // by the tool name, so the slow rows need no second tool and
+                // `tools/list` stays what the other rows assert on.
+                if request.pointer("/params/arguments/slow").is_some() {
+                    tokio::time::sleep(BACKEND_SLOW_CALL_DELAY).await;
                 }
                 axum::Json(fixture_answer(&request, &sink))
             }
@@ -195,7 +218,9 @@ fn write_config(home: &Path, backend_url: &str) {
 /// The shipped binary, spawned the way a stdio client spawns it.
 struct StdioSession {
     child: Child,
-    stdin: ChildStdin,
+    /// `None` once the client has hung up: dropping the handle is the EOF the
+    /// serve loop sees, and a row that closes stdin still reads what follows.
+    stdin: Option<ChildStdin>,
     stdout: Lines<BufReader<ChildStdout>>,
 }
 
@@ -225,7 +250,7 @@ impl StdioSession {
             .kill_on_drop(true)
             .spawn()
             .expect("spawn gateway over stdio");
-        let stdin = child.stdin.take().expect("child stdin");
+        let stdin = Some(child.stdin.take().expect("child stdin"));
         let stdout = BufReader::new(child.stdout.take().expect("child stdout")).lines();
         Self {
             child,
@@ -235,11 +260,17 @@ impl StdioSession {
     }
 
     async fn send(&mut self, message: &Value) {
-        self.stdin
+        let stdin = self.stdin.as_mut().expect("child stdin still open");
+        stdin
             .write_all(format!("{message}\n").as_bytes())
             .await
             .expect("write to child stdin");
-        self.stdin.flush().await.expect("flush child stdin");
+        stdin.flush().await.expect("flush child stdin");
+    }
+
+    /// Hang up, the way a client that exits does.
+    fn close_stdin(&mut self) {
+        self.stdin = None;
     }
 
     /// Read lines until one carries `id`, or the bound expires.
@@ -305,6 +336,19 @@ fn initialize_request(id: i64) -> Value {
 /// Backend tools are not on `tools/call` by their own name unless an operator
 /// pins them, so the invoke meta tool is the route a real client takes.
 fn asking_call(id: i64) -> Value {
+    asking_call_inner(id, false)
+}
+
+/// The same call, with the backend held for `BACKEND_SLOW_CALL_DELAY`.
+fn slow_asking_call(id: i64) -> Value {
+    asking_call_inner(id, true)
+}
+
+fn asking_call_inner(id: i64, slow: bool) -> Value {
+    let mut tool_arguments = json!({});
+    if slow {
+        tool_arguments["slow"] = Value::Bool(true);
+    }
     json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -314,11 +358,15 @@ fn asking_call(id: i64) -> Value {
             "arguments": {
                 "server": BACKEND,
                 "tool": ASKING_TOOL,
-                "arguments": {},
+                "arguments": tool_arguments,
             },
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": CLIENT_PROTOCOL_VERSION,
                 "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
+                // Per request, and distinct per id: two calls sharing one key are
+                // one retried call, and the second would be served the first's
+                // result instead of reaching the backend.
+                IDEMPOTENCY_KEY_META: format!("mrtr7-stdio-{id}"),
             },
         },
     })
@@ -501,6 +549,84 @@ async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
              JSON: {line:?}"
         );
     }
+
+    session.shutdown().await;
+}
+
+/// MIK-7387 §2 — a fast request overtakes a slow one already in dispatch.
+///
+/// The concurrency the dispatch split buys is otherwise asserted by nothing:
+/// every other row here passes just as well against a loop that dispatches one
+/// request at a time, because none of them measures overlap. This one does, and
+/// it is the row that goes red if the `JoinSet` in `run_stdio` is deleted and
+/// dispatch goes back inline — the slow response would then be written before
+/// the fast request is even read.
+///
+/// Stated behaviour change it pins: responses to non-`initialize` requests are
+/// written in completion order, not request order. JSON-RPC correlates by `id`.
+#[tokio::test]
+async fn ac_mrtr_7a_a_fast_request_is_answered_before_a_slow_one_it_followed() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, _received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    session.send(&initialize_request(1)).await;
+    let (_, initialized) = session.read_until_id(1).await;
+    assert!(initialized.is_some(), "the child never answered initialize");
+
+    // Pipelined deliberately: the fast request is written without waiting for
+    // the slow one, which is the only arrangement in which overtaking can
+    // happen at all.
+    session.send(&slow_asking_call(2)).await;
+    session
+        .send(&json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}))
+        .await;
+
+    let (seen, fast) = session.read_until_id(3).await;
+    assert!(
+        fast.is_some(),
+        "the child never answered the fast request: {seen:?}"
+    );
+    let slow_arrived_first = frames_lenient(&seen)
+        .iter()
+        .any(|frame| frame.get("id").and_then(Value::as_i64) == Some(2));
+    assert!(
+        !slow_arrived_first,
+        "the slow request's response preceded the fast one, so the two never \
+         overlapped: dispatch is serialized. Frames: {seen:?}"
+    );
+
+    session.shutdown().await;
+}
+
+/// MIK-7387 §6 — a request in flight when stdin closes still gets its response.
+///
+/// EOF is not a cancellation: the client is owed an answer to a call it already
+/// made. Dropping the `JoinSet` at EOF instead of draining it aborts that call
+/// mid-dispatch and the id is never answered, which no other row here catches
+/// because none of them closes stdin while work is outstanding.
+#[tokio::test]
+async fn ac_mrtr_7a_request_in_flight_when_stdin_closes_still_gets_its_response() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, _received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    session.send(&initialize_request(1)).await;
+    let (_, initialized) = session.read_until_id(1).await;
+    assert!(initialized.is_some(), "the child never answered initialize");
+
+    session.send(&slow_asking_call(2)).await;
+    // Hang up while the backend still holds the call.
+    session.close_stdin();
+
+    let (seen, answered) = session.read_until_id(2).await;
+    assert!(
+        answered.is_some(),
+        "a request still in dispatch when stdin closed was never answered; the \
+         drain aborted it. Frames: {seen:?}"
+    );
 
     session.shutdown().await;
 }
