@@ -571,7 +571,7 @@ pub(super) fn retry_origin_backend(
     // means "nothing to route", which is exactly true here — routing it would
     // hand the answer to a backend named after a meta-tool, and the gate that
     // must see it would never run.
-    if payload.purpose == crate::protocol::continuation::Purpose::DestructiveConfirm {
+    if payload.purpose == crate::protocol::continuation::ContinuationPurpose::DestructiveConfirm {
         return None;
     }
     Some(Ok(payload.backend_id))
@@ -627,7 +627,7 @@ async fn redeem_retry(
     // arrived after either would leave the caller's own honest retry with
     // nothing left to redeem.
     payload
-        .require_purpose(crate::protocol::continuation::Purpose::BackendInput)
+        .require_purpose(crate::protocol::continuation::ContinuationPurpose::BackendInput)
         .map_err(|error| {
             warn!(
                 server,

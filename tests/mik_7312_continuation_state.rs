@@ -21,7 +21,9 @@ use mcp_gateway::gateway::streaming::NotificationMultiplexer;
 use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
 use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, StoreLimits, open_runtime};
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-use mcp_gateway::protocol::continuation::{ContinuationError, ContinuationState, Payload, Purpose};
+use mcp_gateway::protocol::continuation::{
+    ContinuationError, ContinuationPurpose, ContinuationState, Payload,
+};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 
 /// One gateway process, built the way the server builds it.
@@ -114,7 +116,7 @@ fn payload(jti: &str, origin: &str, expires_at: u64) -> Payload {
         hold_key: format!("exchange-{jti}"),
         // A backend `input_required` continuation, which is the domain every
         // case in this file redeems through.
-        purpose: Purpose::BackendInput,
+        purpose: ContinuationPurpose::BackendInput,
     }
 }
 

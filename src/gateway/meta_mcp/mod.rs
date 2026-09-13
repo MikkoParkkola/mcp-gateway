@@ -2418,14 +2418,14 @@ async fn redeem_confirmation(
     principal: &str,
     digest: &str,
 ) -> std::result::Result<(), ()> {
-    use crate::protocol::continuation::{Purpose, now_unix_secs};
+    use crate::protocol::continuation::{ContinuationPurpose, now_unix_secs};
 
     let now = now_unix_secs();
     let payload = continuation.keyring().open(token, now).map_err(|error| {
         warn!(%error, "Confirmation envelope refused");
     })?;
     payload
-        .require_purpose(Purpose::DestructiveConfirm)
+        .require_purpose(ContinuationPurpose::DestructiveConfirm)
         .map_err(|_| {
             warn!("Continuation from another domain presented as a confirmation");
         })?;
