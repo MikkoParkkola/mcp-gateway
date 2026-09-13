@@ -3461,11 +3461,20 @@ mod gateway_bootstrap_tests;
 #[cfg(test)]
 mod stdio_forward_path_tests {
     use serde_json::json;
-    use tokio::io::AsyncBufReadExt;
 
-    use super::Gateway;
+    use super::{Gateway, StdioWriter};
     use crate::protocol::JsonRpcNotification;
     use crate::transport::notification_sink;
+
+    /// A writer whose frames land in a queue instead of stdout, so a test can
+    /// read them in the order the dispatch produced them.
+    fn test_writer() -> (
+        StdioWriter,
+        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        (StdioWriter(tx), rx)
+    }
 
     fn progress(token: &str) -> JsonRpcNotification {
         JsonRpcNotification {
@@ -3481,7 +3490,7 @@ mod stdio_forward_path_tests {
     /// the design ADR-014 §1 rejects.
     #[tokio::test]
     async fn a_notification_is_written_before_its_dispatch_returns() {
-        let (client, mut server) = tokio::io::duplex(4096);
+        let (writer, mut frames) = test_writer();
         let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
         let dispatch_gate = std::sync::Arc::clone(&gate);
 
@@ -3496,19 +3505,14 @@ mod stdio_forward_path_tests {
                     let _permit = dispatch_gate.acquire().await.unwrap();
                     "result"
                 },
-                &mut server,
+                &writer,
             )
             .await
         });
 
-        let mut lines = tokio::io::BufReader::new(client).lines();
-        let first = lines
-            .next_line()
-            .await
-            .unwrap()
-            .expect("no line on the wire");
+        let first = frames.recv().await.expect("no frame on the wire");
         assert!(
-            first.contains("notifications/progress"),
+            first.to_string().contains("notifications/progress"),
             "first frame was not the notification: {first}"
         );
 
@@ -3521,10 +3525,10 @@ mod stdio_forward_path_tests {
     /// travels to the backend unchanged -- the leak SUB.2b forbids.
     #[tokio::test]
     async fn a_dispatch_runs_inside_a_notification_scope() {
-        let mut wire: Vec<u8> = Vec::new();
+        let (writer, _frames) = test_writer();
         let minted = Gateway::dispatch_streaming_notifications(
             async { notification_sink::mint_progress_token(&json!(7)) },
-            &mut wire,
+            &writer,
         )
         .await;
         assert!(
@@ -3537,15 +3541,16 @@ mod stdio_forward_path_tests {
     /// caller's to see; the post-loop drain is what delivers it.
     #[tokio::test]
     async fn a_late_notification_is_drained_before_the_response() {
-        let mut wire: Vec<u8> = Vec::new();
+        let (writer, mut frames) = test_writer();
         Gateway::dispatch_streaming_notifications(
             async {
                 notification_sink::publish(vec![progress("gw-late")]);
             },
-            &mut wire,
+            &writer,
         )
         .await;
-        assert!(std::str::from_utf8(&wire).unwrap().contains("gw-late"));
+        let frame = frames.recv().await.expect("no frame on the wire");
+        assert!(frame.to_string().contains("gw-late"));
     }
 }
 
