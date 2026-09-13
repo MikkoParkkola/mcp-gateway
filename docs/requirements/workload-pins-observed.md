@@ -40,7 +40,11 @@ filled by an actual run; they are absent here by construction.
 |---|---|---|
 | A | `v3.5.0` | `32f135a61fb50c20a044fb4c2347bc1cf8015d89` |
 | B | `v3.5.1` | `e138680a542b41fa156a94a1ffc9decd9692be77` |
-| C / D / E | branch tip | `790898c661bb80b9979021890a1ef6f5099dd637` |
+| C / D / E | branch tip | `69ba9e03cc6df0a6a92fdaa813444a61e97cc29e` |
+
+The C/D/E value is the commit the arms were actually built from, read back from each arm's
+`.checkout_sha` after the build, not the branch tip at the time the contract was frozen. The
+two differ only by documentation commits, but the pin records what was built.
 
 ## Feature-set check (void condition 6)
 
