@@ -270,13 +270,29 @@ const MINOR: &[Row] = &[
         ],
     },
     Row {
-        statement: "10. Loosen inputSchema and outputSchema to JSON Schema 2020-12",
+        statement: "10. Loosen inputSchema and outputSchema to JSON Schema 2020-12, \
+                    and structuredContent to any JSON value",
         requirement: "MIK-6865.SCHEMA.1",
         role: Role::Server,
         transport: Transport::Any,
-        evidence: &[
-            "mik_7272_exploit_acs::schema::ac_schema_1_no_meta_tool_nests_an_object_inside_an_array",
-        ],
+        // Emptied deliberately. The row previously cited
+        // `ac_schema_1_no_meta_tool_nests_an_object_inside_an_array`, which is
+        // a real test of a real requirement and bears on neither clause of
+        // this statement: it reads `inputSchema` on the meta tool list looking
+        // for one nested shape. Evidence that does not bear on the statement
+        // reads exactly like evidence that does, which is the failure this
+        // file exists to make visible -- so the citation moved into the
+        // tracked gap, where it documents what is covered without claiming
+        // the statement is.
+        evidence: &[],
+    },
+    Row {
+        statement: "11. Remove the notifications/elicitation/complete notification and the \
+                    elicitationId field of URL mode elicitation requests",
+        requirement: "NFR.CONFORMANCE.1",
+        role: Role::Both,
+        transport: Transport::Any,
+        evidence: &[],
     },
     Row {
         statement: "12. Error-code allocation policy; renumber HeaderMismatch, \
@@ -304,11 +320,40 @@ fn all_rows() -> Vec<&'static Row> {
 /// of those states can be reached by leaving the file alone, which is the
 /// point: a permanently red suite teaches everyone to ignore red, and a silent
 /// exemption teaches nobody anything.
-const TRACKED_GAPS: &[(&str, &str)] = &[(
-    "1. extensions field on client and server capabilities",
-    "Cluster B writes E1-E5 of \
-     docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
-)];
+const TRACKED_GAPS: &[(&str, &str)] = &[
+    (
+        "1. extensions field on client and server capabilities",
+        "Cluster B writes E1-E5 of \
+         docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
+    ),
+    (
+        "10. Loosen inputSchema and outputSchema to JSON Schema 2020-12, \
+         and structuredContent to any JSON value",
+        "Three tests close it, and none exists. (a) A 2020-12 keyword absent \
+         from draft-07 -- prefixItems or unevaluatedProperties -- is accepted \
+         in an outputSchema rather than rejected. (b) A scalar and a bare-array \
+         structuredContent survive enforce_output_schema unchanged under a \
+         matching non-object outputSchema; every output-schema fixture in the \
+         tree declares type: object today. (c) A declared outputSchema is \
+         byte-identical in a tools/list wire response to the one the capability \
+         declared. The nearest existing test, \
+         mik_7272_exploit_acs::schema::ac_schema_1_no_meta_tool_nests_an_object_inside_an_array, \
+         covers neither clause. See \
+         docs/requirements/RELEASE-4.0.0-conformance-matrix.md",
+    ),
+    (
+        "11. Remove the notifications/elicitation/complete notification and the \
+         elicitationId field of URL mode elicitation requests",
+        "Neither name appears anywhere in src or tests, so the gateway cannot \
+         emit either of its own accord. What is unverified is pass-through: a \
+         2025-11-25 backend may put elicitationId in the params of a URL mode \
+         elicitation, and OutboundRequest carries those params verbatim \
+         (src/protocol/mrtr.rs:435). Closing this needs a bridged elicitation \
+         carrying the field to reach a modern client with it removed, and a \
+         legacy client to still receive it. See \
+         docs/requirements/RELEASE-4.0.0-conformance-matrix.md",
+    ),
+];
 
 #[test]
 fn matrix_has_no_empty_cells() {
@@ -359,11 +404,46 @@ fn a_tracked_gap_is_still_a_gap() {
 fn every_statement_names_the_requirement_that_owns_it() {
     // Traceability in the other direction: a row whose requirement is unnamed
     // cannot be closed against the requirements document, so its verdict has
-    // nowhere to go.
+    // nowhere to go. What this asserted until now was the prefix `MIK-`, which
+    // is one of the two id shapes the scope documents allocate -- the
+    // release-wide criteria are `NFR.` ids, and minor 11 is owned by one of
+    // them. A prefix check could not tell an unallocated owner from an
+    // allocated one either way, so the id is resolved against the requirements
+    // corpus instead: an invented owner now fails here.
+    let docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/requirements");
+    let mut corpus = String::new();
+    for entry in std::fs::read_dir(&docs)
+        .expect("requirements directory is readable")
+        .flatten()
+    {
+        let path = entry.path();
+        if path.is_file() {
+            corpus
+                .push_str(&std::fs::read_to_string(&path).expect("requirements file is readable"));
+        }
+    }
+
     for row in all_rows() {
+        // A cell may name several ids and abbreviate a run as `.1-.10`. The
+        // first is the owning one, and the only one resolved here.
+        let owner = row
+            .requirement
+            .split([',', ' '])
+            .next()
+            .unwrap_or_default()
+            .split("-.")
+            .next()
+            .unwrap_or_default();
+
         assert!(
-            row.requirement.contains("MIK-"),
+            owner.starts_with("MIK-") || owner.starts_with("NFR."),
             "no owning requirement for: {}",
+            row.statement
+        );
+
+        assert!(
+            corpus.contains(owner),
+            "'{}' is owned by {owner}, and no such requirement is defined in docs/requirements",
             row.statement
         );
     }
@@ -414,6 +494,25 @@ fn the_matrix_covers_every_major_change() {
         9,
         "the 2026-07-28 changelog lists nine major changes; this matrix has {}",
         MAJOR.len()
+    );
+}
+
+#[test]
+fn the_matrix_covers_every_minor_change() {
+    // The count MAJOR has had since this file was written, and MINOR had not.
+    // Item 11 was missing for exactly the reason the major-change counter
+    // exists: a statement nobody listed is verified by nothing and fails
+    // nothing, so the only thing that can notice it is a count taken against
+    // the changelog rather than against the list itself.
+    //
+    // Twelve, from the changelog's own `Minor changes` heading. Its later
+    // `Deprecated`, `Other schema changes`, `Governance` and `Process`
+    // sections are deliberately outside both lists and outside this count.
+    assert_eq!(
+        MINOR.len(),
+        12,
+        "the 2026-07-28 changelog lists twelve minor changes; this matrix has {}",
+        MINOR.len()
     );
 }
 

@@ -208,8 +208,11 @@
     {
       "id": "NFR.CONFORMANCE.1",
       "status": "pending",
-      "evidence": [],
-      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+      "evidence": [
+        "docs/requirements/RELEASE-4.0.0-conformance-matrix.md",
+        "tests/mik_7272_conformance.rs"
+      ],
+      "note": "Graded 2026-09-13 against the 2026-07-28 changelog as its own population: 21 statements, 18 COVERED, 3 UNCOVERED (minor 1, 10, 11), 4 reasoned N/A axis cells. The matrix is executable -- tests/mik_7272_conformance.rs holds the rows and CI fails on a cell citing a test that does not exist, on a tracked gap that quietly regained evidence, and on a statement whose owning requirement is not defined in docs/requirements. PARTIAL because UNCOVERED is not empty: five named tests close it, listed in the matrix and in TRACKED_GAPS."
     },
     {
       "id": "NFR.WORKLOAD.1",
