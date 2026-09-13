@@ -142,6 +142,7 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
         task_executor,
         subscriptions,
         continuation,
+        session_lifecycle: None,
     });
     (state, store_dir)
 }

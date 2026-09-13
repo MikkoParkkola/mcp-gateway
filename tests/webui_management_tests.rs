@@ -126,6 +126,7 @@ async fn make_app_state(
 
     let state = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+        session_lifecycle: None,
         env: None,
         backends,
         meta_mcp,
@@ -210,6 +211,7 @@ async fn make_app_state_with_reload(
     (
         Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+            session_lifecycle: None,
             env: None,
             backends,
             meta_mcp,

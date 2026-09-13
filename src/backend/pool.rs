@@ -367,11 +367,24 @@ impl Backend {
             .and_then(|entry| entry.value().transport.read().clone())
     }
 
+    /// Test-only: the consecutive and lifetime unserved probe counts, which
+    /// rows 10 to 11b assert are two different values with two different reset
+    /// rules.
+    #[cfg(test)]
+    pub(crate) fn unserved_counts_for_test(&self) -> (u64, u64) {
+        (
+            self.unserved_consecutive
+                .load(std::sync::atomic::Ordering::SeqCst),
+            self.unserved_total
+                .load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
     /// Test-only: trip this backend's canonical Shared-slot circuit breaker
-    /// open by recording `failure_threshold` consecutive failures.
+    /// open, by the same route the health probe's unserved escalation uses.
     #[cfg(test)]
     pub(crate) fn trip_circuit_breaker_for_test(&self) {
-        self.trip_circuit_breaker_for_test_key(&PoolKey::Shared);
+        self.trip_circuit_breaker("test-trip");
     }
 
     /// Test-only: trip an arbitrary pool slot's circuit breaker open

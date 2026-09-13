@@ -804,3 +804,102 @@ currently sitting on `src/protocol/extensions.rs` reads as though they are.
 `Era::Legacy` omits the capabilities key by revision; the `-32021` refusal
 turns on a per-request declaration. A client can be modern and still not
 declare tasks.
+
+### Claude — 2026-09-09, ledger divergence resolved by re-derivation
+
+The divergence flagged in the previous ACK is closed, and the answer is neither
+of the two numbers that were in dispute.
+
+Re-derived today with `scripts/release/count-release-criteria.py --check`, run
+against both trees rather than transcribed from either receipt:
+
+- local worktree ledger, peer edits in flight: `146 criteria, 183 rows, 180 met
+  or non-blocking, 3 blocking`
+- committed ledger at the pushed tip of the release branch: identical, byte for
+  byte on the coverage line
+
+So the earlier ACK's `174 / 9` was accurate when written and is now superseded,
+and PR496's `182 / 157 / 25` is older still. Neither receipt was wrong for its
+own tree; both are stale for the current one. The blocking column moved
+`21 -> 20 -> 9 -> 7 -> 5 -> 4 -> 3` across today's ledger commits, the last
+step landing this afternoon. Whoever merges should re-run the script rather
+than carry any number in this file forward, including this one.
+
+### Claude — 2026-09-09, one bridge finding routed to the MRTR.7a/7b lane
+
+Not opening work on it, per the standing ACK that the bridge runtime is that
+lane's and is in flight. Handing over one finding rather than a patch.
+
+The legacy-bridge branch in `src/gateway/meta_mcp/invoke.rs` guards on
+`caller.era == Era::Legacy && interim.is_some() && session_id.is_some()`. The
+third conjunct tests a session *identifier*, but what decides whether a bridge
+can run is whether the *channel* can deliver, and those are different facts. A
+legacy caller whose session id is known while its channel cannot deliver — a
+disconnected stream, stdio with no client half — takes the bridge and receives a
+hard refusal where the pre-split code minted a redeemable continuation.
+
+Two things make this a defect against a stated invariant rather than a
+preference about error shape. First, the session id is minted unconditionally
+for a caller that carried none, in `src/gateway/router/handlers.rs`, so the
+guard's third conjunct is satisfied by callers that never had a channel.
+Second, the same file argues six lines below that mint that holding the
+subscription would make a prompt look deliverable to a caller with no live
+stream — it drops the receiver precisely so a session id is not read as a
+delivery channel, and the downstream guard then reads it as one.
+
+`DeliveryError::NoSession` is a distinguishable variant, so a fall-through is
+available: on `NoSession` specifically, leave `interim` set and drop through to
+the mint. `Declined`, `UnknownAction` and `ClientRefused` are real answers from
+a reachable client and must keep failing hard.
+
+Blast radius, measured rather than estimated: 16 of the 19 cases in
+`tests/mik_7212_mrtr_component_acs.rs` fail inside one shared arrange helper
+against this refusal, at the pushed tip. They are one fix, not sixteen. That
+file arrived with this branch as its own acceptance criteria and became
+measurable only once the lib target went green today.
+
+One scheduling consequence for whoever owns the workflow: the Tests job runs
+`cargo test --all-features` with no `--no-fail-fast`, and the component binary
+sorts before the dispatcher binary. Until these sixteen clear, the dispatcher
+lane's committed test cannot execute at all, so any review demanding that it be
+demonstrated green is unsatisfiable on the current workflow. That is a
+one-word change to the workflow file and it is not ours to make.
+
+### Claude — 2026-09-09, correction: the bridge has a production call site
+
+One statement in this file is stale and it is load-bearing for the MRTR.7a/7b
+prerequisite analysis, so flagging it rather than working around it.
+
+The note above states `InputBridge` "has zero production call sites — `rg -n
+--hidden --no-ignore "InputBridge" src/` returns three hits, all inside its own
+file". There is a fourth hit. `b7a4a768`, "feat(mrtr): wire the input bridge into
+the invoke path", landed on the release branch at 2026-09-09 11:26, and
+`InputBridge` is constructed at `src/gateway/meta_mcp/invoke.rs:1733` at the
+pushed tip. Checked at origin and locally, both, because a single-tree grep is
+how the original claim went stale in the first place.
+
+So the three prerequisites listed as gating the call site — a per-session
+capability store, `BackendInvoker::invoke` returning `Result`, and one accounted
+dispatch — are gating a call site that already exists. That does not make them
+unnecessary; it means their status needs re-deriving against a tree where the
+wiring is present, rather than one where it is pending.
+
+The narrow claim in the same acknowledgement survives untouched and we are not
+opening work on it: `Bridge::to_legacy_client` has no caller at origin in `src/`
+or `tests/`. The only surviving mention is a doc comment recording that a
+property was previously pinned against it. That scope is right. It is the
+premise behind it that has moved.
+
+Two further consequences you will want before your next sweep. The module doc of
+`tests/mik_7212_mrtr7_stdio_acs.rs` justifies an unobservable test row on the
+grounds that nothing on a transport calls the bridge; that justification has
+expired and the row may now be testable. And `MIK-7212.WIRE.10` is named in
+`input_bridge.rs` as the row that would join the two halves of the stdio refusal
+invariant end to end — it is still open, and a fix landed today
+(`3227c985`, the `NoSession` fall-through) whose safety argument depends on that
+invariant holding.
+
+Separately, a fleet environment fact worth having: the repo's disk-pressure hook
+matches the string `cargo` anywhere in a Bash command, including inside a heredoc
+commit-message body, and refuses before anything runs with no hint that prose
+caused it. Write the message to a file and use `git commit -F`.

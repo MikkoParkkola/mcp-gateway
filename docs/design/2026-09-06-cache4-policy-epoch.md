@@ -24,6 +24,16 @@ CACHE.4b (stale-authorization serving) are the same digest read at two moments.
   FOR sentence above can be true of, and it is the first row of the residual table below.
 - Cache size, eviction, TTL. CACHE.4b is a security row, not a caching row.
 
+### Scope move — receipt update, 2026-09-09 (§P0)
+
+**The surface moved: 4.f.2 and 4.f.3 leave OUT and enter FOR.** They were deferred as U6 on a
+check that asked the wrong question (see the U3 correction below), and the corrected check says
+one handle reaches all three bump sites with no new owner. §P0 freezes scope at first dual
+review and permits a move only with a paragraph saying why; this is that paragraph. Nothing
+leaves FOR, and the added surface is two signature changes plus one accessor, all named in
+*Closing U6* below. U5 / 4.e stays OUT and stays deferred — that is a router-to-invoke wiring
+job with no epoch in it.
+
 ## Problem, stated at source
 
 The brief said "no policy epoch participates in `response_key`" and "routing profile and
@@ -169,6 +179,62 @@ body, so a response-inequality assertion cannot go red and is not the falsifier.
   one (see the residual table below), and until that one is keyed too, a runtime reload is safe
   only for responses the executor never cached. Stated here rather than discovered in review.
 
+## Closing U6 — the mechanism for 4.f.2 and 4.f.3
+
+### Measured constraints (re-derived 2026-09-09; the citations below supersede this document's earlier ones, which drifted)
+
+**Line numbers below are ANCHORED TO SYMBOLS, not trusted as addresses.** This worktree is shared,
+`src/gateway/server/mod.rs` is under concurrent edit by another session, and `fn run` moved from
+809 to 811 *during this document's own review*. Every citation names its containing function,
+which is stable; the numbers are approximate, as of `b92c69c8`. A reader who finds a number off by a few
+lines should trust the symbol. In a live shared tree, a design that cites only line numbers reads
+as wrong within a day.
+
+| # | fact | where |
+|---|---|---|
+| C9 | All three bump sites reach **one `MetaMcp` value**. `Gateway::build_meta_mcp` constructs it and performs the grant write (`set_identity_grants`, under `Arc::get_mut`) before returning it; `Gateway::run` receives it and holds it in scope at the capability watcher (`meta_mcp.set_capabilities(...)` immediately above) and, via a clone taken before the move into router state, at `ConfigWatcher::start`. **Not** one function body — one object. | `src/gateway/server/mod.rs`: `build_meta_mcp` 465-810 (grant write ~754), `run` 811+ (cap watcher ~896, `ConfigWatcher::start` ~1311) |
+| C10 | `meta_mcp` moves into the router state **before** `ConfigWatcher::start` — but `meta_mcp_for_shutdown = Arc::clone(&meta_mcp)`, taken a few lines earlier, proves a clone taken before the move outlives it. The epoch handle is an `Arc<AtomicU64>` *inside* `MetaMcp`, so cloning it clones the inner `Arc`, not the `Arc<MetaMcp>` — the `Arc::get_mut(&mut meta_mcp)` in `build_meta_mcp` is unaffected. | `src/gateway/server/mod.rs`, `run`: `meta_mcp_for_shutdown` ~1229, move into state ~1242 |
+| C11 | The 4.f.2 predicate **already exists**: `ConfigDiff.profiles_changed`, computed by `fn profiles_changed(old, new)` and set on the diff; its operator-facing string is "profiles/meta config changed". Nothing new is invented to decide when a profile changed. | `src/config_reload/mod.rs:84`, `:647`, `:330`, `:191-192` |
+| C12 | `ReloadContext` (`:1371-1388`) and `LiveConfig` (`:243-253`) carry **no generation counter** — `rg "generation\|reload_count\|AtomicU64" src/config_reload/mod.rs` returns 0. There is nothing to reuse as an epoch; a counter must be supplied. | `src/config_reload/mod.rs` |
+| C13 | `CapabilityWatcher::start(backend, shutdown_rx)` takes **no callback**; the reload it must follow is `backend.reload().await` inside the spawned task, after a 500 ms debounce and the pinned-capability verify. 4.f.3 therefore needs a third parameter — a signature change, named here rather than discovered in implementation. | `src/capability/watcher.rs:35-38`, `:57`, `:116`, `:144-148`, `:159` |
+| C14 | The epoch's four literal `0`s are all that exist: `src/cache.rs:108` (field), `invoke.rs:1334` (read site), `:1855` (write site), `tests.rs:4427`. No writer has landed. | `rg -n policy_epoch src/` |
+
+### Options considered
+
+| option | verdict |
+|---|---|
+| **A′. `MetaMcp` keeps the epoch (option A, unchanged) and exposes a handle accessor returning `Arc<AtomicU64>`; `run` clones it once before `:1240` and hands clones to the capability watcher and `ConfigWatcher::start`** | **CHOSEN.** One owner, one counter, three writers. It does not contest 4a's ownership decision — it consumes it — so the two changes compose instead of colliding. Cost: one accessor plus two signature parameters. |
+| B. A fresh `Arc<AtomicU64>` created in `run` before `:894`, injected into `MetaMcp` and both watchers | Rejected: if 4a lands the `MetaMcp`-owned counter (it is that design's chosen option A) while this lands an independent one, **two epochs exist**, the key reads one, the watchers bump the other, and the criterion is silently unmet with every test green. Same wiring cost, strictly worse failure mode. |
+| C. Watchers call a `MetaMcp` setter through `meta_mcp_for_shutdown` | Rejected: a handle whose name and purpose are shutdown becomes load-bearing for cache correctness, and the capability watcher would hold a `MetaMcp` alive to increment a `u64`. Same cost as A′, worse ownership story. |
+| D. `ResponseCache::clear()` on reload | Rejected at U4 and rejected again here for the same reason: global, and cannot exclude an invocation authorized before it ran. |
+
+### Shape
+
+- **4.f.2** — bump inside the config-reload path **only when `ConfigDiff.profiles_changed` is true**, not on every successful reload. Bumping on any reload strands every cached entry on an unrelated config edit (log level, a timeout), which is a cache-hit regression sold as security.
+- **4.f.3** — bump after `backend.reload()` returns successfully in the capability watcher task. Bumping before the reload lands would open a window where the new epoch is live and the old capability set is still serving.
+- Ordering everywhere: **bump after the change is visible**, never before — the same rule 4.g applies within one invocation.
+- `debug_assert!(new > old)` at each bump site, per the parent design's accepted tradeoff.
+
+### Dependency on CACHE.4a — named, not designed around
+
+**This change cannot land before, or independently of, 4a's writer.** 4a owns where the counter
+lives; A′ consumes that decision and adds two readers of the same handle. If both land as written,
+there is one epoch. If this lands first, or lands against a different owner, there are two, and
+the criterion reports met while a superseded grant is still servable. **Sequencing is a
+coordination requirement, not a merge-order preference**: 4.f.1 (4a) lands first, this follows,
+and the closing evidence for 4.f.2/4.f.3 must show the bumped counter and the counter read by
+`KeyContext` are the same allocation.
+
+### What this closes, and what it does not
+
+Closing 4.f.2 also closes the residual row **"profile *contents* under an unchanged name key
+identically"**: a contents edit sets `profiles_changed`, which bumps the epoch, which changes every
+key. The price is honest and belongs to the operator, not to engineering: **any** profiles/meta
+config edit invalidates the whole response cache, not just the entries the edited profile could
+have served. That is stated as an accepted tradeoff and asked below.
+
+The executor's second, unkeyed cache is untouched and remains the first residual row.
+
 ## Residual — what CACHE.4b still needs after this change
 
 One table, so a later closer of the RED row cannot miss a half this change already knew was open.
@@ -177,9 +243,10 @@ One table, so a later closer of the RED row cannot miss a half this change alrea
 |---|---|---|
 | **executor response cache is unkeyed** — `src/capability/executor/mod.rs:313-318` (read) and `:347-349` (write) hold a **second** cache, keyed `format!("{}:{}", capability.name, sha256(params)[..16])` (`executor/params.rs:243-258`). No identity, no profile, no epoch. A post-bump miss at the `MetaMcp` layer re-dispatches, the executor serves its **pre-bump** body, and `MetaMcp` then stores that body under the **new** epoch — a superseded-grant response laundered into the fresh epoch. | Out of scope here by size, not by importance: keying it needs one process-level epoch both constructors (`executor/mod.rs:208`, `:247`) snapshot, which is the parent design's B6 and a design event of its own. **Do not implement it in this change.** | this row + parent B6 |
 | **4.e protocol revision has no production value** | both call sites pass `None` unconditionally; the seam guard proves the digest reads the field, not that anything varies it | U5 |
-| **4.f.2 `LiveConfig` reload does not bump** | nothing wires the epoch to `ConfigWatcher::start` | U6 |
-| **4.f.3 capability watcher does not bump** | same watcher-construction seam (`src/gateway/server/mod.rs:874`) | U6 |
-| **profile *contents* under an unchanged name key identically** | `routing_profile` is `&profile.name`, not a digest of contents (`invoke.rs:1214`, `:1787`) | 4.f.2/4.f.3 above |
+| ~~**4.f.2 `LiveConfig` reload does not bump**~~ | **Closed by *Closing U6*** — bump gated on the existing `ConfigDiff.profiles_changed`. Open only until 4a's writer lands (see the dependency). | *Closing U6* |
+| ~~**4.f.3 capability watcher does not bump**~~ | **Closed by *Closing U6*** — bump after `backend.reload()` succeeds; costs one parameter on `CapabilityWatcher::start` (`src/capability/watcher.rs:35-38`). | *Closing U6* |
+| ~~**profile *contents* under an unchanged name key identically**~~ | **Closed as a consequence of 4.f.2**, at the cost of a whole-cache invalidation on any profiles/meta edit. `routing_profile` stays `&profile.name` (`invoke.rs:1334`, `:1855`) — the epoch, not the name, carries the contents change. Operator question below. | *Closing U6* |
+| **grant changes have no runtime path at all** | `identity_grants` appears nowhere in `src/config_reload/`; the sole `set_identity_grants` caller is startup (`server/mod.rs:754`). The 4.f.1 bump is correct and unreachable in production until grants become reloadable. | U6a; parent C4 |
 
 ## §P1 Open questions — scheduled, not assumed
 
@@ -206,12 +273,42 @@ Format: `question — check run — what came back — what it changed`.
   injected `Arc<AtomicU64>` owned by neither the cache nor `MetaMcp` would have been the cheaper
   answer; they do not, so option A stands.
 
+  **CORRECTED 2026-09-09 — the check above asked the wrong question, and its conclusion was
+  wrong.** It searched `src/gateway/meta_mcp/mod.rs` for the *watchers*; the watchers are not
+  built there, so zero hits was guaranteed and carried no information. The question that decides
+  the shape is where the three bump sites are *constructed*, and the answer is that all three reach
+  **the same `MetaMcp` value**. Two are inside `Gateway::run` — the capability watcher, with
+  `meta_mcp.set_capabilities(...)` in scope, and `ConfigWatcher::start`. The third, the grant
+  writer, is inside `Gateway::build_meta_mcp`, which `run` calls to obtain that very `MetaMcp`, so
+  it operates on the object under construction rather than a different one. (An earlier draft of
+  this correction said all three sit in one function body. That was wrong — the grant write is in
+  `build_meta_mcp` — and a reviewer caught it. Convergence on one *object* is what the mechanism
+  needs; one *function* never was.) They **do** converge. Option A's
+  owner survives the correction unchanged (see *Closing U6*); what does not survive is the claim
+  that 4.f.2 and 4.f.3 need plumbing that does not exist.
+
 - **U4. Is the epoch bump preferable to the already-unwired `ResponseCache::clear()`?** — read
   `cache.rs:302` and searched for callers — no production caller; `clear()` is global and
   cannot exclude an in-flight invocation authorized before it ran — **changed nothing**, it
   confirmed the direction the parent design's doc comment at `cache.rs:274` already states
   ("the policy epoch it was authorized under ... mixed in as one digest ... unconditionally").
   Recorded so the option is visibly rejected rather than silently unconsidered.
+
+- **U6. What carries the epoch to the config and capability watchers?** (was deferred; resolved
+  2026-09-09) — `rg -n "^    (pub )?(async )?fn " src/gateway/server/mod.rs` to bound the enclosing
+  functions, plus `sed -n` at each of the three bump sites — all three act on one `MetaMcp`
+  (grant write in `build_meta_mcp`; both watchers in `run`, which owns that same `MetaMcp`), and `ConfigDiff.profiles_changed`
+  (`src/config_reload/mod.rs:84`, computed `:647`, set `:330`) already exists as the 4.f.2
+  predicate — **changed the scope**: 4.f.2 and 4.f.3 move from deferred to FOR, with no second
+  epoch and no invented predicate. Mechanism in *Closing U6*.
+
+- **U6a. Are identity grants config-reloadable, so that the criterion's "grant" half has a
+  runtime path at all?** — `rg -n "identity_grants|identity\.grants" src/config*.rs src/config/*.rs
+  src/config_reload/*.rs` — **zero hits**; the sole caller of `set_identity_grants`
+  (defined `src/gateway/meta_mcp/mod.rs:924`) is `src/gateway/server/mod.rs:754`, inside startup,
+  under `Arc::get_mut` — **changed what may be claimed**: the grant half is startup-only by
+  construction, not by omission. C4's "latent in production" is confirmed at a second site, and
+  no runtime grant-change path is being left un-bumped.
 
 ### Deferred
 
@@ -227,17 +324,8 @@ Format: `question — check run — what came back — what it changed`.
 Nothing in this change depends on U5: the epoch mechanism keys, bumps and reads without it, and
 the seam guard test asserts only that the seam discriminates.
 
-**U6 — 4.f.2 / 4.f.3: what carries the epoch to the config and capability watchers?**
-
-| field | |
-|---|---|
-| owner | this ticket (MIK-7213) |
-| what would resolve it | whether `ConfigWatcher::start` (`src/gateway/server/mod.rs:1275`) and the capability watcher (`src/gateway/server/mod.rs:874`) can take a cloned `Arc<AtomicU64>` at construction — both are built in the same file that builds `MetaMcp`, so the handle exists at one point; the cost is two signature changes, which is a design event of its own |
-| when | before 4.0.0 ships — CACHE.4b names a **profile** change and this is the half that carries it |
-| what if it resolves badly | a reload that narrows a routing profile leaves entries assembled under the wider profile servable — stale-authorization serving, the exact defect CACHE.4b names. Fallback is NOT a hand-bumped epoch called a reload; it is 4.f.2/4.f.3 recorded as not covered |
-
-**These two deferrals block nothing in this change and gate what they name**: no 4.e closure
-claim, no 4.f.2/4.f.3 closure claim.
+**U6 is no longer deferred — see *Closing U6* above and the Resolved entry.** U5 remains the
+only deferral here, and it gates what it names: no 4.e closure claim.
 
 **They also bound what CACHE.4b may claim.** The criterion at `:94` reads "a policy epoch that
 invalidates it on a grant **or profile** change". The epoch closes the *grant* half (4.f.1). The
@@ -260,6 +348,16 @@ latent limit, not a criterion miss.
   size, eviction and TTL are OUT, and the row is satisfied by the epoch mechanism alone.
 - **One mechanism or two rows?** — asked of the lead — one mechanism — **changed the design**:
   CACHE.4a and CACHE.4b share the epoch and are not split into independent work.
+- **Is a whole-cache invalidation on every profiles/meta config edit acceptable, or must the
+  profile dimension key on a digest of profile *contents* instead?** — **asked of the operator,
+  answer outstanding.** This is not an engineering choice: both readings are correct security,
+  and they differ only in what they cost. The epoch route (chosen, *Closing U6*) invalidates
+  every entry on any profile edit — simple, and provably no stale authorization survives. A
+  contents digest in `routing_profile` invalidates only what changed — but it changes **every**
+  production cache key immediately, and it makes the key depend on a canonicalisation
+  (`canonical_json`, `src/config_reload/mod.rs:714-715`, `:750-751`) whose stability is now a
+  cache-correctness property. Recommendation: take the epoch route and revisit only if cache-hit
+  rate is measured to suffer; it is reversible, the digest is not.
 - **Still open, asked in the accompanying report:** whether the ledger corrections below are
   mine to apply (the do-not-touch list named lines 344 and 393, not 93 and 94), and whether
   4.e's deferral is acceptable for a 4.0.0 release or whether the cross-layer wiring must land.
@@ -270,7 +368,15 @@ latent limit, not a criterion miss.
 - `docs/design/2026-08-31-cluster-f-response-cache-keying-test-plan.md` — its 4.d/4.e "Blocked:
   `build_key` has no revision parameter and the finished key has no callable form" note is
   stale; `response_key` plus `KeyContext` lifted that block.
+- `src/capability/watcher.rs` — `CapabilityWatcher::start`'s doc comment, once its signature
+  carries the epoch handle (4.f.3).
 - This document is the design receipt; the parent design is cross-referenced, not edited.
+- **Citation drift, 2026-09-09**: this document's own `invoke.rs:1214`/`:1787`,
+  `server/mod.rs:874`/`:1275` and `meta_mcp/mod.rs:890` are stale against the current branch. The
+  live values are `invoke.rs:1334`/`:1855`, `server/mod.rs:894`/`:1309`, and
+  `meta_mcp/mod.rs:924` (definition) with its sole caller at `server/mod.rs:754`. The Ledger
+  corrections table below is left **as written** — it is the receipt of what was checked on
+  2026-09-06 — and this line is its erratum.
 
 ## Ledger corrections — verified at source, all six
 

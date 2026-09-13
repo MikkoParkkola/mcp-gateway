@@ -64,6 +64,7 @@ use super::meta_mcp_tool_defs::{
 use super::webhooks::WebhookRegistry;
 
 pub(crate) mod admission;
+mod direct_route;
 pub(crate) mod invoke;
 mod prompt_cache;
 mod protocol;
@@ -2245,6 +2246,58 @@ mod account_entry_point_authz_tests;
 #[path = "search_ranking_authz_tests.rs"]
 mod search_ranking_authz_tests;
 
+/// Whether the peer behind `backend` has had `method` removed from under it
+/// (MIK-7217, OUTBOUND.1).
+///
+/// The gateway is the only place that knows both which revision the backend
+/// speaks and which methods that revision deleted, so it is the only place the
+/// refusal can be made without spending a round trip to hear it. Sending one
+/// anyway is not harmless: a modern peer answers `method not found`, which is
+/// indistinguishable from a peer that is merely missing a feature, so the
+/// gateway would be manufacturing the ambiguity it exists to resolve.
+///
+/// Unresolved and legacy eras both forward. Silence is not evidence of
+/// modernity, and refusing on a guess would take `logging/setLevel` away from
+/// every 2025 backend whose era probe has not come back yet.
+///
+/// `pub(in crate::gateway)`, widened from private, so the direct backend
+/// route (`gateway::router::backend_handlers`) can reuse this one mechanism
+/// instead of a second copy of the revision's removed-method list (MIK-7217,
+/// OUTBOUND.1).
+pub(in crate::gateway) async fn era_removed_method(
+    backend: &crate::backend::Backend,
+    method: &str,
+) -> bool {
+    let era = backend.cached_era().await;
+    if era != Some(crate::protocol::era::Era::Modern) {
+        return false;
+    }
+    if !crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method) {
+        return false;
+    }
+    // `debug!`, not `warn!`: the refusal is triggered by whatever method a
+    // client asks for, so at `warn!` a client polling a removed method sets
+    // the gateway's log volume. The counter below carries the same event at a
+    // volume an operator controls.
+    tracing::debug!(
+        backend = %backend.name,
+        method,
+        "Refusing a method the backend's protocol revision removed"
+    );
+    telemetry_metrics::counter!(
+        "mcp_gateway_removed_method_refused_total",
+        "backend" => backend.name.clone(),
+        "method" => method.to_string(),
+        "era" => "modern"
+    )
+    .increment(1);
+    true
+}
+
+#[cfg(test)]
+#[path = "era_gate_tests.rs"]
+mod era_gate_tests;
+
 /// Destructive-action confirmation. NOT the control -- the admin
 /// requirement is, and `gateway_kill_server`, the only tool carrying
 /// `destructiveHint: true`, is in the admin set. This is the prompt an
@@ -2276,6 +2329,101 @@ fn confirmation_refusal_response(id: &RequestId, message: String) -> JsonRpcResp
     // reads it to tell a refusal apart from a client failure.
     response.confirmation_refusal = true;
     response
+}
+
+/// The request key the in-band confirmation is asked under, and the only key an
+/// answer is read from.
+///
+/// The version travels in the key, not in a new envelope field: a `v2` question
+/// can then coexist with this one and an old client's answer is never ambiguous
+/// about which question it answers
+/// (`docs/design/2026-09-09-confirm-2-in-band-schema-and-wiring.md:44-60`).
+/// Spelled once — a second spelling is a discriminator that can disagree with
+/// itself.
+const CONFIRMATION_INPUT_KEY: &str = "io.mcp-gateway.destructive-confirmation.v1";
+
+/// Who a confirmation envelope is bound to.
+///
+/// `principal_fingerprint` answers `None` for a modern stateless caller: that
+/// path authenticates by API key and the fingerprint is written for a verified
+/// backend exchange. Minting on `None` would bind the envelope to nobody, and
+/// refusing on `None` would leave the in-band ask unreachable on the one
+/// transport it exists to serve — so the API-key *name* is the fallback. It
+/// grants nothing new: it is the same authority the admin gate accepted one
+/// frame earlier for this very call, sealing a caller to its own answer to a
+/// question this gateway just asked it. A caller with neither is still refused.
+fn confirmation_principal(caller: &MetaMcpCallerContext<'_>) -> Option<String> {
+    crate::protocol::mrtr::principal_fingerprint(caller.verified_identity).or_else(|| {
+        caller
+            .api_key_name
+            .map(|name| crate::hashing::sha256_hex(format!("apikey-name:{name}").as_bytes()))
+    })
+}
+
+/// Which call a confirmation authorises.
+///
+/// One function because the mint and the redemption must agree exactly; two
+/// spellings of the same pair is how a digest silently stops matching. The
+/// gateway answers its own meta-tools, so it is both the server and the tool.
+fn confirmation_digest(tool_name: &str, arguments: &Value) -> String {
+    crate::protocol::mrtr::original_request_digest(tool_name, tool_name, arguments)
+}
+
+/// Spend the envelope an in-band confirmation was asked on.
+///
+/// `Err` means the envelope is unusable for any reason — forged, expired,
+/// wrong domain, bound to another caller or call, already spent, or naming an
+/// exchange this replica no longer holds. One shape for all of them: a caller
+/// that could tell them apart could map gateway state one probe at a time, and
+/// the answer to every one of them is to ask again.
+///
+/// Same order as `invoke::redeem_retry`, for the same reasons — purpose before
+/// anything is read out of the payload, so an envelope from the backend domain
+/// cannot spend the hold or the redemption belonging to the exchange whose
+/// `jti` it happens to carry; binding before the ledger, so a handle this
+/// gateway will not honour does not burn the caller's one redemption. Not that
+/// function, because the principal differs: it derives the stricter
+/// `principal_fingerprint`, which refuses exactly the API-key caller this
+/// domain must bind (see `confirmation_principal`).
+///
+/// `std::result::Result` spelled out because this module's bare `Result` is the
+/// crate alias, which fixes the error type and cannot carry the `()` this needs.
+async fn redeem_confirmation(
+    continuation: &crate::protocol::continuation::ContinuationState,
+    token: &str,
+    principal: &str,
+    digest: &str,
+) -> std::result::Result<(), ()> {
+    use crate::protocol::continuation::{Purpose, now_unix_secs};
+
+    let now = now_unix_secs();
+    let payload = continuation.keyring().open(token, now).map_err(|error| {
+        warn!(%error, "Confirmation envelope refused");
+    })?;
+    payload
+        .require_purpose(Purpose::DestructiveConfirm)
+        .map_err(|_| {
+            warn!("Continuation from another domain presented as a confirmation");
+        })?;
+    payload.redeemable_by(principal, digest).map_err(|error| {
+        warn!(%error, "Confirmation not redeemable by this caller");
+    })?;
+    // Single use, and spent before the answer is read rather than after it is
+    // acted on: a handle still redeemable afterwards is one an operator's "no"
+    // can be replayed past.
+    if !continuation
+        .ledger()
+        .consume(&payload.jti, payload.expires_at, now)
+        .await
+    {
+        warn!("Confirmation envelope already spent");
+        return Err(());
+    }
+    continuation
+        .in_flight()
+        .complete(&payload.hold_key, now)
+        .await;
+    Ok(())
 }
 
 /// Returns the refusal to send, or `None` when the call may proceed.
@@ -2344,6 +2492,86 @@ async fn destructive_confirmation_gate(
                 return Some(refused(&action_desc));
             }
         }
+        // The asker is the caller itself, one round-trip away: the gate answers
+        // the call with an `input_required` result and the caller confirms by
+        // retrying with the answer.
+        //
+        // Redemption is tried BEFORE minting. The other order never reads the
+        // answer the caller just sent, mints a second question instead, and
+        // turns the ask into an unbounded loop — strictly worse than the honest
+        // refusal it replaces.
+        ConfirmationChannel::InBand { continuation } => {
+            let Some(principal) = confirmation_principal(caller) else {
+                return Some(refused(&action_desc));
+            };
+            let digest = confirmation_digest(tool_name, arguments);
+
+            if let Some(token) = caller.retry.request_state.as_deref() {
+                if redeem_confirmation(continuation, token, &principal, &digest)
+                    .await
+                    .is_err()
+                {
+                    return Some(refused(&action_desc));
+                }
+                // Only JSON `true` confirms. Absent, `false`, `"yes"`, `1` —
+                // all decline, fail-closed. A malformed answer is deliberately
+                // not a protocol error: an error would hand a caller a way to
+                // turn a decline into a retryable condition.
+                if caller
+                    .retry
+                    .input_responses
+                    .as_ref()
+                    .and_then(|answers| answers.get(CONFIRMATION_INPUT_KEY))
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                {
+                    return None;
+                }
+                return Some(confirmation_refusal_response(
+                    id,
+                    format!("Operator declined: {action_desc}"),
+                ));
+            }
+
+            let Some(payload) = continuation
+                .begin_confirmation_exchange(
+                    tool_name.to_owned(),
+                    // A confirmation continues no backend exchange, so there is
+                    // no backend state to carry. Absent rather than empty: an
+                    // empty string is a state some backend never issued.
+                    None,
+                    principal,
+                    digest,
+                    crate::protocol::continuation::now_unix_secs(),
+                )
+                .await
+            else {
+                warn!(tool = %tool_name, "No slot to hold this confirmation open");
+                return Some(refused(&action_desc));
+            };
+            let Ok(envelope) = continuation.keyring().mint(&payload) else {
+                warn!(tool = %tool_name, "Confirmation envelope mint refused");
+                return Some(refused(&action_desc));
+            };
+            return Some(JsonRpcResponse::success(
+                id.clone(),
+                json!({
+                    "resultType": "input_required",
+                    "inputRequests": {
+                        CONFIRMATION_INPUT_KEY: {
+                            "type": "boolean",
+                            "title": "Confirm destructive action",
+                            "description": action_desc,
+                        },
+                    },
+                    "requestState": envelope,
+                }),
+            ));
+        }
     }
     None
 }
+
+#[cfg(test)]
+#[path = "outbound_log_tests.rs"]
+mod outbound_log_tests;

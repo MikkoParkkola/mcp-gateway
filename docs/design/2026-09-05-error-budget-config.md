@@ -30,9 +30,9 @@ answers "no, it is fine, you are asking too fast".
 | `ErrorBudgetConfig` — threshold 0.8, window_size 100, window_duration 5m, min_samples 10 | `src/kill_switch/budget.rs:95`, `impl Default` at `:119` |
 | `CapabilityErrorBudgetConfig` — threshold 0.8, window_size 50, window_duration 5m, min_samples 5, cooldown 5m | `src/kill_switch/budget.rs:140`, `impl Default` at `:166` |
 | Neither type derives `Serialize`/`Deserialize` | `rg 'serde\|Deserialize\|Serialize' src/kill_switch/budget.rs` — zero hits |
-| `set_error_budget_config` / `set_capability_budget_config` have no callers in `src/` or `tests/` | `src/gateway/meta_mcp/mod.rs:961`, `:967` |
-| The defaults are therefore the only reachable values | follows from the two rows above |
-| Both setters were already recorded as dead, disposed without a ticket | `docs/requirements/RELEASE-4.0.0-criteria-status.md:278-279` |
+| ~~`set_error_budget_config` / `set_capability_budget_config` have no callers in `src/` or `tests/`~~ **WITHDRAWN (2026-09-08, verified at source)** — both are called in production | definitions `src/gateway/meta_mcp/mod.rs:1001`, `:1006`; callers `src/gateway/server/mod.rs:615`, `:616` |
+| ~~The defaults are therefore the only reachable values~~ **WITHDRAWN** — it followed from the withdrawn row above. The setters are reachable; what remains true is that neither config type is deserialized from the config file, so no *operator-supplied* value reaches them | follows from the `Serialize`/`Deserialize` row, which stands |
+| ~~Both setters were already recorded as dead, disposed without a ticket~~ **WITHDRAWN** — the disposal rested on the same refuted premise and should be revisited | `docs/requirements/RELEASE-4.0.0-criteria-status.md:278-279` |
 | The rest of the config parses durations as `5m` via `humantime_serde` | `src/config/mod.rs:1196`, `:1301`, `:1392`; module at `:1676` |
 | The backend failsafe records a dispatch `Err` as a circuit-breaker failure, independently of the budget | `src/backend/ops.rs:255`, `:384` (`entry.failsafe.record_failure(&e.to_string(), latency)`) |
 | HTTP status codes are deliberately NOT classified in the error type; a status-only classifier was tried and refused by two tests (#247 overloads 404/400 to mean "session expired") | `src/error.rs:120-126` |
@@ -388,8 +388,24 @@ criterion asserts, not because it was hard.
 
 Residual, stated: `throttled: false` would match and be excluded. Nobody has
 observed that string; "request throttled by upstream" is in a test because
-somebody did. Accepted knowingly rather than traded for the observed case. A test asserts both call sites route through it.
+somebody did. Accepted knowingly rather than traded for the observed case.
 
-This change ships no code yet, so no leg has reviewed an implementation. Both
-design legs and one confirmation pass have returned; implementation starts
-against this text.
+That both recorders route through the one predicate is a STRUCTURAL property, not a
+tested one: at the time of this decision `is_rate_limited` was defined once, in
+`src/gateway/recovery.rs`, and no classifier kept a second copy. No case drives one
+table of signal strings through both paths asserting an identical verdict per input.
+The test plan records that as GH475.RL.11 with no case, disposed to
+[#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481); the criteria ledger
+carries the row, its caller list and its `structural` qualifier, and is the one
+place that inventory lives.
+
+An earlier revision of this paragraph claimed a test asserts both recorders route
+through the predicate. No such test exists.
+
+Both design legs and one confirmation pass returned against this text, and the
+implementation was written against it afterwards and has since landed.
+
+This document records what was DECIDED, on 2026-09-05, and is not revised as the code
+moves. For the state of the code read
+[#475](https://github.com/MikkoParkkola/mcp-gateway/issues/475) and the release-criteria
+ledger; where either disagrees with this text, they are right and this is history.

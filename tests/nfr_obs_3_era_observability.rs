@@ -316,6 +316,7 @@ mod read {
 
         let state = Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+            session_lifecycle: None,
             env: None,
             meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
             backends,

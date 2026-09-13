@@ -433,6 +433,7 @@ impl crate::transport::Transport for CapturingTransport {
         _params: Option<Value>,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
+        _resend: crate::transport::ResendPermission,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
         self.dispatches.calls.lock().push(Dispatch {
             headers: extra_headers.to_vec(),

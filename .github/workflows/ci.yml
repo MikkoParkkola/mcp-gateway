@@ -26,10 +26,14 @@ jobs:
         run: tests/public_repo_hygiene.sh
       - name: Validate tracked public docs boundary
         run: scripts/dev/check-public-repo-hygiene.sh
-      - name: Enforce per-file license boundary (MIT core vs PolyForm-NC default)
+      - name: Enforce the Noncommercial license header on every source file
         run: scripts/ci/check-license-headers.sh
       - name: Verify license files ship in every packaged artifact
         run: scripts/ci/verify-artifact-licenses.sh
+      - name: Validate the hosted-runner guard
+        run: scripts/ci/check-hosted-runners.sh --self-test
+      - name: Require every job to run on a GitHub-hosted runner
+        run: scripts/ci/check-hosted-runners.sh
 
   service-template-smoke:
     name: Service template smoke
@@ -150,7 +154,7 @@ jobs:
       - name: Validate kind rollback smoke script
         run: bash -n deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh
       - name: Create kind cluster
-        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: mcp-gateway-rollback-smoke
       - name: Apply, upgrade, and roll back on the real cluster
@@ -235,7 +239,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       # The external journey is executed by the mandatory SDK job below.
-      - run: cargo test --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
+      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
 
   task-sdk-recovery:
     uses: ./.github/workflows/task-sdk-recovery.yml
@@ -313,6 +317,14 @@ jobs:
         run: python3 scripts/release/count-release-criteria.py --check
       - name: Test supplemental acceptance checks
         run: python3 scripts/release/test_scope_acceptance.py
+      - name: Test the tag/manifest publish gate
+        run: python3 scripts/release/test_check_tag_manifest.py
+      # Proves the workflow-wiring assertions still discriminate: each case
+      # breaks one rule, or restates it in an equivalent spelling, and the
+      # suite has to return the stated verdict. Runs against a copy of the
+      # workflows, so nothing here edits this file.
+      - name: Test that the workflow-wiring assertions catch their mutations
+        run: python3 scripts/release/test_workflow_wiring_mutations.py
       - name: Validate supplemental scope (pending work is reported)
         run: python3 scripts/release/check_scope_acceptance.py --check
       - name: Require completed acceptance in publishing context
@@ -325,7 +337,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@0c952ace0f842f11c75775922d7400335cf60bc6 # main
+      - uses: trufflesecurity/trufflehog@166bf18f3a3fe52a6db9e1770568f52a0c40ff07 # main
         with:
           extra_args: --only-verified
 
@@ -344,6 +356,20 @@ jobs:
         run: python3 scripts/dev/test_cwe532_leak_lint.py
       - name: Run CWE-532 leak lint
         run: python3 scripts/dev/cwe532-leak-lint.py src crates
+
+  control-drift-probes:
+    name: Control-drift probes (NFR.SEC.7)
+    # CI cannot detect drift — there is no listening install here, and by
+    # construction a build from this tree carries this tree's controls. What it
+    # proves is that the probes still discriminate: the rows run against stub
+    # servers that refuse everything, refuse nothing, and carry the control, so
+    # a probe that has silently stopped exercising its control fails here rather
+    # than going green against a stale install. Stdlib Python, no extra deps.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test the drift probes (fail when a probe stops discriminating)
+        run: python3 scripts/dev/test_check_control_drift.py
 
   docker:
     name: Docker
@@ -364,7 +390,14 @@ jobs:
 
       - name: Extract tag
         id: meta
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+        # This workflow cannot read release.yml's job outputs — it fires on the
+        # same tag independently — so it runs the same gate itself. Publishing a
+        # signed image for a tag whose manifest names a different version is
+        # exactly what the gate refuses. `version` here drops the leading `v`,
+        # so this publisher and docker.yml agree on the image tag; previously
+        # this pushed `:v4.0.0` while docker.yml pushed `:4.0.0`, and only this
+        # one is signed.
+        run: python3 scripts/release/check_tag_manifest.py
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
@@ -381,9 +414,19 @@ jobs:
         with:
           context: .
           push: true
+          # The version tag is always pushed; :latest moves only for a stable
+          # release, so `docker pull` with no tag cannot land on a candidate.
+          # Signing and SBOM attestation below run against the digest, so an rc
+          # adopter gets the same supply-chain guarantees either way.
           tags: |
             ghcr.io/mikkoparkkola/mcp-gateway:${{ steps.meta.outputs.version }}
-            ghcr.io/mikkoparkkola/mcp-gateway:latest
+            ${{ steps.meta.outputs.is_prerelease != 'true' && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}
+          # Same reason as docker.yml: without a per-build value the runtime
+          # stage's `apt-get upgrade` is restored from the shared gha cache, and
+          # a release image ships whatever packages were current when that layer
+          # was first built.
+          build-args: |
+            APT_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

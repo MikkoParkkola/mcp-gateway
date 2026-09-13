@@ -111,6 +111,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
 
     let app = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+        session_lifecycle: None,
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
         backends,

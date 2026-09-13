@@ -59,7 +59,9 @@ impl Transport for CountingTransport {
 }
 
 /// A registry holding one backend whose calls are counted.
-fn counted_backend(name: &str) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
+pub(in crate::gateway::meta_mcp) fn counted_backend(
+    name: &str,
+) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
@@ -82,7 +84,9 @@ fn counted_backend(name: &str) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
 /// authorizer is the only thing that varies. A fixture that assembled the
 /// context some other way would prove the double works rather than that the
 /// chokepoint is reached.
-fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
+pub(in crate::gateway::meta_mcp) fn ctx(
+    authorizer: &(dyn ToolAuthorizer + Sync),
+) -> MetaMcpCallerContext<'_> {
     MetaMcpCallerContext {
         signing: None,
         execution: None,
@@ -104,7 +108,7 @@ fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
     }
 }
 
-fn invoke_args(server: &str, tool: &str) -> Value {
+pub(in crate::gateway::meta_mcp) fn invoke_args(server: &str, tool: &str) -> Value {
     json!({ "server": server, "tool": tool, "arguments": {} })
 }
 

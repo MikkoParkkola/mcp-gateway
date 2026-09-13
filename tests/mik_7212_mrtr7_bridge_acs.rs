@@ -586,6 +586,40 @@ async fn ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice() {
     );
 }
 
+/// A state-only interim result carries `requestState` and no questions. The
+/// bridge must ask the client nothing at all: inventing a round trip here
+/// would put a question to a person that no server ever posed.
+///
+/// `mik_7212_acs.rs` pins the same property against `Bridge::to_legacy_client`,
+/// a projection that skips the capability slice. This one runs against the live
+/// run loop, which is the only thing that can dispatch.
+#[tokio::test]
+async fn ac_mrtr_7a_a_state_only_interim_asks_the_client_nothing() {
+    let client = FakeClient::mute();
+    let backend = FakeBackend::new(vec![completed()]);
+    let records = Records::default();
+
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared(&json!({"elicitation": {"form": {}}})),
+        None,
+        &interim(&[]),
+    )
+    .await;
+
+    assert!(
+        outcome.is_ok(),
+        "a state-only interim must complete, not fail: {outcome:?}"
+    );
+    assert!(
+        client.methods().is_empty(),
+        "nothing was asked, so nothing may be put to the client: {:?}",
+        client.methods()
+    );
+}
+
 /// Row 325 — a capability declared in the session is asked for when the
 /// per-request slice is absent.
 ///

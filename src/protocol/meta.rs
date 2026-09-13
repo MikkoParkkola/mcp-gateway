@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! Per-request protocol metadata (MCP 2026-07-28), and telling the eras apart.
 //!
@@ -452,6 +452,17 @@ impl RequestShape {
         match self {
             RequestShape::Modern(f) => f.declared_capabilities,
             _ => Declared::NONE,
+        }
+    }
+
+    /// The minimum log level this request declared, if it declared one.
+    ///
+    /// `None` for a legacy or malformed request, which is the same answer
+    /// ADR-014 §4 gives an omitted key: absence means silence, not everything.
+    pub fn declared_log_level(&self) -> Option<&str> {
+        match self {
+            RequestShape::Modern(f) => f.log_level.as_deref(),
+            _ => None,
         }
     }
 }

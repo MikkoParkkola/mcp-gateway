@@ -56,6 +56,7 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
     .expect("the fixture task store opens");
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
         backends,

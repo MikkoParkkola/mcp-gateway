@@ -4,6 +4,10 @@ Author: Mikko Parkkola
 Date: 2026-04-12
 Status: Draft for launch
 
+> **Licensing note (2026-09-10).** This post describes the 3.x licensing model.
+> mcp-gateway v4.0.0 drops the MIT core: the whole repository is PolyForm
+> Noncommercial 1.0.0. See [`LICENSES.md`](../../LICENSES.md).
+
 ## TL;DR
 
 "Sovereign" is overloaded. In this post it means one thing: **every layer of the coding-agent stack is either mine or forkable, and the alignment decision is formally verifiable rather than asserted.** Over the last two weeks I shipped 33 commits across 7 repos toward that target. This post walks through what's in the stack, what's proven, what's scaffolding, and why I think the frame matters now.

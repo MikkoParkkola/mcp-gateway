@@ -41,7 +41,18 @@ FROM debian:trixie-slim
 
 LABEL io.modelcontextprotocol.server.name="io.github.MikkoParkkola/mcp-gateway"
 
-RUN apt-get update && apt-get upgrade -y \
+# Debian ships security updates into the apt archives continuously, but the
+# `debian:trixie-slim` image they are published against is rebuilt far less
+# often. While that base image's digest sits still, this layer's cache key sits
+# still with it, so a rebuild restores the upgrade from cache instead of running
+# it: the image keeps whatever package versions were current the day the layer
+# was first built, and the trivy gate in docker.yml reports CVEs that
+# `apt-get upgrade` would already have fixed. Pass a per-build value here to
+# move the cache key and force the upgrade to re-run against today's archives.
+ARG APT_CACHE_BUST=local
+
+RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
+    && apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
     ca-certificates \
     wget \

@@ -157,18 +157,40 @@ and the gap matters most for the row that carries the criterion: a T4 that regis
 itself is a fixture standing in for the production code it exists to prove — the shape §P2 records as
 two shipped defects.
 
-So one named function owns it — `wire_session_lifecycle(firewall: Option<&Arc<Firewall>>) ->
-Arc<SessionLifecycle>`, placed beside the firewall block (`src/gateway/server/mod.rs:1197-1211`). It
-creates the instance, registers `Firewall::on_session_end` (`firewall/mod.rs:682`) under a
-`Weak<Firewall>`, and returns the handle. Startup calls it; T4 calls the SAME function and supplies
-only a firewall. No test registers a handler. The capture is `Weak` because the handle is stored on
-`AppState` beside `firewall` (`server/mod.rs:1249`) and a strong `Arc` inside the callback would close
-a cycle through the state that owns both.
+So one named function owns THE REGISTRATION — `wire_session_lifecycle(lifecycle:
+&Arc<SessionLifecycle>, firewall: &Arc<Firewall>)`, placed beside the firewall block
+(`src/gateway/server/mod.rs:1197-1211`). It registers `Firewall::on_session_end`
+(`firewall/mod.rs:682`) under a `Weak<Firewall>` and returns nothing. Startup calls it; T4 calls the
+SAME function. No test registers a handler.
+
+It does NOT construct the instance, and that is the whole point of the split. An earlier revision had
+one function create AND register, which cannot be placed: creation must precede the reaper at `:992`
+and registration cannot precede the firewall at `:1197`, so a single function straddling both would
+have to be called twice or in two places at once. Construction carries no criterion — `SessionLifecycle::new`
+is a plain constructor and no acceptance criterion asserts anything about where it is called. Registration
+carries the criterion T4 exists to prove, so registration is what the shared function owns.
+
+The capture is `Weak` so the lifecycle handle cannot keep the firewall alive past the state that owns
+it. NOT to break a reference cycle: `AppState` holding both (`server/mod.rs:1249`) is not a cycle, and
+a cycle would need the firewall to hold the lifecycle back, which nothing does.
+
+**D8a — the function lives in `gateway::session_lifecycle`, not in `gateway::server` (a decision D8
+did not make; named per §P3).** D8 says "placed beside the firewall block", which reads as
+`gateway::server`, and that placement does not compile for the caller D8 exists to serve: `mod server`
+is private, so a test naming `mcp_gateway::gateway::server::wire_session_lifecycle` fails with E0603
+before it reaches an assertion. The alternatives were widening `server` to `pub` and moving the
+function; widening a module to expose one function enlarges the public surface for a test's
+convenience (D28), so the function moved instead. It sits in `session_lifecycle.rs` beside the type it
+registers against, under `#[cfg(feature = "firewall")]` because its second parameter is a `Firewall`.
+Startup still calls it from exactly where D8 says — after the firewall block — so the ORDER D8 fixes is
+unchanged, and only the module the symbol lives in moved. Nothing else about D8 is affected: one
+function, called by startup and by T4, registering the production handler.
 
 **Ordering, which the sites force and the design had not stated.** The reaper is spawned at
-`server/mod.rs:992`, roughly two hundred lines BEFORE the firewall exists at `:1197`. The instance is
-therefore created before `:992` and passed to `spawn_reaper_on` (D1a), and the handler is registered
-afterwards. That is safe, not a race: `register` takes `&self` (`session_lifecycle.rs:48`), and no key
+`server/mod.rs:992`, roughly two hundred lines BEFORE the firewall exists at `:1197`. So startup does
+three things in order: construct the instance before `:992`, pass it to `spawn_reaper_on` (D1a), and
+call `wire_session_lifecycle` with that same handle after the firewall block. The one handle is then
+stored on `AppState`. That is safe, not a race: `register` takes `&self` (`session_lifecycle.rs:48`), and no key
 is tracked until requests flow, which requires the `AppState` built at `:1220` — so the first possible
 `reap` with anything in it happens after registration. Rejected: moving `spawn_reaper_on` below the
 firewall block, which reorders two unrelated subsystems' startup to save one `Arc::clone`.

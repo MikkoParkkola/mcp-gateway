@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#
+# Security controls whose presence in a *listening* build is checked by
+# `scripts/dev/check-control-drift.py` (NFR.SEC.7).
+#
+# Admission rule: a control is listed as probed exactly when its absence is
+# observable from outside the process. A control whose absence cannot be seen
+# from outside cannot drift detectably; it is still listed, with
+# `probe = "none"` and the reason, so this file states its own coverage
+# instead of implying completeness by omission.
+
+[[control]]
+id = "origin-guard"
+description = "a cross-origin browser request is refused before dispatch"
+introduced_in = "5d25f104"
+source = "src/gateway/router/origin_guard.rs"
+probe = "foreign-origin"
+
+[[control]]
+id = "host-guard"
+description = "a request carrying a foreign Host header is refused"
+introduced_in = "5d25f104"
+source = "src/gateway/router/origin_guard.rs"
+probe = "foreign-host"
+
+[[control]]
+id = "unsafe-code-denied"
+description = "the crate root denies unsafe code"
+introduced_in = "5d25f104"
+source = "src/lib.rs"
+probe = "none"
+reason = "a compile-time lint leaves no signal on the wire; drift is caught by the build, not by a request"

@@ -97,7 +97,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search results do not advertise tools the operator turned off.
   ([#470](https://github.com/MikkoParkkola/mcp-gateway/pull/470))
 
-## [4.0.0] - 2026-08-29
+## [4.0.0] - unreleased
+
+> Not yet tagged. The latest release is 3.5.1 (2026-09-04), which was tagged after this
+> section was started and therefore appears above it.
+>
+> Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). `gateway.yaml` loads
+> unchanged; the strict `env_files` parsing is the one change that refuses a start rather than
+> warns.
 
 ### Changed
 
@@ -190,6 +197,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were. Scanning is per logical line, as the parser reads them.
 
 ### Added
+
+- **`meta_mcp.exposed_meta_tools` restricts the meta-tool surface** (GH issue 449):
+  an allow-list of meta-tools to expose, enforced on both `tools/list` and
+  `tools/call` for every meta-tool built-in, including the two Code Mode tools
+  (`gateway_search`, `gateway_execute`). The field is new in 4.0.0 and defaults to
+  empty, which exposes everything as before, so no existing configuration changes
+  behaviour on upgrade. An allow-list that omits `gateway_invoke` is honoured and
+  logged as a warning, since it leaves backend tools unreachable through the
+  gateway. `meta_mcp.surfaced_tools` is a separate list and is unaffected.
 
 - **First start after upgrading to 4.0.0 prints what changed underneath it.**
   The release re-keys OAuth credentials, refuses a malformed `env_files` line at

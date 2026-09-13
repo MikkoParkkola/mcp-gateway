@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Downloads](https://img.shields.io/crates/d/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Rust](https://img.shields.io/badge/rust-1.95+-blue.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-PolyForm--NC%20%2B%20MIT%20core-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
+[![License](https://img.shields.io/badge/license-PolyForm--NC-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
 [![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
@@ -22,7 +22,7 @@ MCP Gateway is a single Rust binary that sits between an AI client and all of it
 
 ![demo](demo.gif)
 
-Personal and noncommercial use is free, including running the full gateway. Running it commercially needs a [commercial license](#license), and only a small MIT core of generic building blocks is MIT-licensed.
+Personal and noncommercial use is free, including running the full gateway. Running it commercially needs a [commercial license](#license).
 
 ## The problem this removes
 
@@ -353,7 +353,7 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 
 ### Protocol and transport
 
-- **MCP version**: 2025-11-25 (latest spec)
+- **MCP versions**: the `initialize` handshake negotiates up to 2025-11-25. The newer 2026-07-28 revision is reached only on the stateless `POST /mcp` path, via the `MCP-Protocol-Version` header; it is served by default and is switched off with `server.modern_protocol: false`
 - **Transports**: stdio, Streamable HTTP, SSE, WebSocket
 - **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
 - **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` report `restart_required`, and keep reporting it until a restart, for every field a reload cannot apply — which is every field outside that short live list, `auth` included. A reload that would leave the tool endpoint reachable without a credential is refused rather than applied
@@ -395,7 +395,7 @@ This table compares public, user-facing behavior, not internal roadmap scoring. 
 | Imports and bridges | Native MCP backends plus REST capability YAML and protocol-import planning | Docker-packaged MCP server catalog | MCP server aggregation | Strong bridge story for OpenAPI, SSE, WebSocket, and stdio compatibility |
 | Ranking and routing | Safety-aware ranking, explanations, cost/latency/trust/health signals | Catalog/profile selection, not an MCP tool ranker | Gateway-level routing to configured servers | Transport routing, not semantic tool ranking |
 | Deployment | Local, team gateway, Docker Compose, systemd, launchd, a security-hardened Helm chart (non-root, seccomp, read-only rootfs), and experimental (v1alpha1) Kubernetes CRDs | Docker Desktop, Docker CLI, Docker Hub/catalog workflow | Local or shared self-hosted gateway | Local or remote bridge process beside the target MCP server |
-| Licensing | Noncommercial-default (PolyForm-NC) with a small MIT core of generic building blocks; commercial use of the runnable gateway requires a license | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
+| Licensing | PolyForm Noncommercial 1.0.0 throughout; commercial use requires a license | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
 
 ### vs Anthropic MCP tunnels
 
@@ -480,6 +480,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Quick Start](docs/QUICKSTART.md) | Zero to running in 2 minutes |
 | [Annotated config example](examples/gateway-full.yaml) | Commented `gateway.yaml` covering the most-used config sections |
 | [OAuth Configuration](docs/OAUTH_CONFIG.md) | OAuth 2.0 setup with Slack and Figma examples |
+| [Upgrading to 4.0](docs/UPGRADING-4.0.md) | Per-issuer OAuth storage, strict `env_files` parsing, protocol floor, and the single-license change |
 | [Upgrading to 3.0](docs/UPGRADING-3.0.md) | Per-user OAuth isolation and identity-propagation upgrade path |
 | [Deployment Guide](docs/DEPLOYMENT.md) | Docker, systemd, TLS/mTLS, scaling |
 | [OpenAPI Import](docs/OPENAPI_IMPORT.md) | Generate capabilities from OpenAPI specs |
@@ -567,30 +568,23 @@ mcp-gateway is part of a suite of MCP tools:
 
 ## License
 
-mcp-gateway uses **mixed, per-file licensing**, and the default is Noncommercial.
-
-| Scope | License |
-|-------|---------|
-| Files whose header carries `// SPDX-License-Identifier: MIT` (below the copyright line) | MIT ([LICENSE-MIT](LICENSE-MIT)) |
-| Everything else (the default) | PolyForm Noncommercial 1.0.0 ([LICENSE-NONCOMMERCIAL](LICENSE-NONCOMMERCIAL)) |
-
-If a file is not explicitly marked MIT, it is Noncommercial. The MIT core is a
-small set of simple, generic building blocks with no enterprise logic: the MCP
-protocol types, natural-language tool search, response shaping/transforms, the
-server design validator, the skills bridge, generic capability schema-validation
-and hashing, and the `gateway-core` primitives crate. The exact paths are in
-[`.mit-core-allowlist`](.mit-core-allowlist).
+mcp-gateway is licensed under the **PolyForm Noncommercial License 1.0.0**
+([LICENSE-NONCOMMERCIAL](LICENSE-NONCOMMERCIAL)). Every first-party file carries
+a copyright line and an explicit
+`// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0` header. There is no
+second license and no allowlist.
 
 What this means:
 
 - **Personal and noncommercial use is free**, including running the whole gateway.
-- **Running the gateway commercially requires a commercial license.** The runnable
-  gateway, covering dispatch, transport, backend management, identity, security,
-  governance, is Noncommercial. The MIT core is building blocks, not a
-  free-for-commercial gateway. See [COMMERCIAL.md](COMMERCIAL.md).
-- Versions 3.0.0–3.2.1 were published with MIT metadata for code now licensed as
-  Noncommercial from v3.3.0. Those copies stay MIT (a granted license cannot be
-  revoked) but are deprecated. See [NOTICE.md](NOTICE.md).
+- **Running the gateway commercially requires a commercial license.** This covers
+  the whole project — dispatch, transport, backend management, identity,
+  security, governance — including the generic building blocks that earlier 3.x
+  releases shipped under MIT headers. See [COMMERCIAL.md](COMMERCIAL.md).
+- Rights granted in earlier releases are not revoked. Versions 3.0.0–3.2.1 were
+  published with MIT package metadata, and v3.3.0 onward in the 3.x line shipped
+  a small MIT core under per-file headers. Those copies stay MIT for their
+  recipients; from **v4.0.0** there is no MIT core. See [NOTICE.md](NOTICE.md).
 
 Full model: [LICENSES.md](LICENSES.md).
 

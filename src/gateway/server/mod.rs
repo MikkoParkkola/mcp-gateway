@@ -6,6 +6,8 @@
 // test that drives a real startup must call the same one rather than a copy of
 // its policy.
 pub(crate) mod account_bindings;
+#[cfg(test)]
+mod gh475_budget_decides_tests;
 mod persistence;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
@@ -1113,12 +1115,15 @@ impl Gateway {
         // effects back on. Bounds are the constants in `crate::idempotency`.
         // This is the only production construction site of `MetaMcp`, and both
         // `run` and `run_stdio` reach it, so the cache is `Some` on every boot.
-        // That covers ONE of the criterion's three routes: generic `tools/call`.
-        // stdio discards the retry fields before dispatch (`:2633`, `:3671`) and
-        // the direct `POST /mcp/{name}` bypass never calls `idempotency_key_for`
-        // (`backend_handlers.rs:338-353`), so both are still unprotected. SUB.4
-        // is MET only when all three are covered — see
-        // `docs/design/2026-08-31-sub-4-idempotency-wiring.md`.
+        // All three of the criterion's routes reach a guard from here: generic
+        // `tools/call` through `meta_mcp/invoke.rs`, stdio through the real
+        // `RetryFields` `dispatch_single_with_sink` builds (`:1886`), and the
+        // direct `POST /mcp/{name}` bypass through its own local re-enforcement
+        // (`meta_mcp/direct_route.rs`, called at `backend_handlers.rs:781`).
+        // Reaching a guard is not the whole criterion: the direct route still
+        // RELEASES the client's key when the backend call fails, which is the
+        // broken-stream case SUB.4 is written about, so the row is PARTIAL —
+        // see `docs/design/2026-08-31-sub-4-idempotency-wiring.md`.
         Arc::get_mut(&mut meta_mcp)
             .expect("no other Arc references at this point")
             .enable_idempotency(
@@ -1444,7 +1449,12 @@ impl Gateway {
             Arc::clone(&self.backends),
             self.config.streaming.clone(),
         ));
-        multiplexer.spawn_reaper_on();
+        // One lifecycle registry, swept by the same tick that reaps stream
+        // sessions. Constructed here so the reaper has an owner; the write
+        // side that populates it is wired separately.
+        let session_lifecycle =
+            Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+        multiplexer.spawn_reaper_on(Arc::clone(&session_lifecycle));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let auth_config = Arc::new(ResolvedAuthConfig::try_from_config(&self.config.auth)?);
 
@@ -1684,6 +1694,13 @@ impl Gateway {
             Some(fw)
         };
 
+        // The write side of the registry: without this the reaper sweeps an
+        // empty map forever, which is silent and looks exactly like working.
+        #[cfg(feature = "firewall")]
+        if let Some(ref firewall) = firewall_arc {
+            crate::gateway::session_lifecycle::wire_session_lifecycle(&session_lifecycle, firewall);
+        }
+
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).
         // Only the cost-governance shutdown tasks consume this clone.
@@ -1805,6 +1822,7 @@ impl Gateway {
         let task_executor_for_shutdown = Arc::clone(&task_executor);
 
         let state = Arc::new(AppState {
+            session_lifecycle: Some(Arc::clone(&session_lifecycle)),
             // Shared, not minted: the invoke path mints continuations against
             // `meta_mcp`'s keyring, so a second one here would be a keyring
             // that opens nothing this gateway ever sealed.
@@ -2330,14 +2348,20 @@ impl Gateway {
 
             // Handle batch requests (array of JSON-RPC calls)
             if request.is_array() {
-                let responses = Box::pin(Self::dispatch_batch_with_sink(
-                    &meta_mcp,
-                    &tool_policy,
-                    &mtls_policy,
-                    request,
-                    session_id,
-                    &mut protocol_telemetry_sink,
-                ))
+                // Boxed: the dispatch future is tens of kilobytes and this one
+                // lives across the `select!` in the helper, so leaving it inline
+                // would put the whole thing on the reader loop's stack frame.
+                let responses = Self::dispatch_streaming_notifications(
+                    Box::pin(Self::dispatch_batch_with_sink(
+                        &meta_mcp,
+                        &tool_policy,
+                        &mtls_policy,
+                        request,
+                        session_id,
+                        &mut protocol_telemetry_sink,
+                    )),
+                    &mut stdout,
+                )
                 .await;
                 Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
                 if !responses.is_empty() {
@@ -2348,14 +2372,17 @@ impl Gateway {
             }
 
             // Single request
-            let response_opt = Box::pin(Self::dispatch_single_with_sink(
-                &meta_mcp,
-                &tool_policy,
-                &mtls_policy,
-                request,
-                session_id,
-                protocol_telemetry_sink.as_mut(),
-            ))
+            let response_opt = Self::dispatch_streaming_notifications(
+                Box::pin(Self::dispatch_single_with_sink(
+                    &meta_mcp,
+                    &tool_policy,
+                    &mtls_policy,
+                    request,
+                    session_id,
+                    protocol_telemetry_sink.as_mut(),
+                )),
+                &mut stdout,
+            )
             .await;
             Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
 
@@ -2403,7 +2430,10 @@ impl Gateway {
     }
 
     /// Write a JSON-RPC response to stdout followed by a newline.
-    async fn write_response(stdout: &mut tokio::io::Stdout, value: &serde_json::Value) {
+    async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
+        stdout: &mut W,
+        value: &serde_json::Value,
+    ) {
         let serialized = match serde_json::to_string(value) {
             Ok(s) => s,
             Err(e) => {
@@ -2422,6 +2452,57 @@ impl Gateway {
         }
         if let Err(e) = stdout.flush().await {
             warn!(error = %e, "Failed to flush stdout");
+        }
+    }
+
+    /// Run `fut` inside a notification scope, writing each notification the
+    /// backend publishes as it arrives.
+    ///
+    /// Draining concurrently rather than afterwards is the whole point: a
+    /// progress notification has to reach the client while the call that
+    /// raised it is still running, so it must be written *before* the caller
+    /// writes `fut`'s own response (`MIK-7272.SUB.2b`, S-02).
+    ///
+    /// Installing the scope is also what makes the mint reachable on stdio —
+    /// `mint_progress_token` returns `None` outside one, and the client's own
+    /// token would then travel to the backend unchanged.
+    async fn dispatch_streaming_notifications<F, W>(fut: F, stdout: &mut W) -> F::Output
+    where
+        F: Future,
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let (scoped, mut notifications) = crate::transport::notification_sink::scope(fut);
+        tokio::pin!(scoped);
+        let output = loop {
+            tokio::select! {
+                Some(notification) = notifications.recv() => {
+                    Self::write_notification(stdout, &notification).await;
+                }
+                output = &mut scoped => break output,
+            }
+        };
+        // The scope's sender drops with `scoped`, so anything still queued is
+        // everything that will ever arrive; write it before the response.
+        while let Ok(notification) = notifications.try_recv() {
+            Self::write_notification(stdout, &notification).await;
+        }
+        output
+    }
+
+    /// Serialise one notification onto the client's stream. A notification
+    /// that cannot be serialised is dropped with a warning rather than
+    /// failing the request it belongs to.
+    async fn write_notification<W: tokio::io::AsyncWrite + Unpin>(
+        stdout: &mut W,
+        notification: &crate::protocol::JsonRpcNotification,
+    ) {
+        match serde_json::to_value(notification) {
+            Ok(value) => Self::write_response(stdout, &value).await,
+            Err(error) => warn!(
+                %error,
+                method = %notification.method,
+                "stdio: unserialisable notification"
+            ),
         }
     }
 
@@ -2449,6 +2530,35 @@ impl Gateway {
 
     /// Dispatch one stdio request, durably recording its inbound observation
     /// before any handler can await, fail, or terminate the process.
+    /// NFR.OBS.1's stdio half: record one inbound observation and flush it.
+    ///
+    /// Its own function so the dispatcher below reads as dispatch; the two
+    /// calls are the same either way.
+    fn observe_stdio_inbound(
+        request: &serde_json::Value,
+        params: Option<&serde_json::Value>,
+        method: &str,
+        session_id: &str,
+        sink: Option<&mut crate::protocol_revision_telemetry::DurableTelemetrySink>,
+    ) {
+        crate::protocol_revision_telemetry::observe_inbound_request(
+            request,
+            params,
+            method,
+            None,
+            Some(session_id),
+            crate::protocol_revision_telemetry::Transport::Stdio,
+        );
+        if let Some(sink) = sink
+            && let Err(error) = sink.persist_global()
+        {
+            warn!(
+                %error,
+                "failed to persist inbound stdio protocol-revision observation; measurement window is incomplete"
+            );
+        }
+    }
+
     async fn dispatch_single_with_sink(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
@@ -2650,22 +2760,21 @@ impl Gateway {
             // keeps the pre-handshake record at `absent`/`none`.
             crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
         );
-        crate::protocol_revision_telemetry::observe_inbound_request(
+        Self::observe_stdio_inbound(
             request,
             params,
             &method,
-            None,
-            Some(session_id),
-            crate::protocol_revision_telemetry::Transport::Stdio,
+            session_id,
+            protocol_telemetry_sink,
         );
-        if let Some(sink) = protocol_telemetry_sink
-            && let Err(error) = sink.persist_global()
-        {
-            warn!(
-                %error,
-                "failed to persist inbound stdio protocol-revision observation; measurement window is incomplete"
-            );
-        }
+
+        // ADR-014 §4, the stdio half. Stdio classifies the same body HTTP does,
+        // so it declares a level the same way and gets the same filter -- one
+        // policy, not one per transport. This runs inside the sink installed by
+        // `dispatch_streaming_notifications`.
+        crate::transport::notification_sink::set_request_log_level(
+            request_shape.declared_log_level(),
+        );
 
         // Notifications have no id — send no response
         if method.starts_with("notifications/") {
@@ -2794,6 +2903,18 @@ impl Gateway {
                     Some(id),
                     -32602,
                     "Malformed protocol metadata",
+                );
+            }
+            // MIK-7272.SUB.4 §P3 (#528): the same -32602 refusal route 1
+            // gives at `router/handlers.rs`. An unusable retry field must not
+            // run on as an unprotected fresh call: the caller believes it has
+            // replay protection it does not have, and for a destructive tool
+            // that is the duplicate side effect it asked to be spared.
+            if retry.is_malformed() {
+                break 'tool_call JsonRpcResponse::error(
+                    Some(id),
+                    -32602,
+                    format!("malformed request fields: {}", retry.malformed.join(", ")),
                 );
             }
             // Verified evidence only: stdio echoes no header, so the session's
@@ -3219,6 +3340,97 @@ fn stdio_caller_context<'a>(
 
 #[cfg(test)]
 mod gateway_bootstrap_tests;
+
+#[cfg(test)]
+mod stdio_forward_path_tests {
+    use serde_json::json;
+    use tokio::io::AsyncBufReadExt;
+
+    use super::Gateway;
+    use crate::protocol::JsonRpcNotification;
+    use crate::transport::notification_sink;
+
+    fn progress(token: &str) -> JsonRpcNotification {
+        JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: "notifications/progress".to_string(),
+            params: Some(json!({ "progressToken": token, "progress": 1 })),
+        }
+    }
+
+    /// S-02's liveness half: the notification is on the wire before the
+    /// dispatch it belongs to has produced a response. Asserting only that
+    /// both appear would pass on a drain-then-emit implementation, which is
+    /// the design ADR-014 §1 rejects.
+    #[tokio::test]
+    async fn a_notification_is_written_before_its_dispatch_returns() {
+        let (client, mut server) = tokio::io::duplex(4096);
+        let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+        let dispatch_gate = std::sync::Arc::clone(&gate);
+
+        let dispatch = tokio::spawn(async move {
+            Gateway::dispatch_streaming_notifications(
+                async move {
+                    notification_sink::publish(vec![progress("gw-1")]);
+                    // Park the dispatch. Reading the notification below can
+                    // only succeed if it was written while this is pending,
+                    // so a drain-after-resolve implementation deadlocks here
+                    // instead of passing.
+                    let _permit = dispatch_gate.acquire().await.unwrap();
+                    "result"
+                },
+                &mut server,
+            )
+            .await
+        });
+
+        let mut lines = tokio::io::BufReader::new(client).lines();
+        let first = lines
+            .next_line()
+            .await
+            .unwrap()
+            .expect("no line on the wire");
+        assert!(
+            first.contains("notifications/progress"),
+            "first frame was not the notification: {first}"
+        );
+
+        gate.add_permits(1);
+        assert_eq!(dispatch.await.unwrap(), "result");
+    }
+
+    /// The scope is what makes the mint reachable. Without it
+    /// `mint_progress_token` returns `None` and the client's own token
+    /// travels to the backend unchanged -- the leak SUB.2b forbids.
+    #[tokio::test]
+    async fn a_dispatch_runs_inside_a_notification_scope() {
+        let mut wire: Vec<u8> = Vec::new();
+        let minted = Gateway::dispatch_streaming_notifications(
+            async { notification_sink::mint_progress_token(&json!(7)) },
+            &mut wire,
+        )
+        .await;
+        assert!(
+            minted.is_some(),
+            "dispatch ran outside a notification scope"
+        );
+    }
+
+    /// A notification published after the dispatch resolves is still the
+    /// caller's to see; the post-loop drain is what delivers it.
+    #[tokio::test]
+    async fn a_late_notification_is_drained_before_the_response() {
+        let mut wire: Vec<u8> = Vec::new();
+        Gateway::dispatch_streaming_notifications(
+            async {
+                notification_sink::publish(vec![progress("gw-late")]);
+            },
+            &mut wire,
+        )
+        .await;
+        assert!(std::str::from_utf8(&wire).unwrap().contains("gw-late"));
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -3729,6 +3941,52 @@ mod tests {
         );
     }
 
+    /// SUB.4.MALFORMED.1, stdio leg. The §P3 design event: a retry field the
+    /// parser cannot use is REFUSED with -32602 rather than run on as an
+    /// unprotected fresh call. Before this the key was simply dropped and the
+    /// caller kept believing it had replay protection.
+    #[tokio::test]
+    async fn stdio_refuses_a_malformed_idempotency_key() {
+        let meta = test_meta_mcp();
+        let response = Gateway::dispatch_single(
+            &meta,
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_list_servers",
+                    "arguments": {},
+                    // A non-string key: present, unusable, and therefore
+                    // recorded in `RetryFields::malformed`.
+                    "_meta": { crate::protocol::mrtr::IDEMPOTENCY_KEY_META: 42 }
+                }
+            }),
+            "stdio-session",
+        )
+        .await
+        .expect("a tools/call carrying an id must return a response");
+
+        assert_eq!(
+            response
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_i64),
+            Some(-32602),
+            "an unusable idempotency key must be refused as an invalid param, \
+             not silently dropped: {response}"
+        );
+        assert!(
+            response
+                .pointer("/error/message")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|m| m.starts_with("malformed request fields:")),
+            "the refusal must name the malformed fields, the same wording the \
+             HTTP route uses: {response}"
+        );
+    }
+
     #[tokio::test]
     async fn ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm() {
         // Bound rather than inlined: the kill switch is the execution sentinel,
@@ -4007,13 +4265,15 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_batch_returns_invalid_request_for_empty_batch() {
-        let responses = Gateway::dispatch_batch(
+        // Boxed: the dispatch future carries the whole request path and sits
+        // just over the `large_futures` threshold on the test stack.
+        let responses = Box::pin(Gateway::dispatch_batch(
             &test_meta_mcp(),
             &test_tool_policy(),
             &test_mtls_policy(),
             json!([]),
             "stdio-session",
-        )
+        ))
         .await;
 
         assert_eq!(responses.len(), 1);

@@ -385,6 +385,18 @@ impl MetaMcp {
             return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
         }
 
+        // Removed in 2026-07-28 and replaced by `subscriptions/listen`. The
+        // gateway answers with the code the peer would have sent, one round
+        // trip earlier and without the ambiguity of a refusal that might have
+        // been about this resource rather than about the method.
+        if super::era_removed_method(&backend, "resources/subscribe").await {
+            return JsonRpcResponse::error(
+                Some(id),
+                crate::protocol::era::METHOD_NOT_FOUND_CODE,
+                "resources/subscribe was removed in protocol revision 2026-07-28",
+            );
+        }
+
         match backend
             .request("resources/subscribe", Some(json!({ "uri": uri })))
             .await
@@ -417,6 +429,18 @@ impl MetaMcp {
         // INV-2 (ADR-008): fail closed on a multi-user gateway — see handle_resources_read.
         if let Err(e) = self.enforce_oauth_isolation_for(&backend, &backend.name, false) {
             return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+        }
+
+        // Removed in 2026-07-28 and replaced by `subscriptions/listen`. The
+        // gateway answers with the code the peer would have sent, one round
+        // trip earlier and without the ambiguity of a refusal that might have
+        // been about this resource rather than about the method.
+        if super::era_removed_method(&backend, "resources/unsubscribe").await {
+            return JsonRpcResponse::error(
+                Some(id),
+                crate::protocol::era::METHOD_NOT_FOUND_CODE,
+                "resources/unsubscribe was removed in protocol revision 2026-07-28",
+            );
         }
 
         match backend

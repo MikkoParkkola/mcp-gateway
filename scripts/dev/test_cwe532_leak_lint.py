@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Tests for cwe532-leak-lint.py (CWE-532 secret-leak lint).
 
 Stdlib-only. Run directly:

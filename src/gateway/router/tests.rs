@@ -115,6 +115,7 @@ async fn test_router_app_state_with(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -172,6 +173,7 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -227,6 +229,7 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -305,6 +308,7 @@ async fn test_router_app_state_with_provenance_backend(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -393,6 +397,7 @@ async fn test_router_app_state_minting_without_route_audit(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -451,6 +456,7 @@ async fn test_router_app_state_with_ssrf(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -523,6 +529,7 @@ async fn test_router_app_state_with_auth(auth: &AuthConfig) -> (Arc<AppState>, t
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -590,6 +597,7 @@ async fn test_router_app_state_with_auth_and_config(
     .expect("the configured fixture task store opens");
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -886,6 +894,55 @@ fn ac_control_3b_absent_params_meta_changes_nothing() {
         merge_client_meta(args, Some(&params), true),
         json!({"q": 1})
     );
+}
+
+/// BLOCK-3: the predicate the router feeds to `merge_client_meta` answers
+/// "would this gateway confirm the name exists", not "is this one of ours".
+/// A surfaced backend tool answers yes to the first question, so the client's
+/// `_meta` was injected into arguments the backend never asked for.
+#[test]
+fn block3_a_surfaced_backend_tool_does_not_take_the_clients_meta() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let params = json!({
+        "name": "backend__tool",
+        "arguments": {"city": "Oslo"},
+        "_meta": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    });
+    let (name, args) = extract_tools_call_params(Some(&params));
+    let merged = merge_client_meta(args, Some(&params), meta.exposes_meta_tool(name));
+    assert_eq!(
+        merged,
+        json!({"city": "Oslo"}),
+        "`backend__tool` is not a gateway meta-tool, so the direct route must \
+         hand the backend the arguments the client actually sent"
+    );
+}
+
+/// BLOCK-3, the other half: narrowing the predicate must not drop the merge for
+/// a name the gateway does own. An admin tool is included deliberately — the
+/// router asks this predicate *before* its admin pre-check, so an admin name
+/// missing from the roster would lose the client's `_meta` silently.
+#[test]
+fn block3_a_governed_meta_tool_still_takes_the_clients_meta() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    for tool in ["gateway_invoke", "gateway_kill_server"] {
+        let params = json!({
+            "name": tool,
+            "arguments": {"server": "weather"},
+            "_meta": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+        });
+        let (name, args) = extract_tools_call_params(Some(&params));
+        let merged = merge_client_meta(args, Some(&params), meta.exposes_meta_tool(name));
+        assert_eq!(
+            merged,
+            json!({
+                "server": "weather",
+                "_meta": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+            }),
+            "{tool} is a gateway meta-tool, so its handler must still see the \
+             client's `_meta`"
+        );
+    }
 }
 
 // =====================================================================
