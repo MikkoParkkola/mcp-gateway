@@ -25,11 +25,16 @@ and a tag-shaped digest each exit 3.
 |---|---|
 | `docs/requirements/RELEASE-4.0.0-workload-contract.md` | `6bada5f908d5dbb18a6fe0b67b648ba855b651f79e9dc82eb5f0b1c034ec662b` |
 | `benchmarks/workload/run_workload.sh` | `a8a28089e68969e9881ae7f168fb8d6bd124a469b7621582bd14e0b930b276ba` |
-| `benchmarks/workload/eval_workload.py` | `784195bdcf5464a6abc842e8ff3dd777662276bff879650eb4b0f987e29cc147` |
+| `benchmarks/workload/eval_workload.py` | `80d2031be39a86f1cdc385d2268578ee0469cfd813897ca8869b83798f1fa509` |
 | `benchmarks/workload/mcp_backend.py` | `41b26fca2c318de3d5927a532a3c76e1896f3c76d8f0fb4792e792af0211adf3` |
 | `benchmarks/workload/k6_workload.js` | `9d3844c3144345d7b59ec4a08ac8aa5c1b57868dd1f1696d00b7b19a736d39bc` |
 | `benchmarks/workload/gateway.workload.yaml` (template) | `811b7a63557fac6ba4cf5bb66517a02c6ea47e0a8317a18090d0286c56d45727` |
 | `benchmarks/workload/gateway.workload.mixed.yaml` (template) | `bc775b8506b0f7cb3cbd4110ee06a6df04e86a8da93ca4358b08e16bd624a324` |
+
+The `eval_workload.py` digest above is the **fixed** evaluator, not the one that
+was current when the contract was frozen. Void 4 read a key k6 never emits, which
+made every run void before any rep could be graded; the fix is commit `339ac7aa`.
+A pin recorded against the pre-fix evaluator would pin a file that cannot grade.
 
 The two rendered-config rows in §11 are marked `(pinned at first rep)` and can only be
 filled by an actual run; they are absent here by construction.
