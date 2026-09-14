@@ -35,7 +35,10 @@ tool" checks have nothing external to flake on.
 
 - `mcp-gateway 4.0.0`, built at `e3b8a24fe729640cf84aa7d2ed1ede40bde4baea` on this
   branch (tree clean apart from this rehearsal's own new/moved files), `cargo build`
-  debug profile, default features.
+  debug profile, default features. The binary was rebuilt 2026-09-14 (the prior
+  `target/debug/mcp-gateway` had been swept) from `Cargo.lock` as committed at that
+  same SHA — Rust source and lockfile are both unchanged since then, so the rebuild
+  reproduces the same dependency resolution, not a different one.
 - `mcp-gateway 3.5.1` reference binary: extracted from a `v351.tar` source tarball
   (not a live git checkout — no `.git` in the extracted tree) and built with
   `cargo build`. `Cargo.toml` in that tree declares `version = "3.5.1"` and the
