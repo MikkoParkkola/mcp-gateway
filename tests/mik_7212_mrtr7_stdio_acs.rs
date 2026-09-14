@@ -630,3 +630,41 @@ async fn ac_mrtr_7a_request_in_flight_when_stdin_closes_still_gets_its_response(
 
     session.shutdown().await;
 }
+
+/// MIK-7387 §1 — a batch carrying `initialize` cannot stall the reader.
+///
+/// That batch stays on the reader so the session's protocol revision is bound
+/// before anything is classified against it. A bridged ask raised from there
+/// could only be answered by the loop it is blocking, so handing it the real
+/// channel parks the reader for the bridge's per-prompt bound and every later
+/// line waits behind it. The batch arm therefore dispatches with
+/// `NoClientChannel`: the call is refused at once instead.
+///
+/// Hand `run_stdio`'s initialize-batch arm the real channel again and this row
+/// goes red — the `tools/list` below is not read until the prompt expires,
+/// which is longer than `READ_TIMEOUT`.
+#[tokio::test]
+async fn ac_mrtr_7a_a_batch_carrying_initialize_does_not_stall_the_reader() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, _received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    session
+        .send(&json!([initialize_request(1), asking_call(2)]))
+        .await;
+    // Pipelined: the reader must reach this line without waiting out a prompt
+    // raised inside the batch.
+    session
+        .send(&json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))
+        .await;
+
+    let (seen, listed) = session.read_until_id(9).await;
+    assert!(
+        listed.is_some(),
+        "a request sent after an initialize-carrying batch was never answered; \
+         the batch held the reader. Frames: {seen:?}"
+    );
+
+    session.shutdown().await;
+}

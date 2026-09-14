@@ -2366,6 +2366,11 @@ impl Gateway {
         // it directly, so a dispatch can be moved off the reader without two
         // writers ever interleaving halves of a frame.
         let (writer, writer_task) = spawn_stdio_writer();
+        // The client's half of the bridge. Shared, not borrowed: a spawned
+        // dispatch needs `'static`, and the caller context holds `&dyn
+        // ClientChannel`, so each task clones the `Arc` and takes the borrow
+        // inside itself.
+        let channel = Arc::new(stdio_channel::StdioClientChannel::new(writer.clone()));
         // Dispatches live here instead of on the reader, so a slow backend call
         // stops holding up the next line of stdin. Drained at EOF: dropping the
         // set would abort a dispatch that still owes the client a response.
@@ -2395,6 +2400,18 @@ impl Gateway {
                 }
             };
 
+            // A reply to something we asked is not a request. It is matched
+            // before the batch branch because dispatching it would have
+            // `parse_request_ref` answer our own answer with a -32600 frame.
+            // An id nobody waits on is dropped: the expected cause is a late
+            // answer to a prompt that already timed out.
+            if let Some(reply_id) = stdio_channel::StdioClientChannel::reply_id(&request) {
+                if !channel.resolve(&reply_id, request) {
+                    debug!(%reply_id, "stdio: reply matched no outstanding request");
+                }
+                continue;
+            }
+
             // Handle batch requests (array of JSON-RPC calls)
             if request.is_array() {
                 // A batch carrying `initialize` stays on the reader for the same
@@ -2402,6 +2419,13 @@ impl Gateway {
                 // revision, and a request spawned before that binding lands is
                 // classified against an unbound session.
                 if Self::carries_initialize(&request) {
+                    // `NoClientChannel`, not the real one: this arm holds the
+                    // reader, and the reader is what routes a reply back. A
+                    // bridged ask raised from here could only be answered by
+                    // the loop it is blocking, so it would stall every later
+                    // line for the bridge's per-prompt bound and then fail
+                    // anyway. Refusing immediately is the same outcome without
+                    // the stall.
                     let responses = Self::dispatch_streaming_notifications(
                         Box::pin(Self::dispatch_batch_with_sink(
                             &meta_mcp,
@@ -2410,6 +2434,7 @@ impl Gateway {
                             request,
                             session_id,
                             &mut protocol_telemetry_sink,
+                            &crate::gateway::input_bridge::NoClientChannel,
                         )),
                         &writer,
                     )
@@ -2424,6 +2449,7 @@ impl Gateway {
                 let tool_policy = Arc::clone(&tool_policy);
                 let mtls_policy = Arc::clone(&mtls_policy);
                 let writer = writer.clone();
+                let channel = Arc::clone(&channel);
                 // The reader keeps the sink: a spawned dispatch observes into the
                 // global revision registry either way, and the sink is only the
                 // handle that flushes it, so the EOF flush below covers this one.
@@ -2440,6 +2466,7 @@ impl Gateway {
                             request,
                             session_id,
                             &mut sink,
+                            &*channel,
                         )),
                         &writer,
                     )
@@ -2463,6 +2490,11 @@ impl Gateway {
                         request,
                         session_id,
                         protocol_telemetry_sink.as_mut(),
+                        // Same rule as the batch arm above: nothing dispatched
+                        // on the reader may raise a prompt only the reader can
+                        // answer. `initialize` has no bridged path today, so
+                        // this is the invariant rather than a live refusal.
+                        &crate::gateway::input_bridge::NoClientChannel,
                     )),
                     &writer,
                 )
@@ -2480,6 +2512,7 @@ impl Gateway {
             let tool_policy = Arc::clone(&tool_policy);
             let mtls_policy = Arc::clone(&mtls_policy);
             let writer = writer.clone();
+            let channel = Arc::clone(&channel);
             tasks.spawn(async move {
                 let response_opt = Self::dispatch_streaming_notifications(
                     Box::pin(Self::dispatch_single_with_sink(
@@ -2489,6 +2522,7 @@ impl Gateway {
                         request,
                         session_id,
                         None,
+                        &*channel,
                     )),
                     &writer,
                 )
@@ -2501,6 +2535,11 @@ impl Gateway {
         }
 
         info!("stdio: EOF reached, shutting down");
+        // Before the drain, not after: stdin is closed, so no reply can arrive
+        // to satisfy an outstanding prompt. A dispatch parked in `send_request`
+        // would otherwise wait out the bridge's full timeout inside a drain
+        // that exists to let it answer.
+        channel.close();
         // Drain before the writer closes: an in-flight dispatch still owes the
         // client a response, and dropping the set would abort it mid-call.
         // ponytail: unbounded set — one task per line, no concurrency cap; bound
@@ -2654,6 +2693,7 @@ impl Gateway {
             request.clone(),
             session_id,
             None,
+            &crate::gateway::input_bridge::NoClientChannel,
         )
         .await
     }
@@ -2698,6 +2738,7 @@ impl Gateway {
         protocol_telemetry_sink: Option<
             &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
+        channel: &dyn crate::gateway::input_bridge::ClientChannel,
     ) -> Option<serde_json::Value> {
         // Borrowed views throughout: a request this dispatcher refuses must not
         // be copied on its way to the refusal. Ownership is taken once, after
@@ -2753,6 +2794,7 @@ impl Gateway {
                 session_id,
                 &mut signing_context,
                 &request_shape,
+                channel,
             ))
             .await
         } else {
@@ -2932,11 +2974,11 @@ impl Gateway {
     /// [`Self::dispatch_tools_call`] purely to keep that function under the
     /// line budget — every field and its rationale are unchanged.
     fn build_stdio_caller_context<'a>(
-        is_modern: bool,
+        request_shape: &crate::protocol::meta::RequestShape,
         protocol_revision: Option<&'a str>,
         stdio_authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
         retry: &'a crate::protocol::mrtr::RetryFields,
-        era: crate::protocol::meta::Era,
+        channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
     ) -> MetaMcpCallerContext<'a> {
         MetaMcpCallerContext {
             // stdio has no task route: the extension's handle is read
@@ -2946,7 +2988,10 @@ impl Gateway {
             task: None,
             execution: None,
             signing: None,
-            is_modern,
+            is_modern: matches!(
+                request_shape,
+                crate::protocol::meta::RequestShape::Modern(_)
+            ),
             protocol_revision,
             credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
             authorizer: stdio_authorizer,
@@ -2963,25 +3008,30 @@ impl Gateway {
             // alone, so stdio was never checked and the default
             // non-admin context went unnoticed.
             is_admin: true,
-            // stdio carries no per-request capability
-            // declaration to read, and absent means absent.
-            input_capabilities: crate::protocol::meta::Declared::NONE,
+            // Read from the same per-request `_meta.clientCapabilities` route 1
+            // reads (`router/handlers.rs`), off the same `RequestShape` this
+            // dispatch already classified. Not the `initialize` handshake:
+            // nothing stores handshake capabilities, on either transport. A
+            // `Legacy` or `Malformed` shape still yields `NONE`, so a client
+            // that declared nothing is refused exactly as before.
+            input_capabilities: request_shape.declared_capabilities(),
             retry,
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
             verified_identity: None,
             // Same `RequestShape` the `initialize` arm advertises against.
-            era,
-            // No `ProxyManager` in this scope -- it is HTTP-only --
-            // so there is no session to put a request on.
-            channel: &crate::gateway::input_bridge::NoClientChannel,
-            // stdio speaks to one process over two pipes and
-            // has no elicitation channel: there is no operator
-            // this transport can reach, so a destructive call
-            // it cannot confirm is refused rather than asked
-            // about. Not "found no session" -- no asker can
-            // exist here at all.
+            era: request_shape.era(),
+            // The stdio client channel: one process over two pipes, so the
+            // reader routes replies back by id and this is the only session
+            // there is. `NoClientChannel` on the test and batch-free paths
+            // that have no writer to queue on.
+            channel,
+            // Destructive confirmation is a separate surface from the input
+            // bridge above and is not wired on stdio: nothing here can raise
+            // the prompt, so a destructive call stays refused rather than
+            // executed unconfirmed. Deliberately narrower than `channel` --
+            // MIK-7387 wires the bridge only.
             confirmation:
                 crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         }
@@ -2999,6 +3049,7 @@ impl Gateway {
         session_id: &str,
         signing_context: &mut Option<super::meta_mcp::signing::SigningInvocationContext>,
         request_shape: &crate::protocol::meta::RequestShape,
+        channel: &dyn crate::gateway::input_bridge::ClientChannel,
     ) -> (
         crate::protocol::JsonRpcResponse,
         Option<super::meta_mcp::admission::SyncLease>,
@@ -3025,10 +3076,6 @@ impl Gateway {
             };
 
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
-            let is_modern = matches!(
-                request_shape,
-                crate::protocol::meta::RequestShape::Modern(_)
-            );
             if matches!(
                 request_shape,
                 crate::protocol::meta::RequestShape::Malformed { .. }
@@ -3079,11 +3126,11 @@ impl Gateway {
                 merge_client_meta_ref(arguments.unwrap_or(&empty_arguments), params, is_meta_tool)
             };
             let mut caller = Self::build_stdio_caller_context(
-                is_modern,
+                request_shape,
                 protocol_revision_owned.as_deref(),
                 &stdio_authorizer,
                 &retry,
-                request_shape.era(),
+                channel,
             );
             if let Some(context) = signing_context.as_mut()
                 && let Err(error) = meta_mcp.prepare_signing_invocation(
@@ -3154,6 +3201,7 @@ impl Gateway {
             batch,
             session_id,
             &mut sink,
+            &crate::gateway::input_bridge::NoClientChannel,
         )
         .await
     }
@@ -3179,6 +3227,7 @@ impl Gateway {
         protocol_telemetry_sink: &mut Option<
             crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
+        channel: &dyn crate::gateway::input_bridge::ClientChannel,
     ) -> Vec<serde_json::Value> {
         let serde_json::Value::Array(requests) = batch else {
             return vec![
@@ -3203,6 +3252,7 @@ impl Gateway {
                 req,
                 session_id,
                 protocol_telemetry_sink.as_mut(),
+                channel,
             ))
             .await
             {
