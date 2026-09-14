@@ -93,10 +93,13 @@ noticed when the cells were written.
 
 ## Measured run
 
-### Attempt 1 aborted on the shared box, before any measured rep
+### The run reached D1 and stopped there
 
-`2026-09-14-modernfix-v1` died in the **B0 warm-up**. The gateway process
-itself aborted:
+`2026-09-14-modernfix-v1` produced ten `summary.json` files — `A1`-`A3`,
+`B1`-`B3`, `C1`-`C3` and `D1` — and then stopped on `void: D1: k6 exited
+non-zero` (`run_workload.sh` exit 3). `E1`-`E3` never ran.
+
+One rep earlier, in the **B0 warm-up**, the gateway process aborted:
 
 ```
 B0.gateway.stderr:
@@ -107,7 +110,9 @@ run_workload.sh: line 196: 3816382 Aborted (core dumped) HOME="$gwhome" ...
 ```
 
 followed by 701 KB of `connection reset by peer` in `B0.k6.err` as k6 kept
-posting to a dead listener. A0 had completed cleanly minutes earlier, and B's
+posting to a dead listener. The harness carried on into `B1`-`B3`, each of
+which starts its own gateway under its own `home-B*`, so those reps ran
+against live listeners. A0 had completed cleanly minutes earlier, and B's
 request bytes are unchanged by `03a21d63` (`IS_MODERN_ERA` is false for
 `2025-06-18`, so neither `_meta` nor the mirrored headers are added on A/B/C)
 — B ran clean four times in `2026-09-14-hdrfix-v2` with identical bytes.
@@ -117,37 +122,51 @@ was running a peer agent's `cargo clippy --all-targets` at the time
 (`stdiochk` sessions at 16:33:30Z and 16:37:24Z), and a 172 KB allocation
 failing on a box reporting 78 GB available one minute later fits a transient
 spike. It fits a per-process `RLIMIT_AS` or a cgroup limit on the runner slice
-equally well, and neither has been checked. Attempt 2 is gated on a
-resource-quiet box (`pgrep -c rustc` and `pgrep -c cargo` both 0, 1-minute
-load below 4.00 on 20 cores) and snapshots contention before and after, which
-decides it: an identical abort on a quiet box rules co-residency out.
-Independently, a latency measurement taken next to a full Rust build would not
-have been usable even if it had survived. **No measured rep exists from
-attempt 1; no number from it is reported.**
+equally well, and neither has been checked. The falsifier is a rerun on a
+compile-quiet box (`pgrep -c rustc` and `pgrep -c cargo` both 0, 1-minute load
+below 8.00 — the box idles near 12 with 75 logged-in users, so the gate has to
+key on the compile fleet, and 8.00 sits below every reading taken while the
+peers were building: 11.21, 12.51, 12.97, 13.83). An identical abort there
+would rule co-residency out. It has not been run, and nothing below depends on
+it.
 
-### What a second measure pass can add, and what it cannot
+**No latency number from this run is reported.** The whole run sat next to a
+Rust compile fleet and cell B lost its warm-up; the A/B/C figures for this
+rehearsal stay the `2026-09-14-hdrfix-v2` ones in `07-header-fix-and-rerun.md`,
+whose request bytes are identical to these.
 
-`03a21d63` leaves the A/B/C request bytes untouched, so a fresh A/B/C sample
-re-measures what `2026-09-14-hdrfix-v2` already measured and says nothing
-about the change under test, while carrying the full contention risk of a
-20-minute run on a shared box. The A/B/C numbers for this rehearsal therefore
-stay the hdrfix-v2 ones (`07-finding-spread.md`); no second per-rep table is
-built from attempt 2. What attempt 2 is for is the evaluator verdict on a run
-directory containing the modern cells.
+### Verdict
 
-That verdict is already determined by the refusal above, and the exact string
-is worth stating in advance so it is not mistaken for plumbing: with `setup()`
-throwing, D1 writes no `summary.json`, `require_file` raises
-`Void("missing required file: D1.summary.json")` (`eval_workload.py:42`), and
-the run reports `VERDICT: VOID (exit 3)`. That is the admission wall, not a
-missing artefact — the cell never got past the `-32602` quoted above.
+`python3 eval_workload.py /home/mikko/perf-workload/runs/2026-09-14-modernfix-v1`,
+complete output:
 
-### Attempt 2 status
+```
+VERDICT: VOID  (exit 3)
+  D1: http_error_rate above zero
+```
 
-Not yet launched. It is gated on a resource-quiet box and will be reported
-verbatim, or reported as blocked, in the same terms. Nothing in this file's
-conclusion depends on it: the substantive result is the two smokes, which
-already carry the verbatim `-32602` on both modern cells.
+The evaluator raises before it prints any per-rep line, so there is no table
+to quote and no margin comparison to make. VOID is a status of its own, not a
+failure of the gateway's latency.
+
+The void fires on D1's error rate rather than on a missing artefact: k6 still
+writes a summary when `setup()` throws, and `D1.summary.json` holds exactly
+the three setup requests. `D1.k6.txt`:
+
+```
+http_req_failed................: 33.33% 1 out of 3
+```
+
+`http_error_rate` is `{"passes": 1, "fails": 2, "value": 0.3333333333333333}`
+— `initialize` and `tools/list` returned 200, the pinned `tools/call` did not.
+That single non-200 is the `-32602` quoted above. No measured iteration ever
+ran, so D1 carries no `semantic_assertion_rate` at all: the cell's latency and
+semantic properties are not weaker than A/B/C here, they are absent.
+
+The run's version pins are copied verbatim to
+`10-pins-modernfix-v1.json.txt`: A `32f135a6`/3.5.0, B `e138680a`/3.5.1,
+C/D/E `69ba9e03`/4.0.0, k6 image
+`sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755`.
 
 ## Consequence
 
