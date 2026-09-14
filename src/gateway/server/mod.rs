@@ -34,7 +34,7 @@ use super::auth::ResolvedAuthConfig;
 use super::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use super::oauth::{AgentAuthState, AgentDefinition, AgentRegistry, GatewayKeyPair};
 use super::proxy::ProxyManager;
-use super::router::{AppState, create_router_with};
+use super::router::{AppState, CallerStanding, create_router_with};
 use super::streaming::NotificationMultiplexer;
 use super::webhooks::WebhookRegistry;
 use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
@@ -65,6 +65,13 @@ use support::{log_startup_banner, serve_tls, shutdown_signal};
 
 /// State owner for the single client on a long-lived stdio connection.
 const STDIO_SESSION_ID: &str = "stdio-session";
+
+/// The standing stdio serves its metadata surfaces at.
+///
+/// The client spawned this process, so it already holds whatever the
+/// operator holds; withholding the admin half of the surface from it would
+/// describe a gateway nobody is talking to.
+const STDIO: CallerStanding = CallerStanding::Admin;
 
 fn expand_home_path(path: &str) -> PathBuf {
     if path == "~" {
@@ -2647,27 +2654,13 @@ impl Gateway {
                         None,
                         request_shape.era(),
                     ),
-                    // Standing is Admin on stdio for the same reason the
-                    // caller context below is: the client that spawned this
-                    // process already holds whatever the operator holds.
-                    "tools/list" => meta_mcp.handle_tools_list_with_params(
-                        id,
-                        params,
-                        Some(session_id),
-                        crate::gateway::router::CallerStanding::Admin,
-                    ),
+                    "tools/list" => {
+                        meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), STDIO)
+                    }
                     "prompts/list" => meta_mcp.handle_prompts_list(id, params).await,
                     "prompts/get" => meta_mcp.handle_prompts_get(id, params).await,
                     "resources/list" => meta_mcp.handle_resources_list(id, params).await,
-                    "resources/read" => {
-                        meta_mcp
-                            .handle_resources_read(
-                                id,
-                                params,
-                                crate::gateway::router::CallerStanding::Admin,
-                            )
-                            .await
-                    }
+                    "resources/read" => meta_mcp.handle_resources_read(id, params, STDIO).await,
                     "resources/templates/list" => {
                         meta_mcp.handle_resources_templates_list(id, params).await
                     }
