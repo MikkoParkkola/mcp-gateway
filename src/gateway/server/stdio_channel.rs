@@ -26,14 +26,12 @@ use crate::transport::PendingRequestGuard;
 // Constructed only by this module's tests until the stdio read loop spawns its
 // dispatches and a single writer owns stdout — sections 1 and 2 of
 // `docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md`, which this
-// type (section 4) is built for. `not(test)` because the test build does
-// construct it, so an unconditional expectation would go unfulfilled there.
-// The Kani build does not: it reports this type as dead like any other pass,
-// so it has to keep the expectation rather than be excluded from it.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")
-)]
+// type (section 4) is built for. `allow` rather than `expect`, and uncfg'd:
+// the three builds disagree about whether the type is dead. The test build
+// constructs it, and CI showed the Kani job reporting it dead in one pass and
+// reachable in another, so every `expect` spelling is unfulfilled in one of
+// them. `allow` is silent either way; it comes out when the consumer lands.
+#[allow(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")]
 pub(crate) struct StdioClientChannel {
     /// Outbound requests awaiting a reply, keyed by the id we minted.
     pending: DashMap<String, oneshot::Sender<Value>>,
@@ -43,10 +41,7 @@ pub(crate) struct StdioClientChannel {
     closed: AtomicBool,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")
-)]
+#[allow(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")]
 impl StdioClientChannel {
     /// Build a channel that queues its frames on `writer`.
     pub(crate) fn new(writer: mpsc::UnboundedSender<Value>) -> Self {

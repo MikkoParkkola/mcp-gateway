@@ -371,7 +371,7 @@ pub(super) fn is_terminal(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
 }
 
-/// Poll `tasks/get` until the task is terminal, bounded by attempts.
+/// Poll `tasks/get` until the task is terminal, bounded by a deadline.
 ///
 /// Not a sleep and not a timeout: every row that needs the worker to have
 /// *started* uses [`GateHandle::wait_for_dispatch`], and every row that needs it
@@ -381,19 +381,20 @@ pub(super) fn is_terminal(status: &str) -> bool {
 /// so the worker (and any `spawn_blocking` durable write it awaits) can make
 /// progress between attempts.
 pub(super) async fn poll_until_terminal(state: &Arc<AppState>, principal: &str, id: &str) -> Value {
-    const ATTEMPTS: usize = 5_000;
-    let mut last = Value::Null;
-    for _ in 0..ATTEMPTS {
-        last = get_task(state, principal, id).await;
+    const TERMINAL_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + TERMINAL_BOUND;
+    loop {
+        let last = get_task(state, principal, id).await;
         if is_terminal(&status_of(&last)) {
             return last;
         }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "task {id} never reached a terminal status in {TERMINAL_BOUND:?}; \
+             the last answer was {last}"
+        );
         tokio::task::yield_now().await;
     }
-    panic!(
-        "task {id} never reached a terminal status in {ATTEMPTS} polls; \
-         the last answer was {last}"
-    );
 }
 
 /// Assert a task is `completed` carrying exactly the mock's successful result.
