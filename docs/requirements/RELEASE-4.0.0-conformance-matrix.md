@@ -86,27 +86,70 @@ instrument that can see it.
 
 ## Matrix
 
-### Statements with evidence — COVERED (18 of 21)
+### Statements with evidence — COVERED (19 of 21)
 
-All nine major statements and minor 2-9 and 12 carry at least one evidence
+All nine major statements and minor 2-9, 11 and 12 carry at least one evidence
 reference, and every cited name resolves to a defined test. The cells, roles
 and transports are in the source of truth rather than copied here, because a
 copy drifts and the original is checked by CI: `tests/mik_7272_conformance.rs`,
 `MAJOR` at `:52` and `MINOR` at `:175`.
 
-### Statements without evidence — UNCOVERED (3 of 21)
+### Statements without evidence — UNCOVERED (2 of 21)
 
 | # | Statement | Why it is uncovered | The test that closes it |
 |---|---|---|---|
 | Minor 1 | `extensions` field on client and server capabilities | Tracked gap; the work is scoped and unstarted | E1-E5 of `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md` |
 | Minor 10 | Loosen `inputSchema`/`outputSchema` to any JSON Schema 2020-12 keywords, and `structuredContent` to any JSON value | The row cites `ac_schema_1_no_meta_tool_nests_an_object_inside_an_array`, which reads `inputSchema` on the meta tool list and looks for one nested shape (`tests/mik_7272_exploit_acs.rs:305`). It touches neither clause: not `outputSchema`, not 2020-12 keyword acceptance, not `structuredContent`. Every output-schema fixture in the tree declares `type: object`, and no test constructs a scalar or top-level-array `structuredContent` | Three, and all three are needed. (a) A 2020-12 keyword absent from draft-07 — `prefixItems` or `unevaluatedProperties` — is accepted in an `outputSchema` rather than rejected. (b) A scalar and a bare-array `structuredContent` survive `enforce_output_schema` unchanged under a matching non-object `outputSchema`. (c) A declared `outputSchema` is byte-identical in a `tools/list` wire response to the one the capability declared |
-| Minor 11 | Remove `notifications/elicitation/complete` and the `elicitationId` field of URL mode elicitation | The row did not exist until this revision. Neither name appears anywhere in `src` or `tests`, so the gateway originates neither — but absence is not an assertion, and two forwarding paths are unverified | Two. (a) A URL-mode elicitation from a 2025-11-25 backend carrying `elicitationId` reaches a modern client with the field removed, and a legacy client with it retained. (b) A `notifications/elicitation/complete` from a backend does not reach a modern client. The hop is the streaming multiplexer, which tags a backend notification and fans it out to the session's subscribers without inspecting the method (`src/gateway/streaming.rs:266`); the modern-path refusal at `src/gateway/router/handlers.rs:940` runs on inbound client requests and lists five other methods, so neither end filters this one today |
 
 Minor 11 is the cell `NFR.CONFORMANCE.1` names as "modern URL-elicitation
 completion removal", and minor 10's second clause is the one it names as
 "arbitrary-JSON structured results". Both were absent from the matrix as
 evidence, which is the finding: a matrix that omits a statement, or cites a
 test that does not bear on it, looks identical to one that covers it.
+
+### Minor 11, closed — and the tracked gap's mechanism was wrong
+
+Three tests now carry it, and the finding that came with them is that the gap
+note named the wrong hop. It said the risk was the streaming multiplexer
+tagging a backend notification and fanning it out "without inspecting the
+method" (`src/gateway/streaming.rs:266`). No backend-supplied method reaches
+that code. Every client-delivery site builds its frame with a literal method
+string — `src/gateway/proxy.rs` at `:242`, `:307`, `:351`, `:381`, `:433`,
+`:474` and `:494` — and `src/gateway/webhooks/mod.rs:420` broadcasts a
+transformed payload that carries no JSON-RPC method at all. The one site whose
+method comes from a caller is `ClientChannel::send_request`
+(`src/gateway/proxy.rs:530`, `src/gateway/server/stdio_channel.rs:105`,
+`src/gateway/input_bridge.rs:328`), and its only production caller is
+`InputBridge::ask` (`src/gateway/input_bridge.rs:505`), which passes
+`prompt.kind.method()` — a `const fn` over three variants.
+
+So the statement holds on both clauses, and it holds by construction rather
+than by a filter. That distinction is the reason the closing tests say so in
+their own doc comments:
+
+- (a), live path —
+  `gateway::proxy::tests::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths`.
+  Both `forward_elicitation` and `forward_elicitation_with_response`
+  re-serialise from `ElicitationCreateParams` (`src/protocol/messages.rs:513`),
+  which names four fields and carries no `#[serde(flatten)]`. Neither path
+  reads the client's era, so the field is dropped for a modern client *and* for
+  a legacy one — stricter than the changelog asks, and not an era filter.
+- (a), legacy half —
+  `mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11a_a_legacy_bridge_relay_retains_elicitation_id`.
+  `InputBridge::prompt` clones `request["params"]` whole
+  (`src/gateway/input_bridge.rs:473`), so a 2025-11-25 exchange is relayed
+  unedited. This pins a library contract: `InputBridge` has no production
+  construction site in `src/` as of this revision, though the caller context
+  already carries a real channel (`src/gateway/router/handlers.rs:1588`,
+  `channel: state.proxy_manager.as_ref()`).
+- (b) —
+  `mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11b_elicitation_complete_is_refused_unsent`.
+  The removed notification is refused as `Refusal::UnrecognisedMethod` and no
+  frame leaves, under the most permissive declaration there is.
+
+What remains is latent fragility rather than a defect: a `#[serde(flatten)]`
+added to `ElicitationCreateParams` for pass-through fidelity would regain the
+field on the live path, and the first test is what would notice.
 
 For minor 10 the behaviour is present even though the evidence is not.
 `ToolsCallResult.structured_content` is `Option<Value>`
@@ -166,24 +209,26 @@ per-backend passthrough route forwards any method it is handed —
 at `:541` — so the gateway carries whatever a caller sends, including methods
 it does not implement. An N/A resting on a missing string literal would have
 been a missing test wearing a label, which is the one thing Rule 3 exists to
-prevent. The obligation it actually creates is minor 11's second closing test.
+prevent. The obligation it actually created is minor 11's second closing
+test, `ac_conformance_minor_11b_elicitation_complete_is_refused_unsent`, now
+written.
 
 ## Tally
 
 | Disposition | Count |
 |---|---|
-| COVERED | 18 |
-| UNCOVERED | 3 |
+| COVERED | 19 |
+| UNCOVERED | 2 |
 | **Population (statements)** | **21** |
 
-The three UNCOVERED statements are the three entries of `TRACKED_GAPS` in
+The two UNCOVERED statements are the two entries of `TRACKED_GAPS` in
 `tests/mik_7272_conformance.rs`, and that is enforced rather than asserted
 here: `matrix_has_no_empty_cells` fails on an untracked empty row, and
 `a_tracked_gap_is_still_a_gap` fails on an exemption whose row has since gained
 evidence or disappeared. This document and the executable matrix cannot drift
 apart on the count without one of those two tests going red.
 
-18 + 3 = 21, and only changelog statements are counted. The four N/A rows above
+19 + 2 = 21, and only changelog statements are counted. The four N/A rows above
 are axis cells, not statements: they record why a role/transport combination
 raises no obligation, so they neither add to the population nor absorb any
 statement from it. Clause-level gaps (minor 10 has two, minor 11 has two) are
@@ -194,8 +239,9 @@ both use, and mixing units is how a tally stops being checkable.
 ## Grade
 
 **PARTIAL.** Rule 4 makes this mechanical: UNCOVERED is not empty, so the
-criterion is not met, and the five named tests behind those three statements are
-the remaining work. What this revision delivered is the matrix, its population
+criterion is not met. The remaining work is minor 1 — Cluster B's E1-E5 — and
+minor 10's three named tests, which are written on `feat/v4-conformance-minor10`
+and not cited here because they are not on this line yet. What this revision delivered is the matrix, its population
 rule, the missing statement, the count assertion that would have caught it, the
 N/A reasons and the one N/A that turned out to be a gap — which is the bulk of
 the criterion and the part that makes the remainder checkable.

@@ -1427,4 +1427,87 @@ mod tests {
             "an undeliverable bridge send must not strand its pending entry"
         );
     }
+
+    // ── NFR.CONFORMANCE.1, minor 11 — removed elicitation surface ───────
+
+    /// Minor 11, clause (a) — neither live elicitation forward path can put
+    /// `elicitationId` on the wire.
+    ///
+    /// The 2026-07-28 changelog removes the field from URL-mode elicitation
+    /// requests. A 2025-11-25 backend still sends it, and the gateway forwards
+    /// elicitation to the connected client on two paths — the fire-and-forget
+    /// [`ProxyManager::forward_elicitation`] and the awaited
+    /// [`ProxyManager::forward_elicitation_with_response`]. Both are asserted,
+    /// because a removal proven on one path and not the other is not a removal.
+    ///
+    /// **What actually strips it, stated so the test does not overclaim:** the
+    /// typed read. Both paths re-serialise from [`ElicitationCreateParams`]
+    /// (`protocol::messages`), which names four fields and carries no
+    /// `#[serde(flatten)]`, so every key the gateway cannot name is gone by the
+    /// time a frame is built. Neither path inspects the client's era. The field
+    /// is therefore dropped for a modern client AND for a legacy one, which is
+    /// stricter than the changelog requires and is the behaviour this pins. A
+    /// future `flatten` added for pass-through fidelity would regain the field
+    /// on both, and this test is what would notice.
+    ///
+    /// The router's own `parse_elicitation_params` (`router/helpers.rs`) is
+    /// `pub(super)`; its entire body is the `serde_json::from_value` call made
+    /// here, so the typed read under test is the one the handler performs.
+    #[tokio::test]
+    async fn ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths() {
+        let raw = json!({
+            "mode": "url",
+            "message": "Authorise the deploy",
+            "url": "https://example.test/authorise",
+            "elicitationId": "elicit-2025-11-25-42",
+        });
+        let params: ElicitationCreateParams =
+            serde_json::from_value(raw).expect("a 2025-11-25 URL-mode request still parses");
+
+        let mux = make_multiplexer();
+        // Held for the whole test: `send_to_session` reports failure against a
+        // session whose receiver has been dropped, and a test that lost its
+        // receiver would pass the assertions below on zero delivered frames.
+        let (session, mut rx) = mux.get_or_create_session(Some("sess-minor-11a"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+
+        assert!(
+            proxy.forward_elicitation(&session, &params),
+            "the fire-and-forget forward must reach the session"
+        );
+
+        // Nothing ever answers, so the awaited path is ended by the outer
+        // timeout. The frame it sent is already in the receiver by then.
+        let _ = tokio::time::timeout(
+            Duration::from_millis(50),
+            proxy.forward_elicitation_with_response(&session, &params, Duration::from_secs(30)),
+        )
+        .await;
+
+        let mut seen = 0;
+        while let Ok(frame) = rx.try_recv() {
+            seen += 1;
+            assert_eq!(
+                frame.data["method"], "elicitation/create",
+                "frame {seen} is not the elicitation request"
+            );
+            let sent = &frame.data["params"];
+            assert!(
+                sent.get("elicitationId").is_none(),
+                "frame {seen} carried the removed elicitationId field: {sent}"
+            );
+            // The neighbour assertion: a forward that dropped everything would
+            // satisfy the line above and forward no question at all.
+            assert_eq!(sent["mode"], "url", "frame {seen} lost the mode");
+            assert_eq!(
+                sent["url"], "https://example.test/authorise",
+                "frame {seen} lost the url"
+            );
+            assert_eq!(
+                sent["message"], "Authorise the deploy",
+                "frame {seen} lost the message"
+            );
+        }
+        assert_eq!(seen, 2, "both forward paths must have been exercised");
+    }
 }
