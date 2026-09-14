@@ -26,10 +26,11 @@ use crate::transport::PendingRequestGuard;
 // Constructed only by this module's tests until the stdio read loop spawns its
 // dispatches and a single writer owns stdout — sections 1 and 2 of
 // `docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md`, which this
-// type (section 4) is built for. `not(test)` because the test build does
-// construct it, so an unconditional expectation would go unfulfilled there.
+// type (section 4) is built for. `not(any(test, kani))` because the test build does
+// construct it and Kani treats every item as reachable, so an unconditional
+// expectation would go unfulfilled in both.
 #[cfg_attr(
-    not(test),
+    not(any(test, kani)),
     expect(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")
 )]
 pub(crate) struct StdioClientChannel {
@@ -42,7 +43,7 @@ pub(crate) struct StdioClientChannel {
 }
 
 #[cfg_attr(
-    not(test),
+    not(any(test, kani)),
     expect(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")
 )]
 impl StdioClientChannel {
