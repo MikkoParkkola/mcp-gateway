@@ -122,7 +122,7 @@ shlex = "2.0"
 sha2 = "0.11"
 base64 = "0.23"
 rand = "0.10"
-dirs = "6.0"
+dirs = "7.0"
 hmac = "0.13"
 hkdf = "0.13"
 hex = "0.4"
@@ -173,7 +173,7 @@ pretty_assertions = "1.4"
 tempfile = "3.14"
 serde_urlencoded = "0.7"
 criterion = { version = "0.8", features = ["html_reports"] }
-jsonschema = { version = "0.52.1", default-features = false }
+jsonschema = { version = "0.56.0", default-features = false }
 
 [features]
 default = ["a2a", "webui", "config-export", "cost-governance", "firewall", "discovery", "semantic-search", "tool-profiles", "metrics"]
