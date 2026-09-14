@@ -2647,13 +2647,27 @@ impl Gateway {
                         None,
                         request_shape.era(),
                     ),
-                    "tools/list" => {
-                        meta_mcp.handle_tools_list_with_params(id, params, Some(session_id))
-                    }
+                    // Standing is Admin on stdio for the same reason the
+                    // caller context below is: the client that spawned this
+                    // process already holds whatever the operator holds.
+                    "tools/list" => meta_mcp.handle_tools_list_with_params(
+                        id,
+                        params,
+                        Some(session_id),
+                        crate::gateway::router::CallerStanding::Admin,
+                    ),
                     "prompts/list" => meta_mcp.handle_prompts_list(id, params).await,
                     "prompts/get" => meta_mcp.handle_prompts_get(id, params).await,
                     "resources/list" => meta_mcp.handle_resources_list(id, params).await,
-                    "resources/read" => meta_mcp.handle_resources_read(id, params).await,
+                    "resources/read" => {
+                        meta_mcp
+                            .handle_resources_read(
+                                id,
+                                params,
+                                crate::gateway::router::CallerStanding::Admin,
+                            )
+                            .await
+                    }
                     "resources/templates/list" => {
                         meta_mcp.handle_resources_templates_list(id, params).await
                     }

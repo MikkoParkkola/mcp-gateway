@@ -15,8 +15,8 @@ use tracing::{debug, info, warn};
 
 use super::AppState;
 use super::authorization::{
-    RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
-    refusal_principal, require_admin_tool_access,
+    CallerStanding, RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call,
+    is_admin_meta_tool, refusal_principal, require_admin_tool_access,
 };
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
@@ -1235,6 +1235,7 @@ async fn meta_mcp_dispatch(
                 params.as_ref(),
                 Some(session_id.as_str()),
                 code_mode_url_active,
+                CallerStanding::of_client(client.as_ref()),
             )
         }
         // Labelled so the destructive-confirmation gate can answer *through* the
@@ -1766,7 +1767,11 @@ async fn meta_mcp_dispatch(
         "resources/read" => {
             state
                 .meta_mcp
-                .handle_resources_read(id, params.as_ref())
+                .handle_resources_read(
+                    id,
+                    params.as_ref(),
+                    CallerStanding::of_client(client.as_ref()),
+                )
                 .await
         }
         "resources/templates/list" => {
