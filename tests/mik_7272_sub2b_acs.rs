@@ -1447,12 +1447,11 @@ async fn notification_then_result(
         invoke(2, SLOW_TOOL, &arguments, &request_meta),
     )
     .await;
-    if status != 200 {
-        panic!(
-            "the slow call was refused before it streamed: status={status} body={}",
-            reader.drain().await
-        );
-    }
+    assert!(
+        status == 200,
+        "the slow call was refused before it streamed: status={status} body={}",
+        reader.drain().await
+    );
     assert!(
         content_type.contains("text/event-stream"),
         "the gateway answered {content_type}, so it never committed to a \

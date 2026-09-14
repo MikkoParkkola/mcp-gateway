@@ -368,7 +368,7 @@ async fn account_shared_descriptor_dispatches_legacy_without_identity_or_custody
         .expect("a shared binding must install with no custody");
 
     // THE SAME production dispatch entry, with NO verified identity.
-    let result = execute(&meta, name, None)
+    let result = Box::pin(execute(&meta, name, None))
         .await
         .expect("shared dispatch must succeed for an unidentified caller");
     assert!(

@@ -414,7 +414,7 @@ async fn meta_mcp_capability_dispatch_carries_the_verified_identity_to_the_accou
     .expect("the capability must register");
     meta.set_capabilities(Arc::clone(&backend));
 
-    let anonymous = meta_execute(&meta, None)
+    let anonymous = Box::pin(meta_execute(&meta, None))
         .await
         .expect_err("an unverified caller must not reach a managed account");
     assert!(
@@ -427,7 +427,7 @@ async fn meta_mcp_capability_dispatch_carries_the_verified_identity_to_the_accou
         "an unverified Code Mode dispatch must never reach custody"
     );
 
-    let _ = meta_execute(&meta, Some("alice")).await;
+    let _ = Box::pin(meta_execute(&meta, Some("alice"))).await;
     assert_eq!(
         custody.releases(),
         3,
@@ -823,7 +823,7 @@ async fn meta_mcp_multi_user_dispatch_reaches_the_account_boundary_for_a_verifie
     // setters are documented to keep in sync.
     meta.set_multi_user(true);
 
-    let anonymous = meta_execute(&meta, None)
+    let anonymous = Box::pin(meta_execute(&meta, None))
         .await
         .expect_err("an unverified caller must not reach a managed account");
     assert!(
@@ -836,7 +836,7 @@ async fn meta_mcp_multi_user_dispatch_reaches_the_account_boundary_for_a_verifie
         "an unverified Code Mode dispatch must never reach custody"
     );
 
-    let _ = meta_execute(&meta, Some("alice")).await;
+    let _ = Box::pin(meta_execute(&meta, Some("alice"))).await;
     assert_eq!(
         custody.releases(),
         4,
