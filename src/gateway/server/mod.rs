@@ -66,6 +66,77 @@ use support::{log_startup_banner, serve_tls, shutdown_signal};
 /// State owner for the single client on a long-lived stdio connection.
 const STDIO_SESSION_ID: &str = "stdio-session";
 
+/// Clonable handle to the one task that owns stdout on a stdio session.
+///
+/// Concurrent dispatches cannot each hold `stdout`: two interleaved writes
+/// would splice one JSON-RPC frame into another. Every producer holds a clone
+/// of this sender instead, and the writer task serialises the frames.
+///
+/// The queue is unbounded on purpose. A bounded one would make `send` await,
+/// and a notification has to be orderable ahead of its own dispatch's response
+/// from inside a synchronous notification scope (`queue_notification`).
+#[derive(Clone)]
+struct StdioWriter(tokio::sync::mpsc::UnboundedSender<serde_json::Value>);
+
+impl StdioWriter {
+    /// Queue one whole JSON-RPC frame for stdout.
+    ///
+    /// `Err` means the writer task is gone, i.e. stdout is closed; a caller
+    /// with nowhere left to report drops the error rather than fail its
+    /// request.
+    fn send(
+        &self,
+        value: serde_json::Value,
+    ) -> std::result::Result<(), tokio::sync::mpsc::error::SendError<serde_json::Value>> {
+        self.0.send(value)
+    }
+}
+
+/// What the stdio dispatcher knows about the client behind one request.
+///
+/// One parameter rather than two because both answer the same question and
+/// `dispatch_tools_call` is at the argument budget. Copy, not a borrow of a
+/// struct: the fields are already borrows.
+#[derive(Clone, Copy)]
+struct StdioCaller<'a> {
+    /// The shape the request was classified as, which is where its declared
+    /// capabilities and era are read from.
+    shape: &'a crate::protocol::meta::RequestShape,
+    /// The half of the input bridge that can reach this client, or
+    /// `NoClientChannel` where nothing can.
+    channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
+}
+
+impl<'a> StdioCaller<'a> {
+    /// Pair a shape with the channel that can reach the client it came from.
+    ///
+    /// A constructor rather than a literal at the call site: the dispatcher it
+    /// is built in is at the `clippy::too_many_lines` budget.
+    fn new(
+        shape: &'a crate::protocol::meta::RequestShape,
+        channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
+    ) -> Self {
+        Self { shape, channel }
+    }
+}
+
+/// Spawn the task that owns stdout, returning the producer handle and the
+/// task's join handle.
+///
+/// The task ends once every `StdioWriter` clone has dropped and the queue is
+/// drained, so awaiting the join handle is what guarantees a queued frame
+/// reached stdout before `run_stdio` returns.
+fn spawn_stdio_writer() -> (StdioWriter, tokio::task::JoinHandle<()>) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+    let task = tokio::spawn(async move {
+        let mut stdout = tokio::io::stdout();
+        while let Some(value) = rx.recv().await {
+            Gateway::write_response(&mut stdout, &value).await;
+        }
+    });
+    (StdioWriter(tx), task)
+}
+
 fn expand_home_path(path: &str) -> PathBuf {
     if path == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -2318,9 +2389,22 @@ impl Gateway {
 
         // ── Read → dispatch → write loop ────────────────────────────────────
         let stdin = tokio::io::stdin();
-        let stdout = tokio::io::stdout();
         let mut reader = BufReader::new(stdin).lines();
-        let mut stdout = stdout;
+        // stdout belongs to one task from here on. Nothing in this loop writes
+        // it directly, so a dispatch can be moved off the reader without two
+        // writers ever interleaving halves of a frame.
+        let (writer, writer_task) = spawn_stdio_writer();
+        // The client's half of the bridge. Shared, not borrowed: a spawned
+        // dispatch needs `'static`, and the caller context holds `&dyn
+        // ClientChannel`, so each task clones the `Arc` and takes the borrow
+        // inside itself.
+        // The raw sender, not the `StdioWriter` wrapper: the channel queues
+        // whole frames on the same task and needs no other method of it.
+        let channel = Arc::new(stdio_channel::StdioClientChannel::new(writer.0.clone()));
+        // Dispatches live here instead of on the reader, so a slow backend call
+        // stops holding up the next line of stdin. Drained at EOF: dropping the
+        // set would abort a dispatch that still owes the client a response.
+        let mut tasks = tokio::task::JoinSet::new();
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -2341,58 +2425,183 @@ impl Gateway {
                         "id": null,
                         "error": {"code": -32700, "message": format!("Parse error: {e}")}
                     });
-                    Self::write_response(&mut stdout, &err_resp).await;
+                    drop(writer.send(err_resp));
                     continue;
                 }
             };
 
+            // A reply to something we asked is not a request. It is matched
+            // before the batch branch because dispatching it would have
+            // `parse_request_ref` answer our own answer with a -32600 frame.
+            // An id nobody waits on is dropped: the expected cause is a late
+            // answer to a prompt that already timed out.
+            if let Some(reply_id) = stdio_channel::StdioClientChannel::reply_id(&request) {
+                if !channel.resolve(&reply_id, request) {
+                    debug!(%reply_id, "stdio: reply matched no outstanding request");
+                }
+                continue;
+            }
+
             // Handle batch requests (array of JSON-RPC calls)
             if request.is_array() {
-                // Boxed: the dispatch future is tens of kilobytes and this one
-                // lives across the `select!` in the helper, so leaving it inline
-                // would put the whole thing on the reader loop's stack frame.
-                let responses = Self::dispatch_streaming_notifications(
-                    Box::pin(Self::dispatch_batch_with_sink(
+                // A batch carrying `initialize` stays on the reader for the same
+                // reason a bare one does: it binds the session's protocol
+                // revision, and a request spawned before that binding lands is
+                // classified against an unbound session.
+                if Self::carries_initialize(&request) {
+                    // `NoClientChannel`, not the real one: this arm holds the
+                    // reader, and the reader is what routes a reply back. A
+                    // bridged ask raised from here could only be answered by
+                    // the loop it is blocking, so it would stall every later
+                    // line for the bridge's per-prompt bound and then fail
+                    // anyway. Refusing immediately is the same outcome without
+                    // the stall.
+                    let responses = Self::dispatch_streaming_notifications(
+                        Box::pin(Self::dispatch_batch_with_sink(
+                            &meta_mcp,
+                            &tool_policy,
+                            &mtls_policy,
+                            request,
+                            session_id,
+                            &mut protocol_telemetry_sink,
+                            &crate::gateway::input_bridge::NoClientChannel,
+                        )),
+                        &writer,
+                    )
+                    .await;
+                    Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
+                    if !responses.is_empty() {
+                        drop(writer.send(serde_json::Value::Array(responses)));
+                    }
+                    continue;
+                }
+                let meta_mcp = Arc::clone(&meta_mcp);
+                let tool_policy = Arc::clone(&tool_policy);
+                let mtls_policy = Arc::clone(&mtls_policy);
+                let writer = writer.clone();
+                let channel = Arc::clone(&channel);
+                // The reader keeps the sink: a spawned dispatch observes into the
+                // global revision registry either way, and the sink is only the
+                // handle that flushes it, so the EOF flush below covers this one.
+                tasks.spawn(async move {
+                    let mut sink = None;
+                    // Boxed: the dispatch future is tens of kilobytes and this one
+                    // lives across the `select!` in the helper, so leaving it inline
+                    // would put the whole thing on the task's stack frame.
+                    let responses = Self::dispatch_streaming_notifications(
+                        Box::pin(Self::dispatch_batch_with_sink(
+                            &meta_mcp,
+                            &tool_policy,
+                            &mtls_policy,
+                            request,
+                            session_id,
+                            &mut sink,
+                            &*channel,
+                        )),
+                        &writer,
+                    )
+                    .await;
+                    if !responses.is_empty() {
+                        drop(writer.send(serde_json::Value::Array(responses)));
+                    }
+                });
+                continue;
+            }
+
+            // `initialize` stays on the reader: it binds the session's protocol
+            // revision, and every request dispatched after it is classified
+            // against that binding, so it cannot race the requests that follow.
+            if Self::carries_initialize(&request) {
+                let response_opt = Self::dispatch_streaming_notifications(
+                    Box::pin(Self::dispatch_single_with_sink(
                         &meta_mcp,
                         &tool_policy,
                         &mtls_policy,
                         request,
                         session_id,
-                        &mut protocol_telemetry_sink,
+                        protocol_telemetry_sink.as_mut(),
+                        // Same rule as the batch arm above: nothing dispatched
+                        // on the reader may raise a prompt only the reader can
+                        // answer. `initialize` has no bridged path today, so
+                        // this is the invariant rather than a live refusal.
+                        &crate::gateway::input_bridge::NoClientChannel,
                     )),
-                    &mut stdout,
+                    &writer,
                 )
                 .await;
                 Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
-                if !responses.is_empty() {
-                    let batch_resp = serde_json::Value::Array(responses);
-                    Self::write_response(&mut stdout, &batch_resp).await;
+
+                if let Some(response) = response_opt {
+                    drop(writer.send(response));
                 }
                 continue;
             }
 
-            // Single request
-            let response_opt = Self::dispatch_streaming_notifications(
-                Box::pin(Self::dispatch_single_with_sink(
-                    &meta_mcp,
-                    &tool_policy,
-                    &mtls_policy,
-                    request,
-                    session_id,
-                    protocol_telemetry_sink.as_mut(),
-                )),
-                &mut stdout,
-            )
-            .await;
-            Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
+            // Every other single request
+            let meta_mcp = Arc::clone(&meta_mcp);
+            let tool_policy = Arc::clone(&tool_policy);
+            let mtls_policy = Arc::clone(&mtls_policy);
+            let writer = writer.clone();
+            let channel = Arc::clone(&channel);
+            tasks.spawn(async move {
+                let response_opt = Self::dispatch_streaming_notifications(
+                    Box::pin(Self::dispatch_single_with_sink(
+                        &meta_mcp,
+                        &tool_policy,
+                        &mtls_policy,
+                        request,
+                        session_id,
+                        None,
+                        &*channel,
+                    )),
+                    &writer,
+                )
+                .await;
 
-            if let Some(response) = response_opt {
-                Self::write_response(&mut stdout, &response).await;
+                if let Some(response) = response_opt {
+                    drop(writer.send(response));
+                }
+            });
+
+            // Reaped here rather than only at EOF: a `JoinSet` keeps a finished
+            // task's entry until it is joined, so a long-lived session would
+            // hold one per request it ever served. Non-blocking, so the reader
+            // never waits on a dispatch that is still running.
+            while let Some(joined) = tasks.try_join_next() {
+                if let Err(error) = joined {
+                    warn!(%error, "stdio dispatch task did not finish cleanly");
+                }
             }
         }
 
         info!("stdio: EOF reached, shutting down");
+        // Before the drain, not after: stdin is closed, so no reply can arrive
+        // to satisfy an outstanding prompt. A dispatch parked in `send_request`
+        // would otherwise wait out the bridge's full timeout inside a drain
+        // that exists to let it answer.
+        channel.close();
+        // Drain before the writer closes: an in-flight dispatch still owes the
+        // client a response, and dropping the set would abort it mid-call.
+        // ponytail: unbounded set — one task per line, no concurrency cap; bound
+        // it if a client can flood stdin.
+        while let Some(joined) = tasks.join_next().await {
+            if let Err(error) = joined {
+                warn!(%error, "stdio dispatch task did not finish cleanly");
+            }
+        }
         Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
+        // The channel owns a producer handle of its own, for the questions it
+        // sends the client. Dropped after the drain, which is where the last
+        // dispatch releases its clone: hold it a line longer and the queue
+        // never closes, so the await below never returns.
+        drop(channel);
+        // Drop the last producer handle so the writer task sees the queue close,
+        // then await it: a frame still queued here has not reached stdout yet,
+        // and tearing the backends down first would race the client's last read.
+        drop(writer);
+        if let Err(error) = writer_task.await {
+            warn!(%error, "stdio writer task did not finish cleanly");
+        }
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
         // so leaving either running keeps the registry alive after run_stdio
@@ -2466,38 +2675,43 @@ impl Gateway {
     /// Installing the scope is also what makes the mint reachable on stdio —
     /// `mint_progress_token` returns `None` outside one, and the client's own
     /// token would then travel to the backend unchanged.
-    async fn dispatch_streaming_notifications<F, W>(fut: F, stdout: &mut W) -> F::Output
+    async fn dispatch_streaming_notifications<F>(fut: F, writer: &StdioWriter) -> F::Output
     where
         F: Future,
-        W: tokio::io::AsyncWrite + Unpin,
     {
         let (scoped, mut notifications) = crate::transport::notification_sink::scope(fut);
         tokio::pin!(scoped);
         let output = loop {
             tokio::select! {
                 Some(notification) = notifications.recv() => {
-                    Self::write_notification(stdout, &notification).await;
+                    Self::queue_notification(writer, &notification);
                 }
                 output = &mut scoped => break output,
             }
         };
         // The scope's sender drops with `scoped`, so anything still queued is
-        // everything that will ever arrive; write it before the response.
+        // everything that will ever arrive; queue it before the response.
         while let Ok(notification) = notifications.try_recv() {
-            Self::write_notification(stdout, &notification).await;
+            Self::queue_notification(writer, &notification);
         }
         output
     }
 
-    /// Serialise one notification onto the client's stream. A notification
-    /// that cannot be serialised is dropped with a warning rather than
-    /// failing the request it belongs to.
-    async fn write_notification<W: tokio::io::AsyncWrite + Unpin>(
-        stdout: &mut W,
+    /// Queue one notification for the writer task. A notification that cannot
+    /// be serialised is dropped with a warning rather than failing the request
+    /// it belongs to.
+    ///
+    /// Synchronous, and deliberately so: the queue is unbounded, so ordering a
+    /// notification ahead of its dispatch's response costs no await inside the
+    /// notification scope.
+    fn queue_notification(
+        writer: &StdioWriter,
         notification: &crate::protocol::JsonRpcNotification,
     ) {
         match serde_json::to_value(notification) {
-            Ok(value) => Self::write_response(stdout, &value).await,
+            // A closed writer means stdout is gone; the dispatch still runs to
+            // completion, it just has nowhere to report.
+            Ok(value) => drop(writer.send(value)),
             Err(error) => warn!(
                 %error,
                 method = %notification.method,
@@ -2524,6 +2738,7 @@ impl Gateway {
             request.clone(),
             session_id,
             None,
+            &crate::gateway::input_bridge::NoClientChannel,
         )
         .await
     }
@@ -2568,6 +2783,7 @@ impl Gateway {
         protocol_telemetry_sink: Option<
             &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
+        channel: &dyn crate::gateway::input_bridge::ClientChannel,
     ) -> Option<serde_json::Value> {
         // Borrowed views throughout: a request this dispatcher refuses must not
         // be copied on its way to the refusal. Ownership is taken once, after
@@ -2622,7 +2838,7 @@ impl Gateway {
                 id,
                 session_id,
                 &mut signing_context,
-                &request_shape,
+                StdioCaller::new(&request_shape, channel),
             ))
             .await
         } else {
@@ -2802,11 +3018,11 @@ impl Gateway {
     /// [`Self::dispatch_tools_call`] purely to keep that function under the
     /// line budget — every field and its rationale are unchanged.
     fn build_stdio_caller_context<'a>(
-        is_modern: bool,
+        request_shape: &crate::protocol::meta::RequestShape,
         protocol_revision: Option<&'a str>,
         stdio_authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
         retry: &'a crate::protocol::mrtr::RetryFields,
-        era: crate::protocol::meta::Era,
+        channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
     ) -> MetaMcpCallerContext<'a> {
         MetaMcpCallerContext {
             // stdio has no task route: the extension's handle is read
@@ -2816,7 +3032,10 @@ impl Gateway {
             task: None,
             execution: None,
             signing: None,
-            is_modern,
+            is_modern: matches!(
+                request_shape,
+                crate::protocol::meta::RequestShape::Modern(_)
+            ),
             protocol_revision,
             credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
             authorizer: stdio_authorizer,
@@ -2833,25 +3052,30 @@ impl Gateway {
             // alone, so stdio was never checked and the default
             // non-admin context went unnoticed.
             is_admin: true,
-            // stdio carries no per-request capability
-            // declaration to read, and absent means absent.
-            input_capabilities: crate::protocol::meta::Declared::NONE,
+            // Read from the same per-request `_meta.clientCapabilities` route 1
+            // reads (`router/handlers.rs`), off the same `RequestShape` this
+            // dispatch already classified. Not the `initialize` handshake:
+            // nothing stores handshake capabilities, on either transport. A
+            // `Legacy` or `Malformed` shape still yields `NONE`, so a client
+            // that declared nothing is refused exactly as before.
+            input_capabilities: request_shape.declared_capabilities(),
             retry,
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
             verified_identity: None,
             // Same `RequestShape` the `initialize` arm advertises against.
-            era,
-            // No `ProxyManager` in this scope -- it is HTTP-only --
-            // so there is no session to put a request on.
-            channel: &crate::gateway::input_bridge::NoClientChannel,
-            // stdio speaks to one process over two pipes and
-            // has no elicitation channel: there is no operator
-            // this transport can reach, so a destructive call
-            // it cannot confirm is refused rather than asked
-            // about. Not "found no session" -- no asker can
-            // exist here at all.
+            era: request_shape.era(),
+            // The stdio client channel: one process over two pipes, so the
+            // reader routes replies back by id and this is the only session
+            // there is. `NoClientChannel` on the test and batch-free paths
+            // that have no writer to queue on.
+            channel,
+            // Destructive confirmation is a separate surface from the input
+            // bridge above and is not wired on stdio: nothing here can raise
+            // the prompt, so a destructive call stays refused rather than
+            // executed unconfirmed. Deliberately narrower than `channel` --
+            // MIK-7387 wires the bridge only.
             confirmation:
                 crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         }
@@ -2868,7 +3092,7 @@ impl Gateway {
         id: crate::protocol::RequestId,
         session_id: &str,
         signing_context: &mut Option<super::meta_mcp::signing::SigningInvocationContext>,
-        request_shape: &crate::protocol::meta::RequestShape,
+        caller: StdioCaller<'_>,
     ) -> (
         crate::protocol::JsonRpcResponse,
         Option<super::meta_mcp::admission::SyncLease>,
@@ -2877,6 +3101,11 @@ impl Gateway {
             client_meta_insert_required, extract_tools_call_params_ref, merge_client_meta_ref,
         };
         use crate::protocol::JsonRpcResponse;
+
+        let StdioCaller {
+            shape: request_shape,
+            channel,
+        } = caller;
 
         let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
         let mut execution = None;
@@ -2895,10 +3124,6 @@ impl Gateway {
             };
 
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
-            let is_modern = matches!(
-                request_shape,
-                crate::protocol::meta::RequestShape::Modern(_)
-            );
             if matches!(
                 request_shape,
                 crate::protocol::meta::RequestShape::Malformed { .. }
@@ -2949,11 +3174,11 @@ impl Gateway {
                 merge_client_meta_ref(arguments.unwrap_or(&empty_arguments), params, is_meta_tool)
             };
             let mut caller = Self::build_stdio_caller_context(
-                is_modern,
+                request_shape,
                 protocol_revision_owned.as_deref(),
                 &stdio_authorizer,
                 &retry,
-                request_shape.era(),
+                channel,
             );
             if let Some(context) = signing_context.as_mut()
                 && let Err(error) = meta_mcp.prepare_signing_invocation(
@@ -3024,8 +3249,21 @@ impl Gateway {
             batch,
             session_id,
             &mut sink,
+            &crate::gateway::input_bridge::NoClientChannel,
         )
         .await
+    }
+
+    /// Whether this frame binds the session's protocol revision: a bare
+    /// `initialize`, or a batch carrying one.
+    fn carries_initialize(request: &serde_json::Value) -> bool {
+        fn is_initialize(request: &serde_json::Value) -> bool {
+            request.get("method").and_then(serde_json::Value::as_str) == Some("initialize")
+        }
+        match request.as_array() {
+            Some(entries) => entries.iter().any(is_initialize),
+            None => is_initialize(request),
+        }
     }
 
     async fn dispatch_batch_with_sink(
@@ -3037,6 +3275,7 @@ impl Gateway {
         protocol_telemetry_sink: &mut Option<
             crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
+        channel: &dyn crate::gateway::input_bridge::ClientChannel,
     ) -> Vec<serde_json::Value> {
         let serde_json::Value::Array(requests) = batch else {
             return vec![
@@ -3061,6 +3300,7 @@ impl Gateway {
                 req,
                 session_id,
                 protocol_telemetry_sink.as_mut(),
+                channel,
             ))
             .await
             {
@@ -3360,11 +3600,20 @@ mod gateway_bootstrap_tests;
 #[cfg(test)]
 mod stdio_forward_path_tests {
     use serde_json::json;
-    use tokio::io::AsyncBufReadExt;
 
-    use super::Gateway;
+    use super::{Gateway, StdioWriter};
     use crate::protocol::JsonRpcNotification;
     use crate::transport::notification_sink;
+
+    /// A writer whose frames land in a queue instead of stdout, so a test can
+    /// read them in the order the dispatch produced them.
+    fn test_writer() -> (
+        StdioWriter,
+        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        (StdioWriter(tx), rx)
+    }
 
     fn progress(token: &str) -> JsonRpcNotification {
         JsonRpcNotification {
@@ -3380,7 +3629,7 @@ mod stdio_forward_path_tests {
     /// the design ADR-014 §1 rejects.
     #[tokio::test]
     async fn a_notification_is_written_before_its_dispatch_returns() {
-        let (client, mut server) = tokio::io::duplex(4096);
+        let (writer, mut frames) = test_writer();
         let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
         let dispatch_gate = std::sync::Arc::clone(&gate);
 
@@ -3395,19 +3644,14 @@ mod stdio_forward_path_tests {
                     let _permit = dispatch_gate.acquire().await.unwrap();
                     "result"
                 },
-                &mut server,
+                &writer,
             )
             .await
         });
 
-        let mut lines = tokio::io::BufReader::new(client).lines();
-        let first = lines
-            .next_line()
-            .await
-            .unwrap()
-            .expect("no line on the wire");
+        let first = frames.recv().await.expect("no frame on the wire");
         assert!(
-            first.contains("notifications/progress"),
+            first.to_string().contains("notifications/progress"),
             "first frame was not the notification: {first}"
         );
 
@@ -3420,10 +3664,10 @@ mod stdio_forward_path_tests {
     /// travels to the backend unchanged -- the leak SUB.2b forbids.
     #[tokio::test]
     async fn a_dispatch_runs_inside_a_notification_scope() {
-        let mut wire: Vec<u8> = Vec::new();
+        let (writer, _frames) = test_writer();
         let minted = Gateway::dispatch_streaming_notifications(
             async { notification_sink::mint_progress_token(&json!(7)) },
-            &mut wire,
+            &writer,
         )
         .await;
         assert!(
@@ -3436,15 +3680,16 @@ mod stdio_forward_path_tests {
     /// caller's to see; the post-loop drain is what delivers it.
     #[tokio::test]
     async fn a_late_notification_is_drained_before_the_response() {
-        let mut wire: Vec<u8> = Vec::new();
+        let (writer, mut frames) = test_writer();
         Gateway::dispatch_streaming_notifications(
             async {
                 notification_sink::publish(vec![progress("gw-late")]);
             },
-            &mut wire,
+            &writer,
         )
         .await;
-        assert!(std::str::from_utf8(&wire).unwrap().contains("gw-late"));
+        let frame = frames.recv().await.expect("no frame on the wire");
+        assert!(frame.to_string().contains("gw-late"));
     }
 }
 
@@ -3861,6 +4106,7 @@ mod tests {
             }),
             "stdio-durable-window-test",
             sink.as_mut(),
+            &crate::gateway::input_bridge::NoClientChannel,
         )
         .await
         .expect("initialize returns a response");
