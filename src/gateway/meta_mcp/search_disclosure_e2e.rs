@@ -366,7 +366,11 @@ impl Transport for ServedSurfaceTransport {
     }
 }
 
-async fn served_surface_backend(name: &str, tools: Vec<Tool>, calls: Arc<AtomicUsize>) -> Arc<Backend> {
+async fn served_surface_backend(
+    name: &str,
+    tools: Vec<Tool>,
+    calls: Arc<AtomicUsize>,
+) -> Arc<Backend> {
     let backend = Arc::new(Backend::new(
         name,
         BackendConfig::default(),
@@ -396,6 +400,7 @@ async fn served_surface_backend(name: &str, tools: Vec<Tool>, calls: Arc<AtomicU
 /// set is exactly what the same fixture's `tools/call` will actually run —
 /// for BOTH directions: a hidden tool must refuse, and a disclosed one must
 /// not be accidentally refused too.
+#[allow(clippy::too_many_lines)] // one end-to-end trace; splitting it would hide the sequence
 #[tokio::test]
 async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -409,7 +414,11 @@ async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
         served_surface_backend(
             "alpha",
             vec![
-                tool("public_tool", "A publicly surfaced tool.", valid_schema.clone()),
+                tool(
+                    "public_tool",
+                    "A publicly surfaced tool.",
+                    valid_schema.clone(),
+                ),
                 tool(
                     "denied_tool",
                     "A tool the default profile denies.",
@@ -514,7 +523,9 @@ async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
     let hidden_err = hidden_meta.error.expect("a hidden meta-tool must refuse");
     assert_eq!(hidden_err.code, -32601);
     assert!(
-        hidden_err.message.ends_with("Unknown tool: gateway_list_servers"),
+        hidden_err
+            .message
+            .ends_with("Unknown tool: gateway_list_servers"),
         "{}",
         hidden_err.message
     );
@@ -534,7 +545,9 @@ async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
         "a hidden tool and a genuinely nonexistent one must refuse identically"
     );
     assert!(
-        un_err.message.ends_with("Unknown tool: gateway_zzz_nonexistent"),
+        un_err
+            .message
+            .ends_with("Unknown tool: gateway_zzz_nonexistent"),
         "{}",
         un_err.message
     );
@@ -585,6 +598,7 @@ async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
 /// disclosure difference is not cosmetic: a killed tool refuses
 /// `gateway_execute` regardless of the tier that revealed it, a
 /// profile-denied one refuses too, and the plain visible one actually runs.
+#[allow(clippy::too_many_lines)] // one end-to-end trace; splitting it would hide the sequence
 #[tokio::test]
 async fn mik_7332_discovery_1_disclosure_tiers_agree_with_invocation() {
     let registry = Arc::new(BackendRegistry::new());
@@ -595,7 +609,11 @@ async fn mik_7332_discovery_1_disclosure_tiers_agree_with_invocation() {
     let _ = registry.register(
         served_surface_backend(
             "alpha",
-            vec![tool("alpha_tool", "Alive backend tool. [keywords: widget]", schema.clone())],
+            vec![tool(
+                "alpha_tool",
+                "Alive backend tool. [keywords: widget]",
+                schema.clone(),
+            )],
             Arc::new(AtomicUsize::new(0)),
         )
         .await,
@@ -603,14 +621,22 @@ async fn mik_7332_discovery_1_disclosure_tiers_agree_with_invocation() {
     let _ = registry.register(
         backend_with_tools(
             "beta",
-            vec![tool("beta_tool", "Killed backend tool. [keywords: widget]", schema.clone())],
+            vec![tool(
+                "beta_tool",
+                "Killed backend tool. [keywords: widget]",
+                schema.clone(),
+            )],
         )
         .await,
     );
     let _ = registry.register(
         backend_with_tools(
             "gamma",
-            vec![tool("gamma_tool", "Profile-denied tool. [keywords: widget]", schema)],
+            vec![tool(
+                "gamma_tool",
+                "Profile-denied tool. [keywords: widget]",
+                schema,
+            )],
         )
         .await,
     );
@@ -664,7 +690,10 @@ async fn mik_7332_discovery_1_disclosure_tiers_agree_with_invocation() {
     // profile-denied one still does not — proving the two absences are
     // different mechanisms, not the same filter under two names.
     let l1 = meta
-        .code_mode_search(&json!({ "query": "*_tool", "limit": 10, "detail": "l1" }), None)
+        .code_mode_search(
+            &json!({ "query": "*_tool", "limit": 10, "detail": "l1" }),
+            None,
+        )
         .await
         .unwrap();
     let l1_matches = l1["matches"].as_array().unwrap();
@@ -818,8 +847,7 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
     let exposure = ["gateway_get_stats".to_string()];
     let registry = Arc::new(BackendRegistry::new());
 
-    let unconfigured =
-        MetaMcp::new(Arc::clone(&registry)).with_exposed_meta_tools(&exposure);
+    let unconfigured = MetaMcp::new(Arc::clone(&registry)).with_exposed_meta_tools(&exposure);
     let listed =
         listed_names(&unconfigured.handle_tools_list_for_session(RequestId::Number(1), None));
     assert!(
@@ -893,7 +921,12 @@ async fn routing_guide_text(meta: &MetaMcp) -> String {
         .result
         .and_then(|r| r.get("contents").and_then(Value::as_array).cloned())
         .and_then(|contents| contents.first().cloned())
-        .and_then(|entry| entry.get("text").and_then(Value::as_str).map(str::to_string))
+        .and_then(|entry| {
+            entry
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .expect("the routing guide resource must return text")
 }
 
