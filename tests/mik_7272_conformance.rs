@@ -335,13 +335,11 @@ fn all_rows() -> Vec<&'static Row> {
 /// of those states can be reached by leaving the file alone, which is the
 /// point: a permanently red suite teaches everyone to ignore red, and a silent
 /// exemption teaches nobody anything.
-const TRACKED_GAPS: &[(&str, &str)] = &[
-    (
-        "1. extensions field on client and server capabilities",
-        "Cluster B writes E1-E5 of \
+const TRACKED_GAPS: &[(&str, &str)] = &[(
+    "1. extensions field on client and server capabilities",
+    "Cluster B writes E1-E5 of \
          docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
-    ),
-];
+)];
 
 #[test]
 fn matrix_has_no_empty_cells() {

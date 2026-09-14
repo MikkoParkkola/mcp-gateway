@@ -4155,6 +4155,18 @@ mod response_transform_tests {
     fn ac_schema_10b_scalar_structured_content_survives_enforce_output_schema() {
         let schema = json!({ "type": "string" });
 
+        // The discriminating assertion. `enforce_output_schema` is advisory on
+        // mismatch (see its else arm) and returns the payload either way, so
+        // the survival check below passes whether the scalar validated or was
+        // rejected and waved through. Only this one fails if support for a
+        // non-object `outputSchema` regresses.
+        let validation = validate_output(&json!("hello"), &schema);
+        assert!(
+            validation.is_valid(),
+            "a scalar structuredContent must validate against a type: string outputSchema, not merely survive: {}",
+            validation.format_output_error(&schema)
+        );
+
         let result = enforce_output_schema(
             "demo",
             "echo",
@@ -4172,6 +4184,13 @@ mod response_transform_tests {
     #[test]
     fn ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema() {
         let schema = json!({ "type": "array", "items": { "type": "string" } });
+
+        let validation = validate_output(&json!(["a", "b"]), &schema);
+        assert!(
+            validation.is_valid(),
+            "a bare-array structuredContent must validate against a type: array outputSchema, not merely survive: {}",
+            validation.format_output_error(&schema)
+        );
 
         let result = enforce_output_schema(
             "demo",
