@@ -1,5 +1,14 @@
 # 3.5.0 workload reference figure — reference, not gating
 
+> **Caveat added 2026-09-14 after review.** These figures may not measure what
+> they appear to. The workload sends one constant argument, which the gateway can
+> answer from its response cache: a 300-call probe on the pinned config produced
+> 1 backend invocation and 299 cache hits. The cache-hit fraction inside the
+> measured reps was not captured, so an undetermined part of this distribution may
+> be cache-hit service time rather than gateway→backend work. Do not promote this
+> figure to a gating baseline until that is resolved.
+> See `rehearsal-2026-09-14/06-finding-response-cache.md`.
+
 **This is not a gating baseline.** §4 of the workload contract admits a gating
 number only from a post-merge interleaved scored run. `feat/v4-workload-harness`
 is unmerged, so no number produced from it can gate anything. §4 names exactly one
