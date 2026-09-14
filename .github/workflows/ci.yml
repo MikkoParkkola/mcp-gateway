@@ -114,7 +114,7 @@ jobs:
         with:
           cosign-release: v2.5.2
       - name: Install syft (SBOM)
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Validate supply-chain smoke script
         run: bash -n scripts/dev/helm-supply-chain-smoke.sh
       - name: Sign + verify chart and image by digest, assert SBOM
@@ -140,7 +140,7 @@ jobs:
         with:
           cosign-release: v2.5.2
       - name: Install syft (SBOM)
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Validate air-gap smoke script
         run: bash -n scripts/dev/helm-airgap-smoke.sh
       - name: Export to bundle, import to isolated registry, verify + install offline
@@ -394,7 +394,7 @@ jobs:
           cosign-release: v2.5.2
 
       - name: Install syft (SBOM)
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
 
       - name: Cosign keyless-sign the released image by digest
         env:
