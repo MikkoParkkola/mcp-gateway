@@ -110,11 +110,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - name: Install cosign
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v2.5.2
       - name: Install syft (SBOM)
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Validate supply-chain smoke script
         run: bash -n scripts/dev/helm-supply-chain-smoke.sh
       - name: Sign + verify chart and image by digest, assert SBOM
@@ -136,11 +136,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - name: Install cosign
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v2.5.2
       - name: Install syft (SBOM)
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Validate air-gap smoke script
         run: bash -n scripts/dev/helm-airgap-smoke.sh
       - name: Export to bundle, import to isolated registry, verify + install offline
@@ -337,7 +337,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@166bf18f3a3fe52a6db9e1770568f52a0c40ff07 # main
+      - uses: trufflesecurity/trufflehog@4b7d1d3a6827691637eff750b6482042e06462d0 # main
         with:
           extra_args: --only-verified
 
@@ -432,12 +432,12 @@ jobs:
 
       - name: Install cosign
         # cosign-release is pinned so flag behavior can't drift under a v3 default.
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v2.5.2
 
       - name: Install syft (SBOM)
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
 
       - name: Cosign keyless-sign the released image by digest
         env:
