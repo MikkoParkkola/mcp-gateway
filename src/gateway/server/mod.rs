@@ -92,6 +92,21 @@ impl StdioWriter {
     }
 }
 
+/// What the stdio dispatcher knows about the client behind one request.
+///
+/// One parameter rather than two because both answer the same question and
+/// `dispatch_tools_call` is at the argument budget. Copy, not a borrow of a
+/// struct: the fields are already borrows.
+#[derive(Clone, Copy)]
+struct StdioCaller<'a> {
+    /// The shape the request was classified as, which is where its declared
+    /// capabilities and era are read from.
+    shape: &'a crate::protocol::meta::RequestShape,
+    /// The half of the input bridge that can reach this client, or
+    /// `NoClientChannel` where nothing can.
+    channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
+}
+
 /// Spawn the task that owns stdout, returning the producer handle and the
 /// task's join handle.
 ///
@@ -2795,8 +2810,10 @@ impl Gateway {
                 id,
                 session_id,
                 &mut signing_context,
-                &request_shape,
-                channel,
+                StdioCaller {
+                    shape: &request_shape,
+                    channel,
+                },
             ))
             .await
         } else {
@@ -3050,8 +3067,7 @@ impl Gateway {
         id: crate::protocol::RequestId,
         session_id: &str,
         signing_context: &mut Option<super::meta_mcp::signing::SigningInvocationContext>,
-        request_shape: &crate::protocol::meta::RequestShape,
-        channel: &dyn crate::gateway::input_bridge::ClientChannel,
+        caller: StdioCaller<'_>,
     ) -> (
         crate::protocol::JsonRpcResponse,
         Option<super::meta_mcp::admission::SyncLease>,
@@ -3060,6 +3076,11 @@ impl Gateway {
             client_meta_insert_required, extract_tools_call_params_ref, merge_client_meta_ref,
         };
         use crate::protocol::JsonRpcResponse;
+
+        let StdioCaller {
+            shape: request_shape,
+            channel,
+        } = caller;
 
         let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
         let mut execution = None;
