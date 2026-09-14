@@ -67,7 +67,7 @@ at its existing test call sites.
 ## 2. Where the recovered set lives
 
 A new `extensions: ExtensionSet` field on `RequestFields`
-(`src/protocol/meta.rs:85`), populated on the `RequestShape::Modern` success arm
+(`src/protocol/meta.rs:55`), populated on the `RequestShape::Modern` success arm
 only, reached through a `RequestShape::declared_extensions()` accessor that
 mirrors the existing `declared_capabilities()`.
 
@@ -126,14 +126,14 @@ No *new* behaviour is proposed. But `declares_tasks_extension` already decides
 dispatch on this exact field, and leaving it in place means shipping two
 parsers that disagree about the same bytes. Two dispositions:
 
-- **(i) Unify (recommended).** Delete `declares_tasks_extension`; the gate at
+- **(i) Unify — RULED, and implemented.** Delete `declares_tasks_extension`; the gate at
   `handlers.rs:1034` consumes `RequestShape::declared_extensions()`. One
   parser, one answer, and the deletion is smaller than the duplication.
   **Behaviour change:** `{"…/tasks": 3}`, `null`, `[]` and `"x"` stop passing
   the gate and start receiving `MISSING_REQUIRED_CLIENT_CAPABILITY`. That is
-  the spec reading, and it is a live-path tightening, so it is the operator's
-  call, not this note's.
-- **(ii) Recover only.** Add the field, leave the gate alone. Smaller and
+  the spec reading, and it is a live-path tightening, so it was raised as the
+  operator's call and ruled in favour of unifying.
+- **(ii) Recover only — not taken.** Add the field, leave the gate alone. Smaller and
   strictly additive, but it ships the divergence table above as a known defect,
   and the matrix cell may then claim only that the declaration is *parseable*,
   not that the gateway acts on a validly negotiated one.
@@ -158,9 +158,23 @@ Split one per shape, so a red case names exactly one mutation (kimi-review).
 one case runs through the router to the gate at `handlers.rs:1034`, because a
 parse-level assertion stays green while the live gate is broken — and a green
 test over a divergent gate is exactly how the matrix ends up claiming coverage
-it does not have. Candidate fixture: `tests/task_upstream_recovery/helper.rs`
-already builds the `_meta` envelope with an `extensions` map (`:547`), so the
-route fixture is reuse, not new scaffolding.
+it does not have. Fixture: `tests/mik_7272_task_1_acs.rs`, whose
+`post` helper dispatches through the real in-process axum router
+(`create_router(state).oneshot(request)`), beside the existing gate rows
+`ac_task_1_4` and `ac_task_1_13`. Its `modern` builder took a `bool`, which
+cannot express a settings value the specification disallows, so the body-builder
+was split: `modern` keeps the two-declaration signature every other row uses and
+delegates to `modern_declaring`, which takes the capabilities object verbatim.
+(`tests/task_upstream_recovery/helper.rs` is not usable here: it spawns the
+binary as a subprocess against a mock upstream, and its `_meta` builder is the
+fake *peer's* side, not the client's.)
+
+Landed as `ac_ext_1_e6_a_non_object_settings_value_does_not_declare_the_extension`
+(five malformed settings values, each expecting `400` + `-32021`) and its
+companion `ac_ext_1_e7_a_valid_settings_object_still_declares_the_extension`,
+without which a gate that refused everything would satisfy E6. Failing-first
+observed before the gate change: E6 red at `left: 200, right: 400`, E7 already
+green.
 
 ## Falsifier
 

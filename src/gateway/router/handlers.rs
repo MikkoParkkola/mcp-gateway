@@ -174,24 +174,6 @@ fn reaches_tasks_extension(method: &str, params: Option<&Value>) -> bool {
     }
 }
 
-/// Whether THIS request declared the extension.
-///
-/// Per request, never remembered: a declaration is a statement about the
-/// message carrying it, and a client that declared once is not thereby a client
-/// that can handle a task handle on every later call.
-fn declares_tasks_extension(params: Option<&Value>) -> bool {
-    params
-        .and_then(|p| {
-            p.pointer("/_meta/io.modelcontextprotocol~1clientCapabilities/extensions")
-                .or_else(|| {
-                    p.get("_meta")?
-                        .get("io.modelcontextprotocol/clientCapabilities")?
-                        .get("extensions")
-                })
-        })
-        .is_some_and(|ext| ext.get(TASKS_EXTENSION).is_some())
-}
-
 /// The task ids a `subscriptions/listen` names, if it names any.
 fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
     params
@@ -858,6 +840,12 @@ async fn meta_mcp_dispatch(
     // moved by the per-method check below, ~100 lines before the caller context
     // is built.
     let declared_capabilities = shape.declared_capabilities();
+    // Same reason, and the same parser the classifier used: the gate below once
+    // ran its own `pointer()` read that asked only whether the identifier was
+    // *present*, so `{"…/tasks": 3}` passed a gate that
+    // `ExtensionSet::from_capabilities` would have refused. One parser, one
+    // answer.
+    let declared_extensions = shape.declared_extensions();
     // Owned: `shape` is moved ~100 lines before the caller is built. Classifier
     // output, never the duplicate-header sentinel.
     //
@@ -1031,7 +1019,7 @@ async fn meta_mcp_dispatch(
     // Handing a task handle to a client that never said it could hold one
     // strands the work: the client reads a handle it will never redeem.
     if reaches_tasks_extension(method.as_str(), params.as_ref())
-        && !declares_tasks_extension(params.as_ref())
+        && !declared_extensions.contains(crate::protocol::extensions::Extension::Tasks)
     {
         return build_error_response_with_data(
             Some(id.clone()),
