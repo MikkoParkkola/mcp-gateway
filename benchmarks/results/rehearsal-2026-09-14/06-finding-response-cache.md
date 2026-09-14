@@ -44,9 +44,33 @@ sends it.
 
 ## What this does to the numbers
 
-The cache contaminates **A and B**, not C/D/E. Per measured rep, cells A and B
-recorded ~8156 passing semantic assertions off approximately **one** backend
-invocation; cells C, D and E hit the backend on every call.
+The cache contaminates **A and B**, not C/D/E. Two independent grounds, and
+neither extrapolates the 2.00 s probe onto a 60 s rep:
+
+**1. Measured at the rep's own rate and duration.** The arm-A binary, k6's header
+shape, 9720 calls paced at 162/s over 60.00 s — against a measured rep window of
+60.02 s:
+
+```
+arm=A  n=9720  elapsed=60.00s  ok=9720  rej=0  err=0  cache_hits=9719  invocations=1
+```
+
+One backend invocation across a full rep-length window. Whatever the cache's TTL
+is, it does not expire inside a rep at this rate.
+
+**2. Rep-level corroboration, from the run itself.** Cache hits bypass the rate
+limiter — arm C with the protocol header served 320 and rejected **0**; the same
+binary without it rejected 71 of 320. Cells A and B took **zero** rejections in
+every measured rep while offering up to ~162 calls/s against a 100 rps limit. Had
+their traffic taken the backend path in any volume it would have been throttled
+exactly as C's was. It was not.
+
+Per-rep `cache_hits` was **not** captured during the reps themselves —
+`gateway_get_stats` was not sampled per rep. The rep-side claim is therefore
+"predominantly cache-served", carried by the rejection argument and the 60 s
+replication, not read off a rep counter.
+
+Cells C, D and E hit the backend on every call.
 
 That reverses three things written elsewhere in this directory:
 

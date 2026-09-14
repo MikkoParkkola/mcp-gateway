@@ -25,8 +25,11 @@ All 15 measured reps completed; `MEASURE2_EXIT=0`. The three warm-up reps
 | E2 | 0.67 | 1.21 | 2.56 | 0.6683 | 5441 | 2701 | 0.9171 | 0 |
 | E3 | 0.66 | 1.20 | 2.47 | 0.6683 | 5446 | 2703 | 0.9171 | 0 |
 
-A and B (3.5.0, 3.5.1) serve every call. C, D and E (4.0.0) reject a third of
-them. D and E are report-only cells, but their agreement with C to four decimal
+A and B (3.5.0, 3.5.1) serve every call — predominantly from the response
+cache, which is why they take no rejections; C, D and E (4.0.0) reach the backend
+on every call and reject a third of them. The two sides therefore measured
+different operations: see `06-finding-response-cache.md` before reading anything
+across the A/B–C/D/E boundary. D and E are report-only cells, but their agreement with C to four decimal
 places is itself evidence: the defect is indifferent to which protocol revision
 the client speaks.
 
@@ -50,9 +53,16 @@ about the defect, never as a performance claim.
 ## The latency columns are not a latency comparison
 
 C's p50 of 0.67 ms against A's 0.38 ms looks like a 76% regression. It is not a
-measurement of anything. A rejected call returns a short canned error without ever
-reaching the backend, so a third of C's samples are cheaper than a served call
-and the remaining two thirds are ordinary. The distribution is a blend of two
-different operations. Any ratio computed from it is meaningless in both directions.
+measurement of anything, for two independent reasons.
+
+Within C, a rejected call returns a short canned error without ever reaching the
+backend, so a third of C's samples are cheaper than a served call and the
+remaining two thirds are ordinary — the distribution is a blend of two different
+operations.
+
+Across the arms, A's 0.38 ms is predominantly cache-hit service time while C's
+0.67 ms is gateway→backend→gateway work (`06-finding-response-cache.md`). The
+comparison is void by construction, not merely noisy. Any ratio computed from it
+is meaningless in both directions.
 The P50 ≤5% / P99 ≤10% budgets are **not evaluable** on this data — neither met
 nor missed.

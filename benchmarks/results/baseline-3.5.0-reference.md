@@ -2,10 +2,14 @@
 
 > **Caveat added 2026-09-14 after review, and hardened the same day after
 > measurement.** These figures do not measure what they appear to. They are
-> cache-hit service time. The workload sends one constant argument, and the
-> 3.5.0 binary answers it from the response cache under the header shape k6
-> sends: 319 of 320 calls served from cache, **1** backend invocation, measured
-> on the arm-A binary with the runner's own pinned config and offered rate. The
+> predominantly cache-hit service time. The workload sends one constant
+> argument, and the 3.5.0 binary answers it from the response cache under the
+> header shape k6 sends: 9719 of 9720 calls served from cache, **1** backend
+> invocation, measured on the arm-A binary with the runner's own pinned config,
+> offered rate and rep-length duration (60.00 s). Per-rep cache counters were not
+> captured during the reps themselves; the rep-side claim rests on that
+> replication and on A/B taking zero rate-limit rejections, which uncached
+> traffic at that rate does not. The
 > same probe on 4.0.0 with those headers caches nothing. This is no longer an
 > undetermined fraction and no longer a caveat attached to an otherwise usable
 > number — it is a reason the figure cannot be promoted to a gating baseline at

@@ -57,7 +57,8 @@ circuit_breakers: [{ server: "workload", state: "closed",
 Caveat, and it is a real one: it is not confirmed that this stats surface reads
 the *same* per-identity pool slot that `ops.rs` gates on (`pool_key_for` →
 `PoolKey::Shared`, `src/backend/pool.rs:173-181`). Treat `trips_count: 0` as
-strong but not conclusive.
+strong but not conclusive — the load-bearing evidence for this file's title is
+the two-rate rate-limit fit below, not the stats read.
 
 ## The rates — which cut against the earlier framing
 
