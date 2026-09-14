@@ -292,7 +292,19 @@ const MINOR: &[Row] = &[
         requirement: "NFR.CONFORMANCE.1",
         role: Role::Both,
         transport: Transport::Any,
-        evidence: &[],
+        evidence: &[
+            // (a) The live forward paths cannot put `elicitationId` on the
+            // wire: both re-serialise from `ElicitationCreateParams`, which
+            // names four fields and carries no `flatten`.
+            "gateway::proxy::tests::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths",
+            // (a), legacy half. The relay for a client that must be asked
+            // directly carries the params whole, because 2025-11-25 did not
+            // remove the field.
+            "mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11a_a_legacy_bridge_relay_retains_elicitation_id",
+            // (b) The removed notification is refused before a frame leaves,
+            // at the one site whose method a backend supplies.
+            "mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11b_elicitation_complete_is_refused_unsent",
+        ],
     },
     Row {
         statement: "12. Error-code allocation policy; renumber HeaderMismatch, \
@@ -339,18 +351,6 @@ const TRACKED_GAPS: &[(&str, &str)] = &[
          declared. The nearest existing test, \
          mik_7272_exploit_acs::schema::ac_schema_1_no_meta_tool_nests_an_object_inside_an_array, \
          covers neither clause. See \
-         docs/requirements/RELEASE-4.0.0-conformance-matrix.md",
-    ),
-    (
-        "11. Remove the notifications/elicitation/complete notification and the \
-         elicitationId field of URL mode elicitation requests",
-        "Neither name appears anywhere in src or tests, so the gateway cannot \
-         emit either of its own accord. What is unverified is pass-through: a \
-         2025-11-25 backend may put elicitationId in the params of a URL mode \
-         elicitation, and OutboundRequest carries those params verbatim \
-         (src/protocol/mrtr.rs:435). Closing this needs a bridged elicitation \
-         carrying the field to reach a modern client with it removed, and a \
-         legacy client to still receive it. See \
          docs/requirements/RELEASE-4.0.0-conformance-matrix.md",
     ),
 ];
