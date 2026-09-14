@@ -310,16 +310,14 @@ pub trait ClientChannel: Send + Sync {
 /// every read site, where one site forgetting it fails open. Here the answer
 /// is the channel itself, and the only thing it can do is refuse.
 ///
-/// Stdio carries this. The stdio dispatcher runs with no `ProxyManager` in
-/// scope — that type is HTTP-only — so there is no session to put a request on
-/// and [`DeliveryError::NoSession`] is the literal truth, not a stand-in for
-/// one. Refusing here is also what MIK-7387 will change: until it lands, an
-/// initialized stdio caller stays refused. Two halves, proven separately: the
-/// stdio caller context sets this channel (grep `NoClientChannel` under
-/// `src/gateway/server/`), and the refusal it then yields is pinned over the
-/// whole admitted method set in `tests/mik_7212_mrtr7_bridge_acs.rs`. No test
-/// joins the two end to end yet; that row is `MIK-7212.WIRE.10` in the MRTR.7
-/// test plan and lands with the bridge's integration tests.
+/// Stdio no longer carries this. As of MIK-7387 the stdio read loop owns a
+/// `StdioClientChannel` (`src/gateway/server/stdio_channel.rs`) and routes
+/// replies back by id, so an initialized stdio caller can be asked. What is
+/// left here is the genuine null case: the `#[cfg(test)]` dispatch wrappers,
+/// which have no writer to queue a frame on. The refusal itself is still
+/// pinned over the whole admitted method set in
+/// `tests/mik_7212_mrtr7_bridge_acs.rs`, and the stdio end-to-end path in
+/// `tests/mik_7212_mrtr7_stdio_acs.rs`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoClientChannel;
 

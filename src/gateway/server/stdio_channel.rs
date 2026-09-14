@@ -23,15 +23,9 @@ use crate::transport::PendingRequestGuard;
 
 /// A [`ClientChannel`] over the stdio pipes.
 //
-// Constructed only by this module's tests until the stdio read loop spawns its
-// dispatches and a single writer owns stdout — sections 1 and 2 of
-// `docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md`, which this
-// type (section 4) is built for. `not(test)` because the test build does
-// construct it, so an unconditional expectation would go unfulfilled there.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")
-)]
+// Constructed once per stdio session by `Gateway::run_stdio`, which clones the
+// `Arc` into every spawned dispatch — section 4 of
+// `docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md`.
 pub(crate) struct StdioClientChannel {
     /// Outbound requests awaiting a reply, keyed by the id we minted.
     pending: DashMap<String, oneshot::Sender<Value>>,
@@ -41,10 +35,6 @@ pub(crate) struct StdioClientChannel {
     closed: AtomicBool,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")
-)]
 impl StdioClientChannel {
     /// Build a channel that queues its frames on `writer`.
     pub(crate) fn new(writer: mpsc::UnboundedSender<Value>) -> Self {
