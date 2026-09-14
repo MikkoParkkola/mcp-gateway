@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Snapshot preservation and corrupt-state refusals for MODEL-05/07.
 
 use super::*;
