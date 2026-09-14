@@ -511,15 +511,14 @@ async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
     // --- Invocation permission: the hidden meta-tool must refuse exactly
     // like an unrecognised name, and the surfaced-but-denied tool must
     // refuse without ever reaching the backend. ---
-    let hidden_meta = meta
-        .handle_tools_call(
-            RequestId::Number(2),
-            "gateway_list_servers",
-            json!({}),
-            None,
-            ctx(&AllowAll),
-        )
-        .await;
+    let hidden_meta = Box::pin(meta.handle_tools_call(
+        RequestId::Number(2),
+        "gateway_list_servers",
+        json!({}),
+        None,
+        ctx(&AllowAll),
+    ))
+    .await;
     let hidden_err = hidden_meta.error.expect("a hidden meta-tool must refuse");
     assert_eq!(hidden_err.code, -32601);
     assert!(
@@ -530,15 +529,14 @@ async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
         hidden_err.message
     );
 
-    let unrecognised = meta
-        .handle_tools_call(
-            RequestId::Number(3),
-            "gateway_zzz_nonexistent",
-            json!({}),
-            None,
-            ctx(&AllowAll),
-        )
-        .await;
+    let unrecognised = Box::pin(meta.handle_tools_call(
+        RequestId::Number(3),
+        "gateway_zzz_nonexistent",
+        json!({}),
+        None,
+        ctx(&AllowAll),
+    ))
+    .await;
     let un_err = unrecognised.error.expect("a nonexistent tool must refuse");
     assert_eq!(
         un_err.code, hidden_err.code,
@@ -552,15 +550,14 @@ async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
         un_err.message
     );
 
-    let denied_call = meta
-        .handle_tools_call(
-            RequestId::Number(4),
-            "denied_tool",
-            json!({"q": "x"}),
-            None,
-            ctx(&AllowAll),
-        )
-        .await;
+    let denied_call = Box::pin(meta.handle_tools_call(
+        RequestId::Number(4),
+        "denied_tool",
+        json!({"q": "x"}),
+        None,
+        ctx(&AllowAll),
+    ))
+    .await;
     assert!(
         denied_call.error.is_some(),
         "a tool hidden from discovery by the routing profile must not be invocable directly: {denied_call:?}"
@@ -571,15 +568,14 @@ async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
         "the denied call must never reach the backend"
     );
 
-    let allowed_call = meta
-        .handle_tools_call(
-            RequestId::Number(5),
-            "public_tool",
-            json!({"q": "x"}),
-            None,
-            ctx(&AllowAll),
-        )
-        .await;
+    let allowed_call = Box::pin(meta.handle_tools_call(
+        RequestId::Number(5),
+        "public_tool",
+        json!({"q": "x"}),
+        None,
+        ctx(&AllowAll),
+    ))
+    .await;
     assert!(
         allowed_call.error.is_none(),
         "the listed, allowed surfaced tool must actually run: {allowed_call:?}"
@@ -800,15 +796,14 @@ async fn mik_7332_discovery_1_admin_axis_disclosure_versus_invocation() {
         "the admin-only meta-tool is disclosed with no role axis: {listed:?}"
     );
 
-    let nonadmin = meta
-        .handle_tools_call(
-            RequestId::Number(2),
-            "gateway_kill_server",
-            json!({"server": "alpha"}),
-            None,
-            ctx(&AllowAll),
-        )
-        .await;
+    let nonadmin = Box::pin(meta.handle_tools_call(
+        RequestId::Number(2),
+        "gateway_kill_server",
+        json!({"server": "alpha"}),
+        None,
+        ctx(&AllowAll),
+    ))
+    .await;
     let err = nonadmin
         .error
         .expect("a nonadmin must be refused an admin meta-tool");
@@ -819,15 +814,14 @@ async fn mik_7332_discovery_1_admin_axis_disclosure_versus_invocation() {
         err.message
     );
 
-    let admin = meta
-        .handle_tools_call(
-            RequestId::Number(3),
-            "gateway_kill_server",
-            json!({"server": "alpha"}),
-            None,
-            admin_ctx(&AllowAll),
-        )
-        .await;
+    let admin = Box::pin(meta.handle_tools_call(
+        RequestId::Number(3),
+        "gateway_kill_server",
+        json!({"server": "alpha"}),
+        None,
+        admin_ctx(&AllowAll),
+    ))
+    .await;
     assert!(
         !admin
             .error
@@ -854,15 +848,14 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
         !listed.contains(&"gateway_get_stats".to_string()),
         "an unconfigured feature must contribute nothing to the served list: {listed:?}"
     );
-    let refused = unconfigured
-        .handle_tools_call(
-            RequestId::Number(2),
-            "gateway_get_stats",
-            json!({}),
-            None,
-            ctx(&AllowAll),
-        )
-        .await;
+    let refused = Box::pin(unconfigured.handle_tools_call(
+        RequestId::Number(2),
+        "gateway_get_stats",
+        json!({}),
+        None,
+        ctx(&AllowAll),
+    ))
+    .await;
     let err = refused
         .error
         .expect("an unconfigured feature's tool must not execute");
@@ -886,15 +879,14 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
         listed.contains(&"gateway_get_stats".to_string()),
         "configuring the feature must surface its tool: {listed:?}"
     );
-    let ran = configured
-        .handle_tools_call(
-            RequestId::Number(4),
-            "gateway_get_stats",
-            json!({}),
-            None,
-            ctx(&AllowAll),
-        )
-        .await;
+    let ran = Box::pin(configured.handle_tools_call(
+        RequestId::Number(4),
+        "gateway_get_stats",
+        json!({}),
+        None,
+        ctx(&AllowAll),
+    ))
+    .await;
     assert!(
         ran.error.is_none(),
         "the surfaced tool must actually execute: {ran:?}"
@@ -973,15 +965,14 @@ async fn mik_7332_discovery_1_routing_guide_agrees_with_served_list() {
         "narrowing the allow-list must withhold tools the guide still names"
     );
     let first = withheld[0];
-    let refused = narrowed
-        .handle_tools_call(
-            RequestId::Number(4),
-            first,
-            json!({}),
-            None,
-            admin_ctx(&AllowAll),
-        )
-        .await;
+    let refused = Box::pin(narrowed.handle_tools_call(
+        RequestId::Number(4),
+        first,
+        json!({}),
+        None,
+        admin_ctx(&AllowAll),
+    ))
+    .await;
     let err = refused
         .error
         .expect("a withheld tool must refuse even though the guide names it");
