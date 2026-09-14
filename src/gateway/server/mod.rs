@@ -107,6 +107,19 @@ struct StdioCaller<'a> {
     channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
 }
 
+impl<'a> StdioCaller<'a> {
+    /// Pair a shape with the channel that can reach the client it came from.
+    ///
+    /// A constructor rather than a literal at the call site: the dispatcher it
+    /// is built in is at the `clippy::too_many_lines` budget.
+    fn new(
+        shape: &'a crate::protocol::meta::RequestShape,
+        channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
+    ) -> Self {
+        Self { shape, channel }
+    }
+}
+
 /// Spawn the task that owns stdout, returning the producer handle and the
 /// task's join handle.
 ///
@@ -2810,10 +2823,7 @@ impl Gateway {
                 id,
                 session_id,
                 &mut signing_context,
-                StdioCaller {
-                    shape: &request_shape,
-                    channel,
-                },
+                StdioCaller::new(&request_shape, channel),
             ))
             .await
         } else {
