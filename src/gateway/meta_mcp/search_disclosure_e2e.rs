@@ -724,3 +724,151 @@ async fn mik_7332_discovery_1_disclosure_tiers_agree_with_invocation() {
         "the tool visible at L0 must actually run: {alpha_call:?}"
     );
 }
+
+/// Names disclosed by a `tools/list` response, in order.
+fn listed_names(response: &JsonRpcResponse) -> Vec<String> {
+    response
+        .result
+        .as_ref()
+        .and_then(|r| r.get("tools"))
+        .and_then(Value::as_array)
+        .expect("tools/list must return a tools array")
+        .iter()
+        .filter_map(|t| t.get("name").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The same caller context as [`ctx`], holding admin.
+fn admin_ctx(
+    authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync),
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        is_admin: true,
+        ..ctx(authorizer)
+    }
+}
+
+/// Acceptance clause A (admin/nonadmin axis). `handle_tools_list_for_session`
+/// takes a session id and no caller standing (`mod.rs:1398`), so disclosure
+/// has no role axis at all: the admin-only meta-tools
+/// (`router::authorization::ADMIN_META_TOOLS`) are listed to every caller and
+/// gated only at dispatch (`mod.rs:1701`). This pins that divergence rather
+/// than asserting an agreement the code cannot reach: the served list is
+/// role-invariant, a nonadmin is refused the tool its own list disclosed, and
+/// an admin is not.
+#[tokio::test]
+async fn mik_7332_discovery_1_admin_axis_disclosure_versus_invocation() {
+    let registry = Arc::new(BackendRegistry::new());
+    let meta = MetaMcp::new(Arc::clone(&registry)).with_exposed_meta_tools(&[
+        "gateway_invoke".to_string(),
+        "gateway_kill_server".to_string(),
+    ]);
+
+    let listed = listed_names(&meta.handle_tools_list_for_session(RequestId::Number(1), None));
+    assert!(
+        listed.contains(&"gateway_kill_server".to_string()),
+        "the admin-only meta-tool is disclosed with no role axis: {listed:?}"
+    );
+
+    let nonadmin = meta
+        .handle_tools_call(
+            RequestId::Number(2),
+            "gateway_kill_server",
+            json!({"server": "alpha"}),
+            None,
+            ctx(&AllowAll),
+        )
+        .await;
+    let err = nonadmin
+        .error
+        .expect("a nonadmin must be refused an admin meta-tool");
+    assert_eq!(err.code, -32600, "{}", err.message);
+    assert!(
+        err.message.contains("requires admin access"),
+        "the refusal must name the admin gate, not a routing failure: {}",
+        err.message
+    );
+
+    let admin = meta
+        .handle_tools_call(
+            RequestId::Number(3),
+            "gateway_kill_server",
+            json!({"server": "alpha"}),
+            None,
+            admin_ctx(&AllowAll),
+        )
+        .await;
+    assert!(
+        !admin
+            .error
+            .as_ref()
+            .is_some_and(|e| e.message.contains("requires admin access")),
+        "the same call from an admin must pass the gate: {admin:?}"
+    );
+}
+
+/// Acceptance clause B (configured/unconfigured features). `gateway_get_stats`
+/// is gated at disclosure by `MetaToolGates.stats` (`mod.rs:1410`) and at
+/// invocation by the same `Option` (`invoke.rs:3206`). This asserts both ends
+/// move together: unconfigured contributes nothing to the served list and
+/// refuses, configured appears and runs.
+#[tokio::test]
+async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable() {
+    let exposure = ["gateway_get_stats".to_string()];
+    let registry = Arc::new(BackendRegistry::new());
+
+    let unconfigured =
+        MetaMcp::new(Arc::clone(&registry)).with_exposed_meta_tools(&exposure);
+    let listed =
+        listed_names(&unconfigured.handle_tools_list_for_session(RequestId::Number(1), None));
+    assert!(
+        !listed.contains(&"gateway_get_stats".to_string()),
+        "an unconfigured feature must contribute nothing to the served list: {listed:?}"
+    );
+    let refused = unconfigured
+        .handle_tools_call(
+            RequestId::Number(2),
+            "gateway_get_stats",
+            json!({}),
+            None,
+            ctx(&AllowAll),
+        )
+        .await;
+    let err = refused
+        .error
+        .expect("an unconfigured feature's tool must not execute");
+    assert!(
+        err.message.contains("Statistics not enabled"),
+        "{}",
+        err.message
+    );
+
+    let configured = MetaMcp::with_features(
+        Arc::clone(&registry),
+        None,
+        Some(Arc::new(crate::stats::UsageStats::new())),
+        None,
+        Duration::from_secs(60),
+    )
+    .with_exposed_meta_tools(&exposure);
+    let listed =
+        listed_names(&configured.handle_tools_list_for_session(RequestId::Number(3), None));
+    assert!(
+        listed.contains(&"gateway_get_stats".to_string()),
+        "configuring the feature must surface its tool: {listed:?}"
+    );
+    let ran = configured
+        .handle_tools_call(
+            RequestId::Number(4),
+            "gateway_get_stats",
+            json!({}),
+            None,
+            ctx(&AllowAll),
+        )
+        .await;
+    assert!(
+        ran.error.is_none(),
+        "the surfaced tool must actually execute: {ran:?}"
+    );
+}
