@@ -123,6 +123,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separation this change exists to enforce, so the gateway re-registers and
   re-authorizes instead. No configuration change is needed.
 
+- **A response is cached only under a protocol revision the gateway can
+  identify.** The response cache is keyed by the revision a request was served
+  under, and a request whose revision cannot be determined is not cached at all
+  (`cache_protocol_revision`, `src/protocol/meta.rs:514`). A modern request
+  carries its revision in the body. A legacy-shaped request must supply it in
+  the `MCP-Protocol-Version` header or have bound one by completing
+  `initialize` on the session (`:522`). Anything else resolves to "no revision",
+  which is documented as fail-closed and means skip the cache (`:512`). Earlier
+  versions had no such key, so a response fetched for a caller that declared no
+  revision could be served to a caller asking under a different one.
+
+  **A stateless client loses response caching on upgrade.** A bare `POST` that
+  sends no `MCP-Protocol-Version` header and never runs `initialize` — the shape
+  common to load generators, probes and short scripts — is no longer served from
+  cache, and that traffic reaches the backends instead. Nothing errors, so the
+  symptom is throughput and backend load rather than a failure, and the
+  gateway's own rate limits then apply to calls that previously never reached
+  them. Send the header on stateless requests, or complete `initialize` and
+  reuse the session; either restores caching and neither needs a configuration
+  change.
+
 ### Fixed
 
 - **A throttled backend no longer looks like a failing one.** A rate-limited
