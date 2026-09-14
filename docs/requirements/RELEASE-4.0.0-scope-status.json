@@ -297,14 +297,15 @@
     },
     {
       "id": "NFR.UPGRADE.1",
-      "status": "pending",
+      "status": "met",
       "evidence": [
+        "scripts/release/nfr_upgrade_1_rehearsal.sh",
+        "scripts/release/fixtures/nfr_upgrade_1_mount_stub.py",
+        "docs/release/nfr-upgrade-1-rehearsal-results.md",
         "src/commands/upgrade.rs",
-        "docs/release/4.0.0-upgrade-path-qa-2026-09-05.md",
-        "docs/UPGRADING-4.0.md",
-        ".github/workflows/ci.yml"
+        "docs/UPGRADING-4.0.md"
       ],
-      "note": "ABSENT, graded conjunct-by-conjunct 2026-09-13. The criterion (scope-update.md:56) asks for an upgrade from 3.5.1 exercising modern-off and rollback with config, credentials, permissions, mounts and active callers preserved per the documented lifecycle.\n\nSeven of nine conjuncts are ABSENT, one is PARTIAL and one is a real rehearsal of a different mechanism. PARTIAL: config preservation is functionally proven but generically -- docs/release/4.0.0-upgrade-path-qa-2026-09-05.md MIG.1 drives the upgrade twice and compares a sha256 of gateway.yaml before and after, byte-identical, re-driven at 073790da. It is not from 3.5.1 and not bundled with the other preserved properties. ABSENT: no 3.5.1 rehearsal exists at all -- verified here, src/commands/upgrade.rs:102-115 holds exactly two MIGRATIONS entries, applies_below 3.0.0 and 4.0.0, both notice: true, and the only rehearsal document drives 2.0.0 and 3.9.0 stamps. Credentials, permissions, mounts and active callers have no rehearsal; the rollback claim at docs/UPGRADING-4.0.md:94-99 is a written assertion rather than an executed pass; and the 'documented migration contract' the test plan names does not exist as a document.\n\nAdjacent but not this criterion: kind-rollback-smoke.sh and the K8s job at .github/workflows/ci.yml:150-169 are a real apply/upgrade/rollout-undo rehearsal that passes today. It exercises a Kubernetes Deployment rollout with substituted pause images, not the gateway's own version-stamp, config, credential, permission, mount and caller lifecycle, so it cannot carry this row.\n\nSize: large (8), and arguably a floor: it needs 3.5.1 config and token fixtures, an isolated deployment harness, verification of five preserved properties, a modern-off plus rollback sequence, and the migration contract document authored first so there is something to diff against."
+      "note": "Graded 2026-09-14 against an executed rehearsal, superseding the 2026-09-13 ABSENT grade. scripts/release/nfr_upgrade_1_rehearsal.sh drives a real 3.5.1 deployment through upgrade, modern-off and rollback in an isolated data dir and records 17 of 17 checks PASS (docs/release/nfr-upgrade-1-rehearsal-results.md). Every conjunct of the criterion (RELEASE-4.0.0-scope-tests.md:70) has its own row: config preserved by SHA-256 across upgrade (PHASE2.CONFIG_PRESERVED); the OAuth token file byte-identical (PHASE2.CREDENTIALS_PRESERVED); API-key scoping and the backend mount intact (PHASE2.PERMISSIONS_AND_MOUNTS_PRESERVED); an active caller invoking the same mounted tool before and after (PHASE1.ACTIVE_CALLER_BASELINE, PHASE2.ACTIVE_CALLER_POST_UPGRADE); modern off refusing a 2026-07-28 initialize with -32022 and dropping it from server/discover (PHASE3.*); and a 3.5.1 binary started against a 4.0.0-stamped data dir leaving the stamp alone and logging the downgrade (PHASE4.*). The 4.0.0 binary was rebuilt 2026-09-14 from the Cargo.lock committed at e3b8a24f, so the rebuild resolves the same dependencies the evidence was produced against."
     },
     {
       "id": "NFR.RELEASEGATE.1",
