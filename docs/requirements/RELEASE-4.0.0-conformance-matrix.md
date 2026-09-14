@@ -86,25 +86,25 @@ instrument that can see it.
 
 ## Matrix
 
-### Statements with evidence — COVERED (19 of 21)
+### Statements with evidence — COVERED (20 of 21)
 
-All nine major statements and minor 2-9, 11 and 12 carry at least one evidence
+All nine major statements and minor 2-12 carry at least one evidence
 reference, and every cited name resolves to a defined test. The cells, roles
 and transports are in the source of truth rather than copied here, because a
 copy drifts and the original is checked by CI: `tests/mik_7272_conformance.rs`,
 `MAJOR` at `:52` and `MINOR` at `:175`.
 
-### Statements without evidence — UNCOVERED (2 of 21)
+### Statements without evidence — UNCOVERED (1 of 21)
 
 | # | Statement | Why it is uncovered | The test that closes it |
 |---|---|---|---|
 | Minor 1 | `extensions` field on client and server capabilities | Tracked gap; the work is scoped and unstarted | E1-E5 of `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md` |
-| Minor 10 | Loosen `inputSchema`/`outputSchema` to any JSON Schema 2020-12 keywords, and `structuredContent` to any JSON value | The row cites `ac_schema_1_no_meta_tool_nests_an_object_inside_an_array`, which reads `inputSchema` on the meta tool list and looks for one nested shape (`tests/mik_7272_exploit_acs.rs:305`). It touches neither clause: not `outputSchema`, not 2020-12 keyword acceptance, not `structuredContent`. Every output-schema fixture in the tree declares `type: object`, and no test constructs a scalar or top-level-array `structuredContent` | Three, and all three are needed. (a) A 2020-12 keyword absent from draft-07 — `prefixItems` or `unevaluatedProperties` — is accepted in an `outputSchema` rather than rejected. (b) A scalar and a bare-array `structuredContent` survive `enforce_output_schema` unchanged under a matching non-object `outputSchema`. (c) A declared `outputSchema` is byte-identical in a `tools/list` wire response to the one the capability declared |
 
 Minor 11 is the cell `NFR.CONFORMANCE.1` names as "modern URL-elicitation
-completion removal", and minor 10's second clause is the one it names as
-"arbitrary-JSON structured results". Both were absent from the matrix as
-evidence, which is the finding: a matrix that omits a statement, or cites a
+completion removal", and minor 10's second clause was the one it names as
+"arbitrary-JSON structured results" until two tests closed it. Both were
+absent from the matrix as evidence, which is the finding: a matrix that omits a
+statement, or cites a
 test that does not bear on it, looks identical to one that covers it.
 
 ### Minor 11, closed — and the tracked gap's mechanism was wrong
@@ -151,15 +151,21 @@ What remains is latent fragility rather than a defect: a `#[serde(flatten)]`
 added to `ElicitationCreateParams` for pass-through fidelity would regain the
 field on the live path, and the first test is what would notice.
 
-For minor 10 the behaviour is present even though the evidence is not.
+For minor 10 the behaviour was already present; the evidence was not.
 `ToolsCallResult.structured_content` is `Option<Value>`
 (`src/protocol/messages.rs:360`), `extract_output_validation_target` returns
 whatever `structuredContent` holds (`src/gateway/meta_mcp/invoke.rs:194`), and
 `apply_validated_output` writes it back without inspecting its JSON type
 (`:207`); a schema mismatch is advisory for proxied tools and does not reject
-(`:160-177`). So this is a gap in evidence, not a defect — which is exactly why
-it is UNCOVERED rather than a bug: nothing asserts it, so nothing would notice
-it regressing.
+(`:160-177`). Four tests close the row —
+`capability::schema_validator::tests::ac_schema_10a_accepts_2020_12_keywords_absent_from_draft_07`
+(clause a),
+`gateway::meta_mcp::invoke::response_transform_tests::ac_schema_10b_scalar_structured_content_survives_enforce_output_schema`
+and `ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema`
+(clause b), and
+`gateway::meta_mcp::tests::ac_schema_10c_declared_output_schema_is_byte_identical_on_the_wire`
+(clause c) — each confirmed by breaking the mechanism it depends on and
+watching the test fail before being restored.
 
 ## Revision and outcome axes
 
@@ -231,17 +237,17 @@ apart on the count without one of those two tests going red.
 19 + 2 = 21, and only changelog statements are counted. The four N/A rows above
 are axis cells, not statements: they record why a role/transport combination
 raises no obligation, so they neither add to the population nor absorb any
-statement from it. Clause-level gaps (minor 10 has two, minor 11 has two) are
-recorded as closing tests inside their statement's row rather than as rows of
-their own, because a statement is the unit the changelog and the `Row` struct
-both use, and mixing units is how a tally stops being checkable.
+statement from it. Clause-level gaps (minor 11 has two) are recorded as
+closing tests inside their statement's row rather than as rows of their own,
+because a statement is the unit the changelog and the `Row` struct both use,
+and mixing units is how a tally stops being checkable.
 
 ## Grade
 
 **PARTIAL.** Rule 4 makes this mechanical: UNCOVERED is not empty, so the
-criterion is not met. The remaining work is minor 1 — Cluster B's E1-E5 — and
-minor 10's three named tests, which are written on `feat/v4-conformance-minor10`
-and not cited here because they are not on this line yet. What this revision delivered is the matrix, its population
+criterion is not met. The remaining work is minor 1 alone — Cluster B's
+E1-E5. What this revision delivered is the matrix, its population
 rule, the missing statement, the count assertion that would have caught it, the
-N/A reasons and the one N/A that turned out to be a gap — which is the bulk of
-the criterion and the part that makes the remainder checkable.
+N/A reasons, the one N/A that turned out to be a gap, and minor 10's row closed
+by four mutation-tested tests — which is the bulk of the criterion and the
+part that makes the remainder checkable.

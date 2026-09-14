@@ -275,16 +275,19 @@ const MINOR: &[Row] = &[
         requirement: "MIK-6865.SCHEMA.1",
         role: Role::Server,
         transport: Transport::Any,
-        // Emptied deliberately. The row previously cited
-        // `ac_schema_1_no_meta_tool_nests_an_object_inside_an_array`, which is
-        // a real test of a real requirement and bears on neither clause of
-        // this statement: it reads `inputSchema` on the meta tool list looking
-        // for one nested shape. Evidence that does not bear on the statement
-        // reads exactly like evidence that does, which is the failure this
-        // file exists to make visible -- so the citation moved into the
-        // tracked gap, where it documents what is covered without claiming
-        // the statement is.
-        evidence: &[],
+        evidence: &[
+            // (a) A 2020-12 keyword absent from draft-07 is accepted in both
+            // an inputSchema and an outputSchema rather than rejected.
+            "capability::schema_validator::tests::ac_schema_10a_accepts_2020_12_keywords_absent_from_draft_07",
+            // (b) A scalar and a bare-array structuredContent survive
+            // enforce_output_schema unchanged under a matching non-object
+            // outputSchema.
+            "gateway::meta_mcp::invoke::response_transform_tests::ac_schema_10b_scalar_structured_content_survives_enforce_output_schema",
+            "gateway::meta_mcp::invoke::response_transform_tests::ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema",
+            // (c) A declared outputSchema is byte-identical in a tools/list
+            // wire response to the one the capability declared.
+            "gateway::meta_mcp::tests::ac_schema_10c_declared_output_schema_is_byte_identical_on_the_wire",
+        ],
     },
     Row {
         statement: "11. Remove the notifications/elicitation/complete notification and the \
@@ -337,21 +340,6 @@ const TRACKED_GAPS: &[(&str, &str)] = &[
         "1. extensions field on client and server capabilities",
         "Cluster B writes E1-E5 of \
          docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
-    ),
-    (
-        "10. Loosen inputSchema and outputSchema to JSON Schema 2020-12, \
-         and structuredContent to any JSON value",
-        "Three tests close it, and none exists. (a) A 2020-12 keyword absent \
-         from draft-07 -- prefixItems or unevaluatedProperties -- is accepted \
-         in an outputSchema rather than rejected. (b) A scalar and a bare-array \
-         structuredContent survive enforce_output_schema unchanged under a \
-         matching non-object outputSchema; every output-schema fixture in the \
-         tree declares type: object today. (c) A declared outputSchema is \
-         byte-identical in a tools/list wire response to the one the capability \
-         declared. The nearest existing test, \
-         mik_7272_exploit_acs::schema::ac_schema_1_no_meta_tool_nests_an_object_inside_an_array, \
-         covers neither clause. See \
-         docs/requirements/RELEASE-4.0.0-conformance-matrix.md",
     ),
 ];
 
