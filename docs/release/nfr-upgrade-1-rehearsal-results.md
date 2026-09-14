@@ -33,13 +33,24 @@ tool" checks have nothing external to flake on.
 
 ## Revision under test
 
-- `mcp-gateway 4.0.0`, built from `8ab4bc5d66a4c5b6cc2af03dd8870de90804c58e` (tree clean
-  apart from this rehearsal's own new files), `cargo build` debug profile, default
-  features.
-- `mcp-gateway 3.5.1` reference binary, built separately from the 3.5.1 tag, used as
-  both the upgrade's starting point (phase 1) and the rollback target (phase 4).
-- Run driven 2026-09-14. `results.json` reproduced across three consecutive runs with
-  identical PASS/FAIL shape once the request-shape fix below landed.
+- `mcp-gateway 4.0.0`, built at `e3b8a24fe729640cf84aa7d2ed1ede40bde4baea` on this
+  branch (tree clean apart from this rehearsal's own new/moved files), `cargo build`
+  debug profile, default features.
+- `mcp-gateway 3.5.1` reference binary: extracted from a `v351.tar` source tarball
+  (not a live git checkout — no `.git` in the extracted tree) and built with
+  `cargo build`. `Cargo.toml` in that tree declares `version = "3.5.1"` and the
+  binary's own `--version` output says `mcp-gateway 3.5.1`, matching the repo's
+  `v3.5.1` tag; the tarball's own provenance (that it was produced *from* that tag)
+  was not independently verified beyond that version match. Used as both the
+  upgrade's starting point (phase 1) and the rollback target (phase 4).
+- Run driven 2026-09-14. `results.json` reproduced identically (17/17 PASS, same ids)
+  across two consecutive runs of the current script version — the version with the
+  `-32022`-specific phase-3 assertion and the legacy-shaped `server/discover` call
+  (see "What went wrong" below for why that shape matters). An earlier script
+  revision that used a modern-shaped `server/discover` call and a looser
+  string-match assertion also went green across two runs, but was replaced because
+  it exercised the wrong code path and the wrong condition (see below) — those
+  earlier green runs are not evidence for the current script.
 
 ## What each phase proves
 
@@ -55,8 +66,13 @@ tool" checks have nothing external to flake on.
    `Mcp-Method` headers) succeeds; `server/discover` advertises `2026-07-28` in
    `supportedVersions`.
 4. **Phase 3 — `server.modern_protocol: false`.** The same well-formed 2026-07-28
-   `initialize` is refused (`-32602`/`-32022` era-refusal path); `server/discover`'s
-   response — success or refusal — never lists `2026-07-28` in `supportedVersions`.
+   `initialize` is refused with `-32022` ("unsupported protocol version"), the
+   era-refusal code — not `-32602` (malformed metadata), which would mean the
+   refusal happened for the wrong reason and wouldn't prove `modern_protocol: false`
+   was the cause. A separate, legacy-shaped `server/discover` call (not a
+   modern-shaped one — see "What went wrong" below) reaches
+   `discover_document(modern_enabled=false)` directly and confirms its
+   `result.supportedVersions` list never contains `2026-07-28`.
 5. **Phase 4 — rollback to 3.5.1 against the 4.0.0-stamped data dir.** The stamp is
    left at `4.0.0` (older-binary-than-stamp is the `Greater` branch in
    `src/commands/upgrade.rs`'s stamp comparison, which intentionally does not rewrite
@@ -79,8 +95,8 @@ tool" checks have nothing external to flake on.
 | PHASE2.MODERN_INITIALIZE_ON | PASS | 2026-07-28 initialize accepted with modern_protocol default (true) |
 | PHASE2.MODERN_DISCOVER_ADVERTISES | PASS | server/discover advertises 2026-07-28 with modern on |
 | PHASE2.ACTIVE_CALLER_POST_UPGRADE | PASS | same API key invoked same mounted tool successfully on 4.0.0 |
-| PHASE3.MODERN_OFF_INITIALIZE_REFUSED | PASS | 2026-07-28 initialize refused once server.modern_protocol: false |
-| PHASE3.MODERN_OFF_DISCOVER_HIDES | PASS | server/discover no longer advertises 2026-07-28 |
+| PHASE3.MODERN_OFF_INITIALIZE_REFUSED | PASS | 2026-07-28 initialize refused with -32022 (unsupported protocol version) once server.modern_protocol: false |
+| PHASE3.MODERN_OFF_DISCOVER_HIDES | PASS | server/discover (legacy shape, reaches discover_document(modern_enabled=false) directly) no longer advertises 2026-07-28 |
 | PHASE4.STAMP_UNCHANGED | PASS | stamp still 4.0.0 after starting the 3.5.1 binary (installed.cmp(current)==Greater leaves the stamp alone) |
 | PHASE4.DOWNGRADE_WARNING_LOGGED | PASS | 'Downgrade detected' warning present in 3.5.1 stderr |
 | PHASE4.GATEWAY_STARTS_NORMALLY | PASS | rolled-back 3.5.1 gateway answers initialize |
@@ -89,7 +105,7 @@ tool" checks have nothing external to flake on.
 
 ## What went wrong on the way here (test-script bugs, not product bugs)
 
-The first full run scored 19 PASS / 2 FAIL. Both failures
+The first full run scored 15 PASS / 2 FAIL (out of 17 checks). Both failures
 (`PHASE2.MODERN_INITIALIZE_ON`, `PHASE2.MODERN_DISCOVER_ADVERTISES`) were the rehearsal
 script sending the wrong wire shape, not a gateway defect:
 
@@ -105,17 +121,33 @@ script sending the wrong wire shape, not a gateway defect:
   rejected the request for a header/body mismatch it was designed to catch:
   MCP 2026-07-28 requires `Mcp-Method` to mirror the JSON-RPC `method`, and the
   rehearsal wasn't sending it. Fixed by adding `Mcp-Method` to `rpc_modern()`.
-- The `PHASE3.MODERN_OFF_DISCOVER_HIDES` check originally string-matched the whole
-  response body for `"2026-07-28"`. That's wrong on its own terms once the request is
-  well-formed: the refusal response legitimately echoes the *rejected* version back in
-  its error message (`"unsupported protocol version '2026-07-28'"`), which is not the
-  same as *advertising* it. Fixed to parse `result.supportedVersions` /
-  `error.data.supportedVersions` specifically and assert `2026-07-28` is absent from
-  that list, rather than absent from the whole payload.
+- With both of those fixed, `PHASE3.MODERN_OFF_DISCOVER_HIDES` still passed, but for
+  two compounding wrong reasons that a follow-up review caught:
+  1. Its `server/discover` call had been switched to `rpc_modern()`, a modern-shaped
+     request. With `modern_protocol: false`, the gateway's era gate
+     (`src/gateway/router/handlers.rs`, `RequestShape::Modern` dispatch) refuses any
+     modern-shaped request with `-32022` *before* it ever reaches the
+     `server/discover` handler — so the check was never exercising
+     `discover_document(modern_enabled=false)`, the function it's named after and
+     the one this criterion actually cares about.
+  2. The assertion string-matched the whole response body for `"2026-07-28"`. That's
+     wrong on its own terms: even the era-refusal response legitimately echoes the
+     *rejected* version back in its error message
+     (`"unsupported protocol version '2026-07-28'"`), which is not the same as
+     *advertising* it, and a passing match there would have hidden case 1 above by
+     accident.
+  Fixed by reverting the `server/discover` call to the legacy (2025-06-18) shape it
+  originally used — which passes the era gate, dispatches, and calls
+  `discover_document(modern_enabled=false)` directly — and by narrowing the
+  assertion to parse `result.supportedVersions` / `error.data.supportedVersions`
+  specifically rather than the whole payload. `PHASE3.MODERN_OFF_INITIALIZE_REFUSED`
+  was tightened at the same time to assert the specific `-32022` code instead of
+  merely `"error" in response`, so it can only pass on the era-refusal path.
 
-All three were caught because the first full run surfaced concrete wire-level responses,
-and each was corrected against the request-shape code the gateway actually runs
-(`src/protocol/meta.rs`, `src/protocol/headers.rs`), not by loosening the assertion.
+All four were caught by reading the request-shape code the gateway actually runs
+(`src/protocol/meta.rs`, `src/protocol/headers.rs`,
+`src/gateway/router/handlers.rs`), not by loosening an assertion until it went
+green.
 
 ## A finding outside this criterion's scope (pre-existing, not a 4.0.0 regression)
 
@@ -142,3 +174,8 @@ front of whoever owns multi-tenant OAuth isolation, not buried in a script comme
   scenario. Those are different NFRs' territory if they're in scope at all.
 - 3.5.1 reference binary is used as-is (not rebuilt from this tree), matching what an
   operator actually runs pre-upgrade.
+- No SHA-256 value is printed in the results table above (only in the `[PASS]` log
+  lines): `gateway.yaml` embeds the fixture's random port and the run's random API
+  key, so the hash differs every run by construction. What the checks assert is a
+  within-run before/after identity (`CONFIG_SHA_BEFORE == CONFIG_SHA_AFTER_UPGRADE`),
+  not a fixed reference hash.
