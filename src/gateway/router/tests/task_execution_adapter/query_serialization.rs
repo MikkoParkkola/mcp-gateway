@@ -247,13 +247,12 @@ impl BarrierRecovery {
             if self.queries() >= count {
                 return;
             }
-            if Instant::now() >= deadline {
-                panic!(
-                    "only {} upstream queries entered the adapter in {ARRIVAL_BOUND:?}; \
-                     {count} were expected",
-                    self.queries()
-                );
-            }
+            assert!(
+                Instant::now() < deadline,
+                "only {} upstream queries entered the adapter in {ARRIVAL_BOUND:?}; \
+                 {count} were expected",
+                self.queries()
+            );
             tokio::task::yield_now().await;
         }
     }
@@ -270,12 +269,11 @@ impl BarrierRecovery {
             if self.claims_seen() > seen {
                 return;
             }
-            if Instant::now() >= deadline {
-                panic!(
-                    "no recovery read reached the adapter's trust check in {ARRIVAL_BOUND:?}; \
-                     the read never entered the recovery path and this row would observe nothing"
-                );
-            }
+            assert!(
+                Instant::now() < deadline,
+                "no recovery read reached the adapter's trust check in {ARRIVAL_BOUND:?}; \
+                 the read never entered the recovery path and this row would observe nothing"
+            );
             tokio::task::yield_now().await;
         }
     }
