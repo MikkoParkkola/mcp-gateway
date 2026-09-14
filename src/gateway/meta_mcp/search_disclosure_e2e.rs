@@ -872,3 +872,85 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
         "the surfaced tool must actually execute: {ran:?}"
     );
 }
+
+/// Every `gateway_*` name mentioned in a guide's text.
+fn guide_tool_names(text: &str) -> std::collections::BTreeSet<String> {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|word| word.starts_with("gateway_"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Read the gateway-owned routing guide through the served surface.
+async fn routing_guide_text(meta: &MetaMcp) -> String {
+    let response = meta
+        .handle_resources_read(
+            RequestId::Number(1),
+            Some(&json!({"uri": "gateway://guides/routing"})),
+        )
+        .await;
+    response
+        .result
+        .and_then(|r| r.get("contents").and_then(Value::as_array).cloned())
+        .and_then(|contents| contents.first().cloned())
+        .and_then(|entry| entry.get("text").and_then(Value::as_str).map(str::to_string))
+        .expect("the routing guide resource must return text")
+}
+
+/// Acceptance clause C (routing guide agreement). The guide served at
+/// `gateway://guides/routing` is static prose (`resources.rs:134`), not a
+/// projection of the live surface. On the default surface every tool it names
+/// is disclosed, so the two agree; under an operator allow-list they do not,
+/// and the guide keeps naming a tool `tools/list` withholds and `tools/call`
+/// refuses. Both halves are asserted: the agreement that holds, and the
+/// divergence that the static text makes unavoidable.
+#[tokio::test]
+async fn mik_7332_discovery_1_routing_guide_agrees_with_served_list() {
+    let registry = Arc::new(BackendRegistry::new());
+
+    let meta = MetaMcp::new(Arc::clone(&registry));
+    let named = guide_tool_names(&routing_guide_text(&meta).await);
+    assert!(
+        !named.is_empty(),
+        "the routing guide must name the tools it routes to"
+    );
+    let listed = listed_names(&meta.handle_tools_list_for_session(RequestId::Number(2), None));
+    for name in &named {
+        assert!(
+            listed.contains(name),
+            "the routing guide names {name} but the served list withholds it: {listed:?}"
+        );
+    }
+
+    let narrowed = MetaMcp::new(Arc::clone(&registry))
+        .with_exposed_meta_tools(&["gateway_invoke".to_string()]);
+    let narrowed_named = guide_tool_names(&routing_guide_text(&narrowed).await);
+    assert_eq!(
+        narrowed_named, named,
+        "the guide text is static: narrowing the allow-list must not change it"
+    );
+    let narrowed_listed =
+        listed_names(&narrowed.handle_tools_list_for_session(RequestId::Number(3), None));
+    let withheld: Vec<&String> = named
+        .iter()
+        .filter(|name| !narrowed_listed.contains(*name))
+        .collect();
+    assert!(
+        !withheld.is_empty(),
+        "narrowing the allow-list must withhold tools the guide still names"
+    );
+    let first = withheld[0];
+    let refused = narrowed
+        .handle_tools_call(
+            RequestId::Number(4),
+            first,
+            json!({}),
+            None,
+            admin_ctx(&AllowAll),
+        )
+        .await;
+    let err = refused
+        .error
+        .expect("a withheld tool must refuse even though the guide names it");
+    assert_eq!(err.code, -32601, "{}", err.message);
+}
