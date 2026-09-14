@@ -18,13 +18,15 @@
 //! the dispatch entry (this module does not exercise the OIDC wire or public
 //! gateway startup).
 //!
-//! STATUS. Six cases exercise the current implementation. The seventh
+//! STATUS. All seven cases exercise the current implementation and pass. The
+//! seventh
 //! (`registered_managed_backend_without_installed_strategy_refuses_with_zero_backend_calls`)
-//! is an intended RED: the current
-//! `.backend_identity_strategy(server).or_else(global)` fallback mints the
-//! global signed assertion for a managed backend whose per-backend strategy was
-//! never installed. The assertion is deliberately NOT weakened to accept that
-//! wrongly minted credential.
+//! was documented as an intended RED against the unconditional
+//! `.backend_identity_strategy(server).or_else(global)` fallback, but the same
+//! commit that added the case (6f7c9c33) also gated that fallback behind
+//! `account_bound` (`invoke.rs:2593`): an account-bound backend no longer
+//! borrows an unrelated global strategy. The case has therefore been GREEN
+//! since it landed, and its assertion was never weakened to reach green.
 //!
 //! MULTI-THREAD RUNTIME: `CustodyHandle::refresh_if_expired` drives the refresh
 //! future with `block_on` inside `spawn_blocking`, which needs a runtime with
@@ -231,10 +233,12 @@ async fn missing_verified_principal_refuses_with_zero_backend_calls() {
 /// strategy has no credential to present, and the global minting strategy is not
 /// a substitute for the account holder's own token.
 ///
-/// EXPECTED RED TODAY: the current
-/// `.backend_identity_strategy(server).or_else(global)` fallback mints the
-/// global assertion instead, so `mail` reaches the transport with a credential
-/// nobody's account authorized. The assertion below is not relaxed to accept it.
+/// GREEN SINCE 6f7c9c33. An earlier note called this an expected RED, on the
+/// unconditional `.backend_identity_strategy(server).or_else(global)` fallback
+/// that would mint the global assertion and let `mail` reach the transport with
+/// a credential nobody's account authorized. That fallback is now gated behind
+/// `account_bound` (`invoke.rs:2593`), so dispatch fails closed. The assertion
+/// below was never relaxed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn registered_managed_backend_without_installed_strategy_refuses_with_zero_backend_calls() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
@@ -448,5 +452,108 @@ async fn mixed_external_and_managed_backends_select_their_own_strategy() {
         custody.releases(),
         1,
         "custody must be consulted for the managed backend only"
+    );
+}
+
+/// JOURNEY.2 C2: TWO PRINCIPALS CONCURRENTLY, NOT SEQUENTIALLY. The sequential
+/// sibling above proves the credentials are keyed per principal; it cannot
+/// distinguish "keyed correctly" from "only ever one resolution in flight".
+/// Here both dispatches are driven by one `join!` on a multi-thread runtime, so
+/// the lease/release recheck, the custody single-flight and the strategy cache
+/// are entered by both principals at once. Dispatch ORDER is then a race, so
+/// the oracle is the SET of (Authorization, identity key) pairs that reached the
+/// transport — a positional assertion here would be a flake, not a proof.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn alice_and_bob_dispatch_concurrently_only_their_own_token() {
+    let custody = custody_with(&[
+        (account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH)),
+        (account_key("bob", WORK), grant(BOB_WORK_TOKEN, FRESH)),
+    ]);
+    let installed = custody.installed();
+    let (meta, dispatches) = gateway(
+        &[("mail", Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &installed,
+        &slots(&[("alice", WORK), ("bob", WORK)]),
+    );
+
+    let (alice_identity, bob_identity) = (identity("alice"), identity("bob"));
+    let (alice, bob) = tokio::join!(
+        execute(&meta, "mail", Some(&alice_identity)),
+        execute(&meta, "mail", Some(&bob_identity)),
+    );
+    alice.expect("alice's concurrent dispatch must succeed");
+    bob.expect("bob's concurrent dispatch must succeed");
+
+    let mut observed = dispatches
+        .calls()
+        .into_iter()
+        .map(|call| (call.authorization(), call.identity_key))
+        .collect::<Vec<_>>();
+    observed.sort();
+    let mut expected = vec![
+        (
+            Some(format!("Bearer {ALICE_WORK_TOKEN}")),
+            Some(expected_identity_key("alice", WORK, SEEDED_REVISION)),
+        ),
+        (
+            Some(format!("Bearer {BOB_WORK_TOKEN}")),
+            Some(expected_identity_key("bob", WORK, SEEDED_REVISION)),
+        ),
+    ];
+    expected.sort();
+    assert_eq!(
+        observed, expected,
+        "each concurrent principal must reach the backend exactly once, with \
+         only its own token under its own authority-bearing binding"
+    );
+}
+
+/// JOURNEY.2 C3: A VERIFIED BUT UNCONNECTED PRINCIPAL IS REFUSED, ACTIONABLY.
+/// Bob is a fully verified identity with a seeded identity-pool slot; what he
+/// does NOT have is a grant for the `work` descriptor. The refusal must fail
+/// closed (zero backend calls, no release) AND tell him what to do about it:
+/// per the 2026-09-13 release-lead ruling, "actionable" for 4.0.0 means the
+/// message names the connect STEP, not that a usable connect offer exists —
+/// that offer is ADR-008 Slice C and stays deferred.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn verified_but_unconnected_principal_refuses_actionably_with_zero_backend_calls() {
+    let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
+    let installed = custody.installed();
+    let (meta, dispatches) = gateway(
+        &[("mail", Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &installed,
+        // Bob's slot is seeded deliberately: a missing pool slot would make this
+        // case fail on the slot rather than on his missing grant.
+        &slots(&[("alice", WORK), ("bob", WORK)]),
+    );
+
+    // `Box::pin` per the module's convention for gateway dispatch futures,
+    // which are over the `clippy::large_futures` threshold.
+    let error = Box::pin(execute(&meta, "mail", Some(&identity("bob"))))
+        .await
+        .expect_err("a verified principal with no grant must fail closed");
+
+    assert_eq!(
+        dispatches.count(),
+        0,
+        "an unconnected principal must be refused BEFORE any backend call"
+    );
+    assert_eq!(
+        custody.releases(),
+        0,
+        "no credential may be released for an account that was never connected"
+    );
+    let text = error.to_string();
+    assert!(
+        !text.contains(ALICE_WORK_TOKEN) && !text.contains(STATIC_FALLBACK),
+        "the refusal must not leak another principal's token or a static \
+         fallback: {text}"
+    );
+    assert!(
+        text.contains("connect the account"),
+        "the refusal must name the connect step, not merely report the \
+         disconnected state: {text}"
     );
 }

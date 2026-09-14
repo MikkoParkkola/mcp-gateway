@@ -147,7 +147,7 @@ pub(crate) enum AccountServiceError {
         )
     )]
     RuntimeNotImplemented,
-    #[error("account is not connected")]
+    #[error("account is not connected — connect the account for this backend, then retry")]
     ConnectOffer,
     #[error("account grant is revoked")]
     Revoked,

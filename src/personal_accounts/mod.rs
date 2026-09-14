@@ -591,8 +591,8 @@ impl PersonalAccountStore {
 pub(crate) use service::CredentialLease;
 #[cfg(test)]
 pub(crate) use service::{
-    CredentialReleaseObserver, ProviderRefreshError, RefreshProvider, ReleasedCredentials,
-    TokenRefresh,
+    ConsentExpectation, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
+    ReleasedCredentials, TokenRefresh,
 };
 #[cfg(test)]
 pub(crate) use worker::CustodyHandle;
