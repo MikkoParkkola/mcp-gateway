@@ -743,6 +743,46 @@ async fn get_tools_does_not_cache_json_rpc_error_response() {
     assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
 }
 
+// MIK-7334.CATALOGUE.1 — a `session_mode = per_user` backend has no
+// per-identity catalogue fetch anywhere in this codebase yet, so the shared
+// `PoolKey::Shared` metadata cache (one connection, shared by every caller)
+// must be withheld rather than served under a caller's own identity. No
+// transport is configured: if the guard did not short-circuit, this test
+// would fail with a transport error instead of an empty, uncached result.
+#[tokio::test]
+async fn per_user_backend_withholds_shared_tool_cache() {
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+    };
+
+    let backend = Backend::new(
+        "test",
+        BackendConfig {
+            identity_propagation: Some(IdentityPropagationConfig {
+                strategy: PropagationStrategyKind::SignedAssertion,
+                audience: "aud".to_string(),
+                required: false,
+                session_mode: SessionMode::PerUser,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
+            }),
+            ..Default::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+
+    let tools = backend.get_tools().await.expect("withheld, not errored");
+
+    assert!(
+        tools.is_empty(),
+        "per_user backend must not serve the shared cache"
+    );
+    assert!(!backend.has_cached_tools());
+    assert_eq!(backend.cached_tools_count(), 0);
+    assert!(backend.get_cached_tool("anything").is_none());
+}
+
 // --- MIK-7214.HEADER.8 — tools violating an `x-mcp-header` constraint are
 // excluded from `tools/list`, on the same tool-metadata path as the
 // destructive-annotation gate.
@@ -1664,4 +1704,169 @@ async fn row_10b_an_escalation_clears_the_count_it_acted_on() {
         "two answers after a restart are not three, so nothing may restart again"
     );
     assert_eq!(backend.unserved_counts_for_test(), (2, 5));
+}
+
+// ── MIK-7334.CATALOGUE.1 ──────────────────────────────────────────────────
+//
+// A `session_mode = per_user` backend keeps one transport/session per caller
+// identity (`PoolKey::PerUser`, `pool.rs`), but the metadata path does not:
+// `get_cached_list_shared` fetches through `request_internal`, which reaches
+// for `shared_transport()` — the single `PoolKey::Shared` slot — and stores the
+// answer in one un-keyed `CachedMetadata`. So the catalogue one caller's fetch
+// materialises is the catalogue every later caller reads.
+
+/// A backend whose upstream answers `tools/list` differently per identity.
+///
+/// The production metadata path carries no identity, so the only faithful way
+/// to model "this backend's catalogue depends on who is asking" is a transport
+/// whose answer the test advances between callers — standing in for the
+/// per-identity session each caller would own.
+struct PerIdentityTools {
+    responses: parking_lot::Mutex<Vec<JsonRpcResponse>>,
+    requests: AtomicUsize,
+    delay: Duration,
+}
+
+impl PerIdentityTools {
+    fn new(tools_per_identity: &[&str], delay: Duration) -> Self {
+        let responses = tools_per_identity
+            .iter()
+            .rev()
+            .map(|name| {
+                JsonRpcResponse::success_serialized(
+                    RequestId::Number(1),
+                    ToolsListResult {
+                        tools: vec![sample_tool(name)],
+                        next_cursor: None,
+                    },
+                )
+            })
+            .collect();
+        Self {
+            responses: parking_lot::Mutex::new(responses),
+            requests: AtomicUsize::new(0),
+            delay,
+        }
+    }
+}
+
+#[async_trait]
+impl Transport for PerIdentityTools {
+    async fn request(&self, method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        assert_eq!(method, "tools/list");
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        sleep(self.delay).await;
+        let next = self.responses.lock().pop();
+        next.ok_or_else(|| Error::BackendUnavailable("no further identity".to_string()))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn per_user_backend(cache_ttl: Duration) -> Backend {
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+    };
+
+    Backend::new(
+        "test",
+        BackendConfig {
+            identity_propagation: Some(IdentityPropagationConfig {
+                strategy: PropagationStrategyKind::SignedAssertion,
+                audience: "aud".to_string(),
+                required: true,
+                session_mode: SessionMode::PerUser,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
+            }),
+            ..Default::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        cache_ttl,
+    )
+}
+
+/// GIVEN a per-identity backend that advertises `alpha_tool` to the first
+/// identity and `beta_tool` to the second
+/// WHEN the first identity's read fills the cache and the second identity reads
+/// THEN the second identity must not be served the first identity's catalogue.
+#[tokio::test]
+async fn differing_per_identity_schemas_do_not_cross_callers() {
+    let backend = Arc::new(per_user_backend(Duration::from_secs(60)));
+    let transport = Arc::new(PerIdentityTools::new(
+        &["alpha_tool", "beta_tool"],
+        Duration::from_millis(0),
+    ));
+    let transport_dyn: Arc<dyn Transport> = transport.clone();
+    backend.set_transport_for_test(transport_dyn);
+
+    // Identity A: cold read.
+    let seen_by_a = backend.get_tools().await.expect("identity A read");
+    // Identity B: hot read against the same un-keyed cache.
+    let seen_by_b = backend.get_tools().await.expect("identity B read");
+
+    let names_b: Vec<&str> = seen_by_b.iter().map(|t| t.name.as_str()).collect();
+    assert!(
+        !names_b.contains(&"alpha_tool"),
+        "identity B was served identity A's catalogue: {names_b:?} \
+         (A saw {:?}, upstream fetches: {})",
+        seen_by_a.iter().map(|t| &t.name).collect::<Vec<_>>(),
+        transport.requests.load(Ordering::SeqCst)
+    );
+    assert!(
+        !backend
+            .get_cached_tool_names()
+            .contains(&"alpha_tool".to_string()),
+        "one identity's catalogue is readable from the shared cache by every caller"
+    );
+}
+
+/// GIVEN a per-identity backend whose catalogue fill is in flight
+/// WHEN that identity's grant is revoked before the fill lands
+/// THEN the revoked identity's catalogue must not be served afterwards.
+///
+/// `invalidate_tools_cache` is the only production hook that clears this cache,
+/// and it clears an EMPTY list only — so a revocation that lands mid-fill
+/// cannot evict the entry the fill is about to write.
+#[tokio::test]
+async fn revocation_during_a_fill_is_not_served_afterwards() {
+    let backend = Arc::new(per_user_backend(Duration::from_secs(60)));
+    let transport = Arc::new(PerIdentityTools::new(
+        &["revoked_tool"],
+        Duration::from_millis(50),
+    ));
+    let transport_dyn: Arc<dyn Transport> = transport.clone();
+    backend.set_transport_for_test(transport_dyn);
+
+    let filling = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.get_tools().await })
+    };
+
+    // Revocation lands while the fill is still on the wire.
+    sleep(Duration::from_millis(10)).await;
+    backend.invalidate_tools_cache();
+
+    let _ = filling.await.expect("fill task");
+
+    assert!(
+        !backend
+            .get_cached_tool_names()
+            .contains(&"revoked_tool".to_string()),
+        "the revoked identity's catalogue is still served from the cache"
+    );
+    assert!(
+        backend.get_cached_tool("revoked_tool").is_none(),
+        "a revoked identity's tool schema is still resolvable"
+    );
 }
