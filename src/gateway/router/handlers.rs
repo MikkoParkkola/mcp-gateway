@@ -440,6 +440,10 @@ pub(super) async fn mcp_delete_handler(
 
     match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
+            // MRTR.7a. The declaration dies with the session it was captured
+            // for: left behind, it would grant the next holder of a reused
+            // identifier permissions that holder never declared.
+            state.meta_mcp.clear_session_declaration(id);
             info!(session_id = %id, "Session terminated by client");
             StatusCode::NO_CONTENT
         }
@@ -857,7 +861,18 @@ async fn meta_mcp_dispatch(
     // *client* for something. Owned rather than borrowed because `shape` is
     // moved by the per-method check below, ~100 lines before the caller context
     // is built.
-    let declared_capabilities = shape.declared_capabilities();
+    // MRTR.7a. A modern request re-declares on every call, and its own `_meta`
+    // is the whole answer — reading the handshake behind it would let a
+    // declaration the request did not make decide what the request may be
+    // asked. A legacy shape has nowhere to carry a declaration at all, so its
+    // only evidence is the `initialize` this session opened with; absent that,
+    // `Declared::NONE`, which is what the classifier already answers.
+    let declared_capabilities = match era {
+        crate::protocol::meta::Era::Modern => shape.declared_capabilities(),
+        crate::protocol::meta::Era::Legacy => state
+            .meta_mcp
+            .session_declaration(Some(session_id.as_str())),
+    };
     // Owned: `shape` is moved ~100 lines before the caller is built. Classifier
     // output, never the duplicate-header sentinel.
     //

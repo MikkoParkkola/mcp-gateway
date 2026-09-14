@@ -204,7 +204,7 @@ impl FakeBackend {
 
 #[async_trait::async_trait]
 impl BackendInvoker for FakeBackend {
-    async fn invoke(&self, retry_params: Value) -> Result<Value, BridgeError> {
+    async fn invoke(&self, retry_params: Value) -> Result<Value, mcp_gateway::Error> {
         self.calls.lock().expect("calls").push(retry_params);
         Ok(self
             .results

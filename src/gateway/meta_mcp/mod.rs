@@ -195,12 +195,11 @@ pub struct MetaMcpCallerContext<'a> {
     /// No `Default`, for the same reason the authorizer has none — a defaulted
     /// era is a site that silently claims an era it never saw.
     ///
-    /// SCAFFOLD as of this commit: the reader is the MRTR.9 gate at
-    /// `meta_mcp::invoke` (`interim.undeclared(caller.input_capabilities)`),
-    /// which must merge the session declaration for `Legacy` and read only the
-    /// request's own `_meta` for `Modern`. That merge is `MIK-7212.WIRE.1`
-    /// through `WIRE.4` and lands next; until it does, nothing on the
-    /// production path reads this field.
+    /// Two readers on the production path, both in `meta_mcp::invoke`: the
+    /// MRTR.9 gate, whose `input_capabilities` the router has already merged
+    /// per era (`router::handlers`), and the MRTR.7 bridge, which asks the
+    /// client directly for `Legacy` because that caller has no `_meta` to
+    /// carry a continuation back in.
     pub era: crate::protocol::meta::Era,
     /// How this caller can be sent a request of the gateway's own — a bridged
     /// `sampling/createMessage` or `elicitation/create`.
@@ -419,6 +418,20 @@ pub struct MetaMcp {
     /// Transitions via the `gateway_set_state` meta-tool.
     pub(super) session_state: SessionStateStore,
 
+    /// What each session declared it can be asked for, captured at
+    /// `initialize` (MIK-7212 MRTR.7a).
+    ///
+    /// A legacy-shaped request carries no declaration of its own — the shape
+    /// has nowhere to put one — so the only evidence a legacy caller ever
+    /// gives is the handshake it opened with. Held per session and dropped
+    /// with it: a declaration that outlived its session would grant the next
+    /// holder of a reused identifier permissions nobody gave it.
+    ///
+    /// Never merged into a modern request. A modern caller re-declares on
+    /// every request, and reading the handshake behind that would answer a
+    /// question the request already answered for itself.
+    pub(super) session_declarations: Arc<RwLock<HashMap<String, Declared>>>,
+
     /// HMAC-SHA256 response signer (ADR-001, OWASP ASI07).
     ///
     /// `Some` when `security.message_signing.enabled = true`; `None` otherwise.
@@ -584,6 +597,7 @@ impl MetaMcp {
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
             session_state: SessionStateStore::new(),
+            session_declarations: Arc::new(RwLock::new(HashMap::new())),
             message_signer: None,
             nonce_store: None,
             provenance_signer: None,
@@ -1355,6 +1369,43 @@ fn session_key(session_id: Option<&str>) -> Option<&str> {
     session_id.filter(|sid| !sid.is_empty())
 }
 
+impl MetaMcp {
+    /// Record what `session_id` declared at `initialize`.
+    ///
+    /// Overwrites: a re-handshake on the same identifier replaces the
+    /// declaration rather than accumulating one, so a client cannot widen what
+    /// it may be asked for by handshaking twice.
+    pub fn record_session_declaration(&self, session_id: Option<&str>, declared: Declared) {
+        let Some(sid) = session_key(session_id) else {
+            return;
+        };
+        self.session_declarations
+            .write()
+            .insert(sid.to_string(), declared);
+    }
+
+    /// What `session_id` declared at `initialize`, or [`Declared::NONE`].
+    ///
+    /// Absence answers `NONE` rather than "unknown": a session that never
+    /// handshook declared nothing, and the caller of this is a gate that must
+    /// refuse on exactly that.
+    #[must_use]
+    pub fn session_declaration(&self, session_id: Option<&str>) -> Declared {
+        session_key(session_id).map_or(Declared::NONE, |sid| {
+            self.session_declarations
+                .read()
+                .get(sid)
+                .copied()
+                .unwrap_or(Declared::NONE)
+        })
+    }
+
+    /// Drop a session's declaration, on disconnect or client termination.
+    pub fn clear_session_declaration(&self, session_id: &str) {
+        self.session_declarations.write().remove(session_id);
+    }
+}
+
 /// Refusal shared by the two routing-profile meta-tools.
 ///
 /// Both are refused, not only the writer: answering `gateway_get_profile`
@@ -1472,6 +1523,12 @@ impl MetaMcp {
             negotiated = negotiated_version,
             "Protocol version negotiation"
         );
+        // MRTR.7a. The handshake is the only place a legacy client can say what
+        // it can be asked for, so it is captured here whatever era this request
+        // was classified as: the era of the handshake does not decide the era
+        // of the calls that follow it.
+        self.record_session_declaration(session_id, Declared::from_initialize(params));
+
         let profile_hint = header_profile.or_else(|| {
             params
                 .and_then(|p| p.get("profile"))

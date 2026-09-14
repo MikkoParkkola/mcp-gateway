@@ -426,6 +426,20 @@ impl Declared {
         }
     }
 
+    /// Read a declaration out of an `initialize` request's params.
+    ///
+    /// The handshake spells the same object as `params.capabilities`, so this
+    /// is [`Self::parse`] over a different key rather than a second parser:
+    /// one grammar, whether the declaration arrives at `initialize` or in a
+    /// request's `_meta`. Anything but an object declares nothing.
+    #[must_use]
+    pub fn from_initialize(params: Option<&Value>) -> Self {
+        params
+            .and_then(|p| p.get("capabilities"))
+            .and_then(Value::as_object)
+            .map_or(Self::NONE, Self::parse)
+    }
+
     /// Read a declaration out of a `clientCapabilities` object.
     ///
     /// Only an object-valued key declares. The specification writes a declared

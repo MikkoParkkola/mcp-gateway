@@ -3026,9 +3026,17 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     // to a principal the gateway can name, and an API key name is not one
     // (`principal_fingerprint` reads the OIDC identity alone) -- so `alice`
     // alone would exit on the unnameable-caller refusal (MRTR.2).
+    //
+    // It is on the modern era because since MRTR.7's bridge landed a legacy
+    // caller holding a session is bridged instead of minted, and a bridged
+    // exchange ends this call rather than handing back the handle this test is
+    // named for.
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         input_capabilities: declaring(&json!({"elicitation": {}})),
         verified_identity: Some(&NAMED_CALLER),
+        is_modern: true,
+        protocol_revision: Some("2026-07-28"),
+        era: crate::protocol::meta::Era::Modern,
         ..allow_all_ctx_named(Some("alice"), Some("agent-1"))
     };
     let result = meta
@@ -3484,13 +3492,38 @@ fn allow_all_ctx_declaring(
     }
 }
 
-/// The same caller, unnameable: no API key, no agent, no verified identity.
+/// The same caller on the modern era, which is the only era that still reaches
+/// the continuation mint.
+///
+/// A sibling rather than an `era` parameter on [`allow_all_ctx_declaring`],
+/// and deliberately not an edit to that helper: three MRTR.9 tests pass
+/// `Declared::NONE` through it to prove a *legacy* client is refused what it
+/// never declared. Modern + `NONE` is refused too, so flipping the shared
+/// helper would leave those three green while quietly moving them off the case
+/// they were written for.
+///
+/// `protocol_revision` moves with `era`: a caller claiming the modern era while
+/// naming a 2025 revision is a shape no client can present, and the cache keys
+/// off the revision.
+fn modern_ctx_declaring(
+    declared: crate::protocol::meta::Declared,
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        is_modern: true,
+        protocol_revision: Some("2026-07-28"),
+        era: crate::protocol::meta::Era::Modern,
+        ..allow_all_ctx_declaring(declared)
+    }
+}
+
+/// The same modern caller, unnameable: no API key, no agent, no verified
+/// identity.
 fn anonymous_ctx_declaring(
     declared: crate::protocol::meta::Declared,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
         verified_identity: None,
-        ..allow_all_ctx_declaring(declared)
+        ..modern_ctx_declaring(declared)
     }
 }
 
@@ -3529,6 +3562,165 @@ fn book_flight() -> serde_json::Value {
     json!({ "server": "booking", "tool": "book_flight", "arguments": {} })
 }
 
+/// A backend that answers `tools/call` from a script and keeps every set of
+/// params it was sent.
+///
+/// Separate from [`ToolCallTestTransport`], which answers the same value every
+/// time: a bridged exchange is a sequence — ask, then finish — and a fixture
+/// that cannot stop asking can only ever prove the round bound. The recorded
+/// params are how a row tells a retry from the first dispatch, which is the
+/// half `ToolCallTestTransport` throws away.
+struct ScriptedToolCallTransport {
+    answers: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
+    seen: std::sync::Mutex<Vec<serde_json::Value>>,
+}
+
+impl ScriptedToolCallTransport {
+    fn new(answers: Vec<serde_json::Value>) -> Arc<Self> {
+        Arc::new(Self {
+            answers: std::sync::Mutex::new(answers.into()),
+            seen: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The params of every `tools/call` this backend received, in order.
+    fn dispatches(&self) -> Vec<serde_json::Value> {
+        self.seen.lock().expect("seen").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for ScriptedToolCallTransport {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        assert_eq!(method, "tools/call");
+        self.seen
+            .lock()
+            .expect("seen")
+            .push(params.unwrap_or(serde_json::Value::Null));
+        // A dispatch past the end of the script is the defect a row would
+        // otherwise have to infer from a confusing answer: the exchange ran
+        // longer than the row said it would.
+        let answer = self
+            .answers
+            .lock()
+            .expect("answers")
+            .pop_front()
+            .expect("the backend was dispatched more times than the script allows");
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            answer,
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// Register one scripted `booking` backend, so a row states its script and
+/// nothing else.
+fn booking_answering(
+    answers: Vec<serde_json::Value>,
+) -> (Arc<BackendRegistry>, Arc<ScriptedToolCallTransport>) {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "booking",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let transport = ScriptedToolCallTransport::new(answers);
+    backend.set_transport_for_test(transport.clone() as Arc<dyn crate::transport::Transport>);
+    let _ = registry.register(backend);
+    (registry, transport)
+}
+
+/// The interim result `backend_asking_for_elicitation` returns, as a value a
+/// script can hold.
+fn asking_to_confirm() -> serde_json::Value {
+    json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "confirm": {
+                "method": "elicitation/create",
+                "params": { "message": "Charge the card?" }
+            }
+        },
+        "requestState": "backend-opaque"
+    })
+}
+
+/// One frame a [`RecordingClient`] was asked to put on the client's connection.
+#[derive(Clone, Debug)]
+struct ClientFrame {
+    session: String,
+    method: String,
+    params: Option<serde_json::Value>,
+}
+
+/// A [`crate::gateway::input_bridge::ClientChannel`] that records what it was
+/// asked to send and answers `accept`.
+///
+/// In this module rather than reused from `tests/mik_7212_mrtr7_bridge_acs.rs`:
+/// `MetaMcpCallerContext` is crate-private, so a row that drives `invoke_tool`
+/// with a live channel can only be written on this side of the boundary.
+///
+/// Recording is the point. "The client was asked" is not observable from the
+/// call's return value — a bridged exchange that asked nobody and one that
+/// asked and was answered both return the backend's finished body — so the
+/// frames are the only place the two differ.
+struct RecordingClient {
+    frames: std::sync::Mutex<Vec<ClientFrame>>,
+}
+
+impl RecordingClient {
+    fn new() -> Self {
+        Self {
+            frames: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn frames(&self) -> Vec<ClientFrame> {
+        self.frames.lock().expect("frames").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::ClientChannel for RecordingClient {
+    async fn send_request(
+        &self,
+        session_id: &str,
+        _id: &str,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> std::result::Result<serde_json::Value, crate::gateway::input_bridge::DeliveryError> {
+        self.frames.lock().expect("frames").push(ClientFrame {
+            session: session_id.to_string(),
+            method: method.to_string(),
+            params,
+        });
+        Ok(json!({
+            "jsonrpc": "2.0",
+            "result": {"action": "accept", "content": {"confirmed": "by-the-person"}},
+        }))
+    }
+}
+
 // The other half of the same gate: it must not be a blanket refusal of every
 // interim result. A declared capability passes through.
 //
@@ -3537,6 +3729,12 @@ fn book_flight() -> serde_json::Value {
 // gateway's sealed envelope rather than the backend's own string. Asserting
 // only `resultType` here would have passed unchanged the day minting landed —
 // a case that cannot fail is worse than one that breaks.
+//
+// Modern caller: since MRTR.7's bridge landed, a legacy caller with a session
+// is bridged rather than minted (the question is put to the client inside this
+// call), so the mint this test is about is reachable only on the modern era.
+// The legacy half of that split is
+// `a_legacy_caller_with_no_live_channel_cannot_be_asked` below.
 #[tokio::test]
 async fn a_declared_input_request_passes_the_gateway_gate() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
@@ -3545,7 +3743,7 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
+            &modern_ctx_declaring(declaring(&json!({"elicitation": {}}))),
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3602,6 +3800,10 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
 // guards against — recording the jti at mint time would need `mint_continuation`
 // (`src/gateway/meta_mcp/invoke.rs:372`) to become async, an edit larger than the
 // defect, so the probe stages the effect rather than the cause.
+//
+// Modern caller for the same reason as
+// `a_declared_input_request_passes_the_gateway_gate`: the mint whose ledger
+// this reads is modern-only since MRTR.7's bridge landed.
 #[tokio::test]
 async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
@@ -3610,7 +3812,7 @@ async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
+            &modern_ctx_declaring(declaring(&json!({"elicitation": {}}))),
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3743,6 +3945,12 @@ async fn a_refusals_required_capabilities_survive_the_response_boundary() {
 // other unnameable caller also holds — which is not a binding — so the
 // exchange is refused instead. Without this case the refusal ships unexercised
 // and the choice between refusing and approximating is untested.
+//
+// Modern, because the refusal is a property of the mint: the bridge a legacy
+// caller now takes hands back no envelope, so there is nothing to bind to a
+// principal and nothing to replay. An unnameable *legacy* caller is therefore
+// bridged rather than refused — recorded as an assumption in the MRTR.7 design
+// doc rather than decided here.
 #[tokio::test]
 async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
@@ -3759,6 +3967,145 @@ async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
         err.to_rpc_code(),
         -32003,
         "the refusal must reuse the gateway's existing refusal code"
+    );
+}
+
+// The legacy half of the split the three tests above moved off, kept because
+// the case is reachable in production and nothing else covers it: an HTTP
+// client that declared `elicitation` at `initialize` and whose event stream
+// dropped before the `tools/call`. The gateway's declaration gate passes — the
+// client did declare — and the bridge is entered, so the call can no longer
+// end in a continuation the client could redeem later. It ends in a delivery
+// failure instead, and the distinct wording is the point: a client that was
+// asked and said no gets `BridgeError::Refused`'s sentence, not this one.
+#[tokio::test]
+async fn a_legacy_caller_with_no_live_channel_cannot_be_asked() {
+    let meta = MetaMcp::new(backend_asking_for_elicitation());
+
+    let err = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            // `allow_all_ctx_declaring` is legacy and carries `NoClientChannel`.
+            &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
+        )
+        .await
+        .expect_err("a question that cannot be delivered must fail the call");
+    assert_eq!(err.to_rpc_code(), -32603, "{err:?}");
+    assert!(
+        err.to_string().contains("was not answered"),
+        "the failure must name delivery, not the client's own refusal: {err:?}"
+    );
+}
+
+// MIK-7212.WIRE.2 — a legacy request with a session declaration is bridged.
+//
+// The whole point of MRTR.7: a 2025 client cannot redeem a continuation, so a
+// backend's question either gets put to it inside this one call or the call
+// fails. `input_capabilities` here is the value `router::handlers` merges in
+// from the session's `initialize` for exactly this era, so a wiring that never
+// reads the session store leaves the client unasked and this row red.
+//
+// Three assertions, because each kills a different wiring. The frame proves
+// the client was asked at all; the *retry's* `inputResponses` proves the
+// answer travelled back to the backend rather than being dropped on the floor;
+// the returned body proves the caller is handed the finished result and not
+// the interim it could not have acted on.
+#[tokio::test]
+async fn a_legacy_caller_with_a_session_declaration_is_bridged() {
+    let (registry, backend) = booking_answering(vec![
+        asking_to_confirm(),
+        json!({"content": [{"type": "text", "text": "booked"}], "isError": false}),
+    ]);
+    let meta = MetaMcp::new(registry);
+    let client = RecordingClient::new();
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        channel: &client,
+        ..allow_all_ctx_declaring(declaring(&json!({"elicitation": {}})))
+    };
+
+    let result = meta
+        .invoke_tool(&book_flight(), Some("session-1"), &caller)
+        .await
+        .expect("a bridged exchange that the client answered must complete");
+
+    let frames = client.frames();
+    assert_eq!(frames.len(), 1, "the client must be asked exactly once");
+    assert_eq!(frames[0].method, "elicitation/create");
+    assert_eq!(
+        frames[0].session, "session-1",
+        "the question must go to the session that asked"
+    );
+    assert_eq!(
+        frames[0].params.as_ref().map(|p| &p["message"]),
+        Some(&json!("Charge the card?")),
+        "the backend's own prompt must reach the person, not a gateway \
+         paraphrase: {:?}",
+        frames[0].params
+    );
+
+    let dispatches = backend.dispatches();
+    assert_eq!(
+        dispatches.len(),
+        2,
+        "the answer must be carried back to the backend in a second dispatch"
+    );
+    assert_eq!(
+        dispatches[1]["inputResponses"]["confirm"],
+        json!({"confirmed": "by-the-person"}),
+        "the retry must carry what the client answered, projected out of the \
+         reply envelope: {:#}",
+        dispatches[1]
+    );
+    assert_eq!(
+        dispatches[1]["requestState"], "backend-opaque",
+        "the retry must return the backend's own state to it: {:#}",
+        dispatches[1]
+    );
+
+    assert!(
+        result.get("resultType").is_none(),
+        "the caller must be handed the finished result, not an interim it \
+         cannot redeem: {result:#}"
+    );
+    assert_eq!(result["content"][0]["text"], "booked", "{result:#}");
+}
+
+// MIK-7212.WIRE.3 — a legacy request with no session declaration is refused.
+//
+// The fail-open mutant: an absent declaration read as "ask anyway". The
+// refusal alone is not enough to catch it — a wiring that asks the client
+// first and refuses on the answer also refuses — so this asserts the client
+// was never reached. Same fixture as WIRE.2 down to the live channel; only the
+// declaration differs, which is what makes the silence attributable.
+#[tokio::test]
+async fn a_legacy_caller_with_no_session_declaration_is_refused_unasked() {
+    let (registry, backend) = booking_answering(vec![asking_to_confirm()]);
+    let meta = MetaMcp::new(registry);
+    let client = RecordingClient::new();
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        channel: &client,
+        ..allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE)
+    };
+
+    let err = meta
+        .invoke_tool(&book_flight(), Some("session-1"), &caller)
+        .await
+        .expect_err("an undeclared capability must be refused");
+    assert_eq!(
+        err.to_rpc_code(),
+        -32021,
+        "the refusal must be MRTR.9's, not the bridge's own: {err:?}"
+    );
+    assert!(
+        client.frames().is_empty(),
+        "a refused request must put nothing on the client's connection: {:?}",
+        client.frames()
+    );
+    assert_eq!(
+        backend.dispatches().len(),
+        1,
+        "the refusal belongs after the first dispatch and before any retry"
     );
 }
 
