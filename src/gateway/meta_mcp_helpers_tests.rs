@@ -903,3 +903,34 @@ fn empty_extensions_are_omitted_so_discovery_stays_additive() {
         "capabilities must not carry an extensions key while none is implemented, got: {wire}"
     );
 }
+
+#[test]
+fn ac_ext_1_a_the_builder_serializes_the_map_it_was_given() {
+    // GIVEN: an extension identifier the production source can never emit.
+    // `ExtensionSet::gateway_declares()` returns `vec![Extension::Tasks]`, so a
+    // builder that ignored its argument and read `discovery_extensions()`
+    // directly would still satisfy every assertion phrased against
+    // `io.modelcontextprotocol/tasks`. A probe identifier is what separates
+    // "the parameter is wired" from "the wire value happens to be right".
+    let mut probe = std::collections::HashMap::new();
+    probe.insert("example.test/probe".to_string(), serde_json::json!({}));
+
+    // WHEN: the builder serializes those capabilities.
+    let wire = serde_json::to_value(build_server_capabilities(probe)).unwrap();
+
+    // THEN: the serialized map is exactly the injected one — the literal key is
+    // present and it is the only key. Asserting against `discovery_extensions()`
+    // here would compare the function to itself and pass on any implementation.
+    let extensions = wire
+        .get("extensions")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or_else(|| panic!("capabilities must carry the injected extensions, got: {wire}"));
+
+    assert_eq!(
+        extensions.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["example.test/probe"],
+        "the builder must serialize the map it was given and nothing else; \
+         any other key means the extension source is read from somewhere \
+         other than the parameter"
+    );
+}

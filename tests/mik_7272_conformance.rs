@@ -185,11 +185,29 @@ const MINOR: &[Row] = &[
         // exist, and the assertion below could not tell, because it checks that
         // a string was written and not that the string names a test.
         //
-        // The honest evidence is E1-E5 of
-        // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`.
-        // Naming them before they exist would keep the suite green while
-        // pointing at nothing, which is the same defect with a later date on
-        // it. Cluster B closes this cell when it writes them.
+        // The server half is covered. E1-E3 of
+        // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`
+        // live in `src/gateway/meta_mcp_helpers_tests.rs`, and
+        // `ac_ext_1_a_the_builder_serializes_the_map_it_was_given` is the one
+        // that pins identity: it injects a probe identifier the production
+        // source can never emit, so it is red both when the builder drops its
+        // argument and when the builder ignores the argument and reads
+        // `discovery_extensions()` directly. The other two each survive one of
+        // those two mutations.
+        //
+        // The client half cannot be tested, and the reason is a PRODUCT gap,
+        // not a missing test: `ExtensionSet::from_capabilities`
+        // (`src/protocol/extensions.rs:82`) has no production caller. Nothing
+        // on the `tools/call` path recovers the extensions a client declares in
+        // `_meta`, so E4 and E5 -- which assert the recovered set at the invoke
+        // funnel -- have nothing to assert against. Rewriting them as direct
+        // `from_capabilities` calls would pass while the function stays
+        // unreachable, which is what the plan rules out.
+        //
+        // So the cell stays empty. This statement is `Role::Both`, and citing
+        // E1-E3 here would claim the client half on server-side evidence --
+        // the same defect with a later date on it. It closes when the recovery
+        // is wired, not when more tests are written.
         evidence: &[],
     },
     Row {
@@ -337,7 +355,11 @@ fn all_rows() -> Vec<&'static Row> {
 /// exemption teaches nobody anything.
 const TRACKED_GAPS: &[(&str, &str)] = &[(
     "1. extensions field on client and server capabilities",
-    "Cluster B writes E1-E5 of \
+    "`ExtensionSet::from_capabilities` (src/protocol/extensions.rs:82) has no \
+         production caller, so nothing on the `tools/call` path recovers client \
+         extensions and the client half of this statement cannot be asserted \
+         against production code -- a product gap, not a missing test. The \
+         server half is carried by E1-E3 of \
          docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
 )];
 
