@@ -53,6 +53,14 @@ deletable.
 - Every tip was archived under `refs/archive/by-tip/<sha>` before its branch was
   deleted. The archive does not prove nothing was lost; it makes the deletion
   recoverable either way.
+- Scope limit on that recoverability, recorded because the first version of this
+  document overstated it. Both the containment base and the archive refs are
+  local; at the time of the deletions `chore/v4-reconcile-main` existed on no
+  remote, so for the branches whose only proof was containment the commits were
+  held on one disk. The base has since been pushed
+  (`origin/chore/v4-reconcile-main` = `df3d2af`), so the containment proof now
+  resolves against a ref that survives this machine. The archive refs remain
+  local and are a convenience, not a backup.
 
 ## What remains, and why it is not cleanup debt
 
