@@ -1824,7 +1824,9 @@ async fn differing_per_identity_schemas_do_not_cross_callers() {
         transport.requests.load(Ordering::SeqCst)
     );
     assert!(
-        !backend.get_cached_tool_names().contains(&"alpha_tool".to_string()),
+        !backend
+            .get_cached_tool_names()
+            .contains(&"alpha_tool".to_string()),
         "one identity's catalogue is readable from the shared cache by every caller"
     );
 }
@@ -1858,7 +1860,9 @@ async fn revocation_during_a_fill_is_not_served_afterwards() {
     let _ = filling.await.expect("fill task");
 
     assert!(
-        !backend.get_cached_tool_names().contains(&"revoked_tool".to_string()),
+        !backend
+            .get_cached_tool_names()
+            .contains(&"revoked_tool".to_string()),
         "the revoked identity's catalogue is still served from the cache"
     );
     assert!(
