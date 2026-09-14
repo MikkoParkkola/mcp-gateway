@@ -73,7 +73,15 @@ export const options = {
 };
 
 function headers() {
-  const h = { "Content-Type": "application/json" };
+  // Every request carries the era it was negotiated for, not just
+  // initialize(). Without this, a legacy-shaped request has no
+  // `MCP-Protocol-Version` and no bound session revision, so
+  // `cache_protocol_revision` (src/protocol/meta.rs) fails closed and skips
+  // the cache on 4.0.0 -- while 3.5.0/3.5.1 cache the same headerless
+  // request unconditionally. That divergence, not gateway performance, is
+  // what a prior rehearsal measured. Sending the header on every call puts
+  // all cells on the same cache terms.
+  const h = { "Content-Type": "application/json", "MCP-Protocol-Version": PROTOCOL_VERSION };
   if (API_KEY) h["Authorization"] = `Bearer ${API_KEY}`;
   return h;
 }
