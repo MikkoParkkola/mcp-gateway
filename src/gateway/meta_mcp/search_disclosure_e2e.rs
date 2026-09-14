@@ -954,3 +954,117 @@ async fn mik_7332_discovery_1_routing_guide_agrees_with_served_list() {
         .expect("a withheld tool must refuse even though the guide names it");
     assert_eq!(err.code, -32601, "{}", err.message);
 }
+
+/// A capability YAML naming one REST provider, with the given input schema.
+fn capability_yaml(name: &str, input_type: &str) -> String {
+    format!(
+        "name: {name}\n\
+         description: A surfaced capability used to prove per-tool degradation.\n\
+         schema:\n  \
+           input:\n    \
+             type: {input_type}\n    \
+             properties:\n      \
+               q:\n        \
+                 type: string\n\
+         providers:\n  \
+           primary:\n    \
+             service: rest\n    \
+             config:\n      \
+               base_url: https://rest.invalid\n      \
+               path: /{name}\n"
+    )
+}
+
+/// Acceptance clause D (invalid schema withheld, healthy tools remain). A
+/// capability whose `schema.input.type` is not `object` fails structural
+/// validation with a CAP-003 error, and the loader skips that definition alone
+/// (`capability/loader.rs:146`). This asserts the degradation is per-tool: the
+/// broken tool is absent from the capability backend, absent from the served
+/// `tools/list`, and refuses invocation, while its schema-valid sibling on the
+/// same backend stays listed and routable. The sibling's execution stops at
+/// routing — running it would issue the REST call its provider declares.
+#[tokio::test]
+async fn mik_7332_discovery_1_invalid_schema_tool_withheld_backend_survives() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    std::fs::write(
+        dir.path().join("healthy.yaml"),
+        capability_yaml("healthy_cap", "object"),
+    )
+    .expect("write healthy capability");
+    std::fs::write(
+        dir.path().join("broken.yaml"),
+        capability_yaml("broken_cap", "string"),
+    )
+    .expect("write broken capability");
+
+    let capabilities = Arc::new(crate::capability::CapabilityBackend::new(
+        "caps",
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    let loaded = capabilities
+        .load_from_directory(dir.path().to_str().expect("utf-8 path"))
+        .await
+        .expect("a backend with one invalid definition must still load");
+    assert_eq!(
+        loaded, 1,
+        "only the schema-valid capability may load; the backend must not be dropped whole"
+    );
+    assert!(capabilities.has_capability("healthy_cap"));
+    assert!(
+        !capabilities.has_capability("broken_cap"),
+        "the invalid-schema capability must be withheld"
+    );
+
+    // Control: the same definition, with only `schema.input.type` corrected,
+    // loads. Without it this test would pass for any load failure at all.
+    let control_dir = tempfile::TempDir::new().expect("temp dir");
+    std::fs::write(
+        control_dir.path().join("broken.yaml"),
+        capability_yaml("broken_cap", "object"),
+    )
+    .expect("write control capability");
+    let control = Arc::new(crate::capability::CapabilityBackend::new(
+        "caps",
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    assert_eq!(
+        control
+            .load_from_directory(control_dir.path().to_str().expect("utf-8 path"))
+            .await
+            .expect("the control definition must load"),
+        1,
+        "only the input schema may decide whether this definition loads"
+    );
+
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_surfaced_tools(vec![
+            SurfacedToolConfig {
+                server: "caps".to_string(),
+                tool: "healthy_cap".to_string(),
+            },
+            SurfacedToolConfig {
+                server: "caps".to_string(),
+                tool: "broken_cap".to_string(),
+            },
+        ])
+        .with_exposed_meta_tools(&["gateway_invoke".to_string()]);
+    meta.set_capabilities(Arc::clone(&capabilities));
+
+    let listed = listed_names(&meta.handle_tools_list_for_session(RequestId::Number(1), None));
+    assert!(
+        listed.contains(&"healthy_cap".to_string()),
+        "the healthy tool of the same backend must remain listed: {listed:?}"
+    );
+    assert!(
+        !listed.contains(&"broken_cap".to_string()),
+        "the invalid-schema tool must not be disclosed: {listed:?}"
+    );
+
+    assert!(
+        capabilities
+            .call_tool("broken_cap", json!({"q": "x"}))
+            .await
+            .is_err(),
+        "the withheld tool must not be invocable either"
+    );
+}
