@@ -14,7 +14,7 @@
 # touches the operator's real ~/.mcp-gateway. The five properties and why
 # they are the right ones: docs/requirements/RELEASE-4.0.0-scope-tests.md
 # (NFR.UPGRADE.1 row) and docs/requirements/RELEASE-4.0.0-scope-update.md.
-# Results are graded in scripts/release/nfr_upgrade_1_results.md.
+# Results are graded in docs/release/nfr-upgrade-1-rehearsal-results.md.
 # Deliberately no `-e`: this script records PASS/FAIL per conjunct rather
 # than aborting on the first non-zero exit (a refused-request curl or a
 # refused-protocol-version response is an expected outcome in some phases,
@@ -296,13 +296,24 @@ PY
 start_gateway "$BIN_400" "phase3-400-modern-off"
 INIT_OFF="$(rpc_modern "initialize")"
 echo "$INIT_OFF" > "$LOG_DIR/phase3-initialize-modern-off.json"
-if echo "$INIT_OFF" | python3 -c 'import json,sys; d=json.load(sys.stdin); exit(0 if "error" in d else 1)'; then
-  record "PHASE3.MODERN_OFF_INITIALIZE_REFUSED" "PASS" "2026-07-28 initialize refused once server.modern_protocol: false"
+# Assert the specific era-refusal code (-32022, unsupported protocol version),
+# not just "error" in d -- a well-formed request refused for the wrong reason
+# (e.g. -32602 malformed-metadata) would satisfy the weaker check without
+# proving server.modern_protocol: false is what caused the refusal.
+if echo "$INIT_OFF" | python3 -c 'import json,sys; d=json.load(sys.stdin); exit(0 if d.get("error",{}).get("code") == -32022 else 1)'; then
+  record "PHASE3.MODERN_OFF_INITIALIZE_REFUSED" "PASS" "2026-07-28 initialize refused with -32022 (unsupported protocol version) once server.modern_protocol: false"
 else
-  record "PHASE3.MODERN_OFF_INITIALIZE_REFUSED" "FAIL" "2026-07-28 initialize still succeeded with modern_protocol: false: $INIT_OFF"
+  record "PHASE3.MODERN_OFF_INITIALIZE_REFUSED" "FAIL" "2026-07-28 initialize did not get the expected -32022 era-refusal with modern_protocol: false: $INIT_OFF"
 fi
 
-DISCOVER_OFF="$(rpc_modern "server/discover")"
+# Legacy (2025-06-18) shape deliberately, not rpc_modern: a modern-shaped
+# request never reaches server/discover's handler when modern_protocol is
+# off (the era gate refuses it before dispatch -- see
+# PHASE3.MODERN_OFF_INITIALIZE_REFUSED above, which already covers that
+# path). This call is the one that actually exercises
+# discover_document(modern_enabled=false) and proves *that* function hides
+# 2026-07-28, which is what this check is named for.
+DISCOVER_OFF="$(MCP_PROTOCOL_VERSION="2025-06-18" rpc "server/discover" '{}')"
 echo "$DISCOVER_OFF" > "$LOG_DIR/phase3-discover-modern-off.json"
 if echo "$DISCOVER_OFF" | python3 -c '
 import json, sys
