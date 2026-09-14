@@ -73,10 +73,10 @@ async fn alice_and_bob_dispatch_only_their_own_token_on_one_descriptor() {
         &slots(&[("alice", WORK), ("bob", WORK)]),
     );
 
-    execute(&meta, "mail", Some(&identity("alice")))
+    Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
         .await
         .expect("alice's connected account must dispatch");
-    execute(&meta, "mail", Some(&identity("bob")))
+    Box::pin(execute(&meta, "mail", Some(&identity("bob"))))
         .await
         .expect("bob's connected account must dispatch");
 
@@ -155,10 +155,10 @@ async fn one_provider_two_descriptor_ids_stay_separate_accounts() {
     );
 
     let caller = identity("alice");
-    execute(&meta, "work-mail", Some(&caller))
+    Box::pin(execute(&meta, "work-mail", Some(&caller)))
         .await
         .expect("the work account must dispatch");
-    execute(&meta, "personal-mail", Some(&caller))
+    Box::pin(execute(&meta, "personal-mail", Some(&caller)))
         .await
         .expect("the personal account must dispatch");
 
@@ -197,7 +197,7 @@ async fn missing_verified_principal_refuses_with_zero_backend_calls() {
         &slots(&[("alice", WORK)]),
     );
 
-    let error = execute(&meta, "mail", None)
+    let error = Box::pin(execute(&meta, "mail", None))
         .await
         .expect_err("a managed account without a verified principal must fail closed");
 
@@ -254,7 +254,7 @@ async fn registered_managed_backend_without_installed_strategy_refuses_with_zero
         &slots(&[("alice", WORK)]),
     );
 
-    let error = execute(&meta, "mail", Some(&identity("alice")))
+    let error = Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
         .await
         .expect_err("a managed backend with no installed strategy must fail closed at dispatch");
 
@@ -303,7 +303,9 @@ async fn revocation_between_lease_and_release_refuses_at_the_recheck() {
         let meta = Arc::clone(&meta);
         async move {
             let caller = identity("alice");
-            execute(&meta, "mail", Some(&caller)).await.map(|_| ())
+            Box::pin(execute(&meta, "mail", Some(&caller)))
+                .await
+                .map(|_| ())
         }
     });
 
@@ -368,7 +370,7 @@ async fn expired_grant_is_refreshed_through_real_custody_before_dispatch() {
         &slots(&[("alice", WORK)]),
     );
 
-    execute(&meta, "mail", Some(&identity("alice")))
+    Box::pin(execute(&meta, "mail", Some(&identity("alice"))))
         .await
         .expect("an expired grant must be refreshed, not refused");
 
@@ -411,10 +413,10 @@ async fn mixed_external_and_managed_backends_select_their_own_strategy() {
     );
 
     let caller = identity("alice");
-    execute(&meta, "partner", Some(&caller))
+    Box::pin(execute(&meta, "partner", Some(&caller)))
         .await
         .expect("the external backend must still mint its assertion");
-    execute(&meta, "mail", Some(&caller))
+    Box::pin(execute(&meta, "mail", Some(&caller)))
         .await
         .expect("the managed backend must serve its custody credential");
 

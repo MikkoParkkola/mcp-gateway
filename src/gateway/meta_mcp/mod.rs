@@ -1951,11 +1951,13 @@ impl MetaMcp {
         confirmed_in_band: bool,
     ) -> JsonRpcResponse {
         self.dispatch_below_gate_shaped(
-            id,
-            tool_name,
-            arguments,
-            session_id,
-            caller,
+            DispatchTarget {
+                id,
+                tool_name,
+                arguments,
+                session_id,
+                caller,
+            },
             ResultShape::Wrapped,
             confirmed_in_band,
         )
@@ -1988,11 +1990,13 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
         self.dispatch_below_gate_shaped(
-            id,
-            tool_name,
-            arguments,
-            session_id,
-            caller,
+            DispatchTarget {
+                id,
+                tool_name,
+                arguments,
+                session_id,
+                caller,
+            },
             ResultShape::Native,
             // A task worker dispatches what was admitted on the request
             // thread; the confirmation, if there was one, was spent there and
@@ -2004,14 +2008,17 @@ impl MetaMcp {
 
     async fn dispatch_below_gate_shaped(
         &self,
-        id: RequestId,
-        tool_name: &str,
-        arguments: Value,
-        session_id: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
+        target: DispatchTarget<'_>,
         shape: ResultShape,
         confirmed_in_band: bool,
     ) -> JsonRpcResponse {
+        let DispatchTarget {
+            id,
+            tool_name,
+            arguments,
+            session_id,
+            caller,
+        } = target;
         // T2.4: a call naming a backend tool directly — because an operator
         // surfaced it, or because it is a retry of an exchange this gateway
         // opened — is routed BEFORE the meta-tool match.
@@ -2111,6 +2118,16 @@ impl MetaMcp {
             Err(e) => error_response_preserving_status(id, &e),
         }
     }
+}
+
+/// The request `dispatch_below_gate_shaped` routes, common to both entry
+/// points above it.
+struct DispatchTarget<'a> {
+    id: RequestId,
+    tool_name: &'a str,
+    arguments: Value,
+    session_id: Option<&'a str>,
+    caller: &'a MetaMcpCallerContext<'a>,
 }
 
 /// How a dispatch's own result is presented, and the only thing the two
