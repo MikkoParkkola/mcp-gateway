@@ -40,6 +40,10 @@ hint="script exception"
 `2026-09-14-modernfix-smoke` and `-smoke-e`. E uses the mixed config, D the
 shared one; same error, same code.)
 
+The same refusal then recurred in the gating measure run at 16:47:14Z, on D1
+— see **Verdict** below. The finding rests on that occurrence, not on the
+smokes; the smokes only showed it first.
+
 ## The refusal is by design, and the enumeration is closed
 
 `MetaMcp::admit_operation`, `src/gateway/meta_mcp/admission.rs:134-166`:
@@ -159,7 +163,14 @@ http_req_failed................: 33.33% 1 out of 3
 
 `http_error_rate` is `{"passes": 1, "fails": 2, "value": 0.3333333333333333}`
 — `initialize` and `tools/list` returned 200, the pinned `tools/call` did not.
-That single non-200 is the `-32602` quoted above. No measured iteration ever
+That single non-200 is the `-32602` quoted above: the refusal is raised as
+`Error::json_rpc(-32602, ...)` (`admission.rs:155-157`), which is neither
+`Error::Forbidden` nor rpc code 409, so the handler's match falls to
+`_ => StatusCode::BAD_REQUEST` (`handlers.rs:1582-1588`) and the response is
+HTTP 400. `setup()` also proves the ordering independently: it throws on a
+missing `result` for `initialize` and for `tools/list` before it ever issues
+the probe (`k6_workload.js:182-196`), and the throw came from the probe check
+at `:204`. No measured iteration ever
 ran, so D1 carries no `semantic_assertion_rate` at all: the cell's latency and
 semantic properties are not weaker than A/B/C here, they are absent.
 
