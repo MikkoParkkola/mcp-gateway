@@ -78,6 +78,7 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
         request,
         SESSION,
         None,
+        &crate::gateway::input_bridge::NoClientChannel,
     )
     .await
     .expect("a request carrying an id must produce a response")

@@ -2370,7 +2370,9 @@ impl Gateway {
         // dispatch needs `'static`, and the caller context holds `&dyn
         // ClientChannel`, so each task clones the `Arc` and takes the borrow
         // inside itself.
-        let channel = Arc::new(stdio_channel::StdioClientChannel::new(writer.clone()));
+        // The raw sender, not the `StdioWriter` wrapper: the channel queues
+        // whole frames on the same task and needs no other method of it.
+        let channel = Arc::new(stdio_channel::StdioClientChannel::new(writer.0.clone()));
         // Dispatches live here instead of on the reader, so a slow backend call
         // stops holding up the next line of stdin. Drained at EOF: dropping the
         // set would abort a dispatch that still owes the client a response.
@@ -4058,6 +4060,7 @@ mod tests {
             }),
             "stdio-durable-window-test",
             sink.as_mut(),
+            &crate::gateway::input_bridge::NoClientChannel,
         )
         .await
         .expect("initialize returns a response");
