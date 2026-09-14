@@ -72,16 +72,25 @@ export const options = {
   summaryTrendStats: ["avg", "min", "med", "p(50)", "p(90)", "p(95)", "p(99)", "max"],
 };
 
+// A legacy-shaped request (A/B/C) with no `MCP-Protocol-Version` header and
+// no bound session revision makes `cache_protocol_revision`
+// (src/protocol/meta.rs) fail closed and skip the cache on 4.0.0, while
+// 3.5.0/3.5.1 cache that same headerless shape unconditionally. That
+// divergence, not gateway performance, is what a prior rehearsal measured.
+// Sending the header on every legacy call puts all three gating cells on the
+// same cache terms.
+//
+// D/E run the modern era (2026-07-28) instead. A header naming that era
+// flips `classify_request`'s shape decision to Modern, which then requires
+// `_meta.protocolVersion`/`_meta.clientCapabilities` on the request body --
+// fields this script's bodies never carry. Sending the header there voids
+// initialize() outright (-32602, missing required request metadata), so it
+// is scoped to the legacy cells only.
+const IS_LEGACY_ERA = !PROTOCOL_VERSION.startsWith("2026-");
+
 function headers() {
-  // Every request carries the era it was negotiated for, not just
-  // initialize(). Without this, a legacy-shaped request has no
-  // `MCP-Protocol-Version` and no bound session revision, so
-  // `cache_protocol_revision` (src/protocol/meta.rs) fails closed and skips
-  // the cache on 4.0.0 -- while 3.5.0/3.5.1 cache the same headerless
-  // request unconditionally. That divergence, not gateway performance, is
-  // what a prior rehearsal measured. Sending the header on every call puts
-  // all cells on the same cache terms.
-  const h = { "Content-Type": "application/json", "MCP-Protocol-Version": PROTOCOL_VERSION };
+  const h = { "Content-Type": "application/json" };
+  if (IS_LEGACY_ERA) h["MCP-Protocol-Version"] = PROTOCOL_VERSION;
   if (API_KEY) h["Authorization"] = `Bearer ${API_KEY}`;
   return h;
 }
