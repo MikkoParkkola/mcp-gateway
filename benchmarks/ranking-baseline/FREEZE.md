@@ -86,8 +86,8 @@ per-case output is in `benchmarks/ranking-baseline/results.json`.
 
 | metric | value |
 |---|---|
-| top1_hit_rate (overall) | 0.737 (84/114) |
-| top3_hit_rate (overall) | 0.860 (98/114) |
+| top1_hit_rate (overall) | 84/114 = 0.736842 |
+| top3_hit_rate (overall) | 98/114 = 0.859649 |
 | top5_hit_rate (overall) | 0.904 (103/114) |
 | mean reciprocal rank (overall) | 0.807 |
 
@@ -151,19 +151,25 @@ ordering clause. Two tiers: **floor** (fuzzy ranking must not regress
 below current baseline) and **target** (what fuzzy ranking is supposed to
 buy, informed by which categories are weakest today).
 
-| metric | floor (= measured baseline) | target |
+Comparison rounding: a floor is written to 3 decimals **truncated toward
+zero** from the exact measured fraction (never rounded to nearest), so the
+frozen baseline itself always clears its own floor. Compare candidate
+values to the exact fraction, not the truncated display value, when in doubt.
+
+| metric | floor (= measured baseline, truncated down) | target |
 |---|---|---|
-| overall top1_hit_rate | >= 0.737 | >= 0.85 |
-| overall top3_hit_rate | >= 0.860 | >= 0.95 |
-| overall mean reciprocal rank | >= 0.807 | >= 0.90 |
-| `typo` category top1_hit_rate | >= 0.333 | >= 0.70 (this is what edit-distance tolerance is *for*) |
-| `tag_query` category top1_hit_rate | >= 0.600 | >= 0.75 |
+| overall top1_hit_rate | >= 84/114 (0.736) | >= 0.85 |
+| overall top3_hit_rate | >= 98/114 (0.859) | >= 0.95 |
+| overall mean reciprocal rank | >= 0.807 (0.8071325...) | >= 0.90 |
+| `typo` category top1_hit_rate | >= 4/12 (0.333) | >= 0.70 (this is what edit-distance tolerance is *for*) |
+| `tag_query` category top1_hit_rate | >= 12/20 (0.600) | >= 0.75 |
 | discovery turns | not set -- baseline not measured (see section 3) | to be set once a live-agent baseline run exists, before `RANKING.1` lands |
 | invalid invocations | not set -- baseline not measured (see section 3) | to be set once a live-agent baseline run exists, before `RANKING.1` lands |
 | total completed-task tokens | not set -- baseline not measured (see section 3) | to be set once a live-agent baseline run exists, before `RANKING.1` lands |
 
-The floor values are the measured baseline verbatim -- clearing them is a
-non-regression bar, not an aspiration. Target values are judgment calls
+The floor values are the measured baseline (truncated toward zero per the
+rounding convention above, so the baseline always clears its own floor) --
+clearing them is a non-regression bar, not an aspiration. Target values are judgment calls
 informed by the baseline's weakest categories (stated as such, not
 measured); they are for the `RANKING.1` implementer to hit, not this
 ticket's deliverable.
