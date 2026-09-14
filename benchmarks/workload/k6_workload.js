@@ -77,20 +77,39 @@ export const options = {
 // (src/protocol/meta.rs) fail closed and skip the cache on 4.0.0, while
 // 3.5.0/3.5.1 cache that same headerless shape unconditionally. That
 // divergence, not gateway performance, is what a prior rehearsal measured.
-// Sending the header on every legacy call puts all three gating cells on the
+// Sending the header on every call puts all three gating cells on the
 // same cache terms.
 //
-// D/E run the modern era (2026-07-28) instead. A header naming that era
-// flips `classify_request`'s shape decision to Modern, which then requires
-// `_meta.protocolVersion`/`_meta.clientCapabilities` on the request body --
-// fields this script's bodies never carry. Sending the header there voids
-// initialize() outright (-32602, missing required request metadata), so it
-// is scoped to the legacy cells only.
-const IS_LEGACY_ERA = !PROTOCOL_VERSION.startsWith("2026-");
+// D/E run the modern era (2026-07-28), where the same header is only one
+// quarter of a well-formed request. `classify_request`
+// (src/protocol/meta.rs:150-217) reads a 2026 revision as an era declaration
+// and then holds the request to everything that declaration implies:
+// `params._meta` carrying `io.modelcontextprotocol/protocolVersion` and
+// `io.modelcontextprotocol/clientCapabilities`, plus the mirrored
+// `Mcp-Method` header and, on `tools/call`, `Mcp-Name`
+// (src/protocol/headers.rs:176-236). Header alone is malformed, not modern:
+// a prior rehearsal measured exactly that (-32602, missing required request
+// metadata). All four parts are sent below.
+//
+// The modern block stays scoped to the modern era. A `_meta` declaration
+// naming a legacy revision also classifies Modern and is then refused as a
+// version the gateway will not serve statelessly
+// (src/gateway/router/handlers.rs:838-851), and 3.5.0/3.5.1 have no `_meta`
+// handling at all.
+const IS_MODERN_ERA = PROTOCOL_VERSION.startsWith("2026-");
 
-function headers() {
-  const h = { "Content-Type": "application/json" };
-  if (IS_LEGACY_ERA) h["MCP-Protocol-Version"] = PROTOCOL_VERSION;
+// `Mcp-Name` mirrors `params.name` -- the meta-surface tool the request
+// executes (`gateway_invoke`), never the pinned backend tool nested inside
+// `arguments` (`mcp_name_body_field`, src/protocol/headers.rs:63-70).
+function headers(method, name) {
+  const h = {
+    "Content-Type": "application/json",
+    "MCP-Protocol-Version": PROTOCOL_VERSION,
+  };
+  if (IS_MODERN_ERA) {
+    h["Mcp-Method"] = method;
+    if (name) h["Mcp-Name"] = name;
+  }
   if (API_KEY) h["Authorization"] = `Bearer ${API_KEY}`;
   return h;
 }
@@ -102,13 +121,26 @@ let rpcSeq = 0;
 
 function rpc(method, params, trend) {
   rpcSeq += 1;
+  // `_meta` belongs to `params`, not to the JSON-RPC envelope -- that is where
+  // the gateway reads it (src/protocol/meta.rs:150-217). `{}` is the spec's
+  // own "no client options" form for clientCapabilities.
+  const sent = IS_MODERN_ERA
+    ? Object.assign({}, params, {
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      })
+    : params;
   const body = JSON.stringify({
     jsonrpc: "2.0",
     id: `${rpcSeq}-${method}`,
     method,
-    params,
+    params: sent,
   });
-  const res = http.post(`${BASE_URL}/mcp`, body, { headers: headers() });
+  const res = http.post(`${BASE_URL}/mcp`, body, {
+    headers: headers(method, params && params.name),
+  });
   if (trend) trend.add(res.timings.duration);
   httpErrors.add(res.status !== 200);
   try {
