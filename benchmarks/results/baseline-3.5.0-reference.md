@@ -1,12 +1,15 @@
 # 3.5.0 workload reference figure — reference, not gating
 
-> **Caveat added 2026-09-14 after review.** These figures may not measure what
-> they appear to. The workload sends one constant argument, which the gateway can
-> answer from its response cache: a 300-call probe on the pinned config produced
-> 1 backend invocation and 299 cache hits. The cache-hit fraction inside the
-> measured reps was not captured, so an undetermined part of this distribution may
-> be cache-hit service time rather than gateway→backend work. Do not promote this
-> figure to a gating baseline until that is resolved.
+> **Caveat added 2026-09-14 after review, and hardened the same day after
+> measurement.** These figures do not measure what they appear to. They are
+> cache-hit service time. The workload sends one constant argument, and the
+> 3.5.0 binary answers it from the response cache under the header shape k6
+> sends: 319 of 320 calls served from cache, **1** backend invocation, measured
+> on the arm-A binary with the runner's own pinned config and offered rate. The
+> same probe on 4.0.0 with those headers caches nothing. This is no longer an
+> undetermined fraction and no longer a caveat attached to an otherwise usable
+> number — it is a reason the figure cannot be promoted to a gating baseline at
+> all, and a reason it cannot be compared against a 4.0.0 run.
 > See `rehearsal-2026-09-14/06-finding-response-cache.md`.
 
 **This is not a gating baseline.** §4 of the workload contract admits a gating

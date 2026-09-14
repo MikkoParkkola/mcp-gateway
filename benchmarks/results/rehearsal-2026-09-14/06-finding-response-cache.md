@@ -1,81 +1,103 @@
-# Finding — the workload's calls are cacheable, so the latency figures may not measure the backend
+# Finding — the response cache is active on 3.5.0/3.5.1 and inactive on 4.0.0 under the harness's own headers
 
-This one is the harness's own defect, not the product's. It was found while
-testing the breaker hypothesis (`03-finding-breaker.md`) and it is the more
-consequential of the two, because it undermines the numbers rather than their
-interpretation.
+> **Revised 2026-09-14 after measurement.** The first revision of this file put
+> the cache doubt on the 4.0.0 cells (C/D/E) on the strength of a probe run with
+> a full MCP header set. Running the same probe with the header shape k6 actually
+> sends inverts the result. The doubt belongs on cells A and B. The revised
+> claim is measured on all three arm binaries, not inferred.
 
 ## What was measured
 
-Arm-C binary, pinned `gateway.workload.yaml`, a single client issuing 300
-`gateway_invoke` calls with the workload's own pinned argument
-(`{"case_reference": "042"}` — the constant the k6 script sends), at ~1430
-calls/s. Afterwards, `gateway_get_stats`:
+Each arm's own release binary, the pinned `gateway.workload.yaml`, one client,
+320 `gateway_invoke` calls with the workload's pinned argument
+(`{"case_reference": "042"}`) paced at 160 calls/s — the harness's own offered
+rate. Each shape ran in a fresh process. `gateway_get_stats` afterwards:
+
+| arm | version | headers | served | rejected | cache_hits | backend invocations |
+|---|---|---|---|---|---|---|
+| A | 3.5.0 | k6's (`Content-Type` only) | 320 | 0 | 319 | **1** |
+| A | 3.5.0 | full (`Accept` + `MCP-Protocol-Version`) | 320 | 0 | 319 | **1** |
+| B | 3.5.1 | k6's | 320 | 0 | 319 | **1** |
+| B | 3.5.1 | full | 320 | 0 | 319 | **1** |
+| C | 4.0.0 | k6's | 249 | 71 | **0** | **320** |
+| C | 4.0.0 | full | 320 | 0 | 319 | **1** |
+
+Two independent facts fall out, and they are separable because the matrix is
+crossed rather than paired.
+
+**1. The header that decides is `MCP-Protocol-Version`, not `Accept`.** A
+four-way isolation on the 4.0.0 binary, fresh process per shape:
 
 ```
-"invocations":  1,
-"cache_hits":   299,
-"top_tools":  [{ "server": "workload", "tool": "workload_probe", "count": 1 }]
+both_hdrs    (Accept + MCP-Protocol-Version)  cache_hits=319  invocations=1
+proto_only   (MCP-Protocol-Version)           cache_hits=319  invocations=1
+accept_only  (Accept)                         cache_hits=0    invocations=320
+k6_neither   (neither)                        cache_hits=0    invocations=320
 ```
 
-**300 calls, one backend invocation.** The gateway answered 299 of them from its
-response cache without touching the backend process.
+Caching follows the protocol-version header exactly. `Accept` makes no
+difference in either direction.
 
-## Why this matters for NFR.WORKLOAD.1
+**2. The arms differ.** 3.5.0 and 3.5.1 serve from cache whether or not the
+header is present. 4.0.0 serves from cache only when it is present. k6 never
+sends it.
 
-`benchmarks/workload/workload.js` sends one constant argument for every
-iteration of every VU:
+## What this does to the numbers
 
-```js
-arguments: { case_reference: "042" }
-```
+The cache contaminates **A and B**, not C/D/E. Per measured rep, cells A and B
+recorded ~8156 passing semantic assertions off approximately **one** backend
+invocation; cells C, D and E hit the backend on every call.
 
-Identical arguments are exactly the condition that makes a response cacheable.
-So an unmeasured fraction of the 8145 calls per measured rep may never have
-reached the backend, and `mcp_tools_call_latency` may be measuring cache-hit
-service time rather than gateway→backend→gateway work. A p50 of 0.38 ms is
-consistent with that reading.
+That reverses three things written elsewhere in this directory:
 
-This is not a small caveat. It bears directly on the contract's own conjuncts:
+- The A/B-versus-C/D/E comparison is **void by construction**. The two sides did
+  not run the same experiment: one measured the gateway's cached-response path,
+  the other measured gateway→backend→gateway work. No conclusion about 4.0.0
+  versus 3.5.x survives this, in either direction. Corrected in
+  `03-finding-breaker.md`.
+- The **§4 reference figure** (`baseline-3.5.0-reference.md`, p50 0.38 ms) is
+  cache-hit service time. This is now proven on the arm-A binary under
+  runner-identical config, not suspected. It is a reason the figure cannot be
+  promoted at all, not a caveat attached to it.
+- **C1** ("deterministic real backend, successful semantic results") is in
+  doubt at **3.5.0 and 3.5.1**, where it is satisfied in form only. C/D/E are
+  the arms that demonstrably exercised the backend.
 
-- **C1** ("deterministic real backend, successful semantic results") is weakened.
-  The semantic assertion still passes on a cached response, so a run can satisfy
-  C1 while barely exercising the backend.
-- **C4** (P50/P99 budgets) was already `NOT EVALUABLE` for a different reason.
-  This gives a second, independent reason: a latency budget over a cache hit is
-  not a latency budget over the work the requirement is about.
-- The **§4 reference figure** in `benchmarks/results/baseline-3.5.0-reference.md`
-  inherits the same doubt. It remains labelled *reference, not gating*; this
-  finding is a further reason not to promote it.
+## Why C's rejections follow from this
 
-It is also a live confound for the A/B-versus-C/D/E difference in
-`03-finding-breaker.md`: if cache behaviour differs across the three versions,
-the served/rejected split could follow from that rather than from any change in
-gating.
+Once 4.0.0 stops serving these calls from cache, every call reaches the backend
+path and meets the shipped default rate limit (100 rps, burst 50) that the
+pinned config never overrides. The 320-call probe above is a second, independent
+fit of that model at a different rate from the rep fit in
+`03-finding-breaker.md`: 320 offered at a constant 160/s over 2.00 s predicts
+`50 + 100 × 2.00 = 250` served and 70 rejected; observed 249 and 71.
 
 ## What is *not* claimed
 
-The cache-hit fraction during the actual k6 reps was not measured —
-`gateway_get_stats` was not captured per rep, and the run is finished. The
-300-call probe proves the mechanism is active on this binary with this config and
-this argument; it does not quantify what happened inside the measured reps. That
-measurement is the first thing a next rehearsal should capture.
-
-Varying the argument is not an available workaround: the fixture pins arguments
-and answers anything else with
-`JSON-RPC error -32602: arguments did not match the pin` (confirmed by probe).
-So this cannot be fixed by making each call distinct without also changing the
-fixture's pin — i.e. it is a contract-level change, not a script tweak.
+- **Which code change** between 3.5.1 and 4.0.0 made the cached path conditional
+  on the header. Not investigated.
+- **Which behaviour is correct** — 3.5.x caching a request that declares no
+  protocol revision, or 4.0.0 declining to. That is a release-owner call, and it
+  is the question this finding routes.
 
 ## Consequence
 
-A scored run should not be taken from this workload until the contract says
-explicitly which of these it wants:
+A scored run cannot be taken from this workload until the contract says which
+path it means to measure, and the pinned artifacts make all arms take the same
+one. Note that raising `requests_per_second` in the pinned config would remove
+the rejections and **still leave the comparison void**, because A/B would go on
+answering from cache while C/D/E did backend work. The change that matters is
+eliminating the cache divergence — cache disabled in every arm, or client
+headers that cache in every arm. Either is a §5 ratification, not a harness
+decision. Recorded here; not acted on.
 
-1. the gateway's cached-response path (then say so, and the current script is
-   right), or
-2. gateway→backend round-trip work (then the cache must be disabled in the
-   pinned config, or the fixture's argument pin widened so calls are distinct).
+## Recorded, not chased
 
-Either way the pinned config and/or the pinned k6 script change, which is a §5
-ratification, not a harness decision. Recorded here; not acted on.
+During the full-header phase the gateway answered with `Capability
+'workload_probe' ... temporarily disabled due to a high error rate`, blocking
+even the cached path. The gateway's own denials appear to feed an error-rate
+quarantine against a backend that never failed — which sharpens the
+observability defect already routed in `03-finding-breaker.md`. It did not fire
+during the measured reps (`http_error_rate` 0, every semantic failure was
+`Circuit breaker open`), so it does not touch the grading. The accounting path
+was not established.

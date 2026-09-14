@@ -1,10 +1,14 @@
-# Finding — 4.0.0 rejects one call in three; the cause is *not* established as a breaker trip
+# Finding — 4.0.0 rejects one call in three; the cause is the shipped default rate limit, not a breaker trip
 
-> **Corrected 2026-09-14 after review.** An earlier revision of this file
+> **Corrected twice on 2026-09-14.** An earlier revision of this file
 > reported the rejections as a silent circuit-breaker trip and routed them to the
 > release owner as a confirmed product defect. That conclusion was not supported
 > by the evidence and is withdrawn here. What replaces it is narrower, and one
-> part of it lands on the harness rather than the product.
+> part of it lands on the harness rather than the product. A second pass then
+> withdrew the token-bucket arithmetic that revision used — it was circular — and
+> replaced it with a model tested at two offered rates; and it closed the open
+> question about cells A and B, at the cost of the cross-version comparison.
+> See `06-finding-response-cache.md`.
 
 ## What is observed (unchanged)
 
@@ -59,7 +63,7 @@ strong but not conclusive.
 
 | Condition | Offered rate | Result |
 |---|---|---|
-| k6 measure rep, cell C | ~150 calls/s (8145 calls / ~54 s) | ~1/3 rejected |
+| k6 measure rep, cell C | ~136 calls/s mean (8135 calls / 60.02 s), ramping | ~1/3 rejected |
 | "serial" 300-call probe | ~200 calls/s | 117/300 rejected |
 | paced probe, 200 calls @ 50 ms | 20 calls/s | **200/200 served** |
 
@@ -72,19 +76,44 @@ would hit it". The measurement says the opposite — at 20 calls/s nothing is
 rejected. The defensible statement is that rejections appear only above some rate
 between 20 and 150 calls/s.
 
-The served counts fit a 100 rps token bucket with burst 50 across all three
-conditions: cell C served 5445 ≈ 50 + 100 × 54 s; the fast probe served 183 ≈
-50 + 100 × 1.33 s; the paced probe stayed under 100/s and was never throttled.
-Consistent with the default rate limit — not proof of it, but it is the
-hypothesis the arithmetic supports and the breaker hypothesis does not.
+**Withdrawn:** the earlier flat-rate fit ("cell C served 5445 ≈ 50 + 100 × 54 s";
+"the fast probe served 183 ≈ 50 + 100 × 1.33 s"). It was circular. The 54 s and
+1.33 s were solved for from the served counts, not measured; the rep window read
+from the k6 summary is 60.02 s, at which the arithmetic does not hold. A fit
+whose duration is derived from the number it predicts is not evidence.
 
-## What is *not* explained
+What replaces it is the same 100 rps / burst 50 model integrated over the load
+profile the script actually drives, tested at two different offered rates:
 
-Cells A and B offered the same ~150 calls/s against the same defaults and were
-never throttled. Nothing found in this session accounts for that, and the
-response-cache behaviour documented in `06-finding-response-cache.md` is a live
-confound for it. Until that is resolved, "4.0.0 regressed" is a hypothesis, not a
-finding.
+| condition | offered | window | predicted served / rejected | observed |
+|---|---|---|---|---|
+| cell C measure rep | 8135 over the script's ramping-VUs stages | 60.02 s | 5435 / 2700 | 5444 / 2691 |
+| 320-call probe, arm C, k6 headers | 320 at a constant 160/s | 2.00 s | 250 / 70 | 249 / 71 |
+
+Two fits of one model with the same constants — the shipped defaults, 100 rps
+and burst 50 — at rates differing by a factor of the ramp, both within 0.2% and
+one call respectively. That is a tested model, not a fitted curve. The paced
+probe stayed under 100/s and was never throttled, as the same model requires.
+
+## What explains cells A and B — and what it costs the comparison
+
+Cells A and B offered the same load against the same defaults and were never
+throttled. That is now measured, not open: they answered from the gateway's
+response cache. `06-finding-response-cache.md` records the crossed matrix —
+3.5.0 and 3.5.1 serve these calls from cache whether or not the client sends
+`MCP-Protocol-Version`; 4.0.0 serves them from cache only when it is present,
+and k6 never sends it. Per rep, A and B hit the backend about **once**; C, D and
+E hit it on every call.
+
+So the rejections at 4.0.0 need no regression to explain them. Once the calls
+stop being cached they meet a rate limit that was always there and was never
+reached before.
+
+**The cross-version comparison is void by construction.** A/B and C/D/E did not
+run the same experiment, so no conclusion about 4.0.0 versus 3.5.x is available
+from this rehearsal in either direction — neither "4.0.0 regressed" nor "4.0.0
+is fine". Which of the two cache behaviours is correct is a release-owner
+question, routed there, not decided here.
 
 ## What to route, and where
 
@@ -96,8 +125,8 @@ finding.
   workload contract.
 - **Not routed:** "4.0.0 opens the breaker against a healthy backend". Not
   established. Do not cite the earlier revision.
-- **To this harness:** the workload offers ~150 calls/s against a default 100 rps
-  limit it never configures. Whether NFR.WORKLOAD.1 intends to measure a
+- **To this harness:** the workload offers up to ~162 calls/s (mean ~136/s)
+  against a default 100 rps limit it never configures. Whether NFR.WORKLOAD.1 intends to measure a
   throttled gateway is a contract question, and it is open. See `05-grading.md`.
 
 ## Second-order: the harness under-reports the rejection
