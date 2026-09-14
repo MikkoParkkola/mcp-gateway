@@ -1,3 +1,4 @@
+sha256: a5ff8b9c0801f91319e3e574e565c81a9e28cd49857e10656f52a470f76ab7a1
 fulcrum: "1.0"
 name: github_create_issue
 description: Create a GitHub issue in a repository. Requires GitHub personal access token with repo scope.

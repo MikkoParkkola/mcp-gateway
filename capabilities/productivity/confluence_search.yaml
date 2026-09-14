@@ -1,3 +1,4 @@
+sha256: 135cf3d3b4baadd9c0c8f967d43ecdb1f5edabe68bb4363510d6fb594f2b79cf
 fulcrum: "1.0"
 name: confluence_search
 description: Search Confluence pages and spaces using CQL (Confluence Query Language)

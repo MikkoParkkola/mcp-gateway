@@ -1,3 +1,4 @@
+sha256: a423a0b40ee434d60c9ab17db0be76c0a6d4a00e8aaad338cdfe34e637742e9d
 fulcrum: "1.0"
 name: gmail_save_attachment
 description: Download a Gmail attachment and save it to disk. Fetches the attachment by message ID and attachment ID, base64-decodes the data, and writes it to the specified output directory.

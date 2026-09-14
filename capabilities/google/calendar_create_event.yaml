@@ -1,3 +1,4 @@
+sha256: 963f2f66c0c0b908732707896808ea80d90e34b183390748504795afd17643e5
 fulcrum: "1.0"
 name: calendar_create_event
 description: Create a new event in Google Calendar

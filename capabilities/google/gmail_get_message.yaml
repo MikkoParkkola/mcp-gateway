@@ -1,3 +1,4 @@
+sha256: 3da49c290a4f8ec4e4e1319b4af9561ae2fbd2ba59c706456622b536c89e1b26
 fulcrum: "1.0"
 name: gmail_get_message
 description: Get full email message content by message ID

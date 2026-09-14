@@ -1,3 +1,4 @@
+sha256: d7d80e644e757fb45ef773107f3b3c47492c1c1177387cf6a7215309ed6e73bd
 fulcrum: "1.0"
 name: voice_list
 description: List the AI voices available from HeyGen.

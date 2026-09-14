@@ -1,3 +1,4 @@
+sha256: 9014a2b611e92bedd3794704ab2e0ca75c187041be301514b51527d07ce118cb
 fulcrum: "1.0"
 name: gmail_profile
 description: Get Gmail profile information for the authenticated user

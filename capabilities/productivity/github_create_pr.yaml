@@ -1,3 +1,4 @@
+sha256: d58122ce85fec47378a9803bc8a38e0d2b50a932ba5ae875731a1801fb54d001
 fulcrum: "1.0"
 name: github_create_pr
 description: Create a GitHub Pull Request in a repository

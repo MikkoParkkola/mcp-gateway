@@ -1,3 +1,4 @@
+sha256: 40e897c08e3027e8c690092be0f828d1961e63eef2c01fe1ca23a05ea946eb49
 fulcrum: "1.0"
 name: gws_sheets_read
 description: Read values from a Google Sheets spreadsheet range.

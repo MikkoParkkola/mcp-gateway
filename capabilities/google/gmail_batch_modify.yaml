@@ -1,3 +1,4 @@
+sha256: e9170e149476fe3f69f0ed075de0f2b07a4206afac758332cbed88d9b040ee91
 fulcrum: "1.0"
 name: gmail_batch_modify
 description: Batch modify multiple Gmail messages at once (mark read, archive, trash, etc.). More efficient than modifying one-by-one for bulk operations.

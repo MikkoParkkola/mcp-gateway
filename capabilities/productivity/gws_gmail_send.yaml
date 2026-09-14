@@ -1,3 +1,4 @@
+sha256: 3dd1c6b9ebc8e505827ffadba959db57f7cf571c509f1ea00dc48803dcf6f8bd
 fulcrum: "1.0"
 name: gws_gmail_send
 description: Send an email via Gmail. Composes and sends a new message with optional CC/BCC recipients.

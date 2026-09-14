@@ -1,3 +1,4 @@
+sha256: d0f7d0a02c629015258cd45eb3cc940842993f0e99a74c88fc2f3fd2e3303452
 fulcrum: "1.0"
 name: linear_search_issues
 description: Search Linear issues by query string with optional filters (team, state, assignee, priority)
