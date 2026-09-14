@@ -2562,6 +2562,16 @@ impl Gateway {
                     drop(writer.send(response));
                 }
             });
+
+            // Reaped here rather than only at EOF: a `JoinSet` keeps a finished
+            // task's entry until it is joined, so a long-lived session would
+            // hold one per request it ever served. Non-blocking, so the reader
+            // never waits on a dispatch that is still running.
+            while let Some(joined) = tasks.try_join_next() {
+                if let Err(error) = joined {
+                    warn!(%error, "stdio dispatch task did not finish cleanly");
+                }
+            }
         }
 
         info!("stdio: EOF reached, shutting down");
@@ -2580,6 +2590,11 @@ impl Gateway {
             }
         }
         Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
+        // The channel owns a producer handle of its own, for the questions it
+        // sends the client. Dropped after the drain, which is where the last
+        // dispatch releases its clone: hold it a line longer and the queue
+        // never closes, so the await below never returns.
+        drop(channel);
         // Drop the last producer handle so the writer task sees the queue close,
         // then await it: a frame still queued here has not reached stdout yet,
         // and tearing the backends down first would race the client's last read.
