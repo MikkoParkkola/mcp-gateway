@@ -3774,6 +3774,7 @@ mod error_classification_tests {
 mod response_transform_tests {
     use serde_json::json;
 
+    use crate::capability::validate_output;
     use crate::projection::schema::{ActorSpec, ProjectionSpec, SubjectSpec};
     use crate::provider::Transform as _;
     use crate::provider::transforms::ResponseTransform;
