@@ -1564,6 +1564,67 @@ fn tools_list_includes_surfaced_tool_when_in_backend_cache() {
     assert!(names.contains(&"gateway_invoke"));
 }
 
+// Minor 10 (c) — MIK-6865.SCHEMA.1: a declared `outputSchema` must be
+// byte-identical in the `tools/list` wire response to the one the capability
+// declared. Surfaced capability tools go through `CapabilityDefinition::
+// to_mcp_tool` (src/capability/definition/mod.rs) and
+// `project_tool_descriptor_trust_card` (src/trust/descriptor.rs) on the way
+// to the wire; neither is supposed to touch the schema.
+#[test]
+fn ac_schema_10c_declared_output_schema_is_byte_identical_on_the_wire() {
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+
+    let declared_output_schema = json!({
+        "type": "array",
+        "items": { "type": "string" },
+        "prefixItems": [{ "type": "string" }],
+        "minItems": 1
+    });
+
+    let mut cap = crate::capability::parse_capability(
+        r"
+name: schema_wire_check
+description: Test capability with a declared, non-object output schema
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.invalid
+      path: /check
+",
+    )
+    .expect("fixture capability must parse");
+    cap.schema.output = declared_output_schema.clone();
+
+    let cap_backend = Arc::new(CapabilityBackend::new(
+        "schema_wire_check_backend",
+        Arc::new(CapabilityExecutor::new()),
+    ));
+    cap_backend
+        .register_capability(cap)
+        .expect("fixture capability must register");
+
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_capabilities(cap_backend);
+    let meta = meta.with_surfaced_tools(vec![SurfacedToolConfig {
+        server: "schema_wire_check_backend".to_string(),
+        tool: "schema_wire_check".to_string(),
+    }]);
+
+    let resp = meta.handle_tools_list(RequestId::Number(1));
+    let result = resp.result.unwrap();
+    let tools = result["tools"].as_array().unwrap();
+    let wire_tool = tools
+        .iter()
+        .find(|t| t["name"] == json!("schema_wire_check"))
+        .expect("surfaced capability tool must appear in tools/list");
+
+    assert_eq!(
+        wire_tool["outputSchema"], declared_output_schema,
+        "outputSchema on the wire must be byte-identical to the one the capability declared"
+    );
+}
+
 #[test]
 fn tools_list_meta_tools_always_present_regardless_of_surfaced_tools() {
     // GIVEN: MetaMcp with surfaced tools but no backends (cache will be empty)

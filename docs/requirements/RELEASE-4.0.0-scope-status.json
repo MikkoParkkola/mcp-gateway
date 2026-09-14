@@ -285,7 +285,7 @@
         "docs/requirements/RELEASE-4.0.0-conformance-matrix.md",
         "tests/mik_7272_conformance.rs"
       ],
-      "note": "Graded 2026-09-13 against the 2026-07-28 changelog as its own population: 21 statements, 18 COVERED, 3 UNCOVERED (minor 1, 10, 11), 4 reasoned N/A axis cells. The matrix is executable -- tests/mik_7272_conformance.rs holds the rows and CI fails on a cell citing a test that does not exist, on a tracked gap that quietly regained evidence, and on a statement whose owning requirement is not defined in docs/requirements. PARTIAL because UNCOVERED is not empty: five named tests close it, listed in the matrix and in TRACKED_GAPS."
+      "note": "Graded 2026-09-13 against the 2026-07-28 changelog as its own population: 21 statements, updated 2026-09-14 to 19 COVERED, 2 UNCOVERED (minor 1, 11) after minor 10's second clause (arbitrary-JSON structured results) closed via ac_schema_10b_scalar_structured_content_survives_enforce_output_schema and ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema, 4 reasoned N/A axis cells. The matrix is executable -- tests/mik_7272_conformance.rs holds the rows and CI fails on a cell citing a test that does not exist, on a tracked gap that quietly regained evidence, and on a statement whose owning requirement is not defined in docs/requirements. PARTIAL because UNCOVERED is not empty: tests for the two remaining statements (minor 1, minor 11) close it, listed in the matrix and in TRACKED_GAPS."
     },
     {
       "id": "NFR.WORKLOAD.1",

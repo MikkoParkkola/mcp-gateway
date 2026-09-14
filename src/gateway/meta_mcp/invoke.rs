@@ -4146,6 +4146,47 @@ mod response_transform_tests {
         assert_eq!(result["content"][0]["text"], json!("bad input"));
     }
 
+    // Minor 10 (b) — MIK-6865.SCHEMA.1: a scalar or bare-array
+    // `structuredContent` must survive `enforce_output_schema` unchanged when
+    // the declared `outputSchema` itself is non-object (`type: string`,
+    // `type: array`). Every other fixture in this file declares
+    // `type: object`; this is the clause none of them exercise.
+    #[test]
+    fn ac_schema_10b_scalar_structured_content_survives_enforce_output_schema() {
+        let schema = json!({ "type": "string" });
+
+        let result = enforce_output_schema(
+            "demo",
+            "echo",
+            json!({
+                "content": [{"type": "text", "text": "hello"}],
+                "structuredContent": "hello",
+                "isError": false
+            }),
+            Some(&schema),
+        );
+
+        assert_eq!(result["structuredContent"], json!("hello"));
+    }
+
+    #[test]
+    fn ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema() {
+        let schema = json!({ "type": "array", "items": { "type": "string" } });
+
+        let result = enforce_output_schema(
+            "demo",
+            "list_things",
+            json!({
+                "content": [{"type": "text", "text": "[\"a\",\"b\"]"}],
+                "structuredContent": ["a", "b"],
+                "isError": false
+            }),
+            Some(&schema),
+        );
+
+        assert_eq!(result["structuredContent"], json!(["a", "b"]));
+    }
+
     #[tokio::test]
     async fn response_transform_runs_before_output_validation() {
         let transform = ResponseTransform::new(&TransformConfig {

@@ -86,37 +86,43 @@ instrument that can see it.
 
 ## Matrix
 
-### Statements with evidence — COVERED (18 of 21)
+### Statements with evidence — COVERED (19 of 21)
 
-All nine major statements and minor 2-9 and 12 carry at least one evidence
+All nine major statements and minor 2-10 and 12 carry at least one evidence
 reference, and every cited name resolves to a defined test. The cells, roles
 and transports are in the source of truth rather than copied here, because a
 copy drifts and the original is checked by CI: `tests/mik_7272_conformance.rs`,
 `MAJOR` at `:52` and `MINOR` at `:175`.
 
-### Statements without evidence — UNCOVERED (3 of 21)
+### Statements without evidence — UNCOVERED (2 of 21)
 
 | # | Statement | Why it is uncovered | The test that closes it |
 |---|---|---|---|
 | Minor 1 | `extensions` field on client and server capabilities | Tracked gap; the work is scoped and unstarted | E1-E5 of `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md` |
-| Minor 10 | Loosen `inputSchema`/`outputSchema` to any JSON Schema 2020-12 keywords, and `structuredContent` to any JSON value | The row cites `ac_schema_1_no_meta_tool_nests_an_object_inside_an_array`, which reads `inputSchema` on the meta tool list and looks for one nested shape (`tests/mik_7272_exploit_acs.rs:305`). It touches neither clause: not `outputSchema`, not 2020-12 keyword acceptance, not `structuredContent`. Every output-schema fixture in the tree declares `type: object`, and no test constructs a scalar or top-level-array `structuredContent` | Three, and all three are needed. (a) A 2020-12 keyword absent from draft-07 — `prefixItems` or `unevaluatedProperties` — is accepted in an `outputSchema` rather than rejected. (b) A scalar and a bare-array `structuredContent` survive `enforce_output_schema` unchanged under a matching non-object `outputSchema`. (c) A declared `outputSchema` is byte-identical in a `tools/list` wire response to the one the capability declared |
 | Minor 11 | Remove `notifications/elicitation/complete` and the `elicitationId` field of URL mode elicitation | The row did not exist until this revision. Neither name appears anywhere in `src` or `tests`, so the gateway originates neither — but absence is not an assertion, and two forwarding paths are unverified | Two. (a) A URL-mode elicitation from a 2025-11-25 backend carrying `elicitationId` reaches a modern client with the field removed, and a legacy client with it retained. (b) A `notifications/elicitation/complete` from a backend does not reach a modern client. The hop is the streaming multiplexer, which tags a backend notification and fans it out to the session's subscribers without inspecting the method (`src/gateway/streaming.rs:266`); the modern-path refusal at `src/gateway/router/handlers.rs:940` runs on inbound client requests and lists five other methods, so neither end filters this one today |
 
 Minor 11 is the cell `NFR.CONFORMANCE.1` names as "modern URL-elicitation
-completion removal", and minor 10's second clause is the one it names as
-"arbitrary-JSON structured results". Both were absent from the matrix as
-evidence, which is the finding: a matrix that omits a statement, or cites a
+completion removal", and minor 10's second clause was the one it names as
+"arbitrary-JSON structured results" until two tests closed it. Both were
+absent from the matrix as evidence, which is the finding: a matrix that omits a
+statement, or cites a
 test that does not bear on it, looks identical to one that covers it.
 
-For minor 10 the behaviour is present even though the evidence is not.
+For minor 10 the behaviour was already present; the evidence was not.
 `ToolsCallResult.structured_content` is `Option<Value>`
 (`src/protocol/messages.rs:360`), `extract_output_validation_target` returns
 whatever `structuredContent` holds (`src/gateway/meta_mcp/invoke.rs:194`), and
 `apply_validated_output` writes it back without inspecting its JSON type
 (`:207`); a schema mismatch is advisory for proxied tools and does not reject
-(`:160-177`). So this is a gap in evidence, not a defect — which is exactly why
-it is UNCOVERED rather than a bug: nothing asserts it, so nothing would notice
-it regressing.
+(`:160-177`). Four tests close the row —
+`capability::schema_validator::tests::ac_schema_10a_accepts_2020_12_keywords_absent_from_draft_07`
+(clause a),
+`gateway::meta_mcp::invoke::response_transform_tests::ac_schema_10b_scalar_structured_content_survives_enforce_output_schema`
+and `ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema`
+(clause b), and
+`gateway::meta_mcp::tests::ac_schema_10c_declared_output_schema_is_byte_identical_on_the_wire`
+(clause c) — each confirmed by breaking the mechanism it depends on and
+watching the test fail before being restored.
 
 ## Revision and outcome axes
 
@@ -172,30 +178,31 @@ prevent. The obligation it actually creates is minor 11's second closing test.
 
 | Disposition | Count |
 |---|---|
-| COVERED | 18 |
-| UNCOVERED | 3 |
+| COVERED | 19 |
+| UNCOVERED | 2 |
 | **Population (statements)** | **21** |
 
-The three UNCOVERED statements are the three entries of `TRACKED_GAPS` in
+The two UNCOVERED statements are the two entries of `TRACKED_GAPS` in
 `tests/mik_7272_conformance.rs`, and that is enforced rather than asserted
 here: `matrix_has_no_empty_cells` fails on an untracked empty row, and
 `a_tracked_gap_is_still_a_gap` fails on an exemption whose row has since gained
 evidence or disappeared. This document and the executable matrix cannot drift
 apart on the count without one of those two tests going red.
 
-18 + 3 = 21, and only changelog statements are counted. The four N/A rows above
+19 + 2 = 21, and only changelog statements are counted. The four N/A rows above
 are axis cells, not statements: they record why a role/transport combination
 raises no obligation, so they neither add to the population nor absorb any
-statement from it. Clause-level gaps (minor 10 has two, minor 11 has two) are
-recorded as closing tests inside their statement's row rather than as rows of
-their own, because a statement is the unit the changelog and the `Row` struct
-both use, and mixing units is how a tally stops being checkable.
+statement from it. Clause-level gaps (minor 11 has two) are recorded as
+closing tests inside their statement's row rather than as rows of their own,
+because a statement is the unit the changelog and the `Row` struct both use,
+and mixing units is how a tally stops being checkable.
 
 ## Grade
 
 **PARTIAL.** Rule 4 makes this mechanical: UNCOVERED is not empty, so the
-criterion is not met, and the five named tests behind those three statements are
-the remaining work. What this revision delivered is the matrix, its population
+criterion is not met, and the named tests behind those two statements are the
+remaining work. What this revision delivered is the matrix, its population
 rule, the missing statement, the count assertion that would have caught it, the
-N/A reasons and the one N/A that turned out to be a gap — which is the bulk of
-the criterion and the part that makes the remainder checkable.
+N/A reasons, the one N/A that turned out to be a gap, and minor 10's row closed
+by four mutation-tested tests — which is the bulk of the criterion and the
+part that makes the remainder checkable.
