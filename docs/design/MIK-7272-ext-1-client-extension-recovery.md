@@ -8,14 +8,35 @@ committed and stands on its own. Nothing here reopens it.
 
 `ExtensionSet::from_capabilities` (`src/protocol/extensions.rs:82`) parses an
 `extensions` object out of a peer's capability declaration. It has **zero
-production callers**. Every client that declares
-`_meta["io.modelcontextprotocol/clientCapabilities"].extensions` on a
-`tools/call` has that declaration silently dropped, so the client half of EXT.1
-has no evidence and the matrix cell stays empty. Phase 2 supplies the missing
-read.
+production callers** — `rg` finds only test call sites.
 
-**Headline: this adds zero new error paths and changes no dispatch decision.**
-It is recovery only.
+**Correction, found in review (gpt-review, verified at source).** An earlier
+revision of this note, and the phase 1 comment and `TRACKED_GAPS` reason it was
+drawn from, said "nothing on the `tools/call` path recovers client extensions".
+That is false. `declares_tasks_extension` (`src/gateway/router/handlers.rs:182`,
+called at `:1034`) reads
+`_meta["io.modelcontextprotocol/clientCapabilities"].extensions` on every
+request that reaches the tasks extension, and refuses the request with
+`MISSING_REQUIRED_CLIENT_CAPABILITY` when the identifier is absent.
+
+So the real defect is not "no reader". It is **two readers that disagree**:
+
+| | `declares_tasks_extension` (live) | `ExtensionSet::from_capabilities` |
+|---|---|---|
+| parse | `pointer()` / chained `get()`, hand-rolled | shared, typed |
+| `{"…/tasks": {}}` | accepted | accepted |
+| `{"…/tasks": 3}` | **accepted** (`is_some`) | **rejected** (`is_object`) |
+| `{"…/tasks": null}` | **accepted** | **rejected** |
+| identifier it does not know | ignored (it looks only for tasks) | dropped |
+| result | `bool` | `ExtensionSet` |
+
+A client that declares `{"io.modelcontextprotocol/tasks": 3}` passes the live
+gate today and enters task behaviour it never validly negotiated — which the
+comment inside `from_capabilities` already argues against in as many words
+("presence is not agreement").
+
+**Headline, corrected: this is not a pure addition. Unifying the two readers
+tightens a live gate.**
 
 ## 1. What reads the field
 
@@ -27,13 +48,21 @@ value, on the same success arm — not at a second parse site, because a second
 site is a second place for the two reads to disagree about what a malformed
 envelope means.
 
-Call-site detail worth stating, because it does not typecheck otherwise: after
-the existing let-else, `capabilities` is shadowed by a
-`&serde_json::Map<String, Value>`, while `from_capabilities` takes the whole
-`&Value` capability object and performs its own `.get("extensions")`. The
-narrowed binding is therefore renamed so both the map (for `Declared::parse`)
-and the original value (for `ExtensionSet::from_capabilities`) are in scope. No
-new parsing helper is introduced.
+Call-site detail, because the first revision of this note described something
+that does not compile (caught by both reviewers). After the existing let-else,
+`capabilities` is shadowed by a `&serde_json::Map<String, Value>`; before it,
+it is an `Option<&Value>`. `from_capabilities` takes `&Value`. No rename is
+needed — `Option<&Value>` is `Copy`, so one line hoisted above the narrowing
+does it:
+
+```rust
+let declared_extensions = capabilities
+    .map(ExtensionSet::from_capabilities)
+    .unwrap_or_default();
+```
+
+No new parsing helper, no change to `from_capabilities`'s signature, no churn
+at its existing test call sites.
 
 ## 2. Where the recovered set lives
 
@@ -67,7 +96,13 @@ behaviour, and none produces an error.
 | `extensions` present but not an object | empty (`Value::as_object` fails) |
 | Entry whose settings value is not an object (`null`, `3`, `"x"`, `[]`) | that entry dropped (`is_object` filter, `extensions.rs:93`) |
 | Unknown extension identifier | dropped (`Extension::from_id` returns `None`) |
+| `extensions: {}` (present, empty) | empty set — the same answer as absent |
+| Entry whose settings value is `true`/`false` | dropped (`is_object`; booleans are scalars) |
+| Mixed map: one valid, one malformed, one unrecognised | only the valid known entry survives |
 | `RequestShape::Legacy` or `::Malformed` | `ExtensionSet::default()`, mirroring `Declared::NONE` |
+
+Settings *content* is never inspected — only the object shape. Nothing in 4.0.0
+reads what is inside an extension's settings body; that is MIK-7311's work.
 
 The per-entry `is_object` filter is the load-bearing reason to route through
 `from_capabilities` rather than hand-roll a read here: it matches what
@@ -83,35 +118,49 @@ rationale already recorded on `Extension::from_id`.
 
 ## 4. Does anything downstream behave differently?
 
-**No, and that is intentional for 4.0.0.** The doc comment on
-`ExtensionSet::gateway_declares` states that the shipped task model is knowingly
-short of the extension specification for this release — `input_required` is out
-of scope by design, and MIK-7311 completes the model behind it. Acting on a
-recovered extension is MIK-7311's work and is not authorized here.
+**Yes — one gate, and it needs a ruling before implementation.** The first
+revision of this note said "no", which was wrong for the reason in the
+correction above.
 
-So: the four `input_capabilities: Declared` consumers
-(`handlers/tasks.rs:118`, `:215`, `meta_mcp/task_confirmation.rs:106`,
-`meta_mcp/mod.rs:170`) are untouched. No gate reads the new field. What changes
-is that the declaration is *recoverable* — which is exactly what EXT.1's client
-half asserts, and exactly what is untestable today.
+No *new* behaviour is proposed. But `declares_tasks_extension` already decides
+dispatch on this exact field, and leaving it in place means shipping two
+parsers that disagree about the same bytes. Two dispositions:
 
-Consequence for the matrix: the cell becomes writable on the strength of E4/E5,
-which test recovery. It does not become a claim that the gateway varies its
-behaviour per extension. If a reviewer reads the regrade that way, the regrade
-is worded wrong, not the code.
+- **(i) Unify (recommended).** Delete `declares_tasks_extension`; the gate at
+  `handlers.rs:1034` consumes `RequestShape::declared_extensions()`. One
+  parser, one answer, and the deletion is smaller than the duplication.
+  **Behaviour change:** `{"…/tasks": 3}`, `null`, `[]` and `"x"` stop passing
+  the gate and start receiving `MISSING_REQUIRED_CLIENT_CAPABILITY`. That is
+  the spec reading, and it is a live-path tightening, so it is the operator's
+  call, not this note's.
+- **(ii) Recover only.** Add the field, leave the gate alone. Smaller and
+  strictly additive, but it ships the divergence table above as a known defect,
+  and the matrix cell may then claim only that the declaration is *parseable*,
+  not that the gateway acts on a validly negotiated one.
+
+The four `input_capabilities: Declared` consumers (`handlers/tasks.rs:118`,
+`:215`, `meta_mcp/task_confirmation.rs:106`, `meta_mcp/mod.rs:170`) are
+untouched under both. `input_required` and extension-aware task behaviour
+remain MIK-7311.
 
 ## 5. Acceptance cases (failing-first, before implementation)
 
-- **E4 — recovery**: a modern-era request whose `clientCapabilities` carries
-  `{"extensions": {"<tasks id>": {}}}` classifies as `Modern` and
-  `declared_extensions()` contains `Extension::Tasks`. Red today: the accessor
-  does not exist.
-- **E5 — shape discipline**: the same request with a non-object settings value
-  recovers an empty set, and one with no `extensions` key recovers an empty set.
-  This is the case a null-only filter turns red.
+Split one per shape, so a red case names exactly one mutation (kimi-review).
 
-Both address `classify_request` directly rather than through the route, because
-the decision under test is the parse, not the dispatch.
+- **E4 — recovery**: a modern-era request declaring
+  `{"extensions": {"<tasks id>": {}}}` classifies as `Modern` and
+  `declared_extensions()` contains `Extension::Tasks`.
+- **E5a — absent key**: no `extensions` key recovers an empty set.
+- **E5b — shape discipline**: a non-object settings value recovers an empty
+  set. This is the case a null-only filter turns red.
+
+**Route-level, not parse-level (gpt-review).** Under disposition (i) at least
+one case runs through the router to the gate at `handlers.rs:1034`, because a
+parse-level assertion stays green while the live gate is broken — and a green
+test over a divergent gate is exactly how the matrix ends up claiming coverage
+it does not have. Candidate fixture: `tests/task_upstream_recovery/helper.rs`
+already builds the `_meta` envelope with an `extensions` map (`:547`), so the
+route fixture is reuse, not new scaffolding.
 
 ## Falsifier
 
