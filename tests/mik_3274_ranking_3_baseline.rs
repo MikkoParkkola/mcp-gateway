@@ -20,6 +20,8 @@ use mcp_gateway::ranking::{SearchRanker, SearchResult};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
+// `corpus_size` mirrors the key in the frozen corpus.json and cannot be renamed.
+#[allow(clippy::struct_field_names)]
 struct Corpus {
     criterion: String,
     tool_inventory_size: usize,
@@ -90,9 +92,7 @@ async fn load_candidate_pool() -> Vec<(String, String)> {
     let defs = CapabilityLoader::load_directories(&dir_refs)
         .await
         .expect("load production capability inventory");
-    defs.into_iter()
-        .map(|d| (d.name, d.description))
-        .collect()
+    defs.into_iter().map(|d| (d.name, d.description)).collect()
 }
 
 fn rank_case(pool: &[(String, String)], ranker: &SearchRanker, case: &CorpusCase) -> CaseResult {
@@ -100,15 +100,16 @@ fn rank_case(pool: &[(String, String)], ranker: &SearchRanker, case: &CorpusCase
         .iter()
         .map(|(name, desc)| SearchResult::new("fulcrum", name.clone(), desc.clone()))
         .collect();
-    let ranked = ranker.rank(candidates, &case.query);
+    let ordered = ranker.rank(candidates, &case.query);
 
     let best_gold_rank = case
         .gold_tools
         .iter()
-        .filter_map(|gold| ranked.iter().position(|r| &r.tool == gold))
+        .filter_map(|gold| ordered.iter().position(|r| &r.tool == gold))
         .map(|pos0| pos0 + 1) // 1-indexed
         .min();
 
+    #[allow(clippy::cast_precision_loss)] // rank is bounded by the candidate count, never near 2^52
     let reciprocal_rank = best_gold_rank.map_or(0.0, |r| 1.0 / r as f64);
 
     CaseResult {
@@ -124,6 +125,7 @@ fn rank_case(pool: &[(String, String)], ranker: &SearchRanker, case: &CorpusCase
     }
 }
 
+#[allow(clippy::cast_precision_loss)] // corpus case count is in the hundreds
 fn mean(values: impl Iterator<Item = f64> + Clone) -> f64 {
     let count = values.clone().count();
     if count == 0 {
@@ -165,7 +167,10 @@ async fn mik_3274_ranking_3_baseline() {
 
     let mut by_derivation: BTreeMap<String, Vec<&CaseResult>> = BTreeMap::new();
     for c in &cases {
-        by_derivation.entry(c.derivation.clone()).or_default().push(c);
+        by_derivation
+            .entry(c.derivation.clone())
+            .or_default()
+            .push(c);
     }
     let by_derivation: BTreeMap<String, DerivationSummary> = by_derivation
         .into_iter()
@@ -175,8 +180,8 @@ async fn mik_3274_ranking_3_baseline() {
                 k,
                 DerivationSummary {
                     n,
-                    top1_hit_rate: mean(v.iter().map(|c| c.top1_hit as i32 as f64)),
-                    top3_hit_rate: mean(v.iter().map(|c| c.top3_hit as i32 as f64)),
+                    top1_hit_rate: mean(v.iter().map(|c| f64::from(u8::from(c.top1_hit)))),
+                    top3_hit_rate: mean(v.iter().map(|c| f64::from(u8::from(c.top3_hit)))),
                     mean_reciprocal_rank: mean(v.iter().map(|c| c.reciprocal_rank)),
                 },
             )
@@ -188,9 +193,9 @@ async fn mik_3274_ranking_3_baseline() {
         tool_inventory_size: corpus.tool_inventory_size,
         corpus_size: corpus.corpus_size,
         candidate_pool_size: pool.len(),
-        overall_top1_hit_rate: mean(cases.iter().map(|c| c.top1_hit as i32 as f64)),
-        overall_top3_hit_rate: mean(cases.iter().map(|c| c.top3_hit as i32 as f64)),
-        overall_top5_hit_rate: mean(cases.iter().map(|c| c.top5_hit as i32 as f64)),
+        overall_top1_hit_rate: mean(cases.iter().map(|c| f64::from(u8::from(c.top1_hit)))),
+        overall_top3_hit_rate: mean(cases.iter().map(|c| f64::from(u8::from(c.top3_hit)))),
+        overall_top5_hit_rate: mean(cases.iter().map(|c| f64::from(u8::from(c.top5_hit)))),
         overall_mean_reciprocal_rank: mean(cases.iter().map(|c| c.reciprocal_rank)),
         by_derivation,
         cases,
