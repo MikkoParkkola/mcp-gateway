@@ -1,3 +1,4 @@
+sha256: ff558cc995efb9825829db94f3487dafc25b9fe1d98f1a9db93d4fb8b082221f
 fulcrum: "1.0"
 name: stripe_list_charges
 description: List Stripe charges with pagination and filtering. Returns up to 100 charges per request.

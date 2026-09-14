@@ -1,3 +1,4 @@
+sha256: 49d99575a027850ab111f4b643f24470daeaa5c15d66005f697cec47402f3907
 fulcrum: "1.0"
 name: gws_gmail_forward
 description: Forward a Gmail message to another recipient. Forwards the specified message with optional additional body text.

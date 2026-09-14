@@ -1,3 +1,4 @@
+sha256: cc99c2bf18e2f0048111ce08fac7d80f0707c44cbb34b56bce104737a553a0d4
 fulcrum: "1.0"
 name: linear_comment_integration
 description: Linear comment webhook for real-time comment notifications

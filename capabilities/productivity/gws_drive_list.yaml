@@ -1,3 +1,4 @@
+sha256: 2df573d39cb833cfae408956e1dedeb9761b9c963a9508ab3bc217ee97a3408a
 fulcrum: "1.0"
 name: gws_drive_list
 description: List files in Google Drive. Supports search queries, pagination, and filtering by MIME type.

@@ -1,3 +1,4 @@
+sha256: 345064ac364f801544b5002348134629e04e9bcd23b9fa1b7709fcfb8148f8db
 fulcrum: "1.0"
 name: salesforce_query
 description: Execute a Salesforce SOQL query to retrieve CRM records

@@ -1,3 +1,4 @@
+sha256: 145b9e24d2394ce9963803da9b2f3a518c557620fb68c4b91ac0d113bca4d4c1
 fulcrum: "1.0"
 name: slack_post_message
 description: Post a message to a Slack channel or direct message

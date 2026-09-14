@@ -1,3 +1,4 @@
+sha256: c68fa1ba6fe04b80c8175d5ad57f8c21bdce9b6b91e719e2d1e04515b04fd538
 fulcrum: "1.0"
 name: linear_attach_url
 description: "Attach an external URL (GitHub PR, commit, doc) to a Linear issue. Shows as rich link in issue sidebar."

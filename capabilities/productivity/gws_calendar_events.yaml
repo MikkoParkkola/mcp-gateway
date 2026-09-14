@@ -1,3 +1,4 @@
+sha256: 80787d26a31732a9e262bccd20fbce7efc22b0c291259df57f9ce2c6675979d5
 fulcrum: "1.0"
 name: gws_calendar_events
 description: List upcoming Google Calendar events. Supports time range filtering and multiple calendars.

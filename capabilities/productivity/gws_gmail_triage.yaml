@@ -1,3 +1,4 @@
+sha256: e8361afed5b84454241d9ad594d88b838aedd680f6b8ce82293d071243df09ca
 fulcrum: "1.0"
 name: gws_gmail_triage
 description: Triage Gmail messages by modifying labels. Add or remove labels such as INBOX, UNREAD, STARRED, IMPORTANT, SPAM, TRASH.

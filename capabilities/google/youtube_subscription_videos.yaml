@@ -1,3 +1,4 @@
+sha256: a2f035db00684665b31228fe2ad95e7928cabc342d67bfd6fa2cf4e77596efad
 fulcrum: "1.0"
 name: youtube_subscription_videos
 description: Get recent videos from your subscribed channels (new content feed)

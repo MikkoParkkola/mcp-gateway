@@ -1,3 +1,4 @@
+sha256: a104dc04e2ede056f8396f90fbdb0724ed8455a02e2ea63a7701d9e9a0dff6d5
 fulcrum: "1.0"
 name: gmail_get_attachment
 description: Download a Gmail attachment by message ID and attachment ID. Returns base64url-encoded attachment data and size. Use gmail_get_message first to find attachment IDs from the message payload parts.

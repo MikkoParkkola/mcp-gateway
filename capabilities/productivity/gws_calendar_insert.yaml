@@ -1,3 +1,4 @@
+sha256: 7cc39ac09e954f830626907c10df2857c51859d1612e22e082b7b5b761dfe4c5
 fulcrum: "1.0"
 name: gws_calendar_insert
 description: Create a new Google Calendar event. Supports setting title, time range, attendees, location, and description.

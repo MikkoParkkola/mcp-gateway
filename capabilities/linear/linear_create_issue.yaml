@@ -1,3 +1,4 @@
+sha256: 6b3537ef1a7bc5ebb9e121da12ee6e21d554df2675c06663175a250cdab0e21d
 fulcrum: "1.0"
 name: linear_create_issue
 description: Create a new issue in Linear. Requires teamId (use linear_get_teams to find it).
