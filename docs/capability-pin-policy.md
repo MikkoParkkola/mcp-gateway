@@ -62,9 +62,10 @@ which is the opposite of what pinning is for.
 > Every high-privilege capability in the production catalogue carries a valid
 > `sha256:` pin. Every file that carries a pin must match its recomputed hash.
 
-Low-privilege files *may* be pinned; six were pinned before this policy and
-they stay pinned, because the drift half of the check covers any file with a
-pin, not only the required set.
+Low-privilege files *may* be pinned. Six capabilities carried a pin before
+this policy — four of them low-privilege — and all six stay pinned, because
+the drift half of the check covers any file with a pin, not only the
+required set.
 
 ## Current classification
 
