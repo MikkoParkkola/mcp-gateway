@@ -209,3 +209,41 @@ justification, and the row correctly refuses it.
 - One run per side. There is no run-to-run variance figure, only criterion's within-run confidence interval. A second
   full pass would be needed before publishing any absolute value.
 - `modern_request_path` has no 3.5.0 counterpart, so its four cases are HEAD-only cost, never a comparison.
+
+## Re-measured on the release line, 2026-09-15
+
+Every number above was taken against `origin/main`. `main` carries 3 of the 74
+commits this release cites as evidence; the branch 4.0.0 ships from carries 55.
+The caveat that recorded this said the gap was load-bearing. It was.
+
+Method unchanged — one clone (`~/github/.worktrees/perf-remeasure-4.0.0`), one
+`CARGO_TARGET_DIR`, one criterion session, 3.5.0 (`32f135a6`) collected first
+and the candidate minutes later on the same box. Only the after ref changed:
+`chore/v4-reconcile-main` (`5eb6982e`). Harness and logs:
+`spark:~/bench-logs/v4-perf-releaseline/`.
+
+56 comparisons, 27 declared regressions, 11 declared improvements. Six exceed
+the criterion's 5% bound and one exceeds its 10% bound:
+
+| comparison | change (mid) | bootstrap interval | on main, 2026-09-13 |
+|---|---|---|---|
+| `cache_key/schema_fingerprint/50` | **+12.23%** | `[+11.97%, +12.51%]` | +1.39% |
+| `cache_key/schema_fingerprint/200` | +9.71% | `[+9.49%, +9.92%]` | not declared |
+| `cache_key/schema_fingerprint/10` | +7.75% | `[+7.49%, +8.00%]` | not declared |
+| `modern_request_path/validate_headers_encoded_name` | +6.72% | `[+6.52%, +6.91%]` | not declared |
+| `session_sandbox/check_payload_too_large` | +6.41% | `[+3.83%, +8.58%]` | not declared |
+| `budget_enforcer/daily_accumulator_add` | +5.08% | `[+4.90%, +5.21%]` | not declared |
+
+The first row is the finding. Both measurements of it have tight intervals, so
+the ~11pp between them is not noise: it is carried by what the release line
+holds beyond `main`. The three `schema_fingerprint` sizes moving together —
+10, 50, 200 — points at the fingerprint path itself rather than at any one
+input size.
+
+What this does not change: the residual in "What this measurement still does
+not establish" stands unaltered. These are criterion point estimates over
+micro-benchmarks. No harness on either side produces an end-to-end tool-call
+P50 or P99, so nothing here may be quoted as one. That is why `NFR.PERF.1`
+cannot be graded MET on this run — and, now that the proxy breaches the bound
+rather than clearing it, why it cannot be waived on this run either. The row
+moved to blocking on 2026-09-15 and opened cluster N.
