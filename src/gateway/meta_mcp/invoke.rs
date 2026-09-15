@@ -820,6 +820,25 @@ fn undeclared_input_request(
     }
 }
 
+/// What a committed idempotency key stores while the gates still run.
+///
+/// Deliberately not the backend's body: a gate below the commit may be about
+/// to block it, and a retry under the same key would then be served the very
+/// response the gate refused. The real body replaces this on the success path
+/// through `complete`, once every gate has passed.
+fn withheld_response_placeholder() -> Value {
+    json!({
+        "resultType": "complete",
+        "isError": true,
+        "content": [{
+            "type": "text",
+            "text": "Side effect executed; the response was withheld by a \
+                     post-dispatch gate. Retrying with the same idempotency \
+                     key will not re-execute it."
+        }],
+    })
+}
+
 /// Re-dispatches the original call with the answers collected so far.
 ///
 /// Holds the dispatch arguments rather than a closure because
@@ -853,6 +872,21 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         &self,
         retry_params: Value,
     ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
+        // Admitted here as well as at the first dispatch, because the spend
+        // check is per backend call and `invoke_tool` ran it once, before the
+        // backend asked anything. A bridged exchange adds a call per round, so
+        // a budget enforced only at the top is a budget a backend can walk past
+        // by asking. The warnings are dropped: the ones that ride the envelope
+        // are the first call's, and a bridged round has nowhere to put its own.
+        #[cfg(feature = "cost-governance")]
+        self.meta
+            .admit_spend(self.tool, self.api_key_name)
+            .map_err(
+                |e| crate::gateway::input_bridge::BridgeError::BackendFailed {
+                    message: e.to_string(),
+                },
+            )?;
+
         // Through `accounted_dispatch`, not `dispatch_to_backend`: a bridged
         // round is a real backend call and is accounted and gated exactly like
         // the first one. A round that skipped the accounting would let a
@@ -1823,20 +1857,7 @@ impl MetaMcp {
         // Returns the warnings to inject post-dispatch and blocks when the
         // budget is exceeded (returns JSON-RPC -32003 error).
         #[cfg(feature = "cost-governance")]
-        let cost_warnings: Vec<String> = if let Some(ref enforcer) = self.budget_enforcer {
-            let result = enforcer.check(tool, api_key_name);
-            if !result.allowed {
-                return Err(Error::json_rpc(
-                    -32003,
-                    result
-                        .block_reason
-                        .unwrap_or_else(|| "Budget exceeded".to_string()),
-                ));
-            }
-            result.warnings
-        } else {
-            Vec::new()
-        };
+        let cost_warnings: Vec<String> = self.admit_spend(tool, api_key_name)?;
 
         // Derive a prompt_cache_key for OpenAI-compatible backends.
         // Priority: explicit _meta.prompt_cache_key from caller > session hash.
@@ -2026,16 +2047,7 @@ impl MetaMcp {
         // "side effect executed" over a backend that stopped to ask. Keying on
         // the classification would exempt exactly the shapes it rejects.
         if !stopped_to_ask && let Some(reservation) = idem_reservation.as_mut() {
-            reservation.commit(&json!({
-                "resultType": "complete",
-                "isError": true,
-                "content": [{
-                    "type": "text",
-                    "text": "Side effect executed; the response was withheld by a \
-                             post-dispatch gate. Retrying with the same idempotency \
-                             key will not re-execute it."
-                }],
-            }));
+            reservation.commit(&withheld_response_placeholder());
         }
 
         // MRTR.9: a question the client never said it could answer is refused
@@ -2128,11 +2140,25 @@ impl MetaMcp {
                     // the key may be settled. The commit above declined this
                     // reservation precisely because the backend had stopped to
                     // ask; that is no longer true.
+                    //
+                    // The placeholder rather than `completed`, for the reason
+                    // the commit above uses it: the gates between here and
+                    // `complete` may yet block this body, and committing it
+                    // would hand a retry under the same key the response the
+                    // gate refused.
                     if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.commit(&completed);
+                        reservation.commit(&withheld_response_placeholder());
                     }
                     result = completed;
                     interim = None;
+                    // `stopped_to_ask` stays true, and that is the point: it
+                    // gates the response cache below, and a bridged body is
+                    // derived from answers this caller gave in-band. The cache
+                    // key covers `arguments`, not the answers, so caching one
+                    // would serve the next identical call somebody else's
+                    // reply instead of asking. Recomputing the flag from
+                    // `result` here would look tidier and cache exactly the
+                    // bodies that must not be cached.
                 }
                 // No client session to reach is not a failed exchange: it is
                 // the absence of one. A legacy caller can arrive with a
@@ -2172,6 +2198,26 @@ impl MetaMcp {
                     ..
                 }) => {}
                 Err(error) => {
+                    // A round that reached the backend leaves the key settled,
+                    // not released. `BackendFailed` is the one bridge error
+                    // that carries a dispatch whose outcome is unknown from
+                    // here, so it is the one that must not readmit a retry of
+                    // a side effect that may already have run (ADR-012
+                    // consequence 1). Every other variant ends a round the
+                    // backend answered with a question — it said it did not
+                    // act — so releasing the key is correct for them and the
+                    // caller may retry once the exchange can be carried.
+                    if let crate::gateway::input_bridge::BridgeError::BackendFailed { .. } = &error
+                        && let Some(reservation) = idem_reservation.as_mut()
+                    {
+                        reservation.fail(&json!({
+                            "code": -32003,
+                            "message": format!(
+                                "Tool '{tool}' on server '{server}' asked for input and the \
+                                 bridged exchange could not be completed"
+                            ),
+                        }));
+                    }
                     warn!(
                         server,
                         tool,
@@ -3028,6 +3074,31 @@ impl MetaMcp {
         }
     }
 
+    /// Admits one backend call against the configured spend budget.
+    ///
+    /// Per dispatch, not per `gateway_invoke`: a bridged exchange makes one
+    /// backend call per round, and a budget checked only at the first would let
+    /// a backend that keeps asking spend past the operator's limit.
+    ///
+    /// Returns the warnings to inject post-dispatch; blocks with JSON-RPC
+    /// -32003 carrying the enforcer's own reason.
+    #[cfg(feature = "cost-governance")]
+    fn admit_spend(&self, tool: &str, api_key_name: Option<&str>) -> Result<Vec<String>> {
+        let Some(ref enforcer) = self.budget_enforcer else {
+            return Ok(Vec::new());
+        };
+        let result = enforcer.check(tool, api_key_name);
+        if !result.allowed {
+            return Err(Error::json_rpc(
+                -32003,
+                result
+                    .block_reason
+                    .unwrap_or_else(|| "Budget exceeded".to_string()),
+            ));
+        }
+        Ok(result.warnings)
+    }
+
     /// Dispatch one round to the backend and meter it.
     ///
     /// Holds every emission that must fire once per backend call: the
@@ -3038,9 +3109,11 @@ impl MetaMcp {
     /// so metering left behind at a single call site would make every round
     /// after the first invisible.
     ///
-    /// The pre-invoke budget gate is deliberately NOT here. It runs once, and
-    /// above the point where a retry handle is redeemed; moving it below that
-    /// redemption would burn a continuation on a call the budget refuses.
+    /// The spend gate is deliberately NOT here either, though it is also per
+    /// call. It runs in `admit_spend`, above the point where a retry handle is
+    /// redeemed; moving it below that redemption would burn a continuation on
+    /// a call the budget refuses. Each caller of this function admits its own
+    /// round first.
     #[allow(clippy::too_many_arguments)]
     async fn accounted_dispatch(
         &self,
