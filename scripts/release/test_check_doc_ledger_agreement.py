@@ -51,8 +51,15 @@ TRACKER = (ROOT / agreement.TRACKER).read_text()
 
 def newest_row(text):
     """Pick the row through the checker's own key, so both always agree."""
-    rows = list(agreement.SUMMARY.finditer(text))
-    return max(rows, key=agreement.row_age).group(0)
+    match = max(agreement.summary_rows(text), key=agreement.row_age)
+    start = text.index(match.group(0))
+    return text[start : text.index("\n", start)]
+
+
+def with_row(added):
+    """Append a row inside the summary table, where a real tick would write it."""
+    row = newest_row(TRACKER)
+    return TRACKER.replace(row, f"{row}\n{added}", 1)
 
 
 def swap(text, old, new):
@@ -156,11 +163,12 @@ class UnreadableIsNotGreen(unittest.TestCase):
 
 
 class NewestRowIsParsedNotAssumed(unittest.TestCase):
+    def assert_red(self, failures):
+        self.assertTrue(failures, "the newest row was skipped, not read")
+
     def test_an_out_of_order_append_does_not_become_the_current_row(self):
         stale = f"| 2020-01-01a | {BLOCKING + 9} | {PENDING} | **{TOTAL}** | 0 | stale |"
-        self.assertEqual(
-            [], agreement.check_tracker(f"{TRACKER}\n{stale}\n", PENDING, BLOCKING)
-        )
+        self.assertEqual([], agreement.check_tracker(with_row(stale), PENDING, BLOCKING))
 
     def test_a_row_recording_a_close_is_not_skipped(self):
         """Nine shipped rows spend `-1` on the tick column; none may be invisible."""
@@ -168,14 +176,19 @@ class NewestRowIsParsedNotAssumed(unittest.TestCase):
             f"| 2099-01-01a | {BLOCKING} | {PENDING + 1} | **{BLOCKING + PENDING + 1}**"
             " | -1 | a criterion closed |"
         )
-        self.assert_red(agreement.check_tracker(f"{TRACKER}\n{closed}\n", PENDING, BLOCKING))
+        self.assert_red(agreement.check_tracker(with_row(closed), PENDING, BLOCKING))
 
-    def assert_red(self, failures):
-        self.assertTrue(failures, "the newest row was skipped, not read")
+    def test_an_unreadable_row_stops_the_check_instead_of_being_skipped(self):
+        broken = f"| 2099-01-01a | {BLOCKING} | {PENDING} | **{BLOCKING + PENDING} ** | 0 | bad |"
+        with self.assertRaises(agreement.Drift):
+            agreement.check_tracker(with_row(broken), PENDING, BLOCKING)
 
     def test_a_two_letter_suffix_outranks_a_one_letter_suffix(self):
-        rows = list(agreement.SUMMARY.finditer("| 2099-01-01z | 1 | 1 | **2** | 0 |\n"
-                                               "| 2099-01-01aa | 1 | 1 | **2** | 0 |\n"))
+        rows = list(
+            agreement.SUMMARY.finditer(
+                "| 2099-01-01z | 1 | 1 | **2** | 0 |\n| 2099-01-01aa | 1 | 1 | **2** | 0 |\n"
+            )
+        )
         self.assertEqual("aa", max(rows, key=agreement.row_age).group(2))
 
 

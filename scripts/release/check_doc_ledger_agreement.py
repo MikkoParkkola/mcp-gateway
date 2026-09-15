@@ -42,8 +42,15 @@ PROSE = re.compile(r"^All (\w+) major statements and minor 1-(\d+) carry", re.M)
 # be unsigned digits hid the nine rows that record a close as `-1`, and skipping
 # the newest row is how a stale agreement gets certified.
 SUMMARY = re.compile(
-    r"^\| (\d{4}-\d{2}-\d{2})([a-z]+) \| (\d+) \| (\d+) \| \*\*(\d+)\*\* \|", re.M
+    r"^\| (\d{4}-\d{2}-\d{2})([a-z]*) \| (\d+) \| (\d+) \| \*\*(\d+)\*\* \|", re.M
 )
+# The tracker holds several tables. Anchoring on this header keeps the strict
+# row pattern from being asked about rows that were never summary rows, which is
+# what lets an unreadable summary row be a hard error rather than a silent skip.
+SUMMARY_HEADER = re.compile(
+    r"^\| Date \| Core open \| Scope pending \| \*\*OPEN\*\* \|.*$", re.M
+)
+SEPARATOR = re.compile(r"^\|[\s:|-]+\|$")
 
 WORDS = {
     w: n
@@ -131,13 +138,33 @@ def check_prose(text, majors, minors):
     return []
 
 
-def check_tracker(text, pending, blocking):
-    rows = list(SUMMARY.finditer(text))
+def summary_rows(text):
+    """Every data row of the summary table, or a Drift naming the one that broke.
+
+    Selecting the newest row out of whatever happened to match would read a
+    malformed newest row as absent and certify the row below it as current.
+    """
+    header = only_match(SUMMARY_HEADER, text, TRACKER, "summary-table header")
+    rows = []
+    for line in text[header.end() :].splitlines()[1:]:
+        if not line.startswith("|"):
+            break
+        if SEPARATOR.match(line):
+            continue
+        match = SUMMARY.match(line)
+        if not match:
+            raise Drift(f"{TRACKER}: unreadable summary row: {line[:80]}")
+        rows.append(match)
     if not rows:
-        raise Drift(f"{TRACKER}: no summary rows matched")
+        raise Drift(f"{TRACKER}: the summary table has no rows")
+    return rows
+
+
+def check_tracker(text, pending, blocking):
+    rows = summary_rows(text)
     # Newest by parsed key, so an out-of-order append cannot be read as current.
     newest = max(rows, key=row_age)
-    at = f"{TRACKER}:{line_of(text, newest.start())}"
+    at = f"{TRACKER}:{line_of(text, text.index(newest.group(0)))}"
     said_blocking, said_pending, said_total = (int(newest.group(i)) for i in (3, 4, 5))
 
     failures = []
