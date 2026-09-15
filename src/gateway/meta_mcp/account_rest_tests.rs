@@ -29,8 +29,8 @@ use crate::identity_propagation::AccountStrategyRegistry;
 use crate::personal_accounts::AccountCustody;
 
 use super::account_resolver_fixture::{
-    ALICE_PERSONAL_TOKEN, ALICE_WORK_TOKEN, BOB_WORK_TOKEN, PERSONAL, STATIC_FALLBACK, WORK,
-    account_key, custody_with, grant, identity,
+    ALICE_PERSONAL_TOKEN, ALICE_WORK_TOKEN, BOB_WORK_TOKEN, PERSONAL, ROTATED_TOKEN,
+    STATIC_FALLBACK, WORK, account_key, custody_with, grant, identity, reconnect_from,
 };
 use super::account_rest_fixture::{
     Captured, EXPIRED_EXTERNAL_TOKEN, TOOL, backend_with, cacheable_base_url, cacheable_capability,
@@ -1269,5 +1269,78 @@ async fn a_multi_user_dispatch_with_invalid_arguments_acquires_no_credential() {
             .expect("a tool result serializes")
             .contains(ALICE_WORK_TOKEN),
         "a validation error must not carry account credential material"
+    );
+}
+
+/// STORE.2 C4: A CREDENTIAL PREPARED UNDER THE OLD GRANT IS NOT USABLE ONCE THE
+/// ACCOUNT IS RECONNECTED.
+///
+/// The revocation sibling above stops at `invalidate`, which proves only that a
+/// removed grant kills its warm entry. The criterion is stronger: after the user
+/// reconnects and a NEW grant is published, the credential prepared under the
+/// OLD one must still be refused — otherwise a cache entry outlives the
+/// authority it was minted under, which is exactly the hole per-user isolation
+/// is supposed to close.
+///
+/// The new grant is committed through the live `CustodyHandle` under a
+/// compare-and-set expectation naming the grant it replaces, so this is the real
+/// publication path and not a store the test reopened behind custody's back. The
+/// second call is byte-identical to the first: the warm entry is sitting there,
+/// and only a recheck that runs BEFORE the lookup can refuse it.
+///
+/// Three oracles, because two of them can pass for the wrong reason: the call is
+/// refused, no new request reaches the wire, and the refusal carries NEITHER the
+/// old token (served from cache) NOR the new one (silently re-resolved).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reconnected_grant_refuses_the_credential_prepared_under_the_old_one() {
+    let (port, captured) = capture_endpoint().await;
+    let alice = account_key("alice", WORK);
+    let seeded = grant(ALICE_WORK_TOKEN, FRESH);
+    let custody = custody_with(&[(alice.clone(), seeded.clone())]);
+    let installed: Arc<dyn AccountCustody> = custody.installed();
+    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let executor = caching_executor(&registry, Some((LEGACY_TRAP_TOKEN, &dir)));
+    let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));
+
+    let prepared = prepared_caching_context(&registry, "alice", WORK, "oauth:google").await;
+    let warm = executor
+        .execute_with_context(&capability, json!({}), prepared.clone())
+        .await
+        .expect("the prepared credential must dispatch while its grant is current");
+    assert_eq!(captured.count(), 1, "the cache must actually be warm");
+    assert_eq!(
+        warm["authorization"],
+        json!(format!("Bearer {ALICE_WORK_TOKEN}")),
+        "the warm entry must be Alice's own account credential, not the legacy trap"
+    );
+
+    let (expectation, reconnected) = reconnect_from(&seeded, ROTATED_TOKEN);
+    custody
+        .handle
+        .commit_grant_if(&alice, &expectation, &reconnected)
+        .await
+        .expect("the reconnected grant must be published through live custody");
+
+    let error = executor
+        .execute_with_context(&capability, json!({}), prepared)
+        .await
+        .expect_err("a credential prepared under the superseded grant must be refused");
+
+    let text = error.to_string();
+    assert!(
+        !text.contains(ALICE_WORK_TOKEN),
+        "the refusal must not carry the superseded token: {text}"
+    );
+    assert!(
+        !text.contains(ROTATED_TOKEN) && !text.contains(LEGACY_TRAP_TOKEN),
+        "the refusal must not silently re-resolve to the new grant or fall back \
+         to the legacy trap: {text}"
+    );
+    assert_eq!(
+        captured.count(),
+        1,
+        "the refusal must reach neither the cache nor the wire: no new request, and an error \
+         instead of the stored body"
     );
 }

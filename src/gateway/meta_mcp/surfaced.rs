@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
+use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::config::SurfacedToolConfig;
 use crate::{Result, protocol::Tool};
 
@@ -92,6 +93,25 @@ impl MetaMcp {
         self.surfaced_tools_map.get(tool_name).map(String::as_str)
     }
 
+    /// Whether a surfaced MCP-backend tool is withheld for a structurally
+    /// invalid input schema.
+    ///
+    /// The disclosure half of this verdict lives in [`Self::resolve_surfaced_tool`];
+    /// this is the same schema check asked on the dispatch path, so a tool
+    /// withheld from `tools/list` *for its schema* is also refused by name.
+    ///
+    /// It deliberately does not cover the other reasons `resolve_surfaced_tool`
+    /// returns `None`. A cache miss is an unwarmed cache, not a verdict —
+    /// `CachedMetadata` holds `None` until the first fetch — so refusing on it
+    /// would reject valid calls made before the backend's tool list has been
+    /// read.
+    pub(super) fn surfaced_schema_withheld(&self, server: &str, tool_name: &str) -> bool {
+        self.backends
+            .get(server)
+            .and_then(|backend| backend.get_cached_tool(tool_name))
+            .is_some_and(|tool| !input_schema_is_structurally_valid(&tool.input_schema))
+    }
+
     /// Resolve a surfaced tool config to a [`Tool`] schema.
     ///
     /// Returns `None` when:
@@ -134,6 +154,23 @@ impl MetaMcp {
                     tool = %surfaced.tool,
                     "Surfaced tool not in backend cache — omitting from tools/list"
                 );
+            }
+            // Structural schema check, the same one the capability loader runs
+            // before it will serve a definition. A backend's tool arrives over
+            // the wire rather than off disk, so nothing had ever checked it:
+            // the gateway disclosed a schema no client could build a call
+            // against. Withheld per tool — the backend's healthy siblings stay
+            // listed, matching how the loader skips one definition rather than
+            // dropping the directory.
+            if let Some(t) = &tool
+                && !input_schema_is_structurally_valid(&t.input_schema)
+            {
+                warn!(
+                    server = %surfaced.server,
+                    tool = %surfaced.tool,
+                    "Surfaced tool has a structurally invalid input schema — withholding it"
+                );
+                return None;
             }
             return tool;
         }

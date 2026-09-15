@@ -26,9 +26,9 @@ use crate::security::ToolPolicy;
 use crate::security::firewall::Firewall;
 
 mod authorization;
+pub use authorization::CallerStanding;
 pub(crate) use authorization::{
     ADMIN_META_TOOLS, OwnedRouterAuthorizer, RouterAuthorizer, backend_tool_targets_for_call,
-    is_admin_meta_tool,
 };
 mod backend_handlers;
 mod handlers;

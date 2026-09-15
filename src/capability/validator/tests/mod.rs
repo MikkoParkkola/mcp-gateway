@@ -635,3 +635,29 @@ fn extract_placeholders_env_ref() {
     let found: Vec<_> = extract_placeholders("https://{env.API_HOST}/v1").collect();
     assert_eq!(found, vec!["env.API_HOST"]);
 }
+
+#[test]
+fn wire_schema_predicate_rejects_every_non_object() {
+    // A backend may send anything as `inputSchema`. Only an object can be one:
+    // the rest carry no `type` and no `properties`, so the shared check finds
+    // nothing to object to and would otherwise pass them through.
+    for value in [
+        json!(null),
+        json!("object"),
+        json!(7),
+        json!(true),
+        json!([{"type": "object"}]),
+    ] {
+        assert!(
+            !input_schema_is_structurally_valid(&value),
+            "{value} is not a schema a client can build a call against"
+        );
+    }
+    assert!(input_schema_is_structurally_valid(&json!({})));
+    assert!(input_schema_is_structurally_valid(
+        &json!({"type": "object", "properties": {}})
+    ));
+    assert!(!input_schema_is_structurally_valid(
+        &json!({"type": "array"})
+    ));
+}
