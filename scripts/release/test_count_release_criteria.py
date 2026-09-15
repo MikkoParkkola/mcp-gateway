@@ -436,6 +436,41 @@ def test_a_letter_split_is_not_stripped_like_a_clause():
     assert counter.CLAUSE.sub("", "MIK-7213.CACHE.4a") == "MIK-7213.CACHE.4a"
 
 
+# The `core open` term of the burndown OPEN formula is "neither MET-in-any-
+# qualified-form nor N/A". The Coverage line reports BLOCKING rows, which is a
+# different set: a PARTIAL row flagged non-blocking is open by the formula and
+# absent from the blocking count. The tracker published the blocking count as
+# `core open` for six consecutive entries because nothing emitted the other
+# number. These rows pin the difference.
+OPEN_LEDGER = "\n".join(
+    [
+        "| NFR.SEC.7 | signing | T, M | PARTIAL | evidence | yes |",
+        "| NFR.PERF.1 | latency | T, M | PARTIAL | evidence | no |",
+        "| MIK-7272.ORDER.1 | order | MET (structural) | evidence | no |",
+        "| NFR.COMPAT.3 | config | D | N/A (waived) | evidence | no |",
+        "| MIK-6704.IDENT.1a | identity | MET | evidence | no |",
+    ]
+)
+
+
+def test_open_rows_counts_a_partial_row_that_is_not_blocking():
+    assert counter.open_rows(OPEN_LEDGER) == ["NFR.SEC.7", "NFR.PERF.1"]
+
+
+def test_open_rows_admits_every_qualified_met_and_waived_form():
+    met_only = "\n".join(
+        line for line in OPEN_LEDGER.splitlines() if "PARTIAL" not in line
+    )
+    assert counter.open_rows(met_only) == []
+
+
+def test_open_rows_differs_from_the_blocking_count_it_is_mistaken_for():
+    found, _ = counter.rows(OPEN_LEDGER)
+    blocking = sum(1 for _p, flag, _s in found if flag == "yes")
+    assert blocking == 1
+    assert len(counter.open_rows(OPEN_LEDGER)) == 2
+
+
 if __name__ == "__main__":
     # CI runs this file as a script, not under pytest. Without this the module
     # defines its tests, exits 0, and the gate reports a pass having asserted
@@ -456,3 +491,5 @@ if __name__ == "__main__":
         f"{len(failed)} failed of {sum(1 for n in globals() if n.startswith('test_'))}"
     )
     sys.exit(1 if failed else 0)
+
+

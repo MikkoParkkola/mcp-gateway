@@ -183,6 +183,33 @@ def rows(text):
     return out, malformed
 
 
+def open_rows(text):
+    """Criterion ids whose status is neither MET-in-any-qualified-form nor N/A.
+
+    This is the `core open` term the burndown tracker's OPEN formula names, and
+    it is NOT the blocking count the Coverage line reports. The two differ by
+    every row that is PARTIAL and non-blocking, and the tracker published the
+    blocking count as `core open` for six consecutive entries because nothing
+    emitted the number the formula actually asks for. Emitting it is the fix:
+    a term derived by hand is a term that drifts.
+
+    Status is located exactly as `status_violations` locates it -- from the
+    left, with the method regex deciding which of the two positions holds it --
+    so the two can never disagree about which cell they are reading.
+    """
+    out = []
+    for line in text.splitlines():
+        if not line.startswith("| ") or line.startswith("| ---"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 4 or not ID.match(cells[0]) or cells[-1] not in ("yes", "no"):
+            continue
+        status = cells[3] if METHOD.match(cells[2]) else cells[2]
+        if not status.startswith("MET") and not status.startswith("N/A"):
+            out.append(ID.match(cells[0]).group(0))
+    return out
+
+
 def status_violations(text):
     """Criterion ids whose status cell is outside the documented vocabulary.
 
@@ -574,6 +601,11 @@ def main():
     print(
         f"Coverage: {totals[0]} criteria, {totals[1]} rows, "
         f"{totals[2]} met or non-blocking, {totals[3]} blocking."
+    )
+    still_open = open_rows(text)
+    print(
+        f"Core open: {len(still_open)} rows neither MET nor N/A"
+        + (f" ({', '.join(still_open)})." if still_open else ".")
     )
     if uncovered:
         print(f"requirement IDs with no row: {', '.join(uncovered)}", file=sys.stderr)
