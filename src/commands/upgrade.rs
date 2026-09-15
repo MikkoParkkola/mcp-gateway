@@ -228,13 +228,13 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
 //
-// v4.0.0 carries four changes an operator can be surprised by, none of which a
+// v4.0.0 carries five changes an operator can be surprised by, none of which a
 // config edit can pre-empt: two need an action (re-authenticate, fix an env
 // file), one removes an advertised protocol version, and one changes what the
 // error budgets count. A 3.x `gateway.yaml` loads unchanged, so this migration
 // never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The four 4.0.0 changes, in the order they are printed.
+/// The five 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -251,12 +251,19 @@ speak it must upgrade; 2025-03-26 and later are unaffected.",
     "Rate-limited backend responses (HTTP 429 and equivalents) no longer count \
 against the error budgets or the circuit breaker (GH #475). A throttled backend \
 is no longer auto-killed for being busy.",
+    "A response is cached only under a protocol revision the gateway can \
+identify. A stateless POST that sends no `MCP-Protocol-Version` header and \
+never completes `initialize` is no longer served from cache, so that traffic \
+reaches your backends and the gateway's own rate limits now apply to calls that \
+previously never got that far. Nothing errors: the symptom is throughput and \
+backend load. Send the header on stateless requests, or complete `initialize` \
+and reuse the session.",
 ];
 
 /// Emit the one-time 4.0.0 notice.
 ///
 /// Takes the data directory for signature parity with the other migrations; it
-/// reads nothing, because none of the four items depends on what the config
+/// reads nothing, because none of the five items depends on what the config
 /// says.
 ///
 /// The `Result` is dictated by `Migration::apply`, not by anything this can fail at.
@@ -273,7 +280,7 @@ fn migrate_4_0_0_release_notice(_data_dir: &Path) -> std::io::Result<()> {
     // notice fires exactly once. stderr so `--quiet` can suppress progress
     // chatter on stdout without suppressing the warning itself.
     eprintln!(
-        "v4.0.0: four changes need your attention. No config was changed automatically.\n{body}"
+        "v4.0.0: five changes need your attention. No config was changed automatically.\n{body}"
     );
     Ok(())
 }
@@ -1140,14 +1147,20 @@ mod tests {
         assert_eq!(content_after_second, original);
     }
 
-    /// GH475.MIG.4 — the notice carries all four items, each named by the
+    /// GH475.MIG.4 — the notice carries all five items, each named by the
     /// action or removal it announces. Pinned so a later edit cannot quietly
     /// drop one: an operator reads this once.
     #[test]
-    fn notice_4_0_0_carries_all_four_items() {
-        assert_eq!(NOTICE_4_0_0_ITEMS.len(), 4);
+    fn notice_4_0_0_carries_all_five_items() {
+        assert_eq!(NOTICE_4_0_0_ITEMS.len(), 5);
         let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
-        for expected in ["re-authenticate", "fails startup", "2024-10-07", "429"] {
+        for expected in [
+            "re-authenticate",
+            "fails startup",
+            "2024-10-07",
+            "429",
+            "mcp-protocol-version",
+        ] {
             assert!(
                 all.contains(expected),
                 "the 4.0.0 notice no longer mentions {expected}: {all}"
