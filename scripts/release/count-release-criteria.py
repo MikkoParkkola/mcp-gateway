@@ -54,6 +54,12 @@ METHOD = re.compile(r"^[TMID](, ?[TMID])*$")
 # the blocking column is set by hand, so an undefined word is a row whose flag
 # no rule connects to its verdict. Two rows read `PASS` for three days and were
 # counted non-blocking by a check that only ever policed the other column.
+# The exception the ledger's rule names: a dated ruling in the evidence cell
+# lifts the flag on a grade that is neither MET nor N/A. Dated on purpose -- a
+# bare "blocking flag lifted" is an assertion, and the rule calls a bare `no`
+# beside such a grade a stale flag rather than a waiver.
+WAIVER = re.compile(r"\*\*Blocking flag lifted, (\d{4}-\d{2}-\d{2}):?\*\*")
+
 STATUS_WORDS = re.compile(r"^(MET|PARTIAL|ABSENT|UNWIRED|UNTESTED|N/A)(\s*\(.+\))?$")
 # The headline sentence this script owns. Nothing else in the file may state totals.
 HEADLINE = re.compile(
@@ -241,6 +247,11 @@ def blocking_disagreements(text):
     the count with work that is done, which is how a cluster came to name a met
     criterion as its blocker.
 
+A row whose evidence carries a dated **Blocking flag lifted** ruling is not a
+    disagreement: the ledger's rule admits that exception by name, and reporting
+    the release owner's own ruling as a defect is how a checker teaches a reader
+    to ignore it.
+
     Two row shapes are deliberately not reported here, because a check that
     already owns them would then name one defect twice, in two messages: a
     status outside the vocabulary belongs to `status_violations`, and a blocking
@@ -255,7 +266,8 @@ def blocking_disagreements(text):
         word = STATUS_WORDS.match(status)
         if not word:
             continue
-        expected = "no" if word.group(1) in ("MET", "N/A") else "yes"
+        waived = any(WAIVER.search(cell) for cell in cells)
+        expected = "no" if waived or word.group(1) in ("MET", "N/A") else "yes"
         if cells[-1] != expected:
             out.append((cells[0], word.group(1), cells[-1]))
     return out

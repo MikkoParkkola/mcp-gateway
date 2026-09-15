@@ -516,6 +516,28 @@ def test_the_two_statuses_the_rule_exempts_pass_when_flagged_non_blocking():
     assert counter.blocking_disagreements(rows) == []
 
 
+def test_a_dated_ruling_in_the_evidence_cell_lifts_the_flag():
+    """The rule the ledger states admits one exception, and it is dated.
+
+    NFR.PERF.1 is the instance: graded PARTIAL, flagged `no`, and carrying a
+    ruling that says so. Without this the row reads as a stale flag forever.
+    """
+    row = (
+        "| NFR.PERF.1 | a criterion | M | PARTIAL | "
+        "**Blocking flag lifted, 2026-09-05:** out of the release gate | no |"
+    )
+    assert counter.blocking_disagreements(row) == []
+
+
+def test_an_undated_assertion_does_not_lift_the_flag():
+    """A stale flag defends itself in exactly these words; the date is the proof."""
+    row = (
+        "| NFR.PERF.1 | a criterion | M | PARTIAL | "
+        "**Blocking flag lifted:** out of the release gate | no |"
+    )
+    assert counter.blocking_disagreements(row)[0] == ("NFR.PERF.1", "PARTIAL", "no")
+
+
 def test_a_qualified_status_is_read_by_its_word_not_its_parenthetical():
     """`ABSENT (regraded 2026-09-15)` is the shape three rows regraded into."""
     row = "| NFR.PERF.9 | a criterion | M | ABSENT (regraded 2026-09-15) | x | no |"
