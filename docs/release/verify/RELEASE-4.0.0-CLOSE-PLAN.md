@@ -168,7 +168,7 @@ for the same request, and CONFIRM.2 landing made the ask the real one. The `CONF
 ledger row already carries the resolution — the refusal is conditional, it binds where
 confirmation genuinely cannot be obtained, and it stays witnessed by
 `ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm`
-(`src/gateway/server/mod.rs:2835`) and `tests/mik_7246_confirm_1a_unconfirmable_producers.rs`.
+(`src/gateway/server/mod.rs:4007`, re-anchored 2026-09-15 from the stale `:2835`, which now lands on an unrelated `is_admin: true` in a stdio context builder) and `tests/mik_7246_confirm_1a_unconfirmable_producers.rs`.
 What has not landed is the corresponding edit to the two HTTP tests.
 
 That edit exists, uncommitted, in `tests/mik_7215_acs.rs` (+87/-41): it renames the first
