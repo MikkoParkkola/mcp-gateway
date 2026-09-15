@@ -290,8 +290,11 @@ A row whose evidence carries a dated **Blocking flag lifted** ruling is not a
     cell that is neither `yes` nor `no` belongs to `rows`, which calls that row
     malformed and stops the run before this rule is ever consulted.
 
-    Returns `(id, status word, flag)` rather than sentences, so that a caller
-    reading the result never has to parse the message back apart.
+    Returns `(id, status word, flag, the flag the rule requires)` rather than
+    sentences, so that a caller reading the result never has to parse the
+    message back apart -- and never has to recompute the rule to say what the
+    row should have said. Recomputing it told a waived row flagged `yes` that
+    the rule wanted `yes`.
     """
     out = []
     for cells, status in criterion_cells(text):
@@ -301,7 +304,7 @@ A row whose evidence carries a dated **Blocking flag lifted** ruling is not a
         waived = is_waived(cells[status_index(cells) + 1 : -1])
         expected = "no" if waived or word.group(1) in ("MET", "N/A") else "yes"
         if cells[-1] != expected:
-            out.append((cells[0], word.group(1), cells[-1]))
+            out.append((cells[0], word.group(1), cells[-1], expected))
     return out
 
 
@@ -628,9 +631,8 @@ def main():
             "blocking cell disagrees with the status the row states:\n  "
             + "\n  ".join(
                 f"{name} is {word} and its blocking cell reads `{flag}`; "
-                f"the ledger's own rule makes it "
-                f"`{'no' if word in ('MET', 'N/A') else 'yes'}`"
-                for name, word, flag in disagreements
+                f"the ledger's own rule makes it `{expected}`"
+                for name, word, flag, expected in disagreements
             ),
             file=sys.stderr,
         )

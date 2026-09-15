@@ -483,7 +483,7 @@ def test_a_functional_row_is_not_read_as_an_nfr_row_by_its_status_cell():
 def test_an_nfr_row_reads_the_cell_after_its_method_column():
     row = "| NFR.PERF.9 | a criterion | T, D | ABSENT | nothing built | no |"
     assert counter.status_violations(row) == []
-    assert counter.blocking_disagreements(row)[0] == ("NFR.PERF.9", "ABSENT", "no")
+    assert counter.blocking_disagreements(row)[0] == ("NFR.PERF.9", "ABSENT", "no", "yes")
 
 
 def test_a_malformed_blocking_cell_is_a_defect_of_the_check_that_owns_it():
@@ -603,7 +603,7 @@ def test_an_undated_assertion_does_not_lift_the_flag():
         "| NFR.PERF.1 | a criterion | M | PARTIAL | "
         "**Blocking flag lifted:** out of the release gate | no |"
     )
-    assert counter.blocking_disagreements(row)[0] == ("NFR.PERF.1", "PARTIAL", "no")
+    assert counter.blocking_disagreements(row)[0] == ("NFR.PERF.1", "PARTIAL", "no", "yes")
 
 
 def test_a_qualified_status_is_read_by_its_word_not_its_parenthetical():
@@ -663,6 +663,20 @@ def test_a_row_the_selector_skips_is_still_refused_by_the_gate():
     code, complaint = gate_on(broken)
     assert code == 1
     assert "blocking cell disagrees" not in complaint
+
+
+def test_a_waived_row_is_told_the_flag_the_rule_actually_requires():
+    """Recomputing the rule at the message told this row to keep its `yes`."""
+    row = (
+        "| NFR.PERF.1 | a criterion | M | PARTIAL | "
+        "**Blocking flag lifted, 2026-09-05:** out of the gate | yes |"
+    )
+    assert counter.blocking_disagreements(row)[0] == (
+        "NFR.PERF.1",
+        "PARTIAL",
+        "yes",
+        "no",
+    )
 
 
 if __name__ == "__main__":
