@@ -183,8 +183,8 @@ def rows(text):
     return out, malformed
 
 
-def status_violations(text):
-    """Criterion ids whose status cell is outside the documented vocabulary.
+def criterion_cells(text):
+    """The cells of every well-formed criterion row, and its status cell.
 
     Counted from the LEFT, not the right: an evidence cell may contain a literal
     pipe, which moves every right-hand index and made two well-formed rows read
@@ -192,17 +192,58 @@ def status_violations(text):
     rows do not, so the method regex decides which of the two positions holds
     the status rather than a per-prefix rule that a new prefix would silently
     escape.
+
+    One selection shared by every per-row check. Two copies of it had already
+    drifted apart in whether a malformed row was a defect or a skip, and a third
+    would have decided on its own which rows a new rule was allowed to see.
     """
-    out = []
     for line in text.splitlines():
         if not line.startswith("| ") or line.startswith("| ---"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) < 4 or not ID.match(cells[0]) or cells[-1] not in ("yes", "no"):
             continue
-        status = cells[3] if METHOD.match(cells[2]) else cells[2]
-        if not STATUS_WORDS.match(status):
-            out.append(f"{cells[0]} ({status[:40]})")
+        yield cells, cells[3] if METHOD.match(cells[2]) else cells[2]
+
+
+def status_violations(text):
+    """Criterion ids whose status cell is outside the documented vocabulary."""
+    return [
+        f"{cells[0]} ({status[:40]})"
+        for cells, status in criterion_cells(text)
+        if not STATUS_WORDS.match(status)
+    ]
+
+
+def blocking_disagreements(text):
+    """Rows whose blocking cell contradicts the rule the ledger states itself.
+
+    The ledger writes its own rule down -- "A criterion is BLOCKING unless it is
+    MET or N/A" -- and then sets the blocking column by hand. Nothing compared
+    the two columns: the count reads the flag, the vocabulary check reads the
+    status, and a row can say ABSENT and `no` in the same line without either
+    noticing. Three rows regraded out of MET on 2026-09-15 kept their `no`, so
+    the release headline stayed at one blocking criterion through a regrade that
+    should have moved it.
+
+    Both directions are a disagreement. A MET row left flagged blocking inflates
+    the count with work that is done, which is how a cluster came to name a met
+    criterion as its blocker.
+
+    A status outside the vocabulary is not reported here. `status_violations`
+    already owns that row, and naming it twice reports one defect as two.
+    """
+    out = []
+    for cells, status in criterion_cells(text):
+        word = STATUS_WORDS.match(status)
+        if not word:
+            continue
+        expected = "no" if word.group(1) in ("MET", "N/A") else "yes"
+        if cells[-1] != expected:
+            out.append(
+                f"{cells[0]} is {word.group(1)} and its blocking cell reads "
+                f"`{cells[-1]}`; the ledger's own rule makes it `{expected}`"
+            )
     return out
 
 
@@ -517,6 +558,24 @@ def main():
             file=sys.stderr,
         )
         return 1
+
+    if "--blocking-consistency" in sys.argv:
+        # Not folded into `--check`, which ci.yml, docker.yml and release.yml all
+        # run: the rule is red on four rows today, and the blocking cells that
+        # would settle them belong to the criteria ledger's owner. The suite
+        # pins the four so a fifth cannot arrive unseen, and this path is what
+        # the owner runs to see them. Promoting it into `--check` is the step
+        # after those cells are reconciled.
+        disagreements = blocking_disagreements(text)
+        if disagreements:
+            print(
+                "blocking cell disagrees with the status the row states:\n  "
+                + "\n  ".join(disagreements),
+                file=sys.stderr,
+            )
+            return 1
+        print("Blocking column agrees with every status cell.")
+        return 0
 
     blocking = sum(1 for _, b, _s in criteria if b == "yes")
     if "--blocking" in sys.argv:

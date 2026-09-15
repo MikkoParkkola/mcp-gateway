@@ -436,6 +436,75 @@ def test_a_letter_split_is_not_stripped_like_a_clause():
     assert counter.CLAUSE.sub("", "MIK-7213.CACHE.4a") == "MIK-7213.CACHE.4a"
 
 
+# The four rows the criteria ledger states as neither MET nor N/A while their
+# blocking cell reads `no`. Pinned, not tolerated: a fifth one turns this test
+# red the tick it appears, and so does the owner reconciling any of these four,
+# which is the moment `--blocking-consistency` gets folded into `--check`.
+KNOWN_DISAGREEMENTS = {
+    "MIK-7212.MRTR.7a",
+    "MIK-7212.MRTR.7b",
+    "NFR.COMPAT.1",
+    "NFR.PERF.1",
+}
+
+
+def named(disagreements):
+    return {d.split(" is ", 1)[0] for d in disagreements}
+
+
+def test_the_live_ledger_disagrees_on_exactly_the_rows_already_reported():
+    found = named(counter.blocking_disagreements(counter.STATUS.read_text()))
+    assert found == KNOWN_DISAGREEMENTS, found
+
+
+def test_a_row_that_is_absent_and_flagged_non_blocking_is_caught():
+    row = "| NFR.PERF.9 | a criterion | M | ABSENT | nothing built | no |"
+    assert named(counter.blocking_disagreements(row)) == {"NFR.PERF.9"}
+
+
+def test_a_row_that_is_met_and_flagged_blocking_is_caught():
+    """The other direction: work that is done must not inflate the count."""
+    row = "| NFR.PERF.9 | a criterion | M | MET | shipped | yes |"
+    assert named(counter.blocking_disagreements(row)) == {"NFR.PERF.9"}
+
+
+def test_the_two_statuses_the_rule_exempts_pass_when_flagged_non_blocking():
+    rows = (
+        "| NFR.PERF.9 | a criterion | M | MET | shipped | no |\n"
+        "| NFR.PERF.8 | a criterion | M | N/A | out of scope | no |"
+    )
+    assert counter.blocking_disagreements(rows) == []
+
+
+def test_a_qualified_status_is_read_by_its_word_not_its_parenthetical():
+    """`ABSENT (regraded 2026-09-15)` is the shape three rows regraded into."""
+    row = "| NFR.PERF.9 | a criterion | M | ABSENT (regraded 2026-09-15) | x | no |"
+    assert named(counter.blocking_disagreements(row)) == {"NFR.PERF.9"}
+
+
+def test_a_status_outside_the_vocabulary_is_left_to_the_check_that_owns_it():
+    """Reporting it here too would name one defect as two, in two messages."""
+    row = "| NFR.PERF.9 | a criterion | M | DONE | shipped | no |"
+    assert counter.blocking_disagreements(row) == []
+    assert counter.status_violations(row) != []
+
+
+def test_a_functional_row_without_a_method_column_reads_its_own_status():
+    """Position is decided by the method regex, not by the id's prefix."""
+    row = "| MIK-7212.MRTR.9 | a criterion | ABSENT | nothing built | no |"
+    assert named(counter.blocking_disagreements(row)) == {"MIK-7212.MRTR.9"}
+
+
+def test_the_shared_selector_skips_what_is_not_a_criterion_row():
+    text = (
+        "| Group | Criteria | Audited here |\n"
+        "| --- | --- | --- | --- |\n"
+        "not a table row at all\n"
+        "| NFR.PERF.9 | a criterion | M | MET | shipped | maybe |\n"
+    )
+    assert list(counter.criterion_cells(text)) == []
+
+
 if __name__ == "__main__":
     # CI runs this file as a script, not under pytest. Without this the module
     # defines its tests, exits 0, and the gate reports a pass having asserted
