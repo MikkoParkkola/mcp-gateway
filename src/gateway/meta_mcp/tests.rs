@@ -5984,3 +5984,180 @@ async fn a_reissued_idempotency_key_is_served_from_the_stored_result() {
          placeholder: first={first}, second={second}"
     );
 }
+
+/// A transport that answers each `tools/call` with the next scripted result.
+///
+/// The bridge's whole subject is the SECOND call: a fixed result would let a
+/// wiring that never retries pass by answering the first one twice.
+struct ScriptedToolCallTransport {
+    results: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
+    calls: std::sync::Mutex<Vec<serde_json::Value>>,
+}
+
+impl ScriptedToolCallTransport {
+    fn new(results: Vec<serde_json::Value>) -> Self {
+        Self {
+            results: std::sync::Mutex::new(results.into()),
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn calls(&self) -> Vec<serde_json::Value> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for ScriptedToolCallTransport {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        assert_eq!(method, "tools/call");
+        self.calls.lock().unwrap().push(params.unwrap_or_default());
+        let result = self
+            .results
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("backend called more times than the script has answers");
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            result,
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A client that accepts every elicitation it is shown.
+struct AcceptingChannel {
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::ClientChannel for AcceptingChannel {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> std::result::Result<serde_json::Value, crate::gateway::input_bridge::DeliveryError> {
+        self.asked.lock().unwrap().push(method.to_owned());
+        Ok(json!({
+            "jsonrpc": "2.0",
+            "result": {"action": "accept", "content": {"account": "work"}}
+        }))
+    }
+}
+
+// MIK-7212.WIRE: the bridge is reached from the production invoke path, not
+// only from its own acceptance suite. Deleting the branch in `invoke_tool`
+// turns this red — the call returns the backend's question as a continuation
+// envelope instead of the answered result, and the backend is called once.
+//
+// The two halves that make it a WIRING test rather than a second bridge test:
+// the backend here is a real registered backend reached through
+// `accounted_dispatch`, and the client is reached through the caller context's
+// own channel. Neither is a `FakeBackend`.
+#[tokio::test]
+async fn a_legacy_clients_question_is_bridged_from_the_invoke_path() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "asking_backend",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let script = Arc::new(ScriptedToolCallTransport::new(vec![
+        json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "k1": {
+                    "method": "elicitation/create",
+                    "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+                }
+            },
+            "requestState": "backend-state-1"
+        }),
+        json!({"content": [{"type": "text", "text": "booked on work"}]}),
+    ]));
+    let transport: Arc<dyn Transport> = script.clone();
+    backend.set_transport_for_test(transport);
+    let _ = registry.register(backend);
+
+    let channel = AcceptingChannel {
+        asked: std::sync::Mutex::new(Vec::new()),
+    };
+    let mut ctx = allow_all_ctx();
+    ctx.era = crate::protocol::meta::Era::Legacy;
+    // Built through the gateway's own reader rather than a literal: a
+    // hand-made `Declared` could declare a shape no `initialize` can produce.
+    ctx.input_capabilities = crate::protocol::meta::classify_request(
+        Some(&json!({"_meta": {
+            crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+            crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}},
+        }})),
+        None,
+    )
+    .declared_capabilities();
+    ctx.channel = &channel;
+
+    let result = MetaMcp::new(registry)
+        .invoke_tool(
+            &json!({"server": "asking_backend", "tool": "book", "arguments": {}}),
+            Some("session-wire-1"),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        channel.asked.lock().unwrap().as_slice(),
+        ["elicitation/create"],
+        "the question must reach the client on its own connection"
+    );
+
+    let calls = script.calls();
+    assert_eq!(calls.len(), 2, "the backend must be retried: {calls:#?}");
+    assert_eq!(
+        calls[1].pointer("/requestState").and_then(Value::as_str),
+        Some("backend-state-1"),
+        "the retry must carry the backend's own state back: {:#}",
+        calls[1]
+    );
+    assert_eq!(
+        calls[1]
+            .pointer("/inputResponses/k1/account")
+            .and_then(Value::as_str),
+        Some("work"),
+        "the retry must carry the client's answer, keyed as the backend asked: {:#}",
+        calls[1]
+    );
+
+    assert_eq!(
+        result.pointer("/content/0/text").and_then(Value::as_str),
+        Some("booked on work"),
+        "the completed body is what the legacy client sees: {result:#}"
+    );
+    assert!(
+        result.get("requestState").is_none(),
+        "a bridged exchange has no continuation to mint: {result:#}"
+    );
+}
