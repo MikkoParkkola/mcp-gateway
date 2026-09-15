@@ -1064,7 +1064,7 @@ mod wire {
     #[tokio::test]
     async fn ac_ext_1_e7_a_valid_settings_object_still_declares_the_extension() {
         // GIVEN the shape the specification requires
-        let (_, body) = post(
+        let (status, body) = post(
             "key-a",
             modern_declaring(
                 1,
@@ -1075,10 +1075,21 @@ mod wire {
         )
         .await;
 
-        // THEN the gate lets it through
+        // THEN the gate lets it through. `post` parses a non-JSON body to
+        // `Value::Null`, whose `error` member is absent too — so the absence of
+        // an error is not on its own evidence that anything was served.
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a validly declared extension must still be served: {body}"
+        );
         assert!(
             body.get("error").is_none(),
             "a validly declared extension must still be served: {body}"
+        );
+        assert!(
+            body["result"].is_object(),
+            "a served request answers with a result document: {body}"
         );
     }
 

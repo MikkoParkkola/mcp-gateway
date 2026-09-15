@@ -362,6 +362,27 @@ mod http {
     }
 
     #[tokio::test]
+    async fn ac_ext_1_e9_modern_server_discover_advertises_the_tasks_extension() {
+        // The server half of MIK-7272 minor 1. The cited unit row hands
+        // `build_server_capabilities` a map and asserts it comes back, so it
+        // stays green with `discovery_extensions()` returning nothing at all —
+        // and a peer reading this document is the only way a client learns the
+        // gateway speaks tasks. The identifier is transcribed from the
+        // specification, not read from `Extension::Tasks.id()`, for the reason
+        // stated at the top of this file.
+        let (status, body) = post_modern("server/discover", 7).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        let extensions = body["result"]["capabilities"]["extensions"]
+            .as_object()
+            .unwrap_or_else(|| panic!("discovery must carry an extensions map: {body}"));
+        assert!(
+            extensions.contains_key("io.modelcontextprotocol/tasks"),
+            "an empty map is still a map: the identifier must be present: {body}"
+        );
+    }
+
+    #[tokio::test]
     async fn ac_order_1_the_tool_order_is_stable_across_callers() {
         // A `HashMap` iteration order passes a same-caller repeat and fails
         // this: two independent gateways assembling the same set must agree, or

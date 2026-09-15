@@ -292,43 +292,46 @@ closing tests inside their statement's row rather than as rows of their own,
 because a statement is the unit the changelog and the `Row` struct both use,
 and mixing units is how a tally stops being checkable.
 
-### Clause-level coverage — one clause open
+### Clause-level coverage — every clause closed
 
 The counts above are at statement granularity, which is the granularity the two
-executable checks enforce. At clause granularity one clause is open:
+executable checks enforce. At clause granularity, both of minor 1's clauses are
+closed:
 
 | Statement | Clause | Disposition | Basis |
 |---|---|---|---|
 | minor 1 | client declares `extensions` | COVERED | `ac_ext_1_e6…` / `ac_ext_1_e7…` drive the real axum router to the live gate |
-| minor 1 | server advertises `extensions` on `server/discover` | **UNCOVERED** | the only cited row, `ac_ext_1_a_the_builder_serializes_the_map_it_was_given`, asserts a map it is handed — see its own comment at `tests/mik_7272_conformance.rs:911-922`. Deleting `discovery_extensions()` (`src/gateway/meta_mcp_helpers.rs:181`) leaves every cited test green while modern `server/discover` stops advertising the extension. |
+| minor 1 | server advertises `extensions` on `server/discover` | COVERED | `ac_ext_1_e9_modern_server_discover_advertises_the_tasks_extension` (`tests/mik_7213_acs.rs:365`) posts a 2026-07-28 `server/discover` through the real axum router and asserts the tasks identifier is a key of the returned `capabilities.extensions`. Replacing `discovery_extensions()` (`src/gateway/meta_mcp_helpers.rs:181`) with an empty map turns it red — the response loses the `extensions` member entirely — while `ac_ext_1_a_the_builder_serializes_the_map_it_was_given` stays green, which is the asymmetry this row exists to record. |
 
 This is *not* the minor 11 situation. Minor 11 also records clause-level detail
 in-row, but each of its clauses is closed by a production-path test
 (`gateway::proxy::tests::…` for the forward paths, the `mrtr7_bridge` route rows
-for the rest). Minor 1's server clause is closed by nothing. The distinction is
-the whole reason Rule 3 now says "on the production path": in-row recording is a
-formatting choice, not a licence to leave a clause unpinned.
+for the rest). Minor 1's server clause was, for one revision, closed by nothing.
+The distinction is the whole reason Rule 3 now says "on the production path":
+in-row recording is a formatting choice, not a licence to leave a clause
+unpinned.
 
-Closing it takes one test asserting the tasks extension in the capabilities
-returned by a real `server/discover` call.
+It is closed the way the rule asks for: one test asserting the tasks extension
+in the capabilities returned by a real `server/discover` call.
 
 ## Grade
 
-**NOT MET — PARTIAL.** Rule 4's population test passes: UNCOVERED is empty and
-COVERED equals 21, at the statement granularity the executable checks enforce.
-That is necessary and, as of this revision, no longer sufficient. Rule 3 requires
-a COVERED cell to be asserted *on the production path*, and minor 1's server
-clause is not — the grade survives deleting the mechanism it certifies, which is
-the one thing a conformance grade must not do.
+**MET.** Rule 4's population test passes: UNCOVERED is empty and COVERED equals
+21, at the statement granularity the executable checks enforce. Rule 3's
+production-path test now passes too, at clause granularity: minor 1's server
+clause is asserted through the router, and the grade no longer survives deleting
+the mechanism it certifies.
 
 The mechanical rule is kept, not weakened: it still decides the statement tally
 without judgement, and it still could not be gamed by relabelling. What changed
-is that passing it is now the floor rather than the finish. The rule was fixed
-before the last cell closed, and it is being applied against the document that
-declared it — including when the answer is that the grade does not hold.
+is that passing it is the floor rather than the finish. The rule was fixed
+before the last cell closed, and it was applied against the document that
+declared it — including for the one revision in which the answer was that the
+grade did not hold.
 
-Remaining work: the `server/discover` test named at the end of the Tally. One
-test closes the clause and returns this criterion to MET.
+Prior revision, kept because a grade that only ever moved upwards would say
+nothing: this criterion was **NOT MET — PARTIAL** while the server clause was
+covered only by a unit test handed the map it asserts.
 
 What the revisions delivered: the matrix, its population rule, the statement
 that was missing from it, the count assertion that would have caught that, the
