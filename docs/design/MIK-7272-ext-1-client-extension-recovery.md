@@ -101,6 +101,28 @@ behaviour, and none produces an error.
 | Mixed map: one valid, one malformed, one unrecognised | only the valid known entry survives |
 | `RequestShape::Legacy` or `::Malformed` | `ExtensionSet::default()`, mirroring `Declared::NONE` |
 
+**The non-Modern rule is a tightening, and it is an invariant, not a live-path
+flip.** `declares_tasks_extension` read the `_meta` pointer directly, so it
+answered from whatever bytes were there regardless of how the envelope
+classified; `declared_extensions()` answers `ExtensionSet::default()` for
+`Legacy` and `Malformed` by construction. Two source-verified facts say nothing
+reachable changes behaviour:
+
+- A request carrying `_meta["io.modelcontextprotocol/clientCapabilities"]` can
+  never classify as `Legacy` — that field's presence is part of what makes the
+  shape `Modern`, so "a legacy request that declared extensions" is not a
+  representable state.
+- `Malformed` is refused with `-32602` at `handlers.rs:819`, before the gate at
+  `:1034` is reached. A malformed envelope never gets as far as being asked
+  what it declared.
+
+So the rule is what keeps the two halves consistent if the classifier ever
+gains a shape, not a change to any request that exists today. Recorded because
+"mirrors `Declared::NONE`" reads like a restatement of existing behaviour and
+is not: it is a new guarantee with no live path to exercise it.
+`ac_ext_1_e8_a_shape_without_a_finished_declaration_recovers_nothing` pins it
+anyway — an invariant with no live path is exactly the one that rots.
+
 Settings *content* is never inspected — only the object shape. Nothing in 4.0.0
 reads what is inside an extension's settings body; that is MIK-7311's work.
 

@@ -1087,9 +1087,12 @@ mod wire {
             body.get("error").is_none(),
             "a validly declared extension must still be served: {body}"
         );
-        assert!(
-            body["result"].is_object(),
-            "a served request answers with a result document: {body}"
+        // `isError` rather than `is_object()`: a result document that reports
+        // a tool failure is still an object, so the weaker assert cannot tell
+        // "served" from "served and failed".
+        assert_eq!(
+            body["result"]["isError"], false,
+            "the served call must report success: {body}"
         );
     }
 

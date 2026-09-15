@@ -1091,6 +1091,52 @@ mod declared_extensions_tests {
         );
     }
 
+    /// The mirror of `Declared::NONE`: a shape carrying no finished
+    /// declaration recovers no extensions.
+    ///
+    /// This row exists because the falsifier matrix could not reach the arm.
+    /// E4, E5a, E5b and both route rows assert on `Modern`, so a mutation that
+    /// populated the set on EVERY arm survived all five of them — an inverse
+    /// mutation with no test to kill it. Found by kimi-review on the shipped
+    /// diff, not by the matrix, which is the point of running one.
+    ///
+    /// Reachability, checked at source rather than assumed: a request carrying
+    /// `clientCapabilities` can never classify `Legacy`, because
+    /// [`classify_request`] counts any of the four protocol keys as a
+    /// declaration; and the `Malformed` arm it lands in instead is refused with
+    /// `-32602` before dispatch reaches the tasks gate. So this pins an
+    /// invariant, not a live path — which is why it is one unit row and not a
+    /// route row.
+    #[test]
+    fn ac_ext_1_e8_a_shape_without_a_finished_declaration_recovers_nothing() {
+        // GIVEN the declaration without the protocol version that finishes it
+        let unfinished = json!({
+            "_meta": {
+                "io.modelcontextprotocol/clientCapabilities": {
+                    "extensions": { Extension::Tasks.id(): {} }
+                }
+            }
+        });
+
+        // THEN a half-written declaration declares nothing. Recovering from it
+        // would let a client negotiate an extension of a revision it never
+        // claimed to speak.
+        assert!(
+            !classify_request(Some(&unfinished), None)
+                .declared_extensions()
+                .contains(Extension::Tasks),
+            "a shape missing the protocol version must recover nothing"
+        );
+
+        // AND a legacy request, which carries no `_meta` to declare in at all
+        assert!(
+            !classify_request(Some(&json!({ "name": "gateway_list_servers" })), None)
+                .declared_extensions()
+                .contains(Extension::Tasks),
+            "a legacy shape must recover nothing"
+        );
+    }
+
     #[test]
     fn ac_ext_1_e5b_a_non_object_settings_value_declares_nothing() {
         // GIVEN the same identifier carrying a scalar instead of the settings

@@ -457,6 +457,43 @@ mod http {
     }
 
     #[tokio::test]
+    async fn ac_ext_1_the_discovery_document_advertises_the_tasks_extension() {
+        // GIVEN/WHEN: the same modern probe, through the production route.
+        //
+        // This is the SERVER half of matrix row 1, and it exists because the
+        // three tests that stood in for it asserted against a map they were
+        // handed (`meta_mcp_helpers_tests.rs:911-922` says so deliberately).
+        // Emptying `discovery_extensions()` left all three green while modern
+        // `server/discover` silently stopped advertising anything — so they
+        // pinned the serializer, not the wiring. This one dies to that mutation.
+        let (status, body) = post_mcp(json!({
+            "jsonrpc": "2.0", "id": 3, "method": "server/discover"
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        // THEN: the extension the gateway implements is on the wire, under the
+        // identifier the specification names. The literal is deliberate — a
+        // test that reads the same constant production reads cannot notice the
+        // constant changing, and the identifier IS the contract here.
+        // Predicted RED shape, read off the field's serde attribute
+        // (`src/protocol/types.rs:255`, `#[serde(default, skip_serializing_if =
+        // "HashMap::is_empty")]`): emptying `discovery_extensions()` makes the
+        // key ABSENT, not `{}`, so it is the `is_object()` assert below that
+        // fires first. Stated up front so the observed failure can be compared
+        // against a prediction taken from source rather than from reasoning.
+        let extensions = &body["result"]["capabilities"]["extensions"];
+        assert!(
+            extensions.is_object(),
+            "discovery must advertise an extensions object: {body}"
+        );
+        assert!(
+            extensions["io.modelcontextprotocol/tasks"].is_object(),
+            "discovery must advertise the tasks extension it implements: {body}"
+        );
+    }
+
+    #[tokio::test]
     async fn ac_discover_1_http_and_meta_layer_agree() {
         // Equivalence. Both dispatchers must answer with the SAME document the
         // meta layer builds — a dispatcher that assembles its own would drift,
