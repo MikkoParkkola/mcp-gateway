@@ -923,11 +923,23 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.routing_profile,
             )
             .await
-            .map_err(
-                |e| crate::gateway::input_bridge::BridgeError::BackendFailed {
-                    message: e.to_string(),
-                },
-            )
+            .map_err(|e| classify_bridged_dispatch_error(&e))
+    }
+}
+
+/// Decides whether a failed bridged dispatch releases the idempotency key.
+///
+/// The error type already carries a tight, deliberate allowlist of failures that
+/// provably happened above the backend. A bridged round that hit one of those ran
+/// nothing, so it releases the key on the same terms as a pre-dispatch refusal;
+/// everything else stays dispatched and settles, because a round the backend may
+/// have executed must not readmit a retry of a side effect (ADR-012 consequence 1).
+pub(super) fn classify_bridged_dispatch_error(error: &crate::Error) -> crate::gateway::input_bridge::BridgeError {
+    let message = error.to_string();
+    if error.is_pre_dispatch() {
+        crate::gateway::input_bridge::BridgeError::NotAdmitted { message }
+    } else {
+        crate::gateway::input_bridge::BridgeError::BackendFailed { message }
     }
 }
 

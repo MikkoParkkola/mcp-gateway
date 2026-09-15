@@ -6369,3 +6369,40 @@ async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
         "a round refused above the dispatch leaves no settled key behind"
     );
 }
+
+/// Every established pre-dispatch failure releases the bridged round's
+/// idempotency key, and a failure that may have executed still settles it.
+///
+/// The bridged path used to report *all* dispatch errors as `BackendFailed`,
+/// the one bridge error the settlement arm treats as a dispatch whose outcome
+/// is unknown. A round refused by an open circuit or a failed connection had
+/// provably not reached the backend, yet its key was burned all the same, so
+/// the caller lost a retry of work that never ran. The classifier now defers to
+/// the error type's own allowlist; this pins every arm of it.
+#[test]
+fn every_pre_dispatch_failure_releases_the_bridged_idempotency_key() {
+    use crate::gateway::input_bridge::BridgeError;
+    use crate::gateway::meta_mcp::invoke::classify_bridged_dispatch_error;
+
+    for error in [
+        crate::Error::CircuitOpen("breaker open".into()),
+        crate::Error::BackendNotFound("no such backend".into()),
+        crate::Error::ToolNotFound("no such tool".into()),
+        crate::Error::TransportConnect("connection refused".into()),
+    ] {
+        assert!(
+            matches!(
+                classify_bridged_dispatch_error(&error),
+                BridgeError::NotAdmitted { .. }
+            ),
+            "{error:?} happened above the backend and must release the key"
+        );
+    }
+
+    // The negative control: a timeout is the canonical failure whose outcome is
+    // unknown from here, so it must keep settling.
+    assert!(matches!(
+        classify_bridged_dispatch_error(&crate::Error::BackendTimeout("timed out".into())),
+        BridgeError::BackendFailed { .. }
+    ));
+}
