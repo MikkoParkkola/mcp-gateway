@@ -149,3 +149,61 @@ a genuine defect one module over; it is not itself a finding this lane can settl
 
 **Escalation**: this contradicts the operator ruling of 2026-09-08, which directed that #78 be
 fixed. Recorded here rather than rounded to a verdict, per the lane brief.
+
+## PR #550 — the 132 branch alerts — DISMISSED (test code)
+
+The `CodeQL` check on PR #550 reported *132 new alerts including 117 critical severity
+security vulnerabilities*, which was the last red check on the v4 release line. The alerts
+live on `refs/pull/550/head`; `main` carried none. Two rules account for all of them:
+`rust/hard-coded-cryptographic-value` (117) and `rust/cleartext-logging` (15).
+
+They are not 132 findings. They are twelve test files, flagged because the reconcile diff is
+large enough that CodeQL attributed the whole test corpus to the pull request — the check
+summary says so itself: *"Alerts not introduced by this pull request might have been detected
+because the code changes were too large."*
+
+**Deciding location per file.** Each `src/` file is reachable only beneath a `#[cfg(test)]`
+declaration, so it never compiles into a non-test build. Nine are `#[path]` modules carrying
+the attribute directly; three — `signing_joint/cases.rs`, `signing_joint/policy.rs` and
+`tests/modern_startup.rs` — are ordinary child modules whose gate sits on an ancestor, and the
+table below gives the full chain for each. Every `tests/` file is an integration-test target,
+compiled only by `cargo test` and never linked into the shipped binary or library. Line
+numbers as of `3e872f40`.
+
+| Alerts | File | Deciding location |
+|---|---|---|
+| 63 | `src/security/message_signing_nonce_tests.rs` | `src/security/message_signing.rs:468` — `#[cfg(test)]` |
+| 32 | `src/security/message_signing_nonce_metrics_tests.rs` | `src/security/message_signing.rs:769` — `#[cfg(all(test, feature = "metrics"))]` |
+| 8 | `tests/message_signing_stdio_reload.rs` | integration-test target |
+| 7 | `src/gateway/router/tests/task_execution_adapter/signing_joint/cases.rs` | `src/gateway/router/mod.rs:48` — `#[cfg(test)] mod tests`, reached via `tests.rs:39` → `task_execution_adapter.rs:71` → `signing_joint.rs:294` |
+| 6 | `src/config/account_custody_tests.rs` | `src/config/mod.rs:2286` — `#[cfg(test)]` |
+| 5 | `tests/openwebui_adapter_config.rs` | integration-test target |
+| 4 | `tests/message_signing_nonce_metrics_export.rs` | integration-test target |
+| 3 | `src/gateway/router/tests/task_execution_adapter/signing_joint/policy.rs` | same chain as `cases.rs`, declared at `signing_joint.rs:296` |
+| 1 | `src/gateway/meta_mcp/authz_tests.rs` | `src/gateway/meta_mcp/mod.rs:2284` — `#[cfg(test)]` |
+| 1 | `src/config_reload/account_reload_guard_tests.rs` | `src/config_reload/mod.rs:362` — `#[cfg(test)]` |
+| 1 | `src/transport/http/tests/modern_startup.rs` | `src/transport/http/mod.rs:1901` — `#[cfg(test)] mod tests`, declared at `src/transport/http/tests.rs:10` |
+| 1 | `src/personal_accounts/config_tests.rs` | `src/personal_accounts/config.rs:830` — `#[cfg(test)]` |
+
+**Disposal**: all 132 dismissed, reason `used in tests`. Each dismissal comment carries its own
+deciding `file:line` from the table above, so a reader who disagrees can check one line rather
+than re-derive the module chain. This follows the same reasoning recorded for #97 and #100
+below: they are false positives *as security findings*, and the reason is in every case that
+the code is test-only, which is what `used in tests` records.
+
+**Not** taken: a `paths-ignore` entry. The repository runs CodeQL **default setup**
+(`gh api repos/MikkoParkkola/mcp-gateway/code-scanning/default-setup` → `state: configured`,
+`query_suite: default`), which has no in-repo configuration file to add one to. Converting to
+advanced setup to suppress test paths wholesale would also hide a future finding in test code
+that is worth seeing.
+
+**Result**: check run
+[104192013465](https://github.com/MikkoParkkola/mcp-gateway/runs/104192013465) (check suite
+94533203709) recomputed on its own — no re-run needed — from *"132 new alerts including 117
+critical severity security vulnerabilities"* to *"No new alerts in code changed by this pull
+request"*, observed 2026-09-15T06:00Z. The PR rollup at that moment was 46 `SUCCESS` /
+3 `SKIPPED` / 0 failures, `mergeable: MERGEABLE`.
+
+The 132 alert ids, rules and locations are listed in
+[`codeql-550-alert-manifest.md`](codeql-550-alert-manifest.md), so each dismissal can be
+checked against its own alert rather than against this summary.
