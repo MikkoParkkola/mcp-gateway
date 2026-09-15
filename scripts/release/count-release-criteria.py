@@ -16,6 +16,10 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+# Modes: no flag prints the coverage line; `--check` is the gate CI runs;
+# `--blocking` lists the blocking ids; `--blocking-consistency` reports rows
+# whose blocking cell contradicts the status beside it, and is not yet part of
+# `--check` (see the branch that implements it).
 STATUS = ROOT / "docs/requirements/RELEASE-4.0.0-criteria-status.md"
 REQUIREMENTS = ROOT / "docs/requirements/RELEASE-4.0.0-requirements.md"
 PLAN = ROOT / "docs/requirements/RELEASE-4.0.0-plan.md"
@@ -189,9 +193,16 @@ def criterion_cells(text):
     Counted from the LEFT, not the right: an evidence cell may contain a literal
     pipe, which moves every right-hand index and made two well-formed rows read
     as violations. NFR rows carry a verification-method column that functional
-    rows do not, so the method regex decides which of the two positions holds
-    the status rather than a per-prefix rule that a new prefix would silently
-    escape.
+    rows do not, so which cell holds the status depends on the row's family.
+
+    The FAMILY decides, not the content of the cell. Asking whether the third
+    cell looks like a method letter reads a functional row as an NFR one the
+    moment its status cell happens to hold `T` -- and then takes the EVIDENCE
+    cell as the status, so `| MIK-7212.MRTR.9 | ... | T | MET | no |` passed the
+    vocabulary check and the blocking rule both, on a status of `T` that neither
+    ever looked at. The families disagree with their layout on none of the 189
+    rows, and a row that ever does is reported by the vocabulary check, because
+    the cell its family names will not hold a status word.
 
     One selection shared by every per-row check. Two copies of it had already
     drifted apart in whether a malformed row was a defect or a skip, and a third
@@ -203,7 +214,7 @@ def criterion_cells(text):
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) < 4 or not ID.match(cells[0]) or cells[-1] not in ("yes", "no"):
             continue
-        yield cells, cells[3] if METHOD.match(cells[2]) else cells[2]
+        yield cells, cells[3] if cells[0].startswith("NFR.") else cells[2]
 
 
 def status_violations(text):

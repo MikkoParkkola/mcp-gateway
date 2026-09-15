@@ -468,6 +468,24 @@ def test_both_selectors_see_the_same_criterion_rows():
     assert malformed == ["NFR.PERF.9"]
 
 
+def test_a_functional_row_is_not_read_as_an_nfr_row_by_its_status_cell():
+    """`T` in a functional row's status cell must not promote the evidence cell.
+
+    Deciding the status column from the CONTENT of the third cell took `MET`
+    here -- the evidence -- as the status, and a row whose real status was `T`
+    passed the vocabulary check and the blocking rule both.
+    """
+    row = "| MIK-7212.MRTR.9 | a criterion | T | MET | no |"
+    assert counter.status_violations(row) == ["MIK-7212.MRTR.9 (T)"]
+    assert counter.blocking_disagreements(row) == []
+
+
+def test_an_nfr_row_reads_the_cell_after_its_method_column():
+    row = "| NFR.PERF.9 | a criterion | T, D | ABSENT | nothing built | no |"
+    assert counter.status_violations(row) == []
+    assert counter.blocking_disagreements(row)[0] == ("NFR.PERF.9", "ABSENT", "no")
+
+
 def test_a_malformed_blocking_cell_is_a_defect_of_the_check_that_owns_it():
     """The selector skips it; `rows` calls it malformed and stops the run.
 
