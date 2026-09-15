@@ -657,5 +657,7 @@ fn wire_schema_predicate_rejects_every_non_object() {
     assert!(input_schema_is_structurally_valid(
         &json!({"type": "object", "properties": {}})
     ));
-    assert!(!input_schema_is_structurally_valid(&json!({"type": "array"})));
+    assert!(!input_schema_is_structurally_valid(
+        &json!({"type": "array"})
+    ));
 }
