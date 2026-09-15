@@ -5,7 +5,13 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    branches: [main, "codex/v4-*", fix/mrtr2-continuation-handle]
+    branches:
+      [
+        main,
+        chore/v4-reconcile-main,
+        "codex/v4-*",
+        fix/mrtr2-continuation-handle,
+      ]
 
 permissions:
   contents: read
