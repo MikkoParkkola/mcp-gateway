@@ -279,8 +279,11 @@ fn migrate_4_0_0_release_notice(_data_dir: &Path) -> std::io::Result<()> {
     // would swallow a warn event while the version stamp advances, and the
     // notice fires exactly once. stderr so `--quiet` can suppress progress
     // chatter on stdout without suppressing the warning itself.
+    // Count read from the list, never spelled out: a hand-written number drifts
+    // the moment an item is appended, and the header then contradicts the body.
     eprintln!(
-        "v4.0.0: five changes need your attention. No config was changed automatically.\n{body}"
+        "v4.0.0: {} changes need your attention. No config was changed automatically.\n{body}",
+        NOTICE_4_0_0_ITEMS.len()
     );
     Ok(())
 }
