@@ -934,7 +934,9 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
 /// nothing, so it releases the key on the same terms as a pre-dispatch refusal;
 /// everything else stays dispatched and settles, because a round the backend may
 /// have executed must not readmit a retry of a side effect (ADR-012 consequence 1).
-pub(super) fn classify_bridged_dispatch_error(error: &crate::Error) -> crate::gateway::input_bridge::BridgeError {
+pub(super) fn classify_bridged_dispatch_error(
+    error: &crate::Error,
+) -> crate::gateway::input_bridge::BridgeError {
     let message = error.to_string();
     if error.is_pre_dispatch() {
         crate::gateway::input_bridge::BridgeError::NotAdmitted { message }
