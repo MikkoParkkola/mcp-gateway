@@ -22,29 +22,18 @@ use crate::gateway::input_bridge::{ClientChannel, DeliveryError};
 use crate::transport::PendingRequestGuard;
 
 /// A [`ClientChannel`] over the stdio pipes.
-//
-// Constructed only by this module's tests until the stdio read loop spawns its
-// dispatches and a single writer owns stdout — sections 1 and 2 of
-// `docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md`, which this
-// type (section 4) is built for. `allow` rather than `expect`, and uncfg'd:
-// the three builds disagree about whether the type is dead. The test build
-// constructs it, and CI showed the Kani job reporting it dead in one pass and
-// reachable in another, so every `expect` spelling is unfulfilled in one of
-// them. `allow` is silent either way; it comes out when the consumer lands.
-#[allow(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")]
 pub(crate) struct StdioClientChannel {
     /// Outbound requests awaiting a reply, keyed by the id we minted.
     pending: DashMap<String, oneshot::Sender<Value>>,
     /// The only handle to stdout. Frames are queued, never written here.
-    writer: mpsc::UnboundedSender<Value>,
+    writer: mpsc::Sender<Value>,
     /// Set once the client is gone, and never cleared.
     closed: AtomicBool,
 }
 
-#[allow(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")]
 impl StdioClientChannel {
     /// Build a channel that queues its frames on `writer`.
-    pub(crate) fn new(writer: mpsc::UnboundedSender<Value>) -> Self {
+    pub(crate) fn new(writer: mpsc::Sender<Value>) -> Self {
         Self {
             pending: DashMap::new(),
             writer,
@@ -132,7 +121,7 @@ impl ClientChannel for StdioClientChannel {
             frame["params"] = params;
         }
 
-        if self.writer.send(frame).is_err() {
+        if self.writer.send(frame).await.is_err() {
             // The writer task is gone, so stdout is closed and nothing we
             // queue can reach anyone.
             return Err(DeliveryError::NoSession);
@@ -169,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_reply_reaches_the_request_that_is_waiting_for_it() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(16);
         let channel = std::sync::Arc::new(StdioClientChannel::new(tx));
 
         let asking = tokio::spawn({
@@ -207,7 +196,7 @@ mod tests {
         // The cancellation contract on `ClientChannel::send_request`: an outer
         // timeout drops the future, and neither the success nor the error path
         // runs. Without the guard the entry outlives the prompt.
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(16);
         let channel = StdioClientChannel::new(tx);
 
         let outcome = tokio::time::timeout(
@@ -225,7 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_wakes_every_outstanding_prompt() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(16);
         let channel = std::sync::Arc::new(StdioClientChannel::new(tx));
 
         let asking = tokio::spawn({
@@ -253,7 +242,7 @@ mod tests {
         // reaches its bridged question inside that window must not register an
         // entry nothing can resolve and then wait out the bridge's timeout —
         // that spends the drain and loses the response it was drained for.
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(16);
         let channel = StdioClientChannel::new(tx);
         channel.close();
 

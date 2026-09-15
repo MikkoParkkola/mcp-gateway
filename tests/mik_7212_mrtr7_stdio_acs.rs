@@ -195,7 +195,9 @@ fn write_config(home: &Path, backend_url: &str) {
 /// The shipped binary, spawned the way a stdio client spawns it.
 struct StdioSession {
     child: Child,
-    stdin: ChildStdin,
+    /// Taken by [`Self::close_stdin`]: EOF is the stimulus of the drain row,
+    /// and the session has to outlive it to read what the drain writes.
+    stdin: Option<ChildStdin>,
     stdout: Lines<BufReader<ChildStdout>>,
 }
 
@@ -229,17 +231,24 @@ impl StdioSession {
         let stdout = BufReader::new(child.stdout.take().expect("child stdout")).lines();
         Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout,
         }
     }
 
     async fn send(&mut self, message: &Value) {
-        self.stdin
+        let stdin = self.stdin.as_mut().expect("child stdin still open");
+        stdin
             .write_all(format!("{message}\n").as_bytes())
             .await
             .expect("write to child stdin");
-        self.stdin.flush().await.expect("flush child stdin");
+        stdin.flush().await.expect("flush child stdin");
+    }
+
+    /// Send EOF and keep the session: the child's reader loop leaves its
+    /// `while let Ok(Some(line))` and enters the drain.
+    fn close_stdin(&mut self) {
+        drop(self.stdin.take());
     }
 
     /// Read lines until one carries `id`, or the bound expires.
@@ -279,7 +288,7 @@ impl StdioSession {
     }
 
     async fn shutdown(mut self) {
-        drop(self.stdin);
+        drop(self.stdin.take());
         let _ = self.child.kill().await;
     }
 }
@@ -291,9 +300,10 @@ fn initialize_request(id: i64) -> Value {
         "method": "initialize",
         "params": {
             "protocolVersion": CLIENT_PROTOCOL_VERSION,
-            // Declared per request, under the `_meta` key MRTR.9 reads. Sent on
-            // the handshake as well so a client that reads either place is
-            // covered.
+            // The only place a legacy-shaped client can declare
+            // `elicitation`: MRTR.9 reads per-request `_meta` for a modern
+            // call, and a legacy call has none. See [`asking_call`] for why
+            // these rows must be legacy-shaped.
             "capabilities": {"elicitation": {}},
             "clientInfo": {"name": "mrtr7-stdio-acs", "version": "0"},
         },
@@ -304,6 +314,14 @@ fn initialize_request(id: i64) -> Value {
 ///
 /// Backend tools are not on `tools/call` by their own name unless an operator
 /// pins them, so the invoke meta tool is the route a real client takes.
+///
+/// Deliberately carries no `params._meta`. The rows here assert an outbound
+/// `elicitation/create` frame on the client's own channel, and that frame is
+/// written only by the in-band bridge, which serves the legacy request shape;
+/// a `_meta` carrying the modern fields classifies the call Modern and takes
+/// the continuation route instead, which answers with an envelope and asks
+/// nobody. The elicitation capability therefore has to come from the
+/// `initialize` handshake -- see [`initialize_request`].
 fn asking_call(id: i64) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -315,10 +333,6 @@ fn asking_call(id: i64) -> Value {
                 "server": BACKEND,
                 "tool": ASKING_TOOL,
                 "arguments": {},
-            },
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": CLIENT_PROTOCOL_VERSION,
-                "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
             },
         },
     })
@@ -353,7 +367,6 @@ fn position_of_outbound(frames: &[Value], method: &str) -> Option<usize> {
 /// a test asserting only that the call returned passes against a gateway that
 /// never asked anything at all, which is exactly today's behaviour.
 #[tokio::test]
-#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec"]
 async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -397,10 +410,18 @@ async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
         .await;
     let (tail, answer) = session.read_until_id(2).await;
     let answer = answer.expect("row 312: no result for the bridged call after the answer");
+    // `gateway_invoke` hands the backend's own result back inside an envelope
+    // that also carries the trace id, so the answered-branch text is one parse
+    // further down. Asserted through the envelope rather than on a substring:
+    // the interim result's text would match a `contains`, which is the exact
+    // outcome this row exists to rule out.
+    let envelope = answer
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .unwrap_or_else(|| panic!("row 312: no invoke envelope in the result: {tail:?}"));
     assert_eq!(
-        answer
-            .pointer("/result/content/0/text")
-            .and_then(Value::as_str),
+        envelope.pointer("/content/0/text").and_then(Value::as_str),
         Some("answered"),
         "row 312: the answered retry never reached the backend: {tail:?}"
     );
@@ -418,7 +439,6 @@ async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
 /// weaker version — initialize, wait, then call — proves nothing, because the
 /// interleaving it is meant to rule out cannot occur in it.
 #[tokio::test]
-#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec"]
 async fn ac_mrtr_7a_bridged_request_follows_the_initialize_response() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -468,7 +488,6 @@ async fn ac_mrtr_7a_bridged_request_follows_the_initialize_response() {
 /// wrote nothing — the count is what makes the row load-bearing, and the
 /// parse is what the row actually specifies once frames exist.
 #[tokio::test]
-#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec"]
 async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -504,6 +523,71 @@ async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
              JSON: {line:?}"
         );
     }
+
+    session.shutdown().await;
+}
+
+/// Design §6 — a request the loop accepted still gets its response when stdin
+/// closes under it.
+///
+/// EOF drains, it does not abort. The row stages the hardest case the drain
+/// has: a dispatch that is not merely slow but *waiting on the client*, its
+/// question already written to the pipe that then closes. Nothing can answer
+/// it, so `channel.close()` has to fail the prompt and the dispatch has to
+/// carry a response back out — and the writer has to still be there to write
+/// it, which is why `run_stdio` joins the writer task only after the drain.
+///
+/// Asserted on arrival and on being a response, not on a particular error: the
+/// pin is that the caller is not left without an answer, and whether the
+/// refusal reads as an error object or an error result is the bridge's to
+/// decide. A row asserting the text would fail the next time that wording
+/// improves, for no defect.
+///
+/// The failure this catches is silence: abort the `JoinSet` at EOF, or drop the
+/// writer before the drain, and the id-2 frame never arrives.
+#[tokio::test]
+async fn ac_mrtr_7a_request_in_flight_when_stdin_closes_still_gets_its_response() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    session.send(&initialize_request(1)).await;
+    let (_, initialized) = session.read_until_id(1).await;
+    assert!(initialized.is_some(), "the child never answered initialize");
+
+    session.send(&asking_call(2)).await;
+    let staged = session.collect_lines(COLLECT_WINDOW).await;
+
+    // Control: with no question outstanding there is no in-flight dispatch for
+    // EOF to interrupt, and the row would pass against a gateway that had
+    // already answered id 2 before stdin ever closed.
+    assert!(
+        saw_method(&received, "initialize"),
+        "the fixture backend was never reached: {staged:?}"
+    );
+    assert!(
+        position_of_outbound(&frames_lenient(&staged), "elicitation/create").is_some(),
+        "nothing was in flight: the call never reached the bridge, so this row \
+         would not be measuring the drain. Frames: {staged:?}"
+    );
+    assert!(
+        !frames_lenient(&staged)
+            .iter()
+            .any(|frame| frame.get("id").and_then(Value::as_i64) == Some(2)),
+        "id 2 was answered before stdin closed, so the drain is untested: {staged:?}"
+    );
+
+    session.close_stdin();
+
+    let (tail, answer) = session.read_until_id(2).await;
+    let answer = answer.unwrap_or_else(|| {
+        panic!("the in-flight call got no response across EOF; the drain dropped it: {tail:?}")
+    });
+    assert!(
+        answer.get("result").is_some() || answer.get("error").is_some(),
+        "the frame for id 2 is neither a result nor an error: {answer}"
+    );
 
     session.shutdown().await;
 }

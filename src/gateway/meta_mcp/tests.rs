@@ -5984,3 +5984,425 @@ async fn a_reissued_idempotency_key_is_served_from_the_stored_result() {
          placeholder: first={first}, second={second}"
     );
 }
+
+/// A transport that answers each `tools/call` with the next scripted result.
+///
+/// The bridge's whole subject is the SECOND call: a fixed result would let a
+/// wiring that never retries pass by answering the first one twice.
+struct ScriptedToolCallTransport {
+    results: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
+    calls: std::sync::Mutex<Vec<serde_json::Value>>,
+}
+
+impl ScriptedToolCallTransport {
+    fn new(results: Vec<serde_json::Value>) -> Self {
+        Self {
+            results: std::sync::Mutex::new(results.into()),
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn calls(&self) -> Vec<serde_json::Value> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for ScriptedToolCallTransport {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        assert_eq!(method, "tools/call");
+        self.calls.lock().unwrap().push(params.unwrap_or_default());
+        let result = self
+            .results
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("backend called more times than the script has answers");
+        // A scripted round can fail: a bridged exchange whose retry never
+        // lands is the case the idempotency settlement below exists for, and
+        // a transport that can only succeed cannot script it.
+        if let Some(message) = result.get("__transport_error").and_then(Value::as_str) {
+            return Err(crate::Error::json_rpc(-32000, message));
+        }
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            result,
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A client that accepts every elicitation it is shown.
+struct AcceptingChannel {
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::ClientChannel for AcceptingChannel {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> std::result::Result<serde_json::Value, crate::gateway::input_bridge::DeliveryError> {
+        self.asked.lock().unwrap().push(method.to_owned());
+        Ok(json!({
+            "jsonrpc": "2.0",
+            "result": {"action": "accept", "content": {"account": "work"}}
+        }))
+    }
+}
+
+// MIK-7212.WIRE: the bridge is reached from the production invoke path, not
+// only from its own acceptance suite. Deleting the branch in `invoke_tool`
+// turns this red — the call returns the backend's question as a continuation
+// envelope instead of the answered result, and the backend is called once.
+//
+// The two halves that make it a WIRING test rather than a second bridge test:
+// the backend here is a real registered backend reached through
+// `accounted_dispatch`, and the client is reached through the caller context's
+// own channel. Neither is a `FakeBackend`.
+#[tokio::test]
+async fn a_legacy_clients_question_is_bridged_from_the_invoke_path() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "asking_backend",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let script = Arc::new(ScriptedToolCallTransport::new(vec![
+        json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "k1": {
+                    "method": "elicitation/create",
+                    "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+                }
+            },
+            "requestState": "backend-state-1"
+        }),
+        json!({"content": [{"type": "text", "text": "booked on work"}]}),
+    ]));
+    let transport: Arc<dyn Transport> = script.clone();
+    backend.set_transport_for_test(transport);
+    let _ = registry.register(backend);
+
+    let channel = AcceptingChannel {
+        asked: std::sync::Mutex::new(Vec::new()),
+    };
+    let mut ctx = allow_all_ctx();
+    ctx.era = crate::protocol::meta::Era::Legacy;
+    // Built through the gateway's own reader rather than a literal: a
+    // hand-made `Declared` could declare a shape no `initialize` can produce.
+    ctx.input_capabilities = crate::protocol::meta::classify_request(
+        Some(&json!({"_meta": {
+            crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+            crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}},
+        }})),
+        None,
+    )
+    .declared_capabilities();
+    ctx.channel = &channel;
+
+    let result = MetaMcp::new(registry)
+        .invoke_tool(
+            &json!({"server": "asking_backend", "tool": "book", "arguments": {}}),
+            Some("session-wire-1"),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        channel.asked.lock().unwrap().as_slice(),
+        ["elicitation/create"],
+        "the question must reach the client on its own connection"
+    );
+
+    let calls = script.calls();
+    assert_eq!(calls.len(), 2, "the backend must be retried: {calls:#?}");
+    assert_eq!(
+        calls[1].pointer("/requestState").and_then(Value::as_str),
+        Some("backend-state-1"),
+        "the retry must carry the backend's own state back: {:#}",
+        calls[1]
+    );
+    assert_eq!(
+        calls[1]
+            .pointer("/inputResponses/k1/account")
+            .and_then(Value::as_str),
+        Some("work"),
+        "the retry must carry the client's answer, keyed as the backend asked: {:#}",
+        calls[1]
+    );
+
+    assert_eq!(
+        result.pointer("/content/0/text").and_then(Value::as_str),
+        Some("booked on work"),
+        "the completed body is what the legacy client sees: {result:#}"
+    );
+    assert!(
+        result.get("requestState").is_none(),
+        "a bridged exchange has no continuation to mint: {result:#}"
+    );
+}
+
+// MIK-7212.WIRE: a bridged round that reached the backend and failed settles
+// the idempotency key rather than releasing it. The backend answered the first
+// round with a question, so the pre-gate commit above the bridge declined the
+// reservation — which leaves this arm the only thing standing between a lost
+// retry response and a second execution of the side effect it protected
+// (ADR-012 consequence 1).
+//
+// Both halves are assertions: the second attempt is served the stored error,
+// and the backend is never called a third time. Drop the `fail` in the bridged
+// error arm and the key is released instead, the second attempt re-dispatches,
+// and the scripted transport panics for want of a fourth answer.
+#[tokio::test]
+async fn a_failed_bridged_round_settles_the_idempotency_key() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "asking_backend",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let script = Arc::new(ScriptedToolCallTransport::new(vec![
+        json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "k1": {
+                    "method": "elicitation/create",
+                    "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+                }
+            },
+            "requestState": "backend-state-1"
+        }),
+        json!({"__transport_error": "the backend went away mid-exchange"}),
+    ]));
+    let transport: Arc<dyn Transport> = script.clone();
+    backend.set_transport_for_test(transport);
+    let _ = registry.register(backend);
+
+    let mut meta = MetaMcp::new(registry);
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+
+    let channel = AcceptingChannel {
+        asked: std::sync::Mutex::new(Vec::new()),
+    };
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("client-chosen-key".to_string()),
+        ..Default::default()
+    };
+    let mut ctx = allow_all_ctx();
+    ctx.era = crate::protocol::meta::Era::Legacy;
+    ctx.input_capabilities = crate::protocol::meta::classify_request(
+        Some(&json!({
+            "_meta": {
+                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+            }
+        })),
+        None,
+    )
+    .declared_capabilities();
+    ctx.channel = &channel;
+    ctx.retry = &retry;
+
+    let first = meta
+        .invoke_tool(
+            &json!({"server": "asking_backend", "tool": "book", "arguments": {}}),
+            Some("session-wire-2"),
+            &ctx,
+        )
+        .await
+        .expect_err("a bridged round that never landed is not a result");
+    assert_eq!(first.to_rpc_code(), -32003);
+
+    let second = meta
+        .invoke_tool(
+            &json!({"server": "asking_backend", "tool": "book", "arguments": {}}),
+            Some("session-wire-2"),
+            &ctx,
+        )
+        .await
+        .expect_err("the stored failure is terminal, not a readmission");
+    assert_eq!(
+        second.to_rpc_code(),
+        -32003,
+        "the retry must be served the stored error"
+    );
+    assert_eq!(
+        script.calls().len(),
+        2,
+        "the retry must not reach the backend again: {:#?}",
+        script.calls()
+    );
+}
+
+// MIK-7212.WIRE: a bridged round the budget refuses releases the idempotency
+// key instead of settling it. The refusal happens above `accounted_dispatch`,
+// so no side effect ran and the caller must be able to retry once the budget
+// rolls over — settling here would sell a terminal failure for work the
+// backend never saw.
+//
+// The budget is sized to admit exactly one call: the first dispatch is allowed
+// and records its spend, which is what puts the bridged round over the limit.
+// Map the refusal back to `BackendFailed` and the cache holds a stored error
+// instead of being empty.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::cost_accounting::config::{BudgetLimits, CostGovernanceConfig};
+    use crate::cost_accounting::enforcer::BudgetEnforcer;
+    use crate::cost_accounting::registry::CostRegistry;
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "asking_backend",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let script = Arc::new(ScriptedToolCallTransport::new(vec![json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "k1": {
+                "method": "elicitation/create",
+                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+            }
+        },
+        "requestState": "backend-state-1"
+    })]));
+    let transport: Arc<dyn Transport> = script.clone();
+    backend.set_transport_for_test(transport);
+    let _ = registry.register(backend);
+
+    let mut cost_config = CostGovernanceConfig {
+        enabled: true,
+        budgets: BudgetLimits {
+            daily: None,
+            per_tool: [("book".to_string(), 0.015)].into_iter().collect(),
+            per_key: std::collections::HashMap::new(),
+        },
+        ..CostGovernanceConfig::default()
+    };
+    cost_config.tool_costs.insert("book".to_string(), 0.01);
+    let cost_registry = Arc::new(CostRegistry::new(&cost_config));
+    let enforcer = Arc::new(BudgetEnforcer::new(cost_config, Arc::clone(&cost_registry)));
+
+    let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
+    let mut meta = MetaMcp::new(registry).with_cost_governance(enforcer, cost_registry);
+    meta.enable_idempotency(Arc::clone(&cache), Duration::from_secs(300));
+
+    let channel = AcceptingChannel {
+        asked: std::sync::Mutex::new(Vec::new()),
+    };
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("budget-refused-key".to_string()),
+        ..Default::default()
+    };
+    let mut ctx = allow_all_ctx();
+    ctx.era = crate::protocol::meta::Era::Legacy;
+    ctx.input_capabilities = crate::protocol::meta::classify_request(
+        Some(&json!({
+            "_meta": {
+                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+            }
+        })),
+        None,
+    )
+    .declared_capabilities();
+    ctx.channel = &channel;
+    ctx.retry = &retry;
+
+    let refused = meta
+        .invoke_tool(
+            &json!({"server": "asking_backend", "tool": "book", "arguments": {}}),
+            Some("session-wire-3"),
+            &ctx,
+        )
+        .await
+        .expect_err("a bridged round the budget refuses is not a result");
+    assert_eq!(refused.to_rpc_code(), -32003);
+
+    assert_eq!(
+        script.calls().len(),
+        1,
+        "the refused round must not have reached the backend: {:#?}",
+        script.calls()
+    );
+    assert!(
+        cache.is_empty(),
+        "a round refused above the dispatch leaves no settled key behind"
+    );
+}
+
+/// Every established pre-dispatch failure releases the bridged round's
+/// idempotency key, and a failure that may have executed still settles it.
+///
+/// The bridged path used to report *all* dispatch errors as `BackendFailed`,
+/// the one bridge error the settlement arm treats as a dispatch whose outcome
+/// is unknown. A round refused by an open circuit or a failed connection had
+/// provably not reached the backend, yet its key was burned all the same, so
+/// the caller lost a retry of work that never ran. The classifier now defers to
+/// the error type's own allowlist; this pins every arm of it.
+#[test]
+fn every_pre_dispatch_failure_releases_the_bridged_idempotency_key() {
+    use crate::gateway::input_bridge::BridgeError;
+    use crate::gateway::meta_mcp::invoke::classify_bridged_dispatch_error;
+
+    for error in [
+        crate::Error::CircuitOpen("breaker open".into()),
+        crate::Error::BackendNotFound("no such backend".into()),
+        crate::Error::ToolNotFound("no such tool".into()),
+        crate::Error::TransportConnect("connection refused".into()),
+    ] {
+        assert!(
+            matches!(
+                classify_bridged_dispatch_error(&error),
+                BridgeError::NotAdmitted { .. }
+            ),
+            "{error:?} happened above the backend and must release the key"
+        );
+    }
+
+    // The negative control: a timeout is the canonical failure whose outcome is
+    // unknown from here, so it must keep settling.
+    assert!(matches!(
+        classify_bridged_dispatch_error(&crate::Error::BackendTimeout("timed out".into())),
+        BridgeError::BackendFailed { .. }
+    ));
+}

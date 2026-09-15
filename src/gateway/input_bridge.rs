@@ -208,7 +208,16 @@ pub enum BridgeError {
     RequestBudgetExhausted,
     /// The aggregate wall-clock budget for the call ran out.
     Deadline,
-    /// A bridged retry round did not reach the backend, or the backend failed.
+    /// A bridged retry round was refused before anything was dispatched.
+    ///
+    /// Kept apart from [`BridgeError::BackendFailed`] because the two settle
+    /// differently: nothing ran, so the round carries no side effect to
+    /// protect and the caller may retry once the refusal lifts.
+    NotAdmitted {
+        /// Why the round was refused, as reported by the invoker.
+        message: String,
+    },
+    /// A bridged retry round reached the backend and did not come back.
     ///
     /// Carries the reason as text rather than the error itself: this type is
     /// `Clone + PartialEq` so tests can assert on it, and `crate::Error` is
