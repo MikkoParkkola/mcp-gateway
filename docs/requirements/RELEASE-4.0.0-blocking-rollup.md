@@ -1032,18 +1032,23 @@ the release. Three such gates were on the record. Their state today:
   `.github/workflows/ci.yml:180`) and the `Clippy (pedantic)` job is green on `origin/main`
   at `738c7cee` (2026-09-11), alongside `Format`, `Tests`, `Kani` and the ledger job. The
   2026-09-07 record no longer reproduces on the base tree.
-- **The `blocked_response_value` lint blocker — CLOSED** by `e0f9396b`, an ancestor of HEAD,
-  which dropped the superseded blocked-response payload builder; the symbol has no remaining
-  matches in `src/`. The note recorded against it in `criteria-status.md` earlier on
-  2026-09-11 is therefore stale. The ledger is frozen while the push is held, so the
-  correction is recorded here rather than edited into it.
+- **The `blocked_response_value` lint blocker — CLOSED, and never present on this line.** The
+  symbol has no matches in `src/`, and no commit that touched it is reachable from HEAD:
+  `git merge-base --is-ancestor` exits 1 for both `e0f9396b` and `66d1fc23`, and
+  `git log -S'blocked_response_value' HEAD -- src/security/firewall/mod.rs` returns nothing.
+  The earlier reading of this entry — closed *by* `e0f9396b`, "an ancestor of HEAD" — was
+  wrong on the evidence while right on the conclusion: the blocker is absent because the work
+  never arrived here, not because a fix landed. The stale note in `criteria-status.md` was
+  corrected in place on 2026-09-15; the freeze that forced the correction to be recorded here
+  has lifted.
 - **A final review of the committed tree — OPEN, and it is the one that still binds.**
   `grok-review` and `kimi-review` both returned SHIP on the second round of the patch, but
   three changes landed after that verdict: a comment correction, a `let`-else in the direct
   route, and boxing the dispatch future at two call sites to clear `clippy::large_futures`.
   The boxing is the substantive one — it changes allocation on the dispatch path — and no
   reviewer has seen it. Two further commits, `e0f9396b` and `645371b4`, landed after that
-  record was written. The obligation is a review of the committed tree, not of the patch that
+  record was written; neither is reachable from HEAD (`git merge-base --is-ancestor` exits 1
+  for both), so the obligation is scoped to the committed tree on this line, not to them. The obligation is a review of the committed tree, not of the patch that
   produced it (`docs/design/2026-09-11-sub2b-progress-token-mint.md:225-232`).
 
 The branch's own lint gate is green as it stands. `cargo clippy --all-targets --all-features
