@@ -195,19 +195,30 @@ const MINOR: &[Row] = &[
         // `discovery_extensions()` directly. The other two each survive one of
         // those two mutations.
         //
-        // The client half cannot be tested, and the reason is a PRODUCT gap,
-        // not a missing test: `ExtensionSet::from_capabilities`
-        // (`src/protocol/extensions.rs:82`) has no production caller. Nothing
-        // on the `tools/call` path recovers the extensions a client declares in
-        // `_meta`, so E4 and E5 -- which assert the recovered set at the invoke
-        // funnel -- have nothing to assert against. Rewriting them as direct
-        // `from_capabilities` calls would pass while the function stays
-        // unreachable, which is what the plan rules out.
+        // The client half is a PRODUCT gap rather than a missing test, but not
+        // the gap an earlier revision of this comment described. It said
+        // nothing on the `tools/call` path recovers the extensions a client
+        // declares in `_meta`. That is false, and measured false on this base:
+        // `declares_tasks_extension` (`src/gateway/router/handlers.rs:182`,
+        // gating the live path at `:1033-1034`) reads that exact field through
+        // its own hand-rolled `pointer()` parse and tests only that the
+        // identifier is PRESENT, so `{"io.modelcontextprotocol/tasks": 3}`
+        // passes the gate while `ExtensionSet::from_capabilities`
+        // (`src/protocol/extensions.rs:82`), which filters on
+        // `settings.is_object()`, rejects the same bytes.
+        //
+        // The surviving half of the old claim is true: `from_capabilities` has
+        // no production caller. What does not follow is that nothing reads the
+        // field -- the reader on that path is the untyped one. So the defect is
+        // two parsers that disagree about the same bytes, and unifying them
+        // TIGHTENS a live gate. That is an operator decision, not a test gap,
+        // which is why no test here can close it unilaterally.
         //
         // So the cell stays empty. This statement is `Role::Both`, and citing
         // E1-E3 here would claim the client half on server-side evidence --
-        // the same defect with a later date on it. It closes when the recovery
-        // is wired, not when more tests are written.
+        // the same defect with a later date on it. Client-half evidence lands
+        // with `303884b6`; the cell closes when that lands and the two readers
+        // are unified, not when more tests are written.
         evidence: &[],
     },
     Row {
@@ -355,11 +366,18 @@ fn all_rows() -> Vec<&'static Row> {
 /// exemption teaches nobody anything.
 const TRACKED_GAPS: &[(&str, &str)] = &[(
     "1. extensions field on client and server capabilities",
-    "`ExtensionSet::from_capabilities` (src/protocol/extensions.rs:82) has no \
-         production caller, so nothing on the `tools/call` path recovers client \
-         extensions and the client half of this statement cannot be asserted \
-         against production code -- a product gap, not a missing test. The \
-         server half is carried by E1-E3 of \
+    "The client half is not an untested product gap but two parsers that \
+         disagree. `declares_tasks_extension` (src/gateway/router/handlers.rs:182, \
+         gating the live path at :1033-1034) reads the same \
+         `_meta` clientCapabilities.extensions field through a hand-rolled parse \
+         and accepts `{\"io.modelcontextprotocol/tasks\": 3}`, which the typed \
+         `ExtensionSet::from_capabilities` (src/protocol/extensions.rs:82) \
+         rejects. `from_capabilities` does indeed have no production caller; \
+         what does not follow is that nothing recovers client extensions, \
+         because the reader on that path is the untyped one. Unifying them \
+         tightens a live gate, so it is an operator decision, not a test gap. \
+         Client-half evidence lands with 303884b6. The server half is carried \
+         by E1-E3 of \
          docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
 )];
 
