@@ -97,8 +97,14 @@ impl MetaMcp {
     /// invalid input schema.
     ///
     /// The disclosure half of this verdict lives in [`Self::resolve_surfaced_tool`];
-    /// this is the same check asked on the dispatch path, so the tool that is
-    /// missing from `tools/list` is also refused by name.
+    /// this is the same schema check asked on the dispatch path, so a tool
+    /// withheld from `tools/list` *for its schema* is also refused by name.
+    ///
+    /// It deliberately does not cover the other reasons `resolve_surfaced_tool`
+    /// returns `None`. A cache miss is an unwarmed cache, not a verdict —
+    /// `CachedMetadata` holds `None` until the first fetch — so refusing on it
+    /// would reject valid calls made before the backend's tool list has been
+    /// read.
     pub(super) fn surfaced_schema_withheld(&self, server: &str, tool_name: &str) -> bool {
         self.backends
             .get(server)
