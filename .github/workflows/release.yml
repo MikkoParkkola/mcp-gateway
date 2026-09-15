@@ -90,8 +90,12 @@ jobs:
         run: python3 scripts/release/test_scope_acceptance.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
+      - name: Test that the doc/ledger assertions catch their mutations
+        run: python3 scripts/release/test_check_doc_ledger_agreement.py
       - name: Validate supplemental scope (pending work is reported)
         run: python3 scripts/release/check_scope_acceptance.py --check
+      - name: Check release-doc prose against its ledgers
+        run: python3 scripts/release/check_doc_ledger_agreement.py
       - name: Require completed acceptance in publishing context
         env:
           INPUT_TAG: ${{ inputs.tag }}
