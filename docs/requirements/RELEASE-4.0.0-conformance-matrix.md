@@ -6,7 +6,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # v4.0.0 protocol-conformance matrix
 
 Tracks `NFR.CONFORMANCE.1` (`docs/requirements/RELEASE-4.0.0-scope-update.md:54`),
-which this revision grades **PARTIAL** — see the Grade section:
+which this revision grades **MET** — see the Grade section:
 
 > The complete applicable role/transport/revision/outcome matrix has evidence
 > references, including modern URL-elicitation completion removal and
@@ -131,8 +131,9 @@ fails `a_tracked_gap_is_still_a_gap`, so the list above cannot be emptied in
 prose alone.
 
 Minor 1 was the last entry, and it left the UNCOVERED list on 2026-09-15 with
-MIK-7272.EXT.1 phase 2. That closed it as a *row*; its server clause is still
-open, which is what the clause-level table below the Tally records. Its stated cause was wrong in the same way minor 11's was. The matrix
+MIK-7272.EXT.1 phase 2. That closed it as a *row* while its server clause stayed
+open for three revisions; the clause-level table below the Tally records how
+that clause was closed in turn. Its stated cause was wrong in the same way minor 11's was. The matrix
 said the client half could not be asserted because
 `ExtensionSet::from_capabilities` had no production caller — true of that
 function, false of the obligation. `declares_tasks_extension` in
