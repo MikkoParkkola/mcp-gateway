@@ -222,18 +222,22 @@ const MINOR: &[Row] = &[
         // exactly one. The count was inferred from the cell's length instead of
         // read off the file.)
         //
-        // Falsifier, 2026-09-15, mutation `discovery_extensions()` ->
-        // `HashMap::new()`, run against the cited route test:
-        //   unmutated control ..... GREEN
-        //   mutated ............... RED, at the assert that the capabilities
-        //                           carry an extensions map — the body came
-        //                           back with no `extensions` key AT ALL, not
-        //                           an empty object, which is what
-        //                           `#[serde(default, skip_serializing_if =
-        //                           "HashMap::is_empty")]` at
-        //                           `src/protocol/types.rs:255` predicts
+        // Falsifier, 2026-09-15, mutation `discovery_extensions()`
+        // (`src/gateway/meta_mcp_helpers.rs:181`) -> `HashMap::new()`, run
+        // against `…e9_modern_server_discover_advertises_the_tasks_extension`:
+        //   unmutated control ..... e9 GREEN
+        //   mutated ............... e9 RED at `mik_7213_acs.rs:378`, the
+        //                           `as_object()` on the extensions map. The
+        //                           body came back with `capabilities` carrying
+        //                           no `extensions` key AT ALL, not an empty
+        //                           object — which is what `#[serde(default,
+        //                           skip_serializing_if = "HashMap::is_empty")]`
+        //                           at `src/protocol/types.rs:255` predicts, and
+        //                           the reason e9 asserts the map exists before
+        //                           asserting what is in it
         //   mutated ............... builder unit row GREEN
-        // So the builder row could not have caught this and the route test can.
+        // So the builder row cannot die to this mutation and e9 does. Both are
+        // cited: the builder row pins the serializer, e9 pins the wiring.
         evidence: &[
             "mik_7272_task_1_acs::wire::ac_ext_1_e6_a_non_object_settings_value_does_not_declare_the_extension",
             "mik_7272_task_1_acs::wire::ac_ext_1_e7_a_valid_settings_object_still_declares_the_extension",
