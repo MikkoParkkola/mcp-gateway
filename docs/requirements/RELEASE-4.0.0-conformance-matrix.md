@@ -62,6 +62,17 @@ for COVERED and not sufficient; the clause-level reading is done by the reviewer
 and recorded below the tally. Minor 1 is the case that established this — see
 the clause-level line in the Tally.
 
+A third limit, narrower and worth knowing before trusting a citation:
+`every_cited_test_exists` resolves only the **trailing** `::` segment of an
+evidence string (`tests/mik_7272_conformance.rs:558`, `name.rsplit("::")`). It
+proves a function of that name is defined somewhere under `src/` or `tests/`;
+it proves nothing about the module path in front of it. A citation with a
+correct function name and a wrong or non-existent module passes. That is how
+minor 1's server-half citation carried an unrunnable module path
+(`meta_mcp_helpers_tests::…` for what is reached as
+`gateway::meta_mcp_helpers::tests::…`) through every green run until a reviewer
+tried to run it by name.
+
 ### Rule 4 — the grade is mechanical
 
 `NFR.CONFORMANCE.1` is **MET if and only if UNCOVERED is empty** and
