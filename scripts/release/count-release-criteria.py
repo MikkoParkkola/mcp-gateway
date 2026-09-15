@@ -11,6 +11,7 @@ Usage:
     count-release-criteria.py --check    exit 1 if the headline disagrees
 """
 
+import datetime
 import pathlib
 import re
 import sys
@@ -193,6 +194,15 @@ def rows(text):
     return out, malformed
 
 
+def status_index(cells):
+    """Which cell holds the status. The row's FAMILY decides, not its content.
+
+    Named once so the rule that finds the status and the rule that reads the
+    cells beside it cannot disagree about where the row's columns start.
+    """
+    return 3 if cells[0].startswith("NFR.") else 2
+
+
 def criterion_cells(text):
     """The cells of every well-formed criterion row, and its status cell.
 
@@ -220,7 +230,7 @@ def criterion_cells(text):
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) < 4 or not ID.match(cells[0]) or cells[-1] not in ("yes", "no"):
             continue
-        yield cells, cells[3] if cells[0].startswith("NFR.") else cells[2]
+        yield cells, cells[status_index(cells)]
 
 
 def status_violations(text):
@@ -230,6 +240,28 @@ def status_violations(text):
         for cells, status in criterion_cells(text)
         if not STATUS_WORDS.match(status)
     ]
+
+
+def is_waived(evidence):
+    """Whether an evidence cell carries the ruling the ledger's rule admits.
+
+    Scoped to the evidence cells -- everything between the status and the flag.
+    Searching the whole row let the criterion's own description waive it, which
+    is a sentence anyone can write and nobody has to sign.
+
+    The date is parsed, not merely shaped: `2026-13-45` matches the pattern and
+    is not a day on which anything was ruled.
+    """
+    for cell in evidence:
+        found = WAIVER.search(cell)
+        if not found:
+            continue
+        try:
+            datetime.date.fromisoformat(found.group(1))
+        except ValueError:
+            continue
+        return True
+    return False
 
 
 def blocking_disagreements(text):
@@ -266,7 +298,7 @@ A row whose evidence carries a dated **Blocking flag lifted** ruling is not a
         word = STATUS_WORDS.match(status)
         if not word:
             continue
-        waived = any(WAIVER.search(cell) for cell in cells)
+        waived = is_waived(cells[status_index(cells) + 1 : -1])
         expected = "no" if waived or word.group(1) in ("MET", "N/A") else "yes"
         if cells[-1] != expected:
             out.append((cells[0], word.group(1), cells[-1]))

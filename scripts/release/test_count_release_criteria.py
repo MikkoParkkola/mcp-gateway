@@ -534,20 +534,22 @@ class Ledger:
 def gate_on(text):
     """Run the whole gate over a ledger variant, the way CI runs it.
 
-    The rule under test is reached through `main`, so asserting on the function
-    alone would pass unchanged if the call were deleted from the gate.
+    Returns the exit code and what it complained about. The code alone is not
+    enough: an unrelated check rejecting the same mutant would keep the
+    assertion green while the rule it names had been removed.
     """
     import contextlib
     import io
     import sys
 
     original, argv = counter.STATUS, sys.argv
+    complaint = io.StringIO()
     try:
         counter.STATUS = Ledger(text)
         sys.argv = ["count-release-criteria.py", "--check"]
         with contextlib.redirect_stdout(io.StringIO()):
-            with contextlib.redirect_stderr(io.StringIO()):
-                return counter.main()
+            with contextlib.redirect_stderr(complaint):
+                return counter.main(), complaint.getvalue()
     finally:
         counter.STATUS, sys.argv = original, argv
 
@@ -572,12 +574,14 @@ def regrade_leaving_the_flag(text):
 def test_the_blocking_rule_is_enforced_by_the_gate_ci_runs():
     """`--check` is what ci.yml, docker.yml and release.yml run."""
     text = counter.STATUS.read_text()
-    assert gate_on(text) == 0
+    assert gate_on(text) == (0, "")
     mutant = regrade_leaving_the_flag(text)
     before = sum(1 for _i, b, _s in counter.rows(text)[0] if b == "yes")
     after = sum(1 for _i, b, _s in counter.rows(mutant)[0] if b == "yes")
     assert before == after, "the mutation moved the count and proves nothing"
-    assert gate_on(mutant) == 1
+    code, complaint = gate_on(mutant)
+    assert code == 1
+    assert "blocking cell disagrees with the status" in complaint
 
 
 def test_a_dated_ruling_in_the_evidence_cell_lifts_the_flag():
@@ -631,12 +635,48 @@ def test_the_shared_selector_skips_what_is_not_a_criterion_row():
     assert list(counter.criterion_cells(text)) == []
 
 
+def test_a_ruling_written_into_the_description_does_not_waive_the_row():
+    """The waiver is the release owner's, and it lives in the evidence cell.
+
+    Searched across the whole row, a criterion could exempt itself in the
+    sentence that states what it requires.
+    """
+    row = (
+        "| NFR.PERF.1 | a criterion **Blocking flag lifted, 2026-09-05:** says so"
+        " | M | PARTIAL | no evidence | no |"
+    )
+    assert counter.blocking_disagreements(row)[0][0] == "NFR.PERF.1"
+
+
+def test_a_date_that_is_not_a_date_does_not_waive_the_row():
+    row = (
+        "| NFR.PERF.1 | a criterion | M | PARTIAL | "
+        "**Blocking flag lifted, 2026-13-45:** out of the gate | no |"
+    )
+    assert counter.blocking_disagreements(row)[0][0] == "NFR.PERF.1"
+
+
+def test_a_row_the_selector_skips_is_still_refused_by_the_gate():
+    """The rule never sees a malformed flag; the gate must stop the run anyway."""
+    text = counter.STATUS.read_text()
+    broken = text.replace("| no |\n", "| maybe |\n", 1)
+    code, complaint = gate_on(broken)
+    assert code == 1
+    assert "blocking cell disagrees" not in complaint
+
+
 if __name__ == "__main__":
     # CI runs this file as a script, not under pytest. Without this the module
     # defines its tests, exits 0, and the gate reports a pass having asserted
     # nothing -- which is what it did from the day the CI step was added.
+    import re
     import sys
     import traceback
+
+    # A test defined BELOW this block is never collected: the loop reads
+    # globals as they stand when the block runs. Three tests appended after it
+    # ran, reported nothing, and left the count unchanged at 52.
+    declared = len(re.findall(r"^def (test_\w+)", pathlib.Path(__file__).read_text(), re.M))
 
     failed = []
     for name, fn in sorted(globals().items()):
@@ -647,7 +687,12 @@ if __name__ == "__main__":
         except AssertionError:
             failed.append(name)
             traceback.print_exc()
-    print(
-        f"{len(failed)} failed of {sum(1 for n in globals() if n.startswith('test_'))}"
-    )
-    sys.exit(1 if failed else 0)
+    collected = sum(1 for n in globals() if n.startswith("test_"))
+    print(f"{len(failed)} failed of {collected}")
+    if collected != declared:
+        print(
+            f"{declared - collected} test(s) are defined below the runner and "
+            "were never executed",
+            file=sys.stderr,
+        )
+    sys.exit(1 if failed or collected != declared else 0)
