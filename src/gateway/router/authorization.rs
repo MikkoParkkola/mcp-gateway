@@ -81,11 +81,59 @@ pub(crate) fn is_admin_meta_tool(tool_name: &str) -> bool {
     ADMIN_META_TOOLS.contains(&tool_name)
 }
 
+/// What a caller's administrative standing permits on the meta-tool surface.
+///
+/// One predicate, consumed by both `tools/list` and `tools/call`
+/// ([`CallerStanding::permits`]), mirroring how `MetaToolExposure` governs the
+/// operator allow-list: the listed set is *derived from* the same verdict that
+/// gates dispatch rather than maintained beside it, so the two cannot
+/// disagree. Before this existed the admin meta-tools were disclosed to every
+/// caller and refused only at dispatch — a catalogue entry the reader was
+/// never allowed to use.
+///
+/// An enum rather than a `bool` because the value selects behaviour: a naked
+/// `true` at a call site says nothing about which way it leans, and the
+/// fail-open direction is the one that matters here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallerStanding {
+    /// The caller holds operator rights: the full surface, admin tools included.
+    Admin,
+    /// An ordinary caller: everything except the admin meta-tools.
+    Standard,
+}
+
+impl CallerStanding {
+    /// Standing of an authenticated HTTP client (absent client ⇒ `Standard`).
+    #[must_use]
+    pub(crate) fn of_client(client: Option<&AuthenticatedClient>) -> Self {
+        Self::of_admin_flag(client.is_some_and(|client| client.admin))
+    }
+
+    /// Standing carried by a caller context's `is_admin` flag.
+    #[must_use]
+    pub(crate) fn of_admin_flag(is_admin: bool) -> Self {
+        if is_admin {
+            Self::Admin
+        } else {
+            Self::Standard
+        }
+    }
+
+    /// Whether this standing may see *and* call `tool_name`.
+    ///
+    /// Non-meta names (backend and surfaced tools) are governed elsewhere and
+    /// always pass here.
+    #[must_use]
+    pub fn permits(self, tool_name: &str) -> bool {
+        matches!(self, Self::Admin) || !is_admin_meta_tool(tool_name)
+    }
+}
+
 pub(super) fn require_admin_tool_access(
     client: Option<&AuthenticatedClient>,
     tool_name: &str,
 ) -> Result<(), AuthorizationError> {
-    if client.is_some_and(|client| client.admin) {
+    if CallerStanding::of_client(client).permits(tool_name) {
         return Ok(());
     }
 

@@ -17,12 +17,14 @@
 //! control characters in these fields.  [`crate::security::sanitize_resource_metadata`]
 //! escapes all such vectors before the data reaches the client prompt.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use futures::future::join_all;
 use serde_json::{Value, json};
 use tracing::warn;
 
+use crate::gateway::router::CallerStanding;
 use crate::protocol::{
     JsonRpcResponse, RequestId, Resource, ResourceContents, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult,
@@ -176,11 +178,52 @@ If a backend misbehaves you can stop routing to it immediately:
     .to_string()
 }
 
+/// Every `gateway_*` name a block of guide text mentions.
+fn mentioned_meta_tools(block: &str) -> impl Iterator<Item = &str> {
+    block
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|word| word.starts_with("gateway_"))
+}
+
+/// Drop the `## ` sections of a guide that name a tool this caller is not served.
+///
+/// A guide is documentation of the surface, so it is projected through the
+/// surface rather than written beside it: a guide that instructs a caller to
+/// run `gateway_kill_server` when `tools/list` withholds it, and `tools/call`
+/// refuses it, is a manual for a gateway that caller does not have.
+///
+/// Whole sections, not lines: a heading whose commands were filtered out one
+/// by one is worse than no heading, and a prose sentence naming a withheld
+/// tool discloses it just as plainly as the command line under it.
+fn retain_served_sections(text: &str, served: &HashSet<String>) -> String {
+    let mut out = String::new();
+    let mut section = String::new();
+    let mut keep = true;
+    for line in text.lines() {
+        if line.starts_with("## ") {
+            if keep {
+                out.push_str(&section);
+            }
+            section.clear();
+            keep = true;
+        }
+        if mentioned_meta_tools(line).any(|name| !served.contains(name)) {
+            keep = false;
+        }
+        section.push_str(line);
+        section.push('\n');
+    }
+    if keep {
+        out.push_str(&section);
+    }
+    out
+}
+
 /// Attempt to serve a gateway-owned guide resource by URI.
 ///
 /// Returns `Some(JsonRpcResponse)` when the URI matches a known guide;
 /// `None` when the URI belongs to a backend and should be routed normally.
-fn try_serve_guide(id: RequestId, uri: &str) -> Option<JsonRpcResponse> {
+fn try_serve_guide(id: RequestId, uri: &str, served: &HashSet<String>) -> Option<JsonRpcResponse> {
     let text = match uri {
         URI_QUICKSTART => quickstart_content(),
         URI_ROUTING => routing_content(),
@@ -189,7 +232,7 @@ fn try_serve_guide(id: RequestId, uri: &str) -> Option<JsonRpcResponse> {
     let contents = vec![ResourceContents::Text {
         uri: uri.to_string(),
         mime_type: Some("text/plain".to_string()),
-        text,
+        text: retain_served_sections(&text, served),
     }];
     Some(JsonRpcResponse::success(
         id,
@@ -294,13 +337,20 @@ impl MetaMcp {
         &self,
         id: RequestId,
         params: Option<&Value>,
+        standing: CallerStanding,
     ) -> JsonRpcResponse {
         let Some(uri) = extract_nested_optional_str(params, "uri") else {
             return missing_parameter_response(&id, "uri");
         };
 
-        // Gateway-owned guides are served inline — no backend round-trip.
-        if let Some(response) = try_serve_guide(id.clone(), uri) {
+        // Gateway-owned guides are served inline — no backend round-trip, and
+        // projected through the same served set `tools/list` answers from.
+        let served: HashSet<String> = self
+            .meta_tools_for(standing)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        if let Some(response) = try_serve_guide(id.clone(), uri, &served) {
             return response;
         }
 
@@ -486,6 +536,16 @@ mod tests {
     use super::*;
     use crate::protocol::RequestId;
 
+    /// Every `gateway_*` name either guide mentions, i.e. a caller served the
+    /// whole surface. These tests are about URI routing, so nothing here should
+    /// turn on section filtering.
+    fn full_surface() -> HashSet<String> {
+        mentioned_meta_tools(&quickstart_content())
+            .chain(mentioned_meta_tools(&routing_content()))
+            .map(str::to_string)
+            .collect()
+    }
+
     #[test]
     fn guide_resources_returns_exactly_two_entries() {
         // GIVEN/WHEN: calling guide_resources()
@@ -523,7 +583,7 @@ mod tests {
         // WHEN: calling try_serve_guide
         // THEN: Some(response) is returned
         let id = RequestId::Number(1);
-        let response = try_serve_guide(id, URI_QUICKSTART);
+        let response = try_serve_guide(id, URI_QUICKSTART, &full_surface());
         assert!(response.is_some());
     }
 
@@ -533,7 +593,7 @@ mod tests {
         // WHEN: calling try_serve_guide
         // THEN: Some(response) is returned
         let id = RequestId::Number(2);
-        let response = try_serve_guide(id, URI_ROUTING);
+        let response = try_serve_guide(id, URI_ROUTING, &full_surface());
         assert!(response.is_some());
     }
 
@@ -543,7 +603,7 @@ mod tests {
         // WHEN: calling try_serve_guide
         // THEN: None is returned (falls through to backend routing)
         let id = RequestId::Number(3);
-        let response = try_serve_guide(id, "gateway://unknown/resource");
+        let response = try_serve_guide(id, "gateway://unknown/resource", &full_surface());
         assert!(response.is_none());
     }
 
@@ -553,7 +613,7 @@ mod tests {
         // WHEN: serving the guide
         // THEN: the result JSON has a non-empty "contents" array
         let id = RequestId::Number(4);
-        let resp = try_serve_guide(id, URI_QUICKSTART).unwrap();
+        let resp = try_serve_guide(id, URI_QUICKSTART, &full_surface()).unwrap();
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
         assert!(result["contents"].is_array());
@@ -577,5 +637,45 @@ mod tests {
         assert!(content.contains("gateway_set_profile"));
         assert!(content.contains("gateway_list_profiles"));
         assert!(content.contains("chains_with"));
+    }
+
+    /// The filter drops a whole `## ` section, not the offending line.
+    ///
+    /// `gateway_kill_server` and `gateway_revive_server` share one section, and
+    /// only the first is withheld. A line-scoped filter would leave the heading
+    /// standing over a lone recovery command — a manual for half a kill switch.
+    /// The full-surface control on the same text is what proves the section
+    /// disappeared because of the withheld name.
+    #[test]
+    fn retain_served_sections_drops_the_whole_section_naming_a_withheld_tool() {
+        // GIVEN: the routing guide, and a caller served everything but the kill switch
+        let text = routing_content();
+        let mut served = full_surface();
+        assert!(served.remove("gateway_kill_server"));
+
+        // WHEN: the guide is projected through that surface
+        let filtered = retain_served_sections(&text, &served);
+
+        // THEN: the heading and its untouched sibling command go with it
+        assert!(
+            !filtered.contains("## Kill switch and recovery"),
+            "the heading must go with the section: {filtered}"
+        );
+        assert!(
+            !filtered.contains("gateway_revive_server"),
+            "a served sibling in a withheld section must not survive alone: {filtered}"
+        );
+        // ...and the rest of the guide is untouched.
+        assert!(
+            filtered.contains("## Routing profiles") && filtered.contains("gateway_set_profile"),
+            "only the offending section may be dropped: {filtered}"
+        );
+
+        // CONTROL: served the whole surface, the guide is returned verbatim.
+        assert_eq!(
+            retain_served_sections(&text, &full_surface()),
+            text,
+            "a caller served every tool the guide names must get it unedited"
+        );
     }
 }

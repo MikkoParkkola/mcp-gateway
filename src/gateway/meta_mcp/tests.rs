@@ -212,7 +212,13 @@ fn tools_list_wiring_records_real_cache_scope_inputs() {
         ..ListFilters::default()
     };
     let before_private = global_shadow_count(request_filtered);
-    meta.handle_tools_list_with_url_override(RequestId::Number(7002), None, None, true);
+    meta.handle_tools_list_with_url_override(
+        RequestId::Number(7002),
+        None,
+        None,
+        true,
+        CallerStanding::Admin,
+    );
     assert!(global_shadow_count(request_filtered) > before_private);
 }
 
@@ -4662,9 +4668,11 @@ async fn b10_a_successful_invoke_does_not_change_the_connections_tool_list() {
         .await
         .expect("the mock backend's tools must be fetchable");
 
-    let before = tools_list_names(
-        &meta.handle_tools_list_for_session(RequestId::Number(1), MODERN_SESSIONLESS),
-    );
+    let before = tools_list_names(&meta.handle_tools_list_for_session(
+        RequestId::Number(1),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
 
     let invoked = meta
         .invoke_tool(
@@ -4678,9 +4686,11 @@ async fn b10_a_successful_invoke_does_not_change_the_connections_tool_list() {
         "the invoke must succeed or nothing is promoted and the case proves nothing: {invoked:?}"
     );
 
-    let after = tools_list_names(
-        &meta.handle_tools_list_for_session(RequestId::Number(2), MODERN_SESSIONLESS),
-    );
+    let after = tools_list_names(&meta.handle_tools_list_for_session(
+        RequestId::Number(2),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
 
     assert_eq!(
         before, B10_EXPECTED_TOOLS,
@@ -4858,11 +4868,13 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
         RequestId::Number(1),
         "echo",
         MODERN_SESSIONLESS,
+        CallerStanding::Admin,
     ));
     let bystander = tools_list_names(&meta.handle_tools_list_filtered(
         RequestId::Number(2),
         "echo",
         MODERN_SESSIONLESS,
+        CallerStanding::Admin,
     ));
 
     assert_eq!(
@@ -4889,8 +4901,12 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
         "the control's invoke must succeed or it controls for nothing: {legacy_invoked:?}"
     );
 
-    let legacy_list =
-        tools_list_names(&meta.handle_tools_list_filtered(RequestId::Number(3), "echo", LEGACY));
+    let legacy_list = tools_list_names(&meta.handle_tools_list_filtered(
+        RequestId::Number(3),
+        "echo",
+        LEGACY,
+        CallerStanding::Admin,
+    ));
     assert!(
         legacy_list.iter().any(|name| name == "echo"),
         "the promotion is observable nowhere, so the assertions above are \
@@ -5436,10 +5452,16 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
         None,
         crate::protocol::meta::Era::Legacy,
     );
-    let legacy_a_tools =
-        tools_list_set(&meta.handle_tools_list_for_session(RequestId::Number(3), legacy_a));
-    let legacy_b_tools =
-        tools_list_set(&meta.handle_tools_list_for_session(RequestId::Number(4), legacy_b));
+    let legacy_a_tools = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(3),
+        legacy_a,
+        CallerStanding::Admin,
+    ));
+    let legacy_b_tools = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(4),
+        legacy_b,
+        CallerStanding::Admin,
+    ));
     assert!(
         legacy_a_tools.len() < legacy_b_tools.len()
             && legacy_a_tools.iter().all(|t| legacy_b_tools.contains(t)),
@@ -5462,12 +5484,16 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
         crate::protocol::meta::Era::Modern,
     );
 
-    let a = tools_list_set(
-        &meta.handle_tools_list_for_session(RequestId::Number(7), MODERN_SESSIONLESS),
-    );
-    let b = tools_list_set(
-        &meta.handle_tools_list_for_session(RequestId::Number(8), MODERN_SESSIONLESS),
-    );
+    let a = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(7),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
+    let b = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(8),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
 
     assert_eq!(
         a, B01_EXPECTED_TOOLS,
@@ -5492,9 +5518,11 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
 async fn b02_a_set_profile_does_not_change_the_connections_tool_list() {
     let meta = meta_with_narrowable_tools().await;
 
-    let before = tools_list_set(
-        &meta.handle_tools_list_for_session(RequestId::Number(1), MODERN_SESSIONLESS),
-    );
+    let before = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(1),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
 
     let set = Box::pin(meta.handle_tools_call(
         RequestId::Number(2),
@@ -5515,9 +5543,11 @@ async fn b02_a_set_profile_does_not_change_the_connections_tool_list() {
         refusal.message
     );
 
-    let after = tools_list_set(
-        &meta.handle_tools_list_for_session(RequestId::Number(3), MODERN_SESSIONLESS),
-    );
+    let after = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(3),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
 
     assert_eq!(
         before, B01_EXPECTED_TOOLS,
@@ -5569,11 +5599,13 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
         RequestId::Number(3),
         MATCH_ALL_QUERY,
         legacy_a,
+        CallerStanding::Admin,
     ));
     let unnarrowed_tools = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(4),
         MATCH_ALL_QUERY,
         legacy_b,
+        CallerStanding::Admin,
     ));
     assert!(
         legacy_a_tools.len() < unnarrowed_tools.len()
@@ -5601,11 +5633,13 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
         RequestId::Number(7),
         MATCH_ALL_QUERY,
         MODERN_SESSIONLESS,
+        CallerStanding::Admin,
     ));
     let b = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(8),
         MATCH_ALL_QUERY,
         MODERN_SESSIONLESS,
+        CallerStanding::Admin,
     ));
 
     assert_eq!(

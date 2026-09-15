@@ -15,6 +15,7 @@ use crate::config::{BackendConfig, FailsafeConfig, SurfacedToolConfig};
 use crate::gateway::authz::AllowAll;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::authz_tests::ctx;
+use crate::gateway::router::CallerStanding;
 use crate::protocol::{JsonRpcResponse, RequestId, Tool, ToolsListResult};
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
@@ -459,7 +460,8 @@ async fn mik_7332_discovery_1_listed_set_matches_invocable_set() {
         ]);
 
     // --- Disclosure: tools/list ---
-    let listed = meta.handle_tools_list_for_session(RequestId::Number(1), None);
+    let listed =
+        meta.handle_tools_list_for_session(RequestId::Number(1), None, CallerStanding::Admin);
     let tools = listed
         .result
         .expect("tools/list must return a result")
@@ -774,14 +776,17 @@ fn admin_ctx(
     }
 }
 
-/// Acceptance clause A (admin/nonadmin axis). `handle_tools_list_for_session`
-/// takes a session id and no caller standing (`mod.rs:1398`), so disclosure
-/// has no role axis at all: the admin-only meta-tools
-/// (`router::authorization::ADMIN_META_TOOLS`) are listed to every caller and
-/// gated only at dispatch (`mod.rs:1701`). This pins that divergence rather
-/// than asserting an agreement the code cannot reach: the served list is
-/// role-invariant, a nonadmin is refused the tool its own list disclosed, and
-/// an admin is not.
+/// Acceptance clause A (admin/nonadmin axis). Disclosure and dispatch answer
+/// the admin question from one predicate, `CallerStanding::permits`
+/// (`router::authorization`), so the served list and the invocable set agree on
+/// both sides of the axis: a standard caller is neither shown nor served
+/// `gateway_kill_server`, an admin is shown it and may run it.
+///
+/// The control is the second listing. Asserting only that the standard caller
+/// is missing the tool would pass for a build that lists nothing at all, or
+/// for a `permits` that answers `false` to every name; the admin listing of the
+/// same `MetaMcp`, with the same allow-list, is what makes standing the only
+/// thing that differs.
 #[tokio::test]
 async fn mik_7332_discovery_1_admin_axis_disclosure_versus_invocation() {
     let registry = Arc::new(BackendRegistry::new());
@@ -790,21 +795,43 @@ async fn mik_7332_discovery_1_admin_axis_disclosure_versus_invocation() {
         "gateway_kill_server".to_string(),
     ]);
 
-    let listed = listed_names(&meta.handle_tools_list_for_session(RequestId::Number(1), None));
+    let standard = listed_names(&meta.handle_tools_list_for_session(
+        RequestId::Number(1),
+        None,
+        CallerStanding::Standard,
+    ));
     assert!(
-        listed.contains(&"gateway_kill_server".to_string()),
-        "the admin-only meta-tool is disclosed with no role axis: {listed:?}"
+        !standard.contains(&"gateway_kill_server".to_string()),
+        "a standard caller must not be shown the admin-only meta-tool: {standard:?}"
+    );
+    assert!(
+        standard.contains(&"gateway_invoke".to_string()),
+        "the standing filter must remove the admin tool and nothing else: {standard:?}"
     );
 
-    let nonadmin = Box::pin(meta.handle_tools_call(
+    let admin = listed_names(&meta.handle_tools_list_for_session(
         RequestId::Number(2),
+        None,
+        CallerStanding::Admin,
+    ));
+    assert!(
+        admin.contains(&"gateway_kill_server".to_string()),
+        "the same allow-list must disclose the admin tool to an admin: {admin:?}"
+    );
+
+    // The invocation half of the same axis, unchanged by the filter: the
+    // refusal a standard caller meets is still the admin gate's, worded as it
+    // always was. Dispatch is the authority the listing is derived from, so
+    // this is what the two assertions above are agreeing *with*.
+    let nonadmin_call = Box::pin(meta.handle_tools_call(
+        RequestId::Number(3),
         "gateway_kill_server",
         json!({"server": "alpha"}),
         None,
         ctx(&AllowAll),
     ))
     .await;
-    let err = nonadmin
+    let err = nonadmin_call
         .error
         .expect("a nonadmin must be refused an admin meta-tool");
     assert_eq!(err.code, -32600, "{}", err.message);
@@ -814,8 +841,8 @@ async fn mik_7332_discovery_1_admin_axis_disclosure_versus_invocation() {
         err.message
     );
 
-    let admin = Box::pin(meta.handle_tools_call(
-        RequestId::Number(3),
+    let admin_call = Box::pin(meta.handle_tools_call(
+        RequestId::Number(4),
         "gateway_kill_server",
         json!({"server": "alpha"}),
         None,
@@ -823,11 +850,11 @@ async fn mik_7332_discovery_1_admin_axis_disclosure_versus_invocation() {
     ))
     .await;
     assert!(
-        !admin
+        !admin_call
             .error
             .as_ref()
             .is_some_and(|e| e.message.contains("requires admin access")),
-        "the same call from an admin must pass the gate: {admin:?}"
+        "the same call from an admin must pass the gate: {admin_call:?}"
     );
 }
 
@@ -842,8 +869,11 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
     let registry = Arc::new(BackendRegistry::new());
 
     let unconfigured = MetaMcp::new(Arc::clone(&registry)).with_exposed_meta_tools(&exposure);
-    let listed =
-        listed_names(&unconfigured.handle_tools_list_for_session(RequestId::Number(1), None));
+    let listed = listed_names(&unconfigured.handle_tools_list_for_session(
+        RequestId::Number(1),
+        None,
+        CallerStanding::Admin,
+    ));
     assert!(
         !listed.contains(&"gateway_get_stats".to_string()),
         "an unconfigured feature must contribute nothing to the served list: {listed:?}"
@@ -873,8 +903,11 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
         Duration::from_secs(60),
     )
     .with_exposed_meta_tools(&exposure);
-    let listed =
-        listed_names(&configured.handle_tools_list_for_session(RequestId::Number(3), None));
+    let listed = listed_names(&configured.handle_tools_list_for_session(
+        RequestId::Number(3),
+        None,
+        CallerStanding::Admin,
+    ));
     assert!(
         listed.contains(&"gateway_get_stats".to_string()),
         "configuring the feature must surface its tool: {listed:?}"
@@ -901,12 +934,13 @@ fn guide_tool_names(text: &str) -> std::collections::BTreeSet<String> {
         .collect()
 }
 
-/// Read the gateway-owned routing guide through the served surface.
-async fn routing_guide_text(meta: &MetaMcp) -> String {
+/// Read the gateway-owned routing guide as the given caller is served it.
+async fn routing_guide_text(meta: &MetaMcp, standing: CallerStanding) -> String {
     let response = meta
         .handle_resources_read(
             RequestId::Number(1),
             Some(&json!({"uri": "gateway://guides/routing"})),
+            standing,
         )
         .await;
     response
@@ -923,23 +957,32 @@ async fn routing_guide_text(meta: &MetaMcp) -> String {
 }
 
 /// Acceptance clause C (routing guide agreement). The guide served at
-/// `gateway://guides/routing` is static prose (`resources.rs:134`), not a
-/// projection of the live surface. On the default surface every tool it names
-/// is disclosed, so the two agree; under an operator allow-list they do not,
-/// and the guide keeps naming a tool `tools/list` withholds and `tools/call`
-/// refuses. Both halves are asserted: the agreement that holds, and the
-/// divergence that the static text makes unavoidable.
+/// `gateway://guides/routing` is projected through the same served set
+/// `tools/list` answers from, so no caller is ever handed instructions for a
+/// tool their own catalogue withholds — on either axis the surface narrows by.
+///
+/// Three surfaces, because "the guide names nothing" would satisfy a subset
+/// assertion on its own. The admin default is the positive control: the guide
+/// must still name the kill switch and every name in it must be listed. The
+/// standard caller and the allow-listed operator are the two ways the surface
+/// shrinks, and each is checked for subset *and* for the specific name that
+/// had to disappear.
 #[tokio::test]
 async fn mik_7332_discovery_1_routing_guide_agrees_with_served_list() {
     let registry = Arc::new(BackendRegistry::new());
-
     let meta = MetaMcp::new(Arc::clone(&registry));
-    let named = guide_tool_names(&routing_guide_text(&meta).await);
+
+    // Positive control: the full surface keeps the guide whole.
+    let named = guide_tool_names(&routing_guide_text(&meta, CallerStanding::Admin).await);
     assert!(
-        !named.is_empty(),
-        "the routing guide must name the tools it routes to"
+        named.contains("gateway_kill_server"),
+        "an admin's routing guide must still document the kill switch: {named:?}"
     );
-    let listed = listed_names(&meta.handle_tools_list_for_session(RequestId::Number(2), None));
+    let listed = listed_names(&meta.handle_tools_list_for_session(
+        RequestId::Number(2),
+        None,
+        CallerStanding::Admin,
+    ));
     for name in &named {
         assert!(
             listed.contains(name),
@@ -947,27 +990,57 @@ async fn mik_7332_discovery_1_routing_guide_agrees_with_served_list() {
         );
     }
 
-    let narrowed = MetaMcp::new(Arc::clone(&registry))
-        .with_exposed_meta_tools(&["gateway_invoke".to_string()]);
-    let narrowed_named = guide_tool_names(&routing_guide_text(&narrowed).await);
-    assert_eq!(
-        narrowed_named, named,
-        "the guide text is static: narrowing the allow-list must not change it"
-    );
-    let narrowed_listed =
-        listed_names(&narrowed.handle_tools_list_for_session(RequestId::Number(3), None));
-    let withheld: Vec<&String> = named
-        .iter()
-        .filter(|name| !narrowed_listed.contains(*name))
-        .collect();
+    // Standing axis: the same gateway, a caller without operator rights.
+    let standard_named =
+        guide_tool_names(&routing_guide_text(&meta, CallerStanding::Standard).await);
     assert!(
-        !withheld.is_empty(),
-        "narrowing the allow-list must withhold tools the guide still names"
+        !standard_named.contains("gateway_kill_server"),
+        "a standard caller's guide must not document a tool they cannot run: {standard_named:?}"
     );
-    let first = withheld[0];
-    let refused = Box::pin(narrowed.handle_tools_call(
+    assert!(
+        !standard_named.is_empty(),
+        "the guide must still route the tools this caller does have: {standard_named:?}"
+    );
+    let standard_listed = listed_names(&meta.handle_tools_list_for_session(
+        RequestId::Number(3),
+        None,
+        CallerStanding::Standard,
+    ));
+    for name in &standard_named {
+        assert!(
+            standard_listed.contains(name),
+            "the guide names {name} to a caller whose list withholds it: {standard_listed:?}"
+        );
+    }
+
+    // Exposure axis: an operator allow-list that hides most of the surface.
+    let narrowed = MetaMcp::new(Arc::clone(&registry)).with_exposed_meta_tools(&[
+        "gateway_invoke".to_string(),
+        "gateway_search_tools".to_string(),
+    ]);
+    let narrowed_named =
+        guide_tool_names(&routing_guide_text(&narrowed, CallerStanding::Admin).await);
+    let narrowed_listed = listed_names(&narrowed.handle_tools_list_for_session(
         RequestId::Number(4),
-        first,
+        None,
+        CallerStanding::Admin,
+    ));
+    for name in &narrowed_named {
+        assert!(
+            narrowed_listed.contains(name),
+            "the narrowed guide names {name}, which the allow-list withholds: {narrowed_listed:?}"
+        );
+    }
+    let hidden = "gateway_list_profiles";
+    assert!(
+        !narrowed_named.contains(hidden),
+        "the guide must drop the section naming {hidden}: {narrowed_named:?}"
+    );
+    // And the tool the guide no longer names is genuinely unreachable, so the
+    // text was removed because the surface shrank, not merely edited.
+    let refused = Box::pin(narrowed.handle_tools_call(
+        RequestId::Number(5),
+        hidden,
         json!({}),
         None,
         admin_ctx(&AllowAll),
@@ -975,7 +1048,7 @@ async fn mik_7332_discovery_1_routing_guide_agrees_with_served_list() {
     .await;
     let err = refused
         .error
-        .expect("a withheld tool must refuse even though the guide names it");
+        .expect("a tool outside the allow-list must refuse");
     assert_eq!(err.code, -32601, "{}", err.message);
 }
 
@@ -1074,7 +1147,11 @@ async fn mik_7332_discovery_1_invalid_schema_tool_withheld_backend_survives() {
         .with_exposed_meta_tools(&["gateway_invoke".to_string()]);
     meta.set_capabilities(Arc::clone(&capabilities));
 
-    let listed = listed_names(&meta.handle_tools_list_for_session(RequestId::Number(1), None));
+    let listed = listed_names(&meta.handle_tools_list_for_session(
+        RequestId::Number(1),
+        None,
+        CallerStanding::Admin,
+    ));
     assert!(
         listed.contains(&"healthy_cap".to_string()),
         "the healthy tool of the same backend must remain listed: {listed:?}"
@@ -1090,5 +1167,113 @@ async fn mik_7332_discovery_1_invalid_schema_tool_withheld_backend_survives() {
             .await
             .is_err(),
         "the withheld tool must not be invocable either"
+    );
+}
+
+/// Acceptance clause D, MCP-backend half. A capability is validated as it is
+/// read off disk, so a malformed `schema.input` never reaches the surface. A
+/// backend's tools arrive over the wire instead, and until this test the
+/// gateway surfaced whatever a backend sent: a tool whose `inputSchema` is not
+/// an object is a tool no client can build a call against, disclosed anyway.
+///
+/// Same verdict, same degradation shape as the capability path above: the one
+/// bad tool is withheld from `tools/list` and refused by name, its healthy
+/// sibling on the same backend stays listed and still routes, and the backend
+/// itself is not dropped. The healthy control is what separates "the schema
+/// decided this" from "the backend fell over".
+#[tokio::test]
+async fn mik_7332_discovery_1_invalid_schema_backend_tool_withheld_siblings_survive() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = served_surface_backend(
+        "wire",
+        vec![
+            tool(
+                "healthy_wire",
+                "A backend tool whose input schema is a proper object.",
+                json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+            ),
+            // `type: string` is the same CAP-003 error the capability loader
+            // refuses a definition for.
+            tool(
+                "broken_wire",
+                "A backend tool whose input schema is not an object.",
+                json!({"type": "string", "properties": {"q": {"type": "string"}}}),
+            ),
+        ],
+        Arc::clone(&calls),
+    )
+    .await;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let _ = registry.register(Arc::clone(&backend));
+    let meta = MetaMcp::new(Arc::clone(&registry))
+        .with_surfaced_tools(vec![
+            SurfacedToolConfig {
+                server: "wire".to_string(),
+                tool: "healthy_wire".to_string(),
+            },
+            SurfacedToolConfig {
+                server: "wire".to_string(),
+                tool: "broken_wire".to_string(),
+            },
+        ])
+        .with_exposed_meta_tools(&["gateway_invoke".to_string()]);
+
+    let listed = listed_names(&meta.handle_tools_list_for_session(
+        RequestId::Number(1),
+        None,
+        CallerStanding::Admin,
+    ));
+    assert!(
+        listed.contains(&"healthy_wire".to_string()),
+        "the healthy tool of the same backend must remain listed: {listed:?}"
+    );
+    assert!(
+        !listed.contains(&"broken_wire".to_string()),
+        "a structurally invalid input schema must not be disclosed: {listed:?}"
+    );
+    assert!(
+        backend.has_cached_tools(),
+        "one bad tool must not take the backend down with it"
+    );
+
+    // Unlisted and uninvocable are the same claim read two ways. The refusal
+    // is worded like the unrecognised-tool fallback so it does not confirm the
+    // existence of a tool the gateway declined to publish, and the backend
+    // must never have been reached.
+    let refused = Box::pin(meta.handle_tools_call(
+        RequestId::Number(2),
+        "broken_wire",
+        json!({"q": "x"}),
+        None,
+        ctx(&AllowAll),
+    ))
+    .await;
+    let err = refused
+        .error
+        .expect("a tool withheld from the catalogue must not execute");
+    assert_eq!(err.code, -32601, "{}", err.message);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "the refusal must land before the backend is asked"
+    );
+
+    let ran = Box::pin(meta.handle_tools_call(
+        RequestId::Number(3),
+        "healthy_wire",
+        json!({"q": "x"}),
+        None,
+        ctx(&AllowAll),
+    ))
+    .await;
+    assert!(
+        ran.error.is_none(),
+        "the sibling must still route through the same path: {ran:?}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the healthy sibling must reach the backend"
     );
 }

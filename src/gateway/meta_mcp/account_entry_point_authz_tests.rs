@@ -39,6 +39,7 @@ use serde_json::{Value, json};
 use super::MetaMcp;
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
+use crate::gateway::router::CallerStanding;
 use crate::protocol::{
     JsonRpcResponse, Prompt, PromptsListResult, RequestId, Resource, ResourcesListResult,
 };
@@ -197,8 +198,12 @@ async fn prompts_get(meta: &MetaMcp) -> JsonRpcResponse {
 }
 
 async fn resources_read(meta: &MetaMcp) -> JsonRpcResponse {
-    meta.handle_resources_read(RequestId::Number(8), Some(&json!({ "uri": RESOURCE_URI })))
-        .await
+    meta.handle_resources_read(
+        RequestId::Number(8),
+        Some(&json!({ "uri": RESOURCE_URI })),
+        CallerStanding::Admin,
+    )
+    .await
 }
 
 fn prompt_names(response: &JsonRpcResponse) -> Vec<String> {

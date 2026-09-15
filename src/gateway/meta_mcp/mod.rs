@@ -34,6 +34,7 @@ use crate::cost_accounting::CostTracker;
 use crate::cost_accounting::enforcer::BudgetEnforcer;
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::registry::CostRegistry;
+use crate::gateway::router::CallerStanding;
 use crate::gateway::state::SessionStateStore;
 use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
 use crate::identity_grants::{GrantSubject, LocalIdentityGrantStore};
@@ -1544,7 +1545,13 @@ impl MetaMcp {
     /// meta-tools (subject to routing profile filtering).  Tools whose backend
     /// cache is empty are silently omitted rather than blocking the response.
     pub fn handle_tools_list(&self, id: RequestId) -> JsonRpcResponse {
-        self.handle_tools_list_for_session(id, None)
+        // Admin standing: this wrapper has no caller to read and no production
+        // call site — every live path (`..._with_url_override` for HTTP,
+        // `..._with_params` for stdio) supplies real standing. It answers the
+        // "what is the whole meta surface" question the surface-count gates
+        // ask, so lowering it here would shrink a documented count without any
+        // caller's disclosure actually changing.
+        self.handle_tools_list_for_session(id, None, CallerStanding::Admin)
     }
 
     fn shadow_tools_list_assembly(
@@ -1579,13 +1586,14 @@ impl MetaMcp {
         )
     }
 
-    /// Session-aware variant of `handle_tools_list` used by the router.
-    pub fn handle_tools_list_for_session(
-        &self,
-        id: RequestId,
-        session_id: Option<&str>,
-    ) -> JsonRpcResponse {
-        self.shadow_tools_list_assembly(session_id, false);
+    /// The meta-tools this caller is served, after the operator allow-list and
+    /// the caller's standing have both had their say.
+    ///
+    /// The single authority for "what does this caller get to see": `tools/list`
+    /// builds its answer here, and the gateway-owned guides are projected
+    /// through the same set (`resources::try_serve_guide`) so no served text
+    /// can name a tool the same caller's catalogue withholds.
+    pub(super) fn meta_tools_for(&self, standing: CallerStanding) -> Vec<crate::protocol::Tool> {
         let mut tools = if self.code_mode_enabled {
             self.meta_tool_exposure.filter(build_code_mode_tools())
         } else {
@@ -1609,6 +1617,22 @@ impl MetaMcp {
         if self.signing_enabled() && self.require_nonce {
             require_gateway_invoke_nonce(&mut tools);
         }
+        // The admin axis, applied to disclosure by the same predicate that
+        // gates dispatch in `handle_tools_call`. Listing a tool the caller is
+        // then refused is a catalogue entry that exists only to be denied.
+        tools.retain(|tool| standing.permits(&tool.name));
+        tools
+    }
+
+    /// Session-aware variant of `handle_tools_list` used by the router.
+    pub fn handle_tools_list_for_session(
+        &self,
+        id: RequestId,
+        session_id: Option<&str>,
+        standing: CallerStanding,
+    ) -> JsonRpcResponse {
+        self.shadow_tools_list_assembly(session_id, false);
+        let tools = self.meta_tools_for(standing);
         let mut tool_descriptors =
             project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
 
@@ -1663,12 +1687,13 @@ impl MetaMcp {
         id: RequestId,
         #[cfg_attr(not(feature = "spec-preview"), allow(unused_variables))] params: Option<&Value>,
         session_id: Option<&str>,
+        standing: CallerStanding,
     ) -> JsonRpcResponse {
         #[cfg(feature = "spec-preview")]
         if let Some(q) = params.and_then(|p| p.get("query")).and_then(Value::as_str) {
-            return self.handle_tools_list_filtered(id, q, session_id);
+            return self.handle_tools_list_filtered(id, q, session_id, standing);
         }
-        self.handle_tools_list_for_session(id, session_id)
+        self.handle_tools_list_for_session(id, session_id, standing)
     }
 
     /// Variant of [`handle_tools_list_with_params`] that accepts a per-request
@@ -1688,6 +1713,7 @@ impl MetaMcp {
         params: Option<&Value>,
         session_id: Option<&str>,
         url_override: bool,
+        standing: CallerStanding,
     ) -> JsonRpcResponse {
         let effective_code_mode = self.code_mode_enabled || url_override;
         if effective_code_mode && !self.code_mode_enabled {
@@ -1700,7 +1726,8 @@ impl MetaMcp {
             );
             // Still filtered - a URL parameter must not widen what the
             // operator exposed.
-            let tools = self.meta_tool_exposure.filter(build_code_mode_tools());
+            let mut tools = self.meta_tool_exposure.filter(build_code_mode_tools());
+            tools.retain(|tool| standing.permits(&tool.name));
             let tool_descriptors =
                 project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
             return JsonRpcResponse::success(
@@ -1709,7 +1736,7 @@ impl MetaMcp {
             );
         }
         // No override (or static config already handles it): follow normal path.
-        self.handle_tools_list_with_params(id, params, session_id)
+        self.handle_tools_list_with_params(id, params, session_id, standing)
     }
 
     /// Route a call that names a backend tool directly, or `None` when the
@@ -1727,6 +1754,17 @@ impl MetaMcp {
     ) -> Option<JsonRpcResponse> {
         if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
             let server_name = server_name.clone();
+            // A tool the catalogue will not disclose must not answer to its
+            // own name either: unlisted-but-invocable is the same defect as
+            // listed-but-refused, read the other way round. Worded like the
+            // unrecognised-tool fallback so the refusal does not confirm the
+            // existence of something the gateway declined to publish.
+            if self.surfaced_schema_withheld(&server_name, tool_name) {
+                return Some(error_response_preserving_status(
+                    id,
+                    &Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
+                ));
+            }
             return Some(
                 self.invoke_named_backend_tool(
                     id,
@@ -1883,7 +1921,10 @@ impl MetaMcp {
         // It also caught a live one immediately. Moving it here refused stdio,
         // because that path passed a default context whose `is_admin` is false
         // and nothing had ever checked it.
-        if crate::gateway::router::is_admin_meta_tool(tool_name) && !caller.is_admin {
+        // The same predicate `tools/list` filters its answer with
+        // (`meta_tools_for`), so a caller is never shown a tool this gate
+        // would then refuse.
+        if !CallerStanding::of_admin_flag(caller.is_admin).permits(tool_name) {
             return JsonRpcResponse::error(
                 Some(id),
                 -32600,

@@ -153,6 +153,24 @@ pub fn validate_capability_definition(
     issues
 }
 
+/// Whether a tool's input schema clears the structural bar (CAP-003) the
+/// capability loader applies before it will serve a definition.
+///
+/// One verdict, two serving paths. A capability whose `schema.input` is
+/// malformed is skipped at load (`capability::loader`), so it can never be
+/// listed or called. An MCP backend's tool arrives over the wire instead of
+/// off disk and had no equivalent check: the gateway surfaced it with a schema
+/// no client could build a call against. This is the check the other path
+/// already ran, spelled once so the two cannot drift.
+#[must_use]
+pub(crate) fn input_schema_is_structurally_valid(input: &serde_json::Value) -> bool {
+    let mut issues = Vec::new();
+    checks::check_schema_input(input, &mut issues);
+    !issues
+        .iter()
+        .any(|issue| issue.severity == IssueSeverity::Error)
+}
+
 /// Validate a set of capabilities loaded from one or more directories.
 ///
 /// Runs per-capability checks on every definition and then cross-capability
