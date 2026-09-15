@@ -45,7 +45,7 @@ a loss if only one of them survives, however exactly its body is reproduced.
 
 ## Result
 
-**Two moves, five replaced-by-design, three losses.**
+**Three moves, four replaced-by-design, three losses.**
 
 Two of the losses are the MRTR7 bridge wiring, and they are the same loss:
 `TracingBridgeObserver` is the observer the dispatcher fed, so a tip with no
