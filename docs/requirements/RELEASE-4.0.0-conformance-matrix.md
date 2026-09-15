@@ -5,7 +5,8 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # v4.0.0 protocol-conformance matrix
 
-Closes `NFR.CONFORMANCE.1` (`docs/requirements/RELEASE-4.0.0-scope-update.md:54`):
+Tracks `NFR.CONFORMANCE.1` (`docs/requirements/RELEASE-4.0.0-scope-update.md:54`),
+which this revision grades **PARTIAL** — see the Grade section:
 
 > The complete applicable role/transport/revision/outcome matrix has evidence
 > references, including modern URL-elicitation completion removal and
@@ -75,12 +76,18 @@ tried to run it by name.
 
 ### Rule 4 — the grade is mechanical
 
-`NFR.CONFORMANCE.1` is **MET if and only if UNCOVERED is empty** and
-COVERED equals the 21-statement population. The N/A cells are axis cells —
-a role, a transport or a surface that carries no statement at all — so they
-sit outside that sum and cannot be added to it. Any other state is PARTIAL,
-and the UNCOVERED list is the remaining work. The rule is fixed here so that the grade
-follows from the count rather than from how the count is described.
+`NFR.CONFORMANCE.1` is **MET only if UNCOVERED is empty** and COVERED equals
+the 21-statement population — **and only if every clause of every COVERED
+statement is asserted on the production path** (Rule 3). The N/A cells are axis
+cells — a role, a transport or a surface that carries no statement at all — so
+they sit outside that sum and cannot be added to it. Any other state is
+PARTIAL.
+
+The row count is necessary and **not** sufficient, so the remaining work is not
+always the UNCOVERED list. When UNCOVERED is empty and the grade is still
+PARTIAL, the remaining work is the clause-level table below the Tally. The rule
+is fixed here so that the grade follows from the count and the production-path
+condition together, rather than from how the count is described.
 
 ## Population
 
@@ -123,8 +130,9 @@ enforced form of this sentence: an entry there whose row has regained evidence
 fails `a_tracked_gap_is_still_a_gap`, so the list above cannot be emptied in
 prose alone.
 
-Minor 1 was the last entry, and it closed on 2026-09-15 with MIK-7272.EXT.1
-phase 2. Its stated cause was wrong in the same way minor 11's was. The matrix
+Minor 1 was the last entry, and it left the UNCOVERED list on 2026-09-15 with
+MIK-7272.EXT.1 phase 2. That closed it as a *row*; its server clause is still
+open, which is what the clause-level table below the Tally records. Its stated cause was wrong in the same way minor 11's was. The matrix
 said the client half could not be asserted because
 `ExtensionSet::from_capabilities` had no production caller — true of that
 function, false of the obligation. `declares_tasks_extension` in
