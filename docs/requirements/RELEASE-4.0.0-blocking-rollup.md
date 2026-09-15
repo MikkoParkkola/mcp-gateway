@@ -1102,20 +1102,20 @@ both `origin-guard` and `host-guard`. `NFR.SEC.7` stays blocking until it does, 
 change in this repository can move it.
 
 **Review, dated.** A final review of the committed tree by two independent non-Claude
-reviewers. `gpt-review` is unavailable until 2026-09-15; `grok-review` and `kimi-review` have
-seen an earlier round and would be re-reviewing, which satisfies the letter of the gate for
-the commits they have not seen. Choosing between waiting and substituting a second reviewer
-is the release owner's call.
+reviewers. `gpt-review` became available on 2026-09-15 and has since run on this line, so the
+choice between waiting and substituting a second reviewer no longer has to be made. The
+obligation itself stands: it is a review of the committed tree, and the tree has advanced.
 
-**Bookkeeping, once the push is unheld.** Correct the stale `blocked_response_value` note in
-`criteria-status.md`, and add the `tests/mik_6865_nested_key_probe.rs:62` `#[ignore]` line
-noted above. Neither is a gate; both are cheap and both decay if deferred.
+**Bookkeeping — one done, one open.** The stale `blocked_response_value` note in
+`criteria-status.md` was corrected in place on 2026-09-15; the push hold no longer blocks it.
+Still open: the `tests/mik_6865_nested_key_probe.rs:62` `#[ignore]` line noted above. Neither
+is a gate, but the remaining one decays if deferred.
 
 Release-ready means all four, not the gate's count of 2. Three of the four can proceed right
 now: the outbound emitter, the operator deployment, and the review -- the last because the
 gate asks for two independent non-Claude reviewers, not for `gpt-review` in particular, and
 substituting the second one has since been exercised (see the corrections section below).
-Only bookkeeping waits, and it waits on the push hold rather than on anything technical.
+One bookkeeping item remains, and it waits on nothing technical.
 
 ### Corrections from the 2026-09-11 review of this document
 
