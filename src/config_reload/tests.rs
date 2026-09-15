@@ -332,6 +332,37 @@ fn live_config_set_updates_snapshot() {
     assert_eq!(live.get().server.port, 12345);
 }
 
+/// CACHE.4.f.2 — an applied config reload must strand the prior cache entries.
+///
+/// `LiveConfig` is the sole publisher of a new running config, and both boot
+/// paths attach the `MetaMcp` epoch to it. A reload that does not advance the
+/// epoch leaves every response assembled under the superseded config servable.
+#[test]
+fn cache_4f2_an_applied_reload_advances_the_attached_policy_epoch() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let epoch = Arc::new(AtomicU64::new(0));
+    let live = LiveConfig::new(Config::default()).with_policy_epoch(Arc::clone(&epoch));
+
+    // Control: attaching alone must not move it, or the assertion below passes
+    // for a counter that was already ahead.
+    assert_eq!(epoch.load(Ordering::Acquire), 0);
+
+    let mut reloaded = Config::default();
+    reloaded.server.port = 12345;
+    live.set(reloaded);
+    assert_eq!(
+        epoch.load(Ordering::Acquire),
+        1,
+        "a reload that leaves the epoch alone keeps serving bodies assembled \
+         under the superseded config"
+    );
+
+    // Monotonic across reloads: a reset reuses keys minted under a config that
+    // is no longer running.
+    live.set(Config::default());
+    assert_eq!(epoch.load(Ordering::Acquire), 2);
+}
+
 // -------------------------------------------------------------------------
 // diff: multiple simultaneous changes
 // -------------------------------------------------------------------------
