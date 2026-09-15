@@ -20,18 +20,28 @@
 //! a panicking assertion, so a missing reply fails an assertion rather than
 //! hanging the suite.
 //!
+//! The bridge now has a production caller on this transport, so the stagings
+//! rows 323 and 324 depend on were re-checked against it rather than assumed,
+//! by mutating the gateway and requiring the row to notice:
+//!
+//! - Disabling the bridge's call site in `meta_mcp::invoke` turns all three
+//!   MIK-7387 rows red. Each of them observes real outbound traffic now, not
+//!   an empty pipe.
+//! - Dispatching `initialize` off the reader **and** holding its response
+//!   past the question turns row 323 red on its ordering assertion.
+//! - Writing each queued frame from its own task, in two halves, turns row
+//!   324 red — on its *count* assertion, because a spliced line stops parsing
+//!   as a frame and so stops being counted as one. The parse loop below it is
+//!   the row's specification; the count is what fires.
+//!
 //! Two limits, stated rather than discovered later.
 //!
-//! The stagings that rows 323 and 324 depend on — a backend slow enough to put
-//! a question beside the `initialize` response, and a frame large enough that
-//! an unlocked writer can be caught interleaving — cannot be shown to work
-//! while `InputBridge::run` has no production caller. The bridge itself is
-//! implemented and its rounds are driven green through trait fakes in the
-//! sibling file, but nothing on a transport calls it, so no bridged request is
-//! written to the pipe at all and the ordering and the framing are both
-//! unobservable. Each staging removes a known reason its row could not fail;
-//! neither is yet evidence that the row now can. Re-check both against the
-//! first wired bridge.
+//! Row 323 stays green when `initialize` is merely dispatched off the reader
+//! with no added delay. Warm start dials the backend during startup, so
+//! `BACKEND_INITIALIZE_DELAY` never delays the client-visible handshake and
+//! the ordering then holds on timing alone. The row is evidence that the
+//! property holds, not that every way of removing the inline-`initialize`
+//! rule is caught.
 //!
 //! Row 308 wants a legacy client **on an SSE session** to receive its
 //! `elicitation/create` on its own connection. No row covers that: this file
@@ -394,14 +404,13 @@ fn position_of_outbound(frames: &[Value], method: &str) -> Option<usize> {
 /// reading.
 ///
 /// The reply to a question can only arrive on the same pipe the request went
-/// out on, and `src/server/*` runs a single sequential stdio reader: a bridge
-/// that blocks inside dispatch deadlocks the only task that could deliver it.
-/// The row therefore has to be driven through a spawned child rather than a
-/// fake, and the assertion has to be on the **answer**, not on completion —
-/// a test asserting only that the call returned passes against a gateway that
-/// never asked anything at all, which is exactly today's behaviour.
+/// out on, and one sequential reader task owns that pipe: a bridge awaited
+/// inside the reader would deadlock the only task that could deliver its
+/// answer, which is why dispatch is spawned off it. The row therefore has to
+/// be driven through a spawned child rather than a fake, and the assertion has
+/// to be on the **answer**, not on completion — a test asserting only that the
+/// call returned passes against a gateway that never asked anything at all.
 #[tokio::test]
-#[ignore = "MIK-7387: no production caller of InputBridge, so no question is written to the pipe; this row is the spec for the wiring commit"]
 async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -432,6 +441,14 @@ async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
     // Reached only once the question is relayed: answer it, and require the
     // final result to be the fixture's answered-branch text, so the row cannot
     // be satisfied by the interim result being handed back to the caller.
+    //
+    // The backend's payload sits one level down: `gateway_invoke` is a meta
+    // tool, and `wrap_tool_success` renders whatever the backend returned as
+    // the pretty-printed text of a single content block. So the assertion
+    // parses `/result/content/0/text` and looks for the answered branch
+    // inside it. An interim relayed to the caller parses to
+    // `{"resultType": "input_required", ...}` and has no `/content/0/text`,
+    // which is what keeps this row able to fail.
     let question = frames
         .iter()
         .find(|frame| frame.get("method").and_then(Value::as_str) == Some("elicitation/create"))
@@ -445,12 +462,16 @@ async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
         .await;
     let (tail, answer) = session.read_until_id(2).await;
     let answer = answer.expect("row 312: no result for the bridged call after the answer");
+    let block = answer
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .expect("gateway_invoke renders its result as a single text block");
+    let payload: Value =
+        serde_json::from_str(block).expect("the text block carries the backend's JSON result");
     assert_eq!(
-        answer
-            .pointer("/result/content/0/text")
-            .and_then(Value::as_str),
+        payload.pointer("/content/0/text").and_then(Value::as_str),
         Some("answered"),
-        "row 312: the answered retry never reached the backend: {tail:?}"
+        "row 312: the answered retry never reached the backend: {payload} {tail:?}"
     );
 
     session.shutdown().await;
@@ -466,7 +487,6 @@ async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
 /// weaker version — initialize, wait, then call — proves nothing, because the
 /// interleaving it is meant to rule out cannot occur in it.
 #[tokio::test]
-#[ignore = "MIK-7387: no production caller of InputBridge, so no question is written to the pipe; this row is the spec for the wiring commit"]
 async fn ac_mrtr_7a_bridged_request_follows_the_initialize_response() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -511,12 +531,14 @@ async fn ac_mrtr_7a_bridged_request_follows_the_initialize_response() {
 /// result is read, so both questions are outstanding together.
 ///
 /// The count is asserted before the framing, deliberately. "Every line parses
-/// as whole JSON" is vacuously true of the empty output today, so a test
-/// leading with it would report a passing framing check on a gateway that
-/// wrote nothing — the count is what makes the row load-bearing, and the
-/// parse is what the row actually specifies once frames exist.
+/// as whole JSON" is vacuously true of an empty stdout, so a test leading with
+/// it would report a passing framing check on a gateway that wrote nothing.
+/// The count is what makes the row load-bearing; the parse is what the row
+/// specifies. Note which one fires: a torn frame stops parsing, so it is
+/// *counted* as one fewer question and the count assertion is what catches a
+/// splice. The parse loop below documents the property and backstops a tear in
+/// a frame the count does not depend on.
 #[tokio::test]
-#[ignore = "MIK-7387: no production caller of InputBridge, so no question is written to the pipe; this row is the spec for the wiring commit"]
 async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;

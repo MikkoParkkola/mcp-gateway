@@ -2197,11 +2197,14 @@ mod attestation_wiring {
     }
 
     async fn invoke_docs_search(meta: &MetaMcp) -> serde_json::Value {
-        meta.invoke_tool(
+        // Boxed to keep this helper's future off every caller's stack frame:
+        // `invoke_tool` sits just under clippy's `large_futures` threshold, so
+        // inlining it here pushes each `#[tokio::test]` above it.
+        Box::pin(meta.invoke_tool(
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
-        )
+        ))
         .await
         .unwrap()
     }
@@ -6057,11 +6060,11 @@ async fn ac_cache_4a_two_backends_do_not_share_one_cache_entry() {
         Duration::from_secs(300),
     );
     let invoke = async |server: &str| {
-        meta.invoke_tool(
+        Box::pin(meta.invoke_tool(
             &json!({"server": server, "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx(),
-        )
+        ))
         .await
         .unwrap()
         .to_string()
@@ -6139,11 +6142,11 @@ async fn ac_cache_4c_two_principals_do_not_share_one_cache_entry() {
             verified_identity: Some(identity),
             ..allow_all_ctx()
         };
-        meta.invoke_tool(
+        Box::pin(meta.invoke_tool(
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &caller,
-        )
+        ))
         .await
         .unwrap()
     };

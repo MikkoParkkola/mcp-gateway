@@ -2091,9 +2091,23 @@ impl MetaMcp {
         // for exactly this era (`router::handlers`), so the gate above has
         // already decided this question may be asked. The bridge re-checks it
         // every round because a later round may ask for something else.
+        //
+        // MIK-7387: "no second turn" is two conditions, not one. A caller the
+        // gateway cannot name has none either — `principal_fingerprint` is
+        // `None` for it, so the mint below can only refuse, and every stdio
+        // caller is one of these: the client spawned this process and presents
+        // no verified identity (`src/gateway/server/mod.rs`, `verified_identity:
+        // None`). Asked here it completes the exchange; left to the mint it
+        // receives `-32003` for a question it had just declared it could answer.
+        //
+        // The predicate is `principal_fingerprint` itself rather than a second
+        // reading of `verified_identity`: that function's own documentation
+        // names a second spelling of the binding rule as the defect to avoid,
+        // and which schemes are constructible is its decision to change.
         if let Some(asked) = interim.as_ref()
-            && caller.era == crate::protocol::meta::Era::Legacy
             && let Some(bridge_session) = session_id
+            && (caller.era == crate::protocol::meta::Era::Legacy
+                || crate::protocol::mrtr::principal_fingerprint(caller.verified_identity).is_none())
         {
             let dispatch = BridgeDispatch {
                 meta: self,
@@ -2145,6 +2159,43 @@ impl MetaMcp {
                     {
                         reservation.commit(&withheld_placeholder());
                     }
+                }
+                // The bridge could not ask, and a modern caller has a second
+                // turn to fall back on: leave it to the mint, which is where
+                // this call would have gone had the bridge not been tried.
+                //
+                // Two conditions, and both are load-bearing.
+                //
+                // `NoSession` is the one delivery outcome that means the
+                // request never reached the wire, so nothing is half-answered.
+                // Every producer of it returns before writing —
+                // `NoClientChannel` by construction, the stdio channel on its
+                // closed flag and on a dead writer task, and the HTTP path when
+                // `send_to_session` finds no live stream. A failure *after* the
+                // write is `TimedOut`, `Malformed`, `NoReplyMember`,
+                // `ClientRefused` or `UnknownAction`, and each of those still
+                // fails the call below.
+                //
+                // Modern, because MRTR.7's rule is that a legacy client cannot
+                // redeem a continuation: for that era the question is put
+                // inside this one call or the call fails, and minting instead
+                // would hand back an envelope nobody can present. That case is
+                // `a_legacy_caller_with_no_live_channel_cannot_be_asked`.
+                //
+                // What this arm is for is the modern caller the predicate above
+                // now admits on the "cannot be named" disjunct but that has no
+                // channel either — an anonymous HTTP caller. Failing here would
+                // answer it `-32603`, displacing the `-32003` that
+                // `unbindable_continuation` was ratified to give it, and that
+                // case is `an_unnameable_caller_is_not_offered_an_interim_exchange`.
+                Err(crate::gateway::input_bridge::BridgeError::Delivery {
+                    error: crate::gateway::input_bridge::DeliveryError::NoSession,
+                    ..
+                }) if caller.era != crate::protocol::meta::Era::Legacy => {
+                    debug!(
+                        server,
+                        tool, trace_id, "No client channel; left to the mint"
+                    );
                 }
                 Err(error) => {
                     warn!(
