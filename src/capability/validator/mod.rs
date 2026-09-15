@@ -164,6 +164,14 @@ pub fn validate_capability_definition(
 /// already ran, spelled once so the two cannot drift.
 #[must_use]
 pub(crate) fn input_schema_is_structurally_valid(input: &serde_json::Value) -> bool {
+    // The shared check tolerates a null or empty schema for webhook-only
+    // capabilities loaded off disk, and says nothing at all about a string,
+    // number, boolean or array -- none of those carry a `type` or `properties`
+    // to object to, so every one of them passed as structurally valid. Over the
+    // wire a non-object is exactly the shape this gate exists to withhold.
+    if !input.is_object() {
+        return false;
+    }
     let mut issues = Vec::new();
     checks::check_schema_input(input, &mut issues);
     !issues
