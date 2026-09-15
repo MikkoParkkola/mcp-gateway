@@ -68,6 +68,31 @@ const STDIO_SESSION_ID: &str = "stdio-session";
 
 /// How long the EOF path waits for the dispatches it already accepted.
 ///
+/// How many frames may wait for stdout before producers stall.
+///
+/// Deep enough that an ordinary burst of progress notifications never blocks
+/// a dispatch, shallow enough that a client which stops reading stalls the
+/// gateway instead of growing its memory.
+const STDOUT_QUEUE_DEPTH: usize = 1024;
+
+/// How many stdio requests may be in flight at once.
+///
+/// Concurrency is the point of MIK-7387, but an uncapped spawn turns a client
+/// that writes faster than the backends answer into unbounded task and backend
+/// load. One client, so the cap is generous rather than tuned.
+const MAX_CONCURRENT_STDIO_DISPATCHES: usize = 64;
+
+/// Queue one frame for the stdout writer, tolerating a closed writer.
+///
+/// A closed queue means stdout is gone, which the serve loop discovers on its
+/// own next read; there is nothing a producer can do about it here.
+async fn send_frame(
+    writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
+    frame: serde_json::Value,
+) {
+    drop(writer.send(frame).await);
+}
+
 /// Bounded rather than unbounded: past it the `JoinSet` aborts what is left,
 /// which is exactly the pre-concurrency behaviour and no worse (design §6).
 const STDIO_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -2361,11 +2386,23 @@ impl Gateway {
         // notifications, outbound bridged requests — queues here and never
         // touches the handle, which is what makes whole-frame writes a
         // property of the code rather than of timing.
-        let (writer, mut queue) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+        // Bounded: stdout is the only consumer, so a client that stops
+        // reading must stall its producers rather than grow this queue. An
+        // unbounded queue would turn a stalled reader into operator-process
+        // memory growth.
+        let (writer, mut queue) =
+            tokio::sync::mpsc::channel::<serde_json::Value>(STDOUT_QUEUE_DEPTH);
         let writer_task = tokio::spawn(async move {
             let mut stdout = tokio::io::stdout();
             while let Some(frame) = queue.recv().await {
-                Self::write_response(&mut stdout, &frame).await;
+                // A closed stdout ends the writer: staying open would let the
+                // dispatch tasks keep executing requests whose answers are
+                // already being thrown away. Closing the queue instead makes
+                // every producer's `send` fail, which is a signal they can see.
+                if !Self::write_response(&mut stdout, &frame).await {
+                    queue.close();
+                    break;
+                }
             }
         });
 
@@ -2373,6 +2410,10 @@ impl Gateway {
         let session_id = STDIO_SESSION_ID;
         let channel = Arc::new(stdio_channel::StdioClientChannel::new(writer.clone()));
         let mut dispatches: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+        // Admission, not just concurrency: a client that writes faster than the
+        // backends answer would otherwise pile one task per line onto the
+        // JoinSet. The permit is released when the dispatch task ends.
+        let admission = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STDIO_DISPATCHES));
         // What the handshake declared, kept for the session (MRTR.9). A legacy
         // -shaped `tools/call` carries no `_meta`, so without this every later
         // call would reach the bridge declaring nothing and be refused -32021
@@ -2402,11 +2443,15 @@ impl Gateway {
             let request: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(e) => {
-                    drop(writer.send(serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": null,
-                        "error": {"code": -32700, "message": format!("Parse error: {e}")}
-                    })));
+                    send_frame(
+                        &writer,
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": null,
+                            "error": {"code": -32700, "message": format!("Parse error: {e}")}
+                        }),
+                    )
+                    .await;
                     continue;
                 }
             };
@@ -2441,7 +2486,7 @@ impl Gateway {
                 .await;
                 Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
                 if !responses.is_empty() {
-                    drop(writer.send(serde_json::Value::Array(responses)));
+                    send_frame(&writer, serde_json::Value::Array(responses)).await;
                 }
                 continue;
             }
@@ -2485,12 +2530,19 @@ impl Gateway {
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
                     if let Some(response) = response {
-                        drop(writer.send(response));
+                        send_frame(&writer, response).await;
                     }
                 }
             };
             if spawned {
-                dispatches.spawn(task);
+                let permit = Arc::clone(&admission)
+                    .acquire_owned()
+                    .await
+                    .expect("the admission semaphore is never closed");
+                dispatches.spawn(async move {
+                    task.await;
+                    drop(permit);
+                });
             } else {
                 task.await;
             }
@@ -2504,7 +2556,11 @@ impl Gateway {
         // is refused rather than left waiting out the bridge's own timeout.
         channel.close();
         if tokio::time::timeout(STDIO_DRAIN_TIMEOUT, async {
-            while dispatches.join_next().await.is_some() {}
+            while let Some(joined) = dispatches.join_next().await {
+                if let Err(e) = joined {
+                    warn!("stdio: dispatch task failed during drain: {e}");
+                }
+            }
         })
         .await
         .is_err()
@@ -2561,29 +2617,34 @@ impl Gateway {
     }
 
     /// Write a JSON-RPC response to stdout followed by a newline.
+    /// `false` when the frame did not reach `stdout`, which the stdio writer
+    /// reads as "the pipe is gone" rather than "this one frame was lost".
     async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
         stdout: &mut W,
         value: &serde_json::Value,
-    ) {
+    ) -> bool {
         let serialized = match serde_json::to_string(value) {
             Ok(s) => s,
             Err(e) => {
+                // Serialisation is this frame's problem, not the pipe's.
                 warn!(error = %e, "Failed to serialize response");
-                return;
+                return true;
             }
         };
         debug!(response_len = serialized.len(), "stdio: writing response");
         if let Err(e) = stdout.write_all(serialized.as_bytes()).await {
             warn!(error = %e, "Failed to write to stdout");
-            return;
+            return false;
         }
         if let Err(e) = stdout.write_all(b"\n").await {
             warn!(error = %e, "Failed to write newline to stdout");
-            return;
+            return false;
         }
         if let Err(e) = stdout.flush().await {
             warn!(error = %e, "Failed to flush stdout");
+            return false;
         }
+        true
     }
 
     /// Run `fut` inside a notification scope, writing each notification the
@@ -2599,7 +2660,7 @@ impl Gateway {
     /// token would then travel to the backend unchanged.
     async fn dispatch_streaming_notifications<F>(
         fut: F,
-        writer: &tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
+        writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
     ) -> F::Output
     where
         F: Future,
@@ -2609,7 +2670,7 @@ impl Gateway {
         let output = loop {
             tokio::select! {
                 Some(notification) = notifications.recv() => {
-                    Self::queue_notification(writer, &notification);
+                    Self::queue_notification(writer, &notification).await;
                 }
                 output = &mut scoped => break output,
             }
@@ -2617,7 +2678,7 @@ impl Gateway {
         // The scope's sender drops with `scoped`, so anything still queued is
         // everything that will ever arrive; write it before the response.
         while let Ok(notification) = notifications.try_recv() {
-            Self::queue_notification(writer, &notification);
+            Self::queue_notification(writer, &notification).await;
         }
         output
     }
@@ -2625,12 +2686,12 @@ impl Gateway {
     /// Serialise one notification onto the client's stream. A notification
     /// that cannot be serialised is dropped with a warning rather than
     /// failing the request it belongs to.
-    fn queue_notification(
-        writer: &tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
+    async fn queue_notification(
+        writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
         notification: &crate::protocol::JsonRpcNotification,
     ) {
         match serde_json::to_value(notification) {
-            Ok(value) => drop(writer.send(value)),
+            Ok(value) => send_frame(writer, value).await,
             Err(error) => warn!(
                 %error,
                 method = %notification.method,
@@ -3547,7 +3608,7 @@ mod stdio_forward_path_tests {
     /// the design ADR-014 §1 rejects.
     #[tokio::test]
     async fn a_notification_is_written_before_its_dispatch_returns() {
-        let (writer, mut queue) = tokio::sync::mpsc::unbounded_channel();
+        let (writer, mut queue) = tokio::sync::mpsc::channel(super::STDOUT_QUEUE_DEPTH);
         let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
         let dispatch_gate = std::sync::Arc::clone(&gate);
 
@@ -3582,7 +3643,7 @@ mod stdio_forward_path_tests {
     /// travels to the backend unchanged -- the leak SUB.2b forbids.
     #[tokio::test]
     async fn a_dispatch_runs_inside_a_notification_scope() {
-        let (writer, _queue) = tokio::sync::mpsc::unbounded_channel();
+        let (writer, _queue) = tokio::sync::mpsc::channel(super::STDOUT_QUEUE_DEPTH);
         let minted = Gateway::dispatch_streaming_notifications(
             async { notification_sink::mint_progress_token(&json!(7)) },
             &writer,
@@ -3598,7 +3659,7 @@ mod stdio_forward_path_tests {
     /// caller's to see; the post-loop drain is what delivers it.
     #[tokio::test]
     async fn a_late_notification_is_drained_before_the_response() {
-        let (writer, mut queue) = tokio::sync::mpsc::unbounded_channel();
+        let (writer, mut queue) = tokio::sync::mpsc::channel(super::STDOUT_QUEUE_DEPTH);
         Gateway::dispatch_streaming_notifications(
             async {
                 notification_sink::publish(vec![progress("gw-late")]);
