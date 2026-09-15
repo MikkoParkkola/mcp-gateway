@@ -32,7 +32,7 @@ a loss if only one of them survives, however exactly its body is reproduced.
 
 | Declaration | `0f04a179` home | Verdict | Evidence at the tip |
 |---|---|---|---|
-| `is_mcp_envelope` | `meta_mcp/invoke.rs` | **LOSS** | Two call sites, and only one survives. The predicate body is reproduced inside `apply_validated_output` (`src/gateway/meta_mcp/invoke.rs:216`) — but that check is **pre-existing**, unchanged by `0f04a179`, and is the reason the helper was extracted rather than the behaviour it added. The site the commit added is the validation-target match guard, and the tip has the pre-commit code there verbatim: `extract_output_validation_target(&result).unwrap_or_else(\|\| result.clone())` at `:160-161`. See "The verdict that changed" below |
+| `is_mcp_envelope` | `meta_mcp/invoke.rs` | **LOSS** | Two call sites, and only one survives. The predicate body is reproduced inside `apply_validated_output` (`src/gateway/meta_mcp/invoke.rs:216`) — but that check is **pre-existing**, unchanged by `0f04a179`, and is the reason the helper was extracted rather than the behaviour it added. The site the commit added is the validation-target match guard, and the tip has the pre-commit code there verbatim: `extract_output_validation_target(&result).unwrap_or_else(\|\| result.clone())` at `:160-161`. See "The verdict that changed" below. **Restored on this branch** — it is the remedy for the MRTR.2a break, see "The experiment ran" |
 | `decorate_modern_result` | `router/handlers.rs` | **move** (renamed) | `shape_modern_response` at `src/gateway/router/handlers.rs:2018`; same `resultType` entry-or-insert and per-method `cacheScope` (`:2032`, `:2041-2043`) |
 | `fail_with_code` | `protocol/tasks.rs` | **replaced-by-design** | `Task::fail(JsonRpcError)` at `src/protocol/tasks.rs:248` routes through `TaskTransition::Fail` and preserves `data` as well as `code` and `message`. Delta: a failure now carries `data` |
 | `task_view` | `router/handlers.rs` | **move** (superseded) | `Task::wire()` at `src/protocol/tasks.rs:238` over `TaskWire` (`:96-118`, nullable `ttl_ms` preserved by a custom decoder), shaped by `src/gateway/router/handlers/tasks.rs:72`. Single construction site in `0f04a179`, single carrier at the tip |
@@ -82,30 +82,62 @@ back to the envelope "validates the wrong document and then republishes it under
 `structuredContent` — carrying the backend's own `requestState` past the mint
 that exists to replace it."
 
-**Open question, not a regrade.** `MIK-7212.MRTR.2a` (`:131`) — *MUST NOT
-forward a backend's `requestState` to a client verbatim* — is graded **MET**.
-The reachability argument against it is assembled but not executed:
-`enforce_output_schema` (`:142`) gates only on a present schema and a
-non-`isError` result, its call sites at `:2991` and `:3137` are on the dispatch
-path that returns before the interim handling at `:1909-1937` mints the
-replacement, and `apply_validated_output` re-wraps the validated document into
-`structuredContent` — which a top-level `requestState` replacement would not
-reach. Every step of that is read, none of it is run. The cheapest disproof or
-confirmation is a unit test on `enforce_output_schema` alone, fed an interim
-envelope carrying a backend `requestState` and a schema it satisfies: if the
-returned value carries that value under `structuredContent`, MRTR.2a is not MET
-on this line. **That test is the next action, and the grade stands until it
-runs.** One of the two independent reviewers rates the break CERTAIN rather than
-open and would regrade now; that is recorded rather than adopted, because the
-same reviewer also misidentified the `BridgeObserver` implementor two rows above
-and a read-only trace is what both claims rest on. Publishing a regrade off a
-read-only trace would be the same error this document exists to correct, one
-level up.
+**The experiment ran, and it is red.** `MIK-7212.MRTR.2a` (`:131`) — *MUST NOT
+forward a backend's `requestState` to a client verbatim* — was graded **MET** on
+a read-only trace. The trace is now executed. Two premises had to hold before a
+unit result could bear on the grade, and both were read at source first:
+
+* The value `enforce_output_schema` receives still carries the backend's own
+  `requestState`. `src/gateway/meta_mcp/invoke.rs:3119` is the raw reply — "this
+  value has not been through projection, the contract gate or any shaping" — and
+  it reaches `enforce_output_schema` at `:3137` unaltered.
+* An interim result can carry a declared `outputSchema`. The schema is resolved
+  from the tool's own registry entry or its cached declaration (`:3127-3135`),
+  and nothing couples that to whether the result is interim.
+
+`mrtr_2a_enforce_output_schema_does_not_republish_backend_request_state`
+(`src/gateway/meta_mcp/invoke.rs`) feeds the function an interim envelope whose
+`content` is a human-readable prompt — not JSON, so there is no inner payload to
+extract — alongside the backend's opaque `requestState`. At the tip the backend
+string came back in **two** places the mint never reaches:
+
+```
+"requestState": "backend-opaque-state-abc123",          <- the mint replaces this one
+"structuredContent": { "requestState": "backend-opaque-state-abc123" },
+"content": [{ "text": "{… \"requestState\": \"backend-opaque-state-abc123\" …}" }]
+```
+
+The mint at `:1909-1937` rewrites the top-level field only, so both copies
+survive it. The reviewer who rated the break CERTAIN rather than open was right,
+and the caution that recorded the rating without adopting it cost one test.
+
+**The remedy is the third loss, not a regrade.** The guard that prevents this is
+`is_mcp_envelope` — the declaration this table's first row adjudicates as lost.
+Restoring it restores the behaviour: an envelope with nothing extractable is
+returned unchanged instead of being validated as the wrong document and
+republished. The loss and the open question were the same defect seen from two
+directions, which is why the grade holds once the guard is back rather than
+needing a regrade and a counter cascade.
+
+Two things go beyond a restoration, and neither is `0f04a179`'s. That commit
+declared the predicate but kept the inline copy inside `apply_validated_output`,
+so routing both sites through one predicate is a new cleanup on this branch, not
+a recovered one. And the predicate itself is tightened: `0f04a179` keyed on the
+bare presence of a `content` key, which classifies a *payload* that merely has a
+field of that name as an envelope and returns it unvalidated — the schema gate
+failing open on exactly the values it exists to check. This branch requires
+`content` to be an **array**, which is the shape `extract_output_validation_target`
+consumes, so a bare payload is still validated as its own target. An independent
+reviewer found that gap in the restored code; it is recorded here because the
+row above publishes the declaration as lost, and what lands is not identical to
+what was lost.
 
 **The burndown does not move on this document: 4 core open, 15 minor, 19 total,
 delta 0.** Nine of ten names are resolved to something already counted or to
-nothing at all. The tenth is an open question with a named experiment, and an
-open question is not a defect until the experiment says so.
+nothing at all. The tenth was an open question with a named experiment; the
+experiment ran, the question became a defect, and the defect is closed on this
+branch — one found and one closed, which is why the delta is still zero. It is
+not zero because nothing happened.
 
 The instrument lesson is the call-site rule. A body that matches somewhere is
 not a move; a helper extracted to dedup *n* sites is a partial loss unless all
