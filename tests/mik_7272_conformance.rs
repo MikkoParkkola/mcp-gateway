@@ -211,7 +211,7 @@ const MINOR: &[Row] = &[
         evidence: &[
             "mik_7272_task_1_acs::wire::ac_ext_1_e6_a_non_object_settings_value_does_not_declare_the_extension",
             "mik_7272_task_1_acs::wire::ac_ext_1_e7_a_valid_settings_object_still_declares_the_extension",
-            "meta_mcp_helpers_tests::ac_ext_1_a_the_builder_serializes_the_map_it_was_given",
+            "gateway::meta_mcp_helpers::tests::ac_ext_1_a_the_builder_serializes_the_map_it_was_given",
         ],
     },
     Row {

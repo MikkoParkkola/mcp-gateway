@@ -41,7 +41,7 @@ a derivation from a cited line, not a judgement call, and a reader can check it.
 
 | Disposition | Means | Requires |
 |---|---|---|
-| **COVERED** | a committed test asserts this cell | test name plus `file:line` |
+| **COVERED** | a committed test asserts this cell *on the production path* | test name plus `file:line` |
 | **N/A** | the cell cannot exist, per Rule 2 | the code or spec line that makes it impossible |
 | **UNCOVERED** | the cell exists and nothing asserts it | the test that would close it |
 
@@ -50,6 +50,17 @@ prevent: an N/A without a reason is a skipped criterion wearing a label, and an
 N/A *with* a plausible-sounding reason that is really a missing test is worse,
 because it reads as complete. The precedent is `RELEASE-4.0.0-test-plan.md:41`,
 where the one N/A row carries the file and line that justify it.
+
+**"On the production path" is a reviewer obligation, not an enforced one.** The
+two executable checks work at *row* granularity: they read `evidence` and can
+only tell an empty list from a non-empty one. Neither can tell a test that
+drives the production path from one that asserts a value the test itself handed
+in, and neither can see a statement whose clauses are unevenly covered. A row
+with one well-pinned clause and one unpinned clause looks identical to a fully
+pinned row. So a citation satisfying `matrix_has_no_empty_cells` is necessary
+for COVERED and not sufficient; the clause-level reading is done by the reviewer
+and recorded below the tally. Minor 1 is the case that established this — see
+the clause-level line in the Tally.
 
 ### Rule 4 — the grade is mechanical
 
@@ -86,9 +97,9 @@ instrument that can see it.
 
 ## Matrix
 
-### Statements with evidence — COVERED (20 of 21)
+### Statements with evidence — COVERED (21 of 21)
 
-All nine major statements and minor 2-12 carry at least one evidence
+All nine major statements and minor 1-12 carry at least one evidence
 reference, and every cited name resolves to a defined test. The cells, roles
 and transports are in the source of truth rather than copied here, because a
 copy drifts and the original is checked by CI: `tests/mik_7272_conformance.rs`,
@@ -262,11 +273,43 @@ closing tests inside their statement's row rather than as rows of their own,
 because a statement is the unit the changelog and the `Row` struct both use,
 and mixing units is how a tally stops being checkable.
 
+### Clause-level coverage — one clause open
+
+The counts above are at statement granularity, which is the granularity the two
+executable checks enforce. At clause granularity one clause is open:
+
+| Statement | Clause | Disposition | Basis |
+|---|---|---|---|
+| minor 1 | client declares `extensions` | COVERED | `ac_ext_1_e6…` / `ac_ext_1_e7…` drive the real axum router to the live gate |
+| minor 1 | server advertises `extensions` on `server/discover` | **UNCOVERED** | the only cited row, `ac_ext_1_a_the_builder_serializes_the_map_it_was_given`, asserts a map it is handed — see its own comment at `tests/mik_7272_conformance.rs:911-922`. Deleting `discovery_extensions()` (`src/gateway/meta_mcp_helpers.rs:181`) leaves every cited test green while modern `server/discover` stops advertising the extension. |
+
+This is *not* the minor 11 situation. Minor 11 also records clause-level detail
+in-row, but each of its clauses is closed by a production-path test
+(`gateway::proxy::tests::…` for the forward paths, the `mrtr7_bridge` route rows
+for the rest). Minor 1's server clause is closed by nothing. The distinction is
+the whole reason Rule 3 now says "on the production path": in-row recording is a
+formatting choice, not a licence to leave a clause unpinned.
+
+Closing it takes one test asserting the tasks extension in the capabilities
+returned by a real `server/discover` call.
+
 ## Grade
 
-**MET.** Rule 4 makes this mechanical: UNCOVERED is empty, so the criterion is
-met. It is met on the rule this document fixed *before* the last cell closed,
-which is the only reason the grade means anything.
+**NOT MET — PARTIAL.** Rule 4's population test passes: UNCOVERED is empty and
+COVERED equals 21, at the statement granularity the executable checks enforce.
+That is necessary and, as of this revision, no longer sufficient. Rule 3 requires
+a COVERED cell to be asserted *on the production path*, and minor 1's server
+clause is not — the grade survives deleting the mechanism it certifies, which is
+the one thing a conformance grade must not do.
+
+The mechanical rule is kept, not weakened: it still decides the statement tally
+without judgement, and it still could not be gamed by relabelling. What changed
+is that passing it is now the floor rather than the finish. The rule was fixed
+before the last cell closed, and it is being applied against the document that
+declared it — including when the answer is that the grade does not hold.
+
+Remaining work: the `server/discover` test named at the end of the Tally. One
+test closes the clause and returns this criterion to MET.
 
 What the revisions delivered: the matrix, its population rule, the statement
 that was missing from it, the count assertion that would have caught that, the
