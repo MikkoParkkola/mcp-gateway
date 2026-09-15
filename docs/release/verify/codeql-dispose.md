@@ -162,10 +162,13 @@ large enough that CodeQL attributed the whole test corpus to the pull request �
 summary says so itself: *"Alerts not introduced by this pull request might have been detected
 because the code changes were too large."*
 
-**Deciding location per file.** Each `src/` file is a `#[path]` module declared under a
-`#[cfg(test)]` attribute, so it never compiles into a non-test build; each `tests/` file is an
-integration-test target, compiled only by `cargo test` and never linked into the shipped
-binary or library. Line numbers as of `3e872f40`.
+**Deciding location per file.** Each `src/` file is reachable only beneath a `#[cfg(test)]`
+declaration, so it never compiles into a non-test build. Nine are `#[path]` modules carrying
+the attribute directly; three — `signing_joint/cases.rs`, `signing_joint/policy.rs` and
+`tests/modern_startup.rs` — are ordinary child modules whose gate sits on an ancestor, and the
+table below gives the full chain for each. Every `tests/` file is an integration-test target,
+compiled only by `cargo test` and never linked into the shipped binary or library. Line
+numbers as of `3e872f40`.
 
 | Alerts | File | Deciding location |
 |---|---|---|
@@ -194,6 +197,13 @@ the code is test-only, which is what `used in tests` records.
 advanced setup to suppress test paths wholesale would also hide a future finding in test code
 that is worth seeing.
 
-**Result**: the `CodeQL` check on #550 recomputed on its own — no re-run needed — to
-*"No new alerts in code changed by this pull request"*, and the PR rollup went to
-46 `SUCCESS` / 3 `SKIPPED` / 0 failures, `mergeable: MERGEABLE`.
+**Result**: check run
+[104192013465](https://github.com/MikkoParkkola/mcp-gateway/runs/104192013465) (check suite
+94533203709) recomputed on its own — no re-run needed — from *"132 new alerts including 117
+critical severity security vulnerabilities"* to *"No new alerts in code changed by this pull
+request"*, observed 2026-09-15T06:00Z. The PR rollup at that moment was 46 `SUCCESS` /
+3 `SKIPPED` / 0 failures, `mergeable: MERGEABLE`.
+
+The 132 alert ids, rules and locations are listed in
+[`codeql-550-alert-manifest.md`](codeql-550-alert-manifest.md), so each dismissal can be
+checked against its own alert rather than against this summary.
