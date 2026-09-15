@@ -516,6 +516,21 @@ def test_the_two_statuses_the_rule_exempts_pass_when_flagged_non_blocking():
     assert counter.blocking_disagreements(rows) == []
 
 
+class Ledger:
+    """Stands in for the status document, which `main` reads exactly once.
+
+    A temp file would be the obvious way to do this and is the wrong one: the
+    reviewers run this suite in a read-only sandbox with no writable TMPDIR,
+    where `tempfile` raises before a single assertion is reached.
+    """
+
+    def __init__(self, text):
+        self.text = text
+
+    def read_text(self):
+        return self.text
+
+
 def gate_on(text):
     """Run the whole gate over a ledger variant, the way CI runs it.
 
@@ -525,20 +540,16 @@ def gate_on(text):
     import contextlib
     import io
     import sys
-    import tempfile
 
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
-        handle.write(text)
-        path = pathlib.Path(handle.name)
     original, argv = counter.STATUS, sys.argv
     try:
-        counter.STATUS, sys.argv = path, ["count-release-criteria.py", "--check"]
+        counter.STATUS = Ledger(text)
+        sys.argv = ["count-release-criteria.py", "--check"]
         with contextlib.redirect_stdout(io.StringIO()):
             with contextlib.redirect_stderr(io.StringIO()):
                 return counter.main()
     finally:
         counter.STATUS, sys.argv = original, argv
-        path.unlink()
 
 
 def regrade_leaving_the_flag(text):
