@@ -36,11 +36,13 @@ UNCOVERED = re.compile(
     r"^### Statements without evidence — UNCOVERED \((\d+) of (\d+)\)$", re.M
 )
 PROSE = re.compile(r"^All (\w+) major statements and minor 1-(\d+) carry", re.M)
-# The sixth column counts what closed on that tick. It is deliberately not
-# captured: no ledger derives it, so asserting it would only compare the
-# document against itself.
+# The row ends at the total. The next column counts what closed on that tick,
+# and no ledger derives it, so it is neither captured nor matched: a column this
+# check does not assert must not be able to reject a row either. Requiring it to
+# be unsigned digits hid the nine rows that record a close as `-1`, and skipping
+# the newest row is how a stale agreement gets certified.
 SUMMARY = re.compile(
-    r"^\| (\d{4}-\d{2}-\d{2})([a-z]+) \| (\d+) \| (\d+) \| \*\*(\d+)\*\* \| \d+ \|", re.M
+    r"^\| (\d{4}-\d{2}-\d{2})([a-z]+) \| (\d+) \| (\d+) \| \*\*(\d+)\*\* \|", re.M
 )
 
 WORDS = {

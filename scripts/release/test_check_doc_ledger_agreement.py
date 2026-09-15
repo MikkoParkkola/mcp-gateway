@@ -30,9 +30,16 @@ def derived():
     minors = agreement.entries(source, "MINOR", "Row {")
     gaps = agreement.entries(source, "TRACKED_GAPS", "(")
     data = json.loads((ROOT / STATUS).read_text(), object_pairs_hook=unique_object)
-    _, pending, blockers = inspect_contract(
+    errors, pending, blockers = inspect_contract(
         ROOT, (ROOT / SCOPE).read_text(), data, (ROOT / BASELINE).read_text()
     )
+    if errors:
+        # Without this the suite would read an inconsistent contract as a valid
+        # oracle and report mutation coverage it never had.
+        raise RuntimeError(
+            "the scope contract is inconsistent, so it cannot be this suite's "
+            "oracle:\n  " + "\n  ".join(errors)
+        )
     return majors, minors, gaps, len(pending), len(blockers)
 
 
@@ -154,6 +161,54 @@ class NewestRowIsParsedNotAssumed(unittest.TestCase):
         self.assertEqual(
             [], agreement.check_tracker(f"{TRACKER}\n{stale}\n", PENDING, BLOCKING)
         )
+
+    def test_a_row_recording_a_close_is_not_skipped(self):
+        """Nine shipped rows spend `-1` on the tick column; none may be invisible."""
+        closed = (
+            f"| 2099-01-01a | {BLOCKING} | {PENDING + 1} | **{BLOCKING + PENDING + 1}**"
+            " | -1 | a criterion closed |"
+        )
+        self.assert_red(agreement.check_tracker(f"{TRACKER}\n{closed}\n", PENDING, BLOCKING))
+
+    def assert_red(self, failures):
+        self.assertTrue(failures, "the newest row was skipped, not read")
+
+    def test_a_two_letter_suffix_outranks_a_one_letter_suffix(self):
+        rows = list(agreement.SUMMARY.finditer("| 2099-01-01z | 1 | 1 | **2** | 0 |\n"
+                                               "| 2099-01-01aa | 1 | 1 | **2** | 0 |\n"))
+        self.assertEqual("aa", max(rows, key=agreement.row_age).group(2))
+
+
+class TheArrayParserIsItselfTested(unittest.TestCase):
+    """The oracle comes through `entries`, so it needs cases of known size."""
+
+    SYNTHETIC = """
+const MAJOR: &[Row] = &[
+    Row { id: "a" },
+    Row { id: "b" },
+];
+
+const MINOR: &[Row] = &[
+    Row {
+        id: "c",
+        note: "a nested Row { } must not count twice",
+    },
+];
+"""
+
+    def test_top_level_entries_only(self):
+        self.assertEqual(2, agreement.entries(self.SYNTHETIC, "MAJOR", "Row {"))
+        self.assertEqual(1, agreement.entries(self.SYNTHETIC, "MINOR", "Row {"))
+
+    def test_an_inline_empty_array_counts_zero(self):
+        self.assertEqual(
+            0, agreement.entries("const TRACKED_GAPS: &[(&str, &str)] = &[];", "TRACKED_GAPS", "(")
+        )
+
+    def test_a_terminator_inside_an_entry_undercounts_loudly(self):
+        """An early cut can only lose entries, and a lost entry fails the check."""
+        source = 'const MAJOR: &[Row] = &[\n    Row { id: "]; " },\n    Row { id: "b" },\n];'
+        self.assertLess(agreement.entries(source, "MAJOR", "Row {"), 2)
 
 
 if __name__ == "__main__":
