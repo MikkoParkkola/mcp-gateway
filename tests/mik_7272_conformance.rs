@@ -531,10 +531,38 @@ fn every_cited_test_exists() {
     // string LOOKED like a test path. It did — and one of the two tests it
     // named had never been written. Checking the shape of evidence is not
     // checking the evidence, so the name is now resolved against the source.
+    //
+    // The WHOLE path is resolved, not the trailing `fn` name (gpt-review). A
+    // bare-name check passes `totally::made::up::ac_x` whenever some unrelated
+    // file happens to define `ac_x`, and this matrix has already shipped one
+    // citation whose module half was wrong. The module half is the half a
+    // reader uses to go and check.
+    let sources = crate_sources();
+    for row in all_rows() {
+        for name in row.evidence {
+            let function = name.rsplit("::").next().unwrap_or_default();
+            assert!(
+                name.contains("::") && function.starts_with("ac_"),
+                "evidence for '{}' is not a test path: {name}",
+                row.statement
+            );
+            assert!(
+                resolves(name, &sources),
+                "evidence for '{}' names {name}, and no test is defined at \
+                 that module path anywhere in the tree",
+                row.statement
+            );
+        }
+    }
+}
+
+/// Every `.rs` file under `src/` and `tests/`, as (crate-relative path, text).
+///
+/// Both trees: an integration test lives under `tests/`, a unit test inside the
+/// module it covers under `src/`, and the matrix cites both shapes.
+fn crate_sources() -> Vec<(String, String)> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    // Both trees: an integration test lives under `tests/`, a unit test inside
-    // the module it covers under `src/`, and the matrix cites both shapes.
-    let mut sources = String::new();
+    let mut sources = Vec::new();
     let mut stack = vec![root.join("src"), root.join("tests")];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir)
@@ -545,26 +573,88 @@ fn every_cited_test_exists() {
             if path.is_dir() {
                 stack.push(path);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                sources.push_str(&std::fs::read_to_string(&path).expect("source file is readable"));
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let text = std::fs::read_to_string(&path).expect("source file is readable");
+                sources.push((rel, text));
             }
         }
     }
+    sources
+}
 
-    for row in all_rows() {
-        for name in row.evidence {
-            let function = name.rsplit("::").next().unwrap_or_default();
-
-            assert!(
-                name.contains("::") && function.starts_with("ac_"),
-                "evidence for '{}' is not a test path: {name}",
-                row.statement
-            );
-
-            assert!(
-                sources.contains(&format!("fn {function}(")),
-                "evidence for '{}' names {name}, and no such test is defined anywhere in the tree",
-                row.statement
-            );
-        }
+/// The module path a file's LOCATION implies: `src/gateway/proxy.rs` ->
+/// `["gateway", "proxy"]`, `tests/mik_7213_acs.rs` -> `["mik_7213_acs"]`.
+///
+/// `mod.rs`, `lib.rs` and `main.rs` name their directory, not themselves.
+fn path_modules(rel: &str) -> Vec<String> {
+    let mut parts: Vec<String> = rel
+        .trim_end_matches(".rs")
+        .split('/')
+        .skip(1)
+        .map(ToOwned::to_owned)
+        .collect();
+    if parts
+        .last()
+        .is_some_and(|p| matches!(p.as_str(), "mod" | "lib" | "main"))
+    {
+        parts.pop();
     }
+    parts
+}
+
+/// Module prefixes a file can be reached by: its own location, plus any
+/// `#[path = "…"] mod name;` that pulls it in under another name — which is how
+/// `src/gateway/meta_mcp_helpers_tests.rs` is `gateway::meta_mcp_helpers::tests`.
+///
+/// Both evidence shapes resolve here, deliberately. A `#[cfg(test)]` module
+/// under `src/` is a lib unit test and runs under `--lib`; a row like
+/// `mik_7272_task_1_acs::wire::…` is an integration target whose first segment
+/// is the file stem under `tests/`. A checker that knew only one shape would
+/// reject the correct name for the other, so the walk covers both trees and
+/// takes the first segment from the file's own path either way.
+fn prefixes(rel: &str, sources: &[(String, String)]) -> Vec<Vec<String>> {
+    let mut out = vec![path_modules(rel)];
+    let base = rel.rsplit('/').next().unwrap_or(rel);
+    let needle = format!("#[path = \"{base}\"]");
+    for (declarer, text) in sources {
+        let Some(after) = text.split_once(&needle).map(|(_, rest)| rest) else {
+            continue;
+        };
+        let Some(name) = after
+            .split_once("mod ")
+            .and_then(|(_, rest)| rest.split([';', ' ', '\n']).next())
+        else {
+            continue;
+        };
+        let mut reached = path_modules(declarer);
+        reached.push(name.to_owned());
+        out.push(reached);
+    }
+    out
+}
+
+/// Whether some file defines `name`'s function at exactly `name`'s module path.
+///
+/// A file accounts for the leading segments by where it sits (or by the
+/// `#[path]` that renames it); every remaining segment must be a `mod` it
+/// declares inline. Anything left over means the citation points somewhere the
+/// test is not.
+fn resolves(name: &str, sources: &[(String, String)]) -> bool {
+    let segments: Vec<&str> = name.split("::").collect();
+    let (function, modules) = segments.split_last().expect("a split yields one part");
+    let definition = format!("fn {function}(");
+    sources.iter().any(|(rel, text)| {
+        text.contains(&definition)
+            && prefixes(rel, sources).iter().any(|prefix| {
+                let prefix: Vec<&str> = prefix.iter().map(String::as_str).collect();
+                modules.starts_with(&prefix)
+                    && modules[prefix.len()..]
+                        .iter()
+                        .all(|m| text.contains(&format!("mod {m}")))
+            })
+    })
 }
