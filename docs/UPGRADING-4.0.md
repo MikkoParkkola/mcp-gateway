@@ -19,6 +19,7 @@ change rather than a runtime one and therefore has no startup notice.
 | 3 | Protocol `2024-10-07` is no longer advertised | None for conforming clients — see below |
 | 4 | Rate-limited responses no longer trip the breaker | None — this removes a failure mode |
 | 5 | One license across the repository | Commercial users need a commercial license |
+| 6 | Caching requires an identifiable protocol revision | Send the version header, or `initialize` the session |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -84,6 +85,28 @@ in this repository is now under the **PolyForm Noncommercial License 1.0.0**
 Noncommercial use is unaffected. Commercial use requires a commercial license — see
 [COMMERCIAL.md](../COMMERCIAL.md). If you adopted the gateway under the previous MIT core, this
 is the change to route past whoever approves your licensing, not a runtime concern.
+
+## 6. Responses are cached only for a known protocol revision
+
+The response cache is now keyed by the protocol revision the request was served under, and a
+request whose revision cannot be identified is not cached at all
+(`cache_protocol_revision`, `src/protocol/meta.rs:514`). A modern request carries its revision
+in the body. A legacy request must supply it in the `MCP-Protocol-Version` header, or have
+bound one by completing `initialize` on the session.
+
+In 3.x the cache had no such key, so a response fetched for a caller that declared no revision
+could be served to a caller asking under a different one. Refusing to key what cannot be
+identified is the safe half of that trade, and the skip is deliberate rather than a fallback.
+
+**This is the item most likely to surprise you.** A client that sends no
+`MCP-Protocol-Version` header *and* does not run `initialize` — a bare stateless `POST`, which
+is common in load generators, probes and simple scripts — loses response caching entirely on
+upgrade, and that traffic goes to your backends instead. Nothing errors; throughput and backend
+load change. The gateway's own rate limits (default 100 rps, burst 50) then apply to calls that
+previously never reached them.
+
+Send `MCP-Protocol-Version` on stateless requests, or complete `initialize` and reuse the
+session. Either restores caching; neither requires a configuration change.
 
 ## After upgrading
 

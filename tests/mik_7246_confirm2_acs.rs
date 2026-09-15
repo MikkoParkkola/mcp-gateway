@@ -7,8 +7,9 @@
 //! `handlers.rs:1462` hands a modern caller `ConfirmationChannel::InBand`
 //! where it once built `Elicit` unconditionally, and `meta_mcp/mod.rs:2164`
 //! mints the envelope and answers `input_required` — so these two tests are no
-//! longer failing-by-construction. They have also never run: nothing has been
-//! measured against a build. Read them as unverified, not as green.
+//! longer failing-by-construction. Both now execute and pass against a build,
+//! so the ledger's `MET` cell for this row rests on measurement rather than on
+//! a reading of the mechanism.
 //!
 //! The shape asserted is the one fixed by
 //! `docs/design/2026-09-09-confirm-2-in-band-schema-and-wiring.md`, spelled in
@@ -35,7 +36,10 @@ const CONFIRMATION_KEY: &str = "io.mcp-gateway.destructive-confirmation.v1";
 /// `destructiveHint: true` — is refused for everyone else by the admin check,
 /// which runs *before* the confirmation gate. A non-admin caller never reaches
 /// the code this criterion is about, and a 403 would look like a red test.
-fn admin_state() -> std::sync::Arc<mcp_gateway::gateway::test_helpers::AppState> {
+async fn admin_state() -> (
+    std::sync::Arc<mcp_gateway::gateway::test_helpers::AppState>,
+    tempfile::TempDir,
+) {
     state(Fixture {
         auth: AuthConfig {
             enabled: true,
@@ -55,24 +59,32 @@ fn admin_state() -> std::sync::Arc<mcp_gateway::gateway::test_helpers::AppState>
         },
         ..Fixture::default()
     })
+    .await
 }
 
 const ADMIN_BEARER: (&str, &str) = ("authorization", "Bearer admin-key");
 
+/// `crate::protocol::mrtr::IDEMPOTENCY_KEY_META`. A modern `tools/call` is
+/// refused before it reaches the confirmation gate without one, so the key is
+/// a precondition of this row, not part of what it asserts.
+const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+
 fn destructive_call() -> Value {
-    modern(
+    let mut request = modern(
         "tools/call",
         json!({
             "name": "gateway_kill_server",
             "arguments": { "server": "confirm2-sentinel" }
         }),
-    )
+    );
+    request["params"]["_meta"][IDEMPOTENCY_KEY_META] = json!("confirm2-acs");
+    request
 }
 
 /// `MIK-7246.CONFIRM.2` — a modern stateless caller is ASKED, not refused.
 #[tokio::test]
 async fn modern_destructive_call_asks_in_band() {
-    let state = admin_state();
+    let (state, _store_dir) = admin_state().await;
     let (status, body) = post(&state, destructive_call(), &[ADMIN_BEARER]).await;
 
     assert_eq!(
@@ -116,7 +128,7 @@ async fn modern_destructive_call_asks_in_band() {
 /// assertion standing for both branches.
 #[tokio::test]
 async fn non_true_answer_declines_rather_than_erroring() {
-    let state = admin_state();
+    let (state, _store_dir) = admin_state().await;
     let (_, ask) = post(&state, destructive_call(), &[ADMIN_BEARER]).await;
     let envelope = ask
         .pointer("/result/requestState")
@@ -146,5 +158,53 @@ async fn non_true_answer_declines_rather_than_erroring() {
         message.contains("Operator declined"),
         "a non-`true` answer must decline, distinguishably from the \
          no-confirmation-available refusal: {body}"
+    );
+}
+
+/// `MIK-7246.CONFIRM.2` — an answered-`true` retry runs the action.
+///
+/// The branch neither test above reaches. Both stop at a refusal: one at the
+/// ask, one at the decline, and a refusal returns before the call is
+/// dispatched. Only `true` carries a *redeemed* envelope past the gate, which
+/// is where a second consumer of a single-use continuation would be handed an
+/// already-spent handle and answer `continuation rejected` — the approved
+/// action silently becoming a stale-retry error.
+#[tokio::test]
+async fn true_answer_runs_the_action_rather_than_rejecting_the_continuation() {
+    let (state, _store_dir) = admin_state().await;
+    let (_, ask) = post(&state, destructive_call(), &[ADMIN_BEARER]).await;
+    let envelope = ask
+        .pointer("/result/requestState")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    assert!(!envelope.is_empty(), "no envelope to redeem: {ask}");
+
+    let mut retry = destructive_call();
+    retry["params"]["inputResponses"] = json!({ CONFIRMATION_KEY: true });
+    retry["params"]["requestState"] = json!(envelope);
+    let (_, body) = post(&state, retry, &[ADMIN_BEARER]).await;
+
+    let message = body
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    // `ContinuationError::client_message` — `src/protocol/continuation.rs:331`.
+    // One string for every cause, so this substring is the whole MRTR.3
+    // refusal family.
+    assert!(
+        !message.contains("continuation rejected"),
+        "the approved call was refused as a spent continuation: the envelope \
+         was redeemed by the gate and then presented again below it: {body}"
+    );
+    assert!(
+        !message.contains("Operator declined"),
+        "`true` is an approval, not a decline: {body}"
+    );
+    assert_ne!(
+        body.pointer("/result/resultType").and_then(Value::as_str),
+        Some("input_required"),
+        "an answered call must not be asked the same question again: {body}"
     );
 }

@@ -7,6 +7,7 @@
 //! `gateway_list_disabled_capabilities`, `gateway_reload_config`,
 //! `gateway_webhook_status`, and `gateway_run_playbook`.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -125,29 +126,20 @@ use super::super::trace;
 use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
 use super::support::{
-    CallerIdentity, MetaMcpInvoker, augment_with_predictions, augment_with_provenance,
-    augment_with_trace, idempotency_key_for, response_cache_key_for, retry_identity_suffix,
-    strip_backend_provenance,
+    MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
+    idempotency_key_for, response_cache_key_for, retry_identity_suffix, strip_backend_provenance,
 };
 
 async fn call_capability_tool_with_identity(
     cap: &crate::capability::CapabilityBackend,
     tool: &str,
     arguments: Value,
-    caller_identity: Option<&GrantSubject>,
+    context: crate::capability::CapabilityExecutionContext,
 ) -> Result<crate::protocol::ToolsCallResult> {
-    cap.call_tool_with_context(
-        tool,
-        arguments,
-        crate::capability::CapabilityExecutionContext {
-            caller_identity: caller_identity.cloned(),
-            allow_loopback_egress: false,
-        },
-    )
-    .await
+    cap.call_tool_with_context(tool, arguments, context).await
 }
 
-fn enforce_output_schema(
+pub(super) fn enforce_output_schema(
     server: &str,
     tool: &str,
     result: Value,
@@ -165,20 +157,8 @@ fn enforce_output_schema(
         return result;
     }
 
-    // No inner payload, no validation. The schema describes the tool's output,
-    // not the MCP envelope carrying it, so falling back to the envelope
-    // validates the wrong document and then republishes it under
-    // `structuredContent` — carrying the backend's own `requestState` past the
-    // mint that exists to replace it, and overwriting a single plain-text item
-    // with a dump of its own wrapper. `apply_capability_projection` refuses
-    // this same case as bug #167; the schema path refuses it here.
-    let validation_target = match extract_output_validation_target(&result) {
-        Some(target) => target,
-        // A bare payload is its own validation target: no envelope to unwrap,
-        // and `apply_validated_output` returns the coerced value directly.
-        None if !is_mcp_envelope(&result) => result.clone(),
-        None => return result,
-    };
+    let validation_target =
+        extract_output_validation_target(&result).unwrap_or_else(|| result.clone());
     let validation = validate_output(&validation_target, schema);
     if validation.is_valid() {
         apply_validated_output(&result, validation.coerced)
@@ -227,18 +207,6 @@ fn extract_output_validation_target(result: &Value) -> Option<Value> {
     }
     let text = content[0].get("text")?.as_str()?;
     serde_json::from_str::<Value>(text).ok()
-}
-
-/// Whether a value is an MCP tool-result envelope rather than a bare payload.
-///
-/// The two are validated differently: an envelope's schema describes what it
-/// CARRIES, so an envelope with nothing extractable has nothing to validate,
-/// while a bare payload is its own target. `apply_validated_output` keys its
-/// re-wrap on the same two fields, so the answer stays consistent across both.
-fn is_mcp_envelope(result: &Value) -> bool {
-    result
-        .as_object()
-        .is_some_and(|obj| obj.contains_key("content") || obj.contains_key("structuredContent"))
 }
 
 fn apply_validated_output(result: &Value, validated: Value) -> Value {
@@ -403,16 +371,9 @@ fn json_is_populated(value: &Value) -> bool {
 ///
 /// The exchange is opened on this replica before the envelope is sealed, so the
 /// handle that goes out names a slot this process is holding (MRTR.8).
-///
-/// The principal is passed in rather than derived here, because the two mint
-/// sites bind different things: a backend exchange binds the verified identity
-/// and refuses without one, and the destructive-confirmation gate binds the
-/// credential that authorised the call. Deriving it inside would give one site
-/// the other's rule.
-pub(super) async fn mint_continuation(
+async fn mint_continuation(
     continuation: &crate::protocol::continuation::ContinuationState,
-    purpose: crate::protocol::continuation::ContinuationPurpose,
-    principal: Option<String>,
+    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     server: &str,
     tool: &str,
     arguments: &Value,
@@ -422,7 +383,7 @@ pub(super) async fn mint_continuation(
         .begin_exchange(
             server.to_string(),
             backend_request_state,
-            principal?,
+            crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)?,
             crate::protocol::mrtr::original_request_digest(server, tool, arguments),
             crate::protocol::continuation::now_unix_secs(),
         )
@@ -432,9 +393,6 @@ pub(super) async fn mint_continuation(
         record_continuation_mint("no_slot");
         return None;
     };
-    // Stamped before the seal, so the purpose is inside the authenticated
-    // plaintext rather than alongside it where a client could restate it.
-    let payload = payload.with_purpose(purpose);
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => {
             record_continuation_mint("ok");
@@ -480,7 +438,7 @@ fn unbindable_continuation(server: &str, tool: &str) -> Error {
 /// issued, unsealed from inside it. One struct for both directions is how a
 /// client-supplied string reaches a backend as if the gateway had issued it.
 #[derive(Debug, Default)]
-pub(super) struct OutboundRetry {
+struct OutboundRetry {
     /// The backend's own opaque state, or `None` when it issued none.
     request_state: Option<String>,
     /// The client's answers, verbatim.
@@ -598,8 +556,6 @@ pub(super) fn retry_origin_backend(
     continuation: &crate::protocol::continuation::ContinuationState,
     retry: &crate::protocol::mrtr::RetryFields,
 ) -> Option<Result<String>> {
-    use crate::protocol::continuation::ContinuationPurpose;
-
     let token = retry.request_state.as_deref()?;
     let now = crate::protocol::continuation::now_unix_secs();
     let payload = match continuation.keyring().open(token, now) {
@@ -610,19 +566,15 @@ pub(super) fn retry_origin_backend(
             return Some(Err(rejected_continuation(&error)));
         }
     };
-    match payload.purpose {
-        ContinuationPurpose::Backend => Some(Ok(payload.backend_id)),
-        // Not a route. `backend_id` holds the meta-tool the gateway asked about,
-        // and no backend of that name need exist. `None` falls through to the
-        // meta surface, which is where the answer was always going.
-        //
-        // Unreachable today by construction: this site sits inside
-        // `route_direct_backend_call` (`mod.rs:1532`), whose only caller is
-        // `mod.rs:1732`, downstream of the gate at `:1715` and skipped on
-        // `ProceedConfirmed`. It is here so that ordering stops being the only
-        // thing keeping a spent confirmation envelope out of the redeem path.
-        ContinuationPurpose::GatewayConfirmation => None,
+    // A destructive confirmation continues no backend exchange: this gateway
+    // asked the question and its own gate reads the answer. `None` already
+    // means "nothing to route", which is exactly true here — routing it would
+    // hand the answer to a backend named after a meta-tool, and the gate that
+    // must see it would never run.
+    if payload.purpose == crate::protocol::continuation::ContinuationPurpose::DestructiveConfirm {
+        return None;
     }
+    Some(Ok(payload.backend_id))
 }
 
 /// Open the continuation a retry presents and recover what the backend gets
@@ -639,11 +591,9 @@ pub(super) fn retry_origin_backend(
 /// authorises. Spending it on success instead would leave it redeemable again
 /// to anyone who can make a dispatch fail, which is the replay this ledger
 /// exists to close.
-pub(super) async fn redeem_retry(
+async fn redeem_retry(
     continuation: &crate::protocol::continuation::ContinuationState,
-    purpose: crate::protocol::continuation::ContinuationPurpose,
     caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    principal: Option<String>,
     server: &str,
     tool: &str,
     arguments: &Value,
@@ -665,25 +615,34 @@ pub(super) async fn redeem_retry(
         rejected_continuation(&error)
     })?;
 
-    // The envelope must have been minted for the redemption now spending it.
-    // Checked before the hold is spent, like the bindings below: a handle
-    // presented at the wrong site should not burn the redemption its rightful
-    // site still needs. The error names neither purpose — which one it hit is
-    // not the client's business.
-    if payload.purpose != purpose {
-        warn!(
-            server,
-            tool, "Continuation presented to a redemption it was not minted for"
-        );
-        record_continuation_rejection("purpose_mismatch");
-        return Err(rejected_continuation(&ContinuationError::NotAuthentic));
-    }
+    // Which domain the envelope was sealed for, before anything is read out of
+    // it and before the hold or the ledger is touched.
+    //
+    // One keyring and one ledger serve two domains — this one, and the
+    // destructive confirmation a task-augmented call is admitted through. An
+    // envelope minted for the other one is *authentic*, so authentication
+    // cannot refuse it; only its purpose can. Checked first so a wrong-domain
+    // envelope cannot spend the hold or the redemption belonging to the
+    // exchange whose `jti` and `hold_key` it happens to carry: a refusal that
+    // arrived after either would leave the caller's own honest retry with
+    // nothing left to redeem.
+    payload
+        .require_purpose(crate::protocol::continuation::ContinuationPurpose::BackendInput)
+        .map_err(|error| {
+            warn!(
+                server,
+                tool, "Continuation from another domain presented as a backend retry"
+            );
+            record_continuation_rejection("wrong_purpose");
+            rejected_continuation(&error)
+        })?;
 
     // The same fingerprint the mint bound to, derived the same way. A caller the
     // gateway cannot name cannot match one it could: `principal_fingerprint`
     // returns `None` for exactly the credential schemes no continuation is ever
     // minted for, so there is no handle here for such a caller to hold.
-    let Some(fingerprint) = principal else {
+    let Some(fingerprint) = crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)
+    else {
         warn!(
             server,
             tool, "Retry from a caller no continuation can be bound to"
@@ -830,91 +789,123 @@ fn undeclared_input_request(
     }
 }
 
-/// Re-dispatches the original call with the answers collected so far.
-///
-/// Holds the dispatch arguments rather than a closure because
-/// [`crate::gateway::input_bridge::BackendInvoker`] is an async trait and every
-/// bridged round needs the same values the first dispatch used: a round that
-/// differed in any of them would be a second call, not a retry of this one.
-struct BridgeDispatcher<'a> {
-    meta: &'a MetaMcp,
-    server: &'a str,
-    tool: &'a str,
-    arguments: &'a Value,
-    prompt_cache_key: Option<&'a str>,
-    inbound_meta: Option<&'a Value>,
-    want_full: bool,
-    session_id: Option<&'a str>,
-    caller_identity: Option<&'a GrantSubject>,
-    headers: &'a [(String, String)],
-    cache_binding: Option<&'a str>,
-    api_key_name: Option<&'a str>,
-    trace_id: &'a str,
-}
-
-#[async_trait::async_trait]
-impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
-    async fn invoke(
-        &self,
-        retry_params: Value,
-    ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
-        // Through `accounted_dispatch`, not `dispatch_to_backend`: a bridged
-        // round is a real backend call and is accounted and gated exactly like
-        // the first one. A round that skipped the accounting would let a
-        // backend that keeps asking spend an unmetered budget.
-        let outbound = OutboundRetry {
-            request_state: retry_params
-                .get("requestState")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            input_responses: retry_params.get("inputResponses").cloned(),
-        };
-        self.meta
-            .accounted_dispatch(
-                self.server,
-                self.tool,
-                self.arguments.clone(),
-                &outbound,
-                self.prompt_cache_key,
-                self.inbound_meta,
-                self.want_full,
-                self.session_id,
-                self.caller_identity,
-                self.headers,
-                self.cache_binding,
-                self.api_key_name,
-                self.trace_id,
-            )
-            .await
-            .map_err(
-                |e| crate::gateway::input_bridge::BridgeError::BackendFailed {
-                    message: e.to_string(),
-                },
-            )
-    }
-}
-
-/// Emits the bridge's counters as structured trace events.
-///
-/// ponytail: tracing rather than the metrics registry — the record carries no
-/// answer body, so a log line is a complete rendering of it. Move to a counter
-/// when an operator needs it aggregated rather than searched.
-struct TracingBridgeObserver<'a> {
-    trace_id: &'a str,
-}
-
-impl crate::gateway::input_bridge::BridgeObserver for TracingBridgeObserver<'_> {
-    fn record(&self, record: crate::gateway::input_bridge::BridgeRecord) {
-        debug!(trace_id = self.trace_id, record = ?record, "input bridge round");
-    }
-}
-
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
 /// Global across all backends; overflow wraps (u64 → effectively infinite for our purposes).
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl MetaMcp {
+    /// Current authorization must run before either execution or retained replay.
+    pub(crate) fn check_invocation_policy(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    ) -> Result<()> {
+        let server = extract_required_str(args, "server")?;
+        let tool = extract_required_str(args, "tool")?;
+        self.authorize_invocation(args, caller)?;
+        if let Err(reason) = validate_tool_name(tool) {
+            return Err(Error::Protocol(format!(
+                "Invalid tool name '{tool}': {reason}"
+            )));
+        }
+        self.check_attestation(args, caller.agent_id)?;
+        self.active_profile(session_id)
+            .check(server, tool)
+            .map_err(Error::Protocol)
+    }
+
+    pub(super) fn authorize_invocation(
+        &self,
+        args: &Value,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    ) -> Result<()> {
+        let authorizer = caller.authorizer;
+        let api_key_name = caller.api_key_name;
+        let agent_id = caller.agent_id;
+        let caller_identity = caller.grant_subject.as_ref();
+        let caller_is_admin = caller.is_admin;
+        let server = extract_required_str(args, "server")?;
+        let tool = extract_required_str(args, "tool")?;
+        // === THE AUTHORIZATION CHOKEPOINT (MIK-7252) ===
+        //
+        // Every meta-layer dispatch passes through here: a surfaced tool, a
+        // `gateway_invoke`, a code-mode step, a playbook step. The router
+        // authorizes only the shapes whose targets appear in the request, so a
+        // playbook step — whose targets come from the playbook definition —
+        // reached a backend with none of the caller's scope checks applied.
+        //
+        // Placed at the top, reading `arguments` raw, for two reasons. It is
+        // the earliest point at which the target is known, so nothing has yet
+        // happened that a refused call is not entitled to: no nonce consumed,
+        // no cache read, no idempotency entry, no credential minted, no budget
+        // consulted. And the router builds its own target from the same raw
+        // arguments, so a policy that one day reads them cannot give the two
+        // layers two answers.
+        // `{}` and not `Null`: the router's own target builder defaults a
+        // missing inner `arguments` to an empty object, and two gates that see
+        // different targets are two gates that can disagree.
+        let empty_args = serde_json::json!({});
+        let target = crate::gateway::authz::ToolTarget {
+            server,
+            tool,
+            arguments: args.get("arguments").unwrap_or(&empty_args),
+        };
+        if let Err(e) = authorizer.authorize(target) {
+            crate::gateway::authz::audit_refusal(
+                authorizer.transport(),
+                authorizer.caller_name(),
+                server,
+                tool,
+                &e.message,
+            );
+            return Err(Error::Forbidden {
+                code: e.code,
+                status: e.status.as_u16(),
+                message: e.message,
+            });
+        }
+
+        // A capability that hands a caller-chosen destination to a third party
+        // which then calls it creates persistent state outside this gateway,
+        // addressed by the caller and authorised by the operator's credential.
+        // That is an out-of-band channel needing no readable response, so it is
+        // an admin action. Derived from the definition, so one added later
+        // inherits the rule.
+        if !caller_is_admin
+            && let Some(capabilities) = self.get_capabilities()
+            && server == capabilities.name
+            && let Some(def) = capabilities.get(tool)
+            && crate::capability::definition::creates_caller_addressed_external_state(&def)
+        {
+            return Err(crate::Error::Config(format!(
+                "'{tool}' registers a caller-supplied address with a third party, which \
+                 then delivers to it using this gateway's credential. That requires an \
+                 admin credential."
+            )));
+        }
+
+        // Identity grants are the same decision as the authorizer above: whether
+        // this caller may reach this tool at all. They are taken here, with
+        // every other refusal, because the response cache and the idempotency
+        // short-circuit both return below this point — a gate under a cache
+        // read decides nothing on a hit, and hands the refused caller the
+        // answer the admitted one paid for. Resolved from the definition, so a
+        // capability added later inherits the rule.
+        if let Some(cap) = self.get_capabilities()
+            && server == cap.name
+            && cap.has_capability(tool)
+        {
+            let cap_def = cap
+                .get(tool)
+                .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
+            self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id, caller_identity)?;
+        }
+
+        Ok(())
+    }
+
     /// Validate the per-action attestation token presented on a
     /// `gateway_invoke` call (MIK-5223, B1-IDENT).
     ///
@@ -979,12 +970,11 @@ impl MetaMcp {
         args: &Value,
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-        step: Option<usize>,
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(args, session_id, caller, &trace_id_clone, step)
+            self.invoke_tool_traced(args, session_id, caller, &trace_id_clone)
                 .await
                 // Single delivery boundary: unwrap the guard-sealed result.
                 .map(GuardedValue::into_inner)
@@ -1071,6 +1061,203 @@ impl MetaMcp {
         )
     }
 
+    /// The post-dispatch response gates a backend result must pass before any
+    /// caller — or any durable record — may hold it.
+    ///
+    /// Extracted so the ONE implementation serves both the live dispatch below
+    /// and an upstream task result recovered later
+    /// (`meta_mcp::upstream::recover_task_result`). The dispatch half is
+    /// deliberately not reachable from here: recovering a result must never be
+    /// able to invoke anything.
+    ///
+    /// Scope is exactly the gates that judge the payload — response contract,
+    /// anomaly screening, context integrity. Dispatch ACCOUNTING is not here
+    /// and must not be: an idempotency reservation, a response-cache write, an
+    /// error budget or a prediction belongs to the call that dispatched, and a
+    /// later read of an already-executed job must not consume or refresh any of
+    /// them.
+    pub(super) fn apply_response_gates(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        result: Value,
+    ) -> Result<Value> {
+        let mut result = result;
+        self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
+
+        // === POST-INVOKE: Response content inspection (issue #133, D2) ===
+        //
+        // Scan the backend response for secrets, exfiltration URLs, code
+        // injection patterns, and suspicious encoding.
+        //
+        // Observe mode (default, `action_mode = false`): logs findings and
+        // annotates the result with `_security_findings`.
+        // Action mode (`action_mode = true`): blocks any response with a
+        // HIGH/CRITICAL finding, returning a security error to the caller.
+        {
+            let text = crate::security::response_inspect::extract_text_from_result(&result);
+            if !text.is_empty() {
+                let inspection = crate::security::response_inspect::inspect_response(
+                    &text,
+                    self.response_inspection_action_mode,
+                );
+                if inspection.has_findings() {
+                    for finding in &inspection.findings {
+                        warn!(
+                            server,
+                            tool,
+                            trace_id,
+                            category = finding.category,
+                            severity = ?finding.severity,
+                            description = finding.description,
+                            "Response inspection finding"
+                        );
+                    }
+                    if inspection.should_block {
+                        return Err(Error::json_rpc(
+                            -32603,
+                            format!(
+                                "Tool '{tool}' on server '{server}' returned a response blocked \
+                                 by anomaly screening (HIGH/CRITICAL security finding detected). \
+                                 See gateway logs for details."
+                            ),
+                        ));
+                    }
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.insert(
+                            "_security_findings".to_string(),
+                            serde_json::to_value(&inspection.findings).unwrap_or_default(),
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(self.apply_context_integrity(server, tool, api_key_name, trace_id, result))
+    }
+
+    /// The response contract gate (issue #133, D1), split out of
+    /// [`Self::apply_response_gates`] purely to keep that function under the
+    /// line budget — logic, ordering and return semantics are unchanged.
+    ///
+    /// Validates the response against the per-tool contract declared in
+    /// `config`. Default-deny (`fail_closed=true`) can block responses from
+    /// tools with no declared contract.
+    ///
+    /// Runs BEFORE D2 anomaly screening so contract violations abort early.
+    fn apply_response_contract_gate(
+        &self,
+        server: &str,
+        tool: &str,
+        trace_id: &str,
+        result: &mut Value,
+    ) -> Result<()> {
+        let Some(ref contract_cfg) = self.response_contract else {
+            return Ok(());
+        };
+        let text = crate::security::response_inspect::extract_text_from_result(result);
+        let tool_entry = contract_cfg.tools.get(tool);
+
+        // fail_closed: no contract declared for this tool → treat as violation
+        if contract_cfg.fail_closed && tool_entry.is_none() {
+            let effective_action_mode = contract_cfg.action_mode;
+            warn!(
+                server,
+                tool,
+                trace_id,
+                reason = "no_contract_declared",
+                detail = "fail_closed is enabled and no contract is declared for this tool",
+                "Response contract violation"
+            );
+            if effective_action_mode {
+                return Err(Error::json_rpc(
+                    -32603,
+                    format!(
+                        "Tool '{tool}' on server '{server}' response blocked by contract gate: \
+                         no contract declared and fail_closed is enabled."
+                    ),
+                ));
+            }
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "_contract_violation".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+                obj.insert(
+                    "_contract_reason".to_string(),
+                    serde_json::Value::String("no_contract_declared".to_string()),
+                );
+            }
+        } else if !text.is_empty() {
+            // Build effective contract merging global defaults with per-tool overrides.
+            let effective_max_bytes = tool_entry
+                .and_then(|e| e.max_bytes)
+                .or(contract_cfg.default_max_bytes);
+            let effective_action_mode = tool_entry
+                .and_then(|e| e.action_mode)
+                .unwrap_or(contract_cfg.action_mode);
+            let patterns: &[String] = tool_entry.map_or(&[], |e| e.forbidden_patterns.as_slice());
+
+            let forbidden_patterns = if patterns.is_empty() {
+                regex::RegexSet::empty()
+            } else {
+                match regex::RegexSet::new(patterns) {
+                    Ok(set) => set,
+                    Err(e) => {
+                        warn!(
+                            server,
+                            tool,
+                            trace_id,
+                            error = %e,
+                            "Failed to compile forbidden_patterns for tool contract — skipping pattern check"
+                        );
+                        regex::RegexSet::empty()
+                    }
+                }
+            };
+
+            let contract = crate::security::response_contract::ToolResponseContract {
+                max_bytes: effective_max_bytes,
+                forbidden_patterns,
+                action_mode: effective_action_mode,
+            };
+
+            if let Some(violation) = contract.validate(&text) {
+                warn!(
+                    server,
+                    tool,
+                    trace_id,
+                    reason = violation.reason,
+                    detail = %violation.detail,
+                    "Response contract violation"
+                );
+                if violation.should_block {
+                    return Err(Error::json_rpc(
+                        -32603,
+                        format!(
+                            "Tool '{tool}' on server '{server}' response blocked by contract gate: \
+                             {} — {}",
+                            violation.reason, violation.detail
+                        ),
+                    ));
+                }
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert(
+                        "_contract_violation".to_string(),
+                        serde_json::Value::Bool(true),
+                    );
+                    obj.insert(
+                        "_contract_reason".to_string(),
+                        serde_json::Value::String(violation.reason.to_string()),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Inner implementation executed within a trace-ID scope.
     ///
     /// Returns a [`GuardedValue`]: every success path must produce one, so the
@@ -1082,100 +1269,28 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         trace_id: &str,
-        step: Option<usize>,
     ) -> Result<GuardedValue> {
         // Unpacked once, here, so the context travels whole across the call
         // boundary for the same reason `invoke_tool` takes it whole: no call
         // site can pass an authorizer without the identity it authorizes.
-        let authorizer = caller.authorizer;
         let api_key_name = caller.api_key_name;
         let agent_id = caller.agent_id;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
-        let caller_is_admin = caller.is_admin;
+
+        // Capture once, before any authorization input is read. A bump after
+        // this strands the insert under the epoch this call was authorized
+        // in. A second load at the write site is the 4.g race.
+        let policy_epoch = self.policy_epoch.load(Ordering::Acquire);
 
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
 
-        // === THE AUTHORIZATION CHOKEPOINT (MIK-7252) ===
-        //
-        // Every meta-layer dispatch passes through here: a surfaced tool, a
-        // `gateway_invoke`, a code-mode step, a playbook step. The router
-        // authorizes only the shapes whose targets appear in the request, so a
-        // playbook step — whose targets come from the playbook definition —
-        // reached a backend with none of the caller's scope checks applied.
-        //
-        // Placed at the top, reading `arguments` raw, for two reasons. It is
-        // the earliest point at which the target is known, so nothing has yet
-        // happened that a refused call is not entitled to: no nonce consumed,
-        // no cache read, no idempotency entry, no credential minted, no budget
-        // consulted. And the router builds its own target from the same raw
-        // arguments, so a policy that one day reads them cannot give the two
-        // layers two answers.
-        // `{}` and not `Null`: the router's own target builder defaults a
-        // missing inner `arguments` to an empty object, and two gates that see
-        // different targets are two gates that can disagree.
-        // Read ONCE, here, before the authorization decision below. Both cache
-        // keys built later in this call use this same local. Re-reading at the
-        // write site would let a grant change that landed between the decision
-        // and the store file the old answer under the new epoch.
-        let policy_epoch = self.policy_epoch.load(std::sync::atomic::Ordering::Acquire);
-
-        let empty_args = serde_json::json!({});
-        let target = crate::gateway::authz::ToolTarget {
-            server,
-            tool,
-            arguments: args.get("arguments").unwrap_or(&empty_args),
-        };
-        if let Err(e) = authorizer.authorize(target) {
-            crate::gateway::authz::audit_refusal(
-                authorizer.transport(),
-                authorizer.caller_name(),
-                server,
-                tool,
-                &e.message,
-            );
-            return Err(Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
-            });
-        }
-
-        // A capability that hands a caller-chosen destination to a third party
-        // which then calls it creates persistent state outside this gateway,
-        // addressed by the caller and authorised by the operator's credential.
-        // That is an out-of-band channel needing no readable response, so it is
-        // an admin action. Derived from the definition, so one added later
-        // inherits the rule.
-        if !caller_is_admin
-            && let Some(capabilities) = self.get_capabilities()
-            && server == capabilities.name
-            && let Some(def) = capabilities.get(tool)
-            && crate::capability::definition::creates_caller_addressed_external_state(&def)
+        if !caller
+            .signing
+            .is_some_and(|context| context.prepared_for(server, tool))
         {
-            return Err(crate::Error::Config(format!(
-                "'{tool}' registers a caller-supplied address with a third party, which \
-                 then delivers to it using this gateway's credential. That requires an \
-                 admin credential."
-            )));
-        }
-
-        // Identity grants are the same decision as the authorizer above: whether
-        // this caller may reach this tool at all. They are taken here, with
-        // every other refusal, because the response cache and the idempotency
-        // short-circuit both return below this point — a gate under a cache
-        // read decides nothing on a hit, and hands the refused caller the
-        // answer the admitted one paid for. Resolved from the definition, so a
-        // capability added later inherits the rule.
-        if let Some(cap) = self.get_capabilities()
-            && server == cap.name
-            && cap.has_capability(tool)
-        {
-            let cap_def = cap
-                .get(tool)
-                .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
-            self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id, caller_identity)?;
+            self.check_invocation_policy(args, session_id, caller)?;
         }
 
         let mut arguments = parse_tool_arguments(args)?;
@@ -1224,43 +1339,7 @@ impl MetaMcp {
             String::new()
         };
 
-        // Validate tool name syntax before any work — prevents session corruption
-        // from malformed names injected by compromised backend servers.
-        if let Err(reason) = validate_tool_name(tool) {
-            return Err(Error::Protocol(format!(
-                "Invalid tool name '{tool}': {reason}"
-            )));
-        }
-
-        // === PRE-INVOKE: Nonce replay protection (ADR-001, OWASP ASI07) ===
-        //
-        // Check and register the request nonce before any dispatch work so that
-        // replayed requests are rejected cheaply without touching the backend.
-        let request_nonce = args.get("nonce").and_then(Value::as_str);
-        if let Some(ref nonce_store) = self.nonce_store {
-            match request_nonce {
-                Some(nonce) => nonce_store.check_and_register(nonce)?,
-                None if self.require_nonce => {
-                    return Err(Error::json_rpc(
-                        -32001,
-                        "Nonce required when message signing is enforced",
-                    ));
-                }
-                None => {} // backward-compatible: nonce is optional by default
-            }
-        }
-
         tracing::Span::current().record("trace_id", trace_id);
-
-        // === PRE-INVOKE: Per-action attestation (MIK-5223, B1-IDENT) ======
-        //
-        // Zero-cost no-op unless a validator was attached via
-        // `with_attestation`. The token is presented in the top-level
-        // `attestation` field of the call. In observe mode validation is
-        // audited but never blocks; in enforce mode a missing/invalid token
-        // fails the call closed. The clock is the gateway's trusted clock,
-        // never a caller-supplied timestamp.
-        self.check_attestation(args, agent_id)?;
 
         if self.kill_switch.is_killed(server) {
             return Err(Error::json_rpc(
@@ -1287,9 +1366,6 @@ impl MetaMcp {
         }
 
         let profile = self.active_profile(session_id);
-        if let Err(msg) = profile.check(server, tool) {
-            return Err(Error::Protocol(msg));
-        }
 
         let tool_key = format!("{server}:{tool}");
 
@@ -1304,16 +1380,16 @@ impl MetaMcp {
         // resolved `cache_binding` (user+audience) is mixed into every cache key
         // so per-user results cache in ISOLATION rather than leaking across users
         // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
-        let caller_credential = match self
+        let caller_credential = if let Some(idp_cfg) = self
             .backends
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         {
-            Some(idp_cfg) => {
-                self.resolve_caller_credential(server, &idp_cfg, verified_identity)
-                    .await?
-            }
-            None => CallerCredential::default(),
+            self.resolve_caller_credential(server, &idp_cfg, verified_identity)
+                .await?
+        } else {
+            self.refuse_unbound_account_backend(server)?;
+            CallerCredential::default()
         };
 
         // ADR-008 INV-2 fail-closed guard. On a multi-user gateway, a backend
@@ -1363,28 +1439,60 @@ impl MetaMcp {
                 ),
             ));
         }
-        // One derivation of the verified actor id for both keys below:
-        // `stable_actor_id` allocates, and it ran once per key for a single
-        // value. Only the sub-expression is shared — the keys stay separate.
-        let verified_actor =
-            verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id);
-        // Who the response cache keys on. `CallerIdentity` owns the order;
-        // this site owns only what it does with the answer. Keying on the
-        // binding alone let two authenticated callers share one entry whenever
-        // propagation was off, which is the shipped default.
-        let caller_principal = CallerIdentity::select(
-            caller_credential.cache_binding.as_deref(),
-            verified_actor.as_deref(),
-        )
-        .map(|identity| identity.value().to_string());
-        // Who the RETRY entry belongs to. The same selection — deliberately a
-        // separate VALUE from `caller_principal` above: retry de-duplication and
-        // response caching are different contracts with different lifetimes,
-        // and collapsing them would make one contract's key change silently
-        // move the other's.
+        // THE CAPABILITY ROUTE'S ACCOUNT BOUNDARY, RESOLVED HERE — BEFORE THE
+        // OUTER RESPONSE CACHE IS CONSULTED.
+        //
+        // The MCP route resolves its per-user credential above, for the same
+        // reason: a cache key built before the caller's credential is known
+        // cannot name the caller. A REST capability's credential does not come
+        // from `backend_identity_propagation` (that map is keyed by BACKEND
+        // name) but from the capability's own `auth.account`, so it has to be
+        // resolved from the capability definition — the tool's PRIMARY auth —
+        // and it has to be resolved here rather than inside the executor, which
+        // only runs after this cache lookup has already happened. The credential
+        // is carried into dispatch and rechecked there; it is never minted
+        // twice, and a refusal returns now, before any lookup.
+        let account_credential = self
+            .resolve_capability_account_credential(server, tool, verified_identity)
+            .await?;
+        // ONE binding for both cache layers and for the transport's session
+        // partitioning. The MCP route's propagation binding when there is one,
+        // otherwise the account credential's — they are never both present,
+        // because one describes a backend's propagation config and the other a
+        // capability's account reference.
+        let dispatch_binding = caller_credential.cache_binding.clone().or_else(|| {
+            account_credential
+                .as_ref()
+                .map(|prepared| prepared.cache_binding().to_owned())
+        });
+        // Who the RETRY entry belongs to. Binding first, then verified
+        // subject — the fallback the protocol side added because the default
+        // left this empty for everyone; `retry_identity_suffix` defers that
+        // order to `CallerIdentity::select`, so this site owns only WHICH
+        // binding it hands in, and the binding it hands in is the dispatch
+        // one so a capability's account boundary reaches the retry key too.
+        // Deliberately a separate value from `caller_principal` below: retry
+        // de-duplication and response caching are different contracts with
+        // different lifetimes, and collapsing them would make one contract's
+        // key change silently move the other's.
         let identity_suffix = retry_identity_suffix(
-            caller_credential.cache_binding.as_deref(),
-            verified_actor.as_deref(),
+            dispatch_binding.as_deref(),
+            verified_identity
+                .map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
+                .as_deref(),
+        );
+        // Who the response cache keys on, in one place and one namespace per
+        // source (`support::caller_cache_principal`). The binding when identity
+        // propagation is minting per-user credentials, then the verified OIDC
+        // subject, then the caller's own `GrantSubject` — which is the only
+        // principal a deployment that derives identity from trusted headers,
+        // mTLS or an OAuth agent (`router/handlers.rs`) has, and without it two
+        // distinct principals shared one entry whenever propagation was off and
+        // no OIDC identity was verified, which is the shipped default.
+        let caller_principal = super::support::caller_cache_principal(
+            dispatch_binding.as_deref(),
+            verified_identity,
+            caller.grant_subject.as_ref(),
         );
 
         // `want_full` no longer suppresses the key. It selects the shape of the
@@ -1396,7 +1504,6 @@ impl MetaMcp {
             &projection_key_suffix,
             &identity_suffix,
             self.idempotency_cache.as_ref(),
-            step,
         );
         // What the key is a key *for*. A client key is an opaque string it
         // chose, so nothing about it says which request it was minted for;
@@ -1468,7 +1575,19 @@ impl MetaMcp {
             }
         }
 
-        if !want_full && let Some(ref cache) = self.cache {
+        // Defense in depth on an already-classified value: the exact set both
+        // layers accept, so a value that is not a revision this build serves —
+        // including a whitespace-padded spelling of one that is — bypasses the
+        // cache instead of naming a bucket of its own. Never trimmed onto a
+        // canonical revision.
+        let protocol_revision = caller
+            .protocol_revision
+            .and_then(crate::protocol::meta::served_revision);
+
+        if !want_full
+            && protocol_revision.is_some()
+            && let Some(ref cache) = self.cache
+        {
             let cache_key = response_cache_key_for(
                 server,
                 tool,
@@ -1478,10 +1597,7 @@ impl MetaMcp {
                 caller.retry,
                 crate::cache::KeyContext {
                     routing_profile: &profile.name,
-                    // Revision is shaped downstream in the router and does not
-                    // reach this layer yet; the seam stays here so it is the
-                    // only place that has to change when it does.
-                    protocol_revision: None,
+                    protocol_revision,
                     policy_epoch,
                 },
             );
@@ -1595,31 +1711,25 @@ impl MetaMcp {
         // the only scope holding all five values the mint sealed — the backend
         // server and tool, its argument object, the caller's identity, and the
         // handle itself.
-        let outbound_retry = match redeem_retry(
-            &self.continuation,
-            crate::protocol::continuation::ContinuationPurpose::Backend,
-            caller,
-            crate::protocol::mrtr::principal_fingerprint(caller.verified_identity),
-            server,
-            tool,
-            &arguments,
-        )
-        .await
-        {
-            Ok(retry) => retry,
-            Err(error) => {
-                // Refused before the backend was reached, so it has not
-                // acted: the key is released rather than settled. Settling
-                // one here would answer an honest retry, made after a fresh
-                // question, with a sentence naming a side effect nothing
-                // performed.
-                if let Some(reservation) = idem_reservation.as_mut() {
-                    reservation.release();
+        let outbound_retry =
+            match redeem_retry(&self.continuation, caller, server, tool, &arguments).await {
+                Ok(retry) => retry,
+                Err(error) => {
+                    // Refused before the backend was reached, so it has not
+                    // acted: the key is released rather than settled. Settling
+                    // one here would answer an honest retry, made after a fresh
+                    // question, with a sentence naming a side effect nothing
+                    // performed.
+                    if let Some(reservation) = idem_reservation.as_mut() {
+                        reservation.release();
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-        };
+            };
 
+        if let Some(execution) = caller.execution {
+            execution.mark_dispatched();
+        }
         let dispatch_result = self
             .accounted_dispatch(
                 server,
@@ -1631,10 +1741,15 @@ impl MetaMcp {
                 want_full,
                 session_id,
                 caller_identity,
+                verified_identity,
                 &caller_credential.headers,
-                caller_credential.cache_binding.as_deref(),
+                dispatch_binding.as_deref(),
+                account_credential,
                 api_key_name,
                 trace_id,
+                policy_epoch,
+                protocol_revision,
+                &profile.name,
             )
             .await;
 
@@ -1728,7 +1843,7 @@ impl MetaMcp {
         // Answering or asking? Read once, because the same verdict decides two
         // things: whether the idempotency key may be settled as completed, and
         // whether the question may be put to this client at all.
-        let mut interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+        let interim = crate::protocol::mrtr::InputRequired::from_result(&result);
         // Whether the backend said it acted, which is a different question from
         // whether the gateway can carry what it sent. Both post-dispatch gates
         // below need this one, not `interim`.
@@ -1791,136 +1906,6 @@ impl MetaMcp {
             return Err(undeclared_input_request(server, tool, &refused));
         }
 
-        // MIK-7212.WIRE: a legacy client is asked here, in-band, instead of
-        // being handed a continuation envelope it has no vocabulary for. A 2025
-        // client cannot redeem one, so relaying it strands the exchange at both
-        // ends — the client holds a token it cannot spend and the backend holds
-        // a round nobody will finish.
-        //
-        // Placed between the two gates on purpose. After MRTR.9, because
-        // reaching this line means the question has already been found
-        // answerable by this client. Before the mint below, because an exchange
-        // the bridge carries to completion has no continuation to redeem: on
-        // success `interim` is cleared and the mint is skipped, and the
-        // completed body then runs the same post-invoke contract and anomaly
-        // gates every non-bridged result runs. Returning early here would buy a
-        // shorter diff by skipping them.
-        // `!requests.is_empty()` is load-bearing, not defensive. An interim
-        // result may carry `requestState` and no questions at all — MRTR.2's
-        // own shape, since a result carrying questions would be refused by the
-        // capability gate before any handle was minted — and handing that to
-        // the bridge makes it spin rather than refuse: `plan` yields no
-        // prompts, `ask` sends nothing, the backend is re-invoked, answers the
-        // same empty interim, and `run` exhausts its rounds. The -32003 that
-        // came back was `RoundsExhausted`, three pointless backend calls after
-        // a question nobody was ever asked.
-        //
-        // There is nothing here for a client to answer, so there is nothing to
-        // bridge. The continuation mint below is the whole of the correct
-        // behaviour for this shape.
-        if caller.era == crate::protocol::meta::Era::Legacy
-            && let Some(pending) = interim.clone()
-            && !pending.requests.is_empty()
-            && let Some(session) = session_id
-        {
-            let dispatcher = BridgeDispatcher {
-                meta: self,
-                server,
-                tool,
-                arguments: &arguments,
-                prompt_cache_key: prompt_cache_key.as_deref(),
-                inbound_meta: args.get("_meta"),
-                want_full,
-                session_id,
-                caller_identity,
-                headers: &caller_credential.headers,
-                cache_binding: caller_credential.cache_binding.as_deref(),
-                api_key_name,
-                trace_id,
-            };
-            let observer = TracingBridgeObserver { trace_id };
-            let bridge = crate::gateway::input_bridge::InputBridge {
-                channel: caller.channel,
-                backend: &dispatcher,
-                observer: &observer,
-                bounds: crate::gateway::input_bridge::BridgeBounds::DEFAULT,
-            };
-            // `None` slice: the per-request capability slice narrows a *modern*
-            // caller's declaration, and this branch is the legacy one — there is
-            // no per-request `_meta` to narrow by, so the session store's value
-            // stands alone.
-            match bridge
-                .run(session, caller.input_capabilities, None, &pending)
-                .await
-            {
-                Ok(completed) => {
-                    // The exchange finished, so the backend has now acted and
-                    // the key may be settled. The commit above declined this
-                    // reservation precisely because the backend had stopped to
-                    // ask; that is no longer true.
-                    if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.commit(&completed);
-                    }
-                    result = completed;
-                    interim = None;
-                }
-                // No client session to reach is not a failed exchange: it is
-                // the absence of one. A legacy caller can arrive with a
-                // declared capability and no session to carry the request on —
-                // every stateless caller does — and the bridge is the wrong
-                // messenger for it, not the last one. Fall through with
-                // `interim` still set and the ask goes out as a continuation,
-                // which is exactly what this path did before the bridge was
-                // wired in front of it.
-                //
-                // This arm does NOT reach stdio, and the reason is worth naming
-                // because no test enforces it. It takes both halves, and an
-                // earlier revision of this comment claimed only the second:
-                // the guard above admits nothing with an empty request map, so
-                // whatever gets here has questions in it, and `plan` — which
-                // refuses requests that are *present and undeclared*, and has
-                // nothing to say about an empty map — then refuses every one of
-                // them, because `stdio_caller_context` declares
-                // `Declared::NONE`. `run` calls `plan` before `ask`, so that
-                // refusal lands as `Refused` one step before any delivery is
-                // attempted, never as `NoSession`. That is
-                // what keeps the deliberate stdio refusal documented on
-                // `NoClientChannel` intact, and MIK-7387 the only thing that
-                // lifts it. The two halves are pinned separately and joined by
-                // nothing: `MIK-7212.WIRE.10` in the MRTR.7 test plan is that
-                // missing row. Until it lands, an edit to either half breaks
-                // this silently, so change `Declared::NONE` or `plan`'s
-                // position and re-read this arm.
-                //
-                // ponytail: `run` walks rounds internally and a session lost on
-                // round two surfaces the same way, so the mint would replay
-                // prompts already answered. Needs a progress signal out of
-                // `run` to tell the two apart; not built, because no channel in
-                // tree fails later than round one.
-                Err(crate::gateway::input_bridge::BridgeError::Delivery {
-                    error: crate::gateway::input_bridge::DeliveryError::NoSession,
-                    ..
-                }) => {}
-                Err(error) => {
-                    warn!(
-                        server,
-                        tool,
-                        trace_id,
-                        error = ?error,
-                        "Bridged input exchange failed for a legacy client"
-                    );
-                    return Err(Error::JsonRpc {
-                        code: -32003,
-                        message: format!(
-                            "Tool '{tool}' on server '{server}' asked for input and the bridged \
-                             exchange could not be completed"
-                        ),
-                        data: None,
-                    });
-                }
-            }
-        }
-
         // MRTR.2: the backend's own `requestState` never reaches the client.
         // It is sealed into a continuation the gateway minted, bound to this
         // caller and this request, and the envelope goes out in its place. The
@@ -1935,8 +1920,7 @@ impl MetaMcp {
         if let Some(interim) = interim {
             let Some(envelope) = mint_continuation(
                 &self.continuation,
-                crate::protocol::continuation::ContinuationPurpose::Backend,
-                crate::protocol::mrtr::principal_fingerprint(caller.verified_identity),
+                caller,
                 server,
                 tool,
                 &arguments,
@@ -1953,164 +1937,7 @@ impl MetaMcp {
             result["requestState"] = json!(envelope);
         }
 
-        // === POST-INVOKE: Response contract gate (issue #133, D1) ===
-        //
-        // Validates the response against the per-tool contract declared in
-        // config.  Default-deny (fail_closed=true) can block responses from
-        // tools with no declared contract.
-        //
-        // Runs BEFORE D2 anomaly screening so contract violations abort early.
-        if let Some(ref contract_cfg) = self.response_contract {
-            let text = crate::security::response_inspect::extract_text_from_result(&result);
-            let tool_entry = contract_cfg.tools.get(tool);
-
-            // fail_closed: no contract declared for this tool → treat as violation
-            if contract_cfg.fail_closed && tool_entry.is_none() {
-                let effective_action_mode = contract_cfg.action_mode;
-                warn!(
-                    server,
-                    tool,
-                    trace_id,
-                    reason = "no_contract_declared",
-                    detail = "fail_closed is enabled and no contract is declared for this tool",
-                    "Response contract violation"
-                );
-                if effective_action_mode {
-                    return Err(Error::json_rpc(
-                        -32603,
-                        format!(
-                            "Tool '{tool}' on server '{server}' response blocked by contract gate: \
-                             no contract declared and fail_closed is enabled."
-                        ),
-                    ));
-                }
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert(
-                        "_contract_violation".to_string(),
-                        serde_json::Value::Bool(true),
-                    );
-                    obj.insert(
-                        "_contract_reason".to_string(),
-                        serde_json::Value::String("no_contract_declared".to_string()),
-                    );
-                }
-            } else if !text.is_empty() {
-                // Build effective contract merging global defaults with per-tool overrides.
-                let effective_max_bytes = tool_entry
-                    .and_then(|e| e.max_bytes)
-                    .or(contract_cfg.default_max_bytes);
-                let effective_action_mode = tool_entry
-                    .and_then(|e| e.action_mode)
-                    .unwrap_or(contract_cfg.action_mode);
-                let patterns: &[String] =
-                    tool_entry.map_or(&[], |e| e.forbidden_patterns.as_slice());
-
-                let forbidden_patterns = if patterns.is_empty() {
-                    regex::RegexSet::empty()
-                } else {
-                    match regex::RegexSet::new(patterns) {
-                        Ok(set) => set,
-                        Err(e) => {
-                            warn!(
-                                server,
-                                tool,
-                                trace_id,
-                                error = %e,
-                                "Failed to compile forbidden_patterns for tool contract — skipping pattern check"
-                            );
-                            regex::RegexSet::empty()
-                        }
-                    }
-                };
-
-                let contract = crate::security::response_contract::ToolResponseContract {
-                    max_bytes: effective_max_bytes,
-                    forbidden_patterns,
-                    action_mode: effective_action_mode,
-                };
-
-                if let Some(violation) = contract.validate(&text) {
-                    warn!(
-                        server,
-                        tool,
-                        trace_id,
-                        reason = violation.reason,
-                        detail = %violation.detail,
-                        "Response contract violation"
-                    );
-                    if violation.should_block {
-                        return Err(Error::json_rpc(
-                            -32603,
-                            format!(
-                                "Tool '{tool}' on server '{server}' response blocked by contract gate: \
-                                 {} — {}",
-                                violation.reason, violation.detail
-                            ),
-                        ));
-                    }
-                    if let Some(obj) = result.as_object_mut() {
-                        obj.insert(
-                            "_contract_violation".to_string(),
-                            serde_json::Value::Bool(true),
-                        );
-                        obj.insert(
-                            "_contract_reason".to_string(),
-                            serde_json::Value::String(violation.reason.to_string()),
-                        );
-                    }
-                }
-            }
-        }
-
-        // === POST-INVOKE: Response content inspection (issue #133, D2) ===
-        //
-        // Scan the backend response for secrets, exfiltration URLs, code
-        // injection patterns, and suspicious encoding.
-        //
-        // Observe mode (default, `action_mode = false`): logs findings and
-        // annotates the result with `_security_findings`.
-        // Action mode (`action_mode = true`): blocks any response with a
-        // HIGH/CRITICAL finding, returning a security error to the caller.
-        {
-            let text = crate::security::response_inspect::extract_text_from_result(&result);
-            if !text.is_empty() {
-                let inspection = crate::security::response_inspect::inspect_response(
-                    &text,
-                    self.response_inspection_action_mode,
-                );
-                if inspection.has_findings() {
-                    for finding in &inspection.findings {
-                        warn!(
-                            server,
-                            tool,
-                            trace_id,
-                            category = finding.category,
-                            severity = ?finding.severity,
-                            description = finding.description,
-                            "Response inspection finding"
-                        );
-                    }
-                    if inspection.should_block {
-                        return Err(Error::json_rpc(
-                            -32603,
-                            format!(
-                                "Tool '{tool}' on server '{server}' returned a response blocked \
-                                 by anomaly screening (HIGH/CRITICAL security finding detected). \
-                                 See gateway logs for details."
-                            ),
-                        ));
-                    }
-                    if let Some(obj) = result.as_object_mut() {
-                        obj.insert(
-                            "_security_findings".to_string(),
-                            serde_json::to_value(&inspection.findings).unwrap_or_default(),
-                        );
-                    }
-                }
-            }
-        }
-
-        result = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
+        result = self.apply_response_gates(server, tool, api_key_name, trace_id, result)?;
 
         // === POST-INVOKE: Inject cost warnings and suggestions ===
         //
@@ -2160,6 +1987,7 @@ impl MetaMcp {
         // not answers either.
         if !want_full
             && !stopped_to_ask
+            && protocol_revision.is_some()
             && let Some(ref cache) = self.cache
         {
             let cache_key = response_cache_key_for(
@@ -2171,10 +1999,7 @@ impl MetaMcp {
                 caller.retry,
                 crate::cache::KeyContext {
                     routing_profile: &profile.name,
-                    // Revision is shaped downstream in the router and does not
-                    // reach this layer yet; the seam stays here so it is the
-                    // only place that has to change when it does.
-                    protocol_revision: None,
+                    protocol_revision,
                     policy_epoch,
                 },
             );
@@ -2279,9 +2104,6 @@ impl MetaMcp {
             crate::trust::CacheOutcome::Miss,
             client_claim.as_ref(),
         );
-        if let Some(ref signer) = self.message_signer {
-            final_result = signer.sign_response(final_result, request_nonce);
-        }
 
         // `result` passed apply_context_integrity earlier on this path; the steps
         // since then add only gateway-authored metadata. Seal at the delivery
@@ -2631,12 +2453,40 @@ impl MetaMcp {
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         else {
+            self.refuse_unbound_account_backend(server)?;
             return Ok((Vec::new(), None));
         };
         let cred = self
             .resolve_caller_credential(server, &idp_cfg, verified_identity)
             .await?;
         Ok((cred.headers, cred.cache_binding))
+    }
+
+    /// Fail closed for a backend that names an `accounts.descriptors` entry but
+    /// reached dispatch with no compiled propagation configuration.
+    ///
+    /// Startup compiles a bound backend's descriptor into its effective
+    /// `identity_propagation` before the backend is constructed, so the only
+    /// way to observe this state is a registration rebuilt from the raw config
+    /// (a hot reload) that lost the binding. Dispatching then would send the
+    /// call with no per-user credential at all — the exact silent downgrade the
+    /// account reference exists to prevent — so it is refused instead.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] naming the backend and its descriptor reference.
+    fn refuse_unbound_account_backend(&self, server: &str) -> Result<()> {
+        let account = self
+            .backends
+            .get(server)
+            .and_then(|b| b.account_descriptor_id().map(str::to_string));
+        match account {
+            Some(account) => Err(Error::Config(format!(
+                "backend '{server}' is bound to account '{account}' but no account strategy is \
+                 installed for it; refusing to dispatch without the account holder's credential"
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// Resolve the per-user identity-propagation credential for a backend
@@ -2665,8 +2515,9 @@ impl MetaMcp {
         let subject_id = crate::identity_propagation::audit_subject(verified_identity);
         let audience = idp_cfg.audience.as_str();
 
+        let vault = idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Vault;
         let refuse = |msg: String| -> Result<CallerCredential> {
-            if idp_cfg.required {
+            if idp_cfg.required || vault {
                 // The request is already being refused on identity-propagation
                 // grounds; an audit-write failure here does not change that
                 // outcome (unlike the mint path below, which is fail-closed on
@@ -2698,6 +2549,18 @@ impl MetaMcp {
             }
         };
 
+        // Vault is installed only for a compiled account-bound backend. A raw
+        // declaration cannot borrow a global strategy, even when optional.
+        let account_bound = self
+            .backends
+            .get(server)
+            .is_some_and(|backend| backend.account_descriptor_id().is_some());
+        if vault && !account_bound {
+            return refuse(
+                "raw Vault identity propagation requires an account descriptor".to_string(),
+            );
+        }
+
         // MIK-6710: refuse BEFORE minting when this backend's transport cannot
         // carry `extra_headers` on the wire (stdio, websocket) — otherwise a
         // `required` backend would mint successfully here and then silently
@@ -2724,7 +2587,15 @@ impl MetaMcp {
         let Some(identity) = verified_identity else {
             return refuse("the request carries no verified end-user identity".to_string());
         };
-        let strategy = self.identity_propagation.read().clone();
+        // An explicit account reference requires its own installed strategy.
+        // A missing or stale install must never borrow an unrelated global
+        // strategy. Descriptorless callers retain their existing behavior.
+        let strategy = if account_bound {
+            self.backend_identity_strategy(server)
+        } else {
+            self.backend_identity_strategy(server)
+                .or_else(|| self.identity_propagation.read().clone())
+        };
         let Some(strategy) = strategy else {
             return refuse("no identity-propagation strategy is configured".to_string());
         };
@@ -2751,51 +2622,13 @@ impl MetaMcp {
                 // so per-user results cache in isolation instead of being dropped
                 // (IDP.8 — replaces the earlier blanket cache bypass).
                 if !cred.headers.is_empty() {
-                    // Fail-closed hardening: a minted credential must never
-                    // reach the caller without a durable audit record, so an
-                    // audit-write failure here aborts the mint instead of
-                    // proceeding to `Ok(CallerCredential{..})`.
-                    //
-                    // Operator-misconfig fail-OPEN guard: the audit helper
-                    // treats `logger = None` (transparency log disabled) as a
-                    // no-op `Ok(())`. On a `required` backend that would let a
-                    // minted per-user credential go on the wire with NO audit
-                    // record — the "no mint without a durable audit record"
-                    // guarantee silently evaporating via misconfiguration. When
-                    // propagation is REQUIRED but no transparency log is
-                    // configured, fail closed on the SAME path as an audit-write
-                    // failure rather than mint blind. (Non-required backends
-                    // keep the `None -> Ok(())` best-effort behavior — a mint
-                    // there is not covered by the durable-record guarantee.)
-                    if idp_cfg.required && audit_logger.is_none() {
-                        return Err(Error::Internal(format!(
-                            "identity-propagation is required for backend '{server}' but no \
-                             transparency log is configured; refusing to mint a per-user \
-                             credential without a durable audit record"
-                        )));
-                    }
-                    if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
-                        audit_logger,
-                        "idp_mint",
-                        &subject_id,
+                    Self::audit_minted_credential(
                         server,
-                        Some(audience),
-                        None,
-                    ) {
-                        // CWE-209: `audit_err` can carry the transparency-log
-                        // filesystem path / IO detail. Keep it in the server log
-                        // only; return a generic client-facing message so the
-                        // sensitive detail never reaches the JSON-RPC caller
-                        // (mirrors the direct route in backend_handlers.rs).
-                        tracing::warn!(
-                            server,
-                            error = %audit_err,
-                            "identity-propagation mint audit write failed"
-                        );
-                        return Err(Error::Internal(format!(
-                            "identity-propagation audit unavailable for backend '{server}'"
-                        )));
-                    }
+                        idp_cfg,
+                        audit_logger,
+                        &subject_id,
+                        audience,
+                    )?;
                 }
                 Ok(CallerCredential {
                     headers: cred.headers,
@@ -2803,6 +2636,110 @@ impl MetaMcp {
                 })
             }
             Err(e) => refuse(format!("credential minting failed: {e}")),
+        }
+    }
+
+    /// Fail-closed hardening: a minted credential must never reach the caller
+    /// without a durable audit record, so an audit-write failure here aborts
+    /// the mint instead of letting it proceed. Split out of
+    /// [`Self::resolve_caller_credential`] purely to keep that function under
+    /// the line budget — logic and ordering are unchanged.
+    ///
+    /// Operator-misconfig fail-OPEN guard: the audit helper treats `logger =
+    /// None` (transparency log disabled) as a no-op `Ok(())`. On a `required`
+    /// backend that would let a minted per-user credential go on the wire
+    /// with NO audit record — the "no mint without a durable audit record"
+    /// guarantee silently evaporating via misconfiguration. When propagation
+    /// is REQUIRED but no transparency log is configured, fail closed on the
+    /// SAME path as an audit-write failure rather than mint blind.
+    /// (Non-required backends keep the `None -> Ok(())` best-effort
+    /// behavior — a mint there is not covered by the durable-record
+    /// guarantee.)
+    fn audit_minted_credential(
+        server: &str,
+        idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
+        audit_logger: Option<&crate::security::TransparencyLogger>,
+        subject_id: &str,
+        audience: &str,
+    ) -> Result<()> {
+        if idp_cfg.required && audit_logger.is_none() {
+            return Err(Error::Internal(format!(
+                "identity-propagation is required for backend '{server}' but no \
+                 transparency log is configured; refusing to mint a per-user \
+                 credential without a durable audit record"
+            )));
+        }
+        if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
+            audit_logger,
+            "idp_mint",
+            subject_id,
+            server,
+            Some(audience),
+            None,
+        ) {
+            // CWE-209: `audit_err` can carry the transparency-log filesystem
+            // path / IO detail. Keep it in the server log only; return a
+            // generic client-facing message so the sensitive detail never
+            // reaches the JSON-RPC caller (mirrors the direct route in
+            // backend_handlers.rs).
+            tracing::warn!(
+                server,
+                error = %audit_err,
+                "identity-propagation mint audit write failed"
+            );
+            return Err(Error::Internal(format!(
+                "identity-propagation audit unavailable for backend '{server}'"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Resolve the account credential a CAPABILITY tool needs, before any
+    /// cache is consulted.
+    ///
+    /// `Ok(None)` means there is nothing to resolve on this route: the target
+    /// is not the capability backend, the tool is not one of its capabilities,
+    /// the capability names no account, or the account is an explicit `shared`
+    /// descriptor whose static credential path is preserved unchanged. Every
+    /// other outcome is either a credential minted for the verified caller by
+    /// the ONE shared registry — the same instance the executor rechecks
+    /// against — or a refusal that returns before the response cache is read.
+    ///
+    /// The reference read here is the capability's PRIMARY `auth`, which is the
+    /// same `auth` the executor injects at egress; nothing here re-derives it
+    /// from a provider name or a backend name.
+    ///
+    /// # Errors
+    ///
+    /// Every refusal from
+    /// [`crate::identity_propagation::AccountStrategyRegistry::resolve`].
+    async fn resolve_capability_account_credential(
+        &self,
+        server: &str,
+        tool: &str,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<Option<Arc<crate::identity_propagation::PreparedAccountCredential>>> {
+        use crate::identity_propagation::AccountCredential;
+
+        let Some(capabilities) = self.get_capabilities() else {
+            return Ok(None);
+        };
+        if server != capabilities.name {
+            return Ok(None);
+        }
+        let Some(definition) = capabilities.get(tool) else {
+            return Ok(None);
+        };
+        let Some(account) = definition.auth.account.as_deref() else {
+            return Ok(None);
+        };
+        match self
+            .account_strategies
+            .resolve(account, &definition.auth.key, verified_identity)
+            .await?
+        {
+            AccountCredential::Legacy => Ok(None),
+            AccountCredential::Prepared(prepared) => Ok(Some(prepared)),
         }
     }
 
@@ -2831,10 +2768,20 @@ impl MetaMcp {
         want_full: bool,
         session_id: Option<&str>,
         caller_identity: Option<&GrantSubject>,
+        // The VERIFIED end-user identity, carried for the capability route
+        // whose account boundary is inside the executor. Pass-through only.
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         propagated_headers: &[(String, String)],
         cache_binding: Option<&str>,
+        // The capability route's account credential, resolved once above the
+        // response cache and carried down unchanged. `None` for every MCP
+        // backend and for a capability with no account reference.
+        account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
         api_key_name: Option<&str>,
         trace_id: &str,
+        policy_epoch: u64,
+        protocol_revision: Option<&str>,
+        routing_profile: &str,
     ) -> Result<Value> {
         let dispatch_start = Instant::now();
         let dispatch_result = self
@@ -2848,8 +2795,13 @@ impl MetaMcp {
                 want_full,
                 session_id,
                 caller_identity,
+                verified_identity,
                 propagated_headers,
                 cache_binding,
+                account_credential,
+                policy_epoch,
+                protocol_revision,
+                routing_profile,
             )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
@@ -2936,14 +2888,27 @@ impl MetaMcp {
         // re-decides it — this is the value the call is made *with*, not the
         // one it is checked against.
         caller_identity: Option<&GrantSubject>,
+        // The VERIFIED end-user identity, carried for the capability route,
+        // whose account boundary is inside the executor rather than at the
+        // resolver above. Pass-through only: nothing here decides it, and the
+        // MCP route continues to use the credential already resolved.
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         // Pre-resolved per-user propagation headers (empty = none). Resolved
         // once in `invoke_tool_traced` so the cache key and this dispatch share
         // one credential (MIK-6734); dispatch never mints.
         propagated_headers: &[(String, String)],
-        // Caller's stable identity binding (MIK-6784), used by the transport to
-        // partition upstream `MCP-Session-Id` state per identity. `None` → the
-        // shared default bucket (single-tenant behavior unchanged).
+        // Caller's stable identity binding (MIK-6784). Transport uses it to
+        // partition upstream `MCP-Session-Id` state; the capability executor
+        // copies the same already-resolved string into the inner cache key.
+        // `None` → shared default bucket / public namespace.
         identity_key: Option<&str>,
+        // Resolved before the outer response cache, rechecked against the same
+        // registry inside the executor before the inner cache and before
+        // egress. Never minted here.
+        account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+        policy_epoch: u64,
+        protocol_revision: Option<&str>,
+        routing_profile: &str,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -2958,8 +2923,32 @@ impl MetaMcp {
             let cap_def = cap
                 .get(tool)
                 .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
-            let result =
-                call_capability_tool_with_identity(&cap, tool, arguments, caller_identity).await?;
+            let result = call_capability_tool_with_identity(
+                &cap,
+                tool,
+                arguments,
+                crate::capability::CapabilityExecutionContext {
+                    caller_identity: caller_identity.cloned(),
+                    allow_loopback_egress: false,
+                    policy_epoch: Some(policy_epoch),
+                    protocol_revision: protocol_revision.map(str::to_owned),
+                    routing_profile: Some(routing_profile.to_owned()),
+                    cache_binding: identity_key.map(str::to_owned),
+                    // The ONLY source of a verified identity on this route is
+                    // `MetaMcpCallerContext::verified_identity`, which carries a
+                    // verified issuer AND subject. `caller_identity` above is a
+                    // `GrantSubject`: an authorization handle whose authority is
+                    // not an OAuth issuer, so an account key built from it would
+                    // bind a person the gateway never authenticated. It is
+                    // threaded here untouched and never synthesised.
+                    verified_identity: verified_identity.cloned().map(Arc::new),
+                    // Carried, not re-resolved: the executor rechecks it
+                    // against the same registry before its own cache lookup
+                    // and again before egress.
+                    account_credential,
+                },
+            )
+            .await?;
             let mut response = serde_json::to_value(result)?;
 
             // Apply per-capability response_transform when configured.
@@ -3067,12 +3056,42 @@ impl MetaMcp {
         // never on the shared transport — tenant isolation, IDP.3). Only when
         // there are neither headers nor an identity key do we take the unchanged
         // static path (shared default session bucket).
-        let response = if propagated_headers.is_empty() && identity_key.is_none() {
-            backend.request("tools/call", Some(params)).await?
-        } else {
-            backend
-                .request_with_headers("tools/call", Some(params), propagated_headers, identity_key)
-                .await?
+        // The upstream-task leg, and the ONLY one. It is a different transport
+        // entry point on the same dispatch, reached after every gate above —
+        // kill switch, capability cooldown, `_full`/`_claim` stripping,
+        // idempotency, authorization, secret injection — has already run. A
+        // parallel submission path would be a second dispatcher with a
+        // different set of gates, which is exactly what this funnel exists to
+        // prevent.
+        //
+        // Armed only by the task worker, for exactly this `(server, tool)`, and
+        // sent exactly once: a retried task-augmented call is a second upstream
+        // job this gateway would not hold the handle for.
+        let submission = crate::gateway::meta_mcp::upstream::armed_submission(server, tool);
+        let response = match &submission {
+            Some(_) => {
+                backend
+                    .request_with_task_capability(
+                        "tools/call",
+                        Some(params),
+                        propagated_headers,
+                        identity_key,
+                    )
+                    .await?
+            }
+            None if propagated_headers.is_empty() && identity_key.is_none() => {
+                backend.request("tools/call", Some(params)).await?
+            }
+            None => {
+                backend
+                    .request_with_headers(
+                        "tools/call",
+                        Some(params),
+                        propagated_headers,
+                        identity_key,
+                    )
+                    .await?
+            }
         };
 
         if let Some(error) = response.error {
@@ -3098,6 +3117,13 @@ impl MetaMcp {
         }
 
         let result = response.result.unwrap_or(json!(null));
+        // The RAW reply, here and nowhere else: this value has not been through
+        // projection, the contract gate or any shaping, so a `resultType:
+        // "task"` in it is the peer's own envelope and never one this gateway
+        // stamped on its own answer.
+        if let Some(submission) = &submission {
+            submission.offer(&result);
+        }
         let output_schema = self
             .get_tool_registry()
             .and_then(|registry| registry.get(&format!("{server}:{tool}")))
@@ -3200,7 +3226,16 @@ impl MetaMcp {
     /// `gateway_get_stats` — gateway statistics with per-backend error budget
     /// and circuit-breaker status.
     #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
-    pub(super) async fn get_stats(&self, _args: &Value, caller_is_admin: bool) -> Result<Value> {
+    pub(super) async fn get_stats(
+        &self,
+        _args: &Value,
+        // The admin flag only decides whether cost figures are included, and
+        // that block is feature-gated. Relaxed on the parameter itself, in
+        // exactly the build where its one use disappears, so dropping that use
+        // under the feature still warns and unrelated bindings stay linted.
+        #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
+        caller_is_admin: bool,
+    ) -> Result<Value> {
         let stats = self
             .stats
             .as_ref()
@@ -3420,7 +3455,12 @@ impl MetaMcp {
 
         debug!(playbook = name, "Running playbook");
 
-        let definition = {
+        let definition = if let Some(definition) = caller
+            .execution
+            .and_then(super::admission::SyncLease::playbook_definition)
+        {
+            definition.clone()
+        } else {
             let engine = self.playbook_engine.read();
             engine
                 .get(name)
@@ -3428,11 +3468,7 @@ impl MetaMcp {
                 .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
         };
 
-        let invoker = MetaMcpInvoker {
-            meta: self,
-            caller,
-            step: std::sync::atomic::AtomicUsize::new(0),
-        };
+        let invoker = MetaMcpInvoker { meta: self, caller };
 
         let mut temp_engine = PlaybookEngine::new();
         temp_engine.register(definition);
@@ -3738,6 +3774,7 @@ mod error_classification_tests {
 mod response_transform_tests {
     use serde_json::json;
 
+    use crate::capability::validate_output;
     use crate::projection::schema::{ActorSpec, ProjectionSpec, SubjectSpec};
     use crate::provider::Transform as _;
     use crate::provider::transforms::ResponseTransform;
@@ -4110,61 +4147,64 @@ mod response_transform_tests {
         assert_eq!(result["content"][0]["text"], json!("bad input"));
     }
 
+    // Minor 10 (b) — MIK-6865.SCHEMA.1: a scalar or bare-array
+    // `structuredContent` must survive `enforce_output_schema` unchanged when
+    // the declared `outputSchema` itself is non-object (`type: string`,
+    // `type: array`). Every other fixture in this file declares
+    // `type: object`; this is the clause none of them exercise.
     #[test]
-    fn block5_an_unextractable_result_is_not_republished_as_structured_content() {
-        // When no inner payload can be extracted, there is nothing the output
-        // schema describes. Validating the MCP envelope against a payload
-        // schema is a category error, and publishing the envelope under
-        // `structuredContent` leaks the backend's own `requestState` past the
-        // mint that is supposed to replace it. `apply_capability_projection`
-        // already refuses this case as bug #167; this asserts the schema path
-        // refuses it too.
-        let schema = json!({
-            "type": "object",
-            "properties": { "issue": { "type": "object" } }
-        });
+    fn ac_schema_10b_scalar_structured_content_survives_enforce_output_schema() {
+        let schema = json!({ "type": "string" });
+
+        // The discriminating assertion. `enforce_output_schema` is advisory on
+        // mismatch (see its else arm) and returns the payload either way, so
+        // the survival check below passes whether the scalar validated or was
+        // rejected and waved through. Only this one fails if support for a
+        // non-object `outputSchema` regresses.
+        let validation = validate_output(&json!("hello"), &schema);
+        assert!(
+            validation.is_valid(),
+            "a scalar structuredContent must validate against a type: string outputSchema, not merely survive: {}",
+            validation.format_output_error(&schema)
+        );
 
         let result = enforce_output_schema(
-            "fulcrum",
-            "linear_get_issue",
+            "demo",
+            "echo",
             json!({
-                "content": [
-                    { "type": "text", "text": "first" },
-                    { "type": "text", "text": "second" }
-                ],
-                "requestState": "backend-owned-state"
+                "content": [{"type": "text", "text": "hello"}],
+                "structuredContent": "hello",
+                "isError": false
             }),
             Some(&schema),
         );
 
-        assert!(
-            result.get("structuredContent").is_none(),
-            "envelope republished as structuredContent: {result}"
-        );
-        assert_eq!(result["content"][0]["text"], json!("first"));
+        assert_eq!(result["structuredContent"], json!("hello"));
     }
 
     #[test]
-    fn block5_a_single_non_json_text_item_keeps_its_human_readable_text() {
-        // The same defect's other face: a schema-bearing tool returning one
-        // plain-text item had that text overwritten with a pretty-printed dump
-        // of the whole envelope.
-        let schema = json!({
-            "type": "object",
-            "properties": { "issue": { "type": "object" } }
-        });
+    fn ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema() {
+        let schema = json!({ "type": "array", "items": { "type": "string" } });
+
+        let validation = validate_output(&json!(["a", "b"]), &schema);
+        assert!(
+            validation.is_valid(),
+            "a bare-array structuredContent must validate against a type: array outputSchema, not merely survive: {}",
+            validation.format_output_error(&schema)
+        );
 
         let result = enforce_output_schema(
-            "fulcrum",
-            "linear_get_issue",
+            "demo",
+            "list_things",
             json!({
-                "content": [{ "type": "text", "text": "no such issue" }]
+                "content": [{"type": "text", "text": "[\"a\",\"b\"]"}],
+                "structuredContent": ["a", "b"],
+                "isError": false
             }),
             Some(&schema),
         );
 
-        assert_eq!(result["content"][0]["text"], json!("no such issue"));
-        assert!(result.get("structuredContent").is_none());
+        assert_eq!(result["structuredContent"], json!(["a", "b"]));
     }
 
     #[tokio::test]
@@ -4529,6 +4569,12 @@ mod identity_propagation_enforcement_tests {
         let (m, captured) = meta_with_capturing_backend();
         let id = identity();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            task: None,
+            signing: None,
+            execution: None,
+            credential_principal: None,
+            is_modern: false,
+            protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
             api_key_name: None,
@@ -4561,6 +4607,12 @@ mod identity_propagation_enforcement_tests {
     async fn code_mode_execute_fails_closed_without_identity() {
         let (m, _captured) = meta_with_capturing_backend();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            task: None,
+            signing: None,
+            execution: None,
+            credential_principal: None,
+            is_modern: false,
+            protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             api_key_name: None,
             agent_id: None,
@@ -4598,6 +4650,12 @@ mod identity_propagation_enforcement_tests {
         let (m, captured) = meta_with_capturing_backend_no_log();
         let id = identity();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            task: None,
+            signing: None,
+            execution: None,
+            credential_principal: None,
+            is_modern: false,
+            protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
             api_key_name: None,

@@ -18,6 +18,8 @@ use axum::http::StatusCode;
 use serde_json::Value;
 use tracing::warn;
 
+use super::auth::QuotaPrincipal;
+
 /// The key under which a refusal carries its HTTP status in the JSON-RPC
 /// error's `data`.
 ///
@@ -118,6 +120,10 @@ pub trait ToolAuthorizer {
 
     /// A stable name for the caller, for audit. `None` when unauthenticated.
     fn caller_name(&self) -> Option<&str>;
+
+    /// Validated quota authority, never a client-selected name or session ID.
+    /// Each transport and wrapper must explicitly preserve or omit authority.
+    fn quota_principal(&self) -> Option<&QuotaPrincipal>;
 }
 
 /// Emits the audit line for a refusal.
@@ -153,6 +159,9 @@ pub(crate) struct AllowAll;
 
 #[cfg(test)]
 impl ToolAuthorizer for AllowAll {
+    fn quota_principal(&self) -> Option<&QuotaPrincipal> {
+        None
+    }
     fn authorize(&self, _target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
         Ok(())
     }
@@ -171,6 +180,9 @@ pub(crate) struct DenyAll;
 
 #[cfg(test)]
 impl ToolAuthorizer for DenyAll {
+    fn quota_principal(&self) -> Option<&QuotaPrincipal> {
+        None
+    }
     fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
         Err(AuthorizationError::forbidden(
             -32003,
@@ -200,6 +212,9 @@ pub(crate) struct DenyOne {
 
 #[cfg(test)]
 impl ToolAuthorizer for DenyOne {
+    fn quota_principal(&self) -> Option<&QuotaPrincipal> {
+        None
+    }
     fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
         if target.tool == self.tool {
             return Err(AuthorizationError::forbidden(
@@ -250,6 +265,9 @@ impl<A: ToolAuthorizer> CountingAuthorizer<A> {
 
 #[cfg(test)]
 impl<A: ToolAuthorizer> ToolAuthorizer for CountingAuthorizer<A> {
+    fn quota_principal(&self) -> Option<&QuotaPrincipal> {
+        self.inner.quota_principal()
+    }
     fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
         *self
             .counts
@@ -283,6 +301,9 @@ pub(crate) struct ToolPolicyAuthorizer<'a> {
 }
 
 impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
+    fn quota_principal(&self) -> Option<&QuotaPrincipal> {
+        None
+    }
     fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
         if target.server.is_empty() || target.tool.is_empty() {
             return Ok(());

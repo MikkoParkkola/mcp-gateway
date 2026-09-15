@@ -408,7 +408,12 @@ impl MetaMcp {
 
         let total_found = matches.len();
 
-        // Apply ranking for keyword queries (not glob — glob already filters precisely)
+        // Rank keyword queries before `finalize_search_matches` truncates.
+        // Glob skips the ranker because `finalize_search_matches` scores every
+        // glob match a uniform 1.0: the candidates all tie, so truncating them
+        // cannot discard a better-scored match. Preferring, say, popularity
+        // among glob matches would need its own specified ordering, not the
+        // keyword ranker.
         if !use_glob && let Some(ref ranker) = self.ranker {
             let search_results: Vec<_> = matches
                 .iter()
@@ -478,8 +483,7 @@ impl MetaMcp {
         // Code Mode carries the caller's identity + attribution through to
         // dispatch, so an identity-required backend gets the per-user credential
         // just like the direct gateway_invoke path (MIK-6734).
-        self.invoke_tool(&invoke_args, session_id, caller, None)
-            .await
+        self.invoke_tool(&invoke_args, session_id, caller).await
     }
 
     /// Execute a sequential chain of `{tool, arguments}` steps.
@@ -522,10 +526,7 @@ impl MetaMcp {
                 "arguments": arguments,
             });
 
-            match self
-                .invoke_tool(&invoke_args, session_id, caller, Some(idx))
-                .await
-            {
+            match self.invoke_tool(&invoke_args, session_id, caller).await {
                 Ok(result) => results.push(json!({
                     "step": idx,
                     "tool": tool_ref,

@@ -1,0 +1,1119 @@
+{
+  "criterion": "MIK-3274.RANKING.3",
+  "tool_inventory_size": 119,
+  "corpus_size": 114,
+  "derivation_note": "Every query below is produced by a mechanical rule over capabilities/*.yaml (name / description / tags), applied with a fixed alphabetical stride so the sample is reproducible. No query was chosen by observing ranker output; see gen_corpus.py for the exact rule that produced each case (derivation/derivation_detail fields).",
+  "cases": [
+    {
+      "id": "name_phrase::agent_search",
+      "query": "agent search",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "agent_search"
+      ]
+    },
+    {
+      "id": "name_phrase::box_extract",
+      "query": "box extract",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "box_extract"
+      ]
+    },
+    {
+      "id": "name_phrase::bus_subscribe",
+      "query": "bus subscribe",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "bus_subscribe"
+      ]
+    },
+    {
+      "id": "name_phrase::calendar_list_events",
+      "query": "calendar list events",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "calendar_list_events"
+      ]
+    },
+    {
+      "id": "name_phrase::contacts_list",
+      "query": "contacts list",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "contacts_list"
+      ]
+    },
+    {
+      "id": "name_phrase::drive_download",
+      "query": "drive download",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "drive_download"
+      ]
+    },
+    {
+      "id": "name_phrase::github_create_issue",
+      "query": "github create issue",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "github_create_issue"
+      ]
+    },
+    {
+      "id": "name_phrase::github_search_repos",
+      "query": "github search repos",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "github_search_repos"
+      ]
+    },
+    {
+      "id": "name_phrase::gmail_labels",
+      "query": "gmail labels",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "gmail_labels"
+      ]
+    },
+    {
+      "id": "name_phrase::gmail_search",
+      "query": "gmail search",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "gmail_search"
+      ]
+    },
+    {
+      "id": "name_phrase::gws_chat_send",
+      "query": "gws chat send",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "gws_chat_send"
+      ]
+    },
+    {
+      "id": "name_phrase::gws_drive_upload",
+      "query": "gws drive upload",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "gws_drive_upload"
+      ]
+    },
+    {
+      "id": "name_phrase::gws_gmail_send",
+      "query": "gws gmail send",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "gws_gmail_send"
+      ]
+    },
+    {
+      "id": "name_phrase::gws_sheets_read",
+      "query": "gws sheets read",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "gws_sheets_read"
+      ]
+    },
+    {
+      "id": "name_phrase::hackernews_get_item",
+      "query": "hackernews get item",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "hackernews_get_item"
+      ]
+    },
+    {
+      "id": "name_phrase::image_to_text",
+      "query": "image to text",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "image_to_text"
+      ]
+    },
+    {
+      "id": "name_phrase::jira_search",
+      "query": "jira search",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "jira_search"
+      ]
+    },
+    {
+      "id": "name_phrase::linear_create_issue",
+      "query": "linear create issue",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "linear_create_issue"
+      ]
+    },
+    {
+      "id": "name_phrase::linear_get_teams",
+      "query": "linear get teams",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "linear_get_teams"
+      ]
+    },
+    {
+      "id": "name_phrase::linear_update_issue",
+      "query": "linear update issue",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "linear_update_issue"
+      ]
+    },
+    {
+      "id": "name_phrase::notion_create_page",
+      "query": "notion create page",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "notion_create_page"
+      ]
+    },
+    {
+      "id": "name_phrase::openpencil_design",
+      "query": "openpencil design",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "openpencil_design"
+      ]
+    },
+    {
+      "id": "name_phrase::pyghidra_reverse",
+      "query": "pyghidra reverse",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "pyghidra_reverse"
+      ]
+    },
+    {
+      "id": "name_phrase::salesforce_query",
+      "query": "salesforce query",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "salesforce_query"
+      ]
+    },
+    {
+      "id": "name_phrase::stripe_charges",
+      "query": "stripe charges",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "stripe_charges"
+      ]
+    },
+    {
+      "id": "name_phrase::trawl_extract",
+      "query": "trawl extract",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "trawl_extract"
+      ]
+    },
+    {
+      "id": "name_phrase::video_create",
+      "query": "video create",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "video_create"
+      ]
+    },
+    {
+      "id": "name_phrase::wayback_availability",
+      "query": "wayback availability",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "wayback_availability"
+      ]
+    },
+    {
+      "id": "name_phrase::weather_current",
+      "query": "weather current",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "weather_current"
+      ]
+    },
+    {
+      "id": "name_phrase::youtube_search",
+      "query": "youtube search",
+      "derivation": "name_phrase",
+      "derivation_detail": "tool name, underscores -> spaces (every 4th tool alphabetically)",
+      "gold_tools": [
+        "youtube_search"
+      ]
+    },
+    {
+      "id": "description_lead::audio_tts",
+      "query": "convert text to natural-sounding speech",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "audio_tts"
+      ]
+    },
+    {
+      "id": "description_lead::bus_pull",
+      "query": "agent bus \u2014 poll for",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "bus_pull"
+      ]
+    },
+    {
+      "id": "description_lead::calendar_list_events",
+      "query": "list upcoming calendar events from",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "calendar_list_events"
+      ]
+    },
+    {
+      "id": "description_lead::contacts_search",
+      "query": "search google contacts by name",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "contacts_search"
+      ]
+    },
+    {
+      "id": "description_lead::ecb_exchange_rates",
+      "query": "get official ecb foreign exchange",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "ecb_exchange_rates"
+      ]
+    },
+    {
+      "id": "description_lead::github_get_repo",
+      "query": "get github repository metadata by",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "github_get_repo"
+      ]
+    },
+    {
+      "id": "description_lead::gmail_labels",
+      "query": "list all gmail labels for",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "gmail_labels"
+      ]
+    },
+    {
+      "id": "description_lead::gmail_send_email",
+      "query": "send email via gmail api",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "gmail_send_email"
+      ]
+    },
+    {
+      "id": "description_lead::gws_docs_write",
+      "query": "create a new google docs",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "gws_docs_write"
+      ]
+    },
+    {
+      "id": "description_lead::gws_gmail_search",
+      "query": "search gmail messages using gmail",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "gws_gmail_search"
+      ]
+    },
+    {
+      "id": "description_lead::gws_sheets_read",
+      "query": "read values from a google",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "gws_sheets_read"
+      ]
+    },
+    {
+      "id": "description_lead::hackernews_show",
+      "query": "get the ids of current",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "hackernews_show"
+      ]
+    },
+    {
+      "id": "description_lead::internet_archive_metadata",
+      "query": "fetch the full metadata of",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "internet_archive_metadata"
+      ]
+    },
+    {
+      "id": "description_lead::linear_comment_integration",
+      "query": "linear comment webhook for real-time",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "linear_comment_integration"
+      ]
+    },
+    {
+      "id": "description_lead::linear_get_teams",
+      "query": "list all linear teams with",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "linear_get_teams"
+      ]
+    },
+    {
+      "id": "description_lead::linear_viewer",
+      "query": "get current authenticated linear user",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "linear_viewer"
+      ]
+    },
+    {
+      "id": "description_lead::number_facts",
+      "query": "get interesting facts about numbers",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "number_facts"
+      ]
+    },
+    {
+      "id": "description_lead::public_holidays",
+      "query": "get public holidays for any",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "public_holidays"
+      ]
+    },
+    {
+      "id": "description_lead::salesforce_query",
+      "query": "execute a salesforce soql query",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "salesforce_query"
+      ]
+    },
+    {
+      "id": "description_lead::stripe_create_payment_intent",
+      "query": "create a stripe paymentintent to",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "stripe_create_payment_intent"
+      ]
+    },
+    {
+      "id": "description_lead::uuid_generate",
+      "query": "generate uuids using uuid tools",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "uuid_generate"
+      ]
+    },
+    {
+      "id": "description_lead::voice_list",
+      "query": "list the ai voices available",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "voice_list"
+      ]
+    },
+    {
+      "id": "description_lead::weather_current",
+      "query": "get current weather using open-meteo",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "weather_current"
+      ]
+    },
+    {
+      "id": "description_lead::youtube_subscription_videos",
+      "query": "get recent videos from your",
+      "derivation": "description_lead",
+      "derivation_detail": "first 5 words of metadata description, lowercased (tools at index%5==2)",
+      "gold_tools": [
+        "youtube_subscription_videos"
+      ]
+    },
+    {
+      "id": "tag_query::academic",
+      "query": "academic",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "semantic_scholar"
+      ]
+    },
+    {
+      "id": "tag_query::address-book",
+      "query": "address-book",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "contacts_list"
+      ]
+    },
+    {
+      "id": "tag_query::albums",
+      "query": "albums",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "musicbrainz_search"
+      ]
+    },
+    {
+      "id": "tag_query::archive",
+      "query": "archive",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "gmail_batch_modify",
+        "gmail_modify",
+        "wayback_availability",
+        "wayback_save"
+      ]
+    },
+    {
+      "id": "tag_query::atlassian",
+      "query": "atlassian",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "confluence_search",
+        "jira_search"
+      ]
+    },
+    {
+      "id": "tag_query::audit",
+      "query": "audit",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "cisco_scanner"
+      ]
+    },
+    {
+      "id": "tag_query::avatar",
+      "query": "avatar",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "avatar_list",
+        "video_agent_create",
+        "video_create"
+      ]
+    },
+    {
+      "id": "tag_query::billing",
+      "query": "billing",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "stripe_charges",
+        "stripe_create_payment_intent"
+      ]
+    },
+    {
+      "id": "tag_query::bus",
+      "query": "bus",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "agent_search",
+        "bus_announce",
+        "bus_publish",
+        "bus_pull",
+        "bus_subscribe"
+      ]
+    },
+    {
+      "id": "tag_query::capture",
+      "query": "capture",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "screenshot_url"
+      ]
+    },
+    {
+      "id": "tag_query::cdp",
+      "query": "cdp",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "desktop_event_bus"
+      ]
+    },
+    {
+      "id": "tag_query::changelog",
+      "query": "changelog",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "github_get_release"
+      ]
+    },
+    {
+      "id": "tag_query::charge",
+      "query": "charge",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "stripe_charges"
+      ]
+    },
+    {
+      "id": "tag_query::checkout",
+      "query": "checkout",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "stripe_create_payment_intent"
+      ]
+    },
+    {
+      "id": "tag_query::climate",
+      "query": "climate",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "weather"
+      ]
+    },
+    {
+      "id": "tag_query::code-review",
+      "query": "code-review",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "github_create_pr"
+      ]
+    },
+    {
+      "id": "tag_query::comments",
+      "query": "comments",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "linear_comment_integration",
+        "linear_get_issue"
+      ]
+    },
+    {
+      "id": "tag_query::company",
+      "query": "company",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "prh_company"
+      ]
+    },
+    {
+      "id": "tag_query::computation",
+      "query": "computation",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "wolfram_llm_query"
+      ]
+    },
+    {
+      "id": "tag_query::contacts",
+      "query": "contacts",
+      "derivation": "tag_query",
+      "derivation_detail": "a metadata.tags entry typed verbatim (every 3rd tag alphabetically)",
+      "gold_tools": [
+        "contacts_list",
+        "contacts_search",
+        "salesforce_query"
+      ]
+    },
+    {
+      "id": "abbreviation::ai",
+      "query": "ai",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "box_extract"
+      ]
+    },
+    {
+      "id": "abbreviation::box",
+      "query": "box",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "box_extract"
+      ]
+    },
+    {
+      "id": "abbreviation::bus",
+      "query": "bus",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "agent_search",
+        "bus_announce",
+        "bus_publish",
+        "bus_pull",
+        "bus_subscribe"
+      ]
+    },
+    {
+      "id": "abbreviation::cdn",
+      "query": "cdn",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "cloudflare_manage"
+      ]
+    },
+    {
+      "id": "abbreviation::cdp",
+      "query": "cdp",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "desktop_event_bus"
+      ]
+    },
+    {
+      "id": "abbreviation::cdx",
+      "query": "cdx",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "wayback_cdx"
+      ]
+    },
+    {
+      "id": "abbreviation::chat",
+      "query": "chat",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "gws_chat_send",
+        "slack_post_message"
+      ]
+    },
+    {
+      "id": "abbreviation::code",
+      "query": "code",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "github_search_repos"
+      ]
+    },
+    {
+      "id": "abbreviation::crm",
+      "query": "crm",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "salesforce_query"
+      ]
+    },
+    {
+      "id": "abbreviation::data",
+      "query": "data",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "gws_sheets_append",
+        "gws_sheets_read"
+      ]
+    },
+    {
+      "id": "abbreviation::dns",
+      "query": "dns",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "cloudflare_manage"
+      ]
+    },
+    {
+      "id": "abbreviation::docs",
+      "query": "docs",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "gws_docs_read",
+        "gws_docs_write"
+      ]
+    },
+    {
+      "id": "abbreviation::ecb",
+      "query": "ecb",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "ecb_exchange_rates"
+      ]
+    },
+    {
+      "id": "abbreviation::edit",
+      "query": "edit",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "linear_update_issue"
+      ]
+    },
+    {
+      "id": "abbreviation::feed",
+      "query": "feed",
+      "derivation": "abbreviation",
+      "derivation_detail": "short (<=4 char) alphabetic metadata tag, i.e. an acronym a user would type",
+      "gold_tools": [
+        "youtube_subscription_videos"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::bus",
+      "query": "bus",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "bus_announce",
+        "bus_publish",
+        "bus_pull",
+        "bus_subscribe"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::calendar",
+      "query": "calendar",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "calendar_create_event",
+        "calendar_free_slots",
+        "calendar_get_attachment",
+        "calendar_list_events"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::github",
+      "query": "github",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "github_create_issue",
+        "github_create_pr",
+        "github_get_release",
+        "github_get_repo",
+        "github_search_repos"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::gmail",
+      "query": "gmail",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "gmail_batch_modify",
+        "gmail_get_attachment",
+        "gmail_get_message",
+        "gmail_labels",
+        "gmail_modify",
+        "gmail_profile",
+        "gmail_save_attachment",
+        "gmail_search",
+        "gmail_send_email"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::gws",
+      "query": "gws",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "gws_calendar_events",
+        "gws_calendar_insert",
+        "gws_chat_send",
+        "gws_docs_read",
+        "gws_docs_write",
+        "gws_drive_list",
+        "gws_drive_upload",
+        "gws_gmail_forward",
+        "gws_gmail_reply",
+        "gws_gmail_search",
+        "gws_gmail_send",
+        "gws_gmail_triage",
+        "gws_gmail_watch",
+        "gws_sheets_append",
+        "gws_sheets_read",
+        "gws_tasks_create",
+        "gws_tasks_list"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::hackernews",
+      "query": "hackernews",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "hackernews_ask",
+        "hackernews_get_item",
+        "hackernews_show",
+        "hackernews_top",
+        "hackernews_user"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::internet",
+      "query": "internet",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "internet_archive_changes",
+        "internet_archive_metadata",
+        "internet_archive_search"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::linear",
+      "query": "linear",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "linear_add_comment",
+        "linear_attach_url",
+        "linear_comment_integration",
+        "linear_create_issue",
+        "linear_create_project",
+        "linear_create_webhook",
+        "linear_get_issue",
+        "linear_get_teams",
+        "linear_list_issues",
+        "linear_list_projects",
+        "linear_search_issues",
+        "linear_update_issue",
+        "linear_viewer"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::random",
+      "query": "random",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "random_joke",
+        "random_quote",
+        "random_user"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::stripe",
+      "query": "stripe",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "stripe_charges",
+        "stripe_create_payment_intent",
+        "stripe_list_charges"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::video",
+      "query": "video",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "video_agent_create",
+        "video_create",
+        "video_download",
+        "video_get"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::wayback",
+      "query": "wayback",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "wayback_availability",
+        "wayback_cdx",
+        "wayback_save"
+      ]
+    },
+    {
+      "id": "shared_prefix_ambiguous::youtube",
+      "query": "youtube",
+      "derivation": "shared_prefix_ambiguous",
+      "derivation_detail": "leading name segment shared by >=3 tools, typed alone",
+      "gold_tools": [
+        "youtube_history",
+        "youtube_search",
+        "youtube_subscription_videos",
+        "youtube_subscriptions"
+      ]
+    },
+    {
+      "id": "typo::agent_search",
+      "query": "agnet search",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "agent_search"
+      ]
+    },
+    {
+      "id": "typo::contacts_list",
+      "query": "contcats list",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "contacts_list"
+      ]
+    },
+    {
+      "id": "typo::github_create_issue",
+      "query": "gituhb create issue",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "github_create_issue"
+      ]
+    },
+    {
+      "id": "typo::gmail_labels",
+      "query": "gmial labels",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "gmail_labels"
+      ]
+    },
+    {
+      "id": "typo::hackernews_get_item",
+      "query": "hackenrews get item",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "hackernews_get_item"
+      ]
+    },
+    {
+      "id": "typo::jira_search",
+      "query": "jiar search",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "jira_search"
+      ]
+    },
+    {
+      "id": "typo::linear_get_teams",
+      "query": "linaer get teams",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "linear_get_teams"
+      ]
+    },
+    {
+      "id": "typo::notion_create_page",
+      "query": "notoin create page",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "notion_create_page"
+      ]
+    },
+    {
+      "id": "typo::pyghidra_reverse",
+      "query": "pyghdira reverse",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "pyghidra_reverse"
+      ]
+    },
+    {
+      "id": "typo::stripe_charges",
+      "query": "strpie charges",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "stripe_charges"
+      ]
+    },
+    {
+      "id": "typo::video_create",
+      "query": "viedo create",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "video_create"
+      ]
+    },
+    {
+      "id": "typo::weather_current",
+      "query": "weahter current",
+      "derivation": "typo",
+      "derivation_detail": "first word of the name with two adjacent interior letters swapped",
+      "gold_tools": [
+        "weather_current"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+{
+  "provenance": "Independent Python cryptography AESGCM synthetic fixture; fixed nonces and public key for tests only. No production Rust encoder or store writer called.",
+  "key_hex": "5151515151515151515151515151515151515151515151515151515151515151",
+  "instance_id": "gateway-instance",
+  "store_epoch": "0123456789abcdef0123456789abcdef",
+  "authority": "{\"ciphertext\":\"6NXDDLkpKZr6harBlzEcuUQQTXiw7XGRxMFWuctBnAG3O+I8MTCUgZpljV1dONXDrgIV5kD5qj5LrjopJMKndj1c7KnozUwhURfpnyy4PBMLbkFgcqg21pNc70vR53FWZEirUhm6/7BGfH80Nug5FhZ4XxbXN3ZLz/J7g7qpEBTlzdItsepj5DUV55/qUF6oeids80j8cWabMa/DP+RIfzY4wdHE1Vsd1u7GBqARMO+SD1yQtHWROnZvmSqmwmHx3y1AgKvQCTRIAnwyEf0NYA8+ceiTaljer1bviFpY9m1dvUQWyIlCFdVPTfK6lLd6eyrPC0DlRAOFMQibV2u70RhHV3SRB/KFp1GNvmxIp6UwU5jdlwmJhxJgPzyV+5zu4W5DsNEARyw8NQ5zrnVP2ZN6DkKcffY6WO2I1ik03Erh4oENNMO6BkmAg2BPYtOSL/6+hPuyjrUk02fux9L4HK/0Uwq+SC45bjX+8fzotKGhqL/PyAQEWA8LikA2S4iwWoRhTssj6+oTYy1lE4jIKjgtdt3D+8Cmf0Zq/7M41qEolHqgywd1UN9VH6d99G4Gkzx/UhkfTy+50B84F2tH4ofE2376Ldagok6bgxFc2hRdpQJVxZ42y08kL8m1TWTT+rHGml0EAJg86lIInJpGkK3bGRZC7zZajp42CRt39px6gPes+5492jXmlMpN8ESpO10IJCWP3iWT8PmH7yc1Fd29EMJupCRVrieGs+aYerswe5QttTOUrqxjibvOhIDvXmG/u7gbnpil5Rlr/WJh/RrxAw0ddKqQyWQ0oiMHMQ91sBlUVMEjDFUhQiI6xnv/wP8sDPI8n0sPm5rdLAYPRFsT1NULuMTHvGVUKuLXjiQCTOgcn4xaL7k1xxESLBtdHpZe/4F0vOAPjZpU+z4W/8FVfDb+Ti/zG73SAZlAWBFlAhFir9omfYPCNzFVtiWmQZbpPddenx0Zi20v1Qu8t27G4JknnAlxvokubbvPfr/3nqZgyDRQ0OH1nE67RvLdOoPXb+VQiDvm9tKCYVjRyOWqOThurDgwjwsuwNWohyMDcOtRPGALl5LAQRtKYpTCXTLWak7ArNJDa+aSjP3MQ57qN8CkeWP15GP1nYdIsf8WGrGC3KQfO3zGOxKeC2NT7EyZ+UNJIU24CoVavyB2Lns6dG0tYjCuokWksY6LF5P23Rad0ZcX4qlOGflfg6LCh+6lc4wSZUX/eHUvygO9n2EKTOFnWxTe9J12KurvRB2kR0a1fcjkRXbaCtIoFvzfjXGVck9OlQIm0wGmfCH1VXQT42FAdipEmFWk3HVIpJZYEEv0I1o6LO1pP3UtF6vsrWA6GNJbFTDQcuCeDfnT1rruXxu/9njREfxufTdfRu5npFkHxjAZgtWY/pWQm+dqbDnVD/eV64/T9wyCJRgzFL+mabdACa6+eMZpPpCGzEzhXBtKTghLLBKEbWBOnWoYwT71dxXsVcvez68gfS1Pplu+M5/wWPGQ5yMsVluCxDifRTtK98PAKY8nL0I84dxu6WBoPa/BCncJV0/hXk9PwjqZvgna08PUITV9adbIdWURo5Cmt4i6dphFjePjadZKwRzPpGuBvkIBqQU8C4c1t+fUw48uDzG/bxLzOgtxQDgEXJmWEgMHo/elFN7/8U4JmWp2lheKvkr6BO8ghHT4Nd7EJH5BND1eBw3tVLhfNbD8DGSYrjwz8RZBBYNR7ce4Q032vQypQlKzLbMpwASPskQwdidfUCLhG/nAvEIc2uscwMhgUoFg8CCCwbM7f40sOHFNjiAKZf36c7mF7meDOfLi9H50TpehEa+Ii+SjT4YRnZsJ2cGQo2KCfaIZlop7hozq5i6GZT/BaE0BVj5oxv7Xi1PDcigMe/XqXaAj9Nl8qb1lCM0qIZ8E7GTVQK6VkuV9K+K5k8FqErYkSKIPkVGO6AkVK33Es0RpayAKAlsO/c90wmqdPxObxY4Lqt+JV4vxL8LLLJNAj2FBr3FHUA+RUEKs+qUGx5Her85CUvfYN1FT1RtI3g7Zsj993iq2w4W64qdQLcbAK6sTeiMc5HeKL0iM77/x+YF8J/ZeMFzCRqyaso/iD0gsPyma68dCsfvTtSAH+Ft9hH+l9Te8NonmlOK8GNqk+K8rBGLQKW5P80YEiHlCVnzyJnauAIATknSuI2OZVwhrF58XixPNdfnvOuWiOZXdr8KZKnpYpx1qFOHdQyn+2OaSnbiOOvA105vOqKWvJDV9HlfBBZ42GQE6HBTyA4OPGiJJ4Hz6eoXfFlFV2Z3sdg20IOPBPZbUMS1SFYE4powYdWb94zXNnb1+0N+qK/3nTxIj5YqKMrb0H7gZ+awVO8i9BexLPVe7VHC+4jSqmXmCFNZH4WWjSU4GfRUz6wR/TzV+HixvH3S8A3TGKMjkliLJTNJKtKUUoC87PBBA42e533bYcaXpXsGAKggbFfgKkjHDXhxy5rR08B8uCTGJmGrjxoWYKYZ2SSkWrjH77k7etKpYCX7rjDigqtf+7va9cX9dIXUcS/QElS9kXI9I6TUh1KSsrwqiJ48chrAnlzXvmg359Dt3c+Ic4GWw1ai3EQ9/ESTPIwx+n5OfSrviE/drqCIdt/xs+Zh8mPmNL5mdiWKy2AUGCm4XT1UHnso88olVa8wWs01PoZ/os9fqaiViTnkARhWDNChkYJRUWUrNG2PkalEyXBEIR3LGyES4TeQ7wlYMZFBcVuZYZVVJ9yjuOOADpLbxQXS/jZPPIpdQ9nl7VRklyj4S6m6c5Zd7DiIlZxxWQ1PDBiV8saNbGNWikHaJII1ZKdbBCWcxrlEfXXZOnhVAEa2UjmvIa5kgBzBvMBrCIhI2HwLksRm2lWLWcUZf3ABfefncbIs5EKP5uuYE/snMwLyvTrXtgkzIDs41jd2Q1dLx7sLQyz3wzCFnsUJK9eizMurDwhsPglD0E+sGmK3j9wZIloxTsjss1XZypUasvybhTXzdrDM9jrXZtmgLmLDf7pdFuyFvMPBg5Z1Ux6K1hEpCW4sV4esI6vetkLDaK1hUlHLHxyaoX/TByNLZ/LPou3sOoUhmYWnLDe9RhnulO2FY+RRCkdLvW63nHGHtdsrd0AJbZU85DoYYAGYcsCYEB22tNff7tZflAkFHxLgL7DC0GxujU54QXrSMWptfCVtE4h/wIEU48edfofdsDpAS2eLS/25ez6wokXT6CQ38ezBTkOpsnP/qYLA8SEQHwFZffgLDeMYGF7t2ZKghDUlC9o0mmosClKKcdFRQbvfFrGPX5ZYA0zWOMP3ssrfHDbECvmBWbThgtgKf6CEdnQUD7szkcrMPFdPjxzv8zNBX7Z49CA8hCKowS8nCuOUF62TJK04y0lYAtu7aRDhUaEwCHxD0ge0f85UjvfYxwM/zVioxuthEWqsOaZvuhaoJjR25BXUELfz2NBW/9EDUfjDYgSo6rtSRGHn2+u7WQjxiB19ff3rCKLm3ANUhsnEIuT6rwjIURymfnZX2R2j8UWd14kx7ZVy9Xutm8+X7oMLeGQ5ox22L+QBGiFgruSugE4bLZ44yyS69JvRRnqF60O32DRsW3dZ4QHef+bbi8HNXvV5bYcND87VWfsXYHwiFqZKzWSxDyqz3EnfOBwe/nbBXKItjfyVvlTOt91jV7Y/GWKBXhLNtaHv/6jNQKBAQp/8auu+nDsTLtkLdPNDtXDRf4R0iGud4SztIaL8LPgbsWuxlIbZ6/JwtEJkuEdK5hpHF9w/OY0d5h2sULnSUp5Bjg6btTfAbQpldC6SsY+EcP4Sn4xQAEcMK2LdcRKgdV8sI0PQ3q4Xws4fZSuETHOVeDZOLw1nFYOwN4P5UWWF7yt9tQUXFqRTo53jPPOZYUQld0ckWLQcVBQIQ3+1/6IG1MDWX4GRzns7P+tuprb2m3v8ga+9AaQMpscnSkqgufyfWJeGK9GRPDYoG6AInhsubwfyITFjLjPbYvO4c59m1hGSAjm47NYrtbUFbH/Q00wumv4HuvwoJiyQ0vdTXDi8wQgflCMS1Uvs1+fsY6+WBLjnXiBw9E+SRdAPcBlH9f7UZAcKNJGZ2tmnktRJ2CPJ0oYORRmhfENJyGTPyVZJSrH/8ixypYAHrCS8NhkcJGJKQt3FiXgn3UdQN8yDxl+nDOfeIWOo=\",\"key_id\":\"current\",\"nonce\":\"d3d3d3d3d3d3d3d3\",\"schema_version\":\"personal_accounts.authority.v1\"}",
+  "record_files": {
+    "05336cba800dd362bf06b017880035b23b43b8010f49674e8bc5b2c4a49fcd5a-00000000000000000000000000000011.json": "{\"ciphertext\":\"Y06kzTywAXsbTzEVKwGqDR15HF6Xf1YnmTOR6MQ2STlik6SUG1QwhzEaw5oi8jmW2hlcr3acQ0CdQVTwEc7INc7V4lo+BVUd7wVc91lN8QvWme7Pcbspkm3SUbJ+ZUFphd4/xXMyjsEMm+M0Tg+yr6OLUYJZxFYYejtTcdHULr3Ognbm7U89NLh3wDJgLHMQ3ffPvSu5bYbx579xDqGzfhat+IUWGtfIKbaGS4zDuDy9+NUHGxdMJ6lvGZRb1K+uK6g0VDGeYa1apZs/pIfhLVr6N6QIImSudKHzP/dZ4mGLeSbc4BDMTI9ljn8jEg4hnDLTKDi0X3IGbp3BzmpDLGMDbrp53FE/lJdxVmduKsSwRBtop+n1cupiqbnNroC5/LN4MWWXHayty1MMyuTknwqFY8gs9AdEsL6sKLJYNZvMCs5Zdl9HxW8jNApoC1UMYZoUUZAiwe/pBQr4nH5q8FfZlQQ8pdotA4w9W9vtATVlL16HAZnVhLEw8BjCQpvGsUQsSPLeovZqABHuYvLd02m3bTvpLm09OL1kCunJ4osEnKHlTZp4hlHSqlXZ5acY5iDFcmA+7OSdrzp+K7jGvphlnsAPnbe+CJEgoQF7AfNFWyWJJXBH6gQM1hss0sT52APq0MmbWC8JuB/Nt/NtwHJckPYX7N9RUX5zUmL9ZA==\",\"key_id\":\"current\",\"nonce\":\"AQEBAQEBAQEBAQEB\",\"schema_version\":\"personal_accounts.v1\"}",
+    "251b859c81707689cc5fbf3d5e7c14ea741bcc9152fe32818cbb3ac1b567cb70-00000000000000000000000000000012.json": "{\"ciphertext\":\"R7Lw6O3K7N83X1rfwWvCTwOl2JD+l6N7y9CwC9BHI+Z+13Ksx6zRyvzLA2nXz22XVqZ2KxdNsLD5QTxQAIO6E+2fwnPTeV2F6n5vZh+/nRcaKN90RPSYSYS4w7qvRopSmroHZBgHpUswn7txC+BHZ7NruYlFhXzBAG7xeWfP6BmejQ9T6BpTJwZoTiw7gaq4Mt+TP7U0dMbahrkn3auU7g00GfICwp5BqfI45Mn7+CuQmGPNQtzu/3Nzwy+VrJg48frMW+QdyvSvZ11yUhmkdR999iO4PIsjv8UpgOIOzgkHbCqlw54klsZytAiGfMkRA2ffmhqMfnDR4y8AVACvpLhunXxf3j4QyZclolZDBFaBmSpdmKNj7gOpN1Rc6C7iFV95LjOSQexO9fqllQ1R1JDaMEta5KztqTftYTnhkaVAgflQJcJyA09kVc4v/Z2irMLkK39KOga/5rfkn2e31glQRQS/A/DPzsP1mqKWLz2ZZs8EP8PYegxRUp5X3D1chlwQ3tbL2ih9Cew6vvhuCwfB/37lh9v/pPKp8uKUubHvjAcnND21JgzRnynkbuGR3GDEMOIldLURKKtCM67nJlPav13zkAiqbIRDVfJXP3kIv8bYNNSNY5dPqI2YAXrodoZdqLJJIDncBp9ivliDeMt6+RbKXzy7747Q2yqT6w==\",\"key_id\":\"current\",\"nonce\":\"AgICAgICAgICAgIC\",\"schema_version\":\"personal_accounts.v1\"}",
+    "c985ea5a4898268aaeb409c7c439bd2a5b87844d39c91759a48f4b35f549f5e8-00000000000000000000000000000013.json": "{\"ciphertext\":\"MymitLajEuOeaKCM9+4XkI0quE1SsxwNhTAwY6VF8oXfLS4aKq0fATCk2mmxve2vuy84sekCNe5R9sh38sa4J1KZurNW2jA87r9hdqiOaJR/wLIw00hNnilSB7zLGWa6n2hn51fhzf2N8oKI3kpdb+8qxv1RT9pQEddsuXAhc/qjbiy0rmh4B25RvaYOiZmup9DJ5HAXpuhD+LryQhhhrGg0c3v7KaGianXvWiE41XbLwysnYf+qRrnxixMVto9+B0IcLTKDOq3WbW4bxXd0BPjB2xh2sHoLap8Ea5/r2AKr1xIut+J+4SAGLvCA+flSMbjQl6rbHeFqJVMdgnm5K9sR2+wcT2b7jRLGca2eqpKBWIhN894IcdqToQHs5WsTIgh46ap7VNiYCOhAoSFJkLtXNDsjDB6OE06/y7339TRJAGk9N0VXYkg6V8Nz0GHEeAJvg+9WqRrQIOntDO/Y7kxAv/SaThxlxWKFdTsPcenPq2T3ZvHGQiDeyCTlZMSW4ciMLQ0MfueQaUjD9sjKD5b1+lidx+V2gQ2WwK1wwNM9k9Xh702q69b/zGHdGgTDQd5svHix/ixmcDn4UjTomBvyf2Js7e0qu5huu4GlZki0StO9ZfOkN7621gpy1wooPOmHCkWz3BEq3+aFFDLi5QcI1X2jvTllDjbD/BH+qQ==\",\"key_id\":\"current\",\"nonce\":\"AwMDAwMDAwMDAwMD\",\"schema_version\":\"personal_accounts.v1\"}",
+    "ccf72ce0988f7848bbef73495d08a1867b74f3680990534db2189887685ca373-00000000000000000000000000000014.json": "{\"ciphertext\":\"77g3n1j52ovtSG4MAZVROWcbiC16wzUf8YwCYaDNNY+2WqCPuJfNKYOcM3iw1JVqxj/G+jmY2fICHIMayvLzvr4B9FsIO7e9Ap7zP07tF6XjKAdfM2XCDu9GnOd/Btdz/NfdFHlYdUMKAo5VwoLVWYIHx88+/y/3ip4WJe4AwTpfLbtsPluQ6ls2ttCuTw4+doyH3PRByovaB8OM3MZW/q6dLth8P+YjQtLuY/K4kuA0lty1jGGc63es/oggIFdpsf26vWdlinUtt2zgwhHYntPMCd3fSobz0KmirBVmRURWvzr+Z1dhi8mTRxtpy9veAyw9gohr//NwGW+D/DQmwJw2bfUImflufZuf9lMMaMLh2gQNKV1ngX+t80PScErohoPQ27VT3F03F3opZx/WJ8t5VQNN8lFlJIv56Z+Rzri3MnPlOw/9nFKmJhwDuChnusS2NsMpNj9AMdceiW6BFC6WfO9Ye1OgOHtbWxN44iqqILdNClU+Ry0GPdAWaj+dtDrdTRFNls4lXKxGcMmRQbrFGSN82z/K5Uc8aLXb0bxWPwPWC4n/3QDy0fgzRk+yByip2sRdvsuzLKgH34PsFoSK1LWI19fEHxtUmI/tiHnfLGARueDpdmy7bqrbD0m9t0NU5xriLoDkvHQJfKvArphUOCYl1VgZJ6g5583+ug==\",\"key_id\":\"current\",\"nonce\":\"BAQEBAQEBAQEBAQE\",\"schema_version\":\"personal_accounts.v1\"}",
+    "1996943e90e9db9aac8532c152a44540e86884ea60673a4b10a49f282100aaad-00000000000000000000000000000015.json": "{\"ciphertext\":\"fPeGPiY1GhPHGBoDjtdrIRB7uWOE4+s1B207phUFSQWxK0EN8yaLjJYaw2zAkqbKQPWB+lqoW9Xf+RecHpGzUOhQ3wiE5RgxPXcqoZ10xQmuSVJ1aOzuNCGMYzeUYvU0kwW3uLAtvD1x8m1CuCtEiAgaV4PZeE1MNtVZBtDWBtrt8mIcSiP+0QY8/XvBlIFq9pX5DBSPBXnxP76jof3HrceGuW3KGub1Duv0EhMetCW5id0vklfd/4GGRcaKhvOMVZBTO1fGO6/Pi4EgJ44MnYV7/mUGLpa75eUijzhTiefHpKgr2OvrGA0XOJVnW8lC9+uBagYX7JIfp2XZJgrHx3rI5FtkbGQhB6EdMu4ksWJRNFLf7rRhqxMSwOZdBFW4Hnf2tSXZpwR/GP6qRFkIDPBY6V/7e1JtT7aC048q90O6/i2jJwL+wtLlN/3+42DK+sLLGum90BVf9knP1e2nZpxx+TvU578lc4mvtxFM4o4yl09sZBz7gg3DmtyCoV55dYVjDUdIbZ1tZGkaRZ6pbSh+BU3KBVkLeGeVmxEKHg1Pp76dOtIF7kSC008oOSzh1WEKj3igl+ZQYDiStj3T5aghPdhVhfA/xnuaLz2cg8zxClkqgUI1brBpRPZGXNjbLdt0yotXo8252KyxPp5MVWEHvGLjM5MPb0CuGirqiA==\",\"key_id\":\"current\",\"nonce\":\"BQUFBQUFBQUFBQUF\",\"schema_version\":\"personal_accounts.v1\"}",
+    "5ad12d654ff427820e32cbc50319e8c779ce6b8ecf1cd64cc1884658aa09ceab-00000000000000000000000000000016.json": "{\"ciphertext\":\"s5FjsEKuem9lGwMDmrzQhSxquF42WYoj3+fkdKV+XEVuVOnL8WZ7oqndJ5bcYlouWB/pikiLFJwu8iRVG+NBr2qE7mNIB9Hj62275KghJtC72m1E1hwGW4Q91hXd2PKZCqRMVahrzCkLJ3DehwP3T5qesIjNED4T8+q4jrVKMDtGwkDMRFtS73xY95BGIPqwdoxlG65vkzLGwWzdX4y0CZRMLxyvz/smmxis5Sm/D831f3EJ+T9FLRxaGi9cYgdDJO369NoXukcicaDQLNj9byYUUdKNH49gXxulbbvNNRzx6ZfPuzRyCEnDwX9bWxlafw7qlQ+yDra9qhnfKBn5BA1vjVm8q4KlrOqzXwRdlVtqeq8OkMm/tNF5l+muPdTvZJy+3NXNZeF+vAPNJ0tR2mrUPx8v7eeymGRD/CClcKn2H4O5ReioG2vhiwLGbz49Nij1gBe7sErPic0Dio1zCW0S3mas6P9w7J7yb3zTLcxjVj4VW81vvJIChgWKAetzpBg2OL5UYEOlhzRkaHmjtKFTZbPGhwAAlJys7KCgDZo1FvFYuCGJfx6Nxw3YlAvoGJP+VQyghfrLSr2NfSShmF6n7uEXLoQi/Nu9S3aaTpZLv4fa7iMpCPmJKeegTT2dkq+CKCxBmwSClaO7B4hBZBW0cP8GTarfhiADdJuzUA==\",\"key_id\":\"current\",\"nonce\":\"BgYGBgYGBgYGBgYG\",\"schema_version\":\"personal_accounts.v1\"}"
+  },
+  "cases": [
+    {
+      "fields": [
+        "https://identity.example",
+        "alice",
+        "google-workspace",
+        "https://www.googleapis.com/drive/v3",
+        "https://accounts.google.com"
+      ],
+      "digest": "05336cba800dd362bf06b017880035b23b43b8010f49674e8bc5b2c4a49fcd5a",
+      "basename": "05336cba800dd362bf06b017880035b23b43b8010f49674e8bc5b2c4a49fcd5a-00000000000000000000000000000011.json",
+      "record": {
+        "generation": "00000000000000000000000000000001",
+        "token_revision": 1,
+        "authorization_epoch": 1,
+        "descriptor_revision": "0000000000000000000000000000000000000000000000000000000000000000",
+        "scopes": [
+          "https://www.googleapis.com/auth/drive.readonly"
+        ],
+        "access_token": "synthetic-axis-0-access-private-d5bf0a",
+        "refresh_token": "synthetic-axis-0-refresh-private-f8ac22",
+        "token_type": "Bearer",
+        "expires_at": 0,
+        "provider_account_id": "synthetic-axis-0-provider-private-35a210",
+        "client_id": "synthetic-google-client"
+      }
+    },
+    {
+      "fields": [
+        "https://other-identity.example",
+        "alice",
+        "google-workspace",
+        "https://www.googleapis.com/drive/v3",
+        "https://accounts.google.com"
+      ],
+      "digest": "251b859c81707689cc5fbf3d5e7c14ea741bcc9152fe32818cbb3ac1b567cb70",
+      "basename": "251b859c81707689cc5fbf3d5e7c14ea741bcc9152fe32818cbb3ac1b567cb70-00000000000000000000000000000012.json",
+      "record": {
+        "generation": "00000000000000000000000000000002",
+        "token_revision": 1,
+        "authorization_epoch": 1,
+        "descriptor_revision": "0000000000000000000000000000000000000000000000000000000000000000",
+        "scopes": [
+          "https://www.googleapis.com/auth/drive.readonly"
+        ],
+        "access_token": "synthetic-axis-1-access-private-d5bf0a",
+        "refresh_token": "synthetic-axis-1-refresh-private-f8ac22",
+        "token_type": "Bearer",
+        "expires_at": 0,
+        "provider_account_id": "synthetic-axis-1-provider-private-35a210",
+        "client_id": "synthetic-google-client"
+      }
+    },
+    {
+      "fields": [
+        "https://identity.example",
+        "bob",
+        "google-workspace",
+        "https://www.googleapis.com/drive/v3",
+        "https://accounts.google.com"
+      ],
+      "digest": "c985ea5a4898268aaeb409c7c439bd2a5b87844d39c91759a48f4b35f549f5e8",
+      "basename": "c985ea5a4898268aaeb409c7c439bd2a5b87844d39c91759a48f4b35f549f5e8-00000000000000000000000000000013.json",
+      "record": {
+        "generation": "00000000000000000000000000000003",
+        "token_revision": 1,
+        "authorization_epoch": 1,
+        "descriptor_revision": "0000000000000000000000000000000000000000000000000000000000000000",
+        "scopes": [
+          "https://www.googleapis.com/auth/drive.readonly"
+        ],
+        "access_token": "synthetic-axis-2-access-private-d5bf0a",
+        "refresh_token": "synthetic-axis-2-refresh-private-f8ac22",
+        "token_type": "Bearer",
+        "expires_at": 0,
+        "provider_account_id": "synthetic-axis-2-provider-private-35a210",
+        "client_id": "synthetic-google-client"
+      }
+    },
+    {
+      "fields": [
+        "https://identity.example",
+        "alice",
+        "other-backend",
+        "https://www.googleapis.com/drive/v3",
+        "https://accounts.google.com"
+      ],
+      "digest": "ccf72ce0988f7848bbef73495d08a1867b74f3680990534db2189887685ca373",
+      "basename": "ccf72ce0988f7848bbef73495d08a1867b74f3680990534db2189887685ca373-00000000000000000000000000000014.json",
+      "record": {
+        "generation": "00000000000000000000000000000004",
+        "token_revision": 1,
+        "authorization_epoch": 1,
+        "descriptor_revision": "0000000000000000000000000000000000000000000000000000000000000000",
+        "scopes": [
+          "https://www.googleapis.com/auth/drive.readonly"
+        ],
+        "access_token": "synthetic-axis-3-access-private-d5bf0a",
+        "refresh_token": "synthetic-axis-3-refresh-private-f8ac22",
+        "token_type": "Bearer",
+        "expires_at": 0,
+        "provider_account_id": "synthetic-axis-3-provider-private-35a210",
+        "client_id": "synthetic-google-client"
+      }
+    },
+    {
+      "fields": [
+        "https://identity.example",
+        "alice",
+        "google-workspace",
+        "https://www.googleapis.com/calendar/v3",
+        "https://accounts.google.com"
+      ],
+      "digest": "1996943e90e9db9aac8532c152a44540e86884ea60673a4b10a49f282100aaad",
+      "basename": "1996943e90e9db9aac8532c152a44540e86884ea60673a4b10a49f282100aaad-00000000000000000000000000000015.json",
+      "record": {
+        "generation": "00000000000000000000000000000005",
+        "token_revision": 1,
+        "authorization_epoch": 1,
+        "descriptor_revision": "0000000000000000000000000000000000000000000000000000000000000000",
+        "scopes": [
+          "https://www.googleapis.com/auth/drive.readonly"
+        ],
+        "access_token": "synthetic-axis-4-access-private-d5bf0a",
+        "refresh_token": "synthetic-axis-4-refresh-private-f8ac22",
+        "token_type": "Bearer",
+        "expires_at": 0,
+        "provider_account_id": "synthetic-axis-4-provider-private-35a210",
+        "client_id": "synthetic-google-client"
+      }
+    },
+    {
+      "fields": [
+        "https://identity.example",
+        "alice",
+        "google-workspace",
+        "https://www.googleapis.com/drive/v3",
+        "https://other-issuer.example"
+      ],
+      "digest": "5ad12d654ff427820e32cbc50319e8c779ce6b8ecf1cd64cc1884658aa09ceab",
+      "basename": "5ad12d654ff427820e32cbc50319e8c779ce6b8ecf1cd64cc1884658aa09ceab-00000000000000000000000000000016.json",
+      "record": {
+        "generation": "00000000000000000000000000000006",
+        "token_revision": 1,
+        "authorization_epoch": 1,
+        "descriptor_revision": "0000000000000000000000000000000000000000000000000000000000000000",
+        "scopes": [
+          "https://www.googleapis.com/auth/drive.readonly"
+        ],
+        "access_token": "synthetic-axis-5-access-private-d5bf0a",
+        "refresh_token": "synthetic-axis-5-refresh-private-f8ac22",
+        "token_type": "Bearer",
+        "expires_at": 0,
+        "provider_account_id": "synthetic-axis-5-provider-private-35a210",
+        "client_id": "synthetic-google-client"
+      }
+    }
+  ]
+}

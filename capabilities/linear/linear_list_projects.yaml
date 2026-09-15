@@ -1,3 +1,4 @@
+sha256: 410bd7a0e856ecbfa14d3199d246edf62575d1541eabec7505bfc5ce99d6e134
 fulcrum: "1.0"
 name: linear_list_projects
 description: List all Linear projects with status, progress, teams, and milestones

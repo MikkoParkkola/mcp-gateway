@@ -42,7 +42,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use crate::config::{KeyServerConfig, KeyServerOidcConfig};
-use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::auth::{AuthenticatedClient, QuotaPrincipal};
 use oidc::VerifiedIdentity;
 use policy::RequestedScopes;
 
@@ -93,8 +93,12 @@ impl KeyServer {
     ) -> Option<(AuthenticatedClient, TemporaryToken)> {
         let temp = self.store.get(token).await?;
 
+        let actor = oidc_client_identity_key(&temp.identity);
         let client = AuthenticatedClient {
-            name: oidc_client_identity_key(&temp.identity),
+            // The quota follows the verified identity, not this token: a second
+            // exchange for the same issuer/subject must not mint a second cap.
+            quota_principal: Some(QuotaPrincipal::oidc_identity(&actor)),
+            name: actor,
             // A temporary token identifies one principal; its own key is the
             // stable identifier.
             principal: crate::gateway::auth::principal_of(&temp.token),
@@ -149,10 +153,14 @@ impl KeyServer {
             .policy
             .resolve_scopes(&identity, &RequestedScopes::default())?;
 
+        let actor = oidc_client_identity_key(&identity);
         let client = AuthenticatedClient {
+            // Same identity, same material, same kind as the exchanged token
+            // above: one person's two credential mechanisms are one bucket.
+            quota_principal: Some(QuotaPrincipal::oidc_identity(&actor)),
             // The verified subject identifies this principal.
-            principal: crate::gateway::auth::principal_of(&oidc_client_identity_key(&identity)),
-            name: oidc_client_identity_key(&identity),
+            principal: crate::gateway::auth::principal_of(&actor),
+            name: actor,
             rate_limit: scopes.rate_limit,
             backends: scopes.backends.clone(),
             allowed_tools: if scopes.tools.is_empty() {

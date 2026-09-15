@@ -724,6 +724,22 @@ pub struct AuthConfig {
     /// identity (MIK-6751).
     #[serde(default)]
     pub shared_account: bool,
+
+    /// Explicit reference to an `accounts.descriptors` MAP KEY — the same
+    /// descriptor id an MCP backend's `account` names, and the same logical
+    /// `backend_id` of the account key.
+    ///
+    /// Retained through parse and re-serialization so a capability rewrite
+    /// cannot quietly demote a managed capability to a gateway-held token. The
+    /// `oauth:<provider>` half of [`Self::key`] must MATCH the referenced
+    /// descriptor's `provider`; a capability keyed `oauth:slack` pointing at a
+    /// `google` descriptor is a refusal, never a best-effort lookup.
+    ///
+    /// REST verified-identity propagation is not wired in this increment, so a
+    /// recognized reference fails CLOSED at credential resolution
+    /// (`executor::credentials`) instead of reaching the shared token storage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// Cache configuration

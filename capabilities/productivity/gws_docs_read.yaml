@@ -1,3 +1,4 @@
+sha256: ccfa50fed453ba47e78c7c5c24fcf6f50edc266cef92879f1a24dee9fc595016
 fulcrum: "1.0"
 name: gws_docs_read
 description: Read the content of a Google Docs document.

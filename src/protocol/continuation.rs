@@ -53,30 +53,21 @@ const NONCE_LEN: usize = 12;
 /// unauthenticated caller can demand small.
 const MAX_ENVELOPE_LEN: usize = 8 * 1024;
 
-/// Which redemption an envelope was minted for.
+/// Why a sealed envelope exists. Distinct domains share one keyring and
+/// ledger; they must not redeem each other.
 ///
-/// Both mints are reachable from one another's dispatch, so the envelope says
-/// which one issued it rather than leaving the two indistinguishable. The
-/// digest already refuses a cross-presentation whose tool or arguments differ;
-/// this refuses one whose tool and arguments MATCH, which is the case a digest
-/// cannot see.
-///
-/// Not a `bool`: "is this a confirmation" reads the same in both directions at
-/// a call site, and a third purpose would have nowhere to go.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// Default is [`Self::BackendInput`]: every envelope minted before this field
+/// existed, and [`Payload::mint`] today, continues a backend elicitation.
+/// Unknown wire values fail to deserialize, so an unrecognised domain cannot
+/// masquerade as either supported one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContinuationPurpose {
-    /// A backend asked for more input; the retry resumes that exchange.
-    ///
-    /// The default, and correct as one rather than merely convenient: a payload
-    /// sealed before this field existed carries no purpose to read back, and
-    /// every envelope minted before it existed was a backend exchange. So a
-    /// pre-field envelope deserializes as exactly what it is, and the wire
-    /// version does not have to move to say so.
+    /// Continues a backend `input_required` exchange.
     #[default]
-    Backend,
-    /// The gateway asked the caller to confirm a destructive action of its own.
-    /// `backend_id` holds the meta-tool's name, which is not a backend.
-    GatewayConfirmation,
+    BackendInput,
+    /// Confirms a destructive outer tool call before task admission.
+    DestructiveConfirm,
 }
 
 /// What the envelope carries. None of it is visible to the client.
@@ -88,14 +79,6 @@ pub enum ContinuationPurpose {
 /// the caller bindings say who is entitled to redeem the exchange.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Payload {
-    /// Which redemption this envelope may be spent on.
-    ///
-    /// `#[serde(default)]` rather than a wire-version bump: `open()` refuses a
-    /// version byte it does not recognise (`:692-694`), so bumping would
-    /// invalidate every envelope in flight at the moment of deploy. A defaulted
-    /// field costs nothing and breaks nobody.
-    #[serde(default)]
-    pub purpose: ContinuationPurpose,
     /// Which backend holds the exchange.
     pub backend_id: String,
     /// The backend's own opaque state, verbatim — `None` when it issued none.
@@ -129,6 +112,13 @@ pub struct Payload {
     /// caller, so a retry whose own exchange has ended would be admitted on the
     /// strength of a stranger's.
     pub hold_key: String,
+    /// Which domain this envelope belongs to.
+    ///
+    /// Absent on envelopes sealed before the field existed; those deserialize
+    /// as [`ContinuationPurpose::BackendInput`]. Confirmation grants set
+    /// [`ContinuationPurpose::DestructiveConfirm`] explicitly at mint.
+    #[serde(default)]
+    pub purpose: ContinuationPurpose,
 }
 
 impl std::fmt::Debug for Payload {
@@ -136,7 +126,6 @@ impl std::fmt::Debug for Payload {
         // Enough to trace an exchange through a log, and nothing that would let
         // a reader of that log redeem it.
         f.debug_struct("Payload")
-            .field("purpose", &self.purpose)
             .field("backend_id", &self.backend_id)
             .field("backend_request_state", &"<redacted>")
             .field("principal_fingerprint", &"<redacted>")
@@ -146,6 +135,7 @@ impl std::fmt::Debug for Payload {
             .field("expires_at", &self.expires_at)
             .field("jti", &self.jti)
             .field("hold_key", &self.hold_key)
+            .field("purpose", &self.purpose)
             .finish()
     }
 }
@@ -228,7 +218,7 @@ impl Payload {
             // backend exchange, and the one caller that does not says so with
             // `with_purpose`, so no call site changes to gain a field it would
             // only ever pass one value for.
-            purpose: ContinuationPurpose::Backend,
+            purpose: ContinuationPurpose::BackendInput,
             backend_id,
             backend_request_state,
             principal_fingerprint,
@@ -252,6 +242,51 @@ impl Payload {
     pub fn with_purpose(mut self, purpose: ContinuationPurpose) -> Self {
         self.purpose = purpose;
         self
+    }
+
+    /// Seal one destructive-confirmation grant, valid from `now`.
+    ///
+    /// Same lifetime, `jti`, and hold contract as [`Self::mint`]. The only
+    /// difference is [`ContinuationPurpose::DestructiveConfirm`], which a
+    /// backend-input redeem must refuse before touching hold or ledger.
+    #[must_use]
+    pub fn mint_confirmation(
+        backend_id: String,
+        backend_request_state: Option<String>,
+        principal_fingerprint: String,
+        original_request_digest: String,
+        origin_replica: String,
+        hold_key: String,
+        now: u64,
+    ) -> Self {
+        Self::mint(
+            backend_id,
+            backend_request_state,
+            principal_fingerprint,
+            original_request_digest,
+            origin_replica,
+            hold_key,
+            now,
+        )
+        .with_purpose(ContinuationPurpose::DestructiveConfirm)
+    }
+
+    /// Refuse a payload whose domain is not `expected`.
+    ///
+    /// Kept beside [`Self::redeemable_by`]: authenticity is not purpose, and
+    /// folding the two would let a caller skip the domain check by reaching
+    /// for the payload directly.
+    ///
+    /// # Errors
+    ///
+    /// [`ContinuationError::NotAuthentic`] when the sealed domain is not the
+    /// one this redemption path serves.
+    pub fn require_purpose(&self, expected: ContinuationPurpose) -> Result<(), ContinuationError> {
+        if self.purpose == expected {
+            Ok(())
+        } else {
+            Err(ContinuationError::NotAuthentic)
+        }
     }
 
     /// Whether this continuation belongs to this caller and this request.
@@ -1150,6 +1185,35 @@ impl ContinuationState {
             .hold(&backend_id, expiry_for(now), now)
             .await?;
         Some(Payload::mint(
+            backend_id,
+            backend_request_state,
+            principal_fingerprint,
+            original_request_digest,
+            self.replica.clone(),
+            hold_key,
+            now,
+        ))
+    }
+
+    /// Open a confirmation exchange on this replica and seal a
+    /// [`ContinuationPurpose::DestructiveConfirm`] continuation for it.
+    ///
+    /// Same hold-then-mint pairing as [`Self::begin_exchange`]: the envelope
+    /// names a slot this process is holding, and a full table declines rather
+    /// than answering with a handle it cannot honour.
+    pub async fn begin_confirmation_exchange(
+        &self,
+        backend_id: String,
+        backend_request_state: Option<String>,
+        principal_fingerprint: String,
+        original_request_digest: String,
+        now: u64,
+    ) -> Option<Payload> {
+        let hold_key = self
+            .in_flight
+            .hold(&backend_id, expiry_for(now), now)
+            .await?;
+        Some(Payload::mint_confirmation(
             backend_id,
             backend_request_state,
             principal_fingerprint,

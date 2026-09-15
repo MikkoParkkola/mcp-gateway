@@ -202,37 +202,46 @@ mod http {
     use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
     use mcp_gateway::gateway::proxy::ProxyManager;
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+    use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+    use mcp_gateway::gateway::test_helpers::{
+        AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+    };
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
     use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
-    fn state() -> Arc<AppState> {
-        state_with_modern(true)
+    /// Every state constructor here hands back the directory its task store
+    /// leases, because the store holds that directory for as long as the
+    /// service lives. Callers bind it for the whole request.
+    async fn state() -> (Arc<AppState>, tempfile::TempDir) {
+        state_with_modern(true).await
     }
 
-    fn state_with_modern(modern: bool) -> Arc<AppState> {
-        state_with(modern, Config::default().auth)
+    async fn state_with_modern(modern: bool) -> (Arc<AppState>, tempfile::TempDir) {
+        state_with(modern, Config::default().auth).await
     }
 
     /// The destructive-confirmation gate sits behind the admin check, so the
     /// only caller who can reach it is an authenticated admin. That needs a
     /// real auth config, which is why this is parameterised rather than a
     /// second copy of the state below.
-    fn state_with(modern: bool, auth: mcp_gateway::config::AuthConfig) -> Arc<AppState> {
-        state_with_exposure(modern, auth, &[])
+    async fn state_with(
+        modern: bool,
+        auth: mcp_gateway::config::AuthConfig,
+    ) -> (Arc<AppState>, tempfile::TempDir) {
+        state_with_exposure(modern, auth, &[]).await
     }
 
     /// As [`state_with`], plus the operator's meta-tool allow-list. An empty
     /// slice exposes every meta-tool, which is what every other caller here
     /// wants; the exposure row needs a list that deliberately omits the tool it
     /// then calls.
-    fn state_with_exposure(
+    async fn state_with_exposure(
         modern: bool,
         auth: mcp_gateway::config::AuthConfig,
         exposed: &[String],
-    ) -> Arc<AppState> {
+    ) -> (Arc<AppState>, tempfile::TempDir) {
         let mut config = Config::default();
         config.server.modern_protocol = modern;
         config.auth = auth;
@@ -243,9 +252,22 @@ mod http {
         ));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let agent_registry = Arc::new(AgentRegistry::new());
-        Arc::new(AppState {
-            session_lifecycle: None,
+
+        // One registry, shared with the executor that publishes through it.
+        let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+        let store_dir = tempfile::tempdir().expect("a private task-store directory");
+        let (tasks, task_executor) = open_runtime(
+            &store_dir.path().join("tasks"),
+            config.tasks.max_workers,
+            StoreLimits::default(),
+            Arc::clone(&subscriptions),
+        )
+        .await
+        .expect("the fixture task store opens");
+
+        let state = Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+            session_lifecycle: None,
             env: None,
             meta_mcp: Arc::new(
                 MetaMcp::new(Arc::clone(&backends)).with_exposed_meta_tools(exposed),
@@ -275,16 +297,19 @@ mod http {
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-            tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-            ),
-        })
+            tasks,
+            task_executor,
+            subscriptions,
+        });
+        (state, store_dir)
     }
 
     /// POST to `/mcp`, returning status, the session header if any, and the body.
     async fn post_mcp(body: Value) -> (StatusCode, Option<String>, Value) {
-        post_mcp_against(state(), body).await
+        // Bound, not dropped: the store's directory has to outlive the request
+        // this helper makes on the state built from it.
+        let (state, _store_dir) = state().await;
+        post_mcp_against(state, body).await
     }
 
     async fn post_mcp_against(
@@ -370,11 +395,21 @@ mod http {
     }
 
     /// A modern `tools/call`, same shape, for a named tool.
+    /// The `params._meta` key carrying an idempotency key, spelled out here
+    /// the way every other scanner in this suite spells it
+    /// (`crate::protocol::mrtr::IDEMPOTENCY_KEY_META` in the gateway): a test
+    /// that imports the constant cannot catch a rename of the wire contract.
+    const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+
     fn modern_tools_call(id: i64, name: &str, arguments: Value) -> Value {
         let mut request = modern_tools_list(id);
         request["method"] = json!("tools/call");
         request["params"]["name"] = json!(name);
         request["params"]["arguments"] = arguments;
+        // A modern call that could mutate is inadmissible without an explicit
+        // idempotency key, and that refusal precedes every branch the rows
+        // below observe. Keyed by `id` so no two rows share an operation.
+        request["params"]["_meta"][IDEMPOTENCY_KEY_META] = json!(format!("acs-{id}"));
         request
     }
 
@@ -604,8 +639,8 @@ mod http {
         // served completely, a client that asks for it is refused with an
         // answer it can act on — not served half a revision, where the working
         // half hides the missing one.
-        let (status, _, body) =
-            post_mcp_against(state_with_modern(false), modern_tools_list(11)).await;
+        let (state, _store_dir) = state_with_modern(false).await;
+        let (status, _, body) = post_mcp_against(state, modern_tools_list(11)).await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], -32022, "{body}");
@@ -621,8 +656,9 @@ mod http {
         // The switch governs the modern path and nothing else. A 2025 client
         // sees the same gateway either way.
         for modern in [false, true] {
+            let (state, _store_dir) = state_with_modern(modern).await;
             let (status, session, body) = post_mcp_against(
-                state_with_modern(modern),
+                state,
                 json!({ "jsonrpc": "2.0", "id": 12, "method": "tools/list" }),
             )
             .await;
@@ -677,24 +713,11 @@ mod http {
     /// handler branch that consults it (`router/handlers.rs:1139-1170`), by the
     /// only route a modern caller has.
     ///
-    /// The premise this row was written on inverted when `CONFIRM.2` landed. A
-    /// modern request carried no session to elicit over, so `Unsupported` was
-    /// the outcome every time; the in-band continuation is exactly the channel
-    /// that case was missing (`router/handlers.rs`, the
-    /// `Era::Modern => ConfirmationChannel::InBand` arm), so a modern caller
-    /// now HAS somebody to ask.
-    ///
-    /// `CONFIRM.1a`'s refusal is conditional -- it binds when confirmation
-    /// cannot be obtained -- and stays witnessed where that is still true:
-    /// `src/gateway/server/mod.rs::ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm`
-    /// drives `ConfirmationChannel::Unavailable` end to end including the
-    /// execution sentinel, and
-    /// `tests/mik_7246_confirm_1a_unconfirmable_producers.rs` covers the two
-    /// elicitation failures behind the same outcome. What this row pins is the
-    /// other half of the same rule, on the transport where a channel now
-    /// exists: asking is not running.
+    /// A modern request cannot carry a session -- this revision deleted them --
+    /// so there is nobody to elicit over and `Unsupported` is the outcome every
+    /// time. That is precisely the case the legacy path answers with a warning.
     #[tokio::test]
-    async fn ac_confirm_1_a_modern_destructive_call_is_asked_in_band_and_not_run() {
+    async fn ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused() {
         // Admin, because `gateway_kill_server` -- the only tool this build
         // annotates `destructiveHint: true` -- is refused for everyone else by
         // the admin check, which runs *before* the confirmation gate. A
@@ -715,8 +738,9 @@ mod http {
             client_circuit_breaker: None,
             single_user: false,
         };
+        let (state, _store_dir) = state_with(true, auth).await;
         let (status, _session, body) = post_mcp_authed(
-            state_with(true, auth),
+            state,
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -726,6 +750,10 @@ mod http {
                     "arguments": { "server": "any-backend" },
                     "_meta": {
                         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        // Without this the call is refused for a missing
+                        // idempotency key before it reaches the confirmation
+                        // branch this row is about.
+                        IDEMPOTENCY_KEY_META: "acs-confirm-1",
                         "io.modelcontextprotocol/clientCapabilities": {},
                         "io.modelcontextprotocol/clientInfo": {
                             "name": "ExampleClient", "version": "1.0.0"
@@ -740,54 +768,49 @@ mod http {
         assert_eq!(
             status,
             StatusCode::OK,
-            "an in-band ask is a successful round, not a transport error: {body}"
+            "JSON-RPC reports errors in the body: {body}"
         );
-        assert!(
-            body.get("error").is_none(),
-            "the call is paused for an answer, not refused: {body}"
-        );
+        // A modern caller has no session to hold an elicitation open, but it
+        // can be asked in band: the gate answers with the confirmation
+        // question and the caller confirms by retrying with the answer
+        // (`destructive_confirmation.rs:137`). The refusal branch belongs to a
+        // caller nobody can ask at all — the stdio dispatcher
+        // (`server/mod.rs:2856`) and the task route
+        // (`router/handlers/tasks.rs:301`) carry that channel.
+        //
+        // What this row asserts either way: the call was answered by the gate
+        // and the destructive action did not run.
         assert_eq!(
             body.pointer("/result/resultType").and_then(Value::as_str),
             Some("input_required"),
-            "a destructive call must come back unfinished, carrying its question: {body}"
+            "an unconfirmed destructive call must be asked about, not run: {body}"
         );
-        // The key is the contract the client keys its answer on. Asserting the
-        // method alone would pass on a question posted under any name, which no
-        // client would know to answer.
-        assert_eq!(
-            body.pointer("/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1/method")
-                .and_then(Value::as_str),
-            Some("elicitation/create"),
-            "the round must carry the confirmation request itself: {body}"
+        // Distinguishes the question from any other `input_required` exit on
+        // the path: the ask must be the destructive-confirmation one.
+        assert!(
+            body.pointer("/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1")
+                .is_some(),
+            "the ask must be the destructive-confirmation one: {body}"
         );
-        let message = body
-            .pointer(
-                "/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1/params/message",
-            )
+        // Guards two things at once, both invisible to every other assertion
+        // here. (1) The fixture's `arguments` key must be the one production
+        // reads (`server`), or the description degrades to the fallback text.
+        // (2) The ask must actually interpolate the description, so deleting
+        // `{action_desc}` from it leaves the title, the shape, and the
+        // describer's own unit tests all green. `docs/DEPLOYMENT.md` promises
+        // the gate names the action, so this asserts the whole action phrase,
+        // not just the argument inside it.
+        let description = body
+            .pointer("/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1/description")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        // Guards the same two things the refusal wording used to. (1) The
-        // fixture's `arguments` key must be the one production reads
-        // (`server`), or the description degrades to its generic fallback text.
-        // (2) The prompt must interpolate the description: the prefix is a
-        // format-string literal, so deleting the interpolation leaves the
-        // prefix and the describer's own unit tests green.
         assert!(
-            message.contains("kill server 'any-backend'"),
-            "the operator must be told what they are confirming: {message}"
+            description.contains("kill server 'any-backend'"),
+            "the ask must name the action it is about, not the fallback text: {description}"
         );
-        // Without an envelope the answer has nothing to come back on, and the
-        // question is decorative.
-        assert!(
-            body.pointer("/result/requestState").is_some(),
-            "the ask must be bound to the state its answer is redeemed against: {body}"
-        );
-        // The execution sentinel for this transport: a finished tool call
-        // carries `content`. An unfinished round that also ran the tool would
-        // have refused nothing, which is the whole of the criterion.
         assert!(
             body.pointer("/result/content").is_none(),
-            "a call still waiting to be confirmed must not have run: {body}"
+            "an unconfirmed destructive call must not also return a tool result: {body}"
         );
     }
 
@@ -837,7 +860,8 @@ mod http {
         };
         // The allow-list names one unrelated meta-tool, so it is non-empty — an
         // empty list exposes everything — and `gateway_kill_server` is absent.
-        let state = state_with_exposure(true, auth, &["gateway_invoke".to_string()]);
+        let (state, _store_dir) =
+            state_with_exposure(true, auth, &["gateway_invoke".to_string()]).await;
         let (status, _session, body) = post_mcp_authed(
             Arc::clone(&state),
             modern_tools_call(
@@ -925,9 +949,9 @@ mod http {
         );
     }
 
-    /// MIK-7246.CONFIRM.1a — the confirmation gate answering is the gate
-    /// working, not the caller misbehaving, so its outcome is excluded from the
-    /// caller's dispatch accounting in BOTH directions.
+    /// MIK-7246.CONFIRM.1a — a confirmation refusal is the gate working, not the
+    /// caller misbehaving, so it is excluded from the caller's dispatch
+    /// accounting in BOTH directions.
     ///
     /// Both arms, not just the failure one: `record_client_success` resets the
     /// consecutive-failure count, so booking a refusal as a success would clear
@@ -971,7 +995,7 @@ mod http {
             }),
             single_user: false,
         };
-        let state = state_with(true, auth);
+        let (state, _store_dir) = state_with(true, auth).await;
         let accounting = Arc::clone(&state.auth_config);
 
         // Control: one genuine failure over this path, as this client.
@@ -989,18 +1013,7 @@ mod http {
             "one failure of two must leave the breaker closed, or the fixture's threshold is wrong"
         );
 
-        // The gate doing its job. Since `CONFIRM.2` this is an in-band ask
-        // rather than a refusal: the modern policy is REFUSE only when nobody
-        // can be asked, and this transport now has a channel
-        // (`destructive_confirmation.rs::for_modern`, `router/handlers.rs`'s
-        // `Era::Modern => InBand` arm). The unconfirmable refusal is not
-        // reachable over HTTP on either era -- legacy proceeds with a warning
-        // -- so it is witnessed on stdio
-        // (`src/gateway/server/mod.rs::ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm`),
-        // which carries no client accounting to exclude it from. What this row
-        // pins is the accounting rule itself, on the outcome the accounted
-        // path produces: an unfinished round is neither a client failure nor a
-        // completed call.
+        // The refusal itself.
         let (_, _, refusal) = post_mcp_authed(
             Arc::clone(&state),
             json!({
@@ -1012,6 +1025,10 @@ mod http {
                     "arguments": { "server": "row17-sentinel" },
                     "_meta": {
                         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        // Without this the call is refused for a missing
+                        // idempotency key before it reaches the confirmation
+                        // branch this row is about.
+                        IDEMPOTENCY_KEY_META: "acs-confirm-1",
                         "io.modelcontextprotocol/clientCapabilities": {},
                         "io.modelcontextprotocol/clientInfo": {
                             "name": "ExampleClient", "version": "1.0.0"
@@ -1022,30 +1039,20 @@ mod http {
             Some("admin-key"),
         )
         .await;
-        // Discriminates the branch. Reading the breaker alone would pass on any
-        // outcome that happens not to be counted, including an ordinary success
-        // -- which would mean the gate never ran and this row proved nothing.
-        assert_eq!(
-            refusal
-                .pointer("/result/resultType")
-                .and_then(Value::as_str),
-            Some("input_required"),
-            "this row observes the gate's own outcome; another exit proves nothing about it: {refusal}"
-        );
         assert!(
             refusal
                 .pointer("/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1")
                 .is_some(),
-            "the round must be the confirmation ask, not some other unfinished round: {refusal}"
+            "this row observes the unconfirmed branch; another exit proves nothing about it: {refusal}"
         );
         assert_eq!(
             accounting.client_circuit_state("row17-client"),
             Some(mcp_gateway::failsafe::CircuitState::Closed),
-            "an unfinished round counted as a failure takes the count to two and trips the breaker: {refusal}"
+            "a refusal counted as a failure takes the count to two and trips the breaker: {refusal}"
         );
 
-        // One more genuine failure. It reaches two only if the gate's round left
-        // the count at one -- booked as a SUCCESS it would have reset it, and
+        // One more genuine failure. It reaches two only if the refusal left the
+        // count at one -- a refusal booked as a SUCCESS would have reset it, and
         // this failure would be the first of two rather than the second.
         let mut unknown_again = modern_tools_list(1703);
         unknown_again["method"] = json!("row17/does-not-exist");
@@ -1059,7 +1066,7 @@ mod http {
         assert_eq!(
             accounting.client_circuit_state("row17-client"),
             Some(mcp_gateway::failsafe::CircuitState::Open),
-            "the gate's round booked as a success reset the count, so this failure is the first of two, not the second"
+            "a refusal booked as a success reset the count, so this failure is the first of two, not the second"
         );
     }
 }

@@ -1,3 +1,4 @@
+sha256: 54a6b28851cafb45de608dd9f6612da257ed4d3e0a950029a3536e6a2f723ec7
 fulcrum: "1.0"
 name: linear_add_comment
 description: Add a comment to a Linear issue

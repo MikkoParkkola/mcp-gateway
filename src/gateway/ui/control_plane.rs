@@ -666,8 +666,10 @@ fn merge_store_into_snapshot(
             tracing::warn!(error = %e, "control-plane store list_policies failed; using local projection");
         }
     }
+    // One bounded page: the newest 200 events, newest first. The view never
+    // walks the whole log, however long it has grown.
     match store.read_audit(&AuditFilter::new(200)) {
-        Ok(events) => snapshot.audit_events = events,
+        Ok(page) => snapshot.audit_events = page.events,
         Err(e) => {
             degraded = true;
             tracing::warn!(error = %e, "control-plane store read_audit failed; audit view left empty");
@@ -1171,7 +1173,7 @@ mod mutation_tests {
         );
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(store.list_grants().unwrap().len(), 1);
-        let audit = store.read_audit(&AuditFilter::new(10)).unwrap();
+        let audit = store.read_audit(&AuditFilter::new(10)).unwrap().events;
         assert_eq!(audit.len(), 1);
         assert_eq!(audit[0].action, ControlPlaneAction::MutateGrant);
         assert_eq!(audit[0].actor_id, "gateway-client:tester");
@@ -1194,7 +1196,13 @@ mod mutation_tests {
         );
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         assert!(store.list_grants().unwrap().is_empty());
-        assert!(store.read_audit(&AuditFilter::new(10)).unwrap().is_empty());
+        assert!(
+            store
+                .read_audit(&AuditFilter::new(10))
+                .unwrap()
+                .events
+                .is_empty()
+        );
     }
 
     // MIK-6686.CP.2 — with no store configured the route reports 503.
@@ -1239,7 +1247,14 @@ mod mutation_tests {
             store.get_grant("grant-1").unwrap().unwrap().status,
             ControlPlaneGrantStatus::Approved
         );
-        assert_eq!(store.read_audit(&AuditFilter::new(10)).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .read_audit(&AuditFilter::new(10))
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
 
         let resp = resolve_decision_core(
             Some(&store),
@@ -1258,7 +1273,14 @@ mod mutation_tests {
             ControlPlaneGrantStatus::Revoked
         );
         // Deny is also audited: two decisions -> two audit entries.
-        assert_eq!(store.read_audit(&AuditFilter::new(10)).unwrap().len(), 2);
+        assert_eq!(
+            store
+                .read_audit(&AuditFilter::new(10))
+                .unwrap()
+                .events
+                .len(),
+            2
+        );
     }
 
     // MIK-6687.CP.3 — a policy decision flips `enforced` through the audited path.
@@ -1287,7 +1309,14 @@ mod mutation_tests {
         );
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(store.get_policy("pol-1").unwrap().unwrap().enforced);
-        assert_eq!(store.read_audit(&AuditFilter::new(10)).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .read_audit(&AuditFilter::new(10))
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
     }
 
     // MIK-6687.CP.3 — decision guards: non-admin denied (no state change), a
@@ -1317,7 +1346,13 @@ mod mutation_tests {
             store.get_grant("grant-1").unwrap().unwrap().status,
             ControlPlaneGrantStatus::Requested
         );
-        assert!(store.read_audit(&AuditFilter::new(10)).unwrap().is_empty());
+        assert!(
+            store
+                .read_audit(&AuditFilter::new(10))
+                .unwrap()
+                .events
+                .is_empty()
+        );
 
         // Missing target -> 404.
         let resp = resolve_decision_core(
@@ -1362,6 +1397,7 @@ mod role_wiring_tests {
     fn client(admin: bool) -> AuthenticatedClient {
         AuthenticatedClient {
             principal: String::new(),
+            quota_principal: None,
             name: "c".to_string(),
             rate_limit: 0,
             backends: Vec::new(),
@@ -1509,7 +1545,7 @@ mod role_wiring_tests {
 mod read_reflect_tests {
     use super::merge_store_into_snapshot;
     use crate::control_plane::{
-        AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent,
+        AuditFilter, AuditPage, ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent,
         ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlanePolicy, ControlPlaneRole,
         ControlPlaneRollbackPlan, ControlPlaneSnapshot, ControlPlaneStore,
         InMemoryControlPlaneStore, StoreError, StoreResult,
@@ -1554,7 +1590,7 @@ mod read_reflect_tests {
         fn append_audit(&self, _event: &ControlPlaneAuditEvent) -> StoreResult<()> {
             Err(StoreError::Corrupt("boom".to_string()))
         }
-        fn read_audit(&self, _filter: &AuditFilter) -> StoreResult<Vec<ControlPlaneAuditEvent>> {
+        fn read_audit(&self, _filter: &AuditFilter) -> StoreResult<AuditPage> {
             Err(StoreError::Corrupt("boom".to_string()))
         }
     }

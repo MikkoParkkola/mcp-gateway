@@ -91,17 +91,9 @@ fn all_meta_tool_schemas() -> Vec<(String, serde_json::Value)> {
         }
     }
 
-    // Population EQUALITY, not a floor. The population is the 19 names the two
-    // builders in `src/gateway/meta_mcp_tool_defs.rs` actually publish through
-    // `tools/list`; a floor of 14 permits five of them to go unwalked, so a
-    // dangling `$ref` in one of the five would ship with every assertion below
-    // still green. Equality also makes the list self-maintaining: adding or
-    // retiring a published definition fails here until this list is updated
-    // deliberately.
-    //
-    // `gateway_webhook_status` is enumerated exactly where a webhook registry
-    // is attached, and `operational_meta_mcp` attaches one, so its schema is
-    // handed to a client on this surface and belongs in the population.
+    // Enumerate all 19 published names across both modes, including webhook
+    // status when the operational fixture attaches its registry. Equality
+    // prevents a newly published schema from silently escaping validation.
     let mut published: Vec<&str> = names.iter().map(String::as_str).collect();
     published.sort_unstable();
     assert_eq!(

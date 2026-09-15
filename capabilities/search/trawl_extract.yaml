@@ -1,3 +1,4 @@
+sha256: e2ee9c373f487c60bb4f7d100db1766ef7ee65e335c1da0d32e32c6701917c03
 fulcrum: "1.0"
 name: trawl_extract
 description: Structured web data extraction using LLM-derived CSS selectors. Extracts tables, lists, and repeating data from any webpage. Uses LLM once to derive strategy, then applies at speed. Self-healing when sites redesign.

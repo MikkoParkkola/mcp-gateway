@@ -19,8 +19,8 @@ pub use export::{
 };
 pub use role_mapping::{ControlPlaneConfig, ControlPlaneRoleMappingConfig, ControlPlaneRoleRule};
 pub use store::{
-    AuditFilter, ControlPlaneStore, FileControlPlaneStore, InMemoryControlPlaneStore, StoreError,
-    StoreResult,
+    AuditCursor, AuditFilter, AuditPage, ControlPlaneStore, FileControlPlaneStore,
+    InMemoryControlPlaneStore, StoreError, StoreResult,
 };
 
 /// License tier for control-plane capabilities.

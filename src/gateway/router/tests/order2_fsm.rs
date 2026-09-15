@@ -6,7 +6,8 @@ use pretty_assertions::assert_eq;
 /// MIK-7272.ORDER2.FSM.3: the real modern HTTP path must refuse state changes.
 #[tokio::test]
 async fn order2_fsm_modern_http_refuses_state_even_with_an_offered_session() {
-    let router = create_router(modern_router_app_state());
+    let (state, _store) = modern_router_app_state().await;
+    let router = create_router(state);
     for offered_session in [None, Some("client-offered-session")] {
         let mut request = axum::http::Request::builder()
             .method("POST")

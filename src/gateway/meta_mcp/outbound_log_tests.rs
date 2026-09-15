@@ -33,7 +33,7 @@ async fn messages_from_invoke(declared: Option<&str>) -> Vec<JsonRpcNotification
 
     let (result, notifications) = notification_sink::collect(async {
         notification_sink::set_request_log_level(declared);
-        Box::pin(meta.invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll), None)).await
+        Box::pin(meta.invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))).await
     })
     .await;
 

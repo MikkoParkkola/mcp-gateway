@@ -69,6 +69,18 @@ pub fn delivers(filter: &ListenRequest, notification: &Value) -> bool {
             .is_some_and(|uri| filter.resource_uris().iter().any(|want| want == uri));
     }
 
+    if kind == NotificationKind::Tasks {
+        // Named tasks only, matched exactly like a resource URI. The ownership
+        // narrowing already emptied this list for a caller who named a task it
+        // does not own, so an exact match here is what closes that rule at the
+        // broadcast door.
+        return notification
+            .get("params")
+            .and_then(|p| p.get("taskId"))
+            .and_then(Value::as_str)
+            .is_some_and(|id| filter.task_ids().iter().any(|want| want == id));
+    }
+
     filter.wants(kind)
 }
 

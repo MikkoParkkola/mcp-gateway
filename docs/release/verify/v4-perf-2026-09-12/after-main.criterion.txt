@@ -1,0 +1,598 @@
+   Compiling futures-core v0.3.34
+   Compiling futures-sink v0.3.34
+   Compiling zmij v1.0.23
+   Compiling futures-macro v0.3.34
+   Compiling serde_json v1.0.151
+   Compiling futures-io v0.3.34
+   Compiling futures-task v0.3.34
+   Compiling num-bigint v0.4.8
+   Compiling futures-channel v0.3.34
+   Compiling tokio-util v0.7.19
+   Compiling http-body-util v0.1.3
+   Compiling sync_wrapper v1.0.2
+   Compiling regex-automata v0.4.18
+   Compiling ahash v0.8.12
+   Compiling ref-cast v1.0.27
+   Compiling pem v4.0.0
+   Compiling uuid v1.26.0
+   Compiling num-iter v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling ref-cast-impl v1.0.27
+   Compiling axum-core v0.5.6
+   Compiling clap_complete v4.6.9
+   Compiling async-stream v0.3.6
+   Compiling quick-xml v0.42.0
+   Compiling unicode-general-category v1.1.0
+   Compiling bit-vec v0.8.0
+   Compiling h2 v0.4.19
+   Compiling tokio-stream v0.1.19
+   Compiling borrow-or-share v0.2.4
+   Compiling bit-set v0.8.0
+   Compiling futures-util v0.3.34
+   Compiling fluent-uri v0.4.1
+   Compiling strum_macros v0.28.0
+   Compiling num-rational v0.4.2
+   Compiling der-parser v10.0.0
+   Compiling simple_asn1 v0.6.4
+   Compiling jsonwebtoken v11.0.0
+   Compiling x509-parser v0.18.1
+   Compiling num v0.4.3
+   Compiling fraction v0.17.0
+   Compiling hashbrown v0.17.1
+   Compiling num-cmp v0.1.0
+   Compiling vsimd v0.8.0
+   Compiling outref v0.5.2
+   Compiling regex v1.13.1
+   Compiling matchers v0.2.0
+   Compiling bytecount v0.6.9
+   Compiling micromap v0.3.0
+   Compiling rcgen v0.14.10
+   Compiling tracing-subscriber v0.3.23
+   Compiling uuid-simd v0.8.0
+   Compiling jsonschema-value v0.52.1
+   Compiling referencing v0.52.1
+   Compiling strum v0.28.0
+   Compiling tower v0.5.3
+   Compiling futures-executor v0.3.34
+   Compiling governor v0.10.4
+   Compiling tokio-tungstenite v0.30.0
+   Compiling tower-http v0.7.1
+   Compiling hyper v1.8.1
+   Compiling tower-http v0.6.11
+   Compiling futures v0.3.34
+   Compiling fancy-regex v0.19.0
+   Compiling tinytemplate v1.2.1
+   Compiling hyper-util v0.1.20
+   Compiling jsonschema-regex v0.52.1
+   Compiling email_address v0.2.9
+   Compiling criterion v0.8.2
+   Compiling tokio-test v0.4.5
+   Compiling jsonschema v0.52.1
+   Compiling hyper-rustls v0.27.7
+   Compiling axum-server v0.8.0
+   Compiling axum v0.8.9
+   Compiling reqwest v0.13.4
+   Compiling metrics-exporter-prometheus v0.18.3
+   Compiling mcp-gateway v4.0.0 (/home/mikko/github/.worktrees/perf-remeasure-4.0.0)
+    Finished `bench` profile [optimized] target(s) in 2m 30s
+     Running benches/gateway_benchmarks.rs (/home/mikko/bench-targets/v4-perf/release/deps/gateway_benchmarks-3014cee73c74c4a9)
+Gnuplot not found, using plotters backend
+Benchmarking tool_registry/insert_one
+Benchmarking tool_registry/insert_one: Warming up for 3.0000 s
+Benchmarking tool_registry/insert_one: Collecting 100 samples in estimated 5.0003 s (14M iterations)
+Benchmarking tool_registry/insert_one: Analyzing
+tool_registry/insert_one
+                        time:   [298.32 ns 299.07 ns 299.92 ns]
+                        change: [+4.4458% +4.7511% +5.0436%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) low mild
+Benchmarking tool_registry/get_hit/10
+Benchmarking tool_registry/get_hit/10: Warming up for 3.0000 s
+Benchmarking tool_registry/get_hit/10: Collecting 100 samples in estimated 5.0011 s (19M iterations)
+Benchmarking tool_registry/get_hit/10: Analyzing
+tool_registry/get_hit/10
+                        time:   [255.64 ns 255.91 ns 256.18 ns]
+                        change: [−1.1652% −1.0985% −1.0236%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) low mild
+Benchmarking tool_registry/get_hit/100
+Benchmarking tool_registry/get_hit/100: Warming up for 3.0000 s
+Benchmarking tool_registry/get_hit/100: Collecting 100 samples in estimated 5.0008 s (19M iterations)
+Benchmarking tool_registry/get_hit/100: Analyzing
+tool_registry/get_hit/100
+                        time:   [256.37 ns 256.54 ns 256.72 ns]
+                        change: [−0.5083% −0.4289% −0.3516%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking tool_registry/get_hit/1000
+Benchmarking tool_registry/get_hit/1000: Warming up for 3.0000 s
+Benchmarking tool_registry/get_hit/1000: Collecting 100 samples in estimated 5.0006 s (19M iterations)
+Benchmarking tool_registry/get_hit/1000: Analyzing
+tool_registry/get_hit/1000
+                        time:   [256.71 ns 256.91 ns 257.11 ns]
+                        change: [−0.0070% +0.0773% +0.1591%] (p = 0.07 > 0.05)
+                        No change in performance detected.
+Benchmarking tool_registry/get_miss
+Benchmarking tool_registry/get_miss: Warming up for 3.0000 s
+Benchmarking tool_registry/get_miss: Collecting 100 samples in estimated 5.0004 s (52M iterations)
+Benchmarking tool_registry/get_miss: Analyzing
+tool_registry/get_miss  time:   [102.19 ns 102.66 ns 103.01 ns]
+                        change: [+0.2187% +1.0576% +1.8774%] (p = 0.01 < 0.05)
+                        Change within noise threshold.
+Benchmarking tool_registry/replace_server_50
+Benchmarking tool_registry/replace_server_50: Warming up for 3.0000 s
+Benchmarking tool_registry/replace_server_50: Collecting 100 samples in estimated 5.1034 s (35k iterations)
+Benchmarking tool_registry/replace_server_50: Analyzing
+tool_registry/replace_server_50
+                        time:   [25.805 µs 26.025 µs 26.286 µs]
+                        change: [−68.478% +25.468% +338.69%] (p = 0.84 > 0.05)
+                        No change in performance detected.
+Found 6 outliers among 100 measurements (6.00%)
+  5 (5.00%) high mild
+  1 (1.00%) high severe
+Benchmarking tool_registry/contains_hit
+Benchmarking tool_registry/contains_hit: Warming up for 3.0000 s
+Benchmarking tool_registry/contains_hit: Collecting 100 samples in estimated 5.0001 s (161M iterations)
+Benchmarking tool_registry/contains_hit: Analyzing
+tool_registry/contains_hit
+                        time:   [30.834 ns 30.841 ns 30.848 ns]
+                        change: [−5.7424% −3.9608% −2.1571%] (p = 0.00 < 0.05)
+                        Performance has improved.
+
+Benchmarking simhash/compute/4
+Benchmarking simhash/compute/4: Warming up for 3.0000 s
+Benchmarking simhash/compute/4: Collecting 100 samples in estimated 5.0001 s (140M iterations)
+Benchmarking simhash/compute/4: Analyzing
+simhash/compute/4       time:   [35.415 ns 35.489 ns 35.569 ns]
+                        change: [+0.8269% +1.1719% +1.4910%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 15 outliers among 100 measurements (15.00%)
+  4 (4.00%) high mild
+  11 (11.00%) high severe
+Benchmarking simhash/compute/16
+Benchmarking simhash/compute/16: Warming up for 3.0000 s
+Benchmarking simhash/compute/16: Collecting 100 samples in estimated 5.0006 s (40M iterations)
+Benchmarking simhash/compute/16: Analyzing
+simhash/compute/16      time:   [122.45 ns 122.68 ns 122.95 ns]
+                        change: [+0.5042% +0.8266% +1.1475%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 16 outliers among 100 measurements (16.00%)
+  6 (6.00%) high mild
+  10 (10.00%) high severe
+Benchmarking simhash/compute/64
+Benchmarking simhash/compute/64: Warming up for 3.0000 s
+Benchmarking simhash/compute/64: Collecting 100 samples in estimated 5.0000 s (10M iterations)
+Benchmarking simhash/compute/64: Analyzing
+simhash/compute/64      time:   [478.12 ns 480.05 ns 482.16 ns]
+                        change: [−0.3133% +0.1326% +0.5639%] (p = 0.55 > 0.05)
+                        No change in performance detected.
+Found 12 outliers among 100 measurements (12.00%)
+  12 (12.00%) high mild
+Benchmarking simhash/hamming_distance
+Benchmarking simhash/hamming_distance: Warming up for 3.0000 s
+Benchmarking simhash/hamming_distance: Collecting 100 samples in estimated 5.0000 s (19B iterations)
+Benchmarking simhash/hamming_distance: Analyzing
+simhash/hamming_distance
+                        time:   [256.88 ps 256.89 ps 256.91 ps]
+                        change: [−0.0067% +0.0020% +0.0103%] (p = 0.65 > 0.05)
+                        No change in performance detected.
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) low severe
+  2 (2.00%) high mild
+  3 (3.00%) high severe
+Benchmarking simhash/index_find_similar/10
+Benchmarking simhash/index_find_similar/10: Warming up for 3.0000 s
+Benchmarking simhash/index_find_similar/10: Collecting 100 samples in estimated 5.0000 s (315M iterations)
+Benchmarking simhash/index_find_similar/10: Analyzing
+simhash/index_find_similar/10
+                        time:   [15.552 ns 15.579 ns 15.604 ns]
+                        change: [−0.8871% −0.6854% −0.4775%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking simhash/index_find_similar/100
+Benchmarking simhash/index_find_similar/100: Warming up for 3.0000 s
+Benchmarking simhash/index_find_similar/100: Collecting 100 samples in estimated 5.0001 s (86M iterations)
+Benchmarking simhash/index_find_similar/100: Analyzing
+simhash/index_find_similar/100
+                        time:   [57.622 ns 57.680 ns 57.730 ns]
+                        change: [−0.5478% −0.4124% −0.2847%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking simhash/index_find_similar/500
+Benchmarking simhash/index_find_similar/500: Warming up for 3.0000 s
+Benchmarking simhash/index_find_similar/500: Collecting 100 samples in estimated 5.0011 s (18M iterations)
+Benchmarking simhash/index_find_similar/500: Analyzing
+simhash/index_find_similar/500
+                        time:   [281.98 ns 282.30 ns 282.66 ns]
+                        change: [+0.3162% +0.4086% +0.5189%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 11 outliers among 100 measurements (11.00%)
+  9 (9.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking cache_key/from_context
+Benchmarking cache_key/from_context: Warming up for 3.0000 s
+Benchmarking cache_key/from_context: Collecting 100 samples in estimated 5.0008 s (29M iterations)
+Benchmarking cache_key/from_context: Analyzing
+cache_key/from_context  time:   [174.25 ns 174.36 ns 174.48 ns]
+                        change: [+0.7950% +0.8877% +0.9748%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking cache_key/from_session_and_user
+Benchmarking cache_key/from_session_and_user: Warming up for 3.0000 s
+Benchmarking cache_key/from_session_and_user: Collecting 100 samples in estimated 5.0001 s (25M iterations)
+Benchmarking cache_key/from_session_and_user: Analyzing
+cache_key/from_session_and_user
+                        time:   [202.86 ns 211.41 ns 221.66 ns]
+                        change: [−15.673% −10.439% −4.6284%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 19 outliers among 100 measurements (19.00%)
+  19 (19.00%) high severe
+Benchmarking cache_key/from_header
+Benchmarking cache_key/from_header: Warming up for 3.0000 s
+Benchmarking cache_key/from_header: Collecting 100 samples in estimated 5.0002 s (37M iterations)
+Benchmarking cache_key/from_header: Analyzing
+cache_key/from_header   time:   [126.06 ns 126.26 ns 126.44 ns]
+                        change: [−1.2719% −1.0322% −0.7934%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking cache_key/key_for_slot
+Benchmarking cache_key/key_for_slot: Warming up for 3.0000 s
+Benchmarking cache_key/key_for_slot: Collecting 100 samples in estimated 5.0001 s (188M iterations)
+Benchmarking cache_key/key_for_slot: Analyzing
+cache_key/key_for_slot  time:   [26.572 ns 26.635 ns 26.709 ns]
+                        change: [−2.8636% −2.5281% −2.1760%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+Benchmarking cache_key/stable_tool_order/10
+Benchmarking cache_key/stable_tool_order/10: Warming up for 3.0000 s
+Benchmarking cache_key/stable_tool_order/10: Collecting 100 samples in estimated 5.0084 s (2.1M iterations)
+Benchmarking cache_key/stable_tool_order/10: Analyzing
+cache_key/stable_tool_order/10
+                        time:   [2.4203 µs 2.4218 µs 2.4235 µs]
+                        change: [−0.5554% −0.4701% −0.3852%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 19 outliers among 100 measurements (19.00%)
+  19 (19.00%) high mild
+Benchmarking cache_key/stable_tool_order/50
+Benchmarking cache_key/stable_tool_order/50: Warming up for 3.0000 s
+Benchmarking cache_key/stable_tool_order/50: Collecting 100 samples in estimated 5.0377 s (283k iterations)
+Benchmarking cache_key/stable_tool_order/50: Analyzing
+cache_key/stable_tool_order/50
+                        time:   [17.923 µs 17.980 µs 18.041 µs]
+                        change: [+0.9687% +1.1840% +1.3676%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 35 outliers among 100 measurements (35.00%)
+  16 (16.00%) low severe
+  19 (19.00%) high mild
+Benchmarking cache_key/stable_tool_order/200
+Benchmarking cache_key/stable_tool_order/200: Warming up for 3.0000 s
+Benchmarking cache_key/stable_tool_order/200: Collecting 100 samples in estimated 5.1200 s (71k iterations)
+Benchmarking cache_key/stable_tool_order/200: Analyzing
+cache_key/stable_tool_order/200
+                        time:   [72.969 µs 73.167 µs 73.379 µs]
+                        change: [+0.6717% +0.8590% +1.0232%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 17 outliers among 100 measurements (17.00%)
+  16 (16.00%) low severe
+  1 (1.00%) high mild
+Benchmarking cache_key/schema_fingerprint/10
+Benchmarking cache_key/schema_fingerprint/10: Warming up for 3.0000 s
+Benchmarking cache_key/schema_fingerprint/10: Collecting 100 samples in estimated 5.0069 s (2.9M iterations)
+Benchmarking cache_key/schema_fingerprint/10: Analyzing
+cache_key/schema_fingerprint/10
+                        time:   [1.7300 µs 1.7307 µs 1.7316 µs]
+                        change: [+0.2820% +0.3206% +0.3635%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking cache_key/schema_fingerprint/50
+Benchmarking cache_key/schema_fingerprint/50: Warming up for 3.0000 s
+Benchmarking cache_key/schema_fingerprint/50: Collecting 100 samples in estimated 5.0337 s (525k iterations)
+Benchmarking cache_key/schema_fingerprint/50: Analyzing
+cache_key/schema_fingerprint/50
+                        time:   [9.5203 µs 9.5254 µs 9.5307 µs]
+                        change: [+1.3035% +1.3926% +1.4845%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 26 outliers among 100 measurements (26.00%)
+  9 (9.00%) low mild
+  17 (17.00%) high mild
+Benchmarking cache_key/schema_fingerprint/200
+Benchmarking cache_key/schema_fingerprint/200: Warming up for 3.0000 s
+Benchmarking cache_key/schema_fingerprint/200: Collecting 100 samples in estimated 5.0907 s (116k iterations)
+Benchmarking cache_key/schema_fingerprint/200: Analyzing
+cache_key/schema_fingerprint/200
+                        time:   [43.825 µs 43.849 µs 43.876 µs]
+                        change: [+0.4848% +0.5535% +0.6182%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+
+Benchmarking mcp_frame/parse_request
+Benchmarking mcp_frame/parse_request: Warming up for 3.0000 s
+Benchmarking mcp_frame/parse_request: Collecting 100 samples in estimated 5.0004 s (6.9M iterations)
+Benchmarking mcp_frame/parse_request: Analyzing
+mcp_frame/parse_request time:   [718.29 ns 718.83 ns 719.39 ns]
+                        change: [+0.8989% +0.9951% +1.0875%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking mcp_frame/parse_response
+Benchmarking mcp_frame/parse_response: Warming up for 3.0000 s
+Benchmarking mcp_frame/parse_response: Collecting 100 samples in estimated 5.0006 s (7.9M iterations)
+Benchmarking mcp_frame/parse_response: Analyzing
+mcp_frame/parse_response
+                        time:   [629.86 ns 630.54 ns 631.18 ns]
+                        change: [−10.172% −10.039% −9.9065%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking mcp_frame/parse_notification
+Benchmarking mcp_frame/parse_notification: Warming up for 3.0000 s
+Benchmarking mcp_frame/parse_notification: Collecting 100 samples in estimated 5.0005 s (13M iterations)
+Benchmarking mcp_frame/parse_notification: Analyzing
+mcp_frame/parse_notification
+                        time:   [376.81 ns 377.06 ns 377.29 ns]
+                        change: [−4.5780% −4.4857% −4.3931%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking mcp_frame/parse_ping
+Benchmarking mcp_frame/parse_ping: Warming up for 3.0000 s
+Benchmarking mcp_frame/parse_ping: Collecting 100 samples in estimated 5.0002 s (70M iterations)
+Benchmarking mcp_frame/parse_ping: Analyzing
+mcp_frame/parse_ping    time:   [70.334 ns 70.583 ns 70.821 ns]
+                        change: [+0.5036% +0.8459% +1.1750%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+
+Benchmarking session_sandbox/check_unrestricted
+Benchmarking session_sandbox/check_unrestricted: Warming up for 3.0000 s
+Benchmarking session_sandbox/check_unrestricted: Collecting 100 samples in estimated 5.0000 s (1.0B iterations)
+Benchmarking session_sandbox/check_unrestricted: Analyzing
+session_sandbox/check_unrestricted
+                        time:   [4.7741 ns 4.7750 ns 4.7760 ns]
+                        change: [−0.1420% −0.1198% −0.0961%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) low mild
+  1 (1.00%) high mild
+Benchmarking session_sandbox/check_all_limits_passing
+Benchmarking session_sandbox/check_all_limits_passing: Warming up for 3.0000 s
+Benchmarking session_sandbox/check_all_limits_passing: Collecting 100 samples in estimated 5.0004 s (17M iterations)
+Benchmarking session_sandbox/check_all_limits_passing: Analyzing
+session_sandbox/check_all_limits_passing
+                        time:   [100.51 ns 100.83 ns 101.12 ns]
+                        change: [+0.6294% +1.1122% +1.6805%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 19 outliers among 100 measurements (19.00%)
+  7 (7.00%) low severe
+  11 (11.00%) low mild
+  1 (1.00%) high severe
+Benchmarking session_sandbox/check_tool_denied
+Benchmarking session_sandbox/check_tool_denied: Warming up for 3.0000 s
+Benchmarking session_sandbox/check_tool_denied: Collecting 100 samples in estimated 5.0001 s (22M iterations)
+Benchmarking session_sandbox/check_tool_denied: Analyzing
+session_sandbox/check_tool_denied
+                        time:   [86.511 ns 86.683 ns 86.863 ns]
+                        change: [−45.829% −22.801% −1.7706%] (p = 0.22 > 0.05)
+                        No change in performance detected.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking session_sandbox/check_backend_denied
+Benchmarking session_sandbox/check_backend_denied: Warming up for 3.0000 s
+Benchmarking session_sandbox/check_backend_denied: Collecting 100 samples in estimated 5.0009 s (22M iterations)
+Benchmarking session_sandbox/check_backend_denied: Analyzing
+session_sandbox/check_backend_denied
+                        time:   [87.652 ns 87.870 ns 88.091 ns]
+                        change: [−50.596% −6.1177% +77.889%] (p = 0.81 > 0.05)
+                        No change in performance detected.
+Found 11 outliers among 100 measurements (11.00%)
+  3 (3.00%) low mild
+  7 (7.00%) high mild
+  1 (1.00%) high severe
+Benchmarking session_sandbox/check_payload_too_large
+Benchmarking session_sandbox/check_payload_too_large: Warming up for 3.0000 s
+Benchmarking session_sandbox/check_payload_too_large: Collecting 100 samples in estimated 5.0010 s (20M iterations)
+Benchmarking session_sandbox/check_payload_too_large: Analyzing
+session_sandbox/check_payload_too_large
+                        time:   [113.55 ns 114.53 ns 115.51 ns]
+                        change: [+0.9369% +1.9678% +2.9639%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+
+Benchmarking input_scanner/scan_clean_args_5_fields
+Benchmarking input_scanner/scan_clean_args_5_fields: Warming up for 3.0000 s
+Benchmarking input_scanner/scan_clean_args_5_fields: Collecting 100 samples in estimated 5.0011 s (6.2M iterations)
+Benchmarking input_scanner/scan_clean_args_5_fields: Analyzing
+input_scanner/scan_clean_args_5_fields
+                        time:   [807.82 ns 808.48 ns 809.18 ns]
+                        change: [−67.054% −67.006% −66.956%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking input_scanner/scan_injection_args_5_fields
+Benchmarking input_scanner/scan_injection_args_5_fields: Warming up for 3.0000 s
+Benchmarking input_scanner/scan_injection_args_5_fields: Collecting 100 samples in estimated 5.0050 s (3.8M iterations)
+Benchmarking input_scanner/scan_injection_args_5_fields: Analyzing
+input_scanner/scan_injection_args_5_fields
+                        time:   [1.3198 µs 1.3204 µs 1.3211 µs]
+                        change: [−46.451% −46.384% −46.316%] (p = 0.00 < 0.05)
+                        Performance has improved.
+
+Benchmarking redactor/scan_and_redact_clean_response
+Benchmarking redactor/scan_and_redact_clean_response: Warming up for 3.0000 s
+Benchmarking redactor/scan_and_redact_clean_response: Collecting 100 samples in estimated 5.0081 s (2.5M iterations)
+Benchmarking redactor/scan_and_redact_clean_response: Analyzing
+redactor/scan_and_redact_clean_response
+                        time:   [544.68 ns 546.27 ns 547.58 ns]
+                        change: [−2.1244% −0.7210% +0.5962%] (p = 0.31 > 0.05)
+                        No change in performance detected.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) low mild
+Benchmarking redactor/scan_and_redact_credential_response
+Benchmarking redactor/scan_and_redact_credential_response: Warming up for 3.0000 s
+Benchmarking redactor/scan_and_redact_credential_response: Collecting 100 samples in estimated 5.0046 s (2.9M iterations)
+Benchmarking redactor/scan_and_redact_credential_response: Analyzing
+redactor/scan_and_redact_credential_response
+                        time:   [647.21 ns 649.04 ns 650.63 ns]
+                        change: [−1.3819% −0.2687% +0.8057%] (p = 0.64 > 0.05)
+                        No change in performance detected.
+
+Benchmarking budget_enforcer/check_disabled
+Benchmarking budget_enforcer/check_disabled: Warming up for 3.0000 s
+Benchmarking budget_enforcer/check_disabled: Collecting 100 samples in estimated 5.0000 s (1.2B iterations)
+Benchmarking budget_enforcer/check_disabled: Analyzing
+budget_enforcer/check_disabled
+                        time:   [3.9223 ns 3.9846 ns 4.0428 ns]
+                        change: [−0.7093% +0.7461% +2.2183%] (p = 0.32 > 0.05)
+                        No change in performance detected.
+Benchmarking budget_enforcer/check_free_tool
+Benchmarking budget_enforcer/check_free_tool: Warming up for 3.0000 s
+Benchmarking budget_enforcer/check_free_tool: Collecting 100 samples in estimated 5.0000 s (257M iterations)
+Benchmarking budget_enforcer/check_free_tool: Analyzing
+budget_enforcer/check_free_tool
+                        time:   [20.514 ns 20.681 ns 20.829 ns]
+                        change: [−0.6534% +0.5266% +1.6072%] (p = 0.36 > 0.05)
+                        No change in performance detected.
+Benchmarking budget_enforcer/check_paid_tool_within_limit
+Benchmarking budget_enforcer/check_paid_tool_within_limit: Warming up for 3.0000 s
+Benchmarking budget_enforcer/check_paid_tool_within_limit: Collecting 100 samples in estimated 5.0002 s (91M iterations)
+Benchmarking budget_enforcer/check_paid_tool_within_limit: Analyzing
+budget_enforcer/check_paid_tool_within_limit
+                        time:   [54.199 ns 54.336 ns 54.451 ns]
+                        change: [+0.4366% +0.7730% +1.1372%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking budget_enforcer/daily_accumulator_add
+Benchmarking budget_enforcer/daily_accumulator_add: Warming up for 3.0000 s
+Benchmarking budget_enforcer/daily_accumulator_add: Collecting 100 samples in estimated 5.0001 s (150M iterations)
+Benchmarking budget_enforcer/daily_accumulator_add: Analyzing
+budget_enforcer/daily_accumulator_add
+                        time:   [33.032 ns 33.049 ns 33.064 ns]
+                        change: [+0.0351% +0.0758% +0.1166%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+
+Benchmarking semantic_search/index_build_500_tools
+Benchmarking semantic_search/index_build_500_tools: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 5.9s, enable flat sampling, or reduce sample count to 60.
+Benchmarking semantic_search/index_build_500_tools: Collecting 100 samples in estimated 5.9248 s (5050 iterations)
+Benchmarking semantic_search/index_build_500_tools: Analyzing
+semantic_search/index_build_500_tools
+                        time:   [1.1701 ms 1.1722 ms 1.1741 ms]
+                        change: [−2.1906% −1.8739% −1.5672%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 17 outliers among 100 measurements (17.00%)
+  1 (1.00%) low mild
+  16 (16.00%) high severe
+Benchmarking semantic_search/query_top10/50
+Benchmarking semantic_search/query_top10/50: Warming up for 3.0000 s
+Benchmarking semantic_search/query_top10/50: Collecting 100 samples in estimated 5.0132 s (1.7M iterations)
+Benchmarking semantic_search/query_top10/50: Analyzing
+semantic_search/query_top10/50
+                        time:   [2.8519 µs 2.8526 µs 2.8533 µs]
+                        change: [−0.8245% −0.7712% −0.7336%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking semantic_search/query_top10/200
+Benchmarking semantic_search/query_top10/200: Warming up for 3.0000 s
+Benchmarking semantic_search/query_top10/200: Collecting 100 samples in estimated 5.0199 s (586k iterations)
+Benchmarking semantic_search/query_top10/200: Analyzing
+semantic_search/query_top10/200
+                        time:   [8.5017 µs 8.5078 µs 8.5191 µs]
+                        change: [−5.9017% −5.8411% −5.7564%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking semantic_search/query_top10/500
+Benchmarking semantic_search/query_top10/500: Warming up for 3.0000 s
+Benchmarking semantic_search/query_top10/500: Collecting 100 samples in estimated 5.0118 s (263k iterations)
+Benchmarking semantic_search/query_top10/500: Analyzing
+semantic_search/query_top10/500
+                        time:   [18.995 µs 19.001 µs 19.008 µs]
+                        change: [−0.3438% −0.2968% −0.2498%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+Benchmarking semantic_search/query_all_matches_500_tools
+Benchmarking semantic_search/query_all_matches_500_tools: Warming up for 3.0000 s
+Benchmarking semantic_search/query_all_matches_500_tools: Collecting 100 samples in estimated 5.1112 s (157k iterations)
+Benchmarking semantic_search/query_all_matches_500_tools: Analyzing
+semantic_search/query_all_matches_500_tools
+                        time:   [32.502 µs 32.528 µs 32.554 µs]
+                        change: [−1.5992% −1.4646% −1.3313%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking semantic_search/index_tool_insert_into_499_tool_corpus
+Benchmarking semantic_search/index_tool_insert_into_499_tool_corpus: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 5.9s, enable flat sampling, or reduce sample count to 60.
+Benchmarking semantic_search/index_tool_insert_into_499_tool_corpus: Collecting 100 samples in estimated 5.8786 s (5050 iterations)
+Benchmarking semantic_search/index_tool_insert_into_499_tool_corpus: Analyzing
+semantic_search/index_tool_insert_into_499_tool_corpus
+                        time:   [1.1649 ms 1.1690 ms 1.1739 ms]
+                        change: [−1.0947% −0.7605% −0.3995%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 16 outliers among 100 measurements (16.00%)
+  16 (16.00%) high severe
+
+Benchmarking modern_request_path/classify_modern
+Benchmarking modern_request_path/classify_modern: Warming up for 3.0000 s
+Benchmarking modern_request_path/classify_modern: Collecting 100 samples in estimated 5.0002 s (110M iterations)
+Benchmarking modern_request_path/classify_modern: Analyzing
+modern_request_path/classify_modern
+                        time:   [45.080 ns 45.109 ns 45.141 ns]
+Benchmarking modern_request_path/classify_legacy
+Benchmarking modern_request_path/classify_legacy: Warming up for 3.0000 s
+Benchmarking modern_request_path/classify_legacy: Collecting 100 samples in estimated 5.0000 s (1.3B iterations)
+Benchmarking modern_request_path/classify_legacy: Analyzing
+modern_request_path/classify_legacy
+                        time:   [3.7972 ns 3.8160 ns 3.8349 ns]
+Found 22 outliers among 100 measurements (22.00%)
+  6 (6.00%) low mild
+  16 (16.00%) high mild
+Benchmarking modern_request_path/validate_headers
+Benchmarking modern_request_path/validate_headers: Warming up for 3.0000 s
+Benchmarking modern_request_path/validate_headers: Collecting 100 samples in estimated 5.0000 s (440M iterations)
+Benchmarking modern_request_path/validate_headers: Analyzing
+modern_request_path/validate_headers
+                        time:   [11.262 ns 11.278 ns 11.294 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) low mild
+Benchmarking modern_request_path/validate_headers_encoded_name
+Benchmarking modern_request_path/validate_headers_encoded_name: Warming up for 3.0000 s
+Benchmarking modern_request_path/validate_headers_encoded_name: Collecting 100 samples in estimated 5.0001 s (179M iterations)
+Benchmarking modern_request_path/validate_headers_encoded_name: Analyzing
+modern_request_path/validate_headers_encoded_name
+                        time:   [27.696 ns 27.721 ns 27.750 ns]
+Found 13 outliers among 100 measurements (13.00%)
+  1 (1.00%) low mild
+  6 (6.00%) high mild
+  6 (6.00%) high severe
+
+Benchmarking continuation/mint_envelope/32
+Benchmarking continuation/mint_envelope/32: Warming up for 3.0000 s
+Benchmarking continuation/mint_envelope/32: Collecting 100 samples in estimated 5.0017 s (7.1M iterations)
+Benchmarking continuation/mint_envelope/32: Analyzing
+continuation/mint_envelope/32
+                        time:   [695.88 ns 696.12 ns 696.33 ns]
+Benchmarking continuation/open_envelope/32
+Benchmarking continuation/open_envelope/32: Warming up for 3.0000 s
+Benchmarking continuation/open_envelope/32: Collecting 100 samples in estimated 5.0023 s (9.1M iterations)
+Benchmarking continuation/open_envelope/32: Analyzing
+continuation/open_envelope/32
+                        time:   [551.00 ns 551.37 ns 551.76 ns]
+Found 17 outliers among 100 measurements (17.00%)
+  17 (17.00%) high severe
+Benchmarking continuation/mint_envelope/4096
+Benchmarking continuation/mint_envelope/4096: Warming up for 3.0000 s
+Benchmarking continuation/mint_envelope/4096: Collecting 100 samples in estimated 5.0053 s (1.4M iterations)
+Benchmarking continuation/mint_envelope/4096: Analyzing
+continuation/mint_envelope/4096
+                        time:   [3.5044 µs 3.5051 µs 3.5058 µs]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  3 (3.00%) high mild
+Benchmarking continuation/open_envelope/4096
+Benchmarking continuation/open_envelope/4096: Warming up for 3.0000 s
+Benchmarking continuation/open_envelope/4096: Collecting 100 samples in estimated 5.0041 s (1.8M iterations)
+Benchmarking continuation/open_envelope/4096: Analyzing
+continuation/open_envelope/4096
+                        time:   [2.7773 µs 2.7776 µs 2.7779 µs]
+Found 17 outliers among 100 measurements (17.00%)
+  17 (17.00%) high severe
+Benchmarking continuation/check_bindings
+Benchmarking continuation/check_bindings: Warming up for 3.0000 s
+Benchmarking continuation/check_bindings: Collecting 100 samples in estimated 5.0007 s (21M iterations)
+Benchmarking continuation/check_bindings: Analyzing
+continuation/check_bindings
+                        time:   [243.44 ns 243.58 ns 243.74 ns]
+

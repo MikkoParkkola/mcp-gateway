@@ -147,6 +147,10 @@ struct Inner {
 pub struct TransparencyLogger {
     inner: Mutex<Inner>,
     config: Arc<TransparencyLogConfig>,
+    #[cfg(test)]
+    fail_next_append: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    append_attempts: std::sync::atomic::AtomicUsize,
 }
 
 /// Which rung of the correlation chain supplied an invocation entry's
@@ -233,7 +237,24 @@ impl TransparencyLogger {
                 last_entry_hash,
             }),
             config,
+            #[cfg(test)]
+            fail_next_append: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            append_attempts: std::sync::atomic::AtomicUsize::new(0),
         })
+    }
+
+    /// Instance-local one-shot I/O fault, consumed by the real append path.
+    #[cfg(test)]
+    pub(crate) fn fail_next_append_for_test(&self) {
+        self.fail_next_append
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn append_attempts_for_test(&self) -> usize {
+        self.append_attempts
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Path the log writes to, with any leading `~/` expanded. Lets callers
@@ -379,6 +400,17 @@ impl TransparencyLogger {
         mut fields: serde_json::Map<String, serde_json::Value>,
         resync: bool,
     ) -> io::Result<String> {
+        #[cfg(test)]
+        {
+            self.append_attempts
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            if self
+                .fail_next_append
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+            {
+                return Err(io::Error::other("injected transparency append failure"));
+            }
+        }
         let mut inner = self
             .inner
             .lock()

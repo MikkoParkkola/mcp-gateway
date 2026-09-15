@@ -1,3 +1,4 @@
+sha256: 2e20d130c63ee1f3d483f53532cd308170b50c9e9ef0ff47147a5bbfccf79bbb
 fulcrum: "1.0"
 name: linear_viewer
 description: Get current authenticated Linear user info (name, email, teams)

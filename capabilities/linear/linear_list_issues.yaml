@@ -1,3 +1,4 @@
+sha256: 1a04152b0d0ade9c6b23f1725dc6daf332e4015f40bb3e94119fb02d072e97a5
 fulcrum: "1.0"
 name: linear_list_issues
 description: "List recent issues for a team, optionally filtered by state (backlog, todo, in_progress, done, canceled)"

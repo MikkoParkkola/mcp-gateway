@@ -23,7 +23,11 @@ mod pool;
 mod registry;
 
 use cached_metadata::CachedMetadata;
-use pool::{PoolKey, PooledEntry};
+#[cfg(test)]
+pub(crate) use pool::PoolKey;
+#[cfg(not(test))]
+use pool::PoolKey;
+use pool::PooledEntry;
 
 pub(crate) use annotations::prepare_tool_metadata;
 pub use lifecycle::runtime_plan_for_backend;

@@ -14,8 +14,6 @@
 
 use mcp_gateway::protocol::headers::{HeaderCheck, decode_header_value, mcp_name_required};
 
-mod common;
-
 // ===========================================================================
 // MIK-7214.HEADER.4 — sentinel encoding.
 //
@@ -23,7 +21,21 @@ mod common;
 // read 2026-08-29. Original value on the left, header value on the right.
 // ===========================================================================
 
-use common::SPEC_ENCODING_TABLE;
+/// The specification's own table. Transcribed, not generated.
+const SPEC_ENCODING_TABLE: &[(&str, &str)] = &[
+    // Plain ASCII passes through untouched.
+    ("us-west1", "us-west1"),
+    // Non-ASCII.
+    ("Hello, 世界", "=?base64?SGVsbG8sIOS4lueVjA==?="),
+    // Leading and trailing whitespace.
+    (" padded ", "=?base64?IHBhZGRlZCA=?="),
+    // Embedded newline.
+    ("line1\nline2", "=?base64?bGluZTEKbGluZTI=?="),
+    // A plain-ASCII value that happens to look like the sentinel. The
+    // specification requires clients to encode this one precisely so a server
+    // cannot mistake it for an encoded value.
+    ("=?base64?literal?=", "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?="),
+];
 
 #[test]
 fn ac_header_4_the_specifications_encoding_table_decodes() {
@@ -254,13 +266,20 @@ mod http {
     use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
     use mcp_gateway::gateway::proxy::ProxyManager;
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+    use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+    use mcp_gateway::gateway::test_helpers::{
+        AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+    };
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
     use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
-    fn state() -> Arc<AppState> {
+    /// The gateway state, plus the directory its task store leases.
+    ///
+    /// The `TempDir` comes back with the state because the store holds its
+    /// directory while the service lives; callers keep it bound for the test.
+    async fn state() -> (Arc<AppState>, tempfile::TempDir) {
         let mut config = Config::default();
         config.server.modern_protocol = true;
         let backends = Arc::new(BackendRegistry::new());
@@ -270,9 +289,22 @@ mod http {
         ));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let agent_registry = Arc::new(AgentRegistry::new());
-        Arc::new(AppState {
-            session_lifecycle: None,
+
+        // One registry, shared with the executor that publishes through it.
+        let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+        let store_dir = tempfile::tempdir().expect("a private task-store directory");
+        let (tasks, task_executor) = open_runtime(
+            &store_dir.path().join("tasks"),
+            config.tasks.max_workers,
+            StoreLimits::default(),
+            Arc::clone(&subscriptions),
+        )
+        .await
+        .expect("the fixture task store opens");
+
+        let state = Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+            session_lifecycle: None,
             env: None,
             meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
             backends,
@@ -300,11 +332,11 @@ mod http {
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-            tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-            ),
-        })
+            tasks,
+            task_executor,
+            subscriptions,
+        });
+        (state, store_dir)
     }
 
     /// POST with explicitly chosen headers, so a test can make them disagree.
@@ -319,7 +351,10 @@ mod http {
         let request = builder
             .body(Body::from(serde_json::to_vec(&body).expect("body")))
             .expect("request");
-        let response = create_router(state())
+        // `_store_dir` stays bound until this helper returns, which is after the
+        // response body has been read: the store's directory outlives the request.
+        let (app, _store_dir) = state().await;
+        let response = create_router(app)
             .oneshot(request)
             .await
             .expect("router must answer");
@@ -396,7 +431,7 @@ mod http {
         //
         // Driven through a mirrored-header mismatch because that is an early
         // refusal — the exact shape of response that carried it.
-        let app_state = state();
+        let (app_state, _store_dir) = state().await;
         let (status, headers) = post_against(
             &app_state,
             modern_body("tools/list"),
@@ -424,7 +459,7 @@ mod http {
         // stateless client. Recognising only an exactly-supported version meant
         // it was handed a session its own revision deleted, and grew the table
         // on behalf of a caller about to be refused anyway.
-        let app_state = state();
+        let (app_state, _store_dir) = state().await;
         let (_, headers) = post_against(
             &app_state,
             modern_body("tools/list"),
@@ -459,7 +494,7 @@ mod http {
         // metadata the request is refused by the duplicate-header check inside
         // the modern block, and the row passes whether or not classification
         // was fixed. Verified by running it against the unfixed classifier.
-        let app_state = state();
+        let (app_state, _store_dir) = state().await;
         let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
 
         let (status, response) = post_against_json(
@@ -484,7 +519,7 @@ mod http {
     async fn a_legacy_error_response_still_carries_its_session_header() {
         // The regression that matters: 2025 clients track the session across a
         // refusal too.
-        let app_state = state();
+        let (app_state, _store_dir) = state().await;
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": "no/such/method"});
         let (_, headers) = post_against(&app_state, body, &[]).await;
 
@@ -497,7 +532,7 @@ mod http {
     #[tokio::test]
     async fn a_legacy_response_still_carries_its_session_header() {
         // The regression that matters: 2025 clients depend on it.
-        let app_state = state();
+        let (app_state, _store_dir) = state().await;
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
         let (_, headers) = post_against(&app_state, body, &[]).await;
 
@@ -513,7 +548,7 @@ mod http {
         // multiplexer session nothing could ever reach: unbounded growth, and a
         // per-request identity that makes sequence anomaly detection see a first
         // call every time — a control that keeps running and stops protecting.
-        let app_state = state();
+        let (app_state, _store_dir) = state().await;
         for _ in 0..5 {
             let (_, _) = post_against(
                 &app_state,
@@ -540,7 +575,7 @@ mod http {
         // values for the refusal — a duplicate header mints a session for a
         // request that is then refused, so a caller that cannot be served can
         // still grow the table one entry per call.
-        let app_state = state();
+        let (app_state, _store_dir) = state().await;
         for _ in 0..5 {
             let (_, _) = post_against(
                 &app_state,
@@ -563,7 +598,7 @@ mod http {
 
     #[tokio::test]
     async fn legacy_requests_still_get_a_session() {
-        let app_state = state();
+        let (app_state, _store_dir) = state().await;
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
         let (_, _) = post_against(&app_state, body, &[]).await;
 

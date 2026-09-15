@@ -23,10 +23,11 @@ use std::time::Duration;
 // ============================================================================
 #[tokio::test]
 async fn control_3_a_modern_request_without_a_credential_is_refused() {
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         auth: auth_with(Vec::new(), Some("secret-bearer")),
         ..Default::default()
-    });
+    })
+    .await;
     let (status, _) = post(&app, modern("tools/list", json!({})), &[]).await;
     assert_eq!(
         status,
@@ -50,10 +51,11 @@ async fn control_3_a_modern_request_without_a_credential_is_refused() {
 // ============================================================================
 #[tokio::test]
 async fn control_4_a_modern_caller_over_its_rate_limit_is_refused() {
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         auth: auth_with(vec![api_key("k", 1, None)], None),
         ..Default::default()
-    });
+    })
+    .await;
     let header = [("authorization", "Bearer k")];
     let (first, _) = post(&app, modern("tools/list", json!({})), &header).await;
     assert_eq!(first, StatusCode::OK, "the first call is inside the budget");
@@ -76,10 +78,11 @@ async fn control_6_a_modern_request_without_an_agent_id_is_refused() {
         require_id: true,
         ..Default::default()
     };
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         agent_identity: identity,
         ..Default::default()
-    });
+    })
+    .await;
     let (status, body) = post(&app, modern("tools/list", json!({})), &[]).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"]["code"], -32600, "body: {body}");
@@ -98,15 +101,16 @@ async fn control_6_a_modern_request_without_an_agent_id_is_refused() {
 // ============================================================================
 #[tokio::test]
 async fn control_9_a_modern_request_to_a_disabled_surface_is_refused() {
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         meta_mcp_enabled: false,
         ..Default::default()
-    });
+    })
+    .await;
     let (status, body) = post(&app, modern("tools/list", json!({})), &[]).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"]["code"], -32600, "body: {body}");
     // Falsifier: the identical frame against an enabled surface is served.
-    let enabled = state(Fixture::default());
+    let (enabled, _enabled_store_dir) = state(Fixture::default()).await;
     let (served, _) = post(&enabled, modern("tools/list", json!({})), &[]).await;
     assert_eq!(served, StatusCode::OK);
 }
@@ -128,13 +132,14 @@ fn invoke() -> Value {
 
 #[tokio::test]
 async fn control_13_a_modern_caller_outside_its_tool_scope_is_refused() {
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         auth: auth_with(
             vec![api_key("k", 0, Some(vec!["allowed_tool".to_string()]))],
             None,
         ),
         ..Default::default()
-    });
+    })
+    .await;
     let (status, body) = post(&app, invoke(), &[("authorization", "Bearer k")]).await;
     assert_eq!(
         status,
@@ -143,13 +148,14 @@ async fn control_13_a_modern_caller_outside_its_tool_scope_is_refused() {
     );
     // Falsifier: a key whose scope covers the target reaches past this gate, so
     // the refusal above is the scope check and not the call failing anyway.
-    let in_scope = state(Fixture {
+    let (in_scope, _in_scope_store_dir) = state(Fixture {
         auth: auth_with(
             vec![api_key("k", 0, Some(vec!["forbidden_tool".to_string()]))],
             None,
         ),
         ..Default::default()
-    });
+    })
+    .await;
     let (served, body) = post(&in_scope, invoke(), &[("authorization", "Bearer k")]).await;
     assert_ne!(
         served,
@@ -167,7 +173,7 @@ async fn control_13_a_modern_caller_outside_its_tool_scope_is_refused() {
 // ============================================================================
 #[tokio::test]
 async fn control_8_a_modern_request_with_unparseable_json_is_refused() {
-    let app = state(Fixture::default());
+    let (app, _store_dir) = state(Fixture::default()).await;
     let (status, body) = post_raw(&app, b"{\"jsonrpc\": \"2.0\", ".to_vec()).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert_eq!(
@@ -192,7 +198,7 @@ async fn control_8_a_modern_request_with_unparseable_json_is_refused() {
 // ============================================================================
 #[tokio::test]
 async fn control_7_a_modern_request_over_the_body_ceiling_is_refused() {
-    let app = state(Fixture::default());
+    let (app, _store_dir) = state(Fixture::default()).await;
     let over = modern(
         "tools/list",
         json!({ "padding": "x".repeat(11 * 1024 * 1024) }),
@@ -221,10 +227,11 @@ async fn control_7_a_modern_request_over_the_body_ceiling_is_refused() {
 // ============================================================================
 #[tokio::test]
 async fn control_11_a_modern_request_carrying_a_null_byte_is_refused() {
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         sanitize_input: true,
         ..Default::default()
-    });
+    })
+    .await;
     let (status, body) = post(&app, modern("tools/list", json!({ "q": "a\u{0}b" })), &[]).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert_eq!(
@@ -237,7 +244,7 @@ async fn control_11_a_modern_request_carrying_a_null_byte_is_refused() {
     // Falsifier two: with the control off, the null byte itself is served — so
     // the refusal above is this control and not the shape being rejected
     // somewhere else on the path.
-    let off = state(Fixture::default());
+    let (off, _off_store_dir) = state(Fixture::default()).await;
     let (unguarded, _) = post(&off, modern("tools/list", json!({ "q": "a\u{0}b" })), &[]).await;
     assert_eq!(
         unguarded,
@@ -254,10 +261,11 @@ async fn control_11_a_modern_request_carrying_a_null_byte_is_refused() {
 
 #[tokio::test]
 async fn control_2_a_modern_request_with_an_unverifiable_agent_token_is_refused() {
-    let state = state(Fixture {
+    let (state, _store_dir) = state(Fixture {
         agent_auth_enabled: true,
         ..Fixture::default()
-    });
+    })
+    .await;
     let (status, body) = post(
         &state,
         modern("tools/list", json!({})),
@@ -277,10 +285,11 @@ async fn control_2_a_modern_request_with_an_unverifiable_agent_token_is_refused(
 
 #[tokio::test]
 async fn control_2_a_modern_request_with_no_agent_token_is_refused() {
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         agent_auth_enabled: true,
         ..Fixture::default()
-    });
+    })
+    .await;
     let (status, body) = post(&app, modern("tools/list", json!({})), &[]).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "body: {body}");
     assert_eq!(body["error"]["code"], json!(-32000), "body: {body}");
@@ -297,10 +306,11 @@ async fn control_2_a_modern_request_with_no_agent_token_is_refused() {
     // every assertion above while this control never ran. With the control
     // off the identical request is served, which leaves the agent gate as
     // the only party that can have refused it.
-    let off = state(Fixture {
+    let (off, _off_store_dir) = state(Fixture {
         agent_auth_enabled: false,
         ..Fixture::default()
-    });
+    })
+    .await;
     let (served, body) = post(&off, modern("tools/list", json!({})), &[]).await;
     assert_eq!(served, StatusCode::OK, "body: {body}");
 }
@@ -313,7 +323,7 @@ async fn control_2_a_modern_request_with_no_agent_token_is_refused() {
 // ============================================================================
 #[tokio::test]
 async fn control_5_a_modern_caller_whose_circuit_is_open_is_refused() {
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         auth: AuthConfig {
             client_circuit_breaker: Some(CircuitBreakerConfig {
                 enabled: true,
@@ -335,7 +345,8 @@ async fn control_5_a_modern_caller_whose_circuit_is_open_is_refused() {
             )
         },
         ..Default::default()
-    });
+    })
+    .await;
     let tripped = [("authorization", "Bearer k")];
     let other = [("authorization", "Bearer k2")];
 
@@ -417,13 +428,14 @@ async fn control_15_a_modern_tools_call_the_firewall_blocks_is_refused() {
         )
     };
 
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         firewall: Some(Arc::new(Firewall::from_config(
             FirewallConfig::default(),
             None,
         ))),
         ..Default::default()
-    });
+    })
+    .await;
     let (status, body) = post(&app, blocked(), &[]).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     // -32600 is the non-anomaly block; -32002 is the anomaly one. Asserting the
@@ -433,7 +445,7 @@ async fn control_15_a_modern_tools_call_the_firewall_blocks_is_refused() {
 
     // Falsifier: the same frame against the state seven router fixtures already
     // build. Whatever answers it, it is not this gate.
-    let off = state(Fixture::default());
+    let (off, _off_store_dir) = state(Fixture::default()).await;
     let (_, body) = post(&off, blocked(), &[]).await;
     assert_ne!(body["error"]["code"], json!(-32600), "body: {body}");
 }

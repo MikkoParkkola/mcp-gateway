@@ -163,6 +163,7 @@ fn test_resolved_client_rate_limit_creates_identity_bucket() {
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
     let temporary_client = AuthenticatedClient {
+        quota_principal: None,
         principal: String::new(),
         name: "temporary@example.com".to_string(),
         rate_limit: 2,
@@ -238,6 +239,7 @@ fn test_auto_generated_token() {
 fn test_client_backend_access_patterns() {
     // Wildcard access
     let wildcard_client = AuthenticatedClient {
+        quota_principal: None,
         principal: String::new(),
         name: "wildcard".to_string(),
         rate_limit: 0,
@@ -252,6 +254,7 @@ fn test_client_backend_access_patterns() {
 
     // Empty backends = all access
     let all_access_client = AuthenticatedClient {
+        quota_principal: None,
         principal: String::new(),
         name: "all".to_string(),
         rate_limit: 0,
@@ -265,6 +268,7 @@ fn test_client_backend_access_patterns() {
 
     // Specific backends only
     let restricted_client = AuthenticatedClient {
+        quota_principal: None,
         principal: String::new(),
         name: "restricted".to_string(),
         rate_limit: 0,

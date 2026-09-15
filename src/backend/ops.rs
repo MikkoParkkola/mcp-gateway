@@ -16,6 +16,16 @@ use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::transport::{ResendPermission, resend_permission};
 use crate::{Error, Result};
 
+/// Which transport entry point one outbound request takes, and how many times.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Attempts {
+    /// The ordinary path: the slot's retry policy decides.
+    WithRetry,
+    /// The upstream-tasks declaration, sent exactly once. A duplicate would
+    /// create durable state upstream that this gateway could not then own.
+    TaskCapabilityOnce,
+}
+
 impl Backend {
     /// Internal request without `ensure_started` (to avoid recursion)
     pub(super) async fn request_internal(
@@ -55,6 +65,16 @@ impl Backend {
         &self,
     ) -> Option<&crate::identity_propagation::IdentityPropagationConfig> {
         self.config.identity_propagation.as_ref()
+    }
+
+    /// The `accounts.descriptors` key this backend is bound to, if any.
+    ///
+    /// The descriptor's logical id — the account key's `backend_id` — and never
+    /// this backend's registry name, which is [`Backend::name`]. Present only
+    /// when the operator wrote an `account` reference that resolved at load.
+    #[must_use]
+    pub fn account_descriptor_id(&self) -> Option<&str> {
+        self.config.account.as_deref()
     }
 
     /// Whether this backend's configured transport can carry per-request
@@ -188,6 +208,67 @@ impl Backend {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
+        self.request_attempted(
+            method,
+            params,
+            extra_headers,
+            identity_key,
+            Attempts::WithRetry,
+        )
+        .await
+    }
+
+    /// The same request, declaring the gateway's upstream tasks extension and
+    /// sent EXACTLY ONCE.
+    ///
+    /// Two properties, both structural rather than promised.
+    ///
+    /// The declaration is made by the transport
+    /// ([`crate::transport::Transport::request_with_task_capability`]), not by a
+    /// marker in `params`: a JSON flag would be forgeable by anything that can
+    /// reach the ordinary request path, including caller-supplied arguments.
+    /// That method also refuses any method outside its own allow-list and any
+    /// peer not known to be modern, locally, before the wire.
+    ///
+    /// One attempt, because `with_retry` cannot tell a lost response from a
+    /// request the peer never saw: retrying a task-augmented `tools/call` would
+    /// create a second upstream job and leave this gateway holding only the
+    /// second handle, with the first running unowned. No later layer can undo
+    /// a second submission, so it must not be possible to make one.
+    ///
+    /// Everything else is unchanged: the same pool slot, failsafe gate,
+    /// concurrency permit, activity guard and outcome recording.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend is unavailable, the concurrency limit
+    /// is reached, the transport cannot declare the extension, or the single
+    /// attempt fails.
+    pub async fn request_with_task_capability(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+    ) -> Result<JsonRpcResponse> {
+        self.request_attempted(
+            method,
+            params,
+            extra_headers,
+            identity_key,
+            Attempts::TaskCapabilityOnce,
+        )
+        .await
+    }
+
+    async fn request_attempted(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+        attempts: Attempts,
+    ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
         // MIK-7272.SUB.2b / ADR-014 §2: never hand a backend the client's own
@@ -254,19 +335,42 @@ impl Backend {
         // closure to the caller's borrow lifetime (MIK-6784).
         let identity_key = identity_key.map(str::to_string);
         let (perm, policy) = self.resend_decision(&entry.failsafe, method, params.as_ref());
-        let result = with_retry(&policy, &name, || {
+        let attempt = || {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();
-            let hdrs = extra_headers.clone();
-            let id = identity_key.clone();
+            let extra_headers = extra_headers.clone();
+            let identity_key = identity_key.clone();
             async move {
-                transport
-                    .request_with_headers(&method, params, &hdrs, id.as_deref(), perm)
-                    .await
+                match attempts {
+                    Attempts::WithRetry => {
+                        transport
+                            .request_with_headers(
+                                &method,
+                                params,
+                                &extra_headers,
+                                identity_key.as_deref(),
+                                perm,
+                            )
+                            .await
+                    }
+                    Attempts::TaskCapabilityOnce => {
+                        transport
+                            .request_with_task_capability(
+                                &method,
+                                params,
+                                &extra_headers,
+                                identity_key.as_deref(),
+                            )
+                            .await
+                    }
+                }
             }
-        })
-        .await;
+        };
+        let result = match attempts {
+            Attempts::WithRetry => with_retry(&policy, &name, attempt).await,
+            Attempts::TaskCapabilityOnce => attempt().await,
+        };
 
         // Calculate latency
         let latency = start_time.elapsed();
@@ -275,7 +379,30 @@ impl Backend {
         // `can_proceed()` gate above, so gating and recording are always
         // symmetric even if a concurrent idle-eviction later replaces this
         // slot's `PooledEntry` for `key` (MIK-6735 fix 1).
-        match &result {
+        self.record_attempt_outcome(&entry, latency, &result);
+
+        // An ordinary answer can contradict the era we probed for: a peer that
+        // rejects this call with a 2026-only code is modern whatever its
+        // `server/discover` did. Correct the verdict off the request path.
+        if let Ok(response) = &result {
+            self.reprobe_if_contradicted(method, response, &transport)
+                .await;
+        }
+
+        result
+    }
+
+    /// Record the outcome of one dispatch attempt against the slot's failsafe
+    /// and the request-duration metrics, split out of [`Self::request_attempted`]
+    /// purely to keep that function under the line budget -- the logic and its
+    /// ordering (gate check, then this, both on the same slot) are unchanged.
+    fn record_attempt_outcome(
+        &self,
+        entry: &super::PooledEntry,
+        latency: std::time::Duration,
+        result: &Result<JsonRpcResponse>,
+    ) {
+        match result {
             Ok(response) => {
                 tracing::info!(
                     latency_ms = latency.as_millis(),
@@ -330,16 +457,6 @@ impl Backend {
             "backend" => self.name.clone()
         )
         .record(latency.as_secs_f64());
-
-        // An ordinary answer can contradict the era we probed for: a peer that
-        // rejects this call with a 2026-only code is modern whatever its
-        // `server/discover` did. Correct the verdict off the request path.
-        if let Ok(response) = &result {
-            self.reprobe_if_contradicted(method, response, &transport)
-                .await;
-        }
-
-        result
     }
 
     /// Send a notification to the backend via the canonical shared slot's

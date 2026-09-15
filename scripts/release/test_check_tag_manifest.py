@@ -1205,13 +1205,32 @@ class WorkflowWiring(unittest.TestCase):
         # runner holding the publishing credentials.
         # Checking only lines that start with `run:` would miss the body of a
         # `run: |` block, which is where an interpolation would actually sit.
-        # So every mention is read, and each has to be an `env:` assignment or
-        # an `if:` condition — evaluated by the expression engine, never
+        # So every mention is read, and each has to be an `env:` assignment, an
+        # `if:` condition, or an input to a step or a called workflow — all
+        # evaluated by the expression engine and handed over as a value, never
         # reaching a shell — with `run:` bodies tracked separately because
         # inside one no spelling is safe.
+        # The input case is spelled as "any lowercase key that is not `run`"
+        # rather than an allowlist of key names, because naming the keys would
+        # make this assertion silently vacuous the next time a step takes the
+        # tag under a name nobody added here. `run` stays excluded by name:
+        # that is the one position where a value does reach a shell, and a
+        # single-line `run:` never enters the folded-block branch above.
+        # A called workflow moves the value rather than consuming it, so the
+        # hazard travels with it: today `release.yml` passes the tag to
+        # `task-sdk-recovery.yml`, which binds it to `actions/checkout`'s `ref:`
+        # and interpolates it into none of its four `run:` steps. That was
+        # checked by hand, not here — this scan reads `release.yml` alone, so a
+        # callee that shell-interpolates its input would satisfy this assertion
+        # while reopening the hole. Extending the scan across every workflow a
+        # permitted input reaches is the real closure; until then, a new `with:`
+        # consumer of the tag needs the callee read before it is added.
         permitted = re.compile(
             r"^(?:[A-Z][A-Z0-9_]*: [\"']?\$\{\{\s*" + TAG_INPUT + r"\s*\}\}[\"']?"
-            r"|if: (?:[>|][-+]?\s)?\$\{\{ [^}]*" + TAG_INPUT + r"[^}]*\}\})$"
+            r"|if: (?:[>|][-+]?\s)?\$\{\{ [^}]*" + TAG_INPUT + r"[^}]*\}\}"
+            r"|(?!run:)[a-z][a-z0-9_-]*: [\"']?\$\{\{ ?[^}]*"
+            + TAG_INPUT
+            + r"[^}]*\}\}[\"']?)$"
         )
         raw = (WORKFLOWS / "release.yml").read_text(encoding="utf-8").splitlines()
         block, kind = None, None

@@ -1,3 +1,4 @@
+sha256: 98ebd2346bb4ac2617135d44198416c6e512a8acfdb044506a62ae9c956f5498
 fulcrum: "1.0"
 name: calendar_list_events
 description: List upcoming calendar events from Google Calendar

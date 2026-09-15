@@ -16,7 +16,7 @@ use crate::gateway::oauth::{
 use crate::mtls::{CertIdentity, PolicyDecision};
 use crate::security::{validate_tool_name, validate_url_not_ssrf};
 
-pub(super) fn backend_tool_targets_for_call(
+pub(crate) fn backend_tool_targets_for_call(
     meta_mcp: &MetaMcp,
     tool_name: &str,
     arguments: &Value,
@@ -81,11 +81,59 @@ pub(crate) fn is_admin_meta_tool(tool_name: &str) -> bool {
     ADMIN_META_TOOLS.contains(&tool_name)
 }
 
+/// What a caller's administrative standing permits on the meta-tool surface.
+///
+/// One predicate, consumed by both `tools/list` and `tools/call`
+/// ([`CallerStanding::permits`]), mirroring how `MetaToolExposure` governs the
+/// operator allow-list: the listed set is *derived from* the same verdict that
+/// gates dispatch rather than maintained beside it, so the two cannot
+/// disagree. Before this existed the admin meta-tools were disclosed to every
+/// caller and refused only at dispatch — a catalogue entry the reader was
+/// never allowed to use.
+///
+/// An enum rather than a `bool` because the value selects behaviour: a naked
+/// `true` at a call site says nothing about which way it leans, and the
+/// fail-open direction is the one that matters here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallerStanding {
+    /// The caller holds operator rights: the full surface, admin tools included.
+    Admin,
+    /// An ordinary caller: everything except the admin meta-tools.
+    Standard,
+}
+
+impl CallerStanding {
+    /// Standing of an authenticated HTTP client (absent client ⇒ `Standard`).
+    #[must_use]
+    pub(crate) fn of_client(client: Option<&AuthenticatedClient>) -> Self {
+        Self::of_admin_flag(client.is_some_and(|client| client.admin))
+    }
+
+    /// Standing carried by a caller context's `is_admin` flag.
+    #[must_use]
+    pub(crate) fn of_admin_flag(is_admin: bool) -> Self {
+        if is_admin {
+            Self::Admin
+        } else {
+            Self::Standard
+        }
+    }
+
+    /// Whether this standing may see *and* call `tool_name`.
+    ///
+    /// Non-meta names (backend and surfaced tools) are governed elsewhere and
+    /// always pass here.
+    #[must_use]
+    pub fn permits(self, tool_name: &str) -> bool {
+        matches!(self, Self::Admin) || !is_admin_meta_tool(tool_name)
+    }
+}
+
 pub(super) fn require_admin_tool_access(
     client: Option<&AuthenticatedClient>,
     tool_name: &str,
 ) -> Result<(), AuthorizationError> {
-    if client.is_some_and(|client| client.admin) {
+    if CallerStanding::of_client(client).permits(tool_name) {
         return Ok(());
     }
 
@@ -277,7 +325,7 @@ pub(super) fn refusal_principal(
 /// through the caller context, so nothing here is ever stored — which is what
 /// keeps `AppState` (owner of `meta_mcp`) out of `MetaMcp` and avoids a
 /// reference cycle.
-pub(super) struct RouterAuthorizer<'a> {
+pub(crate) struct RouterAuthorizer<'a> {
     pub(super) state: &'a AppState,
     pub(super) client: Option<&'a AuthenticatedClient>,
     pub(super) oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
@@ -310,5 +358,53 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
 
     fn caller_name(&self) -> Option<&str> {
         self.principal.as_deref()
+    }
+
+    fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
+        if let Some(client) = self.client
+            && client.authenticated
+        {
+            return client.quota_principal.as_ref();
+        }
+        if let Some(agent) = self.oauth_agent_identity {
+            return agent.quota_principal.as_ref();
+        }
+        self.cert_identity
+            .and_then(|cert| cert.quota_principal.as_ref())
+    }
+}
+
+/// Owned twin of [`RouterAuthorizer`]: captured on the request thread so a
+/// background worker can rebuild the identical borrowed authorizer after the
+/// request future is gone.
+pub(crate) struct OwnedRouterAuthorizer {
+    client: Option<AuthenticatedClient>,
+    oauth_agent_identity: Option<OAuthAgentIdentity>,
+    cert_identity: Option<CertIdentity>,
+    principal: Option<String>,
+}
+
+impl OwnedRouterAuthorizer {
+    pub(crate) fn capture(
+        client: Option<&AuthenticatedClient>,
+        oauth: Option<&OAuthAgentIdentity>,
+        cert: Option<&CertIdentity>,
+    ) -> Self {
+        Self {
+            client: client.cloned(),
+            oauth_agent_identity: oauth.cloned(),
+            cert_identity: cert.cloned(),
+            principal: refusal_principal(client, oauth, cert),
+        }
+    }
+
+    pub(crate) fn borrow<'a>(&'a self, state: &'a AppState) -> RouterAuthorizer<'a> {
+        RouterAuthorizer {
+            state,
+            client: self.client.as_ref(),
+            oauth_agent_identity: self.oauth_agent_identity.as_ref(),
+            cert_identity: self.cert_identity.as_ref(),
+            principal: self.principal.clone(),
+        }
     }
 }

@@ -24,12 +24,27 @@
 //! (`docs/design/2026-09-06-task-1-tasks-extension-test-plan.md`), not here.
 //! The settled half (`ttlMs: number | null` present-and-nullable,
 //! `pollIntervalMs?: number`) is in scope and is asserted below.
+//!
+//! FIXTURE NOTE (2026-09-08): every row that needs a REAL task now dispatches
+//! `gateway_invoke` at the counted backend in [`fixture`], carrying an
+//! idempotency key and a verified identity. It used to name
+//! `gateway_list_servers`, which is a governed built-in the gateway answers
+//! synchronously in I1 — a task-augmented call naming it is answered
+//! `complete` and creates no task, so those rows were asserting against a
+//! handle that never existed and falling back to a fabricated id. The
+//! correction is on the fixture side only: no authorization rule is weakened,
+//! no built-in is relabelled, and every assertion below is the one that was
+//! there before.
 
+#[path = "mik_7272_task_1_acs/fixture.rs"]
+mod fixture;
+
+use mcp_gateway::protocol::JsonRpcError;
 use mcp_gateway::protocol::cacheable::is_final;
 use mcp_gateway::protocol::headers::mcp_name_body_field;
 use mcp_gateway::protocol::meta::ADDED_IN_2026_07_28;
 use mcp_gateway::protocol::tasks::{Task, TaskStatus};
-use serde_json::{Value, json};
+use serde_json::json;
 
 // ===========================================================================
 // MIK-7272.TASK.1.5 — a 2025-era peer calling `tasks/cancel` is refused
@@ -55,23 +70,27 @@ fn ac_task_1_5_tasks_cancel_is_gated_as_a_2026_07_28_method() {
 // tool result with `isError: true` is `completed`, never `failed`.
 // ===========================================================================
 
-/// This case is REWRITTEN, not repaired, when `Task::error()` stops returning
-/// `Option<&str>` — §3.1 mandates that signature change, so the breakage is the
-/// change working rather than a regression. Asserting over the *value's* shape
-/// keeps it compiling against today's type while still failing on the defect.
+/// The canonical model carries a typed JSON-RPC error; its serialized payload
+/// must preserve the backend code, message and optional data as an object.
 #[test]
 fn ac_task_1_6_a_failed_task_carries_an_error_object_not_a_string() {
     let mut task = Task::create("weather.get");
-    task.fail("upstream refused");
+    task.fail(JsonRpcError {
+        code: -32001,
+        message: "upstream refused".to_string(),
+        data: Some(json!({ "reason": "backend-policy" })),
+    });
 
-    let raw = task.error().expect("a failed task reports why it failed");
-    let parsed: Option<Value> = serde_json::from_str(raw).ok();
-    assert!(
-        parsed
-            .as_ref()
-            .is_some_and(|v| v.get("code").is_some() && v.get("message").is_some()),
-        "the specification requires a JSON-RPC error object with `code` and \
-         `message`; a bare string cannot carry either, and got {raw:?}"
+    let error = task.error().expect("a failed task reports why it failed");
+    let encoded = serde_json::to_value(error).expect("the task error serializes");
+    assert_eq!(
+        encoded,
+        json!({
+            "code": -32001,
+            "message": "upstream refused",
+            "data": { "reason": "backend-policy" }
+        }),
+        "a failed task preserves the full JSON-RPC error object, never an encoded string"
     );
 }
 
@@ -119,14 +138,10 @@ fn ac_task_1_7_mcp_name_mirrors_task_id_on_the_task_methods() {
 // MIK-7272.TASK.1.2 — `tasks/get` returns the per-status shape.
 // ===========================================================================
 
-/// PARTIAL, and the missing half is stated rather than skipped: `input_required`
-/// and `cancelled` are not variants of `TaskStatus` today, so a case naming them
-/// would not compile — and a test file that does not compile reports no failure
-/// text for any case in it. What is asserted here is the three variants that
-/// exist and the shape rule that separates them.
-///
-/// DEFERRED: `input_required` + `inputRequests`, and `cancelled`, land with the
-/// enum. Until then this case says nothing about them.
+/// The working/completed/failed payload rules remain covered here. The
+/// canonical five-status model's input-required and cancelled transitions and
+/// payload projection are covered by `protocol/tasks/lifecycle_tests.rs` and
+/// `protocol/tasks/snapshot_tests.rs`; this case makes no real-route claim.
 #[test]
 fn ac_task_1_2_each_status_carries_its_own_payload_and_no_other() {
     let working = Task::create("weather.get");
@@ -145,7 +160,11 @@ fn ac_task_1_2_each_status_carries_its_own_payload_and_no_other() {
     );
 
     let mut failed = Task::create("weather.get");
-    failed.fail("upstream refused");
+    failed.fail(JsonRpcError {
+        code: -32001,
+        message: "upstream refused".to_string(),
+        data: None,
+    });
     assert_eq!(failed.status(), TaskStatus::Failed);
     assert!(
         failed.error().is_some() && failed.result().is_none(),
@@ -191,17 +210,19 @@ fn ac_task_1_8_a_task_creation_result_is_never_a_final_answer() {
 
 // NOT COVERED HERE, and stated rather than skipped: the same-`taskId` half of
 // `.8`. The dedupe key is `(authenticated principal, client idempotency key)`,
-// so it needs a task store that can return the same id twice and a mock backend
-// carrying a mutation counter — neither exists. Asserting it against a
-// hand-built value would be a fixture making its own assertion true, which is
-// the failure mode this file is written against.
+// and the counted-backend fixture below now supplies both halves the row needs
+// — a real key on every create and a per-fixture `tools/call` counter. What it
+// does NOT supply is the row's own home: the retry pair lives in the router's
+// `task_execution_adapter` suite, which owns the adapter's dispatch-once
+// claim. Asserting it here against a hand-built value would still be a fixture
+// making its own assertion true, which is the failure mode this file is
+// written against.
 //
-// It becomes assertable when a task-augmented `tools/call` dispatches: the
-// counter is 1 across two calls carrying the SAME key, both responses carry the
-// same `taskId`, and two calls carrying DIFFERENT keys are two tasks and two
-// backend runs. Never assert the body of the response cache — it is written at
-// `invoke.rs:1291`, after the backend result, so a fixture that leaves caching
-// enabled passes vacuously.
+// It is assertable there as: the counter is 1 across two calls carrying the
+// SAME key, both responses carry the same `taskId`, and two calls carrying
+// DIFFERENT keys are two tasks and two backend runs. Never assert the body of
+// the response cache — it is written at `invoke.rs:1291`, after the backend
+// result, so a fixture that leaves caching enabled passes vacuously.
 
 // ===========================================================================
 // MIK-7272.TASK.1.10 — the served capabilities advertise
@@ -353,6 +374,14 @@ mod capabilities {
 // ===========================================================================
 
 mod http {
+    /// The subscription ceiling every fixture in this file is built with.
+    ///
+    /// Read back by `available()` to tell "the listener went away" apart from
+    /// "the listener was never admitted", so the two uses must agree: a second
+    /// copy of this number would turn a fixture change into a test that spins
+    /// to its deadline instead of failing on what changed.
+    pub const SUBSCRIPTION_CAPACITY: usize = 64;
+
     use std::sync::Arc;
 
     use axum::body::Body;
@@ -363,25 +392,44 @@ mod http {
     use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
     use mcp_gateway::gateway::proxy::ProxyManager;
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+    use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+    use mcp_gateway::gateway::test_helpers::{
+        AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+    };
+    use mcp_gateway::key_server::oidc::VerifiedIdentity;
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
     use mcp_gateway::protocol::headers::mcp_name_body_field;
     use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
+    use crate::fixture::{self, CountedBackend, GateHandle, ServerGuard};
+
     pub(super) const TASKS: &str = "io.modelcontextprotocol/tasks";
+
+    /// Where a task-augmented call carries its idempotency key
+    /// (`crate::protocol::mrtr::IDEMPOTENCY_KEY_META` in the gateway, spelled
+    /// out here because an integration test cannot name a private constant —
+    /// the internal adapter suite's `support.rs` spells the same string for the
+    /// same reason).
+    pub(super) const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
 
     /// Two API keys, so "a different principal" is a fact of the fixture rather
     /// than a wish. With auth disabled every caller is the same principal and
     /// the ownership rows would pass by construction — a fixture that removes
     /// the condition it observes.
+    ///
+    /// `backends` names [`fixture::BACKEND`] rather than being empty: an empty
+    /// list is "every backend", and a credential that may reach anything cannot
+    /// show that a task-producing call was authorized on its own merits. The
+    /// scope is narrow and it is real — the same middleware that reads it on a
+    /// production request reads it here.
     fn two_principal_auth() -> AuthConfig {
         let key = |k: &str, name: &str| ApiKeyConfig {
             key: k.to_string(),
             name: name.to_string(),
             rate_limit: 0,
-            backends: Vec::new(),
+            backends: vec![fixture::BACKEND.to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,
@@ -396,8 +444,39 @@ mod http {
         }
     }
 
-    pub(super) fn state() -> Arc<AppState> {
-        state_from(two_principal_auth())
+    /// Everything one test's gateway owns, held together for the test's whole
+    /// life.
+    ///
+    /// The `TempDir` is a FIELD rather than a returned tuple element so it
+    /// cannot be dropped by a destructuring `let` that only wanted the state:
+    /// the task store leases that directory for as long as the service lives,
+    /// and a store whose directory has been removed underneath it fails in ways
+    /// that read as task defects. Bind the whole `Fixture`; never take it
+    /// apart.
+    ///
+    /// `backend` is the per-fixture counter. Per fixture, never static, so two
+    /// tests in one binary cannot read each other's dispatch count.
+    ///
+    /// `_server` is the fixture's own loopback HTTP listener, held for the same
+    /// reason and dropped with the same `Fixture`: the registered backend
+    /// reaches it over a real socket, so a guard dropped early turns every
+    /// later dispatch into a connection error. It is deliberately NOT stored on
+    /// `AppState` — the state would then own the server that serves the state,
+    /// a cycle that keeps both alive past the test.
+    pub(super) struct Fixture {
+        pub(super) state: Arc<AppState>,
+        pub(super) backend: Arc<CountedBackend>,
+        _server: ServerGuard,
+        /// `None` when the TEST owns the directory, which is how one store
+        /// outlives one gateway: a reconnect fixture opens a second state over
+        /// a directory the test keeps alive across both.
+        _store_dir: Option<tempfile::TempDir>,
+    }
+
+    /// The suite's standard gateway: authentication on, two principals, one
+    /// counted eligible backend that answers immediately.
+    pub(super) async fn state() -> Fixture {
+        state_from(two_principal_auth()).await
     }
 
     /// The shape in which an unauthenticated caller REACHES `/mcp`:
@@ -421,11 +500,54 @@ mod http {
         auth
     }
 
-    pub(super) fn state_public_mcp() -> Arc<AppState> {
-        state_from(public_mcp_auth())
+    pub(super) async fn state_public_mcp() -> Fixture {
+        state_from(public_mcp_auth()).await
     }
 
-    pub(super) fn state_from(auth: AuthConfig) -> Arc<AppState> {
+    /// The standard gateway, but its backend HOLDS every dispatch until the
+    /// returned handle releases it.
+    ///
+    /// For the one row that must observe a task while it is genuinely running.
+    /// A backend that answers immediately races the executor there: the task
+    /// can settle between the create and the update, and the row would then be
+    /// reporting on a terminal task while claiming to report on a working one.
+    /// The gate replaces that race with a barrier — no sleep, and no clock.
+    pub(super) async fn state_holding() -> (Fixture, GateHandle) {
+        let (backend, gate) = CountedBackend::holding();
+        (state_from_with(two_principal_auth(), backend).await, gate)
+    }
+
+    pub(super) async fn state_from(auth: AuthConfig) -> Fixture {
+        state_from_with(auth, CountedBackend::open()).await
+    }
+
+    pub(super) async fn state_from_with(auth: AuthConfig, backend: Arc<CountedBackend>) -> Fixture {
+        let store_dir = tempfile::tempdir().expect("a private task-store directory");
+        let fixture = state_in(auth, backend, store_dir.path()).await;
+        Fixture {
+            _store_dir: Some(store_dir),
+            ..fixture
+        }
+    }
+
+    /// A gateway over a store directory the CALLER owns.
+    ///
+    /// The reconnect rows need two gateways over one store, which is only
+    /// possible if the directory outlives the first fixture. The custody lease
+    /// (`store.lease`, taken with a non-blocking `try_acquire`) is released when
+    /// the previous fixture's last `Arc` drops, and a worker thread can still be
+    /// finishing at that instant, so the open is retried to [`fixture::BOUND`]
+    /// rather than raced. A lease that never frees fails here by name instead of
+    /// surfacing as an unrelated store error inside a task assertion.
+    pub(super) async fn state_over(store_root: &std::path::Path) -> Fixture {
+        state_in(two_principal_auth(), CountedBackend::open(), store_root).await
+    }
+
+    async fn state_in(
+        auth: AuthConfig,
+        backend: Arc<CountedBackend>,
+        store_root: &std::path::Path,
+    ) -> Fixture {
         let mut config = Config::default();
         config.server.modern_protocol = true;
         config.auth = auth;
@@ -435,9 +557,44 @@ mod http {
             config.streaming.clone(),
         ));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-        Arc::new(AppState {
-            session_lifecycle: None,
+
+        // One registry, shared between the state the router reads and the
+        // executor that publishes through it.
+        let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY));
+        let tasks_dir = store_root.join("tasks");
+        let deadline = tokio::time::Instant::now() + fixture::BOUND;
+        let (tasks, task_executor) = loop {
+            match open_runtime(
+                &tasks_dir,
+                config.tasks.max_workers,
+                StoreLimits::default(),
+                Arc::clone(&subscriptions),
+            )
+            .await
+            {
+                Ok(runtime) => break runtime,
+                Err(error) if tokio::time::Instant::now() < deadline => {
+                    // EVERY failure is retried, not only custody contention:
+                    // the open does not report a reason this helper could
+                    // branch on, so naming one here would be a guess. What the
+                    // retry buys is the one case a reconnect row creates — a
+                    // previous custodian still letting go — and the bound is
+                    // what keeps any other cause finite.
+                    let _ = error;
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!(
+                    "the task store at {} could not be opened within {:?}; the last \
+                     attempt failed with: {error:?}",
+                    tasks_dir.display(),
+                    fixture::BOUND
+                ),
+            }
+        };
+
+        let state = Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+            session_lifecycle: None,
             env: None,
             meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
             backends,
@@ -465,11 +622,21 @@ mod http {
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-            tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-            ),
-        })
+            tasks,
+            task_executor,
+            subscriptions,
+        });
+        // Registered AFTER the state exists and BEFORE any request runs, so
+        // every row sees the same gateway a production caller would: a real
+        // backend behind a real transport, reachable only by a credential
+        // scoped to it.
+        let server = fixture::register(&state, &backend).await;
+        Fixture {
+            state,
+            backend,
+            _server: server,
+            _store_dir: None,
+        }
     }
 
     /// A modern request. `declares_tasks` is per request on purpose: the whole
@@ -489,6 +656,65 @@ mod http {
         json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
     }
 
+    /// Add the client idempotency key to an already-built modern request.
+    ///
+    /// The dedupe key is `(authenticated principal, client idempotency key)`, so
+    /// a create that carries none is not a logical request the gateway can
+    /// recognise on retry. Logical retries share a key; distinct creates carry
+    /// distinct ones, which is why every call site below names its own row.
+    pub(super) fn keyed(mut body: Value, key: &str) -> Value {
+        body["params"]["_meta"][IDEMPOTENCY_KEY_META] = json!(key);
+        body
+    }
+
+    /// A task-augmented `gateway_invoke` at the counted backend, keyed.
+    ///
+    /// `gateway_invoke` selecting a registered backend and one of its declared
+    /// tools, rather than a governed built-in wearing a `task` member: the
+    /// built-ins are answered synchronously in I1 and correctly so, and a
+    /// fixture that relabelled one to get a task handle would be asserting
+    /// against a route the gateway does not have. No target hint is inherited
+    /// and none is set — the tool is read-only and non-destructive as declared,
+    /// so nothing here borrows a destructive-authorization decision.
+    pub(super) fn task_invoke(id: i64, key: &str) -> Value {
+        keyed(
+            modern(
+                id,
+                "tools/call",
+                json!({
+                    "name": "gateway_invoke",
+                    "arguments": {
+                        "server": fixture::BACKEND,
+                        "tool": fixture::TOOL,
+                        "arguments": {}
+                    },
+                    "task": {}
+                }),
+                true,
+            ),
+            key,
+        )
+    }
+
+    /// The `taskId` a create was answered with, or a failure naming the whole
+    /// body.
+    ///
+    /// Deliberately a panic and not a fallback id. A fallback let an ownership
+    /// row compare two unrelated refusals and report agreement — the create had
+    /// silently produced no task at all, and the row passed on a gateway that
+    /// never made one.
+    pub(super) fn task_id_of(created: &Value) -> String {
+        created
+            .pointer("/result/taskId")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| {
+                panic!(
+                    "a declared task-augmented call must be answered with a task handle: {created}"
+                )
+            })
+            .to_string()
+    }
+
     /// POST to `/mcp` as `principal`, returning status and body.
     ///
     /// The `Mcp-Name` mirror is derived from `mcp_name_body_field` — the
@@ -496,7 +722,10 @@ mod http {
     /// requires once `.7` lands. That is not circular: `.7` asserts the rule
     /// directly as a unit case, and nothing here asserts the header.
     pub(super) async fn post(principal: &str, body: Value) -> (StatusCode, Value) {
-        post_against(state(), principal, body).await
+        // Bound until this helper returns, which is after the response body has
+        // been read: the store's directory outlives the request made on it.
+        let fixture = state().await;
+        post_against(Arc::clone(&fixture.state), principal, body).await
     }
 
     pub(super) async fn post_against(
@@ -509,6 +738,10 @@ mod http {
 
     /// A request carrying NO credential. Only reaches the handlers when `/mcp`
     /// is public — see [`state_public_mcp`].
+    ///
+    /// It carries no [`VerifiedIdentity`] either, and that is the point: an
+    /// unattributed caller is unattributed in BOTH schemes, so no row can pass
+    /// by reading the one that happens to suit it.
     pub(super) async fn post_unattributed(
         state: Arc<AppState>,
         body: Value,
@@ -516,11 +749,148 @@ mod http {
         post_as(state, None, body).await
     }
 
+    /// Poll `tasks/get` as an unattributed caller until the task it names is
+    /// TERMINAL, and return that answer.
+    ///
+    /// A bounded barrier, not a delay. Nothing sleeps: each turn is a real
+    /// request over the real router, and the loop ends the moment the store
+    /// reports a terminal status. The bound is [`fixture::BOUND`] — the suite's
+    /// one outer bound, shared with the counted backend's waits rather than
+    /// respelled — so a task that is created and then never settled FAILS its
+    /// row finitely instead of hanging the binary.
+    ///
+    /// Each poll carries its own JSON-RPC id, counted up from `id_from`: a
+    /// stateless client correlates answers to requests by id, and reusing one
+    /// would make two answers indistinguishable.
+    pub(super) async fn poll_unattributed_until_terminal(
+        state: Arc<AppState>,
+        id_from: i64,
+        task_id: &str,
+    ) -> Value {
+        let mut last = Value::Null;
+        tokio::time::timeout(fixture::BOUND, async {
+            let mut request_id = id_from;
+            loop {
+                let (_, body) = post_unattributed(
+                    Arc::clone(&state),
+                    modern(request_id, "tasks/get", json!({ "taskId": task_id }), true),
+                )
+                .await;
+                request_id += 1;
+                if let Some("completed" | "failed" | "cancelled") =
+                    body.pointer("/result/status").and_then(Value::as_str)
+                {
+                    return body;
+                }
+                last = body;
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "'{task_id}' never reached a terminal status within {:?}; \
+                 the task was created and never settled: {last}",
+                fixture::BOUND
+            )
+        })
+    }
+
+    /// The OIDC subject that belongs to each credential.
+    ///
+    /// Two distinct subjects from one issuer, matching the internal adapter
+    /// suite's convention: `principal-a`/`alice` name the same caller in both
+    /// schemes and `principal-b`/`bob` differ in both, so the strong actor id
+    /// and the API key can never disagree about who is calling.
+    fn verified_subject(principal: &str) -> Option<&'static str> {
+        match principal {
+            "key-a" => Some("alice"),
+            "key-b" => Some("bob"),
+            _ => None,
+        }
+    }
+
+    /// The answer to a request, keeping the content type apart from the body.
+    ///
+    /// `post_as` collapses two different answers to a null `Value`: an admitted
+    /// stream, which has no body to collect, and a non-JSON response, which
+    /// fails to parse. A row that reads admission off `is_null()` therefore
+    /// cannot tell an open stream from a 200 that carried nothing, so the rows
+    /// that turn on an admission read this instead.
+    #[derive(Debug)]
+    pub(super) struct Answer {
+        pub status: StatusCode,
+        pub content_type: String,
+        pub body: Value,
+    }
+
+    impl Answer {
+        /// An admitted `subscriptions/listen` is an open SSE stream. Nothing
+        /// else on this route answers with that content type.
+        pub fn is_open_stream(&self) -> bool {
+            self.status == StatusCode::OK && self.content_type.starts_with("text/event-stream")
+        }
+    }
+
     pub(super) async fn post_as(
         state: Arc<AppState>,
         principal: Option<&str>,
         body: Value,
     ) -> (StatusCode, Value) {
+        let answer = post_answer(state, principal, body).await;
+        (answer.status, answer.body)
+    }
+
+    /// As [`post_as`], keeping the content type the body decision was made on.
+    pub(super) async fn post_answer_against(
+        state: Arc<AppState>,
+        principal: &str,
+        body: Value,
+    ) -> Answer {
+        post_answer(state, Some(principal), body).await
+    }
+
+    async fn post_answer(state: Arc<AppState>, principal: Option<&str>, body: Value) -> Answer {
+        let response = send(state, principal, body).await;
+        let status = response.status();
+        // An admitted `subscriptions/listen` is an OPEN STREAM by design, so
+        // draining its body never returns. Content-type is what separates the
+        // two answers: a refusal is `application/json` and must be read and
+        // compared; a stream is `text/event-stream` and has no body to collect.
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        if content_type.starts_with("text/event-stream") {
+            return Answer {
+                status,
+                content_type,
+                body: Value::Null,
+            };
+        }
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body must read");
+        Answer {
+            status,
+            content_type,
+            body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        }
+    }
+
+    /// One request through the real router, answered but NOT drained.
+    ///
+    /// Split out of [`post_answer`] so a listen stream can be held open and
+    /// read frame by frame: the same headers, the same auth middleware and the
+    /// same verified identity as every other call in this suite, so a stream
+    /// row cannot pass through a door the other rows do not use.
+    pub(super) async fn send(
+        state: Arc<AppState>,
+        principal: Option<&str>,
+        body: Value,
+    ) -> axum::http::Response<Body> {
         let method = body["method"].as_str().unwrap_or_default().to_string();
         let mut builder = Request::builder()
             .method("POST")
@@ -538,33 +908,31 @@ mod http {
         {
             builder = builder.header("mcp-name", name);
         }
-        let request = builder
+        let mut request = builder
             .body(Body::from(serde_json::to_vec(&body).expect("body")))
             .expect("request");
-        let response = create_router(state)
+        // The strong verified owner the design names. Placed in request
+        // extensions, which is the ONLY way one ever arrives: the two
+        // middleware sites that insert it both sit behind a key server this
+        // in-process router has none of. The credential beside it is real — the
+        // bearer above goes through the actual auth middleware, and the API-key
+        // scope stays in force. Nothing here fabricates a digest, and nothing
+        // widens what a caller may reach.
+        if let Some(principal) = principal
+            && let Some(subject) = verified_subject(principal)
+        {
+            request.extensions_mut().insert(VerifiedIdentity {
+                subject: subject.to_string(),
+                email: format!("{subject}@task-1.test"),
+                name: None,
+                groups: Vec::new(),
+                issuer: "https://idp.task-1.test".to_string(),
+            });
+        }
+        create_router(state)
             .oneshot(request)
             .await
-            .expect("router must answer");
-        let status = response.status();
-        // An admitted `subscriptions/listen` is an OPEN STREAM by design, so
-        // draining its body never returns. Content-type is what separates the
-        // two answers: a refusal is `application/json` and must be read and
-        // compared; a stream is `text/event-stream` and has no body to collect.
-        let streaming = response
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("text/event-stream"));
-        if streaming {
-            return (status, Value::Null);
-        }
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("body must read");
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+            .expect("router must answer")
     }
 }
 
@@ -583,6 +951,11 @@ mod wire {
 
     /// The row that catches a stub: a dispatcher returning tasks
     /// unconditionally passes `.1` and fails this.
+    ///
+    /// Keeps the built-in on purpose. What it observes is the CAPABILITY GATE,
+    /// which fires before eligibility is ever consulted, so a created task is
+    /// not a precondition here and a fixture backend would add a moving part
+    /// the row does not need.
     #[tokio::test]
     async fn ac_task_1_4_a_declaration_on_an_earlier_request_carries_nothing_forward() {
         // GIVEN request 1 declares the extension
@@ -639,6 +1012,9 @@ mod wire {
     /// Written separately from `.4` because a gate implemented per *method
     /// family* passes `.4` and fails this: `subscriptions/listen` is not in the
     /// `tasks/*` family and reaches the extension anyway.
+    ///
+    /// The id it names never existed, which is the point: the gate must refuse
+    /// before anything looks the id up, so no created task is a precondition.
     #[tokio::test]
     async fn ac_task_1_13_an_undeclared_subscription_carrying_task_ids_is_refused() {
         let (status, body) = post(
@@ -666,51 +1042,53 @@ mod wire {
 }
 
 mod dispatch {
-    use serde_json::{Value, json};
+    use std::sync::Arc;
 
-    use super::http::{modern, post, post_against, state};
+    use serde_json::json;
 
+    use super::http::{modern, post, post_against, state, state_holding, task_id_of, task_invoke};
+
+    /// An id nothing ever created. A negative control, and it stays one.
     const FABRICATED_ID: &str = "task-00000000-0000-4000-8000-000000000000";
-
-    /// A task-augmented call, declared. The tool is a meta-tool so the case does
-    /// not need a backend fixture that could answer for the gateway.
-    fn task_call(id: i64) -> Value {
-        modern(
-            id,
-            "tools/call",
-            json!({ "name": "gateway_list_servers", "task": {} }),
-            true,
-        )
-    }
 
     // =======================================================================
     // MIK-7272.TASK.1.1 — a task-augmented call returns `CreateTaskResult` with
     // `resultType: "task"` and a `taskId` that `tasks/get` already resolves.
     // =======================================================================
 
-    /// VACUOUS AS A CONSTRAINT, red today only because no dispatcher exists:
-    /// any stub that returns a task handle passes it. `.4` is the row that
-    /// catches such a stub, and `.11` the row that catches one with no ownership
-    /// check. Kept because the round-trip — the created id resolves immediately,
-    /// before any status change — is the criterion's own wording.
+    /// The round trip the criterion words: the created id resolves immediately,
+    /// before any status change.
+    ///
+    /// It used to be VACUOUS AS A CONSTRAINT — any stub returning a handle
+    /// passed it — and it is still `.4` that catches a stub and `.11` that
+    /// catches a missing ownership check. What has changed is that the call is
+    /// now eligible to BECOME a task, so the handle is a real durable UUID and
+    /// the backend really ran: the dispatch count below is the half that a
+    /// hand-built handle could never satisfy.
     #[tokio::test]
     async fn ac_task_1_1_a_created_task_id_resolves_immediately() {
-        let state = state();
-        let (_, created) = post_against(state.clone(), "key-a", task_call(10)).await;
+        let fixture = state().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(10, "mik-7272-task-1-1-create"),
+        )
+        .await;
 
         assert_eq!(
             created.pointer("/result/resultType"),
             Some(&json!("task")),
             "a declared task-augmented call is answered with a task handle: {created}"
         );
-        let task_id = created
-            .pointer("/result/taskId")
-            .and_then(Value::as_str)
-            .expect("a task handle carries its id")
-            .to_string();
+        let task_id = task_id_of(&created);
+
+        // The dispatch is spawned, so the count becomes observable only once
+        // the worker has run: bounded by scheduler turns, never by a clock. The
+        // equality is what matters — one create is one backend run.
+        fixture.backend.wait_for_calls(1).await;
 
         let (_, fetched) = post_against(
-            state,
+            Arc::clone(&fixture.state),
             "key-a",
             modern(11, "tasks/get", json!({ "taskId": task_id.clone() }), true),
         )
@@ -728,9 +1106,10 @@ mod dispatch {
     // acknowledges with an empty `resultType: "complete"`.
     // =======================================================================
 
-    /// VACUOUS until `tasks/update` is dispatched: nothing routes the method, so
-    /// today the refusal arrives from the method gate rather than from the key
-    /// check. It means something once an update reaches the store.
+    /// The refusal half. It names an id nothing created, which is deliberate:
+    /// the rule under test is that an input response matching no outstanding
+    /// request is refused, and there is no configuration of this gateway in
+    /// which one is outstanding.
     ///
     /// CARVE-OUT (§11.6): nothing here asserts what an update does to `ttlMs` or
     /// `pollIntervalMs`. The specification's MAY-change clauses for both fields
@@ -756,19 +1135,29 @@ mod dispatch {
         );
     }
 
-    /// VACUOUS with the case above, and for the same reason.
+    /// The acceptance half, on a task that is genuinely RUNNING.
+    ///
+    /// The held backend is what makes that true. With a backend that answers
+    /// immediately the task can settle between the create and the update, and
+    /// the row would then be reporting on an update to a terminal task while
+    /// claiming to report on an accepted one — a difference no assertion here
+    /// could see. `wait_for_dispatch` is a barrier at the seam, not a delay:
+    /// it returns when the dispatch has actually reached the backend and is
+    /// being held there.
     #[tokio::test]
     async fn ac_task_1_3_an_accepted_update_acknowledges_with_an_empty_result() {
-        let state = state();
-        let (_, created) = post_against(state.clone(), "key-a", task_call(13)).await;
-        let task_id = created
-            .pointer("/result/taskId")
-            .and_then(Value::as_str)
-            .unwrap_or(FABRICATED_ID)
-            .to_string();
+        let (fixture, mut gate) = state_holding().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(13, "mik-7272-task-1-3-create"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
+        gate.wait_for_dispatch().await;
 
         let (_, body) = post_against(
-            state,
+            Arc::clone(&fixture.state),
             "key-a",
             modern(14, "tasks/update", json!({ "taskId": task_id }), true),
         )
@@ -795,21 +1184,40 @@ mod dispatch {
             ["resultType"],
             "empty means empty: the ack carries `resultType` and nothing else: {body}"
         );
+
+        // An update is not a dispatch: the one held call is still the only one.
+        assert_eq!(
+            fixture.backend.calls(),
+            1,
+            "an accepted `tasks/update` must not run the tool a second time"
+        );
+        gate.release_all();
     }
 }
 
 mod ownership {
+    use std::sync::Arc;
+
     use serde_json::{Value, json};
 
+    use mcp_gateway::gateway::test_helpers::AppState;
+
+    use super::fixture;
     use super::http::{
-        modern, post_against, post_unattributed, public_mcp_auth, state, state_from,
-        state_public_mcp,
+        SUBSCRIPTION_CAPACITY, modern, poll_unattributed_until_terminal, post_against,
+        post_answer_against, post_unattributed, public_mcp_auth, send, state, state_from,
+        state_holding, state_over, state_public_mcp, task_id_of, task_invoke,
     };
 
+    /// An id nothing ever created: the negative control every "indistinguishable
+    /// from no task" comparison is made against, and still a control.
     const FABRICATED_ID: &str = "task-11111111-1111-4111-8111-111111111111";
-    /// Stands in for A's task id while no dispatcher hands one out, so the
-    /// byte-identity comparison still RUNS — and runs against a different id
-    /// than `FABRICATED_ID`, never against itself. See each case's vacuity note.
+    /// A SECOND id nothing ever created, used only where a create is expected to
+    /// be REFUSED and there is therefore no real id to name. Distinct from
+    /// `FABRICATED_ID` so the byte-identity comparison is never run against
+    /// itself. It is no longer a fallback for a create that was supposed to
+    /// succeed: those now panic instead, so an ownership row can never pass on
+    /// two unrelated refusals agreeing.
     const UNDISPATCHED_ID: &str = "task-22222222-2222-4222-8222-222222222222";
 
     /// The gateway's answer with the request id blanked, so two answers to two
@@ -823,47 +1231,40 @@ mod ownership {
         body.to_string()
     }
 
-    fn task_call(id: i64) -> Value {
-        modern(
-            id,
-            "tools/call",
-            json!({ "name": "gateway_list_servers", "task": {} }),
-            true,
-        )
-    }
-
     // =======================================================================
     // MIK-7272.TASK.1.11 — a retrieval naming another principal's task is
     // answered as not-found, identically to an id that never existed.
     // =======================================================================
 
-    /// VACUOUS UNTIL THE DISPATCHER EXISTS: with no `tasks/get` arm, both calls
-    /// get the same method-level refusal and the comparison holds for the wrong
-    /// reason. It means something only once `tasks/get` answers a real id — the
-    /// case then goes red the moment the ownership check is missing or answers
-    /// differently. It is deliberately NOT guarded by an `expect` on the created
-    /// id: a panic in setup would report "no dispatcher" a fourth time and never
-    /// run the byte-identity comparison, which is the assertion that carries the
-    /// criterion. The fallback id stands in until `tools/call` hands out a real
-    /// one, so this case is GREEN today — green for the reason stated here.
+    /// A's task is real: the create is asserted, not hoped for. That is what
+    /// makes the byte-identity comparison a comparison — B is answered about an
+    /// id that DOES resolve for someone, and about one that resolves for
+    /// nobody, and the two answers must be the same.
+    ///
+    /// The dispatch count is the ownership control. A create runs the backend
+    /// once; two retrievals by a principal who owns nothing must run it zero
+    /// more times. A gateway that dispatched on read would leak the task's
+    /// existence through the backend even while answering not-found.
     #[tokio::test]
     async fn ac_task_1_11_another_principals_task_is_indistinguishable_from_no_task() {
-        let state = state();
-        let (_, created) = post_against(state.clone(), "key-a", task_call(20)).await;
-        let task_id = created
-            .pointer("/result/taskId")
-            .and_then(Value::as_str)
-            .unwrap_or(UNDISPATCHED_ID)
-            .to_string();
+        let fixture = state().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(20, "mik-7272-task-1-11-create"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
+        fixture.backend.wait_for_calls(1).await;
 
         let (_, foreign) = post_against(
-            state.clone(),
+            Arc::clone(&fixture.state),
             "key-b",
             modern(21, "tasks/get", json!({ "taskId": task_id }), true),
         )
         .await;
         let (_, absent) = post_against(
-            state,
+            Arc::clone(&fixture.state),
             "key-b",
             modern(22, "tasks/get", json!({ "taskId": FABRICATED_ID }), true),
         )
@@ -874,6 +1275,11 @@ mod ownership {
             shape(absent),
             "B's view of A's task is byte-identical to B's view of an id that never existed"
         );
+        assert_eq!(
+            fixture.backend.calls(),
+            1,
+            "a retrieval dispatches nothing: the only backend run is A's create"
+        );
     }
 
     // =======================================================================
@@ -881,26 +1287,28 @@ mod ownership {
     // check, and refuses indistinguishably from an id that never existed.
     // =======================================================================
 
-    /// VACUOUS UNTIL BOTH TASK.1 AND SUB.2 LAND — and this is the row the design
-    /// singles out for it. Nothing admits a subscription today, so both answers
-    /// are the same refusal for the wrong reason. What must be true before it
-    /// means anything: `subscriptions/listen` must actually admit a stream for a
-    /// `taskId` its caller owns. Until then a green here is not coverage, and
-    /// closing `.12` on it would be a release gate removed and written down as
-    /// passed. The owner-admission assertion below is that guard, stated as an
-    /// assertion rather than a comment so it cannot quietly stop being true.
+    /// VACUOUS UNTIL SUB.2 LANDS in one specific respect, and this is the row
+    /// the design singles out for it: what must be true before the comparison
+    /// carries the criterion is that `subscriptions/listen` really admits a
+    /// stream for a `taskId` its caller owns. That half is now an assertion
+    /// rather than a comment — and the task it names is a real durable one, so
+    /// the admission is admission of something. Until the stream carries task
+    /// notifications, a green here is coverage of the ownership check only, and
+    /// closing `.12` on more than that would be a release gate removed and
+    /// written down as passed.
     #[tokio::test]
     async fn ac_task_1_12_subscription_admission_hides_another_principals_task() {
-        let state = state();
-        let (_, created) = post_against(state.clone(), "key-a", task_call(23)).await;
-        let task_id = created
-            .pointer("/result/taskId")
-            .and_then(Value::as_str)
-            .unwrap_or(UNDISPATCHED_ID)
-            .to_string();
+        let fixture = state().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(23, "mik-7272-task-1-12-create"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
 
         let (_, admitted) = post_against(
-            state.clone(),
+            Arc::clone(&fixture.state),
             "key-a",
             modern(
                 24,
@@ -916,7 +1324,7 @@ mod ownership {
         );
 
         let (_, foreign) = post_against(
-            state.clone(),
+            Arc::clone(&fixture.state),
             "key-b",
             modern(
                 25,
@@ -927,7 +1335,7 @@ mod ownership {
         )
         .await;
         let (_, absent) = post_against(
-            state,
+            Arc::clone(&fixture.state),
             "key-b",
             modern(
                 26,
@@ -949,25 +1357,25 @@ mod ownership {
     // `notifications/tasks` and no `notifications/progress` or `.../message`.
     // =======================================================================
 
-    /// VACUOUS UNTIL BOTH TASK.1 AND SUB.2 LAND: nothing emits task
-    /// notifications, so an empty stream satisfies the negative half of the
-    /// criterion trivially. What must be true first: a listen on a task the
-    /// caller owns must be admitted AND the task must emit at least one
-    /// `notifications/tasks`. Only the admission half is asserted here —
-    /// asserting the emission today would name a notification the gateway has
-    /// no producer for, which fails as an absent name rather than a defect.
+    /// VACUOUS IN ITS NEGATIVE HALF UNTIL SUB.2 LANDS: nothing emits task
+    /// notifications, so an empty stream satisfies "and no progress or message"
+    /// trivially. What IS asserted is the half that can be: a listen naming a
+    /// task the caller really owns is admitted. Asserting the emission today
+    /// would name a notification the gateway has no producer for, which fails
+    /// as an absent name rather than as a defect.
     #[tokio::test]
     async fn ac_task_1_9_a_task_subscription_is_admitted_for_its_owner() {
-        let state = state();
-        let (_, created) = post_against(state.clone(), "key-a", task_call(27)).await;
-        let task_id = created
-            .pointer("/result/taskId")
-            .and_then(Value::as_str)
-            .unwrap_or(UNDISPATCHED_ID)
-            .to_string();
+        let fixture = state().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(27, "mik-7272-task-1-9-create"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
 
         let (_, listened) = post_against(
-            state,
+            Arc::clone(&fixture.state),
             "key-a",
             modern(
                 28,
@@ -1000,25 +1408,30 @@ mod ownership {
     /// The credentialled half of this case is the vacuity guard: it proves the
     /// fixture can tell a retrieved task from a not-found answer, so the
     /// byte-identity assertion below is a real comparison and not two refusals
-    /// agreeing for an unrelated reason.
+    /// agreeing for an unrelated reason. That guard only works on a task that
+    /// exists, which is why the create here is asserted rather than fallen back
+    /// from — it was the fallback that let this row report agreement between
+    /// two answers about nothing.
     #[tokio::test]
     async fn ac_task_1_18_an_unattributed_caller_owns_no_task() {
-        let state = state_public_mcp();
+        let fixture = state_public_mcp().await;
 
-        let (_, created) = post_against(state.clone(), "key-a", task_call(30)).await;
-        let owned_id = created
-            .pointer("/result/taskId")
-            .and_then(Value::as_str)
-            .unwrap_or(UNDISPATCHED_ID)
-            .to_string();
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(30, "mik-7272-task-1-18-create"),
+        )
+        .await;
+        let owned_id = task_id_of(&created);
+        fixture.backend.wait_for_calls(1).await;
         let (_, owner_view) = post_against(
-            state.clone(),
+            Arc::clone(&fixture.state),
             "key-a",
             modern(31, "tasks/get", json!({ "taskId": owned_id.clone() }), true),
         )
         .await;
         let (_, owner_absent) = post_against(
-            state.clone(),
+            Arc::clone(&fixture.state),
             "key-a",
             modern(32, "tasks/get", json!({ "taskId": FABRICATED_ID }), true),
         )
@@ -1030,12 +1443,11 @@ mod ownership {
              that never existed — without this the comparison below is vacuous"
         );
 
-        let (_, unattributed_created) = post_unattributed(state.clone(), task_call(33)).await;
-        let pooled_id = unattributed_created
-            .pointer("/result/taskId")
-            .and_then(Value::as_str)
-            .unwrap_or(UNDISPATCHED_ID)
-            .to_string();
+        let (_, unattributed_created) = post_unattributed(
+            Arc::clone(&fixture.state),
+            task_invoke(33, "mik-7272-task-1-18-unattributed"),
+        )
+        .await;
         assert_eq!(
             unattributed_created
                 .pointer("/error/message")
@@ -1046,13 +1458,26 @@ mod ownership {
              short of the router would answer 401 to everything below and make \
              the comparison vacuous: {unattributed_created}"
         );
+        assert_eq!(
+            fixture.backend.calls(),
+            1,
+            "the refused unattributed create must reach no backend: the only \
+             dispatch is the credentialled one above"
+        );
+        // That refusal is the point, so there is no pooled id to name: the
+        // unattributed caller was handed nothing. The comparison below is
+        // therefore between an id no unattributed caller could have been given
+        // and one that never existed, which is exactly what "an empty principal
+        // is not an identity" means. Its vacuity guard is the credentialled
+        // half above, on a task that really does resolve.
+        let pooled_id = UNDISPATCHED_ID;
         let (_, second_caller) = post_unattributed(
-            state.clone(),
+            Arc::clone(&fixture.state),
             modern(34, "tasks/get", json!({ "taskId": pooled_id }), true),
         )
         .await;
         let (_, never_existed) = post_unattributed(
-            state,
+            Arc::clone(&fixture.state),
             modern(35, "tasks/get", json!({ "taskId": FABRICATED_ID }), true),
         )
         .await;
@@ -1073,7 +1498,8 @@ mod ownership {
     /// The stream is the one arm that must not refuse. `subscriptions/listen`
     /// naming a task nobody may see returns a quiet stream, exactly as it does
     /// for a task owned by another principal — an error here would tell the
-    /// caller that the id resolves to something.
+    /// caller that the id resolves to something. The id it names now really
+    /// does resolve, for A, which is what gives the silence something to hide.
     ///
     /// FORWARD GUARD, and stated as one: this case is green with the
     /// `2c522f53` production hunk reverted, because before that commit no arm
@@ -1089,16 +1515,17 @@ mod ownership {
     /// case's.
     #[tokio::test]
     async fn ac_task_1_19_unattributed_subscription_is_quiet_not_refused() {
-        let state = state_public_mcp();
-        let (_, created) = post_against(state.clone(), "key-a", task_call(36)).await;
-        let owned_id = created
-            .pointer("/result/taskId")
-            .and_then(Value::as_str)
-            .unwrap_or(UNDISPATCHED_ID)
-            .to_string();
+        let fixture = state_public_mcp().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(36, "mik-7272-task-1-19-create"),
+        )
+        .await;
+        let owned_id = task_id_of(&created);
 
         let (_, listened) = post_unattributed(
-            state,
+            Arc::clone(&fixture.state),
             modern(
                 37,
                 "subscriptions/listen",
@@ -1138,271 +1565,709 @@ mod ownership {
     /// path would have kept the pair green while `enabled` did no work.
     /// The admission half on its own passes just as well against a guard
     /// someone deleted outright, and the refusal half is already `.18` — only
-    /// the pair can fail for the right reason.
+    /// the pair can fail for the right reason. The call is the same
+    /// `task_invoke` in both halves for the same reason: a difference in the
+    /// request would be a second variable, and the pair would stop being about
+    /// `enabled`.
     ///
-    /// The admission is asserted POSITIVELY — answered, with a result — not as
-    /// "some message other than `no such task`". A method-not-found, a
+    /// The admission is asserted POSITIVELY — answered, with a REAL handle —
+    /// not as "some message other than `no such task`". A method-not-found, a
     /// capability miss or a tool error all satisfy the negation while the
-    /// caller reaches nothing, so the negation passes on a broken gateway.
-    /// It cannot yet assert a task HANDLE: `tools/call` returns no
-    /// `result/taskId` until the store lands (`.8a`), and a case pinned to a
-    /// field nothing writes is a case that can never go green.
+    /// caller reaches nothing, so the negation passes on a broken gateway. It
+    /// used to stop at "answered", which was one assertion short of the
+    /// criterion: "the credential-less caller reaches the dispatcher" is a
+    /// claim about a task being CREATED, and an answer carrying no handle, or a
+    /// handle behind which nothing runs, satisfies "answered" while the caller
+    /// still reaches nothing. So the admitted half now goes the whole way — a
+    /// real `taskId` (never a fabricated fallback: `task_id_of` panics), a real
+    /// backend run counted exactly once, the same handle for a second
+    /// unattributed request and for a same-key retry, and a real terminal
+    /// outcome polled under the suite's one bound. None of that is `.1`'s claim
+    /// borrowed: `.1` observes a CREDENTIALLED create, and every line here
+    /// fails for this row's own predicate, on the gateway `enabled` decides.
+    ///
+    /// Both halves post the SAME `Value` — one `task_invoke`, cloned, down to
+    /// the idempotency key — which is what retires the "a difference in the
+    /// request would be a second variable" caveat rather than merely stating
+    /// it. The two gateways hold separate stores and separate admission
+    /// indexes, so one key across both is one request asked of two
+    /// configurations, never a retry.
     #[tokio::test]
     async fn ac_task_1_20_auth_disabled_admits_the_unattributed_caller() {
-        let (_, refused) = post_unattributed(state_public_mcp(), task_call(40)).await;
+        // The one request. Everything below posts THIS value.
+        let call = task_invoke(40, "mik-7272-task-1-20");
+
+        let public_fixture = state_public_mcp().await;
+        let (_, refused) = post_unattributed(Arc::clone(&public_fixture.state), call.clone()).await;
         assert_eq!(
             refused.pointer("/error/message").and_then(Value::as_str),
             Some("no such task"),
             "control: with auth ENABLED the same call must still be refused, or \
              the contrast below says nothing about the predicate: {refused}"
         );
+        assert_eq!(
+            refused.pointer("/error/code"),
+            Some(&json!(-32602)),
+            "and refused in `missing_task_error`'s own code — a different error \
+             wearing that message would be a different rule: {refused}"
+        );
+        assert_eq!(
+            refused.pointer("/error/data"),
+            None,
+            "id-free: a refusal carrying data about a task would hand the \
+             unattributed caller exactly what the wording withholds: {refused}"
+        );
+        // Not a racy negative. The refusal is an early return in the router,
+        // before any dispatch is spawned, so a count read straight after it
+        // cannot be observing work that has merely not started yet.
+        assert_eq!(
+            public_fixture.backend.calls(),
+            0,
+            "the refused create must have no backend effect whatsoever"
+        );
 
         let mut disabled = public_mcp_auth();
         disabled.enabled = false;
-        let (_, admitted) = post_unattributed(state_from(disabled), task_call(41)).await;
+        let fixture = state_from(disabled).await;
+
+        let (_, admitted) = post_unattributed(Arc::clone(&fixture.state), call.clone()).await;
         assert!(
-            admitted.get("error").is_none() && admitted.get("result").is_some(),
+            admitted.get("error").is_none(),
             "with auth DISABLED there are no principals to keep apart, so the \
              credential-less caller reaches the dispatcher like every other \
              caller on that gateway and is ANSWERED: {admitted}"
         );
-    }
+        assert_eq!(
+            admitted.pointer("/result/resultType"),
+            Some(&json!("task")),
+            "and answered with a task handle, not with a synchronous result \
+             that quietly dropped the `task` member: {admitted}"
+        );
+        // Panics rather than falling back: an id this row invented would let
+        // every comparison below agree about a task that was never created.
+        let task_id = task_id_of(&admitted);
+        // The handle is a promise that work is under way, so the work is
+        // observed: exactly one dispatch reached the real backend.
+        fixture.backend.wait_for_calls(1).await;
 
-    // =======================================================================
-    // MIK-7272.TASK.1 — the clause with no code behind it: the tool RUNS, and
-    // the handle resolves to what it produced.
-    //
-    // Designed in `docs/design/2026-08-31-task-1-tasks-extension.md` §3.
-    // Every case below compares the settled record against the SAME call made
-    // without `task`, so what it asserts is "the task path answers what the
-    // ordinary path answers" rather than a result shape this file invented.
-    // A fixture that hard-codes the answer passes against a dispatcher that
-    // fabricates it.
-    // =======================================================================
-
-    /// Poll a handle until it leaves `working`.
-    ///
-    /// The dispatch runs on its own task, so a settled status arrives
-    /// eventually rather than immediately. A bounded poll rather than one
-    /// sleep: a fixed sleep either flakes on a loaded machine or spends the
-    /// wall clock on every green run, and when it does fail it reports a
-    /// timeout instead of the last answer the gateway actually gave.
-    async fn poll_until_settled(
-        state: std::sync::Arc<mcp_gateway::gateway::test_helpers::AppState>,
-        key: &str,
-        task_id: &str,
-    ) -> Value {
-        for attempt in 0..200_i64 {
-            let (_, body) = post_against(
-                state.clone(),
-                key,
-                modern(
-                    9000 + attempt,
-                    "tasks/get",
-                    json!({ "taskId": task_id }),
-                    true,
-                ),
-            )
-            .await;
-            if body.pointer("/result/status") != Some(&json!("working")) {
-                return body;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        panic!("the handle {task_id} never left `working`");
-    }
-
-    /// The `taskId` a creation response handed back.
-    fn handle_of(created: &Value) -> String {
-        created
-            .pointer("/result/taskId")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("a task handle carries its id: {created}"))
-            .to_string()
-    }
-
-    /// A call made the ordinary way, to establish what the task path owes.
-    fn plain_call(id: i64, params: Value) -> Value {
-        modern(id, "tools/call", params, true)
-    }
-
-    /// The tool actually runs, and the handle resolves to its result.
-    ///
-    /// LIMIT, stated rather than left for a reviewer to find: this does not
-    /// prove the backend call runs CONCURRENTLY with the response. That needs
-    /// a backend the test can hold at a barrier and release after the poll,
-    /// and the harness has no such backend. Recorded as a gap.
-    #[tokio::test]
-    async fn ac_task_1_a_task_augmented_call_runs_its_tool() {
-        let state = state();
-        let (_, direct) = post_against(
-            state.clone(),
-            "key-a",
-            plain_call(50, json!({ "name": "gateway_list_servers" })),
+        // A SECOND unattributed request — another credential-less caller on
+        // that gateway — resolves the very handle the first was handed. This is
+        // the shared anonymous owner the operator chose by turning
+        // authentication off, and it is the half `.18` refuses where the
+        // operator DID draw a boundary.
+        let (_, fetched) = post_unattributed(
+            Arc::clone(&fixture.state),
+            modern(41, "tasks/get", json!({ "taskId": task_id.clone() }), true),
         )
         .await;
-        let expected = direct.get("result").cloned().unwrap_or_else(|| {
-            panic!("control: the ordinary call answers with a result: {direct}")
-        });
-
-        let (_, created) = post_against(state.clone(), "key-a", task_call(51)).await;
         assert_eq!(
-            created.pointer("/result/status"),
-            Some(&json!("working")),
-            "the handle is returned before the tool has finished: {created}"
-        );
-        assert!(
-            created.pointer("/result/result").is_none(),
-            "a handle carries no result yet — a creation response that already \
-             had one would mean the call was awaited, not dispatched: {created}"
+            fetched.pointer("/result/taskId"),
+            Some(&json!(task_id)),
+            "an unattributed caller on an auth-disabled gateway sees the task \
+             the shared anonymous owner created: {fetched}"
         );
 
-        let settled = poll_until_settled(state, "key-a", &handle_of(&created)).await;
+        // The same key, the same operation, the same owner: the handle it
+        // already owns comes back, and the tool does not run twice. The first
+        // dispatch may have settled by the time this retry arrives.
+        //
+        // The BYTE-IDENTICAL value, request id included: unlike the polls
+        // below, which are distinct requests and carry distinct ids, this one is
+        // deliberately the create resent. A retry that differed anywhere would
+        // leave open which difference admission keyed on.
+        let (_, retried) = post_unattributed(Arc::clone(&fixture.state), call.clone()).await;
         assert_eq!(
-            settled.pointer("/result/status"),
+            retried.pointer("/result/taskId"),
+            Some(&json!(task_id)),
+            "a same-key retry is the same logical request and must be answered \
+             with the same handle: {retried}"
+        );
+        assert_eq!(
+            fixture.backend.calls(),
+            1,
+            "and must not run the tool a second time: the dedupe key is \
+             (owner, idempotency key), and the anonymous owner is an owner"
+        );
+
+        // Real work, really finished. The poll is bounded by the suite's one
+        // bound and ends on the store's own terminal status, so a handle behind
+        // which nothing ever runs fails this row instead of passing it.
+        let terminal =
+            poll_unattributed_until_terminal(Arc::clone(&fixture.state), 42, &task_id).await;
+        assert_eq!(
+            terminal.pointer("/result/status"),
             Some(&json!("completed")),
-            "the dispatched call settles its record: {settled}"
+            "the backend answered, so the task settles completed: {terminal}"
         );
         assert_eq!(
-            settled.pointer("/result/result"),
-            Some(&expected),
-            "the handle resolves to what the tool produced, byte for byte the \
-             answer the ordinary call gave: {settled}"
+            terminal
+                .pointer("/result/result/structuredContent/marker")
+                .and_then(Value::as_str),
+            Some(super::fixture::MARKER),
+            "the completed task preserves the actual backend payload: {terminal}"
+        );
+        assert_eq!(
+            fixture.backend.calls(),
+            1,
+            "one create, one retry, one dispatch: settling is not a second run"
         );
     }
 
-    /// A dispatch that answers with a JSON-RPC error settles the task
-    /// `failed`, carrying that error's OWN code.
-    ///
-    /// The expected code is read off the ordinary call rather than written
-    /// here: a literal would pass against a settle that flattens every failure
-    /// to `-32603` if the two ever coincided, and would need editing every
-    /// time the refusal is reworded.
-    #[tokio::test]
-    async fn ac_task_1_a_failing_dispatch_settles_failed_with_its_own_code() {
-        let state = state();
-        let unknown = json!({ "name": "no_such_tool_anywhere" });
-        let (_, direct) =
-            post_against(state.clone(), "key-a", plain_call(60, unknown.clone())).await;
-        let expected_code = direct
-            .pointer("/error/code")
-            .cloned()
-            .unwrap_or_else(|| panic!("control: the ordinary call is refused: {direct}"));
+    // =======================================================================
+    // MIK-7311.LIFECYCLE.2 — an accepted task survives the loss of the
+    // connection that created it, stays queryable by the same principal, and
+    // stays invisible to every other one.
+    // =======================================================================
 
-        let mut params = unknown;
-        params["task"] = json!({});
-        let (_, created) = post_against(state.clone(), "key-a", plain_call(61, params)).await;
-        let settled = poll_until_settled(state, "key-a", &handle_of(&created)).await;
+    /// Both not-found verbs, each anchored to a KNOWN refusal rather than to
+    /// two agreeing unknowns.
+    ///
+    /// Byte-identity alone proves only that two answers match; it is satisfied
+    /// by a gateway that answers both with a success. The code and the message
+    /// are therefore asserted first, against the one constant the gateway uses
+    /// for absent-or-foreign (`missing_task_error`,
+    /// `src/gateway/router/handlers.rs:216`), and the identity is what proves
+    /// the refusal discloses nothing further.
+    async fn refused_identically(
+        state: &Arc<AppState>,
+        principal: &str,
+        id_from: i64,
+        method: &str,
+        real_task: &str,
+    ) {
+        let (_, real) = post_against(
+            Arc::clone(state),
+            principal,
+            modern(id_from, method, json!({ "taskId": real_task }), true),
+        )
+        .await;
+        let (_, fabricated) = post_against(
+            Arc::clone(state),
+            principal,
+            modern(
+                id_from + 1,
+                method,
+                json!({ "taskId": FABRICATED_ID }),
+                true,
+            ),
+        )
+        .await;
 
         assert_eq!(
-            settled.pointer("/result/status"),
-            Some(&json!("failed")),
-            "a dispatch that produced no result failed, and says so rather \
-             than polling `working` forever: {settled}"
+            real.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32602),
+            "'{method}' on a task this caller does not own must be refused as absent: {real}"
         );
         assert_eq!(
-            settled.pointer("/result/error/code"),
-            Some(&expected_code),
-            "the failure carries the refusal's own code, not a blanket \
-             internal error: {settled}"
+            real.pointer("/error/message").and_then(Value::as_str),
+            Some("no such task"),
+            "the refusal must carry the one constant message, not a narrating one: {real}"
         );
-    }
-
-    /// A result that reports a tool failure is a COMPLETED task.
-    ///
-    /// The call produced a final answer and that answer says the tool failed.
-    /// `failed` is for a task that produced no final answer at all. The
-    /// existing `.6` case asserts this in-process; this one asserts it on the
-    /// wire, which is where the settle rule actually lives.
-    ///
-    /// FINDING, recorded here because this case is what exposed it: on the
-    /// wire, `gateway_invoke` against a missing backend answers
-    /// `isError: false` at the TOP level while burying `"isError": true` one
-    /// JSON-string deep, inside `content[0].text`. The spec puts `isError` on
-    /// the envelope so a client can branch on it; a client that does reads
-    /// this failed call as a success. That is a defect in the invoke path, not
-    /// in the settle rule, so this case asserts against the shape the gateway
-    /// really produces and does not pretend the envelope is conforming. It
-    /// tightens to `/result/isError` the day the invoke path is fixed.
-    ///
-    /// Both halves parse the buried JSON rather than matching its text: a
-    /// substring assertion would be coupled to the serializer's pretty
-    /// printing and would go red on a switch to compact output, for a reason
-    /// that has nothing to do with tasks.
-    ///
-    /// The two results are compared through their content rather than byte for
-    /// byte: each carries its own `trace_id`, so two calls for the same work
-    /// are never equal and an equality assertion here would fail for a reason
-    /// that has nothing to do with tasks.
-    #[tokio::test]
-    async fn ac_task_1_6_an_is_error_result_still_completes_on_the_wire() {
-        let state = state();
-        let invoke = json!({
-            "name": "gateway_invoke",
-            "arguments": { "server": "no-such-server", "tool": "read", "arguments": {} }
-        });
-        let (_, direct) =
-            post_against(state.clone(), "key-a", plain_call(70, invoke.clone())).await;
-        let direct_text = direct
-            .pointer("/result/content/0/text")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| {
-                panic!("control: a missing backend comes back as a RESULT, not an error: {direct}")
-            });
-        let direct_inner: Value = serde_json::from_str(direct_text)
-            .unwrap_or_else(|e| panic!("control: the result's text is itself JSON: {e}: {direct}"));
         assert_eq!(
-            direct_inner.get("isError"),
-            Some(&json!(true)),
-            "control: and that result reports the tool failure, which is the \
-             premise this case rests on: {direct}"
-        );
-
-        let mut params = invoke;
-        params["task"] = json!({});
-        let (_, created) = post_against(state.clone(), "key-a", plain_call(71, params)).await;
-        let settled = poll_until_settled(state, "key-a", &handle_of(&created)).await;
-
-        assert_eq!(
-            settled.pointer("/result/status"),
-            Some(&json!("completed")),
-            "a final result is a completion even when it reports a tool error: {settled}"
-        );
-        let settled_text = settled
-            .pointer("/result/result/content/0/text")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("the record holds the result the call produced: {settled}"));
-        let settled_inner: Value = serde_json::from_str(settled_text)
-            .unwrap_or_else(|e| panic!("the record's text is itself JSON: {e}: {settled}"));
-        assert_eq!(
-            settled_inner.get("isError"),
-            Some(&json!(true)),
-            "and the failure the tool reported survives into the record rather \
-             than being flattened into a settle of its own: {settled}"
+            shape(real),
+            shape(fabricated),
+            "'{method}' on another principal's task must be byte-identical to an id \
+             that never existed"
         );
     }
 
-    /// A gate that refuses still refuses when the call asks for a task.
+    /// Poll `tasks/get` AS `principal` until the task is terminal.
     ///
-    /// The assertion that the relocated `create` is strictly safer than the
-    /// one at `handlers.rs:1196`, rather than merely later: today a
-    /// task-augmented call returns a handle BEFORE the admin pre-check runs,
-    /// so appending `"task": {}` converts a refusal into a `200` and a record
-    /// an unauthorized caller allocated.
-    #[tokio::test]
-    async fn ac_task_1_a_refused_call_is_refused_not_handed_a_handle() {
-        let state = state();
-        let admin_tool = json!({ "name": "gateway_reload_config", "task": {} });
-        let (_, body) = post_against(state, "key-a", plain_call(80, admin_tool)).await;
+    /// The unattributed poller cannot be used here: these rows run with
+    /// authentication on and `/mcp` closed, so an unattributed request never
+    /// reaches a task handler at all.
+    async fn poll_until_terminal(
+        state: &Arc<AppState>,
+        principal: &str,
+        id_from: i64,
+        task_id: &str,
+    ) -> Value {
+        let mut last = Value::Null;
+        tokio::time::timeout(fixture::BOUND, async {
+            let mut request_id = id_from;
+            loop {
+                let (_, body) = post_against(
+                    Arc::clone(state),
+                    principal,
+                    modern(request_id, "tasks/get", json!({ "taskId": task_id }), true),
+                )
+                .await;
+                request_id += 1;
+                if let Some("completed" | "failed" | "cancelled") =
+                    body.pointer("/result/status").and_then(Value::as_str)
+                {
+                    return body;
+                }
+                last = body;
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "'{task_id}' never reached a terminal status within {:?}: {last}",
+                fixture::BOUND
+            )
+        })
+    }
 
+    /// Wait until every subscription permit is back in the registry.
+    ///
+    /// The permit is released when the stream's body is dropped, which happens
+    /// on another task, so the return is awaited rather than assumed.
+    async fn await_no_open_subscriptions(state: &Arc<AppState>) {
+        let deadline = tokio::time::Instant::now() + fixture::BOUND;
+        loop {
+            let available = state.subscriptions.available();
+            if available == SUBSCRIPTION_CAPACITY {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "a dropped subscription stream still holds a permit after {:?}: \
+                 {available} of {SUBSCRIPTION_CAPACITY} available",
+                fixture::BOUND
+            );
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// The task is HELD at the backend for the whole row, so every assertion is
+    /// made about a task that is provably still running: a gateway that quietly
+    /// settled or discarded the task on the disconnect would answer a terminal
+    /// status here rather than a running one.
+    #[tokio::test]
+    async fn lifecycle_2_a_task_survives_a_dropped_stream_and_stays_private() {
+        let (fixture, gate) = state_holding().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(60, "mik-7311-lifecycle-2-disconnect"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
+        fixture.backend.wait_for_calls(1).await;
+
+        // THE CONNECTION THAT IS LOST. An admitted listen answers
+        // `text/event-stream`, which the post helper reports as a null body
+        // rather than draining a stream that never ends — so a null body here
+        // IS the admission, and the permit it took is the observable.
+        let admitted = post_answer_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(
+                62,
+                "subscriptions/listen",
+                json!({ "taskIds": [task_id.clone()] }),
+                true,
+            ),
+        )
+        .await;
         assert!(
-            body.get("error").is_some(),
-            "a non-admin caller is refused an admin tool whether or not the \
-             call asks for a task: {body}"
+            admitted.is_open_stream(),
+            "the owner's listen must be admitted AS A STREAM, or the disconnect \
+             below is a disconnect of nothing. Read off the content type, not off \
+             an absent body: a 200 that carried nothing parses to the same null: \
+             {admitted:?}"
         );
+
+        // DISCONNECT. The helper dropped the response body when it returned,
+        // which drops the listener and returns its permit. Waiting for that
+        // makes "the stream went away" an observed fact: without it a gateway
+        // that never tore the subscription down would pass everything below.
+        await_no_open_subscriptions(&fixture.state).await;
+
+        // Every request from here is a fresh, independently authenticated POST,
+        // which is what reconnect means on this transport.
+        let (_, after) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(64, "tasks/get", json!({ "taskId": task_id.clone() }), true),
+        )
+        .await;
+        assert_eq!(
+            after.pointer("/result/taskId").and_then(Value::as_str),
+            Some(task_id.as_str()),
+            "the creating principal must still resolve the task after the stream \
+             was lost: {after}"
+        );
+        assert_eq!(
+            after.pointer("/result/status").and_then(Value::as_str),
+            Some("working"),
+            "the backend is still holding the dispatch, so the task is running — a \
+             terminal status here means the disconnect settled it: {after}"
+        );
+
+        refused_identically(&fixture.state, "key-b", 65, "tasks/get", &task_id).await;
+        refused_identically(&fixture.state, "key-b", 67, "tasks/cancel", &task_id).await;
+
+        // NOT asserted here: a foreign `subscriptions/listen`. The route
+        // narrows a foreign `taskIds` to the empty list IN SILENCE rather than
+        // refusing (`src/gateway/router/handlers.rs:1050-1062`), so both the
+        // foreign and the fabricated answer are streams with no readable body
+        // over this helper — a comparison of the two cannot fail, whatever the
+        // gateway does. `ac_task_1_12_subscription_admission_hides_another_
+        // principals_task` already carries that pair, with the same ceiling
+        // recorded on it. The discriminating oracles for THIS row are the two
+        // refusals above.
+
+        // A foreign cancel that mutated the task WHILE answering not-found
+        // would satisfy every assertion above. The whole answer is compared,
+        // not one field: anything the probes changed shows up here.
+        let (_, unchanged) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(71, "tasks/get", json!({ "taskId": task_id.clone() }), true),
+        )
+        .await;
+        assert_eq!(
+            shape(unchanged),
+            shape(after),
+            "the foreign probes must leave the owner's view of the task exactly as \
+             it was"
+        );
+
+        // Control, after the foreign probes so those ran against a live task.
+        let (_, cancelled) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(
+                72,
+                "tasks/cancel",
+                json!({ "taskId": task_id.clone() }),
+                true,
+            ),
+        )
+        .await;
         assert!(
-            body.pointer("/result/taskId").is_none(),
-            "and is handed no handle, so no record exists for it to poll: {body}"
+            cancelled.get("error").is_none(),
+            "the creating principal still controls the task after the stream was \
+             lost: {cancelled}"
         );
+        let (_, observed) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(73, "tasks/get", json!({ "taskId": task_id }), true),
+        )
+        .await;
+        assert_eq!(
+            observed.pointer("/result/status").and_then(Value::as_str),
+            Some("cancelled"),
+            "an accepted cancel that changed nothing would pass the assertion \
+             above: {observed}"
+        );
+
+        assert_eq!(
+            fixture.backend.calls(),
+            1,
+            "one create, one dispatch: no read, refusal or cancel re-runs the tool"
+        );
+        gate.release_all();
+    }
+
+    /// THE OTHER HALF OF "SURVIVES". The row above proves the RECORD outlives
+    /// the connection; it cannot prove the WORK does, because the backend is
+    /// held for its whole life and the task is then cancelled. Here the held
+    /// dispatch is released AFTER the stream is gone, and the task runs to a
+    /// completed result — a gateway that abandoned the worker with the client
+    /// would leave the record `working` for ever and fail on the bound.
+    #[tokio::test]
+    async fn lifecycle_2_a_task_whose_client_vanished_still_runs_to_completion() {
+        let (fixture, gate) = state_holding().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(100, "mik-7311-lifecycle-2-completes"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
+        fixture.backend.wait_for_calls(1).await;
+
+        let admitted = post_answer_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            modern(
+                102,
+                "subscriptions/listen",
+                json!({ "taskIds": [task_id.clone()] }),
+                true,
+            ),
+        )
+        .await;
+        assert!(
+            admitted.is_open_stream(),
+            "the owner's listen must be admitted as a stream: {admitted:?}"
+        );
+        await_no_open_subscriptions(&fixture.state).await;
+
+        // The work was held until after the connection was lost, so what
+        // finishes it can only be the gateway's own executor.
+        gate.release_all();
+
+        let settled = poll_until_terminal(&fixture.state, "key-a", 103, &task_id).await;
+        assert_eq!(
+            settled.pointer("/result/status").and_then(Value::as_str),
+            Some("completed"),
+            "a task whose client vanished must still reach a terminal completed \
+             status: {settled}"
+        );
+        assert_eq!(
+            settled
+                .pointer("/result/result/structuredContent/marker")
+                .and_then(Value::as_str),
+            Some("mik-7272-backend-answered"),
+            "the stored result must be the BACKEND's answer — a terminal status \
+             carrying no result is a task that was closed, not one that ran: \
+             {settled}"
+        );
+        assert_eq!(
+            fixture.backend.calls(),
+            1,
+            "the release finishes the dispatch already in flight; it does not \
+             start a second one"
+        );
+    }
+
+    /// A whole gateway is lost and a second one opens over the same store.
+    ///
+    /// Strictly stronger than the criterion's client disconnect, and kept
+    /// alongside it rather than in place of it: this row cannot observe
+    /// per-connection cleanup, and the row above cannot observe durability.
+    /// The backend answers immediately here, so the task is terminal before the
+    /// restart and startup recovery
+    /// (`src/gateway/task_service/execution/recovery.rs:36-80`) has nothing to
+    /// re-settle — what is asserted is that the RESULT was retained.
+    #[tokio::test]
+    async fn lifecycle_2_a_task_survives_a_gateway_restart_and_stays_private() {
+        let store_dir = tempfile::tempdir().expect("a task store the test owns");
+
+        // Scoped so the first gateway — its custody lease, its executor and its
+        // loopback listener — is gone before the second one opens.
+        let (task_id, before) = {
+            let fixture = state_over(store_dir.path()).await;
+            let (_, created) = post_against(
+                Arc::clone(&fixture.state),
+                "key-a",
+                task_invoke(80, "mik-7311-lifecycle-2-restart"),
+            )
+            .await;
+            let task_id = task_id_of(&created);
+            fixture.backend.wait_for_calls(1).await;
+            let before = poll_until_terminal(&fixture.state, "key-a", 81, &task_id).await;
+            assert_eq!(
+                before.pointer("/result/status").and_then(Value::as_str),
+                Some("completed"),
+                "the task must settle before the restart, or this row is about \
+                 recovery rather than about retention: {before}"
+            );
+            (task_id, before)
+        };
+
+        let restarted = state_over(store_dir.path()).await;
+
+        let (_, recovered) = post_against(
+            Arc::clone(&restarted.state),
+            "key-a",
+            modern(85, "tasks/get", json!({ "taskId": task_id.clone() }), true),
+        )
+        .await;
+        assert_eq!(
+            shape(recovered),
+            shape(before),
+            "the second gateway must answer the creating principal with the SAME \
+             task, field for field: a partially recovered record is a task that \
+             did not survive"
+        );
+
+        refused_identically(&restarted.state, "key-b", 86, "tasks/get", &task_id).await;
+        refused_identically(&restarted.state, "key-b", 88, "tasks/cancel", &task_id).await;
+
+        assert_eq!(
+            restarted.backend.calls(),
+            0,
+            "recovery is a read of the store: a second gateway that re-dispatched \
+             the tool would answer every assertion above and run the work twice"
+        );
+    }
+
+    /// THE FALSIFIER for the row above. Same steps, but the second gateway
+    /// opens over an EMPTY directory — and now the task's own creator is told
+    /// it does not exist, in the same words as an id nobody ever minted.
+    ///
+    /// Without this row, a read path that answered success for any well-formed
+    /// id would satisfy the restart row completely.
+    #[tokio::test]
+    async fn lifecycle_2_a_fresh_store_answers_the_same_task_as_absent() {
+        let store_dir = tempfile::tempdir().expect("a task store the test owns");
+        let task_id = {
+            let fixture = state_over(store_dir.path()).await;
+            let (_, created) = post_against(
+                Arc::clone(&fixture.state),
+                "key-a",
+                task_invoke(90, "mik-7311-lifecycle-2-fresh-store"),
+            )
+            .await;
+            let task_id = task_id_of(&created);
+            fixture.backend.wait_for_calls(1).await;
+            poll_until_terminal(&fixture.state, "key-a", 91, &task_id).await;
+            task_id
+        };
+
+        let empty_dir = tempfile::tempdir().expect("a second, empty task store");
+        let fresh = state_over(empty_dir.path()).await;
+
+        refused_identically(&fresh.state, "key-a", 95, "tasks/get", &task_id).await;
+        // Both verbs, as on the row this one falsifies: a control path that
+        // accepted any well-formed id on cancel would be invisible to a
+        // read-only negative. Proved: against the POPULATED store with the get
+        // arm removed, this arm alone fails, and the accepted cancel answers a
+        // bare `{"resultType":"complete"}`.
+        refused_identically(&fresh.state, "key-a", 97, "tasks/cancel", &task_id).await;
+    }
+
+    /// THE THIRD INSPECT ROUTE. `tasks/get` and `tasks/cancel` refuse a foreign
+    /// caller outright; `subscriptions/listen` does not — it narrows a foreign
+    /// `taskIds` to the empty list IN SILENCE and still answers a stream
+    /// (`src/gateway/router/handlers.rs:1050-1062`). Two streams that look
+    /// alike prove nothing about what travels down them, so this row reads the
+    /// frames.
+    ///
+    /// The owner's stream is the PERMISSIVE CONTROL and is drained FIRST: it
+    /// must carry a frame naming the task before the foreign stream is judged.
+    /// Without it, an empty foreign stream would be satisfied by a gateway that
+    /// emits no task events at all.
+    #[tokio::test]
+    async fn lifecycle_2_a_foreign_listener_receives_no_event_for_the_task() {
+        let (fixture, gate) = state_holding().await;
+        let (_, created) = post_against(
+            Arc::clone(&fixture.state),
+            "key-a",
+            task_invoke(110, "mik-7311-lifecycle-2-foreign-stream"),
+        )
+        .await;
+        let task_id = task_id_of(&created);
+        fixture.backend.wait_for_calls(1).await;
+
+        // Both listeners are opened BEFORE the task settles, so neither can
+        // miss the event by arriving late.
+        let mut foreign = listen_stream(&fixture.state, "key-b", 112, &task_id).await;
+        let mut owner = listen_stream(&fixture.state, "key-a", 113, &task_id).await;
+
+        gate.release_all();
+
+        let carried = drain_for(&mut owner, &task_id, Expect::TerminalStatus).await;
+        assert!(
+            carried.is_some(),
+            "the owner's own stream must carry a terminal status event for the \
+             task, or the foreign stream below is empty because nothing was ever \
+             emitted"
+        );
+
+        // Deliberately the WIDER predicate on this side. The control needs a
+        // specific event to prove one was emitted at all; the negative must
+        // reject EVERY task notification naming the task, or a gateway that
+        // leaked a `working` frame and withheld the `completed` one would pass.
+        let leaked = drain_for(&mut foreign, &task_id, Expect::AnyTaskEvent).await;
+        assert!(
+            leaked.is_none(),
+            "a principal who does not own the task must receive no event naming \
+             it: {leaked:?}"
+        );
+    }
+
+    /// Open a listen stream AS `principal` and hand back its body.
+    ///
+    /// `post_against` drops the body when it returns, which is right for every
+    /// row that only needs the admission. A row that reads what travels down
+    /// the stream has to hold it.
+    async fn listen_stream(
+        state: &Arc<AppState>,
+        principal: &str,
+        request_id: i64,
+        task_id: &str,
+    ) -> axum::body::BodyDataStream {
+        let response = send(
+            Arc::clone(state),
+            Some(principal),
+            modern(
+                request_id,
+                "subscriptions/listen",
+                json!({ "taskIds": [task_id] }),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::OK,
+            "'{principal}' must be admitted — the narrowing this row is about \
+             happens INSIDE an admitted stream, so a refusal here would test \
+             something else"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream"),
+            "an admitted listen is a stream; anything else has no frames to read"
+        );
+        response.into_body().into_data_stream()
+    }
+
+    /// What a drained frame has to be to count.
+    #[derive(Clone, Copy)]
+    enum Expect {
+        /// The settled status the release produces. Used for the CONTROL: it
+        /// has to prove an event was emitted, so it names the one event the
+        /// release is known to cause.
+        TerminalStatus,
+        /// Any task notification naming the task. Used for the NEGATIVE, which
+        /// must not be satisfied by a gateway that leaks a different frame.
+        AnyTaskEvent,
+    }
+
+    /// Read frames until one matches, or until the drain's deadline passes.
+    ///
+    /// ONE deadline for the whole drain, not one per chunk: the stream stays
+    /// open and sends a keepalive every 15s, so a per-chunk timeout that
+    /// restarts on every frame would never conclude "nothing arrived" once
+    /// anything else shares the stream. The same bound serves the control and
+    /// the negative, so the two observations are comparable.
+    ///
+    /// Frames are appended to a rolling buffer rather than matched one chunk at
+    /// a time. In this in-process path `axum::response::Sse` writes a whole
+    /// event per frame, so a split is not expected — but a matcher that can
+    /// only see inside one chunk would answer "no leak" if framing ever
+    /// changed, which is the wrong way for this row to fail.
+    async fn drain_for(
+        stream: &mut axum::body::BodyDataStream,
+        task_id: &str,
+        expect: Expect,
+    ) -> Option<String> {
+        use futures::StreamExt;
+
+        let drained = tokio::time::timeout(fixture::BOUND, async {
+            let mut seen = String::new();
+            while let Some(chunk) = stream.next().await {
+                seen.push_str(&String::from_utf8(chunk.ok()?.to_vec()).ok()?);
+                // Matched per COMPLETE SSE record, never across the whole
+                // buffer: `\n\n` ends a record, so a buffer-wide conjunction
+                // would let the task id come from one frame and the method
+                // from another and call that a match.
+                if let Some(record) = seen.split("\n\n").find(|record| {
+                    record.contains(task_id)
+                        && match expect {
+                            Expect::TerminalStatus => record.contains("completed"),
+                            Expect::AnyTaskEvent => record.contains("notifications/tasks"),
+                        }
+                }) {
+                    return Some(record.to_string());
+                }
+            }
+            None
+        })
+        .await;
+        drained.ok().flatten()
     }
 }

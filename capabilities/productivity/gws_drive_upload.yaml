@@ -1,3 +1,4 @@
+sha256: 17f1be5d4ecb6bc84108cac16f3cd6aafb369b3ced57c1d1e8298ac72f6c022d
 fulcrum: "1.0"
 name: gws_drive_upload
 description: Upload a file to Google Drive. Supports setting the file name, parent folder, and MIME type.

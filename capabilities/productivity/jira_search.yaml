@@ -1,3 +1,4 @@
+sha256: cc0eef09971298faba57ccc080fc72492dda2969a5a340acd78b0999d7b18b64
 fulcrum: "1.0"
 name: jira_search
 description: Search Jira issues using JQL (Jira Query Language) for project management and issue tracking

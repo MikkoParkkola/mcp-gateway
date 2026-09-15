@@ -78,3 +78,152 @@ tests:
               backend: stdio-a
             exp_annotations:
               summary: "Backend stdio-a did not stop cleanly when idle"
+
+  # ── SIGNING.5 nonce capacity ───────────────────────────────────────────────
+  #
+  # Two alerts, deliberately different in kind. McpSigningNonceCapacity watches
+  # the aggregate occupancy gauge and needs `for: 5m` — a store briefly near its
+  # bound is normal, a store parked there is not. McpSigningNonceCapacityRefusal
+  # watches the bounded rejection counter and has no `for`: by the time a single
+  # admission has been refused for capacity, protection has already been denied
+  # to a real caller, so there is nothing to wait out.
+  #
+  # Neither alert may carry a `reason` or an identity label. The occupancy gauge
+  # has none by construction; the refusal rule must aggregate its two capacity
+  # reasons into one series, which case (h) below is what pins.
+
+  # (e) Exactly at the threshold is quiet: the comparison is strictly greater,
+  # so an 80000-entry store never pages on its own.
+  - interval: 1m
+    input_series:
+      - series: "mcp_message_signing_nonce_entries"
+        values: "80000x20"
+
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: McpSigningNonceCapacity
+        exp_alerts: []
+
+  # (f) Above the threshold, but not yet for 5m: still quiet. Occupancy crosses
+  # at t=6m, so the alert is pending until t=11m and firing from t=11m.
+  - interval: 1m
+    input_series:
+      - series: "mcp_message_signing_nonce_entries"
+        values: "0x5 90000x20"
+
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: McpSigningNonceCapacity
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: McpSigningNonceCapacity
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: security
+            exp_annotations:
+              summary: "Signing nonce store is above its capacity watermark"
+
+  # (g) Recovery: occupancy drops back, the alert resolves. Above from t=6m to
+  # t=16m, back to zero from t=17m.
+  - interval: 1m
+    input_series:
+      - series: "mcp_message_signing_nonce_entries"
+        values: "0x5 90000x10 0x10"
+
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: McpSigningNonceCapacity
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: security
+            exp_annotations:
+              summary: "Signing nonce store is above its capacity watermark"
+      - eval_time: 18m
+        alertname: McpSigningNonceCapacity
+        exp_alerts: []
+
+  # (h) One capacity refusal of either reason pages at once, and BOTH reasons
+  # firing together still produce exactly one alert carrying no reason label —
+  # the operator is told the store is refusing, never which identity did it.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_message_signing_nonce_rejections_total{reason="principal_capacity"}'
+        values: "0x5 1 1x20"
+      - series: 'mcp_message_signing_nonce_rejections_total{reason="global_capacity"}'
+        values: "0x5 1 1x20"
+
+    alert_rule_test:
+      # increase() needs two samples spanning the step before the extrapolated
+      # rate registers; one step after the bump is enough.
+      - eval_time: 6m
+        alertname: McpSigningNonceCapacityRefusal
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: security
+            exp_annotations:
+              summary: "Signing nonce admissions are being refused for capacity"
+
+  # (i) Replay and invalid refusals are the store working as designed. They must
+  # never page, however many of them there are.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_message_signing_nonce_rejections_total{reason="replay"}'
+        values: "0+5x20"
+      - series: 'mcp_message_signing_nonce_rejections_total{reason="invalid"}'
+        values: "0+3x20"
+
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: McpSigningNonceCapacityRefusal
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: McpSigningNonceCapacityRefusal
+        exp_alerts: []
+
+  # (j) A single capacity refusal ages out of the 5m increase() window and the
+  # alert resolves — no `for`, so this is a pure function of the window.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_message_signing_nonce_rejections_total{reason="global_capacity"}'
+        values: "0x5 1 1x20"
+
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: McpSigningNonceCapacityRefusal
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: security
+            exp_annotations:
+              summary: "Signing nonce admissions are being refused for capacity"
+      # The bump at t=5m->6m is now more than 5m behind: resolved.
+      - eval_time: 13m
+        alertname: McpSigningNonceCapacityRefusal
+        exp_alerts: []
+
+  # (k) The per-principal reason ALONE pages, and recovers the same way. (h)
+  # moves both capacity reasons together and (j) moves only the global one, so
+  # a rule that matched `global_capacity` and nothing else passed both: one
+  # caller exhausting its own bucket while the store as a whole is fine would
+  # have gone unreported. This is the case that refuses that rule.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_message_signing_nonce_rejections_total{reason="principal_capacity"}'
+        values: "0x5 1 1x20"
+
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: McpSigningNonceCapacityRefusal
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: security
+            exp_annotations:
+              summary: "Signing nonce admissions are being refused for capacity"
+      # Same 5m window as (j): the bump ages out and the alert resolves.
+      - eval_time: 13m
+        alertname: McpSigningNonceCapacityRefusal
+        exp_alerts: []

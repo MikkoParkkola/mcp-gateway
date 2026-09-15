@@ -105,6 +105,38 @@ fn output_error_heading_matches_result_validation() {
     assert!(message.contains("status"));
 }
 
+// Minor 10 (a) — MIK-6865.SCHEMA.1: a JSON Schema 2020-12 keyword absent from
+// draft-07 (`prefixItems`, `unevaluatedProperties`) must be accepted in both
+// an `inputSchema` and an `outputSchema`, not rejected. This validator
+// implements a bounded subset — it reads
+// `type`/`properties`/`required`/`additionalProperties`/`enum`/numeric and
+// string bounds — and ignores keys it does not recognise, so an unrecognised
+// 2020-12 keyword sitting alongside an otherwise-valid schema must not turn
+// matching arguments or a matching result invalid.
+#[test]
+fn ac_schema_10a_accepts_2020_12_keywords_absent_from_draft_07() {
+    let mut schema = schema_with_props(json!({ "a": { "type": "string" } }), &["a"]);
+    schema["prefixItems"] = json!([{ "type": "string" }]);
+    schema["unevaluatedProperties"] = json!(false);
+
+    let output_result = validate_output(&json!({ "a": "x" }), &schema);
+    assert!(
+        output_result.is_valid(),
+        "a 2020-12 keyword must not reject an otherwise-matching output: {:?}",
+        output_result.violations
+    );
+
+    // Same schema, same 2020-12 keywords, on the inputSchema path — the
+    // statement names both inputSchema and outputSchema, and both route
+    // through validate_object, so both need a citation here.
+    let input_result = validate_arguments(&json!({ "a": "x" }), &schema);
+    assert!(
+        input_result.is_valid(),
+        "a 2020-12 keyword must not reject otherwise-matching arguments: {:?}",
+        input_result.violations
+    );
+}
+
 // ── Unknown parameters ──────────────────────────────────────────────────
 
 #[test]
