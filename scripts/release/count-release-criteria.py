@@ -18,8 +18,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 # Modes: no flag prints the coverage line; `--check` is the gate CI runs;
 # `--blocking` lists the blocking ids; `--blocking-consistency` reports rows
-# whose blocking cell contradicts the status beside it, and is not yet part of
-# `--check` (see the branch that implements it).
+# whose blocking cell contradicts the status beside it -- a rule every mode
+# enforces, since the count reads that column.
 STATUS = ROOT / "docs/requirements/RELEASE-4.0.0-criteria-status.md"
 REQUIREMENTS = ROOT / "docs/requirements/RELEASE-4.0.0-requirements.md"
 PLAN = ROOT / "docs/requirements/RELEASE-4.0.0-plan.md"
@@ -585,26 +585,25 @@ def main():
         )
         return 1
 
+    # Enforced on every mode, not only behind its own flag. The count below is
+    # a sum over this column, so a cell contradicting the status beside it is a
+    # wrong headline rather than a separate report, and the gate CI runs has to
+    # be the thing that catches it. The four rows that made this red were
+    # reconciled first; the flag remains as the way to ask the question alone.
+    disagreements = blocking_disagreements(text)
+    if disagreements:
+        print(
+            "blocking cell disagrees with the status the row states:\n  "
+            + "\n  ".join(
+                f"{name} is {word} and its blocking cell reads `{flag}`; "
+                f"the ledger's own rule makes it "
+                f"`{'no' if word in ('MET', 'N/A') else 'yes'}`"
+                for name, word, flag in disagreements
+            ),
+            file=sys.stderr,
+        )
+        return 1
     if "--blocking-consistency" in sys.argv:
-        # Not folded into `--check`, which ci.yml, docker.yml and release.yml all
-        # run: the rule is red on four rows today, and the blocking cells that
-        # would settle them belong to the criteria ledger's owner. The suite
-        # pins the four so a fifth cannot arrive unseen, and this path is what
-        # the owner runs to see them. Promoting it into `--check` is the step
-        # after those cells are reconciled.
-        disagreements = blocking_disagreements(text)
-        if disagreements:
-            print(
-                "blocking cell disagrees with the status the row states:\n  "
-                + "\n  ".join(
-                    f"{name} is {word} and its blocking cell reads `{flag}`; "
-                    f"the ledger's own rule makes it "
-                    f"`{'no' if word in ('MET', 'N/A') else 'yes'}`"
-                    for name, word, flag in disagreements
-                ),
-                file=sys.stderr,
-            )
-            return 1
         print("Blocking column agrees with every status cell.")
         return 0
 

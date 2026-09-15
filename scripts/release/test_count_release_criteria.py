@@ -516,6 +516,59 @@ def test_the_two_statuses_the_rule_exempts_pass_when_flagged_non_blocking():
     assert counter.blocking_disagreements(rows) == []
 
 
+def gate_on(text):
+    """Run the whole gate over a ledger variant, the way CI runs it.
+
+    The rule under test is reached through `main`, so asserting on the function
+    alone would pass unchanged if the call were deleted from the gate.
+    """
+    import contextlib
+    import io
+    import sys
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
+        handle.write(text)
+        path = pathlib.Path(handle.name)
+    original, argv = counter.STATUS, sys.argv
+    try:
+        counter.STATUS, sys.argv = path, ["count-release-criteria.py", "--check"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stderr(io.StringIO()):
+                return counter.main()
+    finally:
+        counter.STATUS, sys.argv = original, argv
+        path.unlink()
+
+
+def regrade_leaving_the_flag(text):
+    """Move one row out of MET and leave its `no` behind.
+
+    The shape three rows took on 2026-09-15, and the one no other check sees:
+    the blocking SET is unchanged, so the cluster rollup stays consistent and
+    the headline total still adds up. Flipping a flag instead would be caught
+    by the cluster check and would prove nothing about this rule.
+    """
+    out, done = [], False
+    for line in text.splitlines(keepends=True):
+        if not done and "| MET " in line and line.rstrip().endswith("| no |"):
+            line, done = line.replace("| MET ", "| ABSENT ", 1), True
+        out.append(line)
+    assert done, "the ledger no longer holds a MET row flagged non-blocking"
+    return "".join(out)
+
+
+def test_the_blocking_rule_is_enforced_by_the_gate_ci_runs():
+    """`--check` is what ci.yml, docker.yml and release.yml run."""
+    text = counter.STATUS.read_text()
+    assert gate_on(text) == 0
+    mutant = regrade_leaving_the_flag(text)
+    before = sum(1 for _i, b, _s in counter.rows(text)[0] if b == "yes")
+    after = sum(1 for _i, b, _s in counter.rows(mutant)[0] if b == "yes")
+    assert before == after, "the mutation moved the count and proves nothing"
+    assert gate_on(mutant) == 1
+
+
 def test_a_dated_ruling_in_the_evidence_cell_lifts_the_flag():
     """The rule the ledger states admits one exception, and it is dated.
 
