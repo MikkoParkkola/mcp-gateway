@@ -196,17 +196,28 @@ def open_rows(text):
     Status is located exactly as `status_violations` locates it -- from the
     left, with the method regex deciding which of the two positions holds it --
     so the two can never disagree about which cell they are reading.
+
+    The population is whatever `rows` admitted, never a second filter written
+    to the same recipe. A private copy of that recipe would drop a row `rows`
+    reports as malformed, and this term would then be published beside the
+    blocking count while resting on a smaller set of rows -- the drift the
+    function exists to end, moved one column across. The four-cell shape is
+    still asked because one criterion id also heads a row in a three-column
+    corrections table, and that row is not a criterion row.
     """
+    admitted = {full_id for _, _, full_id in rows(text)[0]}
     out = []
     for line in text.splitlines():
         if not line.startswith("| ") or line.startswith("| ---"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 4 or not ID.match(cells[0]) or cells[-1] not in ("yes", "no"):
+        if len(cells) < 4 or cells[0] not in admitted:
             continue
         status = cells[3] if METHOD.match(cells[2]) else cells[2]
         if not status.startswith("MET") and not status.startswith("N/A"):
-            out.append(ID.match(cells[0]).group(0))
+            # `cells[0]` IS the admitted id: `ID` is anchored at both ends, so
+            # the match that built `admitted` spans the whole cell.
+            out.append(cells[0])
     return out
 
 

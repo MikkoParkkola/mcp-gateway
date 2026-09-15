@@ -464,6 +464,24 @@ def test_open_rows_admits_every_qualified_met_and_waived_form():
     assert counter.open_rows(met_only) == []
 
 
+def test_open_rows_shares_its_population_with_the_row_parser():
+    """A row `rows` calls malformed is not silently open, and not silently shut.
+
+    The two terms are published side by side, so a private row filter here
+    would let this one rest on a smaller set of rows than the blocking count
+    beside it -- the drift the derivation exists to end, one column across.
+    `rows` reports the row; `main` refuses on a report, so the number is never
+    printed beside a row neither term counted.
+    """
+    flagged = OPEN_LEDGER.replace(
+        "| NFR.SEC.7 | signing | T, M | PARTIAL | evidence | yes |",
+        "| NFR.SEC.7 | signing | T, M | PARTIAL | evidence | no (flagged) |",
+    )
+    _found, malformed = counter.rows(flagged)
+    assert malformed == ["NFR.SEC.7"]
+    assert counter.open_rows(flagged) == ["NFR.PERF.1"]
+
+
 def test_open_rows_differs_from_the_blocking_count_it_is_mistaken_for():
     found, _ = counter.rows(OPEN_LEDGER)
     blocking = sum(1 for _p, flag, _s in found if flag == "yes")
