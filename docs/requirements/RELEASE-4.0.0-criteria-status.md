@@ -321,17 +321,20 @@ repository — its own definition. Struck rows have since acquired a caller:
 
 A second dead-definition case was recorded here on 2026-09-11 and **does not reproduce on this
 line** (re-checked 2026-09-15). `blocked_response_value` has no definition in `src/`, and the two
-commits that carried it — `66d1fc23` adding, `e0f9396b` dropping — are both unreachable from HEAD
+commits that carried it, `66d1fc23` and `e0f9396b`, are both unreachable from HEAD
 (`git merge-base --is-ancestor` exits 1 for each), so `git log -S'blocked_response_value' HEAD --
-src/security/firewall/mod.rs` returns nothing. `cargo clippy --all-targets --all-features -- -D
+src/security/firewall/mod.rs` returns nothing. The symbol string does still reach HEAD in three
+commits, but all three touch documentation only; `git grep blocked_response_value HEAD` matches
+nothing outside this file and the rollup. `cargo clippy --all-targets --all-features -- -D
 warnings` is green on HEAD. The symbol is absent because that work never arrived on the release
 line, not because a fix landed here — the distinction matters, because the rollup entry for this
 blocker previously cited `e0f9396b` as "an ancestor of HEAD" and it is not one.
 
-This moves no criterion row either way — it is a split change, not a requirements gap — but it does
-mean the branch cannot pass its own lint gate until the calling half is committed. Recorded here
-rather than fixed: deleting the definition would discard the other half's API, and an
-`#[allow(dead_code)]` would silence the one signal that the change is incomplete.
+This moves no criterion row either way. The rationale recorded on 2026-09-11 — leave the
+definition in place, because deleting it would discard the other half's API and an
+`#[allow(dead_code)]` would silence the one signal that the change is incomplete — applied to the
+branch that carried the split. Neither half reaches this line, so the lint gate here is not
+waiting on the calling half: it is green.
 
 The two budget setters left this table on 2026-09-05 with GH #475. Startup now reads the
 `error_budget:` config section and applies both, and the `#[allow(dead_code)]` that hid them is

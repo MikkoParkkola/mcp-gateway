@@ -1033,14 +1033,14 @@ the release. Three such gates were on the record. Their state today:
   at `738c7cee` (2026-09-11), alongside `Format`, `Tests`, `Kani` and the ledger job. The
   2026-09-07 record no longer reproduces on the base tree.
 - **The `blocked_response_value` lint blocker — CLOSED, and never present on this line.** The
-  symbol has no matches in `src/`, and no commit that touched it is reachable from HEAD:
-  `git merge-base --is-ancestor` exits 1 for both `e0f9396b` and `66d1fc23`, and
+  symbol has no matches in `src/`, and neither commit that carried the definition is reachable
+  from HEAD: `git merge-base --is-ancestor` exits 1 for both `e0f9396b` and `66d1fc23`, and
   `git log -S'blocked_response_value' HEAD -- src/security/firewall/mod.rs` returns nothing.
+  Three commits reachable from HEAD do contain the string, all of them documentation.
   The earlier reading of this entry — closed *by* `e0f9396b`, "an ancestor of HEAD" — was
   wrong on the evidence while right on the conclusion: the blocker is absent because the work
   never arrived here, not because a fix landed. The stale note in `criteria-status.md` was
-  corrected in place on 2026-09-15; the freeze that forced the correction to be recorded here
-  has lifted.
+  corrected in place on 2026-09-15.
 - **A final review of the committed tree — OPEN, and it is the one that still binds.**
   `grok-review` and `kimi-review` both returned SHIP on the second round of the patch, but
   three changes landed after that verdict: a comment correction, a `let`-else in the direct
