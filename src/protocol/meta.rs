@@ -426,6 +426,31 @@ impl Declared {
         }
     }
 
+    /// Read a declaration out of an `initialize` handshake's `capabilities`.
+    ///
+    /// The handshake object has the same shape as a modern request's
+    /// `clientCapabilities`, so the two readings share one parse and cannot
+    /// diverge. This is the only declaration a legacy-shaped request has:
+    /// MRTR.9 reads per-request `_meta`, and a legacy call carries none, so a
+    /// transport that keeps a session — stdio — has to remember what the
+    /// handshake said or treat every later call as declaring nothing.
+    ///
+    /// Absent, null, or non-object capabilities answer [`Self::NONE`]: a
+    /// declaration nothing can read declared nothing.
+    ///
+    /// ```
+    /// # use mcp_gateway::protocol::meta::Declared;
+    /// let caps = serde_json::json!({"elicitation": {}});
+    /// assert!(Declared::from_handshake(Some(&caps)).has("elicitation"));
+    /// assert_eq!(Declared::from_handshake(None), Declared::NONE);
+    /// ```
+    #[must_use]
+    pub fn from_handshake(capabilities: Option<&Value>) -> Self {
+        capabilities
+            .and_then(Value::as_object)
+            .map_or(Self::NONE, Self::parse)
+    }
+
     /// Read a declaration out of a `clientCapabilities` object.
     ///
     /// Only an object-valued key declares. The specification writes a declared
