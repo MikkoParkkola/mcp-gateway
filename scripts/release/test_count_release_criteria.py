@@ -436,36 +436,58 @@ def test_a_letter_split_is_not_stripped_like_a_clause():
     assert counter.CLAUSE.sub("", "MIK-7213.CACHE.4a") == "MIK-7213.CACHE.4a"
 
 
-# The four rows the criteria ledger states as neither MET nor N/A while their
-# blocking cell reads `no`. Pinned, not tolerated: a fifth one turns this test
-# red the tick it appears, and so does the owner reconciling any of these four,
-# which is the moment `--blocking-consistency` gets folded into `--check`.
-KNOWN_DISAGREEMENTS = {
-    "MIK-7212.MRTR.7a",
-    "MIK-7212.MRTR.7b",
-    "NFR.COMPAT.1",
-    "NFR.PERF.1",
-}
+def test_both_selectors_see_the_same_criterion_rows():
+    """The parity the shared selector exists to hold, asserted on the real file.
+
+    Deliberately not a pin on WHICH rows disagree. That set is the content of a
+    document another session edits, and three of the four rows it held moved
+    between one run of this suite and the next -- a suite that asserts another
+    owner's work in progress goes red on their edits, not on ours.
+    `--blocking-consistency` is the path that reports the verdicts.
+
+    What belongs here is that the two row selections still agree. They were two
+    copies of one predicate before this rule was added; a third reader deciding
+    on its own which rows it may see is how a rule comes to police a different
+    population than the count it is compared against.
+    """
+    text = counter.STATUS.read_text()
+    seen = [cells[0] for cells, _status in counter.criterion_cells(text)]
+    counted = [suffixed for _id, _flag, suffixed in counter.rows(text)[0]]
+    assert len(seen) > 100, len(seen)
+    assert seen == counted, set(seen) ^ set(counted)
+
+    # The live file holds no malformed flag today, so parity over it alone is
+    # green whether or not the selector filters on the flag. One injected row
+    # is what makes this assertion fail if the two ever stop agreeing on what a
+    # criterion row is.
+    bad = "| NFR.PERF.9 | a criterion | M | ABSENT | nothing built | maybe |"
+    spiked = f"{text}\n{bad}\n"
+    assert [cells[0] for cells, _status in counter.criterion_cells(spiked)] == seen
+    kept, malformed = counter.rows(spiked)
+    assert [suffixed for _id, _flag, suffixed in kept] == counted
+    assert malformed == ["NFR.PERF.9"]
 
 
-def named(disagreements):
-    return {d.split(" is ", 1)[0] for d in disagreements}
+def test_a_malformed_blocking_cell_is_a_defect_of_the_check_that_owns_it():
+    """The selector skips it; `rows` calls it malformed and stops the run.
 
-
-def test_the_live_ledger_disagrees_on_exactly_the_rows_already_reported():
-    found = named(counter.blocking_disagreements(counter.STATUS.read_text()))
-    assert found == KNOWN_DISAGREEMENTS, found
+    Reported once, by one check. The rule below never sees the row, which is
+    only safe because `main` refuses the document before it gets there.
+    """
+    row = "| NFR.PERF.9 | a criterion | M | ABSENT | nothing built | maybe |"
+    assert counter.rows(row) == ([], ["NFR.PERF.9"])
+    assert counter.blocking_disagreements(row) == []
 
 
 def test_a_row_that_is_absent_and_flagged_non_blocking_is_caught():
     row = "| NFR.PERF.9 | a criterion | M | ABSENT | nothing built | no |"
-    assert named(counter.blocking_disagreements(row)) == {"NFR.PERF.9"}
+    assert counter.blocking_disagreements(row)[0][0] == "NFR.PERF.9"
 
 
 def test_a_row_that_is_met_and_flagged_blocking_is_caught():
     """The other direction: work that is done must not inflate the count."""
     row = "| NFR.PERF.9 | a criterion | M | MET | shipped | yes |"
-    assert named(counter.blocking_disagreements(row)) == {"NFR.PERF.9"}
+    assert counter.blocking_disagreements(row)[0][0] == "NFR.PERF.9"
 
 
 def test_the_two_statuses_the_rule_exempts_pass_when_flagged_non_blocking():
@@ -479,7 +501,7 @@ def test_the_two_statuses_the_rule_exempts_pass_when_flagged_non_blocking():
 def test_a_qualified_status_is_read_by_its_word_not_its_parenthetical():
     """`ABSENT (regraded 2026-09-15)` is the shape three rows regraded into."""
     row = "| NFR.PERF.9 | a criterion | M | ABSENT (regraded 2026-09-15) | x | no |"
-    assert named(counter.blocking_disagreements(row)) == {"NFR.PERF.9"}
+    assert counter.blocking_disagreements(row)[0][0] == "NFR.PERF.9"
 
 
 def test_a_status_outside_the_vocabulary_is_left_to_the_check_that_owns_it():
@@ -492,7 +514,7 @@ def test_a_status_outside_the_vocabulary_is_left_to_the_check_that_owns_it():
 def test_a_functional_row_without_a_method_column_reads_its_own_status():
     """Position is decided by the method regex, not by the id's prefix."""
     row = "| MIK-7212.MRTR.9 | a criterion | ABSENT | nothing built | no |"
-    assert named(counter.blocking_disagreements(row)) == {"MIK-7212.MRTR.9"}
+    assert counter.blocking_disagreements(row)[0][0] == "MIK-7212.MRTR.9"
 
 
 def test_the_shared_selector_skips_what_is_not_a_criterion_row():

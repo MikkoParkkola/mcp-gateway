@@ -230,8 +230,14 @@ def blocking_disagreements(text):
     the count with work that is done, which is how a cluster came to name a met
     criterion as its blocker.
 
-    A status outside the vocabulary is not reported here. `status_violations`
-    already owns that row, and naming it twice reports one defect as two.
+    Two row shapes are deliberately not reported here, because a check that
+    already owns them would then name one defect twice, in two messages: a
+    status outside the vocabulary belongs to `status_violations`, and a blocking
+    cell that is neither `yes` nor `no` belongs to `rows`, which calls that row
+    malformed and stops the run before this rule is ever consulted.
+
+    Returns `(id, status word, flag)` rather than sentences, so that a caller
+    reading the result never has to parse the message back apart.
     """
     out = []
     for cells, status in criterion_cells(text):
@@ -240,10 +246,7 @@ def blocking_disagreements(text):
             continue
         expected = "no" if word.group(1) in ("MET", "N/A") else "yes"
         if cells[-1] != expected:
-            out.append(
-                f"{cells[0]} is {word.group(1)} and its blocking cell reads "
-                f"`{cells[-1]}`; the ledger's own rule makes it `{expected}`"
-            )
+            out.append((cells[0], word.group(1), cells[-1]))
     return out
 
 
@@ -570,7 +573,12 @@ def main():
         if disagreements:
             print(
                 "blocking cell disagrees with the status the row states:\n  "
-                + "\n  ".join(disagreements),
+                + "\n  ".join(
+                    f"{name} is {word} and its blocking cell reads `{flag}`; "
+                    f"the ledger's own rule makes it "
+                    f"`{'no' if word in ('MET', 'N/A') else 'yes'}`"
+                    for name, word, flag in disagreements
+                ),
                 file=sys.stderr,
             )
             return 1
