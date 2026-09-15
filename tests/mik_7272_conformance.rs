@@ -223,17 +223,17 @@ const MINOR: &[Row] = &[
         // read off the file.)
         //
         // Falsifier, 2026-09-15, mutation `discovery_extensions()` ->
-        // `HashMap::new()`:
-        //   unmutated control ..... route test GREEN
-        //   mutated ............... route test RED at `is_object()`,
-        //                           `mik_7217_acs.rs:486`; `capabilities` came
-        //                           back with no `extensions` key AT ALL, which
-        //                           is what `#[serde(default,
-        //                           skip_serializing_if = "HashMap::is_empty")]`
-        //                           at `src/protocol/types.rs:255` predicts
-        //   mutated ............... builder test GREEN
-        // The builder row is replaced below, not kept beside the route test: a
-        // row that cannot die to the mutation adds nothing to a cell.
+        // `HashMap::new()`, run against the cited route test:
+        //   unmutated control ..... GREEN
+        //   mutated ............... RED, at the assert that the capabilities
+        //                           carry an extensions map — the body came
+        //                           back with no `extensions` key AT ALL, not
+        //                           an empty object, which is what
+        //                           `#[serde(default, skip_serializing_if =
+        //                           "HashMap::is_empty")]` at
+        //                           `src/protocol/types.rs:255` predicts
+        //   mutated ............... builder unit row GREEN
+        // So the builder row could not have caught this and the route test can.
         evidence: &[
             "mik_7272_task_1_acs::wire::ac_ext_1_e6_a_non_object_settings_value_does_not_declare_the_extension",
             "mik_7272_task_1_acs::wire::ac_ext_1_e7_a_valid_settings_object_still_declares_the_extension",
