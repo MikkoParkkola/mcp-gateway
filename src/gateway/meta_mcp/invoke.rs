@@ -878,14 +878,17 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         // a budget enforced only at the top is a budget a backend can walk past
         // by asking. The warnings are dropped: the ones that ride the envelope
         // are the first call's, and a bridged round has nowhere to put its own.
+        //
+        // `NotAdmitted`, not `BackendFailed`: the round is refused before the
+        // dispatch, so there is no side effect for the settlement arm to
+        // protect and burning the idempotency key here would deny the caller a
+        // retry of work that never ran.
         #[cfg(feature = "cost-governance")]
         self.meta
             .admit_spend(self.tool, self.api_key_name)
-            .map_err(
-                |e| crate::gateway::input_bridge::BridgeError::BackendFailed {
-                    message: e.to_string(),
-                },
-            )?;
+            .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
+                message: e.to_string(),
+            })?;
 
         // Through `accounted_dispatch`, not `dispatch_to_backend`: a bridged
         // round is a real backend call and is accounted and gated exactly like
@@ -2203,10 +2206,12 @@ impl MetaMcp {
                     // that carries a dispatch whose outcome is unknown from
                     // here, so it is the one that must not readmit a retry of
                     // a side effect that may already have run (ADR-012
-                    // consequence 1). Every other variant ends a round the
-                    // backend answered with a question — it said it did not
-                    // act — so releasing the key is correct for them and the
-                    // caller may retry once the exchange can be carried.
+                    // consequence 1). Every other variant ends a round that
+                    // never reached the backend — `NotAdmitted` was refused
+                    // above the dispatch, and the rest end a round the backend
+                    // answered with a question, saying it did not act — so
+                    // releasing the key is correct for them and the caller may
+                    // retry once the exchange can be carried.
                     if let crate::gateway::input_bridge::BridgeError::BackendFailed { .. } = &error
                         && let Some(reservation) = idem_reservation.as_mut()
                     {

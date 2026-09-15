@@ -6267,3 +6267,105 @@ async fn a_failed_bridged_round_settles_the_idempotency_key() {
         script.calls()
     );
 }
+
+// MIK-7212.WIRE: a bridged round the budget refuses releases the idempotency
+// key instead of settling it. The refusal happens above `accounted_dispatch`,
+// so no side effect ran and the caller must be able to retry once the budget
+// rolls over — settling here would sell a terminal failure for work the
+// backend never saw.
+//
+// The budget is sized to admit exactly one call: the first dispatch is allowed
+// and records its spend, which is what puts the bridged round over the limit.
+// Map the refusal back to `BackendFailed` and the cache holds a stored error
+// instead of being empty.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::cost_accounting::config::{BudgetLimits, CostGovernanceConfig};
+    use crate::cost_accounting::enforcer::BudgetEnforcer;
+    use crate::cost_accounting::registry::CostRegistry;
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "asking_backend",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let script = Arc::new(ScriptedToolCallTransport::new(vec![json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "k1": {
+                "method": "elicitation/create",
+                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+            }
+        },
+        "requestState": "backend-state-1"
+    })]));
+    let transport: Arc<dyn Transport> = script.clone();
+    backend.set_transport_for_test(transport);
+    let _ = registry.register(backend);
+
+    let mut cost_config = CostGovernanceConfig {
+        enabled: true,
+        budgets: BudgetLimits {
+            daily: None,
+            per_tool: [("book".to_string(), 0.015)].into_iter().collect(),
+            per_key: std::collections::HashMap::new(),
+        },
+        ..CostGovernanceConfig::default()
+    };
+    cost_config.tool_costs.insert("book".to_string(), 0.01);
+    let cost_registry = Arc::new(CostRegistry::new(&cost_config));
+    let enforcer = Arc::new(BudgetEnforcer::new(cost_config, Arc::clone(&cost_registry)));
+
+    let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
+    let mut meta = MetaMcp::new(registry).with_cost_governance(enforcer, cost_registry);
+    meta.enable_idempotency(Arc::clone(&cache), Duration::from_secs(300));
+
+    let channel = AcceptingChannel {
+        asked: std::sync::Mutex::new(Vec::new()),
+    };
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("budget-refused-key".to_string()),
+        ..Default::default()
+    };
+    let mut ctx = allow_all_ctx();
+    ctx.era = crate::protocol::meta::Era::Legacy;
+    ctx.input_capabilities = crate::protocol::meta::classify_request(
+        Some(&json!({
+            "_meta": {
+                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+            }
+        })),
+        None,
+    )
+    .declared_capabilities();
+    ctx.channel = &channel;
+    ctx.retry = &retry;
+
+    let refused = meta
+        .invoke_tool(
+            &json!({"server": "asking_backend", "tool": "book", "arguments": {}}),
+            Some("session-wire-3"),
+            &ctx,
+        )
+        .await
+        .expect_err("a bridged round the budget refuses is not a result");
+    assert_eq!(refused.to_rpc_code(), -32003);
+
+    assert_eq!(
+        script.calls().len(),
+        1,
+        "the refused round must not have reached the backend: {:#?}",
+        script.calls()
+    );
+    assert!(
+        cache.is_empty(),
+        "a round refused above the dispatch leaves no settled key behind"
+    );
+}
