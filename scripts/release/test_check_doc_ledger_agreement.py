@@ -43,8 +43,9 @@ TRACKER = (ROOT / agreement.TRACKER).read_text()
 
 
 def newest_row(text):
-    rows = [line for line in text.splitlines() if agreement.SUMMARY.match(line)]
-    return max(rows)
+    """Pick the row through the checker's own key, so both always agree."""
+    rows = list(agreement.SUMMARY.finditer(text))
+    return max(rows, key=agreement.row_age).group(0)
 
 
 def swap(text, old, new):
@@ -138,7 +139,7 @@ class UnreadableIsNotGreen(unittest.TestCase):
 
     def test_an_unknown_number_word_is_refused(self):
         words = {n: w for w, n in agreement.WORDS.items()}
-        text = swap(MATRIX, f"All {words[MAJORS]} major", "All twenty-seven major")
+        text = swap(MATRIX, f"All {words[MAJORS]} major", "All forty major")
         with self.assertRaises(agreement.Drift):
             agreement.check_prose(text, MAJORS, MINORS)
 

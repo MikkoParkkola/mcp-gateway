@@ -36,8 +36,11 @@ UNCOVERED = re.compile(
     r"^### Statements without evidence — UNCOVERED \((\d+) of (\d+)\)$", re.M
 )
 PROSE = re.compile(r"^All (\w+) major statements and minor 1-(\d+) carry", re.M)
+# The sixth column counts what closed on that tick. It is deliberately not
+# captured: no ledger derives it, so asserting it would only compare the
+# document against itself.
 SUMMARY = re.compile(
-    r"^\| (\d{4}-\d{2}-\d{2})([a-z]+) \| (\d+) \| (\d+) \| \*\*(\d+)\*\* \| (\d+) \|", re.M
+    r"^\| (\d{4}-\d{2}-\d{2})([a-z]+) \| (\d+) \| (\d+) \| \*\*(\d+)\*\* \| \d+ \|", re.M
 )
 
 WORDS = {
@@ -51,6 +54,11 @@ WORDS = {
 
 class Drift(Exception):
     """A disagreement, or a document this checker can no longer read."""
+
+
+def row_age(match):
+    """Sort key for a summary row. Shared with the test suite so both agree."""
+    return match.group(1), len(match.group(2)), match.group(2)
 
 
 def line_of(text, index):
@@ -126,7 +134,7 @@ def check_tracker(text, pending, blocking):
     if not rows:
         raise Drift(f"{TRACKER}: no summary rows matched")
     # Newest by parsed key, so an out-of-order append cannot be read as current.
-    newest = max(rows, key=lambda r: (r.group(1), len(r.group(2)), r.group(2)))
+    newest = max(rows, key=row_age)
     at = f"{TRACKER}:{line_of(text, newest.start())}"
     said_blocking, said_pending, said_total = (int(newest.group(i)) for i in (3, 4, 5))
 
