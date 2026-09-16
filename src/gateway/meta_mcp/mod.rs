@@ -70,7 +70,6 @@ mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
 mod direct_route;
-#[cfg(test)]
 mod interim_promotion;
 #[cfg(test)]
 mod interim_promotion_tests;
@@ -2158,9 +2157,27 @@ impl MetaMcp {
 
         match result {
             Ok(content) => match shape {
+                // MRTR.11a: an interim round must not be pretty-printed into
+                // `content[0].text`. `wrap_tool_success` states `is_error:
+                // false` and buries `resultType` inside a JSON string, where
+                // neither a protocol client nor the firewall's
+                // `PreserveInputRequired` policy can read it — a question
+                // committed as an answer. The task worker already escapes via
+                // `ResultShape::Native`; this is the same escape for the
+                // synchronous thread, gated so a backend cannot mint one.
                 ResultShape::Wrapped => {
-                    let has_output_schema = tool_name == "gateway_search_tools";
-                    wrap_tool_success(id, &content, has_output_schema)
+                    match interim_promotion::promote_interim(&content, caller.input_capabilities) {
+                        interim_promotion::Promotion::Native => {
+                            JsonRpcResponse::success(id, content)
+                        }
+                        interim_promotion::Promotion::Wrap => {
+                            let has_output_schema = tool_name == "gateway_search_tools";
+                            wrap_tool_success(id, &content, has_output_schema)
+                        }
+                        interim_promotion::Promotion::UpstreamFault(message) => {
+                            error_response_preserving_status(id, &Error::json_rpc(-32603, message))
+                        }
+                    }
                 }
                 ResultShape::Native => JsonRpcResponse::success(id, content),
             },

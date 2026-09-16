@@ -1,9 +1,9 @@
 //! MRTR.11a/.11b — the presentation decision, pinned row by row.
 //!
-//! Each row names the single check that decides it. The seam is
-//! `#[cfg(test)]` and unwired; wiring it into `dispatch_below_gate`'s
-//! `ResultShape::Wrapped` arm (`mod.rs:2157`) is the declared follow-up and is
-//! deliberately out of scope here.
+//! Each row names the single check that decides it. The seam is wired into
+//! `dispatch_below_gate_shaped`'s `ResultShape::Wrapped` arm, which reads the
+//! caller's `input_capabilities` for the gate; these rows are what pin which
+//! arm each result takes.
 
 use super::interim_promotion::{Promotion, promote_interim};
 use crate::protocol::meta::Declared;

@@ -18,8 +18,9 @@
 //! fault as a successful call.
 //!
 //! The decision is a pure function so it is testable without standing up a
-//! `MetaMcp` server; nothing in the tree currently exercises
-//! `dispatch_below_gate`. The same reason makes it reusable: the chain-interim
+//! `MetaMcp` server; nothing in the tree exercises `dispatch_below_gate`
+//! directly, and the rows below are what pin the arms its `ResultShape::Wrapped`
+//! branch now takes. The same reason makes it reusable: the chain-interim
 //! seam relays `inputRequests` with no capability gate
 //! (`chain_interim.rs:101`), and that gate is one of the arms below.
 
