@@ -591,3 +591,243 @@ async fn ac_mrtr_7a_request_in_flight_when_stdin_closes_still_gets_its_response(
 
     session.shutdown().await;
 }
+
+/// The reply a client sends to one `elicitation/create`.
+///
+/// `action` is mandatory for elicitation: `InputBridge::project`
+/// (`src/gateway/input_bridge.rs:647`) treats a reply without it as malformed
+/// rather than filing it, so a row that answers with a bare object would leave
+/// the dispatch to fail instead of complete.
+fn elicitation_answer(id: &Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        // Echoed verbatim: the bridge mints its own ids and they are strings,
+        // not the numbers a client uses for its own calls.
+        "id": id.clone(),
+        "result": {"action": "accept", "content": {}},
+    })
+}
+
+/// The burst bound. `StdioSession::send` has no timeout of its own, so a
+/// gateway that stops reading fills the stdin pipe and parks the test forever;
+/// under this bound it fails the row instead of hanging CI.
+const BURST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `MAX_CONCURRENT_STDIO_DISPATCHES` (`src/gateway/server/mod.rs:83`). Not
+/// importable from an integration test, so it is repeated here and the row
+/// fails loudly if it ever moves.
+const ADMISSION_CAP: i64 = 64;
+
+/// The first id of a burst. `1` is the `initialize` handshake.
+const FIRST_CALL_ID: i64 = 2;
+
+/// Every outbound `elicitation/create` in `frames`.
+fn prompts_in(frames: &[Value]) -> Vec<&Value> {
+    frames
+        .iter()
+        .filter(|frame| frame.get("method").and_then(Value::as_str) == Some("elicitation/create"))
+        .collect()
+}
+
+/// Every id carrying a `-32000 server busy` refusal.
+fn refused_ids(frames: &[Value]) -> Vec<i64> {
+    frames
+        .iter()
+        .filter(|frame| frame.pointer("/error/code").and_then(Value::as_i64) == Some(-32000))
+        .filter_map(|frame| frame.get("id").and_then(Value::as_i64))
+        .collect()
+}
+
+/// MIK-7212.MRTR.7a — the single stdin reader keeps reading past the admission
+/// cap, so a client that pipelines more bridged calls than may run at once is
+/// still served.
+///
+/// This is the regression pin for `d0c68e15`, where the read loop awaited an
+/// admission permit inline: the 65th pipelined call parked the only reader, and
+/// the answers that would have released the 64 running dispatches could only
+/// arrive through that parked reader. Until now the defect was pinned only by a
+/// unit row on the non-async helper, which cannot see the loop it was a defect
+/// in.
+///
+/// The load-bearing assertion is the last one. Counting 64 prompts and no
+/// refusal says only that the gateway did not refuse the 65th; a gateway that
+/// read the 65th line and dropped it on the floor passes that much. Requiring
+/// the 65th prompt to appear once admission frees is what separates accepted
+/// and parked from silently discarded.
+#[tokio::test]
+async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    // Synchronised deliberately: a burst sent before the handshake is answered
+    // races initialization, and the errors that produces have nothing to do
+    // with the cap this row is about.
+    session.send(&initialize_request(1)).await;
+    let (_, initialized) = session.read_until_id(1).await;
+    assert!(initialized.is_some(), "the child never answered initialize");
+
+    let last_call_id = FIRST_CALL_ID + ADMISSION_CAP;
+    timeout(BURST_TIMEOUT, async {
+        for id in FIRST_CALL_ID..=last_call_id {
+            session.send(&asking_call(id)).await;
+        }
+    })
+    .await
+    .expect("the child stopped reading stdin mid-burst: the reader parked");
+
+    let lines = session.collect_lines(COLLECT_WINDOW).await;
+    let frames = frames_lenient(&lines);
+    assert!(
+        saw_method(&received, "initialize"),
+        "the fixture backend was never reached, so nothing could have asked"
+    );
+
+    let prompts = prompts_in(&frames);
+    assert_eq!(
+        prompts.len(),
+        usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative"),
+        "admission bounds what may run at 64, so 65 unanswered bridged calls \
+         must produce exactly 64 outstanding questions; {} arrived",
+        prompts.len()
+    );
+    assert!(
+        refused_ids(&frames).is_empty(),
+        "65 calls is one past admission but far short of the inflight cap, so \
+         none of them may be refused; refused: {:?}",
+        refused_ids(&frames)
+    );
+
+    // Answer a question the test has actually received. A predetermined id
+    // assumes dispatches start in stdin order, which 9b0caa1e withdrew, and
+    // would hang whenever the chosen call is the one still parked.
+    let answered = prompts[0]
+        .get("id")
+        .cloned()
+        .expect("an elicitation/create the gateway wrote carries an id");
+    session.send(&elicitation_answer(&answered)).await;
+
+    let after = frames_lenient(&session.collect_lines(COLLECT_WINDOW).await);
+    assert!(
+        after.iter().any(|frame| {
+            frame.get("method").is_none()
+                && frame.get("result").is_some()
+                && matches!(frame.get("id").and_then(Value::as_i64),
+                    Some(id) if (FIRST_CALL_ID..=last_call_id).contains(&id))
+        }),
+        "the answered call never completed, so the reader never consumed the \
+         answer: {after:?}"
+    );
+    assert!(
+        !prompts_in(&after).is_empty(),
+        "the 65th call was accepted but never asked its question once \
+         admission freed, so it was read and dropped rather than parked: \
+         {after:?}"
+    );
+
+    session.shutdown().await;
+}
+
+/// `MAX_INFLIGHT_STDIO_REQUESTS` = `STDOUT_QUEUE_DEPTH`
+/// (`src/gateway/server/mod.rs:76,89`). Repeated here for the same reason as
+/// [`ADMISSION_CAP`].
+const INFLIGHT_CAP: i64 = 1024;
+
+/// MIK-7212.MRTR.7b — past the inflight cap the excess is refused, not queued
+/// behind the reader.
+///
+/// The read loop consults `inflight` through a deliberately non-async
+/// `try_acquire_owned` and answers `-32000 server busy` with `try_send`, so
+/// saturation costs the client a refusal and never costs it the reader. Nothing
+/// in this row is answered, so no permit is released mid-burst and the ids the
+/// loop accepts are the ids it read first.
+///
+/// The boundary is asserted as a window rather than a point, and that is not
+/// slack for its own sake: `initialize`'s own dispatch takes an inflight permit
+/// and releases it at `drop(slot)`, which is not ordered against the response
+/// this row waits for, so the cap is observable to within one slot. The window
+/// still fails any regressed cap — halve the constant and the first group draws
+/// refusals — which "at least one refusal somewhere in 1025 calls" would not.
+#[tokio::test]
+async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    session.send(&initialize_request(1)).await;
+    let (_, initialized) = session.read_until_id(1).await;
+    assert!(initialized.is_some(), "the child never answered initialize");
+
+    // One short of the cap, so the handshake's own permit cannot push this
+    // group over it whether or not it has been released yet.
+    let last_below_cap = FIRST_CALL_ID + INFLIGHT_CAP - 2;
+    let last_over_cap = last_below_cap + 3;
+    timeout(BURST_TIMEOUT, async {
+        for id in FIRST_CALL_ID..=last_over_cap {
+            session.send(&asking_call(id)).await;
+        }
+    })
+    .await
+    .expect("the child stopped reading stdin mid-burst: the reader parked");
+
+    let lines = session.collect_lines(COLLECT_WINDOW).await;
+    let frames = frames_lenient(&lines);
+    assert!(
+        saw_method(&received, "initialize"),
+        "the fixture backend was never reached, so nothing could have asked"
+    );
+
+    let refused = refused_ids(&frames);
+    let below: Vec<i64> = refused
+        .iter()
+        .copied()
+        .filter(|id| *id <= last_below_cap)
+        .collect();
+    assert!(
+        below.is_empty(),
+        "ids up to {last_below_cap} are within the inflight cap and must all be \
+         accepted; {} of them were refused, so the cap has regressed below \
+         1024. First: {:?}",
+        below.len(),
+        &below[..below.len().min(5)]
+    );
+    assert!(
+        !refused.is_empty(),
+        "{} calls is past the inflight cap, so the excess must be refused with \
+         -32000 rather than queued; nothing was refused at all",
+        last_over_cap - FIRST_CALL_ID + 1
+    );
+
+    // The refusal is not the whole invariant: a gateway that refuses everything
+    // once saturated would satisfy the assertions above. Work accepted before
+    // the cap must still complete when its answer arrives.
+    let prompts = prompts_in(&frames);
+    assert_eq!(
+        prompts.len(),
+        usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative"),
+        "saturating inflight must not change what admission lets run: {} \
+         questions are outstanding, not {ADMISSION_CAP}",
+        prompts.len()
+    );
+    let answered = prompts[0]
+        .get("id")
+        .cloned()
+        .expect("an elicitation/create the gateway wrote carries an id");
+    session.send(&elicitation_answer(&answered)).await;
+
+    let after = frames_lenient(&session.collect_lines(COLLECT_WINDOW).await);
+    assert!(
+        after.iter().any(|frame| {
+            frame.get("method").is_none()
+                && frame.get("result").is_some()
+                && matches!(frame.get("id").and_then(Value::as_i64),
+                    Some(id) if (FIRST_CALL_ID..=last_below_cap).contains(&id))
+        }),
+        "a call accepted before the cap never completed after its answer was \
+         sent, so saturation cost the client its reader: {after:?}"
+    );
+
+    session.shutdown().await;
+}
