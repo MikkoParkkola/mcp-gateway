@@ -1948,15 +1948,7 @@ async fn ac_mrtr_7a_opaque_state_is_neither_scanned_nor_delivered() {
     let mut pending = interim(&[("k1", ask("Which branch?"))]);
     pending.request_state = Some(format!("state-{STATE_CANARY}"));
 
-    let outcome = bridge_gated(
-        &client,
-        &backend,
-        &gate,
-        &records,
-        declared_all(),
-        &pending,
-    )
-    .await;
+    let outcome = bridge_gated(&client, &backend, &gate, &records, declared_all(), &pending).await;
 
     assert!(outcome.is_ok(), "a clean batch is carried: {outcome:?}");
     for seen in gate.inspected() {

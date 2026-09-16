@@ -887,9 +887,11 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
         };
         self.meta
             .enforce_firewall_challenge(challenge, &targets, &correlation)
-            .map_err(|_| crate::gateway::input_bridge::BridgeError::ChallengeRefused {
-                dispatched: false,
-            })
+            .map_err(
+                |_| crate::gateway::input_bridge::BridgeError::ChallengeRefused {
+                    dispatched: false,
+                },
+            )
     }
 }
 
@@ -1761,6 +1763,23 @@ impl MetaMcp {
                 // error is what stops the retry re-running a side effect that
                 // may already have committed (ADR-012 consequence 1).
                 GuardOutcome::CachedError(error) => {
+                    // A refusal keeps its provenance across the replay as well
+                    // as across the bridge boundary. Served as a generic error
+                    // it would skip the delivery-refusal projection and count
+                    // as a client failure — a retry could then open the circuit
+                    // breaker on a client whose only fault was retrying a call
+                    // the gateway itself refused.
+                    if error
+                        .get(crate::idempotency::FIREWALL_REFUSAL_MARKER)
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                    {
+                        debug!(
+                            server,
+                            tool, key, trace_id, "Idempotency cache hit (firewall refusal)"
+                        );
+                        return Err(Error::ResponseFirewallRefused);
+                    }
                     let (code, message) = crate::idempotency::cached_error_parts(&error);
                     debug!(
                         server,
@@ -2255,10 +2274,14 @@ impl MetaMcp {
                 // taken effect (ADR-012 consequence 1), so the key settles.
                 Err(crate::gateway::input_bridge::BridgeError::ChallengeRefused { dispatched }) => {
                     if dispatched && let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.fail(&json!({
-                            "code": -32600,
-                            "message": "Response blocked by security firewall",
-                        }));
+                        // Built from the variant rather than spelled out, so the
+                        // replayed refusal cannot drift from the live one.
+                        let mut body = json!({
+                            "code": Error::ResponseFirewallRefused.to_rpc_code(),
+                            "message": Error::ResponseFirewallRefused.to_string(),
+                        });
+                        body[crate::idempotency::FIREWALL_REFUSAL_MARKER] = json!(true);
+                        reservation.fail(&body);
                     }
                     warn!(
                         server,

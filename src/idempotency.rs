@@ -858,6 +858,18 @@ pub fn enforce(
 /// Split the payload of a [`GuardOutcome::CachedError`] into its JSON-RPC code
 /// and message.
 ///
+/// Marks a stored error as the gateway's own firewall refusal.
+///
+/// [`cached_error_parts`] reads `code` and `message` alone, so this member
+/// rides along in the stored body and lets the replay restore the typed
+/// `ResponseFirewallRefused` the first attempt returned instead of serving a
+/// generic JSON-RPC error. A refusal replayed untyped loses the
+/// delivery-refusal projection and is accounted against the client, which is
+/// the opposite of what it is: the gateway refused, the client did nothing
+/// wrong. The member cannot be forged from outside — the only other writer
+/// serializes a `JsonRpcError`, whose fields are `code`, `message` and `data`.
+pub const FIREWALL_REFUSAL_MARKER: &str = "_gatewayFirewallRefusal";
+
 /// Falls back to an internal error when the stored value is not the
 /// `{"code", "message"}` object [`IdempotencyReservation::fail`] writes, so a
 /// malformed entry is served as an error rather than replayed as a success.
