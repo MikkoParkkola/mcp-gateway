@@ -11,6 +11,16 @@ mod persistence;
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
 mod stdio_channel;
+
+/// The stdio protocol-revision telemetry sink, shared by every dispatch.
+///
+/// A `std::sync::Mutex` rather than a `tokio` one on purpose: every use is a
+/// synchronous persist and the guard is never held across an `.await`. A guard
+/// that crossed one would make the dispatch future `!Send`, which would
+/// serialise exactly the concurrent calls this transport now exists to run
+/// (design `docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md` §5).
+type SharedTelemetrySink =
+    Arc<std::sync::Mutex<Option<crate::protocol_revision_telemetry::DurableTelemetrySink>>>;
 mod support;
 // Two questions leave this module, both to `config_reload`, and each is
 // exported under the question it answers. A reload asks about the config that
@@ -63,6 +73,25 @@ use support::{log_startup_banner, serve_tls, shutdown_signal};
 
 /// State owner for the single client on a long-lived stdio connection.
 const STDIO_SESSION_ID: &str = "stdio-session";
+
+/// How long EOF waits for the dispatches the serve loop already accepted.
+///
+/// Bounded rather than unbounded: past the bound the abort guards fire, which
+/// is strictly today's behaviour and no worse. Wider than the bridge's own
+/// prompt timeouts would be pointless -- `close` has already failed every
+/// outstanding prompt before the drain starts.
+const STDIO_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Surface a dispatch that ended in a panic instead of a response.
+///
+/// A `JoinSet` reports a panicking task only through the outcome its reap
+/// returns; discarding that outcome is what keeps a panicking dispatch
+/// invisible, which is the state the drain exists to prevent.
+fn report_finished_dispatch(outcome: std::result::Result<(), tokio::task::JoinError>) {
+    if let Err(error) = outcome {
+        warn!(%error, "stdio: a dispatch task ended without a response");
+    }
+}
 
 fn expand_home_path(path: &str) -> PathBuf {
     if path == "~" {
@@ -2200,7 +2229,7 @@ impl Gateway {
             );
             meta_mcp.set_reload_context(reload_ctx);
         }
-        let mut protocol_telemetry_sink =
+        let protocol_telemetry_sink: SharedTelemetrySink = Arc::new(std::sync::Mutex::new(
             match crate::protocol_revision_telemetry::DurableTelemetrySink::open(&data_dir) {
                 Ok(sink) => Some(sink),
                 Err(error) => {
@@ -2211,7 +2240,8 @@ impl Gateway {
                     );
                     None
                 }
-            };
+            },
+        ));
 
         // Account strategies must exist before stdio can admit a request, just
         // as they do before the HTTP listener starts serving.
@@ -2300,9 +2330,25 @@ impl Gateway {
 
         // ── Read → dispatch → write loop ────────────────────────────────────
         let stdin = tokio::io::stdin();
-        let stdout = tokio::io::stdout();
         let mut reader = BufReader::new(stdin).lines();
-        let mut stdout = stdout;
+
+        // §1: one task owns stdout. Every producer -- responses and bridged
+        // requests alike -- queues here and nothing else writes, so two
+        // concurrent frames cannot interleave mid-line.
+        let (writer_tx, mut writer_rx) =
+            tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+        let writer = tokio::spawn(async move {
+            let mut stdout = tokio::io::stdout();
+            while let Some(frame) = writer_rx.recv().await {
+                Self::write_response(&mut stdout, &frame).await;
+            }
+        });
+
+        // §4: cloned into each spawned dispatch, because a borrow of this
+        // local cannot outlive the loop and the task needs `'static`.
+        let channel = Arc::new(stdio_channel::StdioClientChannel::new(writer_tx.clone()));
+        // §6: the accepted-but-unfinished work EOF has to drain, not abort.
+        let mut dispatches = tokio::task::JoinSet::new();
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -2323,12 +2369,34 @@ impl Gateway {
                         "id": null,
                         "error": {"code": -32700, "message": format!("Parse error: {e}")}
                     });
-                    Self::write_response(&mut stdout, &err_resp).await;
+                    let _ = writer_tx.send(err_resp);
                     continue;
                 }
             };
 
-            // Handle batch requests (array of JSON-RPC calls)
+            // §3: a frame with an `id` and no `method` answers one of our own
+            // outbound requests. Dispatching it as a request is the failure
+            // this classification exists to prevent.
+            if let Some(reply_id) = stdio_channel::StdioClientChannel::reply_id(&request) {
+                if !channel.resolve(&reply_id, request) {
+                    debug!(
+                        id = %reply_id,
+                        "stdio: reply matched no outstanding request; dropping it"
+                    );
+                }
+                continue;
+            }
+
+            // Reaped as the loop runs, not only at shutdown: otherwise a long
+            // session accumulates task records and a panicking dispatch stays
+            // invisible until EOF.
+            while let Some(finished) = dispatches.try_join_next() {
+                report_finished_dispatch(finished);
+            }
+
+            // Handle batch requests (array of JSON-RPC calls). Batch
+            // concurrency is out of scope for MIK-7387: a batch stays inline
+            // and sequential, exactly as it was.
             if request.is_array() {
                 let responses = Box::pin(Self::dispatch_batch_with_sink(
                     &meta_mcp,
@@ -2336,36 +2404,98 @@ impl Gateway {
                     &mtls_policy,
                     request,
                     session_id,
-                    &mut protocol_telemetry_sink,
+                    &*channel,
+                    &protocol_telemetry_sink,
                 ))
                 .await;
-                Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
+                Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
                 if !responses.is_empty() {
-                    let batch_resp = serde_json::Value::Array(responses);
-                    Self::write_response(&mut stdout, &batch_resp).await;
+                    let _ = writer_tx.send(serde_json::Value::Array(responses));
                 }
                 continue;
             }
 
-            // Single request
-            let response_opt = Box::pin(Self::dispatch_single_with_sink(
-                &meta_mcp,
-                &tool_policy,
-                &mtls_policy,
-                request,
-                session_id,
-                protocol_telemetry_sink.as_mut(),
-            ))
-            .await;
-            Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
-
-            if let Some(response) = response_opt {
-                Self::write_response(&mut stdout, &response).await;
+            // §2: `initialize` is dispatched inline and its response is queued
+            // before line 2 is even read, so no frame produced by a later line
+            // can precede it. Everything else is spawned, because whether a
+            // call bridges is a property of the backend's answer and cannot be
+            // decided here.
+            if request.get("method").and_then(serde_json::Value::as_str) == Some("initialize") {
+                let response = Box::pin(Self::dispatch_single_with_sink(
+                    &meta_mcp,
+                    &tool_policy,
+                    &mtls_policy,
+                    request,
+                    session_id,
+                    &*channel,
+                    &protocol_telemetry_sink,
+                ))
+                .await;
+                Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
+                if let Some(response) = response {
+                    let _ = writer_tx.send(response);
+                }
+                continue;
             }
+
+            let meta_mcp = Arc::clone(&meta_mcp);
+            let tool_policy = Arc::clone(&tool_policy);
+            let mtls_policy = Arc::clone(&mtls_policy);
+            let channel = Arc::clone(&channel);
+            let sink = Arc::clone(&protocol_telemetry_sink);
+            let responses = writer_tx.clone();
+            dispatches.spawn(async move {
+                let response = Box::pin(Self::dispatch_single_with_sink(
+                    &meta_mcp,
+                    &tool_policy,
+                    &mtls_policy,
+                    request,
+                    session_id,
+                    &*channel,
+                    &sink,
+                ))
+                .await;
+                Self::persist_stdio_protocol_telemetry(&sink);
+                if let Some(response) = response {
+                    let _ = responses.send(response);
+                }
+            });
         }
 
         info!("stdio: EOF reached, shutting down");
-        Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
+
+        // §6: EOF drains what the loop accepted; it does not abort it. Today's
+        // sequential loop answers every request it reads, and concurrency must
+        // not quietly weaken that.
+        //
+        // Order matters. The client that would answer an outstanding question
+        // is gone, so every pending prompt is failed first -- otherwise a
+        // dispatch blocked on one waits out the bridge's own timeout inside the
+        // drain below and spends the whole bound doing nothing.
+        channel.close();
+        if tokio::time::timeout(STDIO_DRAIN_TIMEOUT, async {
+            while let Some(finished) = dispatches.join_next().await {
+                report_finished_dispatch(finished);
+            }
+        })
+        .await
+        .is_err()
+        {
+            warn!(
+                timeout_secs = STDIO_DRAIN_TIMEOUT.as_secs(),
+                "stdio: dispatches still running at the drain bound; abandoning their responses"
+            );
+        }
+        // Closing the queue ends the writer's loop; awaiting it is what
+        // guarantees the drained responses reached stdout before the process
+        // tears its backends down.
+        drop(writer_tx);
+        drop(channel);
+        if let Err(error) = writer.await {
+            warn!(%error, "stdio: the stdout writer task did not finish cleanly");
+        }
+
+        Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
         // so leaving either running keeps the registry alive after run_stdio
@@ -2389,10 +2519,15 @@ impl Gateway {
         Ok(())
     }
 
-    fn persist_stdio_protocol_telemetry(
-        sink: &mut Option<crate::protocol_revision_telemetry::DurableTelemetrySink>,
-    ) {
-        if let Some(sink) = sink
+    fn persist_stdio_protocol_telemetry(sink: &SharedTelemetrySink) {
+        // Poisoned means a dispatch panicked mid-persist. The window is already
+        // incomplete at that point, and refusing to record anything further
+        // would only widen the hole.
+        let mut guard = match sink.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(sink) = guard.as_mut()
             && let Err(error) = sink.persist_global()
         {
             warn!(
@@ -2442,7 +2577,10 @@ impl Gateway {
             mtls_policy,
             request.clone(),
             session_id,
-            None,
+            // Unit tests drive the dispatch path, not the serve loop: there is
+            // no pipe to ask a question on.
+            &crate::gateway::input_bridge::NoClientChannel,
+            &SharedTelemetrySink::default(),
         )
         .await
     }
@@ -2455,9 +2593,8 @@ impl Gateway {
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         mut request: serde_json::Value,
         session_id: &str,
-        protocol_telemetry_sink: Option<
-            &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
-        >,
+        channel: &dyn crate::gateway::input_bridge::ClientChannel,
+        protocol_telemetry_sink: &SharedTelemetrySink,
     ) -> Option<serde_json::Value> {
         // Borrowed views throughout: a request this dispatcher refuses must not
         // be copied on its way to the refusal. Ownership is taken once, after
@@ -2513,6 +2650,7 @@ impl Gateway {
                 session_id,
                 &mut signing_context,
                 &request_shape,
+                channel,
             ))
             .await
         } else {
@@ -2614,9 +2752,7 @@ impl Gateway {
     fn parse_and_observe<'r>(
         request: &'r serde_json::Value,
         session_id: &str,
-        protocol_telemetry_sink: Option<
-            &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
-        >,
+        protocol_telemetry_sink: &SharedTelemetrySink,
     ) -> std::result::Result<
         (
             crate::protocol::RequestId,
@@ -2658,13 +2794,21 @@ impl Gateway {
             Some(session_id),
             crate::protocol_revision_telemetry::Transport::Stdio,
         );
-        if let Some(sink) = protocol_telemetry_sink
-            && let Err(error) = sink.persist_global()
         {
-            warn!(
-                %error,
-                "failed to persist inbound stdio protocol-revision observation; measurement window is incomplete"
-            );
+            // Scoped so the guard is provably dropped before the dispatch this
+            // helper returns into can await anything.
+            let mut guard = match protocol_telemetry_sink.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some(sink) = guard.as_mut()
+                && let Err(error) = sink.persist_global()
+            {
+                warn!(
+                    %error,
+                    "failed to persist inbound stdio protocol-revision observation; measurement window is incomplete"
+                );
+            }
         }
 
         // Notifications have no id — send no response
@@ -2698,6 +2842,7 @@ impl Gateway {
         stdio_authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
         retry: &'a crate::protocol::mrtr::RetryFields,
         era: crate::protocol::meta::Era,
+        channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
     ) -> MetaMcpCallerContext<'a> {
         MetaMcpCallerContext {
             // stdio has no task route: the extension's handle is read
@@ -2734,9 +2879,11 @@ impl Gateway {
             verified_identity: None,
             // Same `RequestShape` the `initialize` arm advertises against.
             era,
-            // No `ProxyManager` in this scope -- it is HTTP-only --
-            // so there is no session to put a request on.
-            channel: &crate::gateway::input_bridge::NoClientChannel,
+            // The serve loop passes its `StdioClientChannel`, which reaches
+            // the client over the same two pipes; every other caller of this
+            // dispatch path -- the playbook runner and the unit tests -- has
+            // nobody on the other end and passes `NoClientChannel`.
+            channel,
             // stdio speaks to one process over two pipes and
             // has no elicitation channel: there is no operator
             // this transport can reach, so a destructive call
@@ -2756,6 +2903,7 @@ impl Gateway {
         session_id: &str,
         signing_context: &mut Option<super::meta_mcp::signing::SigningInvocationContext>,
         request_shape: &crate::protocol::meta::RequestShape,
+        channel: &dyn crate::gateway::input_bridge::ClientChannel,
     ) -> (
         crate::protocol::JsonRpcResponse,
         Option<super::meta_mcp::admission::SyncLease>,
@@ -2829,6 +2977,7 @@ impl Gateway {
                 &stdio_authorizer,
                 &retry,
                 request_shape.era(),
+                channel,
             );
             if let Some(context) = signing_context.as_mut()
                 && let Err(error) = meta_mcp.prepare_signing_invocation(
@@ -2891,14 +3040,15 @@ impl Gateway {
         batch: serde_json::Value,
         session_id: &str,
     ) -> Vec<serde_json::Value> {
-        let mut sink = None;
+        let sink = SharedTelemetrySink::default();
         Self::dispatch_batch_with_sink(
             meta_mcp,
             tool_policy,
             mtls_policy,
             batch,
             session_id,
-            &mut sink,
+            &crate::gateway::input_bridge::NoClientChannel,
+            &sink,
         )
         .await
     }
@@ -2909,9 +3059,8 @@ impl Gateway {
         mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
         session_id: &str,
-        protocol_telemetry_sink: &mut Option<
-            crate::protocol_revision_telemetry::DurableTelemetrySink,
-        >,
+        channel: &dyn crate::gateway::input_bridge::ClientChannel,
+        protocol_telemetry_sink: &SharedTelemetrySink,
     ) -> Vec<serde_json::Value> {
         let serde_json::Value::Array(requests) = batch else {
             return vec![
@@ -2935,7 +3084,8 @@ impl Gateway {
                 mtls_policy,
                 req,
                 session_id,
-                protocol_telemetry_sink.as_mut(),
+                channel,
+                protocol_telemetry_sink,
             ))
             .await
             {
@@ -3228,7 +3378,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        Gateway, load_configured_identity_grants, provenance_key, resolve_provenance_signer,
+        Gateway, SharedTelemetrySink, load_configured_identity_grants, provenance_key,
+        resolve_provenance_signer,
     };
     use crate::{
         backend::BackendRegistry,
@@ -3612,11 +3763,11 @@ mod tests {
     #[tokio::test]
     async fn stdio_dispatch_persists_operator_readable_protocol_counters() {
         let data_dir = tempfile::tempdir().expect("temporary data directory");
-        let mut sink = Some(
+        let sink: SharedTelemetrySink = Arc::new(std::sync::Mutex::new(Some(
             crate::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
                 .expect("open durable telemetry sink"),
-        );
-        Gateway::persist_stdio_protocol_telemetry(&mut sink);
+        )));
+        Gateway::persist_stdio_protocol_telemetry(&sink);
 
         Gateway::dispatch_single_with_sink(
             &test_meta_mcp(),
@@ -3632,7 +3783,8 @@ mod tests {
                 }
             }),
             "stdio-durable-window-test",
-            sink.as_mut(),
+            &crate::gateway::input_bridge::NoClientChannel,
+            &sink,
         )
         .await
         .expect("initialize returns a response");
