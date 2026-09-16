@@ -250,3 +250,79 @@ Design reviewed 2026-09-16 and amended for the findings. Every claim the review
 disputed was re-checked against source before it was accepted; the citations
 above are that check, not the reviewer's word. Next: the failing tests,
 reviewed as tests, then implementation.
+
+---
+
+## Revision 2 — the resume half (proposed 2026-09-16, under review)
+
+Revision 1 shipped the stop. Wiring the call site (`eba5a492`) exposed that the
+resume half, as designed, cannot complete a stopped chain. Three independent
+readings agree — the two review seats on the series and a re-read of the call
+site — so this is a design gap, not a missing test.
+
+### What is wrong
+
+1. **The answers never arrive.** `ChainResumePlan` carries `next_step` and
+   `rounds_used` and discards the redeemed envelope's `backend_request_state`.
+   `run_step` builds `{server, tool, arguments}` only. A resume therefore
+   re-invokes the pending step with its original chain arguments and no answers,
+   so the backend asks the same question again and the exchange burns rounds to
+   the cap. The caller cannot supply the answers through the chain array either:
+   `chain_digest` binds the whole array, so a modified step is refused.
+2. **The deadline resets on every re-ask.** `seal_chain_stop` is documented to
+   copy the deadline, never re-initialise it. Its only caller hands it the
+   *freshly minted step envelope* and patches `rounds_used` back in, so
+   `expires_at` and `hold_key` come from that fresh mint each round. The rounds
+   cap is the only real bound. Either the comment or the wiring was false; this
+   revision makes the wiring true.
+3. **Holds accumulate.** `plan_chain_resume` checks the held exchange is still
+   open and never closes it, while the next `invoke_tool` opens a fresh one.
+   Eight re-asks leave eight in-flight slots for one exchange, and a full
+   in-flight table is a documented mint refusal (`invoke.rs:405`).
+4. **A dead-end token is still minted.** The stop whose seal would set
+   `rounds_used` to `MAX_CHAIN_ROUNDS` hands back a handle the next
+   `plan_chain_resume` must refuse. The caller learns this one round later than
+   it could.
+
+### What changes
+
+**Translate the chain handle into a step handle, then reuse the redemption path
+verbatim.** The gateway already has one correct redemption: `redeem_retry`
+checks purpose, binding, hold and ledger, and lifts `backend_request_state` into
+the `OutboundRetry` that travels to the backend. The chain driver should feed
+that path rather than grow a second one.
+
+- `ChainResumePlan` gains `backend_request_state`, `hold_key` and `expires_at`.
+- For the **pending step only**, `execute_chain` mints a `BackendInput` envelope
+  bound to that step — digest `original_request_digest(server, tool, arguments)`
+  — carrying the chain payload's `hold_key`, `expires_at` and
+  `backend_request_state`. Carried, not re-opened: the exchange the backend is
+  holding is the one `plan_chain_resume` just verified.
+- The pending step is invoked with a substituted `RetryFields`:
+  `request_state` = that envelope, `input_responses` =
+  `caller.retry.input_responses` verbatim. **Successors get `NO_RETRY`**, which
+  makes "answers apply to the pending step only" structural rather than
+  asserted.
+- `seal_chain_stop` carries `expires_at` from the *chain* payload on a re-ask,
+  and its `backend_request_state` parameter is dropped — the only caller passes
+  the field back unchanged, so it is carried like every other field.
+- The round's own hold is closed when the next one is sealed, not when the
+  resume is planned: `redeem_retry` still needs it open.
+- A seal that would reach `MAX_CHAIN_ROUNDS` refuses with the cap's own named
+  message instead of minting.
+
+**Rejected:** dispatching the pending step through `accounted_dispatch` with a
+hand-built `OutboundRetry`, the way the input bridge does. It reaches the
+backend with the right fields and skips the firewall and authorization that
+`invoke_tool` runs — a security regression for a shorter diff.
+
+### What pins it
+
+Three LIVE rows against a stub transport, plus one driver row:
+
+- a resume applies the answers to the pending step and not to its successor;
+- exactly one redeemable handle exists per stop;
+- the successor did not execute;
+- the deadline of a re-ask is the first stop's, not the re-ask's.
+
+The first is the falsifier: written against the current code it must fail.
