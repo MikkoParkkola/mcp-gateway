@@ -158,3 +158,61 @@ batch requests are processed sequentially inside the reader's own task
 One honest gap: no test drives 65 concurrent stdio calls and asserts the 65th
 blocks. The verdict rests on reading the admission paths and finding only one,
 guarded by a library primitive — not on a test.
+
+
+## The fix as it landed, 2026-09-16
+
+Two commits on `work/v4-codeql-record`:
+
+- `8c1c6574` — the gate itself. A `ChallengeGate` trait next to `BridgeObserver`,
+  called inside the round loop before every `ask`, so rounds 2..N are inspected
+  as well as round one. The refusal keeps its type across the bridge boundary
+  (`BridgeError::ChallengeRefused` is restored to `Error::ResponseFirewallRefused`
+  by the caller) so the delivery-refusal projection still runs. Both tests the
+  reviewers asked for are in `tests/mik_7212_mrtr7_bridge_acs.rs`: a two-round
+  exchange whose SECOND challenge is blocked, and a control proving a canary in
+  `request_state` is neither scanned nor delivered.
+- `a3409375` — the fixes from the review of `8c1c6574`, one from each reviewer.
+
+Both reviewers returned SHIP-WITH-FIXES on `8c1c6574`, each with one finding the
+other did not raise, and both were confirmed at source before the fix was written:
+
+**kimi — a later-round refusal released the idempotency key.** The design's third
+bullet above is wrong as stated: "nothing ran" holds only for round one. From
+round two the backend has already executed the tool at least once, so falling
+through without settling readmits a retry of a side effect that may have taken
+effect — exactly what ADR-012 consequence 1 forbids. `ChallengeRefused` now
+carries `dispatched: bool`; `InputBridge::run` stamps it (a gate sees one batch
+and cannot know), and the caller settles the reservation when it is true and
+releases it when it is false. The `is_pre_dispatch` allowlist in `src/error.rs`
+is reverted to variants that prove nothing ran; `ResponseFirewallRefused` no
+longer qualifies unconditionally and no longer needs to, because the gate's
+refusal reaches the caller as a typed `BridgeError` rather than through
+`classify_bridged_dispatch_error`.
+
+**gpt — the scanned artifact carried the backend's own request key.** `challenge`
+serialised `Prompt::key` alongside the method and params, and its own doc comment
+claimed the artifact was "as the client will see it, and nothing else". It is
+not: `ask` mints a fresh `{prefix}{uuid}` wire id per frame
+(`src/gateway/input_bridge.rs:563`) and files the answer under the backend's key
+afterwards, so the key is backend-facing bookkeeping no client can read. Scanning
+it refuses legacy exchanges over content that was never exposed — a denial of
+service on legacy clients wearing a security control's clothes. The key is out of
+the artifact, and a regression row asserts a batch whose backend key alone
+carries the blocked token is still carried.
+
+Two AC rows were added for the pair: `ac_mrtr_7a_a_first_round_refusal_reports_
+that_nothing_was_dispatched` (the `dispatched: false` control for the existing
+multi-round row, which now asserts `dispatched: true`) and
+`ac_mrtr_7a_the_backend_request_key_is_neither_scanned_nor_delivered`. The key row
+was falsified: re-adding `"key": prompt.key` to the artifact turns it red and
+leaves the other 31 green.
+
+State at `a3409375`: `cargo test --features firewall --lib` = 4942 passed, 0
+failed; `--test mik_7212_mrtr7_bridge_acs` = 32 passed, 0 failed;
+`cargo clippy --all-targets --features firewall -- -D warnings` clean.
+
+Still open on this row, and not addressed by either commit: the stdio package has
+not been reviewed as a package, the dead-stdout finding above is confirmed and
+unfixed, and the duplicate-request-id question at `src/protocol/mrtr.rs:200`
+remains unverified.
