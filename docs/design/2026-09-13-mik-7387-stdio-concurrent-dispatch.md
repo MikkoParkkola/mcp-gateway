@@ -246,3 +246,61 @@ Two consequences for the plan:
   interactive client on the other end of the pipe, so there is nowhere for a
   question to go. Stated because the impact graph surfaced it, not because the
   acceptance rows ask for it.
+
+## Addendum, 2026-09-16: non-blocking admission
+
+Ratified after two independent reviews (gpt, kimi), both SHIP-WITH-FIXES, both
+selecting this shape over the alternatives. It replaces the admission step in
+§2; nothing else in this document changes.
+
+### The defect it closes
+
+Awaiting a permit inside the read loop parks the only stdin reader. Past
+`MAX_CONCURRENT_STDIO_DISPATCHES` concurrent bridged dispatches, the next line
+blocks the reader, and the replies those dispatches wait for can only be routed
+by the reader now parked. That is the N=1 deadlock this document was written to
+remove, relocated to N=65.
+
+### The shape
+
+Two semaphores, one idiom. `admission` (64) keeps its meaning: how many
+dispatches may run at once. A second, `MAX_INFLIGHT_STDIO_REQUESTS` (1024,
+matching `STDOUT_QUEUE_DEPTH`), bounds accepted-but-unfinished work and is the
+one the read loop consults — with `try_acquire_owned`, never an await. The
+owned permit moves into the spawned task and is released when it ends. The read
+loop never parks on admission again.
+
+Rejected: counting `dispatches.len()` after a drain. Both reviewers flagged it
+independently — a `JoinSet` may still hold entries for tasks that have already
+finished, so the count over-reports and rejects requests below the real cap. The
+existing reap at `src/gateway/server/mod.rs:2451` stays exactly as it is; it
+matches on the join result and logs a panicking dispatch, which a bare
+`while ... .is_some() {}` drain would have thrown away.
+
+### Four constraints the implementation must satisfy
+
+1. **Stdout death must still exit the loop.** Moving the permit wait into the
+   task deletes the loop's only `stdout_died = true; break;`. Without a
+   replacement, a dead writer with stdin still open leaves the loop reading
+   lines forever and spawning tasks that do nothing. A non-blocking
+   `writer.is_closed()` check stays in the loop and breaks.
+2. **The refusal must not park the loop either.** Writing the busy error with
+   an awaited send on the bounded queue reintroduces the exact defect on the
+   rejection path. Use `try_send` and drop on failure — a full queue means the
+   answer was undeliverable anyway.
+3. **Only requests get a refusal.** A notification carries no `id`, and a
+   response to one is protocol-invalid. Saturated notifications are dropped and
+   logged.
+4. **Start order rests on semaphore fairness.** "Dispatches start in the order
+   their lines were read" holds only because tokio's `Semaphore` is FIFO. That
+   dependency is load-bearing and must be stated where a future reader will see
+   it.
+
+### Acceptance
+
+- 65 pipelined bridge-producing calls, replies withheld until all are sent: no
+  deadlock, every call answered.
+- More than 1024 pipelined calls: the excess is refused with `-32000`, and the
+  loop still routes replies for the accepted ones.
+- Stdout closed mid-session with stdin open: the loop exits rather than
+  spinning.
