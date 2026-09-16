@@ -187,7 +187,8 @@ pub async fn plan_chain_resume(
         return Err(Error::json_rpc(
             -32602,
             format!(
-                "This chain exchange has used its {MAX_CHAIN_ROUNDS} interim rounds;                  start it again rather than answering once more"
+                "This chain exchange has used its {MAX_CHAIN_ROUNDS} interim rounds; \
+                 start it again rather than answering once more"
             ),
         ));
     }
