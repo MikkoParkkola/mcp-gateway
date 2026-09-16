@@ -108,3 +108,53 @@ at source:
 Both reviewers asked for the same two tests: an end-to-end two-round exchange
 whose SECOND challenge carries blocked content, and a control proving a canary
 present only in `request_state` is neither scanned nor delivered.
+
+## Adjudication of the two unverified findings, 2026-09-16
+
+Both were reviewer claims with no source check behind them. Read at source, they
+split one each way.
+
+### A dead stdout leaves the stdio reader admitting calls — CONFIRMED
+
+The read loop `while let Ok(Some(line)) = reader.next_line().await`
+(`src/gateway/server/mod.rs:2427`) depends on stdin alone. When `write_response`
+fails because stdout is gone, the writer task runs `queue.close(); break;`
+(`:2397-2406`) and exits, which closes the channel and signals nothing. The
+reader keeps acquiring admission permits and spawning dispatch tasks for every
+line (`:2537-2548`), and each response then dies silently in `send_frame`, whose
+`drop(writer.send(frame).await)` (`:89-94`) discards the send error without so
+much as a log line — the single `warn!` at the original write failure
+(`:2630-2646`) is the last thing an operator ever sees.
+
+The flag that would refuse new bridged work, `StdioClientChannel::close()`
+(`stdio_channel.rs:83-86`, set at `mod.rs:2557`), fires only on stdin EOF. The
+design it came from, `docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md`
+§6, specifies EOF-triggered draining and never considers stdout failing while
+stdin stays open. The comment at `mod.rs:87-88` — "there is nothing a producer
+can do about it here… the serve loop discovers on its own next read" — is an
+unenforced assumption that a dead stdout implies a dead stdin. True when the
+client process has exited; false for a half-closed pipe or a redirected stdout.
+
+Failure scenario: a client whose stdout consumer stops while its stdin producer
+keeps sending. Every request is parsed, admitted and fully dispatched — real
+backend calls with real side effects — and every response is dropped in silence.
+Not a hang and not unbounded growth: the 64-permit semaphore and stdin's line
+rate bound it. What it costs is executed work no caller can receive, duplicate
+side effects if the caller retries into the void, and no operator signal at all
+after the first write failure.
+
+### The 65th permit is an off-by-one — REFUTED
+
+`MAX_CONCURRENT_STDIO_DISPATCHES: usize = 64` (`mod.rs:83`) is enforced by a
+stock `tokio::sync::Semaphore::new(...)` (`:2416`), with the permit acquired
+before each spawn (`:2538-2541`) and held until `task.await` returns
+(`:2542-2545`). There is no hand-rolled permit bookkeeping to get wrong — no
+`available_permits()`, no manual counter. The adjacent paths were checked for a
+bypass rather than assumed clean: `initialize` runs inline, outside the
+semaphore, which is a documented serialization point and not extra concurrency;
+batch requests are processed sequentially inside the reader's own task
+(`dispatch_batch_with_sink`, `:3253+`, with the scope comment at `:3284-3288`).
+
+One honest gap: no test drives 65 concurrent stdio calls and asserts the 65th
+blocks. The verdict rests on reading the admission paths and finding only one,
+guarded by a library primitive — not on a test.
