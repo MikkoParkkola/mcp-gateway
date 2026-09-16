@@ -21,6 +21,9 @@ const NOW: u64 = 1_780_000_000;
 const CALLER: &str = "fingerprint-of-the-caller-who-started-the-chain";
 const OTHER_CALLER: &str = "fingerprint-of-somebody-else";
 const BACKEND_STATE: &str = "backend-opaque-state";
+/// How long the held exchange stays open, so no row expires for a reason it is
+/// not about.
+const HOLD_SECONDS: u64 = 300;
 
 /// Three steps: two harmless reads around one that can ask.
 fn three_step_chain() -> Vec<Value> {
@@ -67,14 +70,31 @@ fn chain_digest(chain: &[Value]) -> String {
 }
 
 /// A `ChainResume` payload sealed over `chain`, stopped at `next_step`.
-fn chain_payload(chain: &[Value], next_step: Option<usize>, rounds_used: u32) -> Payload {
+///
+/// The hold is opened on the same state the resume is presented to. An
+/// envelope naming an exchange nobody holds is refused on that alone —
+/// `InFlight::route` answers `Gone` for a key the table never knew — so a
+/// hardcoded key would make every positive redemption below fail for a reason
+/// its row is not about, and would leave the wrong-hold case in row 8 unable
+/// to fail.
+async fn chain_payload(
+    state: &ContinuationState,
+    chain: &[Value],
+    next_step: Option<usize>,
+    rounds_used: u32,
+) -> Payload {
+    let hold_key = state
+        .in_flight()
+        .hold("srv", NOW + HOLD_SECONDS, NOW)
+        .await
+        .expect("the in-flight table has room for one exchange");
     let mut payload = Payload::mint(
         "srv".into(),
         Some(BACKEND_STATE.into()),
         CALLER.into(),
         chain_digest(chain),
         "replica-a".into(),
-        "hold-key-a".into(),
+        hold_key,
         NOW,
     )
     .with_purpose(ContinuationPurpose::ChainResume);
@@ -132,6 +152,11 @@ fn chain_stops_at_the_asking_step_and_names_it_as_pending() {
     assert_eq!(response["pendingStep"], json!(1));
     assert_eq!(response["pendingTool"], json!("srv:asks"));
     assert_eq!(response["resultType"], json!("input_required"));
+    assert_eq!(
+        response["requestState"],
+        json!("sealed-token"),
+        "the stop response dropped the sealed token, so the chain cannot be resumed"
+    );
     assert_eq!(log.ran, vec![0, 1], "the successor of an asking step ran");
     assert_eq!(sealed, vec![1]);
     let classified = classify_step_result(1, "srv:asks", &interim_result())
@@ -181,7 +206,7 @@ async fn resume_presenting_a_different_chain_is_refused() {
     let chain = three_step_chain();
     let token = state
         .keyring()
-        .mint(&chain_payload(&chain, Some(1), 1))
+        .mint(&chain_payload(&state, &chain, Some(1), 1).await)
         .expect("mint");
 
     let mut substituted = chain.clone();
@@ -205,7 +230,7 @@ async fn resume_presented_by_a_different_caller_is_refused() {
     let chain = three_step_chain();
     let token = state
         .keyring()
-        .mint(&chain_payload(&chain, Some(1), 1))
+        .mint(&chain_payload(&state, &chain, Some(1), 1).await)
         .expect("mint");
 
     let refused = plan_chain_resume(&state, &token, &chain, OTHER_CALLER, NOW + 1).await;
@@ -224,7 +249,7 @@ async fn resume_presented_twice_is_refused_the_second_time() {
     let chain = three_step_chain();
     let token = state
         .keyring()
-        .mint(&chain_payload(&chain, Some(1), 1))
+        .mint(&chain_payload(&state, &chain, Some(1), 1).await)
         .expect("mint");
 
     let first = plan_chain_resume(&state, &token, &chain, CALLER, NOW + 1).await;
@@ -323,6 +348,11 @@ fn destructive_gate_hold_stops_the_chain_before_its_successor() {
         response["inputRequests"][CONFIRMATION_INPUT_KEY].is_object(),
         "the confirmation request did not reach the caller under its own key"
     );
+    assert_eq!(
+        response["requestState"],
+        json!("sealed-token"),
+        "the stop response dropped the sealed token, so the gate cannot be answered"
+    );
     assert!(
         !log.ran.contains(&2),
         "a successor ran while its predecessor waited at the gate"
@@ -341,21 +371,29 @@ async fn redemption_refuses_every_next_step_it_did_not_seal() {
     let chain = three_step_chain();
 
     // Absent: an envelope from another domain carries no step to resume at.
-    let absent = chain_payload(&chain, None, 1);
+    let absent = chain_payload(&state, &chain, None, 1).await;
     // Out of range: a step index the sealed chain does not contain.
-    let out_of_range = chain_payload(&chain, Some(chain.len() + 1), 1);
+    let out_of_range = chain_payload(&state, &chain, Some(chain.len() + 1), 1).await;
     // Wrong domain: a confirmation grant is not a chain resume.
-    let mut wrong_purpose = chain_payload(&chain, Some(1), 1);
+    let mut wrong_purpose = chain_payload(&state, &chain, Some(1), 1).await;
     wrong_purpose.purpose = ContinuationPurpose::DestructiveConfirm;
     // Wrong hold: an envelope naming an exchange this gateway is not holding.
-    let mut wrong_hold = chain_payload(&chain, Some(1), 1);
+    let mut wrong_hold = chain_payload(&state, &chain, Some(1), 1).await;
     wrong_hold.hold_key = "hold-key-nobody-opened".into();
+    // Past the end: `next_step` is the index of the step that asked, so the
+    // first index outside the chain names a step that never existed.
+    let past_end = chain_payload(&state, &chain, Some(chain.len()), 1).await;
+    // Expired: a stalled chain stops being resumable when its deadline passes.
+    let mut expired = chain_payload(&state, &chain, Some(1), 1).await;
+    expired.expires_at = NOW;
 
     for (case, payload) in [
         ("absent next_step", absent),
         ("out-of-range next_step", out_of_range),
         ("purpose is not ChainResume", wrong_purpose),
         ("envelope does not match its hold", wrong_hold),
+        ("next_step past the end of the chain", past_end),
+        ("envelope has expired", expired),
     ] {
         let token = state.keyring().mint(&payload).expect("mint");
         let refused = plan_chain_resume(&state, &token, &chain, CALLER, NOW + 1).await;
@@ -365,11 +403,17 @@ async fn redemption_refuses_every_next_step_it_did_not_seal() {
 
 /// ROW 9. A destructive-gated step resumed across a chain acts exactly once.
 ///
-/// The invariant, pinned from both sides. No bypass: the `ChainResume` token
-/// resumes transport and carries no authority to act, so the gated step must
-/// still redeem its own confirmation. No double execution: resuming must not
-/// re-enter a step that already acted. One token that did both would be a gate
-/// a caller can walk through, or a delete that happens twice.
+/// The invariant: no double execution. The answered step acts exactly once
+/// across the two phases, and resuming does not re-enter a step that already
+/// acted — a delete that happens twice is the failure this forecloses.
+///
+/// What this row does *not* pin is the other direction, that a `ChainResume`
+/// token carries no authority to act in place of a confirmation. An injected
+/// step closure cannot show it: the closure *is* the step, so "it did not act
+/// while held" would be true of the mock rather than of the gate. Row 8 pins
+/// the reverse domain separation — a confirmation grant cannot resume a chain.
+/// The forward direction needs a gateway-level test against the confirmation
+/// redemption path (`meta_mcp::mod::redeem_confirmation`), not this seam.
 #[test]
 fn destructive_gated_step_resumed_across_a_chain_acts_exactly_once() {
     let chain = three_step_chain();
@@ -391,11 +435,6 @@ fn destructive_gated_step_resumed_across_a_chain_acts_exactly_once() {
             drive_chain(&chain, 0, &mut run, &mut seal).expect("the gate hold stops the chain");
         assert_eq!(stopped["pendingStep"], json!(1));
     }
-    assert!(
-        actions.is_empty(),
-        "the gated step acted while still holding its confirmation"
-    );
-
     // Phase two: the answered step redeems its confirmation and acts, once.
     {
         let mut run = |idx: usize, _tool: &str, _args: &Value| -> Result<Value> {
@@ -433,7 +472,7 @@ async fn a_re_asking_step_is_refused_at_the_round_cap_with_next_step_unchanged()
     let state = ContinuationState::new();
     let chain = three_step_chain();
 
-    let below_cap = chain_payload(&chain, Some(1), MAX_CHAIN_ROUNDS - 1);
+    let below_cap = chain_payload(&state, &chain, Some(1), MAX_CHAIN_ROUNDS - 1).await;
     let below_token = state.keyring().mint(&below_cap).expect("mint");
     let planned: ChainResumePlan = plan_chain_resume(&state, &below_token, &chain, CALLER, NOW + 1)
         .await
