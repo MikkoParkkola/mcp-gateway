@@ -70,6 +70,10 @@ mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
 mod direct_route;
+#[cfg(test)]
+mod interim_promotion;
+#[cfg(test)]
+mod interim_promotion_tests;
 pub(crate) mod invoke;
 mod prompt_cache;
 mod protocol;
