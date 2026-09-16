@@ -82,6 +82,41 @@ const STDOUT_QUEUE_DEPTH: usize = 1024;
 /// load. One client, so the cap is generous rather than tuned.
 const MAX_CONCURRENT_STDIO_DISPATCHES: usize = 64;
 
+/// Accepted-but-unfinished stdio requests, which is a different question from
+/// how many may run at once (`MAX_CONCURRENT_STDIO_DISPATCHES`). Sized to the
+/// stdout queue: work admitted beyond what the writer can still hold has
+/// nowhere to put its answer, so the client is told to slow down instead.
+const MAX_INFLIGHT_STDIO_REQUESTS: usize = STDOUT_QUEUE_DEPTH;
+
+/// Take a slot for one accepted stdio request, or refuse.
+///
+/// Deliberately not `async`. The read loop is the only thing that can deliver
+/// a bridged reply, so a wait here is woken only by work that is itself
+/// waiting on this loop — the deadlock the concurrent-dispatch package exists
+/// to remove, relocated from the first request to the cap-plus-first. A
+/// synchronous signature makes "the reader never parks on admission" a
+/// property of the type rather than of review.
+fn admit_stdio_request(
+    inflight: &Arc<tokio::sync::Semaphore>,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    Arc::clone(inflight).try_acquire_owned().ok()
+}
+
+/// The refusal a saturated gateway owes the client, or `None` when the frame
+/// is a notification: no id means nothing to answer, and answering anyway is a
+/// protocol violation the client cannot correlate.
+fn stdio_busy_response(request: &serde_json::Value) -> Option<serde_json::Value> {
+    let id = request.get("id").filter(|id| !id.is_null())?.clone();
+    Some(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": -32000,
+            "message": "server busy: too many stdio requests in flight, retry this request"
+        }
+    }))
+}
+
 /// Queue one frame for the stdout writer, tolerating a closed writer.
 ///
 /// A closed queue means stdout is gone, which the serve loop discovers on its
@@ -2401,6 +2436,11 @@ impl Gateway {
         // backends answer would otherwise pile one task per line onto the
         // JoinSet. The permit is released when the dispatch task ends.
         let admission = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STDIO_DISPATCHES));
+        // The second bound (design §7). `admission` says how much may RUN;
+        // this says how much may be accepted and not yet finished. The read
+        // loop consults it without ever awaiting, so a client that pipelines
+        // past the cap is refused rather than served by a parked reader.
+        let inflight = Arc::new(tokio::sync::Semaphore::new(MAX_INFLIGHT_STDIO_REQUESTS));
         // What the handshake declared, kept for the session (MRTR.9). A legacy
         // -shaped `tools/call` carries no `_meta`, so without this every later
         // call would reach the bridge declaring nothing and be refused -32021
@@ -2516,6 +2556,25 @@ impl Gateway {
                     request.pointer("/params/capabilities"),
                 );
             }
+            // Before the task is built, because refusing needs the id and the
+            // builder moves the request. `initialize` is dispatched inline and
+            // takes no slot: nothing is in flight yet when it runs.
+            let slot = if spawned {
+                let Some(slot) = admit_stdio_request(&inflight) else {
+                    warn!("stdio: refusing a request, too many already in flight");
+                    if let Some(refusal) = stdio_busy_response(&request) {
+                        // `try_send`, not `send`: the refusal exists to avoid
+                        // parking the reader, and awaiting a full stdout queue
+                        // parks it just the same. A queue with no room is
+                        // already telling the client to slow down.
+                        let _ = writer.try_send(refusal);
+                    }
+                    continue;
+                };
+                Some(slot)
+            } else {
+                None
+            };
             let task = {
                 let meta_mcp = Arc::clone(&meta_mcp);
                 let tool_policy = Arc::clone(&tool_policy);
@@ -2549,22 +2608,32 @@ impl Gateway {
                 }
             };
             if spawned {
-                let permit = Arc::clone(&admission)
-                    .acquire_owned()
-                    .await
-                    .expect("the admission semaphore is never closed");
-                // The wait for a permit is unbounded, so stdout can die inside
-                // it. Admission was checked against a queue that may no longer
-                // exist; dispatching now would run the side effect and throw
-                // the answer away, which is the case this whole guard exists
-                // to prevent.
+                let slot = slot.expect("a spawned request holds the slot it was admitted on");
+                // Non-blocking, and kept: the loop head already races
+                // `writer.closed()`, but a stdout that died while this line
+                // was being parsed must not buy one more dispatch.
                 if writer.is_closed() {
                     stdout_died = true;
                     break;
                 }
+                let admission = Arc::clone(&admission);
+                let closed_probe = writer.clone();
                 dispatches.spawn(async move {
+                    // The wait that used to be here, moved off the reader. It
+                    // is unbounded, so stdout can die inside it: admission was
+                    // checked against a queue that may no longer exist, and
+                    // dispatching now would run the side effect and throw the
+                    // answer away. The read loop leaves by its own `closed()`
+                    // arm; this task only has to decline to start.
+                    let _running = admission
+                        .acquire_owned()
+                        .await
+                        .expect("the admission semaphore is never closed");
+                    if closed_probe.is_closed() {
+                        return;
+                    }
                     task.await;
-                    drop(permit);
+                    drop(slot);
                 });
             } else {
                 task.await;
@@ -4934,6 +5003,56 @@ mod tests {
     //
     // RED ON ARRIVAL, deliberately. The repair is to emit the record from a
     // place both dispatchers reach; adding the emit is not this change's job.
+    /// The saturation gate the stdio read loop consults (design §7).
+    mod stdio_admission {
+        use super::super::*;
+
+        #[test]
+        fn a_saturated_gate_refuses_instead_of_making_the_reader_wait() {
+            let inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+            let first = admit_stdio_request(&inflight).expect("an empty gate admits");
+            let _second = admit_stdio_request(&inflight).expect("the gate admits up to its cap");
+            assert!(
+                admit_stdio_request(&inflight).is_none(),
+                "over the cap the gate must refuse: awaiting here parks the only reader that can \
+                 deliver the replies the already-accepted work is waiting for"
+            );
+            drop(first);
+            assert!(
+                admit_stdio_request(&inflight).is_some(),
+                "a finished dispatch must return its slot to the gate"
+            );
+        }
+
+        #[test]
+        fn a_refusal_answers_the_id_it_refused() {
+            let refusal = stdio_busy_response(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 7, "method": "tools/call"
+            }))
+            .expect("a request carrying an id must be answered");
+            assert_eq!(refusal["id"], serde_json::json!(7));
+            assert_eq!(refusal["error"]["code"], serde_json::json!(-32000));
+        }
+
+        #[test]
+        fn a_notification_is_refused_in_silence() {
+            assert!(
+                stdio_busy_response(&serde_json::json!({
+                    "jsonrpc": "2.0", "method": "notifications/initialized"
+                }))
+                .is_none(),
+                "a frame with no id has nothing to answer; replying to one is a protocol violation"
+            );
+            assert!(
+                stdio_busy_response(&serde_json::json!({
+                    "jsonrpc": "2.0", "id": null, "method": "notifications/initialized"
+                }))
+                .is_none(),
+                "an explicit null id is the same notification, spelled out"
+            );
+        }
+    }
+
     mod stdio_observation {
         use super::*;
         use std::collections::HashMap;
