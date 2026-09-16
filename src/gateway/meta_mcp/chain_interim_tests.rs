@@ -643,3 +643,48 @@ async fn a_first_stop_seals_the_chain_identity_onto_the_steps_envelope() {
         .expect("the envelope a first stop hands back must be redeemable");
     assert_eq!(planned.next_step, 1);
 }
+
+/// ROW 15. A chain resume is not routed to a backend by name.
+///
+/// The invariant: the envelope licenses the chain driver to run
+/// `chain[next_step..]`, and the step it resumes is named by the sealed
+/// `next_step` rather than by the tool the client called. Routing it by
+/// `backend_id` — what every other purpose gets — would dispatch the pending
+/// step's backend with the whole chain array as its arguments, and
+/// `plan_chain_resume` would never see the handle at all.
+///
+/// Minted against the real clock, not [`NOW`]: `retry_origin_backend` reads the
+/// wall clock itself, so an envelope pinned to the module's fixed timestamp
+/// would be refused as expired and the row would pass for the wrong reason.
+#[tokio::test]
+async fn a_chain_resume_is_not_routed_to_the_origin_backend() {
+    let state = ContinuationState::new();
+    let chain = three_step_chain();
+    let now = crate::protocol::continuation::now_unix_secs();
+    let hold_key = state
+        .in_flight()
+        .hold("srv", now + HOLD_SECONDS, now)
+        .await
+        .expect("the in-flight table has room for one exchange");
+    let payload = Payload::mint(
+        "srv".into(),
+        Some(BACKEND_STATE.into()),
+        CALLER.into(),
+        chain_digest(&chain),
+        "replica-a".into(),
+        hold_key,
+        now,
+    )
+    .with_purpose(ContinuationPurpose::ChainResume);
+    let token = state.keyring().mint(&payload).expect("mint");
+
+    let retry = crate::protocol::mrtr::RetryFields {
+        request_state: Some(token),
+        ..crate::protocol::mrtr::RetryFields::default()
+    };
+
+    assert!(
+        super::invoke::retry_origin_backend(&state, &retry).is_none(),
+        "a chain resume was routed to a backend by name, so the chain driver never ran"
+    );
+}

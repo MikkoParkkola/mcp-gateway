@@ -456,9 +456,7 @@ impl MetaMcp {
     ) -> Result<Value> {
         // Chain mode: sequential execution
         if let Some(chain) = args.get("chain").and_then(Value::as_array) {
-            return self
-                .execute_chain(args, chain.clone(), session_id, caller)
-                .await;
+            return self.execute_chain(chain.clone(), session_id, caller).await;
         }
 
         // Single tool execution
@@ -494,7 +492,6 @@ impl MetaMcp {
     /// and surfaces the failing step index in the error message.
     async fn execute_chain(
         &self,
-        args: &Value,
         chain: Vec<Value>,
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
@@ -509,7 +506,14 @@ impl MetaMcp {
         // A presented resume decides where the chain starts and how many rounds
         // this exchange has already spent. Both are sealed, so neither is a
         // number the caller can choose.
-        let (start_step, rounds_used) = match extract_optional_str(args, "requestState") {
+        //
+        // From `caller.retry`, not from `arguments`: the specification makes
+        // `requestState` a sibling of `arguments`, and `RetryFields::from_params`
+        // is where every other redemption in this gateway reads it. A chain
+        // resume that had to hide the handle inside the tool's own arguments
+        // would be the one redemption in the gateway spelled differently, and a
+        // spec-conformant client would present a handle nothing here could see.
+        let (start_step, rounds_used) = match caller.retry.request_state.as_deref() {
             Some(token) => {
                 let fingerprint =
                     crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)

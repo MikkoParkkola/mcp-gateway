@@ -602,7 +602,18 @@ pub(super) fn retry_origin_backend(
     // means "nothing to route", which is exactly true here — routing it would
     // hand the answer to a backend named after a meta-tool, and the gate that
     // must see it would never run.
-    if payload.purpose == crate::protocol::continuation::ContinuationPurpose::DestructiveConfirm {
+    //
+    // A chain resume is the same shape for the same reason: the envelope
+    // licenses the chain driver to run `chain[next_step..]`, and the step it
+    // resumes is named by the sealed `next_step`, not by the tool the client
+    // called. Routing it by `backend_id` would dispatch the pending step's
+    // backend with the whole chain array as its arguments and skip every
+    // binding `plan_chain_resume` exists to check.
+    if matches!(
+        payload.purpose,
+        crate::protocol::continuation::ContinuationPurpose::DestructiveConfirm
+            | crate::protocol::continuation::ContinuationPurpose::ChainResume
+    ) {
         return None;
     }
     Some(Ok(payload.backend_id))
