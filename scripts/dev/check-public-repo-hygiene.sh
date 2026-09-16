@@ -115,6 +115,7 @@ shipped_surfaces=(
   "README.md"
   "docs/QUICKSTART.md"
   "docs/DEPLOYMENT.md"
+  "docs/MULTI_USER.md"
   "docs/OAUTH_CONFIG.md"
   "docs/REMOTE_BACKENDS.md"
   "llms.txt"
