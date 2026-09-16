@@ -1,3 +1,4 @@
+sha256: f38a8961f26df4a61619ba2df751226e598ccd60085d610ee6e0428131d3b9a2
 fulcrum: "1.0"
 name: linear_create_project
 description: "Create a new Linear project with optional description, target date, and team associations"

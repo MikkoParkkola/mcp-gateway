@@ -97,8 +97,13 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: python3 scripts/release/check_scope_acceptance.py --publish-check
 
+  task-sdk-recovery:
+    uses: ./.github/workflows/task-sdk-recovery.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+
   verify:
-    needs: [security-gate, secret-leak-lint, release-criteria]
+    needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery]
     runs-on: ubuntu-latest
     # Every publishing job reads these to decide stable vs prerelease channel.
     # `needs` exposes only direct dependencies, so each consumer names `verify`
@@ -147,7 +152,7 @@ jobs:
         run: cargo clippy --all-features -- -D warnings
 
       - name: Test
-        run: cargo test --all-features
+        run: cargo test --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
 
       - name: Verify publish package
         # The runner image replaces the crates-io source with a mirror, and
@@ -323,6 +328,7 @@ jobs:
     # Must stay GitHub-hosted. npm rejects a provenance bundle signed on a
     # self-hosted runner ("Unsupported GitHub Actions runner environment:
     # self-hosted"), so a third-party runner costs the build attestation.
+    # This package is a thin wrapper that needs nothing from that fleet.
     # https://docs.npmjs.com/generating-provenance-statements
     runs-on: ubuntu-latest
     permissions:

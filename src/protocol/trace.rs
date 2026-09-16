@@ -90,7 +90,7 @@ impl Parent {
 /// relaying a caller's bytes onward: no control characters, no CR or LF, and
 /// nothing outside ASCII, so a field can never carry a header break or a
 /// smuggled line into a downstream request.
-/// Longest `tracestate` this gateway relays, in characters.
+/// Longest `tracestate` this gateway relays, in bytes.
 ///
 /// W3C Trace Context §3.3.1.5 (*tracestate Limits*): "Vendors SHOULD propagate
 /// at least 512 characters of a combined header." The spec states a floor on

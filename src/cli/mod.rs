@@ -153,6 +153,29 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+/// Offline administration of the personal-account custody store.
+///
+/// Every subcommand here is offline and explicit: nothing starts the gateway,
+/// the custody worker or an HTTP client, and no account record is read, written
+/// or migrated. The configuration is selected with the global `--config PATH`
+/// rather than a second `--config` of this subcommand's own, so the path the
+/// store is initialized from is the same path `serve` would later open; a
+/// duplicate flag could name one file here and another there.
+#[derive(Subcommand, Debug)]
+pub enum AccountsCommand {
+    /// Create a fresh empty account authority for the configured roots.
+    ///
+    /// Requires `accounts` in the selected config, requires both configured
+    /// roots to be empty, and refuses rather than replacing, merging or
+    /// migrating existing custody state. The store it creates has zero records
+    /// by construction.
+    #[command(
+        name = "init-store",
+        about = "Create an empty personal-account store from --config (offline)"
+    )]
+    InitStore,
+}
+
 /// Top-level subcommands
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -206,6 +229,10 @@ pub enum Command {
     /// Manage caller identity and local personal-capability grants.
     #[command(subcommand, about = "Identity and local grant administration")]
     Identity(IdentityCommand),
+
+    /// Offline administration of the personal-account custody store.
+    #[command(subcommand, about = "Personal account store administration (offline)")]
+    Accounts(AccountsCommand),
 
     /// Generate a starter gateway.yaml with sensible defaults
     #[command(about = "Create a new gateway configuration file")]

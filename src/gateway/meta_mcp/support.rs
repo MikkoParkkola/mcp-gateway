@@ -36,13 +36,6 @@ use crate::gateway::meta_mcp::MetaMcpCallerContext;
 /// says where the client's bytes stop, so no choice of key can reach across
 /// the boundary into a segment the gateway derives.
 ///
-/// `step` is the ordinal of a chain or playbook step. It is another suffix the
-/// gateway derives, and it sits outside the length prefix with the rest of
-/// them. A chain runs every step through one caller, so without it all the
-/// steps derived one key while each carried its own fingerprint: step 2 met
-/// step 1's entry, mismatched, and was refused, stopping the chain partway.
-/// `None` for an ordinary single invocation, whose key is unchanged.
-///
 /// Returns `None` when no idempotency cache is configured, or when the client
 /// sent no key.
 pub(super) fn idempotency_key_for(
@@ -50,14 +43,12 @@ pub(super) fn idempotency_key_for(
     projection_key_suffix: &str,
     identity_suffix: &str,
     idem_cache: Option<&std::sync::Arc<IdempotencyCache>>,
-    step: Option<usize>,
 ) -> Option<String> {
     idem_cache?;
     let key = client_key?;
     let len = key.len();
-    let step_suffix = step.map_or_else(String::new, |idx| format!("|step:{idx}"));
     Some(format!(
-        "{len}:{key}{projection_key_suffix}{identity_suffix}{step_suffix}"
+        "{len}:{key}{projection_key_suffix}{identity_suffix}"
     ))
 }
 
@@ -121,14 +112,6 @@ impl<'a> CallerIdentity<'a> {
             (None, None) => None,
         }
     }
-
-    /// The identity's own value, untagged — for a key that carries no second
-    /// identity arm to collide with.
-    pub(super) fn value(self) -> &'a str {
-        match self {
-            Self::Binding(value) | Self::Subject(value) => value,
-        }
-    }
 }
 
 /// Build the response-cache key for a `gateway_invoke` call.
@@ -145,6 +128,43 @@ impl<'a> CallerIdentity<'a> {
 /// `context` is forwarded, not consumed here: the routing profile, protocol
 /// revision and policy generation belong to the key the cache layer derives,
 /// so this passes them down rather than mixing a discriminator of its own.
+/// Who the response cache keys on, namespaced by the evidence it came from.
+///
+/// One tagged, length-prefixed namespace per source, so two different kinds of
+/// principal cannot collide by spelling: an identity-propagation
+/// `cache_binding`, else the verified OIDC actor, else the caller's own
+/// `GrantSubject` (authority + subject). The `GrantSubject` arm is what
+/// separates two callers on a deployment that derives identity from trusted
+/// headers, mTLS or an OAuth agent and runs with identity propagation off and
+/// no OIDC — the shipped default, where every caller previously keyed as
+/// `None` and shared one entry.
+///
+/// The binding is copied opaquely, never re-hashed and never trimmed: it is
+/// already the resolver's digest, and the same string is what the capability
+/// executor copies into the inner key.
+pub(super) fn caller_cache_principal(
+    cache_binding: Option<&str>,
+    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+) -> Option<String> {
+    if let Some(binding) = cache_binding {
+        return Some(format!("idp:{}:{binding}", binding.len()));
+    }
+    if let Some(actor) =
+        verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
+    {
+        return Some(format!("oidc:{}:{actor}", actor.len()));
+    }
+    let subject = grant_subject?;
+    Some(format!(
+        "grant:{}:{}:{}:{}",
+        subject.authority.len(),
+        subject.authority,
+        subject.subject.len(),
+        subject.subject
+    ))
+}
+
 pub(super) fn response_cache_key_for(
     server: &str,
     tool: &str,
@@ -315,12 +335,6 @@ pub(super) struct MetaMcpInvoker<'a, 'c> {
     /// authorizer, which nothing on this path consulted — an identity no check
     /// reads is not a check.
     pub(super) caller: &'c MetaMcpCallerContext<'c>,
-    /// The ordinal of the next step this invoker runs.
-    ///
-    /// One invoker serves a whole playbook run, so it can count its own steps.
-    /// Without the count every step derived the caller's one key and the
-    /// second step was refused on a fingerprint mismatch.
-    pub(super) step: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait::async_trait]
@@ -332,10 +346,7 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         // step they could run directly, which is a regression rather than a
         // control: a playbook is not a way AROUND a check, so it faces the same
         // one — now including the scope checks, at the chokepoint.
-        let step = self.step.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.meta
-            .invoke_tool(&args, None, self.caller, Some(step))
-            .await
+        self.meta.invoke_tool(&args, None, self.caller).await
     }
 }
 
@@ -546,62 +557,14 @@ mod tests {
     fn a_forged_client_key_cannot_spell_another_callers_identity_suffix() {
         let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
 
-        let victim = super::idempotency_key_for(Some("X"), "", "|idp:V", Some(&cache), None);
-        let forger = super::idempotency_key_for(Some("X|idp:V"), "", "", Some(&cache), None);
+        let victim = super::idempotency_key_for(Some("X"), "", "|idp:V", Some(&cache));
+        let forger = super::idempotency_key_for(Some("X|idp:V"), "", "", Some(&cache));
 
         assert_ne!(
             victim, forger,
             "a client key that spells the victim's identity suffix must not \
              collide with the victim's key"
         );
-    }
-
-    /// BLOCK-2. A chain runs every step through one caller, so all its steps
-    /// derived the SAME key while each step's fingerprint differed: step 2 met
-    /// step 1's entry, mismatched, and was refused, stopping the chain partway.
-    /// Identical repeated steps failed the other way and replayed step 1's
-    /// result instead of running. Each step owns its own entry, so the step
-    /// ordinal is part of what the key is derived from.
-    #[test]
-    fn block2_two_chain_steps_under_one_client_key_derive_distinct_keys() {
-        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
-
-        let first = super::idempotency_key_for(Some("K"), "", "|sub:A", Some(&cache), Some(0));
-        let second = super::idempotency_key_for(Some("K"), "", "|sub:A", Some(&cache), Some(1));
-
-        assert_ne!(
-            first, second,
-            "two steps of one chain must not share one idempotency entry"
-        );
-    }
-
-    /// The step ordinal is gateway-derived, so it sits OUTSIDE the
-    /// length-prefixed client segment like every other derived suffix
-    /// (MIK-7408). A client that spells a step suffix inside its own key must
-    /// not reach the entry the gateway derives for that step.
-    #[test]
-    fn block2_a_client_key_cannot_forge_a_step_suffix() {
-        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
-
-        let step = super::idempotency_key_for(Some("K"), "", "", Some(&cache), Some(1));
-        let forger = super::idempotency_key_for(Some("K|step:1"), "", "", Some(&cache), None);
-
-        assert_ne!(
-            step, forger,
-            "a client key spelling a step suffix must not collide with that step's key"
-        );
-    }
-
-    /// A single (non-chain) invocation keeps the key it always derived: the
-    /// step segment is absent, so no caller's existing key moves and no stored
-    /// entry from before this change is stranded.
-    #[test]
-    fn block2_a_single_invocation_key_is_unchanged() {
-        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
-
-        let key = super::idempotency_key_for(Some("K"), "", "|sub:A", Some(&cache), None);
-
-        assert_eq!(key.as_deref(), Some("1:K|sub:A"));
     }
 
     /// MIK-7408, the arm that is live on the shipped default. With identity
@@ -613,8 +576,8 @@ mod tests {
     fn a_forged_client_key_cannot_spell_another_callers_verified_subject() {
         let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
 
-        let victim = super::idempotency_key_for(Some("X"), "", "|sub:V", Some(&cache), None);
-        let forger = super::idempotency_key_for(Some("X|sub:V"), "", "", Some(&cache), None);
+        let victim = super::idempotency_key_for(Some("X"), "", "|sub:V", Some(&cache));
+        let forger = super::idempotency_key_for(Some("X|sub:V"), "", "", Some(&cache));
 
         assert_ne!(
             victim, forger,
@@ -633,10 +596,8 @@ mod tests {
     fn a_forged_client_key_cannot_spell_another_callers_projection_arm() {
         let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
 
-        let victim =
-            super::idempotency_key_for(Some("X"), "#arm=treatment", "", Some(&cache), None);
-        let forger =
-            super::idempotency_key_for(Some("X#arm=treatment"), "", "", Some(&cache), None);
+        let victim = super::idempotency_key_for(Some("X"), "#arm=treatment", "", Some(&cache));
+        let forger = super::idempotency_key_for(Some("X#arm=treatment"), "", "", Some(&cache));
 
         assert_ne!(
             victim, forger,

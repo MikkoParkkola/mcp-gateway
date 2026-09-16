@@ -47,15 +47,15 @@ mod schema_validator;
 pub mod validator;
 mod watcher;
 
-pub use backend::{CapabilityBackend, CapabilityBackendStatus, RugPullRecord};
+pub use backend::{CapabilityBackend, CapabilityBackendStatus, DirectoryLoad, RugPullRecord};
 pub use definition::ProtocolConfig;
 pub use definition::*;
 #[cfg(feature = "discovery")]
 pub use discovery::{DiscoveryEngine, DiscoveryOptions, DiscoveryResult};
 pub use execution_context::CapabilityExecutionContext;
 pub(crate) use execution_context::{
-    validate_capability_url_for_context, validate_oauth_isolation,
-    validate_personal_capability_identity,
+    validate_capability_account_binding, validate_capability_url_for_context,
+    validate_oauth_isolation, validate_personal_capability_identity,
 };
 pub use executor::CapabilityExecutor;
 pub use executor::graphql::GraphqlExecutor;

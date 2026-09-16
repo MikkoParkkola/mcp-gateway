@@ -1,3 +1,4 @@
+sha256: 076a726913f92f9763ae4d5e0679300822f7ee6c1c960da64493c3170f3d83f4
 fulcrum: "1.0"
 name: stripe_create_payment_intent
 description: Create a Stripe PaymentIntent to collect a payment — the recommended modern way to accept payments (replaces the legacy Charges API)

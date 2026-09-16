@@ -8,6 +8,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::Config;
 
+/// Gateway state directory, honoring the existing operator override.
+#[must_use]
+pub fn gateway_data_dir() -> PathBuf {
+    resolve_gateway_data_dir(
+        std::env::var("MCP_GATEWAY_CONFIG_DIR").ok(),
+        dirs::home_dir(),
+    )
+}
+
+fn resolve_gateway_data_dir(configured: Option<String>, home: Option<PathBuf>) -> PathBuf {
+    configured.map_or_else(
+        || {
+            home.unwrap_or_else(|| PathBuf::from("."))
+                .join(".mcp-gateway")
+        },
+        PathBuf::from,
+    )
+}
+
 /// Load config tolerantly, returning defaults when the file is absent or unloadable.
 ///
 /// New read-modify-write callers must use [`load_existing_or_default`] so a load
@@ -243,6 +262,23 @@ fn scratch_candidate(path: &Path, seed: u64) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn gateway_state_override_precedes_home_and_preserves_default_fallback() {
+        let home = Some(std::path::PathBuf::from("operator-home"));
+        assert_eq!(
+            super::resolve_gateway_data_dir(Some("isolated-state".into()), home.clone()),
+            std::path::PathBuf::from("isolated-state")
+        );
+        assert_eq!(
+            super::resolve_gateway_data_dir(None, home),
+            std::path::PathBuf::from("operator-home/.mcp-gateway")
+        );
+        assert_eq!(
+            super::resolve_gateway_data_dir(None, None),
+            std::path::PathBuf::from("./.mcp-gateway")
+        );
+    }
     use super::*;
 
     #[test]

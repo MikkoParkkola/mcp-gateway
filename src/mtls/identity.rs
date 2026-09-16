@@ -15,6 +15,7 @@ use x509_parser::certificate::X509Certificate;
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::FromDer;
 
+use crate::gateway::auth::QuotaPrincipal;
 use crate::{Error, Result};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,10 +42,27 @@ pub struct CertIdentity {
 
     /// Pre-computed human-readable label for logs/audit events.
     pub display_name: String,
+
+    /// Nonce-quota bucket, derived from the whole certificate DER.
+    ///
+    /// `None` on any identity built by hand — a fixture cannot mint quota.
+    /// Set only by [`CertIdentity::from_der`], so two certificates sharing a
+    /// CN or display name stay separate and one certificate presented on many
+    /// connections shares one bucket.
+    pub quota_principal: Option<QuotaPrincipal>,
 }
 
 impl CertIdentity {
     /// Parse a DER-encoded certificate and extract its identity fields.
+    ///
+    /// # Trust boundary
+    ///
+    /// The returned identity carries a [`QuotaPrincipal`], which is an
+    /// *authenticated* credential's bucket. Production reaches this only from
+    /// the peer chain of a handshake Rustls has already verified
+    /// (`client_identity_from_peer_chain`, behind the TLS acceptor). Parsing
+    /// is public and proves nothing on its own: calling this on unverified
+    /// bytes would let the sender choose its own bucket.
     ///
     /// # Errors
     ///
@@ -66,6 +84,7 @@ impl CertIdentity {
             san_uris,
             san_dns_names,
             display_name,
+            quota_principal: Some(QuotaPrincipal::client_certificate(der)),
         })
     }
 }

@@ -120,6 +120,44 @@ pub trait Transport: Send + Sync {
         self.request(method, params).await
     }
 
+    /// Send a request that additionally declares the gateway's upstream *tasks*
+    /// extension in the modern `_meta` client-capability envelope.
+    ///
+    /// A distinct method rather than a flag inside `params`: the declaration is
+    /// a statement the transport makes about itself, and a JSON marker would be
+    /// forgeable by anything that can reach [`Transport::request_with_headers`]
+    /// — including a caller-supplied argument list that arrived over the wire.
+    /// Only the trusted task adapter calls this, and it is the only way to get
+    /// the extension onto the wire; ordinary requests keep declaring empty
+    /// capabilities, unchanged.
+    ///
+    /// The pinned upstream SDK admits task-augmented execution only when the
+    /// same request carries
+    /// `_meta["io.modelcontextprotocol/clientCapabilities"].extensions
+    /// ["io.modelcontextprotocol/tasks"] = {}` (probed against fastmcp-tasks
+    /// 4.0.3: without it the identical `tools/call` answers synchronously, and
+    /// `tasks/get` answers `-32021`). That envelope exists only in the modern
+    /// dialect, so a transport with no modern `_meta` channel cannot express
+    /// this at all.
+    ///
+    /// The default impl therefore FAILS, locally, without sending anything. It
+    /// deliberately does not fall back to [`Transport::request`]: a silent
+    /// fallback would put a task submission on the wire that the peer answers
+    /// synchronously, and the caller would record a task that upstream never
+    /// created. Only [`crate::transport::HttpTransport`] overrides it.
+    async fn request_with_task_capability(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+        _extra_headers: &[(String, String)],
+        _identity_key: Option<&str>,
+    ) -> Result<JsonRpcResponse> {
+        Err(crate::Error::Protocol(format!(
+            "cannot send `{method}` with the upstream tasks capability: this transport has no \
+             modern `_meta` channel to declare it in"
+        )))
+    }
+
     /// Whether this transport instance actually applies `extra_headers`
     /// passed to [`Transport::request_with_headers`] to the wire (MIK-6710).
     ///
@@ -182,18 +220,21 @@ pub trait Transport: Send + Sync {
 /// The entry is meant to live exactly as long as the request does, so the guard
 /// removes it on drop. On the success path the reader has already removed the
 /// entry, making the removal a harmless no-op.
-pub(crate) struct PendingRequestGuard<'a> {
-    pending: &'a DashMap<String, oneshot::Sender<JsonRpcResponse>>,
+///
+/// Generic over the reply payload: the stdio transport's map carries
+/// [`JsonRpcResponse`], and the gateway's stdio client channel carries the raw
+/// reply frame as a `Value`, because that is what `ClientChannel::send_request`
+/// hands back (`src/gateway/proxy.rs:523`). One guard, both maps — a second
+/// copy of this type is a second place for the cancellation contract to rot.
+pub(crate) struct PendingRequestGuard<'a, T = JsonRpcResponse> {
+    pending: &'a DashMap<String, oneshot::Sender<T>>,
     key: String,
 }
 
-impl<'a> PendingRequestGuard<'a> {
+impl<'a, T> PendingRequestGuard<'a, T> {
     /// Wrap a `pending` map entry so it is removed when the guard drops.
     #[must_use]
-    pub(crate) fn new(
-        pending: &'a DashMap<String, oneshot::Sender<JsonRpcResponse>>,
-        key: &str,
-    ) -> Self {
+    pub(crate) fn new(pending: &'a DashMap<String, oneshot::Sender<T>>, key: &str) -> Self {
         Self {
             pending,
             key: key.to_string(),
@@ -201,7 +242,7 @@ impl<'a> PendingRequestGuard<'a> {
     }
 }
 
-impl Drop for PendingRequestGuard<'_> {
+impl<T> Drop for PendingRequestGuard<'_, T> {
     fn drop(&mut self) {
         self.pending.remove(&self.key);
     }

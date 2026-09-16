@@ -11,6 +11,7 @@
 
 use mcp_gateway::config::Config;
 use mcp_gateway::gateway::Gateway;
+use mcp_gateway::gateway::test_helpers::CallerStanding;
 use mcp_gateway::protocol::RequestId;
 use serde_json::json;
 
@@ -65,7 +66,8 @@ fn test_extract_request_id_numeric() {
 async fn test_stdio_initialize_produces_valid_response() {
     use mcp_gateway::backend::BackendRegistry;
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp};
+    use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, StoreLimits, open_runtime};
     use mcp_gateway::gateway::{
         AgentAuthState, AgentRegistry, GatewayKeyPair, ProxyManager, ResolvedAuthConfig,
     };
@@ -89,9 +91,24 @@ async fn test_stdio_initialize_produces_valid_response() {
 
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
 
+    // The durable task runtime `run_stdio()` opens, in a private directory this
+    // test holds for its own lifetime: the store leases the directory while the
+    // service lives, so `store_dir` stays bound to the end of the test rather
+    // than being dropped once the runtime is open.
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let (tasks, task_executor) = open_runtime(
+        &store_dir.path().join("tasks"),
+        config.tasks.max_workers,
+        StoreLimits::default(),
+        Arc::clone(&subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+
     let _state = Arc::new(AppState {
-        session_lifecycle: None,
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+        session_lifecycle: None,
         env: None,
         backends: Arc::clone(&backends),
         meta_mcp: Arc::clone(&meta_mcp),
@@ -121,10 +138,9 @@ async fn test_stdio_initialize_produces_valid_response() {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
+        tasks,
+        task_executor,
+        subscriptions,
     });
 
     // Call handle_initialize directly — this is what dispatch_single calls
@@ -177,7 +193,8 @@ async fn test_stdio_tools_list_returns_meta_tools() {
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
 
     let id = RequestId::Number(2);
-    let response = meta_mcp.handle_tools_list_with_params(id, None, Some("stdio-test"));
+    let response =
+        meta_mcp.handle_tools_list_with_params(id, None, Some("stdio-test"), CallerStanding::Admin);
 
     let serialized = serde_json::to_value(&response).expect("serialize");
     assert!(

@@ -1,3 +1,4 @@
+sha256: ca26d4cb049d2d808207b31c7e98a86eae9c2b5b342f9a8c5fb0cc1e6176c774
 fulcrum: "1.0"
 name: contacts_list
 description: List contacts from Google Contacts (People API)

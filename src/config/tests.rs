@@ -2042,3 +2042,154 @@ fn gh475_unknown_capability_key_rejected() {
         "rejection must name the unknown key, got: {err}"
     );
 }
+
+#[test]
+fn duration_serialize_preserves_25ms_config_roundtrip() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 25ms\n",
+    )
+    .expect("write");
+    let cfg = Config::load(Some(&path)).expect("load 25ms");
+    let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+    assert!(
+        yaml.contains("25ms"),
+        "as_secs truncation would emit 0s; got {yaml}"
+    );
+    assert!(
+        !yaml.contains("stop_when_idle_for: 0s"),
+        "original serializer maps 25ms to 0s; got {yaml}"
+    );
+    std::fs::write(&path, &yaml).expect("rewrite");
+    let again = Config::load(Some(&path)).expect("reload");
+    std::assert_eq!(
+        again
+            .backends
+            .get("owned")
+            .expect("backend")
+            .stop_when_idle_for,
+        Some(std::time::Duration::from_millis(25))
+    );
+}
+
+#[test]
+fn duration_serialize_preserves_1250ms_config_roundtrip() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 1250ms\n",
+    )
+    .expect("write");
+    let cfg = Config::load(Some(&path)).expect("load 1250ms");
+    let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+    assert!(
+        yaml.contains("1250ms"),
+        "as_secs truncation would emit 1s; got {yaml}"
+    );
+    assert!(
+        !yaml.contains("stop_when_idle_for: 1s"),
+        "original serializer maps 1250ms to 1s; got {yaml}"
+    );
+    std::fs::write(&path, &yaml).expect("rewrite");
+    let again = Config::load(Some(&path)).expect("reload");
+    std::assert_eq!(
+        again
+            .backends
+            .get("owned")
+            .expect("backend")
+            .stop_when_idle_for,
+        Some(std::time::Duration::from_millis(1250))
+    );
+}
+
+#[test]
+fn duration_serialize_keeps_whole_seconds_as_seconds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 30s\n",
+    )
+    .expect("write");
+    let cfg = Config::load(Some(&path)).expect("load 30s");
+    let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+    assert!(
+        yaml.contains("30s"),
+        "whole seconds must stay NNs; got {yaml}"
+    );
+    assert!(
+        !yaml.contains("30000ms"),
+        "must not expand whole seconds to ms; got {yaml}"
+    );
+    std::fs::write(&path, &yaml).expect("rewrite");
+    let again = Config::load(Some(&path)).expect("reload");
+    std::assert_eq!(
+        again
+            .backends
+            .get("owned")
+            .expect("backend")
+            .stop_when_idle_for,
+        Some(std::time::Duration::from_secs(30))
+    );
+}
+
+#[test]
+fn duration_serialize_zero_and_max_whole_seconds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 0s\n",
+    )
+    .expect("write");
+    let mut cfg = Config::load(Some(&path)).expect("load 0s");
+    let yaml = serde_yaml::to_string(&cfg).expect("serialize 0s");
+    assert!(
+        yaml.contains("0s"),
+        "zero whole seconds encode as 0s; got {yaml}"
+    );
+    cfg.backends
+        .get_mut("owned")
+        .expect("backend")
+        .stop_when_idle_for = Some(std::time::Duration::from_secs(u64::MAX));
+    let yaml = serde_yaml::to_string(&cfg).expect("serialize max secs");
+    assert!(
+        yaml.contains(&format!("{u64}s", u64 = u64::MAX)),
+        "max whole seconds stay seconds; got {yaml}"
+    );
+}
+
+#[test]
+fn duration_serialize_rejects_sub_ms_and_over_u64_millis() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 1s\n",
+    )
+    .expect("write");
+    let mut cfg = Config::load(Some(&path)).expect("load");
+    cfg.backends
+        .get_mut("owned")
+        .expect("backend")
+        .stop_when_idle_for = Some(std::time::Duration::from_nanos(500));
+    assert!(
+        serde_yaml::to_string(&cfg).is_err(),
+        "sub-millisecond precision must be a serde error"
+    );
+    cfg.backends
+        .get_mut("owned")
+        .expect("backend")
+        .stop_when_idle_for = Some(
+        std::time::Duration::from_secs(u64::MAX)
+            .checked_add(std::time::Duration::from_millis(1))
+            .expect("Duration can hold max secs + 1ms"),
+    );
+    assert!(
+        serde_yaml::to_string(&cfg).is_err(),
+        "mixed-seconds millis total over u64 must be a serde error"
+    );
+}

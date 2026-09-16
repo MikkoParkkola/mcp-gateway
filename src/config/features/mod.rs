@@ -11,11 +11,13 @@ mod capability;
 mod code_mode;
 mod error_budget;
 mod failsafe;
+mod idempotency;
 mod key_server;
 mod playbooks;
 mod runtime;
 mod security;
 mod streaming;
+mod tasks;
 mod webhooks;
 
 pub use auth::{AgentAuthConfig, AgentDefinitionConfig, ApiKeyConfig, AuthConfig};
@@ -26,6 +28,7 @@ pub use error_budget::{CapabilityErrorBudgetSection, ErrorBudgetSection};
 pub use failsafe::{
     CircuitBreakerConfig, FailsafeConfig, HealthCheckConfig, RateLimitConfig, RetryConfig,
 };
+pub use idempotency::{IdempotencyConfig, IdempotencyReadOnlyTool};
 pub use key_server::{
     KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
     PolicyMatchConfig, PolicyScopesConfig,
@@ -38,4 +41,5 @@ pub use security::{
     ToolContractConfig,
 };
 pub use streaming::StreamingConfig;
+pub use tasks::{DEFAULT_MAX_WORKERS, TasksConfig};
 pub use webhooks::WebhookConfig;

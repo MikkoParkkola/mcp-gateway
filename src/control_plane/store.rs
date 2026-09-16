@@ -56,6 +56,16 @@ const AUDIT_KIND: &str = "control_plane_audit";
 /// unbounded read.
 const MAX_AUDIT_LIMIT: usize = 10_000;
 
+/// Upper bound on the audit records a single [`ControlPlaneStore::read_audit`]
+/// call may examine, so a filter that matches nothing cannot walk the whole log.
+const MAX_AUDIT_SCAN_RECORDS: usize = 50_000;
+
+/// Hard ceiling on the bytes the file backend reads from the audit log per
+/// [`ControlPlaneStore::read_audit`] call, regardless of the scan budget. The
+/// scan is a reverse tail window, so this bounds the work of one page even when
+/// the log is gigabytes long.
+const MAX_AUDIT_SCAN_BYTES: u64 = 1 << 20;
+
 /// Errors returned by a [`ControlPlaneStore`].
 #[derive(Debug)]
 pub enum StoreError {
@@ -104,16 +114,47 @@ impl From<std::io::Error> for StoreError {
 /// Result alias for store operations.
 pub type StoreResult<T> = Result<T, StoreError>;
 
+/// Opaque continuation token for [`ControlPlaneStore::read_audit`].
+///
+/// A cursor names a position in one backend's log; passing it back resumes the
+/// scan at records strictly older than that position. Its numeric meaning is
+/// backend-private (a byte offset for the file backend, an index for the
+/// in-memory one), so never construct or compare one against a hand-made value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditCursor(u64);
+
+/// One bounded page of audit events, newest first.
+#[derive(Debug, Clone)]
+pub struct AuditPage {
+    /// Matching events, newest first.
+    pub events: Vec<ControlPlaneAuditEvent>,
+    /// Set when older records remain unexamined: pass it back to continue.
+    /// `None` means the scan reached the start of the log, so the page is final.
+    pub next_cursor: Option<AuditCursor>,
+    /// Audit records examined by this call; never exceeds `filter.scan_budget`.
+    pub records_examined: usize,
+    /// Bytes read from storage by this call; never exceeds
+    /// [`MAX_AUDIT_SCAN_BYTES`]. The in-memory backend does no I/O and reports 0.
+    pub bytes_examined: u64,
+}
+
 /// Filter for [`ControlPlaneStore::read_audit`].
 ///
 /// `limit` is required and must be in `1..=MAX_AUDIT_LIMIT`; a zero or oversized
 /// limit is an invalid filter (it must error, never silently return all).
+///
+/// The read is newest-first and bounded: it examines at most `scan_budget`
+/// records and returns [`AuditPage::next_cursor`] whenever it stops before the
+/// start of the log, so a filter matching nothing is cheap per call and never
+/// silently truncates — the caller pages until `next_cursor` is `None`.
 #[derive(Debug, Clone)]
 pub struct AuditFilter {
     /// Maximum number of events to return (`1..=10_000`).
     pub limit: usize,
-    /// Number of leading (oldest, chain-order) events to skip.
-    pub offset: usize,
+    /// Maximum audit records to examine (`1..=MAX_AUDIT_SCAN_RECORDS`).
+    pub scan_budget: usize,
+    /// Resume point from a previous page; `None` starts at the newest record.
+    pub cursor: Option<AuditCursor>,
     /// Restrict to a single actor id when set.
     pub actor_id: Option<String>,
     /// Restrict to a single action when set.
@@ -121,14 +162,24 @@ pub struct AuditFilter {
 }
 
 impl AuditFilter {
-    /// A filter that returns the first `limit` events in chain order.
+    /// A filter returning the newest `limit` events, with the default budget.
     #[must_use]
     pub fn new(limit: usize) -> Self {
         Self {
             limit,
-            offset: 0,
+            scan_budget: MAX_AUDIT_SCAN_RECORDS,
+            cursor: None,
             actor_id: None,
             action: None,
+        }
+    }
+
+    /// The same filter resumed at `cursor`.
+    #[must_use]
+    pub fn resume(&self, cursor: AuditCursor) -> Self {
+        Self {
+            cursor: Some(cursor),
+            ..self.clone()
         }
     }
 
@@ -136,7 +187,8 @@ impl AuditFilter {
     ///
     /// # Errors
     ///
-    /// Errors when `limit` is `0` or greater than [`MAX_AUDIT_LIMIT`].
+    /// Errors when `limit` is `0` or greater than [`MAX_AUDIT_LIMIT`], or when
+    /// `scan_budget` is `0` or greater than [`MAX_AUDIT_SCAN_RECORDS`].
     pub fn validate(&self) -> StoreResult<()> {
         if self.limit == 0 {
             return Err(StoreError::InvalidFilter("limit must be >= 1".to_string()));
@@ -145,6 +197,17 @@ impl AuditFilter {
             return Err(StoreError::InvalidFilter(format!(
                 "limit {} exceeds maximum {MAX_AUDIT_LIMIT}",
                 self.limit
+            )));
+        }
+        if self.scan_budget == 0 {
+            return Err(StoreError::InvalidFilter(
+                "scan_budget must be >= 1".to_string(),
+            ));
+        }
+        if self.scan_budget > MAX_AUDIT_SCAN_RECORDS {
+            return Err(StoreError::InvalidFilter(format!(
+                "scan_budget {} exceeds maximum {MAX_AUDIT_SCAN_RECORDS}",
+                self.scan_budget
             )));
         }
         Ok(())
@@ -206,11 +269,18 @@ pub trait ControlPlaneStore: Send + Sync {
     /// # Errors
     /// Errors on I/O or serialisation failure.
     fn append_audit(&self, event: &ControlPlaneAuditEvent) -> StoreResult<()>;
-    /// Read audit events in chain order, honouring the filter's limit/offset.
+    /// Read one bounded page of audit events, newest first.
+    ///
+    /// The page holds at most `filter.limit` matching events and the call
+    /// examines at most `filter.scan_budget` records (and, on a file backend, at
+    /// most [`MAX_AUDIT_SCAN_BYTES`] bytes). When the scan stops before the
+    /// start of the log — because the page filled or the budget ran out — the
+    /// returned [`AuditPage::next_cursor`] resumes it, so a filter matching
+    /// nothing costs one bounded page per call and is never silently truncated.
     ///
     /// # Errors
     /// Errors on an invalid filter, an I/O failure, a corrupt log line.
-    fn read_audit(&self, filter: &AuditFilter) -> StoreResult<Vec<ControlPlaneAuditEvent>>;
+    fn read_audit(&self, filter: &AuditFilter) -> StoreResult<AuditPage>;
 
     /// Atomically append a write-ahead audit event, then upsert the grant, as a
     /// single serialized unit. Guarantees a committed grant is never unaudited
@@ -330,16 +400,52 @@ fn audit_event_from_entry(entry: &serde_json::Value) -> Option<ControlPlaneAudit
     })
 }
 
-/// Apply a filter's predicates then its offset/limit page to chain-ordered events.
-fn page_audit(
-    events: impl Iterator<Item = ControlPlaneAuditEvent>,
-    filter: &AuditFilter,
-) -> Vec<ControlPlaneAuditEvent> {
-    events
-        .filter(|e| filter.matches(e))
-        .skip(filter.offset)
-        .take(filter.limit)
-        .collect()
+/// Outcome of one bounded newest-first scan, before a backend turns the resume
+/// position into an [`AuditCursor`].
+struct AuditScan {
+    /// Matching events, newest first.
+    events: Vec<ControlPlaneAuditEvent>,
+    /// Resume position when the scan stopped early; `None` when `records` ran
+    /// out, in which case the backend supplies the position of what it left
+    /// unread (the rest of the file below the window, or the start of the log).
+    stopped_at: Option<u64>,
+    /// Records examined, capped by `filter.scan_budget`.
+    records_examined: usize,
+}
+
+/// Collect one bounded page from `records`, which must yield newest-first
+/// `(resume_position, event)` pairs. `resume_position` is where a follow-up scan
+/// must restart to cover everything strictly older than that record.
+///
+/// Stops at `filter.limit` matches or `filter.scan_budget` examined records,
+/// whichever comes first, so an unmatched or rare filter does bounded work per
+/// call instead of walking the log.
+fn scan_audit<I>(records: I, filter: &AuditFilter) -> StoreResult<AuditScan>
+where
+    I: Iterator<Item = StoreResult<(u64, ControlPlaneAuditEvent)>>,
+{
+    let mut scan = AuditScan {
+        events: Vec::new(),
+        stopped_at: None,
+        records_examined: 0,
+    };
+    for record in records {
+        let (resume_at, event) = record?;
+        scan.records_examined += 1;
+        if filter.matches(&event) {
+            scan.events.push(event);
+        }
+        if scan.events.len() >= filter.limit || scan.records_examined >= filter.scan_budget {
+            scan.stopped_at = Some(resume_at);
+            break;
+        }
+    }
+    Ok(scan)
+}
+
+/// A resume position becomes a cursor only when records remain below it.
+fn audit_cursor(resume_at: u64) -> Option<AuditCursor> {
+    (resume_at > 0).then_some(AuditCursor(resume_at))
 }
 
 // ── In-memory backend ──────────────────────────────────────────────────────────
@@ -427,10 +533,30 @@ impl ControlPlaneStore for InMemoryControlPlaneStore {
         Ok(())
     }
 
-    fn read_audit(&self, filter: &AuditFilter) -> StoreResult<Vec<ControlPlaneAuditEvent>> {
+    fn read_audit(&self, filter: &AuditFilter) -> StoreResult<AuditPage> {
         filter.validate()?;
         let audit = Self::lock(&self.audit)?;
-        Ok(page_audit(audit.iter().cloned(), filter))
+        // The cursor is an exclusive upper-bound index: scan backwards from it.
+        let end = filter
+            .cursor
+            .map_or(audit.len(), |AuditCursor(i)| {
+                usize::try_from(i).unwrap_or(usize::MAX)
+            })
+            .min(audit.len());
+        let scan = scan_audit(
+            audit[..end]
+                .iter()
+                .enumerate()
+                .rev()
+                .map(|(i, e)| Ok((u64::try_from(i).unwrap_or(u64::MAX), e.clone()))),
+            filter,
+        )?;
+        Ok(AuditPage {
+            events: scan.events,
+            next_cursor: audit_cursor(scan.stopped_at.unwrap_or(0)),
+            records_examined: scan.records_examined,
+            bytes_examined: 0,
+        })
     }
 }
 
@@ -739,37 +865,121 @@ impl ControlPlaneStore for FileControlPlaneStore {
         Ok(applied)
     }
 
-    fn read_audit(&self, filter: &AuditFilter) -> StoreResult<Vec<ControlPlaneAuditEvent>> {
+    fn read_audit(&self, filter: &AuditFilter) -> StoreResult<AuditPage> {
         filter.validate()?;
         let path = self.audit.path();
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        let file_len = match std::fs::metadata(&path) {
+            Ok(m) => m.len(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
             Err(e) => return Err(e.into()),
         };
-        let mut events = Vec::new();
-        for (line_no, raw) in content.lines().enumerate() {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                continue;
+        // The cursor is an exclusive upper-bound byte offset: everything below it
+        // is still unread. Read one tail window ending there, capped so a single
+        // call never reads more than MAX_AUDIT_SCAN_BYTES no matter how long the
+        // log is.
+        let end = filter
+            .cursor
+            .map_or(file_len, |AuditCursor(b)| b)
+            .min(file_len);
+        let window_len = end.min(MAX_AUDIT_SCAN_BYTES);
+        let window_start = end - window_len;
+        let window = read_window(&path, window_start, window_len)?;
+
+        // A window that starts mid-line drops that partial head; the line it
+        // belongs to is read by the page that covers the bytes below.
+        let (body_offset, body) = if window_start == 0 {
+            (0, &window[..])
+        } else {
+            match window.iter().position(|b| *b == b'\n') {
+                Some(nl) => (nl + 1, &window[nl + 1..]),
+                None => (window.len(), &window[window.len()..]),
             }
-            let entry: serde_json::Value = serde_json::from_str(trimmed)
-                .map_err(|e| StoreError::Corrupt(format!("audit line {}: {e}", line_no + 1)))?;
-            // A line tagged as a control-plane audit event MUST reconstruct; a
-            // malformed one fails closed rather than silently vanishing from the
-            // view. Lines of any other kind are not ours and are skipped.
-            if entry.get("kind").and_then(serde_json::Value::as_str) == Some(AUDIT_KIND) {
-                let event = audit_event_from_entry(&entry).ok_or_else(|| {
-                    StoreError::Corrupt(format!(
-                        "audit line {}: malformed control-plane audit entry",
-                        line_no + 1
-                    ))
-                })?;
-                events.push(event);
-            }
+        };
+        // No complete line in a full window means one audit line is longer than
+        // the whole scan window, so no page could ever read it. Fail closed
+        // rather than hand back a cursor that never advances.
+        if window_start > 0 && body.is_empty() {
+            return Err(StoreError::Corrupt(format!(
+                "audit line ending before byte {end} exceeds the {MAX_AUDIT_SCAN_BYTES}-byte scan window"
+            )));
         }
-        Ok(page_audit(events.into_iter(), filter))
+        let body_start = window_start + u64::try_from(body_offset).unwrap_or(u64::MAX);
+
+        let scan = scan_audit(reverse_audit_lines(body, body_start), filter)?;
+        Ok(AuditPage {
+            events: scan.events,
+            // Exhausting the window still leaves every byte below it unread.
+            next_cursor: audit_cursor(scan.stopped_at.unwrap_or(body_start)),
+            records_examined: scan.records_examined,
+            bytes_examined: window_len,
+        })
     }
+}
+
+// ── Bounded reverse audit-log scan ──────────────────────────────────────────────
+
+/// Read `len` bytes starting at `start`. A log file that was never created reads
+/// as empty, matching an audit view with no events yet.
+fn read_window(path: &Path, start: u64, len: u64) -> StoreResult<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    file.seek(SeekFrom::Start(start))?;
+    let mut buf = vec![0u8; usize::try_from(len).unwrap_or(usize::MAX)];
+    file.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
+/// Yield the control-plane audit records in `body` newest-first, each paired with
+/// the absolute byte offset of its line. `body` must begin on a line boundary at
+/// `body_start`.
+///
+/// A line tagged as a control-plane audit event MUST reconstruct; a malformed one
+/// fails closed rather than silently vanishing from the view. Lines of any other
+/// kind share the log but are not ours, and are skipped.
+fn reverse_audit_lines(
+    body: &[u8],
+    body_start: u64,
+) -> impl Iterator<Item = StoreResult<(u64, ControlPlaneAuditEvent)>> + '_ {
+    let mut lines = Vec::new();
+    let mut offset = 0usize;
+    for line in body.split(|b| *b == b'\n') {
+        lines.push((body_start + u64::try_from(offset).unwrap_or(u64::MAX), line));
+        offset += line.len() + 1;
+    }
+    lines.into_iter().rev().filter_map(|(at, raw)| {
+        let trimmed = raw.trim_ascii();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let entry: serde_json::Value = match serde_json::from_slice(trimmed) {
+            Ok(v) => v,
+            Err(e) => {
+                return Some(Err(StoreError::Corrupt(format!(
+                    "audit line at byte {at}: {e}"
+                ))));
+            }
+        };
+        if entry.get("kind").and_then(serde_json::Value::as_str) != Some(AUDIT_KIND) {
+            return None;
+        }
+        Some(
+            audit_event_from_entry(&entry)
+                .map(|event| (at, event))
+                .ok_or_else(|| {
+                    StoreError::Corrupt(format!(
+                        "audit line at byte {at}: malformed control-plane audit entry"
+                    ))
+                }),
+        )
+    })
 }
 
 // ── Atomic whole-file write ─────────────────────────────────────────────────────
@@ -966,8 +1176,16 @@ mod tests {
             .unwrap();
         let all = store.read_audit(&AuditFilter::new(10)).unwrap();
         assert_eq!(
-            all.iter().map(|e| e.event_id.as_str()).collect::<Vec<_>>(),
-            ["a1", "a2"]
+            all.events
+                .iter()
+                .map(|e| e.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a2", "a1"],
+            "audit reads newest first"
+        );
+        assert!(
+            all.next_cursor.is_none(),
+            "a scan that reached the start of the log is final"
         );
     }
 
@@ -998,43 +1216,260 @@ mod tests {
         );
     }
 
-    // MIK-6685.STORE.6 — read_audit chain order + limit/offset + filters.
-    #[test]
-    fn read_audit_honors_offset_limit_and_filters() {
-        let store = InMemoryControlPlaneStore::new();
-        for i in 0..5 {
-            let actor = if i % 2 == 0 { "alice" } else { "bob" };
-            store
-                .append_audit(&audit_event(
-                    &format!("a{i}"),
-                    actor,
-                    ControlPlaneAction::MutateGrant,
-                ))
-                .unwrap();
-        }
-        let page = store
-            .read_audit(&AuditFilter {
-                limit: 2,
-                offset: 1,
-                actor_id: None,
-                action: None,
+    // MIK-6710.AUDIT.1 — a bounded newest-first read: paging with a cursor over a
+    // log far larger than one page reproduces a full-scan oracle exactly, for
+    // filters that match everything, some events and nothing; every call examines
+    // at most the scan budget; and no filtered result is silently dropped.
+    //
+    // Both backends run this one suite, so the file and in-memory paths cannot
+    // drift apart on order, filter semantics or cursor behaviour.
+    fn bounded_audit_conformance(store: &dyn ControlPlaneStore) {
+        // The oracle: what a full scan in chain order would have contained.
+        let oracle: Vec<ControlPlaneAuditEvent> = (0..200)
+            .map(|i| {
+                let actor = match i {
+                    137 => "rare",
+                    _ if i % 2 == 0 => "alice",
+                    _ => "bob",
+                };
+                let action = if i % 3 == 0 {
+                    ControlPlaneAction::MutatePolicy
+                } else {
+                    ControlPlaneAction::MutateGrant
+                };
+                audit_event(&format!("a{i:04}"), actor, action)
             })
+            .collect();
+        for event in &oracle {
+            store.append_audit(event).unwrap();
+        }
+
+        let cases: Vec<(Option<&str>, Option<ControlPlaneAction>)> = vec![
+            (None, None),
+            (Some("bob"), None),
+            (None, Some(ControlPlaneAction::MutatePolicy)),
+            (Some("bob"), Some(ControlPlaneAction::MutatePolicy)),
+            (Some("rare"), None),
+            (Some("nobody-did-this"), None),
+        ];
+        for (actor, action) in cases {
+            let label = format!("actor={actor:?} action={action:?}");
+            let base = AuditFilter {
+                limit: 7,
+                scan_budget: 13,
+                cursor: None,
+                actor_id: actor.map(str::to_string),
+                action,
+            };
+
+            let mut seen: Vec<String> = Vec::new();
+            let mut filter = base.clone();
+            let mut calls = 0;
+            loop {
+                let page = store.read_audit(&filter).unwrap();
+                calls += 1;
+                assert!(calls < 1000, "{label}: pagination must terminate");
+                assert!(
+                    page.records_examined <= base.scan_budget,
+                    "{label}: examined {} records, budget {}",
+                    page.records_examined,
+                    base.scan_budget
+                );
+                assert!(
+                    page.bytes_examined <= MAX_AUDIT_SCAN_BYTES,
+                    "{label}: read {} bytes, cap {MAX_AUDIT_SCAN_BYTES}",
+                    page.bytes_examined
+                );
+                assert!(
+                    page.events.len() <= base.limit,
+                    "{label}: page overran limit"
+                );
+                seen.extend(page.events.iter().map(|e| e.event_id.clone()));
+                match page.next_cursor {
+                    // A bounded page that stops early MUST hand back a cursor, or
+                    // the missing events are silently truncated.
+                    Some(cursor) => filter = base.resume(cursor),
+                    None => break,
+                }
+            }
+
+            let expected: Vec<String> = oracle
+                .iter()
+                .filter(|e| {
+                    actor.is_none_or(|a| a == e.actor_id) && action.is_none_or(|a| a == e.action)
+                })
+                .rev()
+                .map(|e| e.event_id.clone())
+                .collect();
+            assert_eq!(seen, expected, "{label}: paged read must equal the oracle");
+        }
+    }
+
+    // MIK-6710.AUDIT.1 — both backends satisfy the bounded-read contract.
+    #[test]
+    fn in_memory_audit_read_is_bounded_and_ordered() {
+        bounded_audit_conformance(&InMemoryControlPlaneStore::new());
+    }
+
+    // MIK-6710.AUDIT.1 — both backends satisfy the bounded-read contract.
+    #[test]
+    fn file_audit_read_is_bounded_and_ordered() {
+        let dir = tempfile::tempdir().unwrap();
+        bounded_audit_conformance(&file_store(dir.path()));
+    }
+
+    // MIK-6710.AUDIT.1 — on a log larger than the scan window, one call reads a
+    // bounded tail rather than the whole file, and still returns the newest
+    // events. The positive control is the byte count: it must be below the file
+    // size, which is what the previous whole-file read could never satisfy.
+    #[test]
+    fn file_audit_read_caps_bytes_on_a_log_larger_than_the_window() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let logger = governance_logger(dir.path());
+        let store =
+            FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+        store
+            .append_audit(&audit_event(
+                "seed",
+                "alice",
+                ControlPlaneAction::MutateGrant,
+            ))
             .unwrap();
-        assert_eq!(
-            page.iter().map(|e| e.event_id.as_str()).collect::<Vec<_>>(),
-            ["a1", "a2"]
+
+        // Grow the log past MAX_AUDIT_SCAN_BYTES by replaying the seed line with
+        // fresh ids. Only parsing and ordering are under test here, so the
+        // replayed lines need not extend the hash chain.
+        let seed = std::fs::read_to_string(logger.path()).unwrap();
+        let template = seed.lines().next_back().unwrap().to_string();
+        let mut blob = String::new();
+        let mut written = 0u64;
+        let mut i = 0;
+        while written <= MAX_AUDIT_SCAN_BYTES + (64 * 1024) {
+            let line = template.replace("\"seed\"", &format!("\"bulk-{i:06}\""));
+            written += u64::try_from(line.len()).unwrap_or(u64::MAX) + 1;
+            blob.push_str(&line);
+            blob.push('\n');
+            i += 1;
+        }
+        let newest = format!("bulk-{:06}", i - 1);
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(logger.path())
+            .unwrap();
+        f.write_all(blob.as_bytes()).unwrap();
+        drop(f);
+
+        let file_len = std::fs::metadata(logger.path()).unwrap().len();
+        assert!(
+            file_len > MAX_AUDIT_SCAN_BYTES,
+            "log must exceed the window"
         );
-        let f = AuditFilter {
-            limit: 10,
-            offset: 0,
-            actor_id: Some("bob".to_string()),
-            action: None,
+        let page = store.read_audit(&AuditFilter::new(5)).unwrap();
+        assert_eq!(page.events.len(), 5);
+        assert_eq!(page.events[0].event_id, newest, "newest event comes first");
+        assert!(
+            page.bytes_examined <= MAX_AUDIT_SCAN_BYTES && page.bytes_examined < file_len,
+            "one call read {} of {file_len} bytes",
+            page.bytes_examined
+        );
+        assert!(
+            page.next_cursor.is_some(),
+            "unread bytes remain, so the page must be continuable"
+        );
+
+        // Page the whole log. The second window ends where the first one began,
+        // so the line straddling that boundary is the one an off-by-one in the
+        // cursor handoff would drop or return twice.
+        let mut ids: Vec<String> = Vec::new();
+        let mut cursor = None;
+        let mut calls = 0;
+        loop {
+            let filter = match cursor {
+                Some(at) => AuditFilter::new(10_000).resume(at),
+                None => AuditFilter::new(10_000),
+            };
+            let page = store.read_audit(&filter).unwrap();
+            assert!(
+                page.bytes_examined <= MAX_AUDIT_SCAN_BYTES,
+                "page {calls} read {} bytes",
+                page.bytes_examined
+            );
+            ids.extend(page.events.iter().map(|event| event.event_id.clone()));
+            calls += 1;
+            assert!(calls < 100, "paging the log did not terminate");
+            match page.next_cursor {
+                Some(at) => cursor = Some(at),
+                None => break,
+            }
+        }
+        assert!(calls > 1, "the log must span more than one window");
+        let expected: Vec<String> = (0..i)
+            .rev()
+            .map(|n| format!("bulk-{n:06}"))
+            .chain(std::iter::once("seed".to_string()))
+            .collect();
+        assert_eq!(
+            ids.len(),
+            expected.len(),
+            "every line must be returned exactly once across pages"
+        );
+        if let Some(pos) = ids
+            .iter()
+            .zip(&expected)
+            .position(|(got, want)| got != want)
+        {
+            panic!(
+                "page handoff diverged at index {pos}: got {}, want {}",
+                ids[pos], expected[pos]
+            );
+        }
+    }
+
+    // MIK-6710.AUDIT.1 — a single line longer than the whole scan window can
+    // never be read by any page, so it fails closed instead of returning a cursor
+    // that never advances.
+    #[test]
+    fn file_audit_read_fails_closed_on_a_line_longer_than_the_window() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let logger = governance_logger(dir.path());
+        let store =
+            FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+        store
+            .append_audit(&audit_event("ok", "alice", ControlPlaneAction::MutateGrant))
+            .unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(logger.path())
+            .unwrap();
+        let giant = "x".repeat(usize::try_from(MAX_AUDIT_SCAN_BYTES).unwrap() + 4096);
+        writeln!(f, "{giant}").unwrap();
+        drop(f);
+
+        assert!(matches!(
+            store.read_audit(&AuditFilter::new(10)),
+            Err(StoreError::Corrupt(_))
+        ));
+    }
+
+    // MIK-6710.AUDIT.1 — an oversized or zero scan budget is an invalid filter,
+    // so a caller cannot opt out of the work bound.
+    #[test]
+    fn invalid_scan_budget_errors() {
+        let store = InMemoryControlPlaneStore::new();
+        let bad = |budget| AuditFilter {
+            scan_budget: budget,
+            ..AuditFilter::new(10)
         };
-        let bobs = store.read_audit(&f).unwrap();
-        assert_eq!(
-            bobs.iter().map(|e| e.event_id.as_str()).collect::<Vec<_>>(),
-            ["a1", "a3"]
-        );
+        assert!(matches!(
+            store.read_audit(&bad(0)),
+            Err(StoreError::InvalidFilter(_))
+        ));
+        assert!(matches!(
+            store.read_audit(&bad(MAX_AUDIT_SCAN_RECORDS + 1)),
+            Err(StoreError::InvalidFilter(_))
+        ));
     }
 
     // MIK-6685.STORE.6 — an invalid filter errors, never silently returns all.
@@ -1077,10 +1512,10 @@ mod tests {
             ))
             .unwrap();
 
-        let view = store.read_audit(&AuditFilter::new(10)).unwrap();
+        let view = store.read_audit(&AuditFilter::new(10)).unwrap().events;
         assert_eq!(view.len(), 2);
-        assert_eq!(view[0].event_id, "gov1");
-        assert_eq!(view[1].action, ControlPlaneAction::ApproveServer);
+        assert_eq!(view[0].event_id, "gov2", "newest first");
+        assert_eq!(view[1].action, ControlPlaneAction::MutateGrant);
 
         let result = crate::security::transparency_log::verify_log(&logger.path()).unwrap();
         assert!(
@@ -1251,8 +1686,11 @@ mod tests {
 
         let view = a.read_audit(&AuditFilter::new(10)).unwrap();
         assert_eq!(
-            view.iter().map(|e| e.event_id.as_str()).collect::<Vec<_>>(),
-            ["e1", "e2", "e3"]
+            view.events
+                .iter()
+                .map(|e| e.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["e3", "e2", "e1"]
         );
         let result = crate::security::transparency_log::verify_log(&logger_a.path()).unwrap();
         assert!(
@@ -1309,8 +1747,8 @@ mod tests {
 
         assert_eq!(store.list_grants().unwrap().len(), 1);
         let audit = store.read_audit(&AuditFilter::new(10)).unwrap();
-        assert_eq!(audit.len(), 1);
-        assert_eq!(audit[0].event_id, "e1");
+        assert_eq!(audit.events.len(), 1);
+        assert_eq!(audit.events[0].event_id, "e1");
         let result = crate::security::transparency_log::verify_log(&logger.path()).unwrap();
         assert!(
             result.ok,
@@ -1350,7 +1788,14 @@ mod tests {
             g.subject_id, "user-CHANGED",
             "non-status field must be preserved"
         );
-        assert_eq!(store.read_audit(&AuditFilter::new(10)).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .read_audit(&AuditFilter::new(10))
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
 
         // Missing target -> false, and NO extra audit entry is written.
         assert!(
@@ -1358,6 +1803,13 @@ mod tests {
                 .set_grant_status_audited("absent", ControlPlaneGrantStatus::Revoked, &ev)
                 .unwrap()
         );
-        assert_eq!(store.read_audit(&AuditFilter::new(10)).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .read_audit(&AuditFilter::new(10))
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
     }
 }

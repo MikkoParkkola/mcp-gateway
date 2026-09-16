@@ -1,3 +1,4 @@
+sha256: 350592689cbce9ea8c0e22110202d36817ad3e704036f4bb7eb4d8c73336db51
 fulcrum: "1.0"
 name: gws_tasks_list
 description: List tasks from a Google Tasks task list. Returns tasks with their status, due date, and notes.

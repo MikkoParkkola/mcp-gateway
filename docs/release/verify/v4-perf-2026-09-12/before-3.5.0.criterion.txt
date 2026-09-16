@@ -1,0 +1,645 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling libc v0.2.183
+   Compiling parking_lot_core v0.9.12
+   Compiling cfg-if v1.0.4
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v1.3.0
+   Compiling autocfg v1.5.0
+   Compiling memchr v2.8.0
+   Compiling dunce v1.0.5
+   Compiling fs_extra v1.3.0
+   Compiling serde_core v1.0.229
+   Compiling smallvec v1.15.1
+   Compiling pin-project-lite v0.2.17
+   Compiling log v0.4.29
+   Compiling aws-lc-rs v1.16.2
+   Compiling once_cell v1.21.4
+   Compiling serde v1.0.229
+   Compiling typenum v1.19.0
+   Compiling bytes v1.12.1
+   Compiling thiserror v2.0.20
+   Compiling scopeguard v1.2.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling itoa v1.0.18
+   Compiling futures-core v0.3.33
+   Compiling lock_api v0.4.14
+   Compiling httparse v1.10.1
+   Compiling num-conv v0.2.2
+   Compiling num-traits v0.2.19
+   Compiling zerocopy v0.8.47
+   Compiling time-core v0.1.9
+   Compiling rustls v0.23.43
+   Compiling futures-sink v0.3.33
+   Compiling getrandom v0.3.4
+   Compiling slab v0.4.12
+   Compiling tracing-core v0.1.36
+   Compiling crc32fast v1.5.0
+   Compiling icu_normalizer_data v2.1.1
+   Compiling zmij v1.0.21
+   Compiling icu_properties_data v2.1.2
+   Compiling http v1.4.0
+   Compiling time-macros v0.2.32
+   Compiling futures-channel v0.3.33
+   Compiling getrandom v0.4.2
+   Compiling stable_deref_trait v1.2.1
+   Compiling rustversion v1.0.22
+   Compiling version_check v0.9.5
+   Compiling rustix v1.1.4
+   Compiling allocator-api2 v0.2.21
+   Compiling futures-io v0.3.33
+   Compiling equivalent v1.0.2
+   Compiling futures-task v0.3.33
+   Compiling serde_json v1.0.151
+   Compiling foldhash v0.2.0
+   Compiling untrusted v0.9.0
+   Compiling crossbeam-epoch v0.9.20
+   Compiling hashbrown v0.16.1
+   Compiling untrusted v0.7.1
+   Compiling syn v2.0.117
+   Compiling syn v3.0.2
+   Compiling http-body v1.0.1
+   Compiling jobserver v0.1.34
+   Compiling errno v0.3.14
+   Compiling mio v1.2.0
+   Compiling socket2 v0.6.3
+   Compiling cc v1.2.57
+   Compiling signal-hook-registry v1.4.8
+   Compiling parking_lot v0.12.5
+   Compiling percent-encoding v2.3.2
+   Compiling bitflags v2.11.0
+   Compiling indexmap v2.13.0
+   Compiling tower-service v0.3.3
+   Compiling powerfmt v0.2.0
+   Compiling subtle v2.6.1
+   Compiling deranged v0.5.8
+   Compiling base64 v0.22.1
+   Compiling litemap v0.8.1
+   Compiling writeable v0.6.2
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling cmake v0.1.57
+   Compiling try-lock v0.2.5
+   Compiling atomic-waker v1.1.2
+   Compiling fnv v1.0.7
+   Compiling cmov v0.5.4
+   Compiling alloc-no-stdlib v2.0.4
+   Compiling oid-registry v0.8.1
+   Compiling want v0.3.1
+   Compiling alloc-stdlib v0.2.2
+   Compiling minimal-lexical v0.2.1
+   Compiling pin-utils v0.1.0
+   Compiling heck v0.5.0
+   Compiling hybrid-array v0.4.10
+   Compiling const-oid v0.10.2
+   Compiling ctutils v0.4.2
+   Compiling httpdate v1.0.3
+   Compiling adler2 v2.0.1
+   Compiling time v0.3.55
+   Compiling yansi v1.0.1
+   Compiling simd-adler32 v0.3.8
+   Compiling rand_core v0.10.0
+   Compiling nom v7.1.3
+   Compiling rand_core v0.9.5
+   Compiling miniz_oxide v0.8.9
+   Compiling brotli-decompressor v5.0.0
+   Compiling num-integer v0.1.46
+   Compiling http-body-util v0.1.3
+   Compiling block-buffer v0.12.0
+   Compiling crypto-common v0.2.1
+   Compiling uncased v0.9.10
+   Compiling fs-err v3.3.0
+   Compiling portable-atomic v1.13.1
+   Compiling aws-lc-sys v0.39.0
+   Compiling ring v0.17.14
+   Compiling ipnet v2.12.0
+   Compiling tower-layer v0.3.3
+   Compiling synstructure v0.13.2
+   Compiling flate2 v1.1.9
+   Compiling digest v0.11.2
+   Compiling num-bigint v0.4.6
+   Compiling chacha20 v0.10.0
+   Compiling form_urlencoded v1.2.2
+   Compiling brotli v8.0.2
+   Compiling sync_wrapper v1.0.2
+   Compiling ryu v1.0.23
+   Compiling linux-raw-sys v0.12.1
+   Compiling utf8parse v0.2.2
+   Compiling compression-core v0.4.31
+   Compiling rusticata-macros v4.1.0
+   Compiling openssl-probe v0.2.1
+   Compiling anstyle-parse v1.0.0
+   Compiling serde_derive v1.0.229
+   Compiling thiserror-impl v2.0.20
+   Compiling clap_derive v4.6.4
+   Compiling rand v0.10.2
+   Compiling cpufeatures v0.3.0
+   Compiling figment v0.10.19
+   Compiling tokio-macros v2.7.0
+   Compiling zeroize_derive v1.4.3
+   Compiling displaydoc v0.2.5
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.1
+   Compiling tracing-attributes v0.1.31
+   Compiling futures-macro v0.3.33
+   Compiling zerovec-derive v0.11.2
+   Compiling zerocopy-derive v0.8.47
+   Compiling asn1-rs-impl v0.2.0
+   Compiling asn1-rs-derive v0.6.0
+   Compiling tokio v1.53.1
+   Compiling zeroize v1.8.2
+   Compiling rustls-pki-types v1.14.0
+   Compiling futures-util v0.3.33
+   Compiling pear_codegen v0.2.9
+   Compiling compression-codecs v0.4.37
+   Compiling rustls-native-certs v0.8.3
+   Compiling aho-corasick v1.1.4
+   Compiling zerofrom v0.1.6
+   Compiling asn1-rs v0.7.1
+   Compiling yoke v0.8.1
+   Compiling tracing v0.1.44
+   Compiling regex-syntax v0.8.11
+   Compiling data-encoding v2.10.0
+   Compiling anstyle v1.0.14
+   Compiling zerovec v0.11.5
+   Compiling zerotrie v0.2.3
+   Compiling metrics-exporter-prometheus v0.18.3
+   Compiling lazy_static v1.5.0
+   Compiling anyhow v1.0.104
+   Compiling colorchoice v1.0.5
+   Compiling tinystr v0.8.2
+   Compiling potential_utf v0.1.4
+   Compiling icu_collections v2.1.1
+   Compiling icu_locale_core v2.1.1
+   Compiling utf8_iter v1.0.4
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle-query v1.1.5
+   Compiling anstream v1.0.0
+   Compiling terminal_size v0.4.4
+   Compiling icu_provider v2.1.1
+   Compiling async-stream-impl v0.3.6
+   Compiling quanta v0.12.6
+   Compiling icu_normalizer v2.1.1
+   Compiling icu_properties v2.1.2
+   Compiling regex-automata v0.4.18
+   Compiling rapidhash v4.4.1
+   Compiling getrandom v0.2.17
+   Compiling clap_lex v1.1.0
+   Compiling idna_adapter v1.2.1
+   Compiling idna v1.1.0
+   Compiling strsim v0.11.1
+   Compiling either v1.15.0
+   Compiling metrics v0.24.6
+   Compiling clap_builder v4.6.6
+   Compiling url v2.5.8
+   Compiling tokio-util v0.7.19
+   Compiling async-compression v0.4.41
+   Compiling ppv-lite86 v0.2.21
+   Compiling h2 v0.4.19
+   Compiling rand_chacha v0.9.0
+   Compiling tower v0.5.3
+   Compiling rand v0.9.3
+   Compiling serde_urlencoded v0.7.1
+   Compiling der-parser v10.0.0
+   Compiling webpki-roots v1.0.6
+   Compiling sha1 v0.11.0
+   Compiling rand_xoshiro v0.7.0
+   Compiling left-right v0.11.7
+   Compiling pem v3.0.6
+   Compiling inotify-sys v0.1.5
+   Compiling unsafe-libyaml v0.2.11
+   Compiling same-file v1.0.6
+   Compiling mime v0.3.17
+   Compiling hashbag v0.1.13
+   Compiling sketches-ddsketch v0.3.1
+   Compiling option-ext v0.2.0
+   Compiling inlinable_string v0.1.15
+   Compiling hashbrown v0.14.5
+   Compiling dirs-sys v0.5.0
+   Compiling evmap v11.0.0
+   Compiling pear v0.2.9
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling metrics-util v0.20.1
+   Compiling axum-core v0.5.6
+   Compiling dashmap v6.2.1
+   Compiling clap v4.6.6
+   Compiling walkdir v2.5.0
+   Compiling inotify v0.11.1
+   Compiling webpki-roots v0.26.11
+   Compiling matchers v0.2.0
+   Compiling tower-http v0.6.11
+   Compiling hyper v1.8.1
+   Compiling futures-executor v0.3.33
+   Compiling tracing-serde v0.2.0
+   Compiling sharded-slab v0.1.7
+   Compiling simple_asn1 v0.6.4
+   Compiling uuid v1.24.0
+   Compiling yasna v0.6.0
+   Compiling async-trait v0.1.92
+   Compiling hmac v0.13.0
+   Compiling serde_path_to_error v0.1.20
+   Compiling notify-types v2.1.0
+   Compiling arc-swap v1.9.0
+   Compiling hyper-util v0.1.20
+   Compiling tracing-log v0.2.0
+   Compiling spinning_top v0.3.0
+   Compiling thread_local v1.1.9
+   Compiling nonzero_ext v0.3.0
+   Compiling rayon-core v1.13.0
+   Compiling futures-timer v3.0.3
+   Compiling signature v2.2.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling web-time v1.1.0
+   Compiling x509-parser v0.18.1
+   Compiling matchit v0.8.4
+   Compiling fastrand v2.3.0
+   Compiling iana-time-zone v0.1.65
+   Compiling governor v0.10.4
+   Compiling tracing-subscriber v0.3.23
+   Compiling chrono v0.4.45
+   Compiling backon v1.6.0
+   Compiling notify v8.2.0
+   Compiling tower-http v0.7.0
+   Compiling hkdf v0.13.0
+   Compiling futures v0.3.33
+   Compiling clap_complete v4.6.7
+   Compiling dirs v6.0.0
+   Compiling axum v0.8.9
+   Compiling regex v1.13.1
+   Compiling half v2.7.1
+   Compiling rcgen v0.14.9
+   Compiling tokio-stream v0.1.19
+   Compiling async-stream v0.3.6
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling alloca v0.4.0
+   Compiling quick-xml v0.41.0
+   Compiling shlex v2.0.1
+   Compiling base64 v0.23.1
+   Compiling glob v0.3.4
+   Compiling plotters-backend v0.3.7
+   Compiling dotenvy v0.15.7
+   Compiling ciborium-io v0.2.2
+   Compiling hex v0.4.3
+   Compiling ciborium-ll v0.2.2
+   Compiling plotters-svg v0.3.7
+   Compiling itertools v0.13.0
+   Compiling cast v0.3.0
+   Compiling rayon v1.11.0
+   Compiling plotters v0.3.7
+   Compiling ciborium v0.2.2
+   Compiling tinytemplate v1.2.1
+   Compiling page_size v0.6.0
+   Compiling criterion-plot v0.8.2
+   Compiling diff v0.1.13
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling pretty_assertions v1.4.1
+   Compiling tokio-test v0.4.5
+   Compiling tempfile v3.27.0
+   Compiling criterion v0.8.2
+   Compiling rustls-webpki v0.103.13
+   Compiling jsonwebtoken v11.0.0
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.6.2
+   Compiling tungstenite v0.30.0
+   Compiling hyper-rustls v0.27.7
+   Compiling axum-server v0.8.0
+   Compiling reqwest v0.13.4
+   Compiling tokio-tungstenite v0.30.0
+   Compiling mcp-gateway v3.5.0 (/home/mikko/github/.worktrees/perf-remeasure-4.0.0)
+    Finished `bench` profile [optimized] target(s) in 2m 33s
+     Running benches/gateway_benchmarks.rs (/home/mikko/bench-targets/v4-perf/release/deps/gateway_benchmarks-3f23da63941b20d4)
+Gnuplot not found, using plotters backend
+Benchmarking tool_registry/insert_one
+Benchmarking tool_registry/insert_one: Warming up for 3.0000 s
+Benchmarking tool_registry/insert_one: Collecting 100 samples in estimated 5.0002 s (14M iterations)
+Benchmarking tool_registry/insert_one: Analyzing
+tool_registry/insert_one
+                        time:   [285.49 ns 286.16 ns 286.79 ns]
+Benchmarking tool_registry/get_hit/10
+Benchmarking tool_registry/get_hit/10: Warming up for 3.0000 s
+Benchmarking tool_registry/get_hit/10: Collecting 100 samples in estimated 5.0008 s (19M iterations)
+Benchmarking tool_registry/get_hit/10: Analyzing
+tool_registry/get_hit/10
+                        time:   [258.81 ns 258.91 ns 259.02 ns]
+Benchmarking tool_registry/get_hit/100
+Benchmarking tool_registry/get_hit/100: Warming up for 3.0000 s
+Benchmarking tool_registry/get_hit/100: Collecting 100 samples in estimated 5.0010 s (19M iterations)
+Benchmarking tool_registry/get_hit/100: Analyzing
+tool_registry/get_hit/100
+                        time:   [257.17 ns 257.38 ns 257.59 ns]
+Benchmarking tool_registry/get_hit/1000
+Benchmarking tool_registry/get_hit/1000: Warming up for 3.0000 s
+Benchmarking tool_registry/get_hit/1000: Collecting 100 samples in estimated 5.0004 s (20M iterations)
+Benchmarking tool_registry/get_hit/1000: Analyzing
+tool_registry/get_hit/1000
+                        time:   [256.13 ns 256.33 ns 256.54 ns]
+Benchmarking tool_registry/get_miss
+Benchmarking tool_registry/get_miss: Warming up for 3.0000 s
+Benchmarking tool_registry/get_miss: Collecting 100 samples in estimated 5.0002 s (50M iterations)
+Benchmarking tool_registry/get_miss: Analyzing
+tool_registry/get_miss  time:   [98.588 ns 98.766 ns 98.934 ns]
+Benchmarking tool_registry/replace_server_50
+Benchmarking tool_registry/replace_server_50: Warming up for 3.0000 s
+Benchmarking tool_registry/replace_server_50: Collecting 100 samples in estimated 5.1851 s (35k iterations)
+Benchmarking tool_registry/replace_server_50: Analyzing
+tool_registry/replace_server_50
+                        time:   [26.266 µs 26.544 µs 26.936 µs]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high severe
+Benchmarking tool_registry/contains_hit
+Benchmarking tool_registry/contains_hit: Warming up for 3.0000 s
+Benchmarking tool_registry/contains_hit: Collecting 100 samples in estimated 5.0001 s (162M iterations)
+Benchmarking tool_registry/contains_hit: Analyzing
+tool_registry/contains_hit
+                        time:   [30.778 ns 30.815 ns 30.861 ns]
+Found 16 outliers among 100 measurements (16.00%)
+  16 (16.00%) high severe
+
+Benchmarking simhash/compute/4
+Benchmarking simhash/compute/4: Warming up for 3.0000 s
+Benchmarking simhash/compute/4: Collecting 100 samples in estimated 5.0002 s (143M iterations)
+Benchmarking simhash/compute/4: Analyzing
+simhash/compute/4       time:   [34.873 ns 34.940 ns 35.018 ns]
+Found 18 outliers among 100 measurements (18.00%)
+  1 (1.00%) high mild
+  17 (17.00%) high severe
+Benchmarking simhash/compute/16
+Benchmarking simhash/compute/16: Warming up for 3.0000 s
+Benchmarking simhash/compute/16: Collecting 100 samples in estimated 5.0006 s (40M iterations)
+Benchmarking simhash/compute/16: Analyzing
+simhash/compute/16      time:   [120.88 ns 121.21 ns 121.62 ns]
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+Benchmarking simhash/compute/64
+Benchmarking simhash/compute/64: Warming up for 3.0000 s
+Benchmarking simhash/compute/64: Collecting 100 samples in estimated 5.0012 s (10M iterations)
+Benchmarking simhash/compute/64: Analyzing
+simhash/compute/64      time:   [479.07 ns 479.79 ns 480.63 ns]
+Found 17 outliers among 100 measurements (17.00%)
+  5 (5.00%) high mild
+  12 (12.00%) high severe
+Benchmarking simhash/hamming_distance
+Benchmarking simhash/hamming_distance: Warming up for 3.0000 s
+Benchmarking simhash/hamming_distance: Collecting 100 samples in estimated 5.0000 s (19B iterations)
+Benchmarking simhash/hamming_distance: Analyzing
+simhash/hamming_distance
+                        time:   [256.88 ps 256.90 ps 256.91 ps]
+Found 9 outliers among 100 measurements (9.00%)
+  1 (1.00%) low mild
+  6 (6.00%) high mild
+  2 (2.00%) high severe
+Benchmarking simhash/index_find_similar/10
+Benchmarking simhash/index_find_similar/10: Warming up for 3.0000 s
+Benchmarking simhash/index_find_similar/10: Collecting 100 samples in estimated 5.0000 s (317M iterations)
+Benchmarking simhash/index_find_similar/10: Analyzing
+simhash/index_find_similar/10
+                        time:   [15.682 ns 15.708 ns 15.734 ns]
+Benchmarking simhash/index_find_similar/100
+Benchmarking simhash/index_find_similar/100: Warming up for 3.0000 s
+Benchmarking simhash/index_find_similar/100: Collecting 100 samples in estimated 5.0002 s (87M iterations)
+Benchmarking simhash/index_find_similar/100: Analyzing
+simhash/index_find_similar/100
+                        time:   [57.661 ns 57.700 ns 57.743 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  6 (6.00%) high mild
+  1 (1.00%) high severe
+Benchmarking simhash/index_find_similar/500
+Benchmarking simhash/index_find_similar/500: Warming up for 3.0000 s
+Benchmarking simhash/index_find_similar/500: Collecting 100 samples in estimated 5.0004 s (18M iterations)
+Benchmarking simhash/index_find_similar/500: Analyzing
+simhash/index_find_similar/500
+                        time:   [281.13 ns 281.19 ns 281.26 ns]
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+Benchmarking cache_key/from_context
+Benchmarking cache_key/from_context: Warming up for 3.0000 s
+Benchmarking cache_key/from_context: Collecting 100 samples in estimated 5.0009 s (29M iterations)
+Benchmarking cache_key/from_context: Analyzing
+cache_key/from_context  time:   [172.61 ns 172.76 ns 172.94 ns]
+Found 19 outliers among 100 measurements (19.00%)
+  19 (19.00%) high severe
+Benchmarking cache_key/from_session_and_user
+Benchmarking cache_key/from_session_and_user: Warming up for 3.0000 s
+Benchmarking cache_key/from_session_and_user: Collecting 100 samples in estimated 5.0007 s (25M iterations)
+Benchmarking cache_key/from_session_and_user: Analyzing
+cache_key/from_session_and_user
+                        time:   [216.13 ns 229.81 ns 244.96 ns]
+Benchmarking cache_key/from_header
+Benchmarking cache_key/from_header: Warming up for 3.0000 s
+Benchmarking cache_key/from_header: Collecting 100 samples in estimated 5.0002 s (39M iterations)
+Benchmarking cache_key/from_header: Analyzing
+cache_key/from_header   time:   [127.15 ns 127.52 ns 127.83 ns]
+Benchmarking cache_key/key_for_slot
+Benchmarking cache_key/key_for_slot: Warming up for 3.0000 s
+Benchmarking cache_key/key_for_slot: Collecting 100 samples in estimated 5.0000 s (185M iterations)
+Benchmarking cache_key/key_for_slot: Analyzing
+cache_key/key_for_slot  time:   [27.195 ns 27.275 ns 27.362 ns]
+Benchmarking cache_key/stable_tool_order/10
+Benchmarking cache_key/stable_tool_order/10: Warming up for 3.0000 s
+Benchmarking cache_key/stable_tool_order/10: Collecting 100 samples in estimated 5.0112 s (2.1M iterations)
+Benchmarking cache_key/stable_tool_order/10: Analyzing
+cache_key/stable_tool_order/10
+                        time:   [2.4294 µs 2.4311 µs 2.4328 µs]
+Benchmarking cache_key/stable_tool_order/50
+Benchmarking cache_key/stable_tool_order/50: Warming up for 3.0000 s
+Benchmarking cache_key/stable_tool_order/50: Collecting 100 samples in estimated 5.0363 s (283k iterations)
+Benchmarking cache_key/stable_tool_order/50: Analyzing
+cache_key/stable_tool_order/50
+                        time:   [17.838 µs 17.853 µs 17.869 µs]
+Benchmarking cache_key/stable_tool_order/200
+Benchmarking cache_key/stable_tool_order/200: Warming up for 3.0000 s
+Benchmarking cache_key/stable_tool_order/200: Collecting 100 samples in estimated 5.1543 s (71k iterations)
+Benchmarking cache_key/stable_tool_order/200: Analyzing
+cache_key/stable_tool_order/200
+                        time:   [72.750 µs 72.812 µs 72.876 µs]
+Benchmarking cache_key/schema_fingerprint/10
+Benchmarking cache_key/schema_fingerprint/10: Warming up for 3.0000 s
+Benchmarking cache_key/schema_fingerprint/10: Collecting 100 samples in estimated 5.0035 s (2.9M iterations)
+Benchmarking cache_key/schema_fingerprint/10: Analyzing
+cache_key/schema_fingerprint/10
+                        time:   [1.7245 µs 1.7250 µs 1.7255 µs]
+Benchmarking cache_key/schema_fingerprint/50
+Benchmarking cache_key/schema_fingerprint/50: Warming up for 3.0000 s
+Benchmarking cache_key/schema_fingerprint/50: Collecting 100 samples in estimated 5.0027 s (530k iterations)
+Benchmarking cache_key/schema_fingerprint/50: Analyzing
+cache_key/schema_fingerprint/50
+                        time:   [9.3899 µs 9.4000 µs 9.4094 µs]
+Benchmarking cache_key/schema_fingerprint/200
+Benchmarking cache_key/schema_fingerprint/200: Warming up for 3.0000 s
+Benchmarking cache_key/schema_fingerprint/200: Collecting 100 samples in estimated 5.0970 s (116k iterations)
+Benchmarking cache_key/schema_fingerprint/200: Analyzing
+cache_key/schema_fingerprint/200
+                        time:   [43.606 µs 43.642 µs 43.675 µs]
+
+Benchmarking mcp_frame/parse_request
+Benchmarking mcp_frame/parse_request: Warming up for 3.0000 s
+Benchmarking mcp_frame/parse_request: Collecting 100 samples in estimated 5.0030 s (7.1M iterations)
+Benchmarking mcp_frame/parse_request: Analyzing
+mcp_frame/parse_request time:   [711.38 ns 712.02 ns 712.70 ns]
+Benchmarking mcp_frame/parse_response
+Benchmarking mcp_frame/parse_response: Warming up for 3.0000 s
+Benchmarking mcp_frame/parse_response: Collecting 100 samples in estimated 5.0010 s (7.1M iterations)
+Benchmarking mcp_frame/parse_response: Analyzing
+mcp_frame/parse_response
+                        time:   [699.25 ns 700.20 ns 701.08 ns]
+Benchmarking mcp_frame/parse_notification
+Benchmarking mcp_frame/parse_notification: Warming up for 3.0000 s
+Benchmarking mcp_frame/parse_notification: Collecting 100 samples in estimated 5.0000 s (13M iterations)
+Benchmarking mcp_frame/parse_notification: Analyzing
+mcp_frame/parse_notification
+                        time:   [394.28 ns 394.66 ns 395.09 ns]
+Benchmarking mcp_frame/parse_ping
+Benchmarking mcp_frame/parse_ping: Warming up for 3.0000 s
+Benchmarking mcp_frame/parse_ping: Collecting 100 samples in estimated 5.0003 s (68M iterations)
+Benchmarking mcp_frame/parse_ping: Analyzing
+mcp_frame/parse_ping    time:   [69.794 ns 69.997 ns 70.168 ns]
+Found 21 outliers among 100 measurements (21.00%)
+  19 (19.00%) low severe
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+
+Benchmarking session_sandbox/check_unrestricted
+Benchmarking session_sandbox/check_unrestricted: Warming up for 3.0000 s
+Benchmarking session_sandbox/check_unrestricted: Collecting 100 samples in estimated 5.0000 s (1.0B iterations)
+Benchmarking session_sandbox/check_unrestricted: Analyzing
+session_sandbox/check_unrestricted
+                        time:   [4.7785 ns 4.7792 ns 4.7799 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking session_sandbox/check_all_limits_passing
+Benchmarking session_sandbox/check_all_limits_passing: Warming up for 3.0000 s
+Benchmarking session_sandbox/check_all_limits_passing: Collecting 100 samples in estimated 5.0013 s (17M iterations)
+Benchmarking session_sandbox/check_all_limits_passing: Analyzing
+session_sandbox/check_all_limits_passing
+                        time:   [99.490 ns 99.896 ns 100.26 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) low severe
+Benchmarking session_sandbox/check_tool_denied
+Benchmarking session_sandbox/check_tool_denied: Warming up for 3.0000 s
+Benchmarking session_sandbox/check_tool_denied: Collecting 100 samples in estimated 5.0001 s (25M iterations)
+Benchmarking session_sandbox/check_tool_denied: Analyzing
+session_sandbox/check_tool_denied
+                        time:   [89.234 ns 89.593 ns 89.983 ns]
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) low severe
+  1 (1.00%) high severe
+Benchmarking session_sandbox/check_backend_denied
+Benchmarking session_sandbox/check_backend_denied: Warming up for 3.0000 s
+Benchmarking session_sandbox/check_backend_denied: Collecting 100 samples in estimated 5.0001 s (23M iterations)
+Benchmarking session_sandbox/check_backend_denied: Analyzing
+session_sandbox/check_backend_denied
+                        time:   [95.659 ns 96.575 ns 97.384 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high severe
+Benchmarking session_sandbox/check_payload_too_large
+Benchmarking session_sandbox/check_payload_too_large: Warming up for 3.0000 s
+Benchmarking session_sandbox/check_payload_too_large: Collecting 100 samples in estimated 5.0000 s (21M iterations)
+Benchmarking session_sandbox/check_payload_too_large: Analyzing
+session_sandbox/check_payload_too_large
+                        time:   [111.36 ns 112.06 ns 112.68 ns]
+
+Benchmarking input_scanner/scan_clean_args_5_fields
+Benchmarking input_scanner/scan_clean_args_5_fields: Warming up for 3.0000 s
+Benchmarking input_scanner/scan_clean_args_5_fields: Collecting 100 samples in estimated 5.0090 s (2.0M iterations)
+Benchmarking input_scanner/scan_clean_args_5_fields: Analyzing
+input_scanner/scan_clean_args_5_fields
+                        time:   [2.4551 µs 2.4584 µs 2.4617 µs]
+Benchmarking input_scanner/scan_injection_args_5_fields
+Benchmarking input_scanner/scan_injection_args_5_fields: Warming up for 3.0000 s
+Benchmarking input_scanner/scan_injection_args_5_fields: Collecting 100 samples in estimated 5.0126 s (2.0M iterations)
+Benchmarking input_scanner/scan_injection_args_5_fields: Analyzing
+input_scanner/scan_injection_args_5_fields
+                        time:   [2.4697 µs 2.4732 µs 2.4765 µs]
+
+Benchmarking redactor/scan_and_redact_clean_response
+Benchmarking redactor/scan_and_redact_clean_response: Warming up for 3.0000 s
+Benchmarking redactor/scan_and_redact_clean_response: Collecting 100 samples in estimated 5.0026 s (2.3M iterations)
+Benchmarking redactor/scan_and_redact_clean_response: Analyzing
+redactor/scan_and_redact_clean_response
+                        time:   [552.07 ns 554.79 ns 557.05 ns]
+Benchmarking redactor/scan_and_redact_credential_response
+Benchmarking redactor/scan_and_redact_credential_response: Warming up for 3.0000 s
+Benchmarking redactor/scan_and_redact_credential_response: Collecting 100 samples in estimated 5.0019 s (2.7M iterations)
+Benchmarking redactor/scan_and_redact_credential_response: Analyzing
+redactor/scan_and_redact_credential_response
+                        time:   [649.34 ns 651.23 ns 652.75 ns]
+
+Benchmarking budget_enforcer/check_disabled
+Benchmarking budget_enforcer/check_disabled: Warming up for 3.0000 s
+Benchmarking budget_enforcer/check_disabled: Collecting 100 samples in estimated 5.0000 s (1.2B iterations)
+Benchmarking budget_enforcer/check_disabled: Analyzing
+budget_enforcer/check_disabled
+                        time:   [3.8852 ns 3.9320 ns 3.9760 ns]
+Benchmarking budget_enforcer/check_free_tool
+Benchmarking budget_enforcer/check_free_tool: Warming up for 3.0000 s
+Benchmarking budget_enforcer/check_free_tool: Collecting 100 samples in estimated 5.0000 s (268M iterations)
+Benchmarking budget_enforcer/check_free_tool: Analyzing
+budget_enforcer/check_free_tool
+                        time:   [20.434 ns 20.598 ns 20.744 ns]
+Benchmarking budget_enforcer/check_paid_tool_within_limit
+Benchmarking budget_enforcer/check_paid_tool_within_limit: Warming up for 3.0000 s
+Benchmarking budget_enforcer/check_paid_tool_within_limit: Collecting 100 samples in estimated 5.0002 s (92M iterations)
+Benchmarking budget_enforcer/check_paid_tool_within_limit: Analyzing
+budget_enforcer/check_paid_tool_within_limit
+                        time:   [53.546 ns 53.616 ns 53.677 ns]
+Benchmarking budget_enforcer/daily_accumulator_add
+Benchmarking budget_enforcer/daily_accumulator_add: Warming up for 3.0000 s
+Benchmarking budget_enforcer/daily_accumulator_add: Collecting 100 samples in estimated 5.0001 s (151M iterations)
+Benchmarking budget_enforcer/daily_accumulator_add: Analyzing
+budget_enforcer/daily_accumulator_add
+                        time:   [33.019 ns 33.029 ns 33.040 ns]
+
+Benchmarking semantic_search/index_build_500_tools
+Benchmarking semantic_search/index_build_500_tools: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.0s, enable flat sampling, or reduce sample count to 60.
+Benchmarking semantic_search/index_build_500_tools: Collecting 100 samples in estimated 6.0284 s (5050 iterations)
+Benchmarking semantic_search/index_build_500_tools: Analyzing
+semantic_search/index_build_500_tools
+                        time:   [1.1816 ms 1.1826 ms 1.1838 ms]
+Found 17 outliers among 100 measurements (17.00%)
+  17 (17.00%) high severe
+Benchmarking semantic_search/query_top10/50
+Benchmarking semantic_search/query_top10/50: Warming up for 3.0000 s
+Benchmarking semantic_search/query_top10/50: Collecting 100 samples in estimated 5.0106 s (1.7M iterations)
+Benchmarking semantic_search/query_top10/50: Analyzing
+semantic_search/query_top10/50
+                        time:   [2.8742 µs 2.8746 µs 2.8750 µs]
+Found 11 outliers among 100 measurements (11.00%)
+  8 (8.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking semantic_search/query_top10/200
+Benchmarking semantic_search/query_top10/200: Warming up for 3.0000 s
+Benchmarking semantic_search/query_top10/200: Collecting 100 samples in estimated 5.0326 s (556k iterations)
+Benchmarking semantic_search/query_top10/200: Analyzing
+semantic_search/query_top10/200
+                        time:   [9.0322 µs 9.0359 µs 9.0393 µs]
+Benchmarking semantic_search/query_top10/500
+Benchmarking semantic_search/query_top10/500: Warming up for 3.0000 s
+Benchmarking semantic_search/query_top10/500: Collecting 100 samples in estimated 5.0427 s (263k iterations)
+Benchmarking semantic_search/query_top10/500: Analyzing
+semantic_search/query_top10/500
+                        time:   [19.053 µs 19.063 µs 19.073 µs]
+Benchmarking semantic_search/query_all_matches_500_tools
+Benchmarking semantic_search/query_all_matches_500_tools: Warming up for 3.0000 s
+Benchmarking semantic_search/query_all_matches_500_tools: Collecting 100 samples in estimated 5.0224 s (152k iterations)
+Benchmarking semantic_search/query_all_matches_500_tools: Analyzing
+semantic_search/query_all_matches_500_tools
+                        time:   [32.923 µs 32.941 µs 32.959 µs]
+Found 16 outliers among 100 measurements (16.00%)
+  2 (2.00%) high mild
+  14 (14.00%) high severe
+Benchmarking semantic_search/index_tool_insert_into_499_tool_corpus
+Benchmarking semantic_search/index_tool_insert_into_499_tool_corpus: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.0s, enable flat sampling, or reduce sample count to 60.
+Benchmarking semantic_search/index_tool_insert_into_499_tool_corpus: Collecting 100 samples in estimated 5.9914 s (5050 iterations)
+Benchmarking semantic_search/index_tool_insert_into_499_tool_corpus: Analyzing
+semantic_search/index_tool_insert_into_499_tool_corpus
+                        time:   [1.1838 ms 1.1852 ms 1.1863 ms]
+

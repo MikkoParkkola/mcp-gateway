@@ -112,8 +112,11 @@ async fn cap_validate(file: std::path::PathBuf) -> ExitCode {
 /// line) and rewrite the file in place with the pin prepended.
 ///
 /// This is the operator-facing half of the rug-pull guard: once a
-/// capability is pinned, the loader will refuse to start or hot-reload it
-/// if the file changes without the pin being re-issued.
+/// capability is pinned, the loader refuses to *load* it if the file
+/// changes without the pin being re-issued. The gateway still starts and
+/// hot-reload still proceeds — the tampered capability is dropped with a
+/// warning (`src/capability/loader.rs`, `src/capability/watcher.rs`), so a
+/// poisoned file reads as a missing tool rather than a startup failure.
 async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
     let content = match tokio::fs::read_to_string(&file).await {
         Ok(c) => c,

@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A backend that would send credentials in cleartext is refused at config load** (code-scanning alerts #90, #91): an enabled backend whose `http_url` or `a2a_url` is `http://` against a host off this machine, and whose configuration is credential-bearing — an `oauth` section (including one with `enabled: false`), identity propagation, secret injection, any static header whatever its name, or userinfo or a query string in the URL — no longer starts the gateway. The predicate is deliberately blunt: a header named `X-Trace-Id` and a query of `?page=2` trip it too, because whether a given header or query carries a secret is not decidable at config load, and a name list would only catch the operators who guessed the same names we did. Such a credential is readable by every host on the path and replayable for as long as it is valid, and a config typo should not be what decides that. Loopback is exempt, decided by the same classifier the Origin gate uses. **Breaking for operators pointing any of that configuration at a plain-`http` internal host**: use TLS, or set `allow_cleartext_credentials: true` on that backend to accept the exposure. The refusal names the backend and never echoes the URL, which is the credential-bearing string.
 - **Destructive meta-tools are refused over stdio** (MIK-7246): `gateway_kill_server` carries `destructiveHint: true`, and the gateway asks the operator to confirm such a call before running it. That ask travels over the elicitation channel, which only the HTTP transport has — stdio speaks to one process over two pipes and can reach nobody. A destructive tool called over stdio is now refused with `-32001` and a message naming the action, rather than executed with a warning. **Breaking for stdio operators who kill backends through the gateway**: reach the management tools over the HTTP listener with a client that answers `elicitation/create`, or change the backend's configuration directly. Neither an unobtainable confirmation nor an operator decline counts against the caller's failure budget — the gate working is not the client misbehaving.
 - **`gateway_search` returns L0 by default** (MIK-7084): tool name, one-line purpose, and score. `detail=l1` adds signature, when-to-use, and required params; `detail=l2` returns the full `input_schema`. `include_schema=true` still maps to L2 and is deprecated, not removed. Ranking diagnostics (`ranking` reasons and signals) are omitted unless `explain=true`. `gateway_search_tools` also omits `ranking` unless `explain=true`.
+- **`meta_mcp.exposed_meta_tools` is now enforced** (GH issue 449): this config field was documented as an allow-list of meta-tools to expose but had no effect outside tests. It now restricts both `tools/list` and `tools/call` for every meta-tool built-in, including the two Code Mode tools (`gateway_search`, `gateway_execute`), which were an unlisted escape hatch — reaching every backend tool regardless of the allow-list. **Breaking for operators who already set this field**: a name that was accepted but ignored now actually removes that tool from the surface. An allow-list that omits `gateway_invoke` is logged as a warning, since it leaves backend tools unreachable through the gateway. `meta_mcp.surfaced_tools` (individually surfaced backend tools) is unaffected.
+
 ### Fixed
 
 - **`prompts/list` and `resources/list` no longer stall on a slow or hung
@@ -120,6 +122,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they are not served to any. Reading them under the old key would defeat the
   separation this change exists to enforce, so the gateway re-registers and
   re-authorizes instead. No configuration change is needed.
+
+- **A response is cached only under a protocol revision the gateway can
+  identify.** The response cache is keyed by the revision a request was served
+  under, and a request whose revision cannot be determined is not cached at all
+  (`cache_protocol_revision`, `src/protocol/meta.rs:514`). A modern request
+  carries its revision in the body. A legacy-shaped request must supply it in
+  the `MCP-Protocol-Version` header or have bound one by completing
+  `initialize` on the session (`:522`). Anything else resolves to "no revision",
+  which is documented as fail-closed and means skip the cache (`:512`). Earlier
+  versions had no such key, so a response fetched for a caller that declared no
+  revision could be served to a caller asking under a different one.
+
+  **A stateless client loses response caching on upgrade.** A bare `POST` that
+  sends no `MCP-Protocol-Version` header and never runs `initialize` — the shape
+  common to load generators, probes and short scripts — is no longer served from
+  cache, and that traffic reaches the backends instead. Nothing errors, so the
+  symptom is throughput and backend load rather than a failure, and the
+  gateway's own rate limits then apply to calls that previously never reached
+  them. Send the header on stateless requests, or complete `initialize` and
+  reuse the session; either restores caching and neither needs a configuration
+  change.
 
 ### Fixed
 

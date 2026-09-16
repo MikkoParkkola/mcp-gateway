@@ -1,0 +1,54 @@
+{
+  "note": "Synthetic independent Python AESGCM vectors; fixed public nonces and key are test-only. Malformed fields sit on a REVOKED entry, the only state where entry_version is the sole gate.",
+  "key_hex": "5151515151515151515151515151515151515151515151515151515151515151",
+  "instance_id": "gateway-instance",
+  "fields": [
+    "https://identity.example",
+    "alice",
+    "google-workspace",
+    "https://www.googleapis.com/drive/v3",
+    "https://accounts.google.com"
+  ],
+  "digest": "05336cba800dd362bf06b017880035b23b43b8010f49674e8bc5b2c4a49fcd5a",
+  "basename": "05336cba800dd362bf06b017880035b23b43b8010f49674e8bc5b2c4a49fcd5a-00000000000000000000000000000011.json",
+  "record": {
+    "generation": "00000000000000000000000000000001",
+    "token_revision": 1,
+    "authorization_epoch": 1,
+    "descriptor_revision": "0000000000000000000000000000000000000000000000000000000000000000",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive.readonly"
+    ],
+    "access_token": "synthetic-axis-0-access-private-d5bf0a",
+    "refresh_token": "synthetic-axis-0-refresh-private-f8ac22",
+    "token_type": "Bearer",
+    "expires_at": 0,
+    "provider_account_id": "synthetic-axis-0-provider-private-35a210",
+    "client_id": "synthetic-google-client"
+  },
+  "record_bytes": "{\"ciphertext\":\"Y06kzTywAXsbTzEVKwGqDR15HF6Xf1YnmTOR6MQ2STlik6SUG1QwhzEaw5oi8jmW2hlcr3acQ0CdQVTwEc7INc7V4lo+BVUd7wVc91lN8QvWme7Pcbspkm3SUbJ+ZUFphd4/xXMyjsEMm+M0Tg+yr6OLUYJZxFYYejtTcdHULr3Ognbm7U89NLh3wDJgLHMQ3ffPvSu5bYbx579xDqGzfhat+IUWGtfIKbaGS4zDuDy9+NUHGxdMJ6lvGZRb1K+uK6g0VDGeYa1apZs/pIfhLVr6N6QIImSudKHzP/dZ4mGLeSbc4BDMTI9ljn8jEg4hnDLTKDi0X3IGbp3BzmpDLGMDbrp53FE/lJdxVmduKsSwRBtop+n1cupiqbnNroC5/LN4MWWXHayty1MMyuTknwqFY8gs9AdEsL6sKLJYNZvMCs5Zdl9HxW8jNApoC1UMYZoUUZAiwe/pBQr4nH5q8FfZlQQ8pdotA4w9W9vtATVlL16HAZnVhLEw8BjCQpvGsUQsSPLeovZqABHuYvLd02m3bTvpLm09OL1kCunJ4osEnKHlTZp4hlHSqlXZ5acY5iDFcmA+7OSdrzp+K7jGvphlnsAPnbe+CJEgoQF7AfNFWyWJJXBH6gQM1hss0sT52APq0MmbWC8JuB/Nt/NtwHJckPYX7N9RUX5zUmL9ZA==\",\"key_id\":\"current\",\"nonce\":\"AQEBAQEBAQEBAQEB\",\"schema_version\":\"personal_accounts.v1\"}",
+  "connected_authority": "{\"ciphertext\":\"l+eoq7glzhHvqAeoqk/50uIWGAacL0VoJMFQOi/DPksuw8Ag076q5bSwwSshnzCJKKsZ9NKFAUn3sKF4gKO4hI1U4Ts7MPr/rIfSW8saRRtpCM0DKlO31lB5LfpPY3fYfzUEtAHrVGWgEMix/j475g0Zx6I4tuV8PTwVm/vZYITP2O7nsTpgABEN/b2MGYB9tqjlZi+CDAIGH7JbTjKSBHw9qcfoIRIeiWI/z8M/OuSaicm48keSewn+PymLJoG6VLvzRi0mZFLtbloAH11OyrN/nO1pOx74dGLhESM7GCHdg9hB0ocXpAnO77XKLgbQv2sIhlpyalq7xkvPnFuCBnV/UeMdz66pC6UuSH+iGRVEnMDinlsiOYqkJ6jaNb7B9SJaRL0oGnav2clGZzat7VxoeLxDsR0r3zoj0FUxTM/7418s3ysi5kDlZGnaSl6Ijsdvd2ZVVLFqCnPxUTFJeIiEjpeE641Ud+3Jn9pdNTdLmUgmQXBibPebgiXjIOc7LxasRGxAw6Lgk3Zk2dqyFly9OSqSsZfBMddiDPM5A31TTVzYh+ih9WjEMv1qJi85EfJVN54q/Vky7Fc+511WyrWIfFHbUDL7pnmezaekE8pzHcMoUoOZxtA1TA5+wzZr8H3oz/oQ7O/KN/pJyZZX9j3LydwSiAKSGcbz7S+CZM9aHvI4WV+0ukwE8qfwEe4NJn2Dj+TvtrlxcvlB1f1vZH9M7i9WvSomQR9k0l3Foe3RxH7R5h9RHPuw7uefaVHrPxTcEoZCMVDMCn4/r9fjdW328TWBYqxPC5boTkAaytKHptGSJgrfbt1x1MsdALP7g3mMUQD7\",\"key_id\":\"current\",\"nonce\":\"EBAQEBAQEBAQEBAQ\",\"schema_version\":\"personal_accounts.authority.v1\"}",
+  "revoked_authority": "{\"ciphertext\":\"jzWDQODGq98Yv5e0JOxwU7jUfWU4ejhAKXVIN8IkiHHb39C38luqAmh0eeIvsoFJjWhvVUNMyXn8TO2K3NJwuEy4bwloo96UQO99ytM2sAuS/xeAgLErN6L2l+WoV/oGNHbDkmAoqBeaSf0xp+QuHXWjPU3tIQV3R3QhYpW+3FRts4WOQNQI8a+e6QFTnYquHcSOCK6QQa/f7R3GLnhJ75scC/t/93BPv4ojA1TSzVenRSky3vVqIxWBpwgUTLKKfgvalFMVC4rfzL/XqVesQ1ei+BZAb6ZQaBJcIhVKsOC+AY96Sc2svDc2hzluWdWrkKJQcX71P3y7zld9AAQecAV1ERD494zW8QJE86msJ0N8yZhaJtU69ZyGz/U8NeiiLcZ8wVG2Hnko1QroE8eqssfMxgvxgLZLvWuCJQ0jf121w6KsCOZfK97lGYoNkjm8U7pcrF4axpHqtdhO3wA1xBGLSu3lLuIel3z4T6HMTkiiJHnJYZl3+9UfpXynhkliOTUzzVGLo4nb48V6b0SLHioCVwIwAsEdPwbd5a7Al6GGieCtdZ7m8dAQ8NH2aoYKGrThxgpEQPGrzvK5Ki3QP6cY00KFkjE8aAKeVDrnwxGE1A==\",\"key_id\":\"current\",\"nonce\":\"ERERERERERERERER\",\"schema_version\":\"personal_accounts.authority.v1\"}",
+  "variants": [
+    {
+      "field": "generation",
+      "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "authority": "{\"ciphertext\":\"Y0yj5XISqQ4Q0qqm5gSG/2srVoSbzk1V0DnxEu++dmxg3otQpswiU+CEYigOd4bJ1BcltUdjEIlR1J//NnNGshWJ2sPYoWjoF17k2M0vldezvY/sj9za3MZB9zGjZzJ6MEXaF8cPBXGcmL1r6JKmy1QGnXL25/U9KtiyJiMtVhhQ4XqsglkN+WuBc+mdJzo3G6biCkF2bI/8LBXizUMyRnEEUhIkYAYaigC72A/D7KlnyNGrbWCX2zRb7TXoOJD8AD2mG5nou0II0PhJ7V1cT1WqJu1G1rjYm3iuTu3jqfTXysv3ZPMTVdr7Bb38XdCiwNo5UWteWou62+RkZ4AebLfCS36rTlGoVxib9FdyYWGsW53xrZ8jwtQVFINlDBD0nSENT44liTmh6MGx1cK5ThJezr0+aM6dhp5n9IxS8+adzj7kPRioaxhxtZ59ZN8m1hoCQwZqWFSO+nDbeV//4p/4ss7aCXi0REoDMIP1dsAJkoLzxROTt21zsrV9Sc4HaaI7Og4kebrsPop+Uf0C+wTMO2A0CRVWP+QzIxmr/NM1e6Fg+5hfLNjOqFHEGmlyDFGxlGmNaapvCIGV4OHOdVP0iLWuStr1wbnvV3gbPi0I6Q==\",\"key_id\":\"current\",\"nonce\":\"EhISEhISEhISEhIS\",\"schema_version\":\"personal_accounts.authority.v1\"}"
+    },
+    {
+      "field": "descriptor_revision",
+      "value": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+      "authority": "{\"ciphertext\":\"P8/k+5oItqo1YovxCqrprKkkSf+vpYSLK6O9Zto48rM71HpBualnjoZ1lVHKluxiVDzoLBH/EMgL4b2MuTtzbihjruBjDPcnWNhL//0sTX1EFxKbGtRZDcW8f6p7gpBjaAQcsBNE9O2dD479eO9gpcOCCBLoIfy+Jk7n7yUcLE6fG+jGPPch4JCCvGjEaw7v6bYl/8H+t0DyqRC6Ee+hUYtvbX6VC64wyUff+kV8+JsHgMSZg6MEkdz2p3/6II79jqRmX97dH+KRD0rurz3Ur32k5gMzylQVb7lH42Lofm9woZcLs2bIQzOgiqcA1/IPYAzfGsVHcuegPntBTs9ynk5EABFbcxwxk6G7nTlpUGT1HkneLT3HjN7NbGk1LgUwfY461st3tAuFs1mMprf+TfA3I8uiobncl1SaVaQmWS8+/D1qeKnjRbDiE1bSLkzvo0aAFMIfNipV7mCM+duQpq8a9J0B1RtAfto5iFV4/t3abDqyKS4iRQ2phrY3fpKFjyWaAFoHCpmdXyjT5pJd3jo057Y7p/d8JCg2f3ZEyAX5lTRz6GivuQzFIxpTs+LErh3yRlZ1eQpONrdFdstdDIdmsnHh2Yn+c8hKyQOOQyPK/w==\",\"key_id\":\"current\",\"nonce\":\"ExMTExMTExMTExMT\",\"schema_version\":\"personal_accounts.authority.v1\"}"
+    },
+    {
+      "field": "token_revision",
+      "value": 0,
+      "authority": "{\"ciphertext\":\"/e//EgBPydU0jmptdVjNhZx+ZjN+Vu/0ZH8joBxr3zaklHPcPVk9QrNv/5KzGM2UvuHJ9jvE6HzvkjorDjkic65vkGtPQYV69+EtyAFTs5zDfATVhDWn8x0gIZaCw7/7cqYllhRIY3T7AMg4Sy4dTuyoQXIsVHnOsE+SGwFNiD80EhW26MI+UicGAHBB8bGtdqlx92Irxsvutk3bebk6sW6kSqTjJ7MCmJ1n8KqudU2QPTE/FhjCoLXpTbQ8xSgS1g/UXLYvPzmAx1ZOuJIzVJT7+2NU5QoCGom4lcrAIj+VG9s5NLGKp9n0CDKtseEQ4OFEhmguqh2HMEEw0RncCxjrVNRUKm6PStZEXRrvKX+itELo+ypl0ZTMG2HEo8dp1bc1BLJc7sYaxPfqj40KsXGycrrUg2305EXT6TddfMhgzMbT1xtl017oWqzDnUc0W1T+qoUK2Z1WQ+AV6BP7lHNUmKKmWHSqUf3iZj4cL5wKeZHtMqQDJfNMCTmyAKQ4gXYWP8Njd3KfTa98B84/BNpf2OJaw8MbCqaAye7YX9vc0UWLI/B9wNlx5jiNTgFyaKAR3Q5k8lau03Z5n86Qeio7SSsJMInslORKrcbao3uRzQ==\",\"key_id\":\"current\",\"nonce\":\"FBQUFBQUFBQUFBQU\",\"schema_version\":\"personal_accounts.authority.v1\"}"
+    },
+    {
+      "field": "authorization_epoch",
+      "value": 0,
+      "authority": "{\"ciphertext\":\"54OV7FC0FvM35KASlC++OD4Lq9DRoPG8YUGNTOoBOmrNLPMP90B/NybNetQ7I4abIqER7XAblr+J2knOXxo33sifUmua0dwu7xU9V6WV1bNdbJyLQd2RoESm5SCdd44C8RBtJrujYxcTOk3p5SsUXqystMmWkLS1D+SPaxZQ8d28s0w0WEXr8EyimQKoePtMpP2CVC9TXe8/zscCxjJmUv55tFMJ/UmhrpNdOQ0OhakId+tG/fxEo1Q6n6/8UzAv8rb+BjdjnBMOxLMEwk8F4JJJfk3RYmLFIVbWgJgBCGkIL8i/D0tyNG5+F3Gk9GXbk7HRuzzqVubI9E33q1QFDst39f8uCsCvJj/WNdxIbbfTccCQFceJWv00LLDnvotdPDhbwDWNaSsqSRY26dMYvKEQlYruyOsPZvRlfRJ727E7vxI4NiwBW8j33Q3C+t6SsR6l4ysDpJZpO4sZegO6V22in3B5MD87Y8A3pW4EXqT0IY/4PyegpLDJXtbYMY+qk33JF5SA5O+jfGIObti04rc2kUYbThDRQlNnve/ZuD8M5DSZ97aZ2ngp1CL1ZydCKwDz+YI+vPoFrHYho1BLaZ2smIQzD13oPVHBGEQrG+fCMQ==\",\"key_id\":\"current\",\"nonce\":\"FRUVFRUVFRUVFRUV\",\"schema_version\":\"personal_accounts.authority.v1\"}"
+    }
+  ]
+}

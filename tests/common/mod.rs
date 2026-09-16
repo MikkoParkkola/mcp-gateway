@@ -4,11 +4,8 @@
 //!
 //! Cargo compiles this module once per test binary, so an item only one
 //! suite uses is genuinely dead in the other. That is a property of the
-//! harness layout, not a defect in either suite. The same holds for the
-//! re-exports below, which `dead_code` does not cover: `Duration` is used by
-//! `nfr_sec1_controls` alone and unused in every other binary that includes
-//! this module.
-#![allow(dead_code, unused_imports)]
+//! harness layout, not a defect in either suite.
+#![allow(dead_code)]
 
 pub use axum::body::Body;
 pub use axum::http::{Request, StatusCode};
@@ -18,7 +15,10 @@ pub use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 pub use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 pub use mcp_gateway::gateway::proxy::ProxyManager;
 pub use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-pub use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+pub use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+pub use mcp_gateway::gateway::test_helpers::{
+    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+};
 pub use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 pub use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 pub use serde_json::{Value, json};
@@ -37,26 +37,26 @@ pub fn modern(method: &str, params: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
 }
 
-/// Every field is an independent switch a suite flips on its own; folding
-/// them into enums would couple settings that vary independently.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag gates an independent NFR row; grouping them would force \
+              every case to name fields it does not vary"
+)]
 pub struct Fixture {
     pub auth: AuthConfig,
     pub agent_auth_enabled: bool,
     pub meta_mcp_enabled: bool,
     pub agent_identity: mcp_gateway::config::AgentIdentityConfig,
     pub sanitize_input: bool,
-    /// The stateless path's master switch. The default below is READ from the
-    /// shipped config so COMPAT.1 C1 pins what 4.0.0 actually serves; `false`
-    /// is that row's falsifier.
+    /// The stateless path's master switch. `true` is the shipped default
+    /// (`src/config/mod.rs:1236`); `false` is COMPAT.1 C1's falsifier.
     pub modern_protocol: bool,
     /// The gate control 15 names. `None` is the shipped router-test state and
     /// the falsifier for the block below.
     #[cfg(feature = "firewall")]
     pub firewall: Option<Arc<mcp_gateway::security::firewall::Firewall>>,
-    /// The lifecycle registry the handler renews deadlines in
-    /// (`MIK-7215.CONTROL.4`). `None` is the shipped router-test state, in
-    /// which tracking is a no-op.
+    /// The registry the route tracks scored identities in. `None` is the
+    /// shipped router-test state: nothing is tracked and no sweep runs.
     pub session_lifecycle: Option<Arc<mcp_gateway::gateway::session_lifecycle::SessionLifecycle>>,
 }
 
@@ -73,10 +73,7 @@ impl Default for Fixture {
             // The fixture default is off so the other rows reach their own
             // gate rather than being refused by this one.
             sanitize_input: false,
-            // Read, never restated: a hardcoded `true` here left C1 green
-            // against a build whose shipped default was `false`, which is the
-            // one thing that row exists to deny.
-            modern_protocol: Config::default().server.modern_protocol,
+            modern_protocol: true,
             #[cfg(feature = "firewall")]
             firewall: None,
             session_lifecycle: None,
@@ -84,7 +81,14 @@ impl Default for Fixture {
     }
 }
 
-pub fn state(f: Fixture) -> Arc<AppState> {
+/// The gateway state a case drives, plus the directory its task store leases.
+///
+/// The `TempDir` is returned rather than dropped here because the store holds
+/// its directory for the life of the service: dropping it at the end of this
+/// function would delete the records under a state the test is still posting
+/// to. Callers bind it for the whole test — `let (app, _store_dir) = …` — and
+/// each call gets a fresh private directory, so no two cases share a lease.
+pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
     let mut config = Config::default();
     config.server.modern_protocol = f.modern_protocol;
     config.auth = f.auth;
@@ -94,9 +98,24 @@ pub fn state(f: Fixture) -> Arc<AppState> {
         config.streaming.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    Arc::new(AppState {
-        session_lifecycle: f.session_lifecycle,
+
+    // One registry, shared between the state the router reads and the executor
+    // that publishes: two would send a task's notifications to a listener set
+    // no client here is on.
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let (tasks, task_executor) = open_runtime(
+        &store_dir.path().join("tasks"),
+        config.tasks.max_workers,
+        StoreLimits::default(),
+        Arc::clone(&subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+
+    let app = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+        session_lifecycle: f.session_lifecycle,
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
         backends,
@@ -124,11 +143,11 @@ pub fn state(f: Fixture) -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks,
+        task_executor,
+        subscriptions,
+    });
+    (app, store_dir)
 }
 
 /// POST to `/mcp` as a conforming modern client: body `_meta` mirrored into the
@@ -222,29 +241,3 @@ pub fn auth_with(keys: Vec<ApiKeyConfig>, bearer: Option<&str>) -> AuthConfig {
         single_user: false,
     }
 }
-
-/// The specification's own "Encoding examples" table, read 2026-08-29.
-/// Original value on the left, header value on the right.
-///
-/// Transcribed from the specification, never produced by our own encoder: a
-/// round-trip through our encoder would only prove that it agrees with our
-/// decoder, which was worth nothing once this release when a whole increment
-/// passed against an invented wire format.
-///
-/// Lives here because both the inbound suite (`mik_7214_acs.rs`, decode) and
-/// the outbound one (`mik_7214_header_9_acs.rs`, encode) must be checked
-/// against the SAME rows. A second transcription is a second specification.
-pub const SPEC_ENCODING_TABLE: &[(&str, &str)] = &[
-    // Plain ASCII passes through untouched.
-    ("us-west1", "us-west1"),
-    // Non-ASCII.
-    ("Hello, \u{4e16}\u{754c}", "=?base64?SGVsbG8sIOS4lueVjA==?="),
-    // Leading and trailing whitespace.
-    (" padded ", "=?base64?IHBhZGRlZCA=?="),
-    // Embedded newline.
-    ("line1\nline2", "=?base64?bGluZTEKbGluZTI=?="),
-    // A plain-ASCII value that happens to look like the sentinel. The
-    // specification requires clients to encode this one precisely so a server
-    // cannot mistake it for an encoded value.
-    ("=?base64?literal?=", "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?="),
-];

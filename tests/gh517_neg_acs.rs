@@ -71,6 +71,8 @@ struct Mock {
     initialize_attempts: usize,
     /// Method and headers of every request after the handshake, so an
     /// assertion can name the method rather than trusting arrival order.
+    /// Requests that precede the first `initialize` are not recorded: they
+    /// cannot announce a version that has not been negotiated.
     after_handshake: Vec<(String, HeaderMap)>,
 }
 
@@ -142,10 +144,17 @@ async fn mcp_handler(
         .into_response();
     }
 
-    mock.lock()
-        .expect("mock mutex poisoned")
-        .after_handshake
-        .push((method.clone(), headers));
+    {
+        // The RFC-0061 2.4 era probe runs before negotiation, so it proposes
+        // this build's own newest revision rather than whatever `initialize`
+        // will select. A request that precedes the handshake is not a request
+        // "after the handshake", and holding it to the negotiated version
+        // would assert something no caller could know yet.
+        let mut slot = mock.lock().expect("mock mutex poisoned");
+        if slot.initialize_attempts > 0 {
+            slot.after_handshake.push((method.clone(), headers));
+        }
+    }
 
     if method == "tools/list" {
         return Json(json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}})).into_response();
@@ -191,6 +200,7 @@ fn backend_for(url: &str) -> Backend {
         allow_cleartext_credentials: false,
         runtime_profile: None,
         identity_propagation: None,
+        account: None,
     };
     Backend::new(
         "gh517-mock",

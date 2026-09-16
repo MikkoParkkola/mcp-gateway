@@ -39,7 +39,9 @@ use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+use mcp_gateway::gateway::test_helpers::{
+    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+};
 use mcp_gateway::idempotency::{
     CheckOutcome, GuardOutcome, IN_FLIGHT_TIMEOUT, IdempotencyCache, IdempotencyReservation,
     enforce,
@@ -251,6 +253,7 @@ fn backend_for(name: &str, url: &str, arm: ForwardArm) -> Backend {
         oauth: None,
         secrets: Vec::new(),
         passthrough: matches!(arm, ForwardArm::Fallback),
+        account: None,
         allow_cleartext_credentials: false,
         runtime_profile: None,
         identity_propagation: None,
@@ -309,7 +312,10 @@ const ROUTE_BACKEND: &str = "sub4-route";
 /// from an error the transport raised. A row that called `release()` itself
 /// would assert the transition the test author chose, not the one the gateway
 /// takes.
-fn route_state() -> Arc<AppState> {
+/// The `TempDir` is returned because the task store holds its directory for the
+/// life of the service: dropping it here would delete the records under a state
+/// the test is still posting to. Callers bind it for the whole test.
+async fn route_state() -> (Arc<AppState>, tempfile::TempDir) {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -326,7 +332,22 @@ fn route_state() -> Arc<AppState> {
     let meta_mcp = Arc::new(meta);
     let continuation = meta_mcp.continuation();
 
-    Arc::new(AppState {
+    // One registry, shared between the state the router reads and the executor
+    // that publishes: two would send a task's notifications to a listener set
+    // no client here is on.
+    let subscriptions =
+        Arc::new(mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64));
+    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let (tasks, task_executor) = open_runtime(
+        &store_dir.path().join("tasks"),
+        config.tasks.max_workers,
+        StoreLimits::default(),
+        Arc::clone(&subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+
+    let state = Arc::new(AppState {
         session_lifecycle: None,
         env: None,
         meta_mcp,
@@ -355,12 +376,12 @@ fn route_state() -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
+        tasks,
+        task_executor,
+        subscriptions,
         continuation,
-    })
+    });
+    (state, store_dir)
 }
 
 fn register_route_backend(state: &Arc<AppState>, url: &str, arm: ForwardArm) {
@@ -499,7 +520,7 @@ async fn pre_dispatch_failure_releases_its_key() {
     let address = closed.local_addr().expect("local addr");
     drop(closed);
 
-    let state = route_state();
+    let (state, _store_dir) = route_state().await;
     register_route_backend(
         &state,
         &format!("http://{address}/mcp"),
@@ -541,7 +562,7 @@ async fn pre_dispatch_failure_releases_its_key() {
 #[tokio::test]
 async fn a_post_dispatch_transport_failure_keeps_its_key() {
     let (url, mock) = start_mock(Fault::BrokenResponse).await;
-    let state = route_state();
+    let (state, _store_dir) = route_state().await;
     register_route_backend(&state, &url, ForwardArm::Sanitized);
 
     let (_, first) = post_direct(&state, keyed_call(1, "key-broken-stream")).await;
@@ -593,7 +614,7 @@ async fn a_post_dispatch_transport_failure_keeps_its_key() {
 #[tokio::test]
 async fn a_passthrough_forward_failure_keeps_its_key() {
     let (url, mock) = start_mock(Fault::BrokenResponse).await;
-    let state = route_state();
+    let (state, _store_dir) = route_state().await;
     register_route_backend(&state, &url, ForwardArm::Fallback);
 
     let (_, first) = post_direct(&state, keyed_call(1, "key-passthrough")).await;
@@ -923,7 +944,7 @@ async fn session_expiry_still_recovers_an_explicitly_read_only_call() {
 #[tokio::test]
 async fn a_served_failed_terminal_adopts_the_retry_request_id() {
     let (url, mock) = start_mock(Fault::Refused).await;
-    let state = route_state();
+    let (state, _store_dir) = route_state().await;
     register_route_backend(&state, &url, ForwardArm::Sanitized);
 
     let (_, first) = post_direct(&state, keyed_call(1, "key-served-terminal")).await;

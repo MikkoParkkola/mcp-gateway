@@ -48,7 +48,7 @@ fn scanned_call() -> serde_json::Value {
 #[tokio::test]
 async fn a_scored_call_tracks_its_identity_with_an_idle_ttl_deadline() {
     let (lifecycle, reclaimed) = recording_lifecycle();
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         auth: auth_with(vec![api_key("k", 0, None)], None),
         firewall: Some(Arc::new(Firewall::from_config(
             FirewallConfig::default(),
@@ -56,7 +56,8 @@ async fn a_scored_call_tracks_its_identity_with_an_idle_ttl_deadline() {
         ))),
         session_lifecycle: Some(Arc::clone(&lifecycle)),
         ..Default::default()
-    });
+    })
+    .await;
 
     let before = now_unix();
     let (status, body) = post(&app, scanned_call(), &[("authorization", "Bearer k")]).await;
@@ -94,14 +95,15 @@ async fn a_scored_call_tracks_its_identity_with_an_idle_ttl_deadline() {
 #[tokio::test]
 async fn an_unscored_call_tracks_nothing() {
     let (lifecycle, _reclaimed) = recording_lifecycle();
-    let app = state(Fixture {
+    let (app, _store_dir) = state(Fixture {
         firewall: Some(Arc::new(Firewall::from_config(
             FirewallConfig::default(),
             None,
         ))),
         session_lifecycle: Some(Arc::clone(&lifecycle)),
         ..Default::default()
-    });
+    })
+    .await;
 
     let (status, body) = post(&app, scanned_call(), &[]).await;
     assert_ne!(status, StatusCode::UNAUTHORIZED, "body: {body}");

@@ -45,6 +45,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use notify::{
@@ -250,6 +251,8 @@ pub struct LiveConfig {
     /// never again. Comparing against what is RUNNING keeps it true until a
     /// restart makes the two agree.
     running: Arc<Config>,
+    /// Shared authorization-policy generation. `None` in isolated tests.
+    policy_epoch: Option<Arc<AtomicU64>>,
 }
 
 impl LiveConfig {
@@ -260,7 +263,15 @@ impl LiveConfig {
         Self {
             inner: RwLock::new(Arc::clone(&running)),
             running,
+            policy_epoch: None,
         }
+    }
+
+    /// Share the gateway policy epoch so a published reload can bump it.
+    #[must_use]
+    pub fn with_policy_epoch(mut self, epoch: Arc<AtomicU64>) -> Self {
+        self.policy_epoch = Some(epoch);
+        self
     }
 
     /// The configuration this process is actually running.
@@ -299,7 +310,15 @@ impl LiveConfig {
 
     /// Atomically replace the current config.
     pub fn set(&self, config: Config) {
-        *self.inner.write() = Arc::new(config);
+        let mut lock = self.inner.write();
+        *lock = Arc::new(config);
+        if let Some(epoch) = &self.policy_epoch {
+            let prev = epoch.fetch_add(1, Ordering::Release);
+            debug_assert!(
+                epoch.load(Ordering::Relaxed) > prev,
+                "policy epoch must be monotonic"
+            );
+        }
     }
 }
 
@@ -335,6 +354,14 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigPatch {
 
     patch
 }
+
+#[cfg(test)]
+#[path = "account_reload_tests.rs"]
+mod account_reload_tests;
+
+#[cfg(test)]
+#[path = "account_reload_guard_tests.rs"]
+mod account_reload_guard_tests;
 
 #[cfg(test)]
 mod restart_required_tests {
@@ -630,6 +657,14 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "error_budget" => error_budget,
         "cache" => cache,
         "runtime" => runtime,
+        "tasks" => tasks,
+        // Fail-closed on purpose. Eager replacement of a descriptor's authority,
+        // resource, issuer or scopes is NOT implemented, so an `accounts` edit
+        // is reported as outstanding until a restart rather than claimed as
+        // applied. A field wrongly counted tells an operator to restart when
+        // they need not; the reverse tells them a change took effect when it
+        // did not.
+        "accounts" => accounts,
         #[cfg(feature = "cost-governance")]
         "cost_governance" => cost_governance,
     ]
@@ -732,6 +767,12 @@ struct MetaFields {
     server_public_url: String,
     #[cfg(feature = "cost-governance")]
     cost_governance: String,
+    tasks: String,
+    /// The `accounts` block. Absent from this comparison, an accounts-only edit
+    /// — a descriptor's issuer, resource or scopes — produced no diff at all,
+    /// so the reload reported nothing and the running gateway kept minting
+    /// under a descriptor the file had already replaced.
+    accounts: String,
 }
 
 impl MetaFields {
@@ -759,22 +800,33 @@ impl MetaFields {
             server_public_url: c.server.public_url.clone().unwrap_or_default(),
             #[cfg(feature = "cost-governance")]
             cost_governance: canonical_json(&c.cost_governance),
+            tasks: canonical_json(&c.tasks),
+            accounts: canonical_json(&c.accounts),
         }
     }
 }
 
 /// Partition backends into added / removed / modified buckets.
+///
+/// Compared and carried as EFFECTIVE configurations — what a bound backend
+/// actually runs with, from `config::account_bindings::effective_backends`.
+/// `apply_patch` constructs the replacement `Backend` straight from what it is
+/// handed, so a raw config here would drop the `identity_propagation` a managed
+/// descriptor compiled to and leave the replacement dispatching with no
+/// per-user credential at all. Comparing effective configs also means an
+/// unchanged binding stays byte-identical across a reload instead of appearing
+/// modified.
 fn classify_backends(old: &Config, new: &Config, patch: &mut ConfigPatch) {
     let runtime_changed = canonical_json(&old.runtime) != canonical_json(&new.runtime);
-    let old_enabled: std::collections::HashMap<&str, &BackendConfig> = old
-        .backends
+    let old_effective = crate::config::account_bindings::effective_backends(old);
+    let new_effective = crate::config::account_bindings::effective_backends(new);
+    let old_enabled: std::collections::HashMap<&str, &BackendConfig> = old_effective
         .iter()
         .filter(|(_, c)| c.enabled)
         .map(|(k, v)| (k.as_str(), v))
         .collect();
 
-    let new_enabled: std::collections::HashMap<&str, &BackendConfig> = new
-        .backends
+    let new_enabled: std::collections::HashMap<&str, &BackendConfig> = new_effective
         .iter()
         .filter(|(_, c)| c.enabled)
         .map(|(k, v)| (k.as_str(), v))
@@ -1592,6 +1644,25 @@ impl ReloadContext {
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let evaluated = load_config_patch(&self.config_path, &self.live_config, &self.env)?;
+        if let Some(field) = self
+            .live_config
+            .running()
+            .security
+            .message_signing
+            .restart_changed_field(
+                &evaluated.config.security.message_signing,
+                self.env.startup(),
+                &evaluated.overlay,
+            )
+            .map_err(|error| error.to_string())?
+        {
+            // Before even the empty-patch path: equal effective key bytes can
+            // conceal a configured-reference edit, and env-only reloads publish
+            // there too. This refusal changes no live state or backend object.
+            return Err(format!(
+                "config reload refused: security.message_signing.{field} requires restart"
+            ));
+        }
         // Measured against the overlay startup captured, so a requirement stays
         // reported on every reload until the process actually restarts.
         let env_restart_keys = changed_startup_env_keys(&self.env, &evaluated);
@@ -1674,6 +1745,23 @@ impl ReloadContext {
                 "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
                  and no configuration was published. {restart}",
                 refusal.reason
+            ));
+        }
+
+        // A changed account binding cannot reuse the credentials minted under
+        // the descriptor it replaces: the descriptor's authority, resource,
+        // issuer, client id and requested scopes define the account key and the
+        // descriptor revision every existing lease carries. Eager replacement
+        // of those is not implemented in this slice, so this refuses and
+        // mutates nothing rather than pretending a live replacement happened.
+        // Compared against what is RUNNING, so it stays true until a restart.
+        if let Some(reason) = crate::config::account_bindings::reload_binding_refusal(
+            self.live_config.running(),
+            &new_config,
+        ) {
+            return Err(format!(
+                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+                 configuration was published."
             ));
         }
 

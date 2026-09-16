@@ -53,8 +53,7 @@ impl MetaMcp {
         let identity_suffix =
             support::retry_identity_suffix(cache_binding, verified_actor.as_deref());
         // No projection and no chain step on this route: it forwards one call.
-        let Some(key) =
-            support::idempotency_key_for(client_key, "", &identity_suffix, Some(cache), None)
+        let Some(key) = support::idempotency_key_for(client_key, "", &identity_suffix, Some(cache))
         else {
             return Ok(None);
         };

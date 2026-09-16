@@ -326,6 +326,7 @@ impl StdioSession {
     }
 
     async fn send(&mut self, message: &Value) {
+        let message = with_idempotency_key(message.clone());
         self.stdin
             .write_all(format!("{message}\n").as_bytes())
             .await
@@ -505,9 +506,8 @@ async fn s02_stdio_progress_reaches_its_own_call_before_the_result() {
         .await;
     assert!(
         notification.is_some(),
-        "no notifications/progress reached the client before the read bound; \
-         the call is still blocked in the fixture, which is what an \
-         implementation that flushes at the end looks like from here"
+        "no notifications/progress reached the client before the read bound. \
+         Frames seen instead: {before_notification:?}"
     );
     // Only now — the fixture cannot return until this lands, so reaching the
     // result at all proves the notification preceded it.
@@ -584,7 +584,8 @@ async fn s02_stdio_message_reaches_its_own_call_before_the_result() {
         .await;
     assert!(
         notification.is_some(),
-        "no notifications/message reached the client before the read bound"
+        "no notifications/message reached the client before the read bound. \
+         Frames seen instead: {before_notification:?}"
     );
     // Released through the fixture's own gate, not as a second JSON-RPC call:
     // `Gateway::run_stdio` awaits each dispatch inline, so an id-3 release
@@ -789,11 +790,21 @@ async fn s03_progress_stdio_each_call_sees_only_its_own_token() {
 
 // ── Client harness: HTTP ────────────────────────────────────────────────────
 
+/// The credential the HTTP rows present on every request.
+///
+/// Auth is on here, unlike the stdio config, and that is the point rather than
+/// an incidental hardening: an explicit idempotency key is admitted against a
+/// principal, and an anonymous caller has none. A harness that left auth off
+/// would be refused before it ever reached the streaming behaviour these rows
+/// are about.
+const BEARER: &str = "sub2b-operator-token";
+
 fn write_http_config(home: &Path, backend_url: &str, port: u16) {
     std::fs::write(
         home.join("gateway.yaml"),
         format!(
             "server:\n  host: \"127.0.0.1\"\n  port: {port}\n\
+             auth:\n  enabled: true\n  bearer_token: \"{BEARER}\"\n  single_user: true\n\
              backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n"
         ),
     )
@@ -843,7 +854,19 @@ impl HttpSession {
             .expect("spawn gateway over http");
 
         let url = format!("http://127.0.0.1:{port}/mcp");
-        let client = reqwest::Client::new();
+        // Attached once, as a default header, so no POST helper can forget it:
+        // an unauthenticated request reaches the gateway as `anonymous`, which
+        // holds no principal and cannot be admitted for a keyed call.
+        let mut default_headers = reqwest::header::HeaderMap::new();
+        default_headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {BEARER}"))
+                .expect("a bearer header"),
+        );
+        let client = reqwest::Client::builder()
+            .default_headers(default_headers)
+            .build()
+            .expect("build the http client");
         let ready = timeout(READ_TIMEOUT, async {
             loop {
                 let posted = client
@@ -907,6 +930,36 @@ impl HttpSession {
     }
 }
 
+/// Attach the explicit idempotency key a modern mutating call must carry.
+///
+/// Applied inside the two HTTP POST helpers rather than in [`invoke`], because
+/// only the modern HTTP surface requires one and a key on the stdio rows would
+/// change what those rows exercise. Handshake frames are left alone: a key
+/// belongs to an operation, and `initialize` is not one.
+///
+/// Keyed on the JSON-RPC id, never a constant. `S-03` holds two invocations
+/// open at once, and a shared key would admit the second as a replay of the
+/// first instead of letting it run its own stream — the isolation the row
+/// exists to prove would be destroyed by the harness.
+fn with_idempotency_key(mut message: Value) -> Value {
+    const KEY: &str = mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META;
+
+    if message.get("method").and_then(Value::as_str) != Some("tools/call") {
+        return message;
+    }
+    let id = message
+        .get("id")
+        .and_then(Value::as_i64)
+        .expect("a tools/call carries a numeric id in this harness");
+    if let Some(meta) = message
+        .pointer_mut("/params/_meta")
+        .and_then(Value::as_object_mut)
+    {
+        meta.insert(KEY.to_string(), json!(format!("sub2b-{id}")));
+    }
+    message
+}
+
 /// POST one JSON-RPC message, offering a stream. Returns status, content type
 /// and body; every failure message in the HTTP rows quotes the body, because a
 /// refusal is a body and not a status.
@@ -916,6 +969,7 @@ async fn post_sse(
     session: &str,
     message: Value,
 ) -> (u16, String, String) {
+    let message = with_idempotency_key(message);
     // Mirror whatever the body declared, and nothing when it declared nothing.
     // The gateway reads the header as well as the body and refuses the two
     // disagreeing with -32020 — including the case where only one of them
@@ -997,6 +1051,7 @@ impl SseReader {
         session: &str,
         message: Value,
     ) -> (u16, String, Self) {
+        let message = with_idempotency_key(message);
         let version = message
             .pointer("/params/_meta/io.modelcontextprotocol~1protocolVersion")
             .and_then(Value::as_str)
@@ -1038,6 +1093,23 @@ impl SseReader {
                 pending: String::new(),
             },
         )
+    }
+
+    /// Whatever is left of the body, as text.
+    ///
+    /// A refusal is a body and not a status, so a row that did not get its
+    /// stream reports what the gateway actually said. Bounded by
+    /// [`READ_TIMEOUT`] for the same reason `next_frame` is.
+    async fn drain(mut self) -> String {
+        use futures::StreamExt as _;
+
+        let collect = async {
+            while let Some(Ok(chunk)) = self.stream.next().await {
+                self.pending.push_str(&String::from_utf8_lossy(&chunk));
+            }
+        };
+        let _ = tokio::time::timeout(READ_TIMEOUT, collect).await;
+        self.pending
     }
 
     /// The next complete frame, or `None` when the body ends without one.
@@ -1375,7 +1447,11 @@ async fn notification_then_result(
         invoke(2, SLOW_TOOL, &arguments, &request_meta),
     )
     .await;
-    assert_eq!(status, 200, "the slow call was refused before it streamed");
+    assert!(
+        status == 200,
+        "the slow call was refused before it streamed: status={status} body={}",
+        reader.drain().await
+    );
     assert!(
         content_type.contains("text/event-stream"),
         "the gateway answered {content_type}, so it never committed to a \

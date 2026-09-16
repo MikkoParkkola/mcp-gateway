@@ -1,3 +1,4 @@
+sha256: 6b312e3031525624542837d01de6c479e17a91b7a7bc7502e27a42dc458ca733
 fulcrum: "1.0"
 name: linear_get_issue
 description: "Get a single Linear issue by identifier (e.g., 'ENG-123') with full details and comments"

@@ -14,6 +14,10 @@
 //! * `findings_count`, `findings` — structured finding details.
 //! * `anomaly_score` — optional float from the anomaly detector.
 //!
+//! Response entries additionally carry `schema_version: 2`, the server-selected
+//! `artifact_kind`, and canonical distinct `policy_targets` (`server`/`tool`).
+//! Request entries omit those response fields and retain their existing schema.
+//!
 //! The logger is thread-safe via an internal `Mutex<BufWriter>`.
 
 use std::fs::OpenOptions;
@@ -27,6 +31,9 @@ use serde_json::Value;
 
 use super::{Finding, FirewallAction, FirewallVerdict};
 use crate::security::hash_argument;
+use crate::security::response_policy::{
+    ResponseArtifactKind, ResponseCorrelation, ResponsePolicyTarget,
+};
 
 /// Append-only NDJSON audit logger.
 pub struct AuditLogger {
@@ -48,6 +55,12 @@ struct AuditEntry<'a> {
     findings_count: usize,
     findings: &'a [Finding],
     anomaly_score: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema_version: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artifact_kind: Option<ResponseArtifactKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_targets: Option<&'a [ResponsePolicyTarget]>,
 }
 
 impl AuditLogger {
@@ -102,6 +115,9 @@ impl AuditLogger {
             findings_count: verdict.findings.len(),
             findings: &verdict.findings,
             anomaly_score: verdict.anomaly_score,
+            schema_version: None,
+            artifact_kind: None,
+            policy_targets: None,
         };
         self.write_entry(&entry);
     }
@@ -115,18 +131,45 @@ impl AuditLogger {
         caller: &str,
         verdict: &FirewallVerdict,
     ) {
+        self.log_response_artifact(
+            &ResponseCorrelation {
+                session_id,
+                caller,
+                external_server: server,
+                external_tool: tool,
+            },
+            &[ResponsePolicyTarget {
+                server: server.into(),
+                tool: tool.into(),
+            }],
+            ResponseArtifactKind::FinalResponse,
+            verdict,
+        );
+    }
+
+    /// Write the final policy decision once, with canonical server-owned targets.
+    pub(crate) fn log_response_artifact(
+        &self,
+        correlation: &ResponseCorrelation<'_>,
+        targets: &[ResponsePolicyTarget],
+        artifact: ResponseArtifactKind,
+        verdict: &FirewallVerdict,
+    ) {
         let entry = AuditEntry {
             timestamp: Utc::now().to_rfc3339(),
             event: "response",
-            session_id,
-            server,
-            tool,
-            caller,
+            session_id: correlation.session_id,
+            server: correlation.external_server,
+            tool: correlation.external_tool,
+            caller: correlation.caller,
             args_hash: None,
             action: action_str(verdict.action),
             findings_count: verdict.findings.len(),
             findings: &verdict.findings,
             anomaly_score: verdict.anomaly_score,
+            schema_version: Some(2),
+            artifact_kind: Some(artifact),
+            policy_targets: Some(targets),
         };
         self.write_entry(&entry);
     }

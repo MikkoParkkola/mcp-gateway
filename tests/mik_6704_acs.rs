@@ -402,8 +402,12 @@ fn ac_ident_1a_every_identity_derives_its_principal_from_a_credential() {
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             let lines: Vec<&str> = text.lines().collect();
             for (n, line) in lines.iter().enumerate() {
-                // The literal, not the type's own definition or its impl.
-                if !line.contains("AuthenticatedClient {")
+                // The literal, not the type's own definition, its impl, or a
+                // function whose return type it merely is: `-> AuthenticatedClient {`
+                // opens a body, not an identity. Only the return signature is
+                // discounted, so a constructor sharing that line still counts.
+                let constructors = line.replace("-> AuthenticatedClient {", "");
+                if !constructors.contains("AuthenticatedClient {")
                     || line.contains("struct AuthenticatedClient")
                     || line.contains("impl AuthenticatedClient")
                 {
@@ -416,7 +420,9 @@ fn ac_ident_1a_every_identity_derives_its_principal_from_a_credential() {
                 let Some((f, field)) = lines[n..end]
                     .iter()
                     .enumerate()
-                    .find(|(_, l)| l.contains("principal:"))
+                    // The field itself, not a qualified sibling such as
+                    // `quota_principal:`, which would otherwise be found first.
+                    .find(|(_, l)| l.trim_start().starts_with("principal:"))
                 else {
                     hits.push(format!("{}:{} (no principal field)", path.display(), n + 1));
                     continue;

@@ -1,3 +1,4 @@
+sha256: 7e66eef37e423191adb79852d00d8e6ab6ae09ac8e7efbfaa6628701c25256fa
 fulcrum: "1.0"
 name: linear_get_teams
 description: List all Linear teams with their IDs, states, and labels

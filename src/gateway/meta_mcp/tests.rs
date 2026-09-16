@@ -29,6 +29,11 @@ fn allow_all_ctx_named<'a>(
     agent_id: Option<&'a str>,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         api_key_name,
         agent_id,
@@ -38,6 +43,7 @@ fn allow_all_ctx_named<'a>(
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        task: None,
         // Fail-closed: a helper that declared nothing is a 2025 client, the
         // same reasoning that puts `Declared::NONE` on the line above.
         era: crate::protocol::meta::Era::Legacy,
@@ -53,6 +59,11 @@ fn allow_all_ctx_named<'a>(
 /// `#[cfg(test)]`, so no release build can reach this path.
 fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
@@ -62,6 +73,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        task: None,
         // Fail-closed: a helper that declared nothing is a 2025 client, the
         // same reasoning that puts `Declared::NONE` on the line above.
         era: crate::protocol::meta::Era::Legacy,
@@ -200,7 +212,13 @@ fn tools_list_wiring_records_real_cache_scope_inputs() {
         ..ListFilters::default()
     };
     let before_private = global_shadow_count(request_filtered);
-    meta.handle_tools_list_with_url_override(RequestId::Number(7002), None, None, true);
+    meta.handle_tools_list_with_url_override(
+        RequestId::Number(7002),
+        None,
+        None,
+        true,
+        CallerStanding::Admin,
+    );
     assert!(global_shadow_count(request_filtered) > before_private);
 }
 
@@ -516,15 +534,14 @@ async fn gateway_search_is_callable_regardless_of_code_mode_flag() {
     // GIVEN: code mode disabled, but calling gateway_search explicitly
     let meta = make_meta_mcp();
     let args = json!({ "query": "nonexistent_xyz_404" });
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(99),
-            "gateway_search",
-            args,
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(99),
+        "gateway_search",
+        args,
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
     // THEN: no JSON-RPC error (-32601 unknown tool), just zero results
     assert!(
         response.error.is_none(),
@@ -654,7 +671,6 @@ providers:
             }),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
-            None,
         )
         .await;
 
@@ -758,6 +774,12 @@ providers:
             Some("session-1"),
             &{
                 crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    task: None,
+                    signing: None,
+                    execution: None,
+                    credential_principal: None,
+                    is_modern: false,
+                    protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
                     authorizer: &ALLOW_ALL,
                     api_key_name: Some("shared-api-key"),
                     agent_id: Some("agent-1"),
@@ -771,7 +793,6 @@ providers:
                     channel: &crate::gateway::input_bridge::NoClientChannel,
                 }
             },
-            None,
         )
         .await
         .unwrap();
@@ -817,7 +838,6 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
             }),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
-            None,
         )
         .await
         .unwrap();
@@ -1073,15 +1093,14 @@ async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
     // GIVEN: code mode disabled, calling gateway_execute with no tool/chain
     let meta = make_meta_mcp();
     let args = json!({});
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(100),
-            "gateway_execute",
-            args,
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(100),
+        "gateway_execute",
+        args,
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
     // THEN: returns an error (not -32601 unknown tool)
     // The response wraps the error as tool content (is_error=true) OR as RPC error
     // Either way, there should not be a -32601 "Unknown tool" error
@@ -1337,24 +1356,23 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
     let mm = MetaMcp::new(Arc::clone(&registry));
     mm.set_reload_context(reload_ctx);
 
-    let resp = mm
-        .handle_tools_call(
-            RequestId::Number(7),
-            "gateway_reload_config",
-            json!({}),
-            None,
-            // Admin, because reloading config is admin-gated at the dispatcher.
-            // The default context is non-admin, and this test is about what the
-            // reload REPORTS, not about the gate — an operator running it holds
-            // a credential.
-            MetaMcpCallerContext {
-                is_admin: true,
-                input_capabilities: crate::protocol::meta::Declared::NONE,
-                retry: &crate::protocol::mrtr::NO_RETRY,
-                ..allow_all_ctx()
-            },
-        )
-        .await;
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(7),
+        "gateway_reload_config",
+        json!({}),
+        None,
+        // Admin, because reloading config is admin-gated at the dispatcher.
+        // The default context is non-admin, and this test is about what the
+        // reload REPORTS, not about the gate — an operator running it holds
+        // a credential.
+        MetaMcpCallerContext {
+            is_admin: true,
+            input_capabilities: crate::protocol::meta::Declared::NONE,
+            retry: &crate::protocol::mrtr::NO_RETRY,
+            ..allow_all_ctx()
+        },
+    ))
+    .await;
 
     assert!(
         resp.error.is_none(),
@@ -1552,6 +1570,67 @@ fn tools_list_includes_surfaced_tool_when_in_backend_cache() {
     assert!(names.contains(&"gateway_invoke"));
 }
 
+// Minor 10 (c) — MIK-6865.SCHEMA.1: a declared `outputSchema` must be
+// byte-identical in the `tools/list` wire response to the one the capability
+// declared. Surfaced capability tools go through `CapabilityDefinition::
+// to_mcp_tool` (src/capability/definition/mod.rs) and
+// `project_tool_descriptor_trust_card` (src/trust/descriptor.rs) on the way
+// to the wire; neither is supposed to touch the schema.
+#[test]
+fn ac_schema_10c_declared_output_schema_is_byte_identical_on_the_wire() {
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+
+    let declared_output_schema = json!({
+        "type": "array",
+        "items": { "type": "string" },
+        "prefixItems": [{ "type": "string" }],
+        "minItems": 1
+    });
+
+    let mut cap = crate::capability::parse_capability(
+        r"
+name: schema_wire_check
+description: Test capability with a declared, non-object output schema
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.invalid
+      path: /check
+",
+    )
+    .expect("fixture capability must parse");
+    cap.schema.output = declared_output_schema.clone();
+
+    let cap_backend = Arc::new(CapabilityBackend::new(
+        "schema_wire_check_backend",
+        Arc::new(CapabilityExecutor::new()),
+    ));
+    cap_backend
+        .register_capability(cap)
+        .expect("fixture capability must register");
+
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_capabilities(cap_backend);
+    let meta = meta.with_surfaced_tools(vec![SurfacedToolConfig {
+        server: "schema_wire_check_backend".to_string(),
+        tool: "schema_wire_check".to_string(),
+    }]);
+
+    let resp = meta.handle_tools_list(RequestId::Number(1));
+    let result = resp.result.unwrap();
+    let tools = result["tools"].as_array().unwrap();
+    let wire_tool = tools
+        .iter()
+        .find(|t| t["name"] == json!("schema_wire_check"))
+        .expect("surfaced capability tool must appear in tools/list");
+
+    assert_eq!(
+        wire_tool["outputSchema"], declared_output_schema,
+        "outputSchema on the wire must be byte-identical to the one the capability declared"
+    );
+}
+
 #[test]
 fn tools_list_meta_tools_always_present_regardless_of_surfaced_tools() {
     // GIVEN: MetaMcp with surfaced tools but no backends (cache will be empty)
@@ -1607,15 +1686,14 @@ async fn tools_call_surfaced_tool_on_missing_backend_returns_error() {
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(surfaced);
 
     // WHEN: calling the surfaced tool
-    let resp = mm
-        .handle_tools_call(
-            RequestId::Number(1),
-            "pinned_tool",
-            json!({"arg": "val"}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "pinned_tool",
+        json!({"arg": "val"}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     // THEN: returns a backend-not-found error (not "Unknown tool" -32601)
     // The proxy dispatch was reached (surfaced tool map hit) and the backend was absent
@@ -1640,15 +1718,14 @@ async fn tools_call_unknown_non_surfaced_tool_returns_32601() {
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new()));
 
     // WHEN
-    let resp = mm
-        .handle_tools_call(
-            RequestId::Number(1),
-            "totally_unknown_xyz",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "totally_unknown_xyz",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     // THEN: -32601 "Unknown tool" error
     let err = resp.error.expect("Expected an RPC error for unknown tool");
@@ -1666,15 +1743,14 @@ async fn tools_call_surfaced_tool_name_bypasses_meta_tool_dispatch() {
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(surfaced);
 
     // WHEN: calling the surfaced tool
-    let resp = mm
-        .handle_tools_call(
-            RequestId::Number(1),
-            "my_surfaced_tool",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "my_surfaced_tool",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     // THEN: NOT a -32601 "Unknown tool" error — the surfaced map was consulted first
     if let Some(err) = &resp.error {
@@ -1699,15 +1775,14 @@ async fn colliding_name_is_dispatched_as_meta_tool_not_proxy() {
     assert!(mm.surfaced_tools.is_empty(), "Collision should be dropped");
 
     // WHEN: calling gateway_list_servers
-    let resp = mm
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_list_servers",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_list_servers",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     // THEN: dispatched as the real meta-tool, not proxied → success
     assert!(
@@ -2132,7 +2207,6 @@ mod attestation_wiring {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
-            None,
         )
         .await
         .unwrap()
@@ -2445,7 +2519,7 @@ auth:
         "tool": "register_webhook",
         "arguments": { "url": "https://attacker.example/collect" }
     });
-    let result = meta.invoke_tool(&args, None, &caller, None).await;
+    let result = meta.invoke_tool(&args, None, &caller).await;
     assert!(
         result.is_err(),
         "a non-admin caller must not create an attacker-addressed webhook"
@@ -2464,7 +2538,7 @@ auth:
         retry: &crate::protocol::mrtr::NO_RETRY,
         ..allow_all_ctx()
     };
-    let admin = meta.invoke_tool(&args, None, &admin_caller, None).await;
+    let admin = meta.invoke_tool(&args, None, &admin_caller).await;
     let admin_msg = admin.map_or_else(|e| e.to_string(), |_| String::new());
     assert!(
         !admin_msg.to_lowercase().contains("admin credential"),
@@ -2518,15 +2592,14 @@ fn a_playbook_carries_the_caller_identity() {
 async fn global_meta_tool_is_refused_at_the_dispatcher() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
 
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_reload_config",
-            json!({}),
-            Some("sess-dispatcher"),
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_reload_config",
+        json!({}),
+        Some("sess-dispatcher"),
+        allow_all_ctx(),
+    ))
+    .await;
 
     let message = response
         .error
@@ -2549,20 +2622,19 @@ async fn global_meta_tool_is_refused_at_the_dispatcher() {
 async fn global_meta_tool_reaches_an_admin_caller() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
 
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_reload_config",
-            json!({}),
-            Some("sess-dispatcher-admin"),
-            crate::gateway::meta_mcp::MetaMcpCallerContext {
-                is_admin: true,
-                input_capabilities: crate::protocol::meta::Declared::NONE,
-                retry: &crate::protocol::mrtr::NO_RETRY,
-                ..allow_all_ctx()
-            },
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_reload_config",
+        json!({}),
+        Some("sess-dispatcher-admin"),
+        crate::gateway::meta_mcp::MetaMcpCallerContext {
+            is_admin: true,
+            input_capabilities: crate::protocol::meta::Declared::NONE,
+            retry: &crate::protocol::mrtr::NO_RETRY,
+            ..allow_all_ctx()
+        },
+    ))
+    .await;
 
     let message = response
         .error
@@ -2711,15 +2783,14 @@ fn exposure_only_invoke() -> MetaMcp {
 
 #[tokio::test]
 async fn unexposed_meta_tool_is_refused_on_call() {
-    let response = exposure_only_invoke()
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_list_tools",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(exposure_only_invoke().handle_tools_call(
+        RequestId::Number(1),
+        "gateway_list_tools",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     let error = response
         .error
@@ -2738,16 +2809,18 @@ async fn unexposed_admin_meta_tool_is_refused_as_unrecognized_not_as_admin_only(
     // admin gate placed before the exposure check answers `-32600 requires
     // admin access` and discloses exactly what the allow-list hides. The caller
     // here is non-admin, which is the case that reaches that gate first.
-    let response = MetaMcp::new(Arc::new(BackendRegistry::new()))
-        .with_exposed_meta_tools(&["gateway_invoke".to_string()])
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_kill_server",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(
+        MetaMcp::new(Arc::new(BackendRegistry::new()))
+            .with_exposed_meta_tools(&["gateway_invoke".to_string()])
+            .handle_tools_call(
+                RequestId::Number(1),
+                "gateway_kill_server",
+                json!({}),
+                None,
+                allow_all_ctx(),
+            ),
+    )
+    .await;
 
     let error = response
         .error
@@ -2767,16 +2840,18 @@ async fn exposed_meta_tool_still_runs() {
     // Without this the refusal above passes for a gateway that refuses
     // everything. Same subject as the refusal test, so the allow-list is the
     // only difference between them.
-    let response = MetaMcp::new(Arc::new(BackendRegistry::new()))
-        .with_exposed_meta_tools(&["gateway_list_tools".to_string()])
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_list_tools",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(
+        MetaMcp::new(Arc::new(BackendRegistry::new()))
+            .with_exposed_meta_tools(&["gateway_list_tools".to_string()])
+            .handle_tools_call(
+                RequestId::Number(1),
+                "gateway_list_tools",
+                json!({}),
+                None,
+                allow_all_ctx(),
+            ),
+    )
+    .await;
 
     assert!(
         response.error.is_none(),
@@ -2812,15 +2887,14 @@ fn unexposed_meta_tool_is_not_listed() {
 async fn no_allow_list_exposes_everything() {
     // The default an existing deployment gets: configuring nothing must not
     // start refusing meta-tools.
-    let response = make_meta_mcp()
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_list_tools",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(make_meta_mcp().handle_tools_call(
+        RequestId::Number(1),
+        "gateway_list_tools",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     assert!(
         response.error.is_none(),
@@ -2834,15 +2908,14 @@ async fn unexposed_code_mode_tool_is_refused_on_call() {
     // builder from the rest of the meta-tools, and was outside the governed
     // set, so an allow-list naming only `gateway_invoke` still left it
     // callable. Both builders are governed now.
-    let response = exposure_only_invoke()
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_execute",
-            json!({"tool": "mem:read", "arguments": {}}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(exposure_only_invoke().handle_tools_call(
+        RequestId::Number(1),
+        "gateway_execute",
+        json!({"tool": "mem:read", "arguments": {}}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     let error = response
         .error
@@ -2859,15 +2932,14 @@ async fn the_refusal_does_not_name_the_allow_list() {
     // indistinguishable from the unrecognised-tool fallback. Asserting only the
     // error code lets someone reword the message to "not exposed" and ship a
     // disclosure oracle with every other test still green.
-    let response = exposure_only_invoke()
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_list_tools",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(exposure_only_invoke().handle_tools_call(
+        RequestId::Number(1),
+        "gateway_list_tools",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     // Compared against the fallback the dispatcher actually produces, not
     // against a transcription of it. A literal here asserts today's wording and
@@ -2876,15 +2948,14 @@ async fn the_refusal_does_not_name_the_allow_list() {
     // outside the governed set passes the exposure check (`is_exposed`,
     // meta_mcp_tool_defs.rs:830) and reaches the fallback, so both answers come
     // from one fixture and one dispatcher.
-    let fallback = exposure_only_invoke()
-        .handle_tools_call(
-            RequestId::Number(1),
-            "nobody_implemented_this",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let fallback = Box::pin(exposure_only_invoke().handle_tools_call(
+        RequestId::Number(1),
+        "nobody_implemented_this",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
 
     let error = response.error.expect("an unexposed meta-tool is refused");
     let fallback_error = fallback
@@ -2964,12 +3035,6 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         input_capabilities: declaring(&json!({"elicitation": {}})),
         verified_identity: Some(&NAMED_CALLER),
-        // Stated, not inherited: `allow_all_ctx_named` defaults to `Legacy`
-        // because its callers declare nothing, but this one declares. The era
-        // has to match the declaration's source -- `classify_request` reads
-        // that same `_meta` block as `Modern` -- or the fixture sends a 2025
-        // client down the legacy bridge and never reaches the transform.
-        era: crate::protocol::meta::Era::Modern,
         ..allow_all_ctx_named(Some("alice"), Some("agent-1"))
     };
     let result = meta
@@ -2977,7 +3042,6 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &caller,
-            None,
         )
         .await
         .unwrap();
@@ -3091,7 +3155,6 @@ async fn an_enforced_transform_does_not_invent_a_continuation_handle() {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
-            None,
         )
         .await
         .unwrap();
@@ -3170,7 +3233,6 @@ async fn an_enforced_transform_carries_an_unrecognized_result_type() {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
-            None,
         )
         .await
         .unwrap();
@@ -3250,7 +3312,6 @@ async fn an_enforced_transform_carries_an_empty_result_type() {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
-            None,
         )
         .await
         .unwrap();
@@ -3341,7 +3402,6 @@ async fn an_enforced_transform_refuses_a_malformed_control_field() {
                 &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
                 Some("session-1"),
                 &allow_all_ctx_named(Some("alice"), Some("agent-1")),
-                None,
             )
             .await
             .unwrap();
@@ -3408,6 +3468,11 @@ fn allow_all_ctx_declaring(
     declared: crate::protocol::meta::Declared,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
@@ -3417,24 +3482,10 @@ fn allow_all_ctx_declaring(
         input_capabilities: declared,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
-        // Matched to the declaration's source, not defaulted. Most call sites
-        // pass a `declaring()` result, directly or through
-        // [`form_only_client`], and `declaring()` builds a `_meta` block
-        // carrying `2026-07-28` in both the body and the header before handing
-        // it to `classify_request`; `RequestShape::era` reads that shape back
-        // as `Modern`. Pinning `Legacy` here claimed a wire shape the fixture
-        // never sent -- a 2025 client that somehow declared 2026 input
-        // capabilities -- and took the legacy input bridge, which this
-        // context's `NoClientChannel` then refuses.
-        //
-        // The call sites that pass `Declared::NONE` are unaffected either way,
-        // and this field is not making a claim on their behalf: `invoke_tool`
-        // refuses an undeclared input request (MRTR.9,
-        // `src/gateway/meta_mcp/invoke.rs`) before it reads `era`, so those
-        // tests never reach the branch this field selects. The `Legacy`
-        // default on [`allow_all_ctx_named`] stands for callers that declare
-        // nothing at all.
-        era: crate::protocol::meta::Era::Modern,
+        task: None,
+        // Fail-closed: a helper that declared nothing is a 2025 client, the
+        // same reasoning that puts `Declared::NONE` on the line above.
+        era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
@@ -3501,7 +3552,6 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
-            None,
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3567,7 +3617,6 @@ async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
-            None,
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3615,7 +3664,7 @@ async fn a_refused_input_request_leaves_the_idempotency_key_retryable() {
     // attempt left behind.
     for attempt in ["first", "second"] {
         let err = meta
-            .invoke_tool(&book_flight(), Some("session-1"), &ctx, None)
+            .invoke_tool(&book_flight(), Some("session-1"), &ctx)
             .await
             .expect_err("a refusal must not be replaced by a stored result");
         assert_eq!(
@@ -3637,7 +3686,6 @@ async fn an_undeclared_input_request_is_refused_at_the_gateway() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE),
-            None,
         )
         .await
         .expect_err("a client that declared nothing must not be asked");
@@ -3671,7 +3719,6 @@ async fn a_refusals_required_capabilities_survive_the_response_boundary() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE),
-            None,
         )
         .await
         .expect_err("a client that declared nothing must not be asked");
@@ -3711,7 +3758,6 @@ async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
             &book_flight(),
             Some("session-1"),
             &anonymous_ctx_declaring(declaring(&json!({"elicitation": {}}))),
-            None,
         )
         .await
         .expect_err("a caller that cannot be bound must not be handed a continuation");
@@ -3729,7 +3775,7 @@ async fn an_unconfirmable_destructive_call_is_refused_and_marked() {
     // GIVEN: a destructive call on a transport with nobody to ask
     let ctx = allow_all_ctx();
     // WHEN: the gate judges it
-    let outcome = super::destructive_confirmation_gate(
+    let refusal = super::destructive_confirmation_gate(
         &RequestId::Number(1),
         "gateway_kill_server",
         &json!({"server": "brave"}),
@@ -3737,7 +3783,7 @@ async fn an_unconfirmable_destructive_call_is_refused_and_marked() {
         &ctx,
     )
     .await;
-    let super::GateOutcome::Refuse(refusal) = outcome else {
+    let super::GateOutcome::Refuse(refusal) = refusal else {
         panic!("a destructive call nobody can confirm is refused");
     };
 
@@ -3767,9 +3813,6 @@ async fn a_non_destructive_call_is_not_judged_by_this_gate() {
     // WHEN/THEN: the gate declines to answer at all, so `Unavailable` refuses
     // destructive calls specifically rather than refusing everything -- which a
     // test asserting only the refusal above cannot tell apart.
-    // `Proceed` and not merely "not a refusal": `ProceedConfirmed` would mean
-    // the gate had opened and spent a confirmation on a tool it does not
-    // govern, which a `!matches!(.., Refuse(_))` assertion would wave through.
     assert!(matches!(
         super::destructive_confirmation_gate(
             &RequestId::Number(1),
@@ -3817,15 +3860,14 @@ async fn a_near_miss_of_a_hidden_tool_is_not_answered_with_its_name() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
         .with_exposed_meta_tools(&["gateway_search".to_string()]);
     // WHEN: a caller mistypes a HIDDEN tool by one character
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_kill_serve",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_kill_serve",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
     // THEN: the refusal names neither the hidden tool nor any other hidden one
     let message = response
         .error
@@ -3850,15 +3892,14 @@ async fn a_near_miss_of_a_hidden_tool_is_not_answered_with_its_name() {
 async fn a_near_miss_of_an_exposed_tool_still_gets_its_suggestion() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
         .with_exposed_meta_tools(&["gateway_search".to_string()]);
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_searh",
-            json!({}),
-            None,
-            allow_all_ctx(),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_searh",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
     let message = response
         .error
         .expect("an unrecognised tool is refused")
@@ -3948,7 +3989,6 @@ async fn an_unreadable_mode_is_refused_without_echoing_what_the_backend_sent() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(form_only_client()),
-            None,
         )
         .await
         .expect_err(
@@ -4003,7 +4043,6 @@ async fn a_mode_refusal_carries_the_mode_and_not_a_capability_the_client_already
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(form_only_client()),
-            None,
         )
         .await
         .expect_err("a url-mode request to a form-only client must not be relayed");
@@ -4043,7 +4082,6 @@ async fn a_mode_refusal_does_not_claim_the_capability_was_undeclared() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(form_only_client()),
-            None,
         )
         .await
         .expect_err("a url-mode request to a form-only client must not be relayed");
@@ -4443,16 +4481,24 @@ providers:
     // that call produces: a key computed a second way would stage an entry no
     // read ever looks for, and the case would pass without proving anything.
     let profile = meta.active_profile(Some("session-1"));
+    // The staged entry has to carry the principal the assertions' caller keys
+    // on. With no identity propagation and no OIDC, that is the caller's own
+    // `GrantSubject` — the same one `grant_ctx` builds — namespaced by the
+    // one production helper rather than a second spelling of it here.
+    let staged_subject =
+        crate::identity_grants::GrantSubject::new("cloudflare_access", "user-123", None);
+    let staged_principal =
+        super::support::caller_cache_principal(None, None, Some(&staged_subject));
     let key = super::support::response_cache_key_for(
         "personal_caps",
         "calendar_read",
         &json!({}),
         &crate::projection::projection_key_suffix(meta.projection_mode, Some("session-1")),
-        None,
+        staged_principal.as_deref(),
         &crate::protocol::mrtr::NO_RETRY,
         crate::cache::KeyContext {
             routing_profile: &profile.name,
-            protocol_revision: None,
+            protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
             policy_epoch: 0,
         },
     );
@@ -4492,7 +4538,6 @@ async fn a_cached_entry_is_live_for_the_agent_the_grant_admits() {
             &json!({"server": "personal_caps", "tool": "calendar_read", "arguments": {}}),
             Some("session-1"),
             &grant_ctx("agent-1"),
-            None,
         )
         .await
         .unwrap();
@@ -4512,7 +4557,6 @@ async fn a_denied_agent_is_not_served_the_cached_body() {
             &json!({"server": "personal_caps", "tool": "calendar_read", "arguments": {}}),
             Some("session-1"),
             &grant_ctx("agent-2"),
-            None,
         )
         .await;
 
@@ -4624,16 +4668,17 @@ async fn b10_a_successful_invoke_does_not_change_the_connections_tool_list() {
         .await
         .expect("the mock backend's tools must be fetchable");
 
-    let before = tools_list_names(
-        &meta.handle_tools_list_for_session(RequestId::Number(1), MODERN_SESSIONLESS),
-    );
+    let before = tools_list_names(&meta.handle_tools_list_for_session(
+        RequestId::Number(1),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
 
     let invoked = meta
         .invoke_tool(
             &json!({"server": "mock", "tool": "echo", "arguments": {}}),
             MODERN_SESSIONLESS,
             &allow_all_ctx(),
-            None,
         )
         .await;
     assert!(
@@ -4641,9 +4686,11 @@ async fn b10_a_successful_invoke_does_not_change_the_connections_tool_list() {
         "the invoke must succeed or nothing is promoted and the case proves nothing: {invoked:?}"
     );
 
-    let after = tools_list_names(
-        &meta.handle_tools_list_for_session(RequestId::Number(2), MODERN_SESSIONLESS),
-    );
+    let after = tools_list_names(&meta.handle_tools_list_for_session(
+        RequestId::Number(2),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
 
     assert_eq!(
         before, B10_EXPECTED_TOOLS,
@@ -4797,6 +4844,10 @@ async fn meta_with_echo_hidden_by_a_stale_cache(url: &str) -> MetaMcp {
 #[cfg(feature = "spec-preview")]
 #[tokio::test]
 async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() {
+    // Control: the same promotion over a legacy connection, which keeps its own
+    // session id, must be visible to that connection.
+    const LEGACY: Option<&str> = Some("legacy-a");
+
     let url = start_invokable_mock().await;
     let meta = meta_with_echo_hidden_by_a_stale_cache(&url).await;
 
@@ -4806,7 +4857,6 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
             &json!({"server": "mock", "tool": "echo", "arguments": {}}),
             MODERN_SESSIONLESS,
             &allow_all_ctx(),
-            None,
         )
         .await;
     assert!(
@@ -4818,11 +4868,13 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
         RequestId::Number(1),
         "echo",
         MODERN_SESSIONLESS,
+        CallerStanding::Admin,
     ));
     let bystander = tools_list_names(&meta.handle_tools_list_filtered(
         RequestId::Number(2),
         "echo",
         MODERN_SESSIONLESS,
+        CallerStanding::Admin,
     ));
 
     assert_eq!(
@@ -4837,13 +4889,11 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
 
     // Control: the same promotion over a legacy connection, which keeps its own
     // session id, must be visible to that connection.
-    let legacy = Some("legacy-a");
     let legacy_invoked = meta
         .invoke_tool(
             &json!({"server": "mock", "tool": "echo", "arguments": {}}),
-            legacy,
+            LEGACY,
             &allow_all_ctx(),
-            None,
         )
         .await;
     assert!(
@@ -4851,8 +4901,12 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
         "the control's invoke must succeed or it controls for nothing: {legacy_invoked:?}"
     );
 
-    let legacy_list =
-        tools_list_names(&meta.handle_tools_list_filtered(RequestId::Number(3), "echo", legacy));
+    let legacy_list = tools_list_names(&meta.handle_tools_list_filtered(
+        RequestId::Number(3),
+        "echo",
+        LEGACY,
+        CallerStanding::Admin,
+    ));
     assert!(
         legacy_list.iter().any(|name| name == "echo"),
         "the promotion is observable nowhere, so the assertions above are \
@@ -4991,15 +5045,14 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
         "the staged set in the default state is not what the cases pin"
     );
 
-    let set = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_set_state",
-            json!({"state": TARGET_STATE}),
-            sess,
-            allow_all_ctx(),
-        )
-        .await;
+    let set = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_set_state",
+        json!({"state": TARGET_STATE}),
+        sess,
+        allow_all_ctx(),
+    ))
+    .await;
     assert!(
         set.error.is_none(),
         "a session-bearing connection must be able to hold a state, or the \
@@ -5082,15 +5135,14 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
     // Driven through the real meta-tool, not `SessionStateStore::set_state`:
     // the defect is the argument passed at `mod.rs:1689`, and a fixture
     // touching the store directly bypasses the line under test.
-    let set = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_set_state",
-            json!({"state": TARGET_STATE}),
-            MODERN_SESSIONLESS,
-            allow_all_ctx(),
-        )
-        .await;
+    let set = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_set_state",
+        json!({"state": TARGET_STATE}),
+        MODERN_SESSIONLESS,
+        allow_all_ctx(),
+    ))
+    .await;
     order2_fsm::assert_refusal(&meta, &set);
 
     // Q4: the write is refused, not filtered on read.
@@ -5173,15 +5225,14 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
     // Connection A. Driven through the real meta-tool: the defect is the
     // argument passed at `mod.rs:1689`, and a fixture touching
     // `SessionStateStore::set_state` directly bypasses the line under test.
-    let set = meta
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_set_state",
-            json!({"state": TARGET_STATE}),
-            MODERN_SESSIONLESS,
-            allow_all_ctx(),
-        )
-        .await;
+    let set = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_set_state",
+        json!({"state": TARGET_STATE}),
+        MODERN_SESSIONLESS,
+        allow_all_ctx(),
+    ))
+    .await;
     order2_fsm::assert_refusal(&meta, &set);
 
     // Q4: A's write is refused outright, not accepted and dropped.
@@ -5401,10 +5452,16 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
         None,
         crate::protocol::meta::Era::Legacy,
     );
-    let legacy_a_tools =
-        tools_list_set(&meta.handle_tools_list_for_session(RequestId::Number(3), legacy_a));
-    let legacy_b_tools =
-        tools_list_set(&meta.handle_tools_list_for_session(RequestId::Number(4), legacy_b));
+    let legacy_a_tools = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(3),
+        legacy_a,
+        CallerStanding::Admin,
+    ));
+    let legacy_b_tools = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(4),
+        legacy_b,
+        CallerStanding::Admin,
+    ));
     assert!(
         legacy_a_tools.len() < legacy_b_tools.len()
             && legacy_a_tools.iter().all(|t| legacy_b_tools.contains(t)),
@@ -5427,12 +5484,16 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
         crate::protocol::meta::Era::Modern,
     );
 
-    let a = tools_list_set(
-        &meta.handle_tools_list_for_session(RequestId::Number(7), MODERN_SESSIONLESS),
-    );
-    let b = tools_list_set(
-        &meta.handle_tools_list_for_session(RequestId::Number(8), MODERN_SESSIONLESS),
-    );
+    let a = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(7),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
+    let b = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(8),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
 
     assert_eq!(
         a, B01_EXPECTED_TOOLS,
@@ -5457,19 +5518,20 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
 async fn b02_a_set_profile_does_not_change_the_connections_tool_list() {
     let meta = meta_with_narrowable_tools().await;
 
-    let before = tools_list_set(
-        &meta.handle_tools_list_for_session(RequestId::Number(1), MODERN_SESSIONLESS),
-    );
+    let before = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(1),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
 
-    let set = meta
-        .handle_tools_call(
-            RequestId::Number(2),
-            "gateway_set_profile",
-            json!({"profile": NARROW_PROFILE}),
-            MODERN_SESSIONLESS,
-            allow_all_ctx(),
-        )
-        .await;
+    let set = Box::pin(meta.handle_tools_call(
+        RequestId::Number(2),
+        "gateway_set_profile",
+        json!({"profile": NARROW_PROFILE}),
+        MODERN_SESSIONLESS,
+        allow_all_ctx(),
+    ))
+    .await;
 
     let refusal = set
         .error
@@ -5481,9 +5543,11 @@ async fn b02_a_set_profile_does_not_change_the_connections_tool_list() {
         refusal.message
     );
 
-    let after = tools_list_set(
-        &meta.handle_tools_list_for_session(RequestId::Number(3), MODERN_SESSIONLESS),
-    );
+    let after = tools_list_set(&meta.handle_tools_list_for_session(
+        RequestId::Number(3),
+        MODERN_SESSIONLESS,
+        CallerStanding::Admin,
+    ));
 
     assert_eq!(
         before, B01_EXPECTED_TOOLS,
@@ -5512,7 +5576,6 @@ const B06_EXPECTED_TOOLS: &[&str] = &["invariance_always", "invariance_denied"];
 /// than strict.
 #[cfg(feature = "spec-preview")]
 #[tokio::test]
-#[allow(clippy::similar_names)]
 async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
     let meta = meta_with_narrowable_tools().await;
 
@@ -5536,17 +5599,19 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
         RequestId::Number(3),
         MATCH_ALL_QUERY,
         legacy_a,
+        CallerStanding::Admin,
     ));
-    let legacy_b_tools = tools_list_set(&meta.handle_tools_list_filtered(
+    let unnarrowed_tools = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(4),
         MATCH_ALL_QUERY,
         legacy_b,
+        CallerStanding::Admin,
     ));
     assert!(
-        legacy_a_tools.len() < legacy_b_tools.len()
-            && legacy_a_tools.iter().all(|t| legacy_b_tools.contains(t)),
+        legacy_a_tools.len() < unnarrowed_tools.len()
+            && legacy_a_tools.iter().all(|t| unnarrowed_tools.contains(t)),
         "premise: '{NARROW_PROFILE}' must strictly narrow the filtered list too, or this \
-         case passes for a query that decides everything: {legacy_a_tools:?} vs {legacy_b_tools:?}"
+         case passes for a query that decides everything: {legacy_a_tools:?} vs {unnarrowed_tools:?}"
     );
 
     meta.handle_initialize(
@@ -5568,11 +5633,13 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
         RequestId::Number(7),
         MATCH_ALL_QUERY,
         MODERN_SESSIONLESS,
+        CallerStanding::Admin,
     ));
     let b = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(8),
         MATCH_ALL_QUERY,
         MODERN_SESSIONLESS,
+        CallerStanding::Admin,
     ));
 
     assert_eq!(
@@ -5681,7 +5748,6 @@ async fn ac_cache_4a_two_backends_do_not_share_one_cache_entry() {
             &json!({"server": server, "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx(),
-            None,
         )
         .await
         .unwrap()
@@ -5715,6 +5781,80 @@ async fn ac_cache_4a_two_backends_do_not_share_one_cache_entry() {
     assert!(
         !other.contains("BODY-FROM-A"),
         "docs_b's reply carries docs_a's body: {other}"
+    );
+}
+
+/// CACHE.4.e — same `{server, tool, arguments}`, two negotiated revisions.
+///
+/// The seam guard in `mik_7213_acs.rs` proves only that `KeyContext::digest`
+/// reads the field. This one drives `invoke_tool`, so it fails if production
+/// stops supplying the caller's negotiated revision as well as if the field
+/// leaves the key. The `None` half pins the other production branch: an
+/// unclassified revision must bypass the cache rather than name a bucket.
+#[tokio::test]
+async fn ac_cache_4e_two_protocol_revisions_do_not_share_one_cache_entry() {
+    // Both revisions below must classify, or the "miss" half would pass for the
+    // wrong reason: an unclassified revision bypasses the cache and the backend
+    // is called twice regardless of how the key is built.
+    for revision in ["2025-11-25", "2025-06-18"] {
+        assert!(
+            crate::protocol::meta::served_revision(revision).is_some(),
+            "{revision} no longer classifies, so this test would stop exercising the cache key"
+        );
+    }
+    let registry = Arc::new(BackendRegistry::new());
+    let (docs, calls) = counting_backend("remote_docs", "SHARED-BODY");
+    let _ = registry.register(docs);
+
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::new(crate::cache::ResponseCache::new())),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+    let invoke = async |revision: Option<&str>| {
+        let mut ctx = allow_all_ctx();
+        ctx.protocol_revision = revision;
+        meta.invoke_tool(
+            &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
+            Some("session-1"),
+            &ctx,
+        )
+        .await
+        .unwrap()
+        .to_string()
+    };
+    let calls_now = || calls.load(std::sync::atomic::Ordering::SeqCst);
+
+    // Hit control. Without it a cache that stores nothing satisfies the miss
+    // half below.
+    let _ = invoke(Some("2025-11-25")).await;
+    let _ = invoke(Some("2025-11-25")).await;
+    assert_eq!(
+        calls_now(),
+        1,
+        "the second identical call must be served from the entry the first stored"
+    );
+
+    // Miss half. Only the negotiated revision differs, so a hit here can only
+    // come from the revision going unkeyed — or from production passing a
+    // constant instead of the caller's value.
+    let _ = invoke(Some("2025-06-18")).await;
+    assert_eq!(
+        calls_now(),
+        2,
+        "a second protocol revision was served a body shaped for the first"
+    );
+
+    // Unclassified revision: neither get nor set, so both of these reach the
+    // backend and neither leaves an entry the keyed callers could collide with.
+    let _ = invoke(None).await;
+    let _ = invoke(None).await;
+    assert_eq!(
+        calls_now(),
+        4,
+        "an unclassified revision must bypass the cache, not name a bucket"
     );
 }
 
@@ -5764,7 +5904,6 @@ async fn ac_cache_4c_two_principals_do_not_share_one_cache_entry() {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &caller,
-            None,
         )
         .await
         .unwrap()
@@ -5824,7 +5963,6 @@ async fn a_reissued_idempotency_key_is_served_from_the_stored_result() {
             &json!({"server": "payments", "tool": "charge", "arguments": {"cents": 500}}),
             Some("session-1"),
             &ctx,
-            None,
         )
         .await
         .expect("the charge must succeed")
@@ -5844,91 +5982,5 @@ async fn a_reissued_idempotency_key_is_served_from_the_stored_result() {
         first.contains("CHARGED-ONCE") && second.contains("CHARGED-ONCE"),
         "both replies must carry the backend's own body, not an empty \
          placeholder: first={first}, second={second}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// BLOCK-1: an interim round must survive the meta-tool success wrapper
-// ---------------------------------------------------------------------------
-
-/// The envelope a backend returns when it stops to ask the client something.
-fn interim_envelope() -> serde_json::Value {
-    json!({
-        "resultType": "input_required",
-        "inputRequests": {
-            "confirm": { "type": "elicitation", "message": "proceed?" }
-        },
-        "requestState": "opaque-continuation-handle",
-        "content": [{ "type": "text", "text": "waiting" }],
-    })
-}
-
-#[test]
-fn block_1_gateway_invoke_interim_fields_reach_the_result() {
-    let content = interim_envelope();
-    let mut response = wrap_tool_success(RequestId::Number(1), &content, false);
-    promote_interim_envelope("gateway_invoke", &content, &mut response);
-
-    let result = response.result.expect("success response carries a result");
-    assert_eq!(
-        result.get("resultType").and_then(serde_json::Value::as_str),
-        Some("input_required"),
-        "a client reads resultType from the top level of the result",
-    );
-    assert_eq!(
-        result
-            .get("requestState")
-            .and_then(serde_json::Value::as_str),
-        Some("opaque-continuation-handle"),
-        "without the handle at the top level the round cannot be continued",
-    );
-    assert!(
-        result
-            .get("inputRequests")
-            .and_then(serde_json::Value::as_object)
-            .is_some_and(|map| map.contains_key("confirm")),
-        "the questions must be readable as JSON, not as characters in a text block",
-    );
-}
-
-#[test]
-fn block_1_gateway_execute_interim_fields_reach_the_result() {
-    let content = interim_envelope();
-    let mut response = wrap_tool_success(RequestId::Number(2), &content, false);
-    promote_interim_envelope("gateway_execute", &content, &mut response);
-
-    let result = response.result.expect("success response carries a result");
-    assert_eq!(
-        result
-            .get("requestState")
-            .and_then(serde_json::Value::as_str),
-        Some("opaque-continuation-handle"),
-        "the single-tool execute path shares the wrapper and the defect",
-    );
-}
-
-#[test]
-fn block_1_promotion_leaves_a_completed_call_alone() {
-    let content = json!({ "resultType": "complete", "content": [] });
-    let mut response = wrap_tool_success(RequestId::Number(3), &content, false);
-    promote_interim_envelope("gateway_invoke", &content, &mut response);
-
-    let result = response.result.expect("success response carries a result");
-    assert!(
-        result.get("resultType").is_none(),
-        "a completed call keeps the response shape it always had",
-    );
-}
-
-#[test]
-fn block_1_promotion_ignores_tools_that_cannot_produce_a_round() {
-    let content = interim_envelope();
-    let mut response = wrap_tool_success(RequestId::Number(4), &content, false);
-    promote_interim_envelope("gateway_list_servers", &content, &mut response);
-
-    let result = response.result.expect("success response carries a result");
-    assert!(
-        result.get("requestState").is_none(),
-        "only the invocation paths mint continuations, so only they promote",
     );
 }

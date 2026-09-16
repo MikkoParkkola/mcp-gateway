@@ -28,7 +28,9 @@ use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+use mcp_gateway::gateway::test_helpers::{
+    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+};
 use mcp_gateway::key_server::oidc::VerifiedIdentity;
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META;
@@ -146,7 +148,10 @@ fn register_backend(state: &Arc<AppState>, url: &str) {
 ///
 /// Enabled deliberately: with the cache off there is no control to test, and
 /// a green result would only prove the gateway does nothing either way.
-fn state_with_idempotency() -> Arc<AppState> {
+/// The `TempDir` is returned because the task store holds its directory for the
+/// life of the service: dropping it here would delete the records under a state
+/// the test is still posting to. Callers bind it for the whole test.
+async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -163,7 +168,22 @@ fn state_with_idempotency() -> Arc<AppState> {
     let meta_mcp = Arc::new(meta);
     let continuation = meta_mcp.continuation();
 
-    Arc::new(AppState {
+    // One registry, shared between the state the router reads and the executor
+    // that publishes: two would send a task's notifications to a listener set
+    // no client here is on.
+    let subscriptions =
+        Arc::new(mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64));
+    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let (tasks, task_executor) = open_runtime(
+        &store_dir.path().join("tasks"),
+        config.tasks.max_workers,
+        StoreLimits::default(),
+        Arc::clone(&subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+
+    let state = Arc::new(AppState {
         session_lifecycle: None,
         env: None,
         meta_mcp,
@@ -192,12 +212,12 @@ fn state_with_idempotency() -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
+        tasks,
+        task_executor,
+        subscriptions,
         continuation,
-    })
+    });
+    (state, store_dir)
 }
 
 /// A client's own direct-route `tools/call` frame.
@@ -265,7 +285,7 @@ fn key(value: &str) -> Value {
 async fn direct_route_suppresses_a_keyed_duplicate() {
     let calls = Arc::new(AtomicUsize::new(0));
     let url = spawn_counting_backend(Arc::clone(&calls)).await;
-    let state = state_with_idempotency();
+    let (state, _store_dir) = state_with_idempotency().await;
     register_backend(&state, &url);
 
     let (first_status, first) = post_direct(&state, call_body(1, Some(key("k1"))), None).await;
@@ -295,7 +315,7 @@ async fn direct_route_suppresses_a_keyed_duplicate() {
 async fn direct_route_does_not_replay_across_callers() {
     let calls = Arc::new(AtomicUsize::new(0));
     let url = spawn_counting_backend(Arc::clone(&calls)).await;
-    let state = state_with_idempotency();
+    let (state, _store_dir) = state_with_idempotency().await;
     register_backend(&state, &url);
 
     let alice = identity("alice", "alice@id.local");
@@ -325,7 +345,7 @@ async fn direct_route_does_not_replay_across_callers() {
 async fn direct_route_without_a_key_calls_the_backend_each_time() {
     let calls = Arc::new(AtomicUsize::new(0));
     let url = spawn_counting_backend(Arc::clone(&calls)).await;
-    let state = state_with_idempotency();
+    let (state, _store_dir) = state_with_idempotency().await;
     register_backend(&state, &url);
 
     let (first_status, first) = post_direct(&state, call_body(1, None), None).await;
@@ -350,7 +370,7 @@ async fn direct_route_without_a_key_calls_the_backend_each_time() {
 async fn direct_route_refuses_a_malformed_key() {
     let calls = Arc::new(AtomicUsize::new(0));
     let url = spawn_counting_backend(Arc::clone(&calls)).await;
-    let state = state_with_idempotency();
+    let (state, _store_dir) = state_with_idempotency().await;
     register_backend(&state, &url);
 
     let (status, body) = post_direct(
@@ -398,7 +418,7 @@ async fn direct_route_refuses_a_malformed_key() {
 async fn direct_route_keeps_the_key_of_a_dispatched_call_that_errored() {
     let calls = Arc::new(AtomicUsize::new(0));
     let url = spawn_erroring_backend(Arc::clone(&calls)).await;
-    let state = state_with_idempotency();
+    let (state, _store_dir) = state_with_idempotency().await;
     register_backend(&state, &url);
 
     let (_, first) = post_direct(&state, call_body(1, Some(key("k-error"))), None).await;

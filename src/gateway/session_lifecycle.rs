@@ -139,16 +139,13 @@ impl SessionLifecycle {
         self.tracked.write().remove(key);
     }
 
-    /// Reclaim every tracked key whose deadline has passed.
+    /// Reclaim every tracked key whose deadline has passed, and report how
+    /// many were reclaimed.
     ///
     /// Each key fires the handlers exactly once and is then forgotten: these
     /// callbacks free things, and a handler that runs twice for one key is its
-    /// own defect.
-    ///
-    /// Returns the number of keys reclaimed. A caller logging a sweep cannot
-    /// get this from `tracked_count()` either side of the call: a live request
-    /// may track a key between the two reads, and the difference is wrong the
-    /// moment it does.
+    /// own defect. The count is the keys removed, not the keys examined, so a
+    /// caller logging a sweep can tell an idle sweep from a busy one.
     pub fn reap(&self, now: u64) -> usize {
         let expired: Vec<String> = {
             let mut tracked = self.tracked.write();

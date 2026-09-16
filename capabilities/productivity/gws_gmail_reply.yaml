@@ -1,3 +1,4 @@
+sha256: a57e3d55921878d0183d2c58561ac9864ca57aa16f33ae9c35923bfd0a2cbea2
 fulcrum: "1.0"
 name: gws_gmail_reply
 description: Reply to a Gmail message within its existing thread. Sends a reply to the specified message.

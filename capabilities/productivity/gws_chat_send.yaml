@@ -1,3 +1,4 @@
+sha256: 466c5de0d0ba903d0f030c899d71779d780ecae60a0f83b46aa13aeaba45e4fa
 fulcrum: "1.0"
 name: gws_chat_send
 description: Send a message in a Google Chat space. Posts a text message to the specified Chat space.

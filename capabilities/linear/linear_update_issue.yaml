@@ -1,3 +1,4 @@
+sha256: 6abe920a7155900a9a35ad6a503abace2ae9152432e6f4a3bd734315c053afd2
 fulcrum: "1.0"
 name: linear_update_issue
 description: "Update an existing Linear issue. Requires issue UUID (use linear_search_issues or linear_get_issue to find it)."
