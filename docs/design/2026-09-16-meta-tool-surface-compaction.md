@@ -447,3 +447,39 @@ this check is one line in the `NFR.PERF.4` restatement naming the standing the
 band is measured at. `tests/public_claims_validation.rs:68-72` counts through
 the caller-less `handle_tools_list`, which applies no standing filter, so the
 ceiling is the number the tests enforce whatever the prose says.
+
+## 7. Ruling on R7: which number the criterion governs
+
+`NFR.PERF.4` is measured at the **admin ceiling** — the count a caller with
+every standing sees. Three facts settle it.
+
+The test already measures that number and cannot measure another one.
+`meta_tool_count` calls `handle_tools_list(RequestId::Number(1))` with no
+caller at all (`tests/public_claims_validation.rs:68-72`), so it counts the
+undropped surface. A criterion restated against the default HTTP band would be
+enforced by a test that never evaluates it.
+
+The ceiling is the honest worst case for the claim the criterion exists to
+protect. The surface-size claim is about context cost, and an admin stdio
+caller pays the ceiling on every request. Quoting the smaller default-HTTP
+number would advertise a cost no privileged session actually incurs, which is
+the drift `benchmarks/public_claims.json` was introduced to stop.
+
+The smaller numbers are real and must be published, not hidden. The
+restatement names its standing explicitly — *N meta-tools at the admin
+ceiling* — and records the default HTTP and stdio bands beside it, so the
+figure cannot be read as a per-caller promise. After the cut that is 11 at the
+ceiling, 7 for a default HTTP caller, 10 for stdio.
+
+### The gate struct loses its `Default`
+
+R2 is a live hazard, not a note: `MetaToolGates` derives `Default`
+(`src/gateway/meta_mcp_tool_defs.rs:574`), and both `governed_meta_tool_names()`
+and `DESTRUCTIVE_META_TOOLS` set every flag to `true` by hand. A later field
+added with `..Default::default()` drops tools out of the allow-list and the
+destructive-confirmation set with no compiler error.
+
+Remove the `Default` derive as part of this change. Every construction site
+then lists every field, and the silent allow-list hole becomes a build
+failure. This is cheaper than the guard test it replaces, because it cannot be
+forgotten.
