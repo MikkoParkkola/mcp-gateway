@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::CONFIRMATION_INPUT_KEY;
 use super::chain_interim::{
     ChainResumePlan, MAX_CHAIN_ROUNDS, classify_step_result, drive_chain, malformed_interim_error,
-    plan_chain_resume, seal_chain_stop,
+    plan_chain_resume, seal_chain_stop, step_retry_for,
 };
 use crate::Result;
 use crate::protocol::continuation::{ContinuationPurpose, ContinuationState, Payload};
@@ -686,5 +686,30 @@ async fn a_chain_resume_is_not_routed_to_the_origin_backend() {
     assert!(
         super::invoke::retry_origin_backend(&state, &retry).is_none(),
         "a chain resume was routed to a backend by name, so the chain driver never ran"
+    );
+}
+
+/// A plan is bounded against the chain it was validated with, and nothing in
+/// the type says the chain handed to `step_retry_for` is that same one. The
+/// driver passes one array to both, so this is a refusal rather than a panic
+/// only while that stays true — pin it, because an index is a crash and a crash
+/// in the driver takes the whole call down.
+#[tokio::test]
+async fn a_step_outside_the_chain_is_refused_rather_than_indexed() {
+    let state = ContinuationState::new();
+    let chain = three_step_chain();
+
+    let payload = chain_payload(&state, &chain, Some(2), 1).await;
+    let token = state.keyring().mint(&payload).expect("mint");
+    let plan: ChainResumePlan = plan_chain_resume(&state, &token, &chain, CALLER, NOW + 1)
+        .await
+        .expect("a resume inside the chain is allowed");
+    assert_eq!(plan.next_step, 2);
+
+    let error = step_retry_for(&state, &plan, &chain[..1], None, NOW + 1)
+        .expect_err("a step past the end of the chain must not be indexed");
+    assert!(
+        error.to_string().contains("outside the chain"),
+        "a step past the end was refused for some other reason: {error}"
     );
 }

@@ -327,15 +327,22 @@ pub fn step_retry_for(
     now: u64,
 ) -> Result<crate::protocol::mrtr::RetryFields> {
     let step = plan.next_step;
-    let tool_ref = chain[step]
-        .get("tool")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            crate::Error::json_rpc(
-                -32602,
-                format!("Chain step {step} has no tool reference to resume"),
-            )
-        })?;
+    // `plan_chain_resume` already refused a step past the end, but it bounded it
+    // against the chain *it* was given. Indexing here would turn a caller that
+    // paired a plan with a shorter chain into a panic, so the same refusal is
+    // spelled out rather than assumed.
+    let pending = chain.get(step).ok_or_else(|| {
+        crate::Error::json_rpc(
+            -32602,
+            format!("Chain step {step} is outside the chain being resumed"),
+        )
+    })?;
+    let tool_ref = pending.get("tool").and_then(Value::as_str).ok_or_else(|| {
+        crate::Error::json_rpc(
+            -32602,
+            format!("Chain step {step} has no tool reference to resume"),
+        )
+    })?;
     let (tool_name, server) = crate::gateway::meta_mcp_helpers::parse_code_mode_tool_ref(tool_ref);
     let server = server.ok_or_else(|| {
         crate::Error::json_rpc(
@@ -343,7 +350,7 @@ pub fn step_retry_for(
             format!("Chain step {step}: tool reference is missing server prefix"),
         )
     })?;
-    let arguments = chain[step]
+    let arguments = pending
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
@@ -364,6 +371,11 @@ pub fn step_retry_for(
 ///
 /// The `jti` is fresh. The one that reached here was spent by the redemption
 /// that produced `plan`, so a copy would fail the ledger on every resume.
+///
+/// `rounds_used` starts at zero because this envelope is `BackendInput`, whose
+/// round budget is the step's own. The chain's tally lives on the chain-scoped
+/// envelope [`seal_chain_stop`] mints, and carrying it here would spend a
+/// step's first ask against rounds the chain already used.
 ///
 /// # Errors
 ///
