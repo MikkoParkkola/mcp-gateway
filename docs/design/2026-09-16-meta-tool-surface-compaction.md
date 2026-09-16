@@ -158,7 +158,8 @@ holds:
 | HTTP, admin API key, config file, webhooks on (the ceiling) | **11** |
 | HTTP, auth off (the shipped default) | **7** |
 | stdio, config file | **10** |
-| Minimum stripped surface | 9 admin / 5 standard |
+| Minimum stripped surface, every gate off | 9 admin / 5 standard |
+| Maximum, every gate configured on (unchanged by this cut) | **17** |
 
 The eleven at the ceiling: `gateway_list_servers`, `gateway_list_tools`,
 `gateway_search_tools`, `gateway_invoke`, `gateway_list_disabled_capabilities`,
@@ -166,7 +167,11 @@ The eleven at the ceiling: `gateway_list_servers`, `gateway_list_tools`,
 `gateway_revive_server`, `gateway_reload_config`, `gateway_reload_capabilities`.
 Arithmetic over the verified roster above.
 
-`NFR.PERF.4` is restated from `14-17` to `5-11`.
+`NFR.PERF.4` is restated as **11 meta-tools at the admin ceiling in the
+shipped default gate configuration**, with the band at **9-17** over every gate
+combination and the 7 / 10 figures published beside it. §7 rules on why these
+are two figures rather than one range; the earlier `5-11` conflated them, and
+five is a standard-standing number that no admin caller ever sees.
 
 Two tools were considered and kept. `gateway_set_state` and
 `gateway_list_disabled_capabilities` both read capability-backend state
@@ -213,7 +218,7 @@ with no structural coupling to the gates.
 
 | Site | Asserts | After the cut |
 |---|---|---|
-| `tests/nfr_perf_4_meta_tool_band.rs:25` | `const BAND: RangeInclusive<usize> = 14..=17` | becomes `5..=11`; the test drives every gate combination (`:64`) and re-derives |
+| `tests/nfr_perf_4_meta_tool_band.rs:25` | `const BAND: RangeInclusive<usize> = 14..=17` | **not a one-line edit — see §4.1** |
 | `tests/nfr_perf_4_meta_tool_band.rs:82` | presence tracks the webhook registry in both directions | unchanged — `webhook_status` is not cut |
 | `src/gateway/meta_mcp_tool_defs_tests.rs:26` | `build_meta_tools` with all gates off is 13 | becomes 9 |
 | `src/gateway/meta_mcp_tool_defs_tests.rs:601` | same, as an exposure-work regression pin | becomes 9 |
@@ -278,6 +283,53 @@ tests/`. No fixture file holds a golden `tools/list` response: `rg -n --hidden
 `benchmarks/token_savings.py` and nothing else — no `.json`, `.yaml` or `.snap`
 golden file.
 
+### 4.1 The band test must loop every gate axis before `BAND` moves
+
+`nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band`
+(`:64`) is universally quantified, but only over three axes — `stats`,
+`webhooks`, `reload` — and it counts through the caller-less
+`handle_tools_list`, which applies no standing filter. Today that is complete:
+those are the only gates the served path varies, because `cost_report` is
+hardcoded `true` at `mod.rs:1606`. The helper's doc comment says so in as many
+words: "Every gate the served path actually reads, at both settings"
+(`tests/nfr_perf_4_meta_tool_band.rs:41`).
+
+After the cut it is no longer complete. Six gate fields control eight tools
+(`stats`, `reload`, `cost_report`, `webhook_status`, `playbooks`, and one
+`profiles` gate carrying three tools). Looping three of six leaves the two new
+gates never exercised, so a `BAND` edit would pass **vacuously** — green
+without evaluating what it claims to. That is worse than a red test.
+
+**The loop takes all six axes before `BAND` is touched.** Six booleans is 64
+combinations, not 256: the axis count is gate *fields*, not gated tools. Each
+iteration builds an in-process `MetaMcp` and serialises one `tools/list`, so 64
+is not a CI cost worth sampling around, and no sampling rule is proposed.
+
+`meta_mcp_with` needs three more wirings, all of which already exist:
+
+| Axis | Wiring | Where |
+|---|---|---|
+| `cost_report` | `with_cost_governance(enforcer, registry)` | `src/gateway/meta_mcp/mod.rs:1189` (consuming builder, `cost-governance` feature) |
+| `playbooks` | `set_playbook_engine(engine)` | `src/gateway/meta_mcp/invoke.rs:3898` |
+| `profiles` | `with_profile_registry(registry)` | `src/gateway/meta_mcp/mod.rs:696` (consuming builder) |
+
+`cost_report`'s gate source is `self.cost_registry.is_some()`
+(`Option<Arc<CostRegistry>>` at `mod.rs:384`, `None` at `:580`), which the
+server sets only when `cost_governance.enabled` (`server/mod.rs:983`). Verified.
+Note this is `cost_registry`, not `cost_tracker` — the tracker at `:370` is
+unconditional and cannot serve as a gate.
+
+With all six looped, the true range at the ceiling standing is **`9..=17`**:
+seventeen with every gate on, nine with every gate off. Write that. A band
+topping out at eleven is false for an operator who configures playbooks,
+profiles, cost governance and `expose_stats_tool`, and the band is the one
+claim in this document that is universally quantified.
+
+The two `#[cfg(feature = "cost-governance")]` wirings mean the `cost_report`
+axis is only exercisable in a build with that feature. Gate the axis on the
+`cfg` rather than dropping it, or the default-feature CI run silently drops
+back to a partial loop — the same vacuous-pass failure in a new costume.
+
 ## 5. The one-change checklist
 
 The repository's own guidance names the tool count as a known drift source and
@@ -291,7 +343,7 @@ or lists the tools, found with `rg -n --hidden --no-ignore "14-17|14–17|14 to
 
 - `src/gateway/meta_mcp_tool_defs.rs:575-583` — `MetaToolGates`: two new fields.
 - `src/gateway/meta_mcp_tool_defs.rs:596-603` — the doc comment stating the
-  `14-17` band and its webhook rationale.
+  `14-17` band and its webhook rationale; becomes `9-17`.
 - `src/gateway/meta_mcp_tool_defs.rs:604-636` — `build_meta_tools`: five pushes
   move behind gates.
 - `src/gateway/meta_mcp/mod.rs:1600-1615` — the gate sources.
@@ -300,10 +352,25 @@ or lists the tools, found with `rg -n --hidden --no-ignore "14-17|14–17|14 to
 - `src/config/mod.rs:1484-1497` — the `expose_stats_tool` flag on
   `MetaMcpConfig`.
 - `src/honest_task_tokens.rs:22` — `README_META_TOOLS`, 17 → 11.
+- `src/gateway/meta_mcp_tool_defs.rs:817-826` (`governed_meta_tool_names`) and
+  `src/gateway/destructive_confirmation.rs:231-238` (`DESTRUCTIVE_META_TOOLS`)
+  — both construct `MetaToolGates` as **exhaustive** struct literals with every
+  flag `true`, so both stop compiling (`E0063`) until the two new fields are
+  added. Add `playbooks: true, profiles: true`. Do **not** silence the error
+  with `..Default::default()`: the derive at `:574` makes that compile and
+  quietly drops five tools out of the operator allow-list's governed set and
+  out of the destructive-confirmation set at once. Per §7, remove the
+  `Default` derive at `:574` in the same change so that door stays shut.
+- `tests/nfr_perf_4_meta_tool_band.rs` — see §4.1. Three new loop axes in
+  `meta_mcp_with` (`:41`) and the loop nest (`:64`) **first**, then `BAND` at
+  `:25` becomes `9..=17`, and the doc comment at `:20-24` restates what the
+  band now quantifies over. Not a one-line constant edit.
 
 ### Machine-readable claims
 
-- `benchmarks/public_claims.json:4` — `meta_tools.minimum`, 14 → 5.
+- `benchmarks/public_claims.json:4` — `meta_tools.minimum`, 14 → 9 (the
+  every-gate-off count at the ceiling standing, matching the band's floor; not
+  5, which is a standard-standing figure — see §7).
 - `benchmarks/public_claims.json:5` — `meta_tools.readme_benchmark`, 17 → 11.
 - `benchmarks/public_claims.json:18` — `readme_token_savings.gateway_tools`,
   17 → 11.
@@ -311,6 +378,13 @@ or lists the tools, found with `rg -n --hidden --no-ignore "14-17|14–17|14 to
 - `benchmarks/token_savings.py:162` — the `GATEWAY_TOOLS` definitions.
 
 ### Prose
+
+Which figure replaces which, per §7: a site stating the **band** (`14-17`)
+takes `9-17`; a site stating the **benchmark or headline count** (`17`) takes
+`11` and gains the words "at the admin ceiling"; a site describing what a
+*user* sees takes `7` (HTTP) or `10` (stdio) with the standing named. A site
+that states a bare number with no standing is the drift this list exists to
+stop — give it one or delete the number.
 
 - `README.md:21` — "a compact meta-surface of 14 to 17 tools".
 - `README.md:37`, `README.md:46`, `README.md:308` — the three Mermaid diagram
@@ -375,22 +449,23 @@ The whole design rests on gates governing listing only. **Falsifier:** `rg -n
 authorization, dispatch or routing path reads the struct.
 **Already run for this document: pass** — those five and nothing else.
 
-### R2 — the two new gate fields narrow the governed sets
+### R2 — a compile error gets silenced instead of fixed
 
 Both `governed_meta_tool_names()`
 (`src/gateway/meta_mcp_tool_defs.rs:817-826`) and `DESTRUCTIVE_META_TOOLS`
 (`src/gateway/destructive_confirmation.rs:231-238`) construct `MetaToolGates`
-with every flag literally `true`. A new field added with `..Default::default()`
-would be `false` there and silently drop five tools out of the operator
-allow-list's governed set and out of the destructive-confirmation set at once.
-`MetaToolGates` derives `Default` (`:574`), so the compiler will not catch it.
+as exhaustive struct literals with every flag `true` and no `..`. Adding two
+fields breaks both with `E0063`, so the compiler does raise the alarm — the
+hazard is how it gets answered. `MetaToolGates` derives `Default` (`:574`), so
+`..Default::default()` compiles, reads like a tidy fix, and silently drops five
+tools out of the operator allow-list's governed set and out of the
+destructive-confirmation set, because `is_exposed` admits anything ungoverned.
 **Falsifier:** `every_builder_contributes_to_the_governed_set`
 (`src/gateway/meta_mcp_tool_defs_tests.rs:639`), with
 `conditionally_enumerated_webhook_status_is_still_governed_by_an_allow_list`
-(`:626`) as the companion. **Pass:** the governed set
-still contains all nineteen names — seventeen built plus the two Code Mode
-tools. **Fail:** any count below nineteen. This is the single most likely way
-to ship a real defect from this change.
+(`:626`) as the companion. **Pass:** the governed set still contains all
+nineteen names — seventeen built plus the two Code Mode tools. **Fail:** any
+count below nineteen.
 
 ### R3 — a shipped artifact calls a cut tool by name and stops working
 
@@ -412,14 +487,20 @@ from a live handler (`:106-107`) and asserts the README (`:351-352`) and
 after every §5 edit. **Fail:** any mismatch. The threshold is the test result,
 not a reading of the diff.
 
-### R5 — the band restatement is arithmetic rather than measurement
+### R5 — the band passes vacuously
 
-The 5-11 figures in §2 are counted off the roster by hand.
-**Falsifier:** `tests/nfr_perf_4_meta_tool_band.rs:64`
-(`nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band`)
-already drives `tools/list` across every gate combination. Set `BAND` to
-`5..=11` and let the test compute. **Pass:** every combination lands inside.
-**Fail:** any outside — in which case the band, not the test, is what is wrong.
+The band figures are counted off the roster by hand, and §4.1 shows the
+existing test cannot check them: three loop axes against six gates means the
+two new gates are never exercised, so a `BAND` edit goes green without
+evaluating anything it claims to.
+**Falsifier:** add the three missing axes first, then run the test **before**
+editing `BAND` and read the failure message — it prints the served count and
+the gate values for the combination that fell outside.
+**Pass:** the failures it prints bracket exactly `9..=17`, one combination at
+nine and one at seventeen. **Fail:** anything else, or a green run, which means
+an axis is not wired to a gate and the loop is still decorative. Do not edit
+`BAND` and the loop in the same step: the whole value of this check is seeing
+the old band break where the arithmetic says it should.
 
 ### R6 — stdio operators lose their only stats view
 
@@ -448,6 +529,10 @@ band is measured at. `tests/public_claims_validation.rs:68-72` counts through
 the caller-less `handle_tools_list`, which applies no standing filter, so the
 ceiling is the number the tests enforce whatever the prose says.
 
+**Settled — see §7.** The release owner has ruled that the criterion is
+measured at the admin ceiling. The consequence for the band's figures is
+recorded below.
+
 ## 7. Ruling on R7: which number the criterion governs
 
 `NFR.PERF.4` is measured at the **admin ceiling** — the count a caller with
@@ -468,8 +553,10 @@ the drift `benchmarks/public_claims.json` was introduced to stop.
 The smaller numbers are real and must be published, not hidden. The
 restatement names its standing explicitly — *N meta-tools at the admin
 ceiling* — and records the default HTTP and stdio bands beside it, so the
-figure cannot be read as a per-caller promise. After the cut that is 11 at the
-ceiling, 7 for a default HTTP caller, 10 for stdio.
+figure cannot be read as a per-caller promise. After the cut that is 11 for an
+admin caller in the shipped default gate configuration, 7 for a default HTTP
+caller, 10 for stdio. Eleven is the top of the shipped-gate band, not a ceiling
+over gate configurations — see the two axes below.
 
 ### The gate struct loses its `Default`
 
@@ -483,3 +570,46 @@ Remove the `Default` derive as part of this change. Every construction site
 then lists every field, and the silent allow-list hole becomes a build
 failure. This is cheaper than the guard test it replaces, because it cannot be
 forgotten.
+
+### The two axes are different kinds of thing
+
+Caller standing is not the operator's to choose: on any deployment an admin
+caller sees the undropped surface whether the operator likes it or not. Gate
+configuration *is* their choice — enabling cost governance is opting into those
+tools. Collapsing both into one range is what produced a number false for
+somebody whichever value was picked. So the document publishes two figures, of
+two different kinds:
+
+| | Figure | Quantification |
+|---|---|---|
+| **The band** | **9-17** | Universal, over both axes: every gate combination at the ceiling standing. Nine with every gate off, seventeen with every gate on. This is what `tests/nfr_perf_4_meta_tool_band.rs` asserts (§4.1). |
+| **The headline** | **11** | The admin ceiling in the **shipped default gate configuration** — no playbooks, no profiles, cost governance off, `expose_stats_tool` off. This is where the cut's value shows up, and it is the number the `NFR.PERF.4` restatement names. |
+| Beside it | **7** | Default HTTP caller (auth off, standard standing), same gate configuration. |
+| Beside it | **10** | Stdio caller (always admin, never a webhook registry), same gate configuration. |
+
+Each of the last three is labelled with its standing wherever it is published.
+None of them is presented as the range.
+
+### The cut does not lower the maximum
+
+State this plainly wherever the new figure appears, because the first reader of
+"surface compacted to 11" will otherwise believe something false: **nothing is
+deleted by this change.** All seventeen tools remain built, dispatchable and
+listable. An operator who configures playbooks, routing profiles, cost
+governance and `expose_stats_tool` is served all seventeen, exactly as today.
+
+The value of the cut is entirely in the default. It moves five tools from
+"listed for everyone" to "listed for the operators who asked for them", which
+is why the band's top does not move and the headline's does.
+
+### Follow-through on removing the `Default` derive
+
+Removing the derive is right, and it is cheaper than the paragraph above
+suggests, because the two sites named there are **exhaustive** struct literals
+with no `..`: `governed_meta_tool_names()`
+(`src/gateway/meta_mcp_tool_defs.rs:817-826`) and `DESTRUCTIVE_META_TOOLS`
+(`src/gateway/destructive_confirmation.rs:231-238`) already fail to compile
+(`E0063`) when a field is added. The derive is what would let a future author
+answer that error with `..Default::default()` instead of the two new fields.
+Dropping it closes that door permanently. Check first that nothing else relies
+on it: `rg -n "MetaToolGates::default|MetaToolGates \{ *\.\." --type rust`.
