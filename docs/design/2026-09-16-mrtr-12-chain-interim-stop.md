@@ -303,13 +303,29 @@ that path rather than grow a second one.
   `caller.retry.input_responses` verbatim. **Successors get `NO_RETRY`**, which
   makes "answers apply to the pending step only" structural rather than
   asserted.
-- `seal_chain_stop` carries `expires_at` from the *chain* payload on a re-ask,
-  and its `backend_request_state` parameter is dropped — the only caller passes
-  the field back unchanged, so it is carried like every other field.
-- The round's own hold is closed when the next one is sealed, not when the
-  resume is planned: `redeem_retry` still needs it open.
+- `seal_chain_stop` carries `expires_at` from the *chain* payload on **every**
+  seal after the first stop, not only on a re-ask of the same step: the deadline
+  belongs to the exchange, so a chain that stops at two distinct steps must not
+  extend it at the second. Its `backend_request_state` parameter is dropped —
+  the only caller passes the field back unchanged, so it is carried like every
+  other field.
+- **`hold_key` is carried into the minted step envelope and nowhere else.**
+  `redeem_retry` needs the hold open at its own route check
+  (`invoke.rs:716`) and then closes it itself (`invoke.rs:747`) before the step
+  runs. Every later stop therefore opens its own fresh hold through the ordinary
+  mint. Carrying the key past redemption would seal a successor against a hold
+  already `Gone`, and the next resume would be refused.
 - A seal that would reach `MAX_CHAIN_ROUNDS` refuses with the cap's own named
-  message instead of minting.
+  message instead of minting. `rounds_used` is read from the plan, never from
+  the fresh mint.
+- The minted step envelope, field by field: **fresh `jti`** (the chain payload's
+  is spent at plan time, so a copy would fail the ledger on every resume); the
+  caller's principal fingerprint; `backend_id` from the chain payload, which is
+  what `retry_origin_backend` routes on; `next_step` cleared; `hold_key`,
+  `expires_at`, `backend_request_state` carried.
+- `NO_RETRY` means a fully empty `RetryFields` — `request_state` *and*
+  `input_responses` cleared. Leaving the answers in place would forward them to
+  every successor, which is the leak this bullet claims to close.
 
 **Rejected:** dispatching the pending step through `accounted_dispatch` with a
 hand-built `OutboundRetry`, the way the input bridge does. It reaches the
@@ -318,11 +334,28 @@ backend with the right fields and skips the firewall and authorization that
 
 ### What pins it
 
-Three LIVE rows against a stub transport, plus one driver row:
+Seven rows. Three LIVE against a stub transport, four against the driver:
 
 - a resume applies the answers to the pending step and not to its successor;
-- exactly one redeemable handle exists per stop;
+- exactly one redeemable handle exists per stop — read as "the stop response
+  carries exactly one `requestState` and no other envelope token", since at a
+  stop two unspent envelopes name the same hold;
 - the successor did not execute;
-- the deadline of a re-ask is the first stop's, not the re-ask's.
+- the deadline of a re-ask is the first stop's, not the re-ask's;
+- a chain that stops at two *distinct* steps keeps the first stop's deadline at
+  the second, and the answers reach the second step;
+- two resumes in succession report `rounds_used = 2` at the second seal, and a
+  seal at `MAX_CHAIN_ROUNDS - 1` refuses with the cap's named message;
+- the same chain handle presented twice is refused on the second presentation.
 
 The first is the falsifier: written against the current code it must fail.
+
+### Review of this revision (2026-09-16)
+
+Both seats returned SHIP-WITH-FIXES. The fixes above are theirs, with one
+correction: both ranked "the hold leaks, because it is closed only at the next
+seal" as the top finding, reasoning statically from the design text — one of
+them recorded that it could not read `redeem_retry`'s tail. It closes the hold
+itself (`invoke.rs:747`), so a resume routed through it frees the slot before
+the step runs, and it is the design's own carry-the-key-onward rule that was
+wrong. That rule is now inverted above.
