@@ -53,6 +53,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A backend whose SSE response opens with a keepalive frame is no longer a
+  transport error** (GH #563). Servers built on `rmcp` with its default
+  `sse_retry` prepend a priming frame -- a `data:` line with nothing after it,
+  plus `id:` and `retry:` -- to every POST response stream. 3.5.x took the
+  first `data:` line verbatim and failed the whole call with
+  `Failed to parse SSE data: EOF while parsing a value at line 1 column 0`, so
+  no such backend could be used at all. The response stream is now decoded
+  frame by frame: a block whose joined `data` is empty carries no event, and
+  fields that are neither `data` nor `event` are ignored, so the exchange
+  resolves on the frame that actually holds the JSON-RPC response.
+
 - **Competitive shadow-scan exports now stay portable and loadable.** The
   generated grep rules use the system `grep -E` on macOS and Linux, while the
   Nginx example preserves quoted and escaped log values.
