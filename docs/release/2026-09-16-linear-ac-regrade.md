@@ -72,7 +72,7 @@ claim should cite this type as evidence of a working lifecycle.
 
 ## A status note whose first sentence contradicts its own body
 
-Recorded while looking for work on the core blockers. The `NFR.PERF.1` note in
+Recorded while looking for work on the core blockers. The `NFR.WORKLOAD.1` note in
 `RELEASE-4.0.0-scope-status.json` opens with "the harness exists, is unmerged,
 and has **NEVER BEEN EXECUTED**: zero measured runs, so every measurement
 conjunct is harness-only", and grades all six conjuncts on that basis. Further
@@ -87,6 +87,75 @@ the part a reader quotes. Anyone skimming for "what is the state of the
 workload harness" gets "zero measured runs" from a note that goes on to report
 what those runs measured.
 
+The row is `NFR.WORKLOAD.1`. An earlier draft of this section called it
+`NFR.PERF.1`, which is a different row the note merely cites — `NFR.PERF.1`'s
+absolute thresholds live in `tests/load/k6_gateway.js` and are untouched by the
+workload harness.
+
 The current state, from the note's own body: A/B/C grade INCONCLUSIVE at exit 2
 because B and C spreads exceed the contract margins, and D/E are blocked on an
 owner ruling rather than on measurement. Neither of those is "no runs exist".
+
+## The whole scope, re-graded: 27 of 54
+
+All nine in-scope tickets have now been re-graded against AC text pulled live
+from Linear, at `a768d218`, read-only. MIK-6865's four criteria stay parked by
+decision. This is the first count of the release scope that grades every ticket
+against its own wording rather than against a requirement-document sample.
+
+| ticket | baseline 2026-09-12 | re-graded | direction |
+|---|---|---|---|
+| MIK-7212 MRTR | ~0-1 of 9 | **3 of 9** | up, mostly baseline error |
+| MIK-7213 CACHE | 2 of 8 | **5 of 8** | up, real |
+| MIK-7214 HDR | 3 of 6 | **5 of 6** | up, via a different PR than claimed |
+| MIK-7215 SESSION | ~2.5 of 7 | **3 of 7** | up slightly |
+| MIK-7217 DISCOVER | 1 of 8 | **4 of 7** | up, real |
+| MIK-7246 CONF | 2 of 4 | **4 of 4** | up, complete |
+| MIK-7272 SPEC | 4 of 4 | **3 of 4** | **down** |
+| MIK-7320 FIXTURE | 3 of 3 | **0 of 3** | **down** |
+| MIK-7116 MIN | 0 of 6 | **0 of 6** | flat, reasoning corrected |
+
+**27 of 54 met, 27 open.** MIK-7217's denominator is 7 rather than 8 because
+`DISCOVER.2` names five separate repositories and is not gradable here.
+
+Read the +9 carefully. Much of it is the baseline having missed work that was
+already merged when it was written, not work done since — MIK-7212's largest
+single move, `MRTR.7`, was graded FAIL on the claim of "zero production call
+sites" that was already false on the baseline's own date. Two tickets moved
+**down** on closer reading, and one of those, MIK-7320, went from a clean 3 of 3
+to 0 of 3: its passing state depends on fixture files being committed rather
+than on any code guard, and a skip branch that would have made the test honest
+was added and then deliberately reverted.
+
+Three grades stay INCONCLUSIVE pending a run, because the re-grade was read-only
+and the build lock was held: MIK-7320's `FIXTURE.3`, and the suite-green half of
+MIK-7214's `HDR.6`.
+
+## Closing comments that cite evidence which is not there
+
+The relabelling named at the top of this file is not the only way a ticket has
+been made to read as closed. Two more patterns turned up, both verified:
+
+- **MIK-7214's "20/20 rows MET"** cites line numbers that do not match its own
+  cited source tree, and a branch, `fix/mrtr2-continuation-handle`, that is
+  still not an ancestor of HEAD or main. The functionality is genuinely present
+  — it arrived via an unrelated PR. The claim is right by accident.
+- **MIK-7116's "13 tests"** is 11. The same ticket's baseline grade of "nothing
+  exists" was also wrong on the day it was written: `tenant_guard.rs` and its
+  test file predate it, and the grep that found nothing simply did not match
+  `TenantGuard`.
+
+The common failure is grading from a comment rather than from the cited
+artefact. Every row above was graded by reading the artefact.
+
+## Two flags outside any acceptance criterion
+
+`docs/OWASP_AGENTIC_AI_COMPLIANCE.md:24` marks ASI09 **COVERED** and cites
+`destructive_confirmation.rs`, whose own line 5 says it is "courtesy, not a
+security control". A shipped compliance claim rests on a module that disclaims
+the property. Nobody has recorded accepting that.
+
+The dead-stdout defect is independently confirmed: `send_frame`
+(`src/gateway/server/mod.rs:89`) does `drop(writer.send(frame).await)`, and
+nothing stops the reader admitting calls whose responses are then discarded. No
+delivery-reliability criterion should be graded MET while it stands.
