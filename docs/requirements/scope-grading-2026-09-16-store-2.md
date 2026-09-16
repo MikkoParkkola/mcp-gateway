@@ -17,7 +17,7 @@ graded below against a test body that was read, not against a test name:
 |---|---|---|
 | Revoke during refresh | `s08_a_stale_snapshot_cannot_land_after_a_durable_revoke` | `src/personal_accounts/fence_tests.rs:105` — the snapshot is taken before the provider call "exactly as a refresh would"; after a durable revoke the response returns `RefreshOutcome::Rejected`, and `reopen` still reports `Revoked` |
 | Restart during token replacement | `s10_a_crash_between_candidate_sync_and_manifest_replacement_keeps_the_prior_grant` | `src/personal_accounts/crash_tests.rs:144` — a real child process dies at the named `CommitCheckpoint`, between candidate sync and authority move; the test first proves the window was real (candidate count rose), then requires the prior generation or an explicit failure, never the uncommitted candidate |
-| Old task, cache or connection cannot restore a revoked grant | `s13_restored_pre_revoke_ciphertext_stays_refused_across_restart` | `src/personal_accounts/crash_tests.rs:182` — the exact pre-revoke bytes are written back to the exact accepted path; lookup across a real restart still answers `revoked` |
+| Old task, cache or connection cannot restore a revoked grant | **uncovered** — nearest is `s13_restored_pre_revoke_ciphertext_stays_refused_across_restart` | `src/personal_accounts/crash_tests.rs:182` — proves restored *ciphertext at rest* is refused. The conjunct names three live holders, and a byte sequence on disk is none of them. No test retires a running refresh task, an in-memory cache entry or an open connection and then asserts it cannot use or reinstate the grant |
 | Re-consent yields a usable new grant without reviving the old one | `s09_a_late_refresh_cannot_overwrite_a_newer_generation` | `src/personal_accounts/fence_tests.rs:132` — re-consent mints a new generation over the tombstone and is `Connected`; the refresh staged against the retired generation is `Rejected`; `reopen` returns the new generation unchanged |
 
 Two of the four carry their own positive control, which is what makes them
@@ -27,9 +27,21 @@ generation and not a store that refuses everything. `s10` asserts the candidate
 count rose before asserting the outcome, so the crash window is demonstrated
 rather than assumed.
 
-Grade: **MET**, test-backed. The evidence is four test bodies at four cited
-lines, not a status string edited into a JSON file and read back by the script
-that checks it.
+Grade: **PARTIAL**, unchanged — but for a different and much smaller reason than
+the one on record. Three of four conjuncts are covered by test bodies at cited
+lines. The fourth is genuinely open.
+
+What remains is now one specified test rather than four open questions: at the
+service or lease-runtime layer, hold a live refresh task and a populated
+credential cache across a revoke, then assert both are retired and that neither
+can use nor reinstate the grant under the re-consented generation. The cheapest
+falsifier is the usual one — make the retirement path a no-op and confirm the new
+test goes red.
+
+That distinction came from an independent reviewer and it is the finding of this
+re-grade. The persistence layer refuses a revoked grant four ways; the question
+the criterion actually asks is about holders that are still running, and the
+store boundary cannot answer it.
 
 The transferable finding is about the earlier grade, not this one. A criterion
 was graded absent from a search scoped to the two files whose names matched the
