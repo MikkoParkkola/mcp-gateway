@@ -50,3 +50,40 @@ of the layer that implements it — `commit`, `fence`, `candidate`, `manifest` �
 and a search built from the requirement's words cannot reach it. Grade against
 the layer that decides the behaviour, and record the scope any absence claim was
 made under, because that scope is the claim's real content.
+
+## Review outcome
+
+Two independent reviewers, neither of them the author of this grade.
+
+The first rejected the fourth row of the table above and was right: `s13` proves
+restored ciphertext at rest is refused, which is a claim about bytes on disk and
+not about a running holder. That finding is already folded into the table.
+
+The second accepted that reading and added two the first one missed, both about
+the conjunct this document had marked covered most confidently:
+
+**`s10`'s oracle is a disjunction.** It accepts the prior generation *or* an
+explicit failure. Isolation, not availability, is what the criterion demands, so
+the disjunction is legitimate in principle — but as written, a startup that fails
+for a wholly unrelated reason also satisfies it. The failure arm has to be pinned
+to the specific typed recovery failure for an uncommitted candidate, with a
+healthy-restart control asserting the prior generation still loads. Until it is,
+conjunct 2 can pass for a reason that has nothing to do with token replacement.
+
+**One crash point is not the replacement window.** `s10` dies between candidate
+sync and manifest replacement. Nothing covers a crash *after* the manifest move,
+where the only admissible post-restart state is the new generation. If the
+manifest move is genuinely the sole commit point, that equivalence-class argument
+belongs in the record; otherwise the crash harness should be driven at each named
+`CommitCheckpoint` rather than at one of them.
+
+Revised position: conjunct 1 and conjunct 4 are covered. Conjunct 2 is covered at
+one crash point with an oracle loose enough to pass on an unrelated fault.
+Conjunct 3 is uncovered. The criterion stays **PARTIAL**, and the work it needs is
+three specified tests rather than one.
+
+The pattern is worth keeping. This document began by claiming MET on four
+conjuncts. One reviewer removed a row; the other weakened a row the first had
+accepted. A grade written by the same agent that wrote the tests it grades is a
+self-assessment, and the two places it was wrong were both places it felt most
+certain.
