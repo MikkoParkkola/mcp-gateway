@@ -1539,10 +1539,14 @@ pub struct BackendConfig {
     /// Secret injection rules.
     #[serde(default)]
     pub secrets: Vec<crate::secret_injection::CredentialRule>,
-    /// Pass-through mode: skip gateway tool policy and input sanitization.
+    /// Pass-through mode: skip input sanitization on this backend's
+    /// `tools/call` requests.
     ///
-    /// **Security warning**: enabling this bypasses `tool_policy.check()`,
-    /// `validate_tool_name()`, and `sanitize_json_value()`. Only set this for
+    /// **Security warning**: enabling this forwards caller-supplied arguments
+    /// to the backend without `sanitize_json_value()`. It is narrower than the
+    /// name suggests — `apply_backend_tool_call_security` gates only
+    /// sanitization on this flag, so tool-name validation, the tool-policy
+    /// authorization check and the firewall still run. Only set this for
     /// fully-trusted internal backends. Default: `false`.
     #[serde(default)]
     pub passthrough: bool,
