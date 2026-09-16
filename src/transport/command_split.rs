@@ -152,8 +152,7 @@ mod tests {
 
     #[test]
     fn unix_rules_keep_quoted_macos_path_with_spaces() {
-        let parts =
-            split_command_unix(r#""/Applications/My App/bin/tool" --flag"#).expect("split");
+        let parts = split_command_unix(r#""/Applications/My App/bin/tool" --flag"#).expect("split");
         assert_eq!(
             parts,
             vec![
@@ -183,6 +182,9 @@ mod tests {
     #[test]
     fn host_split_command_selects_a_rule_set() {
         let parts = split_command("npx -y pkg").expect("split");
-        assert_eq!(parts, vec!["npx".to_string(), "-y".to_string(), "pkg".to_string()]);
+        assert_eq!(
+            parts,
+            vec!["npx".to_string(), "-y".to_string(), "pkg".to_string()]
+        );
     }
 }

@@ -473,7 +473,9 @@ fn check_stdio_backend(name: &str, transport: &TransportConfig) -> Option<CheckR
             return Some(
                 CheckResult::fail(label, "empty command")
                     .with_category("backend_stdio")
-                    .with_hint("Set backends.*.command to an executable plus arguments".to_string()),
+                    .with_hint(
+                        "Set backends.*.command to an executable plus arguments".to_string(),
+                    ),
             );
         }
         Some(parts) => parts,
