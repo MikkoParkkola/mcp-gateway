@@ -3,7 +3,12 @@
 Scope: diagnosis of the `NFR.WORKLOAD.1` A/B/C p50 FAIL recorded in
 `01-compile-quiet-rerun.md` (commit `4f2b498d`). **No fix is proposed or
 implemented here.** The run-level verdict is still VOID exit 3 on D1 admission,
-an owner decision that this file does not touch.
+an owner decision that this file does not touch. **Nothing in this file is a
+graded result.** The confirmatory probe in §3 failed its own closing quiet gate
+(`void: after: load 9.09 >= 8.00`, exit 3) and was not retried, so its numbers
+are diagnostic evidence only and must not be quoted as a graded run. The free
+ladder in §1 is read out of the graded run's summaries; it re-reads that run, it
+does not regrade it.
 
 ## Verdict
 
@@ -270,6 +275,47 @@ That is the shape the ladder saw: `tools/list` (16 kB, one new scan) pays
 ~252 µs, `tools/call` (271 B, one scan becoming two) pays ~34 µs, and
 `initialize` and `/health`, which never enter the gate, pay nothing.
 
+### 2.5 The two scans are not interchangeable, and only one of them is new
+
+Raised by the release-line review of this finding (`work/v4-audit-adjudication`,
+`docs/release/2026-09-16-double-response-scan.md`, commit `7bfff9d9`), which
+reproduced the double scan on the shipping line and pointed out that
+`shape_modern_response` runs *between* the two call sites — making the second
+scan a legitimate re-check after a mutation, and the **first** the removal
+candidate. On this branch the same ordering holds (`handlers.rs:1822` shaping,
+`:1824` finalizer). Three things qualify it:
+
+- **The shaping is era-gated, and the graded cells are not in that era.**
+  `shape_modern_response` runs only `if is_modern` (`handlers.rs:1822`), and
+  `is_modern` is `era == Era::Modern` (`:808`). The runner gives A/B/C
+  `LEGACY_PROTOCOL` and only D/E `MODERN_PROTOCOL`
+  (`benchmarks/workload/run_workload.sh:76`). So on **C — the cell that produced
+  every number in this file — nothing mutates between the two scans**; the second
+  inspects a byte-identical payload. The re-check-after-mutation reading is
+  correct, but it applies to D/E, not to the measurement.
+- **The policies differ, so neither scan can stand in for the other.** The first
+  is `ResponseMutationPolicy::Redact` (`handlers.rs:1638`): it mutates in place
+  and takes no clone (`response.rs:38` clones only when the policy is not
+  `Redact`). The second is `PreserveInputRequired` (`handlers.rs:1837-1838`): it
+  clones, and it cannot redact — it can only detect and refuse. Dropping the
+  first would remove the only redacting pass; dropping the second would remove
+  the post-shaping re-check *and* the clone.
+- **The first scan's decision is already consumed downstream.** A block there is
+  not an early return — the code says so at `handlers.rs:1666-1669` — it
+  substitutes a `delivery_refusal_error` that then flows through shaping and
+  through the second scan.
+
+Scope also differs, and it is what makes the second scan the expensive one: the
+first lives inside the meta `tools/call` arm, while the finalizer is
+unconditional for every method, which is why `tools/list` goes from zero scans to
+one and pays ~213 µs for it.
+
+**What is still not answered:** whether anything between the two call sites
+depends on the first scan's *redaction* — a consumer of the mutated payload
+before the finalizer. That decides whether the pair is load-bearing or whether
+one post-shaping `Redact` pass would be both cheaper and strictly safer. Not
+investigated here, and it is a correctness question, not a latency one.
+
 ## 3. Confirmatory ablation — turn the scan off and the gap mostly goes away
 
 ### Method
@@ -406,6 +452,8 @@ C−B columns are a cross-check. Rep 2 is used for the first and not the second.
 | It appeared at 3.5.1 → 4.0.0, not 3.5.0 → 3.5.1 | **Proven** — A and B agree to 0.4 µs on both regressed metrics |
 | The responsible code is the 4.0.0 response-firewall pass reached via `finalize_response_for_delivery` | **Proven on `tools/list`** (85% of the effect ablated, reproducing to 1 µs); **strongly supported on `tools/call`** (62% ablated, right direction both reps, but only ~2× this box's noise floor) |
 | `tools/call` is scanned **twice** per request at 4.0.0 | **Proven by construction** — two `check_response_artifact` call sites, `handlers.rs:1633` (`Redact`) and `handlers.rs:1824` (`PreserveInputRequired`), both on `ResponseArtifactKind::FinalResponse`; the enclosing arm at 1633 was read and is the meta `tools/call` arm (`handlers.rs:1196`, `call_response` bound at 1600-1606) |
+| On the graded cells nothing mutates the payload between the two scans | **Proven by construction** — `shape_modern_response` is gated on `is_modern` (`handlers.rs:1822`, `:808`) and the runner gives A/B/C `LEGACY_PROTOCOL` (`run_workload.sh:76`); on D/E it does run between them (§2.5) |
+| The two scans are not interchangeable | **Proven by construction** — first is `Redact` and clones nothing, second is `PreserveInputRequired` and cannot redact (`response.rs:38`, `:118-123`); first is inside the `tools/call` arm, second is unconditional for every method (§2.5) |
 | B scans `tools/call` exactly once, not zero times | **Proven by construction** — `backend_tool_targets_for_call` returns one target for `gateway_invoke` (`authorization.rs:19-39`) |
 | `tools/list` was never scanned on the meta path at 3.5.1 | **Proven** — no `check_response` caller covers it at B; `response_security.rs` and `firewall/response.rs` do not exist at B |
 | A full deep clone of the result is taken to support an O(1) two-key comparison | **Proven by construction** — `response.rs:38` vs `response.rs:112-125` |
@@ -423,9 +471,10 @@ C−B columns are a cross-check. Rep 2 is used for the first and not the second.
   correctness, security consequence or release risk. Note that §2.4 says the
   clone is *not* where the graded metric's time mostly goes — on a 271-byte
   `tools/call` result the per-byte term is ~6.9 µs of ~21 µs — so the cheapest
-  fix to reason about is not necessarily the one that moves p50. Whether the
-  second pass is redundant or deliberately defence-in-depth is a question for the
-  owner of that code, not an inference from a latency number.
+  fix to reason about is not necessarily the one that moves p50. §2.5 says which
+  pass is which, and neither is simply redundant: the first redacts, the second
+  re-checks after an era-gated mutation. Which one a fix should touch is a
+  question for the owner of that code, not an inference from a latency number.
 - **No verdict change.** `01-compile-quiet-rerun.md` stands: scoped A/B/C p50
   FAIL, run-level VOID exit 3 on D1 admission. This file explains the FAIL; it
   does not regrade it.
