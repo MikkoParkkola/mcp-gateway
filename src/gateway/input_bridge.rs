@@ -217,6 +217,14 @@ pub enum BridgeError {
         /// Why the round was refused, as reported by the invoker.
         message: String,
     },
+    /// The round's client-visible batch was refused by policy before it was sent.
+    ///
+    /// Carries no message on purpose: the caller restores it to
+    /// [`crate::Error::ResponseFirewallRefused`], whose typed arm builds the
+    /// delivery-refusal projection. Flattening a policy refusal into a generic
+    /// bridge failure loses that projection and reports it as an ordinary
+    /// client-attributable error instead.
+    ChallengeRefused,
     /// A bridged retry round reached the backend and did not come back.
     ///
     /// Carries the reason as text rather than the error itself: this type is
@@ -356,6 +364,27 @@ pub trait BackendInvoker: Send + Sync {
     async fn invoke(&self, retry_params: Value) -> Result<Value, BridgeError>;
 }
 
+/// The policy end: admit one round's client-visible batch, or refuse it.
+///
+/// A seam rather than a direct firewall call because the bridge is the protocol
+/// layer and owns no policy. It is consulted inside the round loop, before
+/// every `ask`: rounds 2..N carry prompts built from a backend result this
+/// bridge has not yet seen, so a gate placed before [`InputBridge::run`] would
+/// inspect the first round and admit every later one unread.
+pub trait ChallengeGate: Send + Sync {
+    /// Admit this batch, or refuse the exchange.
+    fn admit(&self, challenge: &Value) -> Result<(), BridgeError>;
+}
+
+/// Admits every batch: the bridge's behaviour when no policy is configured.
+pub struct OpenChallengeGate;
+
+impl ChallengeGate for OpenChallengeGate {
+    fn admit(&self, _challenge: &Value) -> Result<(), BridgeError> {
+        Ok(())
+    }
+}
+
 /// Where the bridge's counters go.
 ///
 /// A seam rather than a metrics call because the requirement is about what the
@@ -370,6 +399,8 @@ pub trait BridgeObserver: Send + Sync {
 pub struct InputBridge<'a> {
     /// The client to ask.
     pub channel: &'a dyn ClientChannel,
+    /// The policy consulted before each round's batch is sent.
+    pub gate: &'a dyn ChallengeGate,
     /// The backend to retry.
     pub backend: &'a dyn BackendInvoker,
     /// Where the counters go.
@@ -416,6 +447,7 @@ impl InputBridge<'_> {
                 return Err(BridgeError::RequestBudgetExhausted);
             }
             self.observe(&interim);
+            self.gate.admit(&Self::challenge(&prompts))?;
             let answers = self.ask(session_id, prompts, started).await?;
             let retry = crate::protocol::mrtr::Bridge::retry_params(&interim, answers);
             let result = self.backend.invoke(retry).await?;
@@ -481,6 +513,28 @@ impl InputBridge<'_> {
             kind,
             params: request.get("params").cloned(),
         })
+    }
+
+    /// The round's batch as the client will see it, and nothing else.
+    ///
+    /// Built from the planned prompts rather than from the interim result so
+    /// the artifact the gate inspects is the artifact that goes on the wire.
+    /// The backend's opaque `requestState` never reaches a prompt — `prompt`
+    /// copies the `params` member alone — so it is neither scanned nor
+    /// delivered, and a canary carried only there stays invisible to both.
+    fn challenge(prompts: &[Prompt]) -> Value {
+        Value::Array(
+            prompts
+                .iter()
+                .map(|prompt| {
+                    serde_json::json!({
+                        "key": prompt.key,
+                        "method": prompt.kind.method(),
+                        "params": prompt.params,
+                    })
+                })
+                .collect(),
+        )
     }
 
     /// Put one round's prompts to the client and collect what came back.

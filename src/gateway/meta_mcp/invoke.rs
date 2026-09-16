@@ -866,6 +866,31 @@ struct BridgeDispatcher<'a> {
     routing_profile: &'a str,
 }
 
+impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
+    /// Scans the batch as the backend composed it, against the backend's own
+    /// target, and refuses the exchange rather than rewriting the question:
+    /// `enforce_firewall_challenge` runs `Immutable`, so a redaction is not
+    /// one of the outcomes available here.
+    fn admit(
+        &self,
+        challenge: &Value,
+    ) -> std::result::Result<(), crate::gateway::input_bridge::BridgeError> {
+        let targets = [crate::security::response_policy::ResponsePolicyTarget {
+            server: self.server.to_owned(),
+            tool: self.tool.to_owned(),
+        }];
+        let correlation = crate::security::response_policy::ResponseCorrelation {
+            session_id: self.session_id.unwrap_or_default(),
+            caller: self.api_key_name.unwrap_or("anonymous"),
+            external_server: "gateway",
+            external_tool: "gateway_invoke",
+        };
+        self.meta
+            .enforce_firewall_challenge(challenge, &targets, &correlation)
+            .map_err(|_| crate::gateway::input_bridge::BridgeError::ChallengeRefused)
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
     async fn invoke(
@@ -964,6 +989,7 @@ async fn run_input_bridge(
     let bridge = crate::gateway::input_bridge::InputBridge {
         channel,
         backend: &dispatcher,
+        gate: &dispatcher,
         observer: &observer,
         bounds: crate::gateway::input_bridge::BridgeBounds::DEFAULT,
     };
@@ -2214,6 +2240,20 @@ impl MetaMcp {
                     error: crate::gateway::input_bridge::DeliveryError::NoSession,
                     ..
                 }) => {}
+                // A policy refusal keeps its type across the bridge boundary.
+                // `error_response_preserving_status` carries a dedicated
+                // `ResponseFirewallRefused` arm that builds the delivery-refusal
+                // projection; flattening it into the -32003 below would report
+                // the gateway's own refusal as a client-attributable error and
+                // never reach that arm. Nothing was dispatched, so the key is
+                // released by falling through without settling it.
+                Err(crate::gateway::input_bridge::BridgeError::ChallengeRefused) => {
+                    warn!(
+                        server,
+                        tool, trace_id, "Bridged challenge refused by the response firewall"
+                    );
+                    return Err(Error::ResponseFirewallRefused);
+                }
                 Err(error) => {
                     // A round that reached the backend leaves the key settled,
                     // not released. `BackendFailed` is the one bridge error

@@ -6389,6 +6389,11 @@ fn every_pre_dispatch_failure_releases_the_bridged_idempotency_key() {
         crate::Error::BackendNotFound("no such backend".into()),
         crate::Error::ToolNotFound("no such tool".into()),
         crate::Error::TransportConnect("connection refused".into()),
+        // The challenge gate's refusal. It is the only thing in the tree that
+        // raises this, and it refuses a round's batch before the question is
+        // put to anyone and before the retry is dispatched, so the round it
+        // ends carries no side effect to protect.
+        crate::Error::ResponseFirewallRefused,
     ] {
         assert!(
             matches!(
