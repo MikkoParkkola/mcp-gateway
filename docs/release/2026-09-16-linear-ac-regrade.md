@@ -145,6 +145,42 @@ unconditionally when the fixture is missing, so it is green because four golden
 files are committed, not because a guard holds — and the skip branch that would
 have made that honest was added in `9c8fa8b3` and reverted in `ec633332`.
 
+### The all-features suite, run: 6358 passed, 29 ignored, 1 failed
+
+The run both criteria name has now happened at `f1fe81ec`, on macOS, 110 test
+binaries. One test fails, and it fails by design on every Apple target:
+
+```
+task_upstream_recovery_sdk::a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
+tests/task_upstream_recovery_sdk/pins.rs:94 — assert!(cfg!(all(unix, not(target_vendor = "apple"))))
+```
+
+The reasoning behind it is sound and documented at `pins.rs:81-88`: the child
+process is handed a temporary certificate authority through `SSL_CERT_FILE`,
+which the platform verifier only consults on its Unix-non-Apple branch. On Apple
+targets the verifier asks the Security framework and ignores the variable, so
+rather than assert an override the dependency does not implement, the test says
+so and stops. The author explicitly declined a production test bypass.
+
+The consequence was not weighed, though. `require_supported_trust_override`
+landed in `6b843ab2` on 2026-09-08. From that commit forward,
+`cargo test --all-features --no-fail-fast` cannot be green on a Mac — which is
+the primary development platform and the literal wording of `FIXTURE.3`. The
+2026-09-12 triage nonetheless grades `FIXTURE.3` MET citing a live run with "0
+failed", four days after the pin landed and with no platform recorded.
+
+So `FIXTURE.3` is **platform-qualified, not met as written**: everything passes
+except one proof that is structurally unrunnable where the criterion is being
+checked. The fix is a wording change, a construct change, or both — either the
+criterion names Linux, or the pin becomes a `#[cfg]` gate that compiles the test
+out on Apple targets instead of failing it. A `cfg` gate keeps the loud failure
+on Linux, where the proof is real, and stops manufacturing a red suite
+everywhere else. That is a decision for the test's owner, not a defect to patch
+past.
+
+`HDR.6`'s suite-green half **is** corroborated: nothing on the legacy path is
+red, and the only failure is the platform pin above.
+
 ## Closing comments that cite evidence which is not there
 
 The relabelling named at the top of this file is not the only way a ticket has
