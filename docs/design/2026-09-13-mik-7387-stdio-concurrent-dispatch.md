@@ -320,3 +320,80 @@ matches on the join result and logs a panicking dispatch, which a bare
   loop still routes replies for the accepted ones.
 - Stdout closed mid-session with stdin open: the loop exits rather than
   spinning.
+
+## Addendum, 2026-09-17: the acceptance rows above need no new seam
+
+The previous addendum ratified three acceptance rows and none of them was ever
+written. The recorded reason was that there is no seam: the read loop is inline
+in `run_stdio` (`src/gateway/server/mod.rs:2286`, loop body at `:2457-2653`) on
+`BufReader::new(tokio::io::stdin()).lines()` (`:2418`), so nothing in-process can
+feed it. That is true of the read side and it is still true today — `rg` over
+`src/gateway/server/` finds no generic reader; `run_stdout_writer`
+(`mod.rs:2737`) is generic over its writer, and it is the write half only.
+
+The conclusion drawn from it was wrong. The harness this package needs is not
+in-process, and it already exists: `StdioSession::spawn`
+(`tests/mik_7212_mrtr7_stdio_acs.rs:205-236`) starts the shipped binary with
+`Command::new(env!("CARGO_BIN_EXE_mcp-gateway")).arg("serve").arg("--stdio")`
+and piped stdin and stdout. It drives the real `run_stdio` over real pipes. Four
+acceptance rows already use it; what none of them does is send more than a
+handful of requests.
+
+So the gap is the rows, not the machinery, and the work is test-only. That is a
+correction to this document's own premise, recorded rather than quietly dropped,
+because the release ledger, the blocking rollup and the readiness board all
+repeat "the seam is unbuilt" as the thing holding `MIK-7212.MRTR.7a` and `.7b`.
+
+**Why the out-of-process harness is the better one anyway**, not merely the one
+that exists. The two properties under test are that the single stdin reader never
+parks, and that the refusal path fires at the real cap. An in-process harness
+would drive an extracted function past semaphores the test itself constructed; the
+child process drives the real constants — `MAX_CONCURRENT_STDIO_DISPATCHES` = 64
+(`mod.rs:83`), `MAX_INFLIGHT_STDIO_REQUESTS` = `STDOUT_QUEUE_DEPTH` = 1024
+(`mod.rs:76,89`) — through the real `main`. The existing unit rows
+(`mod.rs:5019-5060`) already show the weaker shape: they assert
+`admit_stdio_request` against a synthetic `Semaphore::new(2)`, which cannot fail
+the way the 1024 boundary fails.
+
+### The two rows, as tests
+
+Both go in `tests/mik_7212_mrtr7_stdio_acs.rs` beside the four rows that already
+use `StdioSession::spawn`. Both park work by withholding a client answer: a
+bridge-producing call asks the client a question, and a client that never answers
+holds the dispatch open for as long as the test needs.
+
+1. **`the_reader_keeps_reading_past_the_admission_cap`** — send `initialize`,
+   then 65 bridge-producing calls, answering none. Assert every one of the 65 is
+   accepted: the gateway emits 64 bridge prompts (admission's cap) and no
+   `-32000` for the 65th, then answer one and assert its response arrives. This
+   is the regression pin for `d0c68e15`, the defect where `acquire_owned().await`
+   inside the loop parked the only reader at the 65th request. Today that defect
+   is pinned only by a unit row on the non-async helper.
+
+2. **`the_excess_past_the_inflight_cap_is_refused_not_queued`** — send
+   `initialize`, then 1025 bridge-producing calls. Assert at least one `-32000
+   server busy` response, and that an accepted call still completes when its
+   answer is sent. This is the row the release owner's 2026-09-16 ruling names.
+
+### Two traps this plan must not fall into
+
+- **Stdout must be drained while stdin is written.** `STDOUT_QUEUE_DEPTH` is
+  1024 and the refusal is sent with `try_send` (the deliberate choice recorded
+  above: awaiting a full queue would park the reader, which is the bug). A test
+  that writes 1025 frames without reading the far end fills the queue and
+  exercises the dropped-refusal path closed by `fffc5fde`, not the refusal path
+  it meant to assert. The harness reads and writes concurrently.
+- **The 65 row asserts acceptance, the 1025 row asserts refusal.** They cross
+  different caps and they are not two sizes of one test. Row 1 crosses
+  `admission` (64), where the correct behaviour is that work is admitted and
+  parks inside its own task. Row 2 crosses `inflight` (1024), where the correct
+  behaviour is refusal. A test that expects refusal at 65 would encode the
+  rejected design.
+
+### What this addendum does not change
+
+The semaphore values, the non-blocking `try_acquire_owned` gate, the `try_send`
+refusal, the silent refusal of notifications, and the withdrawal of the stdin
+start-order claim (`9b0caa1e`) all stand exactly as ratified. The third
+acceptance row — stdout closed mid-session with stdin open — is out of scope
+here: it needs no saturation and it is not what the MRTR rows block on.
