@@ -121,11 +121,23 @@ impl ClientChannel for StdioClientChannel {
             frame["params"] = params;
         }
 
-        if self.writer.send(frame).await.is_err() {
+        // Capacity first, commit second. The queue is bounded, so `send`
+        // parks when it is full, and `close` runs inside that park: the flag
+        // goes up and the map is cleared, and a plain `send` would then
+        // commit the frame to a channel that is already terminal — a prompt
+        // nothing can answer, reported to the caller as a timeout. Reserving
+        // moves the park ahead of the commit, so the flag below is read with
+        // capacity already in hand and the permit is dropped unused when the
+        // session went away while we waited.
+        let Ok(permit) = self.writer.reserve().await else {
             // The writer task is gone, so stdout is closed and nothing we
             // queue can reach anyone.
             return Err(DeliveryError::NoSession);
+        };
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(DeliveryError::NoSession);
         }
+        permit.send(frame);
         debug!(%id, %method, "stdio: sent bridged request to the client");
 
         // A dropped sender means the entry went away without an answer, which
@@ -188,6 +200,50 @@ mod tests {
             answer.pointer("/result/action").and_then(Value::as_str),
             Some("accept"),
             "the raw reply frame is what the bridge projects; it must arrive whole"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_send_parked_on_a_full_queue_refuses_once_close_wins_the_race() {
+        // The queue is bounded, so a producer can park inside `send`. `close`
+        // runs in that gap: it raises the flag and clears the map, and the
+        // frame would otherwise still be committed to a channel that is
+        // already terminal — a prompt the client can never answer, reported
+        // to the caller as a timeout rather than a dead session.
+        let (tx, mut rx) = mpsc::channel(1);
+        let channel = std::sync::Arc::new(StdioClientChannel::new(tx.clone()));
+        tx.send(json!({"filler": true}))
+            .await
+            .expect("the empty queue took the filler");
+
+        let asking = tokio::spawn({
+            let channel = std::sync::Arc::clone(&channel);
+            async move {
+                channel
+                    .send_request("stdio", "elicit-1", "elicitation/create", None)
+                    .await
+            }
+        });
+        // Let the task register its entry and reach the park on the full queue.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        channel.close();
+        let filler = rx.recv().await.expect("the filler was queued");
+        assert!(
+            filler.get("filler").is_some(),
+            "the filler is what freed the capacity the parked send was waiting for"
+        );
+
+        let outcome = asking.await.expect("task panicked");
+        assert!(
+            matches!(outcome, Err(DeliveryError::NoSession)),
+            "close won the race, so the caller is told the session is gone, not that it timed out: {outcome:?}"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no frame may be written after close: the client can never answer it"
         );
     }
 
