@@ -65,6 +65,10 @@ use super::meta_mcp_tool_defs::{
 use super::webhooks::WebhookRegistry;
 
 pub(crate) mod admission;
+#[cfg(test)]
+mod chain_interim;
+#[cfg(test)]
+mod chain_interim_tests;
 mod direct_route;
 pub(crate) mod invoke;
 mod prompt_cache;
