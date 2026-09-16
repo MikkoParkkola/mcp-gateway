@@ -286,10 +286,6 @@ impl Error {
     /// exists only where reqwest proved the connection was never established
     /// on an unredirected request. See its doc comment for why a redirected
     /// request is excluded.
-    /// `ResponseFirewallRefused` earns its place the same way. The only code
-    /// that raises it is the bridge's challenge gate, which refuses a round's
-    /// client-visible batch before the question is put to anyone and before
-    /// the round's retry is dispatched. Nothing ran, so the key releases.
     #[must_use]
     pub fn is_pre_dispatch(&self) -> bool {
         matches!(
@@ -298,7 +294,6 @@ impl Error {
                 | Self::BackendNotFound(_)
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
-                | Self::ResponseFirewallRefused
         )
     }
 

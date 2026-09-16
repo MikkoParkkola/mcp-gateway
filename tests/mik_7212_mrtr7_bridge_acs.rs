@@ -1879,7 +1879,7 @@ impl ChallengeGate for MarkerGate {
             .expect("inspected")
             .push(rendered.clone());
         if rendered.contains(self.marker) {
-            return Err(BridgeError::ChallengeRefused);
+            return Err(BridgeError::ChallengeRefused { dispatched: false });
         }
         Ok(())
     }
@@ -1913,8 +1913,9 @@ async fn ac_mrtr_7a_the_gate_inspects_every_round_not_only_the_first() {
 
     assert_eq!(
         outcome,
-        Err(BridgeError::ChallengeRefused),
-        "a blocked second-round batch must refuse the exchange"
+        Err(BridgeError::ChallengeRefused { dispatched: true }),
+        "a blocked second-round batch must refuse the exchange, and it must say \
+         the backend already ran — the caller settles the key on that fact"
     );
     assert_eq!(
         gate.inspected().len(),
@@ -1969,6 +1970,88 @@ async fn ac_mrtr_7a_opaque_state_is_neither_scanned_nor_delivered() {
         assert!(
             !rendered.contains(STATE_CANARY),
             "the opaque state reached the client: {rendered}"
+        );
+    }
+}
+
+/// A refusal says whether the backend already ran, because the key turns on it.
+///
+/// The paired control for the multi-round row above, which refuses on round two
+/// and reports `dispatched: true`. Round one has dispatched nothing, so its
+/// refusal releases the idempotency key and the caller may retry once the
+/// refusal lifts. Collapsing the two into one untagged refusal is what ADR-012
+/// consequence 1 forbids: the caller cannot then tell a call that never ran
+/// from one whose side effect may already have taken effect, and releasing the
+/// key on the second readmits a retry of that side effect.
+#[tokio::test]
+async fn ac_mrtr_7a_a_first_round_refusal_reports_that_nothing_was_dispatched() {
+    let client = FakeClient::new(Vec::new());
+    let backend = FakeBackend::never();
+    let gate = MarkerGate::new(BLOCKED);
+    let records = Records(Mutex::new(Vec::new()));
+
+    let outcome = bridge_gated(
+        &client,
+        &backend,
+        &gate,
+        &records,
+        declared_all(),
+        &interim(&[("k1", ask(&format!("Paste {BLOCKED}")))]),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Err(BridgeError::ChallengeRefused { dispatched: false }),
+        "a round-one refusal must report that nothing reached the backend"
+    );
+    assert!(
+        backend.calls().is_empty(),
+        "the backend was re-invoked after a round-one refusal: {:?}",
+        backend.calls()
+    );
+}
+
+/// The backend's own request key is neither scanned nor delivered.
+///
+/// The second control on the challenge artifact, alongside the opaque-state row.
+/// `ask` mints its own wire id per frame and files the answer under the backend's
+/// key afterwards, so that key is backend-facing bookkeeping no client can read.
+/// A gate shown it refuses exchanges over content that was never exposed, which
+/// is a denial of service on legacy clients dressed as a security control.
+#[tokio::test]
+async fn ac_mrtr_7a_the_backend_request_key_is_neither_scanned_nor_delivered() {
+    let client = FakeClient::new(vec![accepted(&json!({"ok": true}))]);
+    let backend = FakeBackend::new(vec![completed()]);
+    let gate = MarkerGate::new(BLOCKED);
+    let records = Records(Mutex::new(Vec::new()));
+    let tainted = format!("k-{BLOCKED}");
+
+    let outcome = bridge_gated(
+        &client,
+        &backend,
+        &gate,
+        &records,
+        declared_all(),
+        &interim(&[(tainted.as_str(), ask("Which branch?"))]),
+    )
+    .await;
+
+    assert!(
+        outcome.is_ok(),
+        "a clean batch under a tainted backend key is carried: {outcome:?}"
+    );
+    for seen in gate.inspected() {
+        assert!(
+            !seen.contains(BLOCKED),
+            "the gate was shown the backend's own request key: {seen}"
+        );
+    }
+    for frame in client.frames() {
+        let rendered = frame.params.map(|p| p.to_string()).unwrap_or_default();
+        assert!(
+            !rendered.contains(BLOCKED),
+            "the backend's request key reached the client: {rendered}"
         );
     }
 }

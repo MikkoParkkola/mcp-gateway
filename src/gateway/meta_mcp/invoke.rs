@@ -887,7 +887,9 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
         };
         self.meta
             .enforce_firewall_challenge(challenge, &targets, &correlation)
-            .map_err(|_| crate::gateway::input_bridge::BridgeError::ChallengeRefused)
+            .map_err(|_| crate::gateway::input_bridge::BridgeError::ChallengeRefused {
+                dispatched: false,
+            })
     }
 }
 
@@ -2245,12 +2247,25 @@ impl MetaMcp {
                 // `ResponseFirewallRefused` arm that builds the delivery-refusal
                 // projection; flattening it into the -32003 below would report
                 // the gateway's own refusal as a client-attributable error and
-                // never reach that arm. Nothing was dispatched, so the key is
-                // released by falling through without settling it.
-                Err(crate::gateway::input_bridge::BridgeError::ChallengeRefused) => {
+                // never reach that arm. The type survives either way; what the
+                // refusal decides is the key. A refusal on round one ends a
+                // call that never dispatched, so falling through releases it.
+                // From round two on the tool has already run, and a released
+                // key would readmit a retry of a side effect that may have
+                // taken effect (ADR-012 consequence 1), so the key settles.
+                Err(crate::gateway::input_bridge::BridgeError::ChallengeRefused { dispatched }) => {
+                    if dispatched && let Some(reservation) = idem_reservation.as_mut() {
+                        reservation.fail(&json!({
+                            "code": -32600,
+                            "message": "Response blocked by security firewall",
+                        }));
+                    }
                     warn!(
                         server,
-                        tool, trace_id, "Bridged challenge refused by the response firewall"
+                        tool,
+                        trace_id,
+                        dispatched,
+                        "Bridged challenge refused by the response firewall"
                     );
                     return Err(Error::ResponseFirewallRefused);
                 }

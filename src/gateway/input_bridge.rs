@@ -224,7 +224,16 @@ pub enum BridgeError {
     /// delivery-refusal projection. Flattening a policy refusal into a generic
     /// bridge failure loses that projection and reports it as an ordinary
     /// client-attributable error instead.
-    ChallengeRefused,
+    ChallengeRefused {
+        /// Whether any round of this call already reached the backend.
+        ///
+        /// A refusal on round one ends a call that never dispatched, so its
+        /// idempotency key releases. From round two on the backend has already
+        /// run the tool at least once, and releasing the key would readmit a
+        /// retry of a side effect that may have taken effect (ADR-012
+        /// consequence 1), so the key settles instead.
+        dispatched: bool,
+    },
     /// A bridged retry round reached the backend and did not come back.
     ///
     /// Carries the reason as text rather than the error itself: this type is
@@ -437,6 +446,7 @@ impl InputBridge<'_> {
         let started = std::time::Instant::now();
         let mut interim = first.clone();
         let mut spent = 0_u32;
+        let mut dispatched = false;
         for _ in 0..self.bounds.rounds {
             if started.elapsed() >= self.bounds.aggregate {
                 return Err(BridgeError::Deadline);
@@ -447,10 +457,21 @@ impl InputBridge<'_> {
                 return Err(BridgeError::RequestBudgetExhausted);
             }
             self.observe(&interim);
-            self.gate.admit(&Self::challenge(&prompts))?;
+            // A gate sees one round's batch and cannot know whether an earlier
+            // round reached the backend, so the refusal it raises is rebuilt
+            // here with the only fact that decides the key's fate.
+            self.gate
+                .admit(&Self::challenge(&prompts))
+                .map_err(|error| match error {
+                    BridgeError::ChallengeRefused { .. } => {
+                        BridgeError::ChallengeRefused { dispatched }
+                    }
+                    other => other,
+                })?;
             let answers = self.ask(session_id, prompts, started).await?;
             let retry = crate::protocol::mrtr::Bridge::retry_params(&interim, answers);
             let result = self.backend.invoke(retry).await?;
+            dispatched = true;
             match crate::protocol::mrtr::InputRequired::from_result(&result) {
                 Some(next) => interim = next,
                 None => return Ok(result),
@@ -522,13 +543,16 @@ impl InputBridge<'_> {
     /// The backend's opaque `requestState` never reaches a prompt — `prompt`
     /// copies the `params` member alone — so it is neither scanned nor
     /// delivered, and a canary carried only there stays invisible to both.
+    /// `Prompt::key` is held back for the same reason: `ask` mints its own wire
+    /// id per frame and files the answer under the key afterwards, so the key
+    /// is backend-facing bookkeeping the client never sees. Scanning it would
+    /// refuse exchanges over content no client could read.
     fn challenge(prompts: &[Prompt]) -> Value {
         Value::Array(
             prompts
                 .iter()
                 .map(|prompt| {
                     serde_json::json!({
-                        "key": prompt.key,
                         "method": prompt.kind.method(),
                         "params": prompt.params,
                     })
