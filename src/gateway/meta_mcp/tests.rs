@@ -6294,6 +6294,15 @@ async fn a_dispatched_round_refused_by_the_firewall_settles_the_key_as_a_refusal
     );
 
     let dispatched = script.calls().len();
+    // Two, not one: round 1 was clean and round 2 is the one the firewall
+    // refused. A single call would mean the refusal landed before anything was
+    // dispatched, which is a different arm of the fix and would leave the
+    // settled-key behaviour below untested.
+    assert_eq!(
+        dispatched, 2,
+        "the refusal must land on the second bridged round, after a dispatch"
+    );
+
     let second = meta
         .invoke_tool(
             &json!({"server": "asking_backend", "tool": "book", "arguments": {}}),
