@@ -69,3 +69,24 @@ reaper has a real production call site (`server/mod.rs:1519`), and nothing in
 `server/mod.rs:1512-1514` says as much — "the write side that populates it is
 wired separately". A reaper over an empty registry proves nothing, so no closing
 claim should cite this type as evidence of a working lifecycle.
+
+## A status note whose first sentence contradicts its own body
+
+Recorded while looking for work on the core blockers. The `NFR.PERF.1` note in
+`RELEASE-4.0.0-scope-status.json` opens with "the harness exists, is unmerged,
+and has **NEVER BEEN EXECUTED**: zero measured runs, so every measurement
+conjunct is harness-only", and grades all six conjuncts on that basis. Further
+down, the same note records three executed runs, a located cause, a repaired
+cache divergence, an admission wall and a current grade of INCONCLUSIVE with
+measured spreads. The branch has moved seventeen commits past the revision the
+opening sentence pins.
+
+Both halves were written in good faith — the note is appended to as findings
+land, and nobody rewrote the top. The hazard is that the opening sentence is
+the part a reader quotes. Anyone skimming for "what is the state of the
+workload harness" gets "zero measured runs" from a note that goes on to report
+what those runs measured.
+
+The current state, from the note's own body: A/B/C grade INCONCLUSIVE at exit 2
+because B and C spreads exceed the contract margins, and D/E are blocked on an
+owner ruling rather than on measurement. Neither of those is "no runs exist".
