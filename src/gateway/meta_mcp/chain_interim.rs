@@ -108,7 +108,7 @@ where
         let result = run_step(idx, tool_ref.clone(), arguments).await?;
 
         // Classified before the result is recorded, so a step that asked is
-        // never pushed as an answer -- the whole defect is one `Ok` treated as
+        // never pushed as an answer — the whole defect is one `Ok` treated as
         // two different things.
         let Some(round) = classify_step_result(idx, &tool_ref, &result)? else {
             completed.push(json!({"step": idx, "tool": tool_ref, "result": result}));
