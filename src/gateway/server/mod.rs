@@ -2390,21 +2390,8 @@ impl Gateway {
         // reading must stall its producers rather than grow this queue. An
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
-        let (writer, mut queue) =
-            tokio::sync::mpsc::channel::<serde_json::Value>(STDOUT_QUEUE_DEPTH);
-        let writer_task = tokio::spawn(async move {
-            let mut stdout = tokio::io::stdout();
-            while let Some(frame) = queue.recv().await {
-                // A closed stdout ends the writer: staying open would let the
-                // dispatch tasks keep executing requests whose answers are
-                // already being thrown away. Closing the queue instead makes
-                // every producer's `send` fail, which is a signal they can see.
-                if !Self::write_response(&mut stdout, &frame).await {
-                    queue.close();
-                    break;
-                }
-            }
-        });
+        let (writer, queue) = tokio::sync::mpsc::channel::<serde_json::Value>(STDOUT_QUEUE_DEPTH);
+        let writer_task = tokio::spawn(Self::run_stdout_writer(tokio::io::stdout(), queue));
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -2424,7 +2411,21 @@ impl Gateway {
         // that copies it, and `Declared` is `Copy`.
         let mut handshake_capabilities = crate::protocol::meta::Declared::NONE;
 
+        // Why the loop can end before EOF: see `run_stdout_writer`.
+        let mut stdout_died = false;
+
         while let Ok(Some(line)) = reader.next_line().await {
+            // A closed queue means the stdout writer has exited, so every
+            // answer from here on would be written nowhere. Executing the
+            // request anyway performs its side effect and discards the only
+            // record of it, which is strictly worse than refusing to start:
+            // stop admitting, and let the drain below finish what was already
+            // accepted.
+            if writer.is_closed() {
+                stdout_died = true;
+                break;
+            }
+
             let line = line.trim().to_string();
             if line.is_empty() {
                 continue;
@@ -2548,7 +2549,11 @@ impl Gateway {
             }
         }
 
-        info!("stdio: EOF reached, shutting down");
+        if stdout_died {
+            warn!("stdio: stdout is gone, refusing further requests and shutting down");
+        } else {
+            info!("stdio: EOF reached, shutting down");
+        }
         // EOF drains, it does not abort (design §6): every request the loop
         // accepted still gets its response. Outstanding prompts are failed
         // first — their answers can only arrive on the pipe that just closed —
@@ -2613,6 +2618,24 @@ impl Gateway {
                 %error,
                 "failed to persist stdio protocol-revision telemetry; measurement window is incomplete"
             );
+        }
+    }
+
+    /// Drain `queue` onto `sink`, closing the queue once the sink is gone.
+    ///
+    /// A dead sink ends the writer: staying open would let the dispatch tasks
+    /// keep executing requests whose answers are already being thrown away.
+    /// Closing the queue makes every producer's `send` fail and `is_closed`
+    /// true, which is the signal the read loop stops admitting on.
+    async fn run_stdout_writer<W: tokio::io::AsyncWrite + Unpin>(
+        mut sink: W,
+        mut queue: tokio::sync::mpsc::Receiver<serde_json::Value>,
+    ) {
+        while let Some(frame) = queue.recv().await {
+            if !Self::write_response(&mut sink, &frame).await {
+                queue.close();
+                break;
+            }
         }
     }
 
