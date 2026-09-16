@@ -457,7 +457,8 @@ fn stdio_backend_uses_container_runtime_bridge_command() {
     let launch = backend
         .resolve_stdio_runtime_launch("definitely-not-a-real-mcp-server")
         .expect("container stdio bridge launch");
-    let parts = shlex::split(&launch.command).expect("bridge command is shell-splitable");
+    let parts = crate::transport::split_command(&launch.command)
+        .expect("bridge command is shell-splitable");
 
     assert_eq!(parts.first().map(String::as_str), Some("docker"));
     assert_eq!(parts.get(1).map(String::as_str), Some("run"));
