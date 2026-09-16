@@ -366,7 +366,7 @@ fn a_single_long_line_delivered_one_byte_at_a_time_still_frames() {
 /// joined data is empty, so it yields no event and the exchange resolves on
 /// the frame that actually holds the response.
 #[tokio::test]
-async fn a_priming_keepalive_frame_ahead_of_the_result_does_not_fail_the_exchange() {
+async fn a_retry_priming_frame_ahead_of_the_result_does_not_fail_the_exchange() {
     let body = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(
         b"data: \nid: 0\nretry: 3000\n\n\
           data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-03-26\"}}\n\n",
@@ -374,8 +374,11 @@ async fn a_priming_keepalive_frame_ahead_of_the_result_does_not_fail_the_exchang
     let response = decode_sse_exchange(body)
         .await
         .expect("the priming frame is skipped, not parsed as the response");
-    assert!(
-        response.result.is_some(),
-        "the response after the priming frame is what resolves the exchange"
+    let result = response
+        .result
+        .expect("the frame after the priming frame carries the result");
+    assert_eq!(
+        result["protocolVersion"], "2025-03-26",
+        "the exchange resolves on the frame holding the response, not the priming frame"
     );
 }

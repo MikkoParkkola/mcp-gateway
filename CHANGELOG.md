@@ -53,9 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A backend whose SSE response opens with a keepalive frame is no longer a
-  transport error** (GH #563). Servers built on `rmcp` with its default
-  `sse_retry` prepend a priming frame -- a `data:` line with nothing after it,
+- **A backend whose SSE response opens with a retry priming frame is no longer
+  a transport error** (GH #563). Servers built on `rmcp` with its default
+  `sse_retry` prepend such a frame -- a `data:` line with nothing after it,
   plus `id:` and `retry:` -- to every POST response stream. 3.5.x took the
   first `data:` line verbatim and failed the whole call with
   `Failed to parse SSE data: EOF while parsing a value at line 1 column 0`, so
