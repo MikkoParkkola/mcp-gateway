@@ -4575,6 +4575,122 @@ const B10_EXPECTED_TOOLS: &[&str] = &[
 ];
 
 // ============================================================================
+// MIK-7272.ORDER.2a — a tool promoted for one connection must not surface on
+// another connection's list.
+//
+// Plan: docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md
+// ============================================================================
+
+/// B-07 — a tool promoted by connection A's own successful `gateway_invoke`
+/// must not appear on A's next modern list, nor make A's list differ from a
+/// second modern connection's.
+///
+/// The list reads carry no `query`, so the UNFILTERED merge (`mod.rs`, the
+/// `promoted_tools_for_session` append below the meta-tools) is the executing
+/// line. An earlier draft drove the reads through `handle_tools_list_filtered`
+/// under a routing profile denying `echo`, on the theory that the filtered
+/// merge — which, unlike every sibling loop, applies no `tool_allowed` — was
+/// the leakier path. Measured, it is not reachable: `deny_tools` refuses the
+/// INVOKE as well, so a profile-denied tool never enters `session_promoted`,
+/// and the missing filter is unreachable rather than exploitable. Nor could a
+/// filtered read distinguish a promoted entry from an ordinary one if it were
+/// reached — the merge resolves each promoted name through the same
+/// `get_cached_tool` and de-duplicates by name, so the enumeration has already
+/// produced an identical descriptor.
+///
+/// The promotion is driven through the production invoke path. A fixture
+/// calling `promote_tool_for_session` directly would supply the session id
+/// itself and so bypass the defect, which is the ARGUMENT `invoke.rs` passes,
+/// not the store beneath it. The invoke is asserted to have succeeded because
+/// an errored one promotes nothing and would leave the case green having
+/// exercised none of the path.
+///
+/// Both modern reads are pinned to the same literal rather than compared with
+/// each other: a leak that reaches every connection keying to the empty
+/// session id moves both lists in step, and an A-vs-B equality assertion
+/// passes on exactly that.
+///
+/// HONEST LIMIT, so this is not read as a duplicate of B-10: today A and B are
+/// indistinguishable by construction — the router spells a modern connection's
+/// absent session as the empty id, so both read the same key. That
+/// indistinguishability is the condition the criterion forbids, not an
+/// accident of the fixture, and the two connections separate the moment modern
+/// connections carry distinct ids.
+///
+/// What B-10 does NOT carry, and what this case is for, is the control at the
+/// end: the same promotion driven over a LEGACY connection, whose own next
+/// list must contain `echo`. `session_key` filters the empty string only, so a
+/// non-empty legacy id survives the ORDER.2 fix and its promotion stays
+/// observable. Without it, the two empty modern deltas would be equally
+/// consistent with promotion having become a silent no-op for everyone.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() {
+    let url = start_invokable_mock().await;
+    let meta = meta_with_backend(&url, Duration::from_secs(5));
+
+    // Production prefetches every backend's tools at startup; without a warm
+    // cache `promoted_tools_for_session` resolves the promoted key to nothing
+    // and the case could not fail whatever the promotion did.
+    meta.list_tools(&json!({"server": "mock"}), MODERN_SESSIONLESS)
+        .await
+        .expect("the mock backend's tools must be fetchable");
+
+    // Connection A promotes, through its own successful invoke.
+    let invoked = meta
+        .invoke_tool(
+            &json!({"server": "mock", "tool": "echo", "arguments": {}}),
+            MODERN_SESSIONLESS,
+            &allow_all_ctx(),
+        )
+        .await;
+    assert!(
+        invoked.is_ok(),
+        "the invoke must succeed or nothing is promoted and the case proves nothing: {invoked:?}"
+    );
+
+    let promoter = tools_list_names(
+        &meta.handle_tools_list_for_session(RequestId::Number(1), MODERN_SESSIONLESS),
+    );
+    let bystander = tools_list_names(
+        &meta.handle_tools_list_for_session(RequestId::Number(2), MODERN_SESSIONLESS),
+    );
+
+    assert_eq!(
+        promoter, B10_EXPECTED_TOOLS,
+        "the promoting connection was shown the tool its own invoke promoted"
+    );
+    assert_eq!(
+        bystander, B10_EXPECTED_TOOLS,
+        "another connection was shown a tool promoted for someone else"
+    );
+
+    // Control: the same promotion over a legacy connection, which keeps its own
+    // session id, must be visible to that connection.
+    const LEGACY: Option<&str> = Some("legacy-a");
+    let legacy_invoked = meta
+        .invoke_tool(
+            &json!({"server": "mock", "tool": "echo", "arguments": {}}),
+            LEGACY,
+            &allow_all_ctx(),
+        )
+        .await;
+    assert!(
+        legacy_invoked.is_ok(),
+        "the control's invoke must succeed or it controls for nothing: {legacy_invoked:?}"
+    );
+
+    let legacy_list =
+        tools_list_names(&meta.handle_tools_list_for_session(RequestId::Number(3), LEGACY));
+    assert!(
+        legacy_list.iter().any(|name| name == "echo"),
+        "the promotion is observable nowhere, so the assertions above are \
+         satisfied by a silent no-op rather than by per-connection isolation: \
+         {legacy_list:?}"
+    );
+}
+
+// ============================================================================
 // MIK-7272.ORDER.2 — FSM workflow state (B-08, B-09)
 // ============================================================================
 
@@ -4934,4 +5050,107 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
              connection is shown"
         );
     }
+}
+
+// ============================================================================
+// MIK-7272.ORDER.2 — Cluster B connection invariance (B-01, B-02, B-06)
+// ============================================================================
+
+/// The profile connection A asks for.
+///
+/// Registered by the fixture below. `handle_initialize` skips a profile name
+/// the registry does not contain (`mod.rs`, `profile_registry.contains`), so
+/// an unregistered name would leave A and B identical for a reason that has
+/// nothing to do with the invariant, and B-01 would pass with the defect
+/// present.
+const NARROW_PROFILE: &str = "narrow";
+
+/// The substring both staged capability names carry.
+///
+/// B-06 needs a query that is non-empty — `handle_tools_list_filtered`
+/// delegates an empty query to the unfiltered handler and never reaches the
+/// filtered assembly — and that still matches every tool the pinned literal
+/// names, so the pin stays satisfiable rather than being narrowed by the
+/// query itself.
+const MATCH_ALL_QUERY: &str = "invariance";
+
+/// A gateway whose visible tool set genuinely moves with the routing profile.
+///
+/// Two capability tools, both statically surfaced so they appear in
+/// `tools/list`, and a `narrow` profile that denies exactly one of them. The
+/// default profile denies nothing: without a profile that decides, `narrow`
+/// and the default would produce the same list and every case below would
+/// pass whether or not a profile leaks across connections.
+async fn meta_with_narrowable_tools() -> MetaMcp {
+    use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    for (name, path) in [
+        ("invariance_always", "always"),
+        ("invariance_denied", "denied"),
+    ] {
+        std::fs::write(
+            dir.path().join(format!("{name}.yaml")),
+            format!(
+                r"
+name: {name}
+description: connection invariance fixture
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.invalid
+      path: /{path}
+"
+            ),
+        )
+        .unwrap();
+    }
+
+    let cap_backend = Arc::new(CapabilityBackend::new(
+        "caps",
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    cap_backend
+        .load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    let mut configs = std::collections::HashMap::new();
+    configs.insert(
+        "open".to_string(),
+        RoutingProfileConfig {
+            description: "denies nothing".to_string(),
+            ..Default::default()
+        },
+    );
+    configs.insert(
+        NARROW_PROFILE.to_string(),
+        RoutingProfileConfig {
+            description: "denies one staged tool".to_string(),
+            deny_tools: Some(vec!["invariance_denied".to_string()]),
+            ..Default::default()
+        },
+    );
+    let registry = ProfileRegistry::from_config(&configs, "open");
+
+    let surfaced = ["invariance_always", "invariance_denied"]
+        .into_iter()
+        .map(|tool| SurfacedToolConfig {
+            server: "caps".to_string(),
+            tool: tool.to_string(),
+        })
+        .collect();
+
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_profile_registry(registry)
+        .with_surfaced_tools(surfaced);
+    meta.set_capabilities(cap_backend);
+    meta
+}
+
+/// The tool names in a `tools/list` response, sorted.
+fn tools_list_set(resp: &JsonRpcResponse) -> Vec<String> {
+    discovery_names(resp.result.as_ref().expect("tools/list must succeed"))
 }
