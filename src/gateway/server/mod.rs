@@ -2616,6 +2616,11 @@ impl Gateway {
                     stdout_died = true;
                     break;
                 }
+                // Start order among concurrent dispatches is NOT stdin order
+                // (design §7.4): each task requests its permit on its own
+                // first poll, so the semaphore queue follows the scheduler,
+                // not the client. Only the `initialize` response keeps its
+                // guaranteed position, and it keeps it by being inline.
                 let admission = Arc::clone(&admission);
                 let closed_probe = writer.clone();
                 dispatches.spawn(async move {

@@ -291,10 +291,26 @@ matches on the join result and logs a panicking dispatch, which a bare
 3. **Only requests get a refusal.** A notification carries no `id`, and a
    response to one is protocol-invalid. Saturated notifications are dropped and
    logged.
-4. **Start order rests on semaphore fairness.** "Dispatches start in the order
-   their lines were read" holds only because tokio's `Semaphore` is FIFO. That
-   dependency is load-bearing and must be stated where a future reader will see
-   it.
+4. **Start order is NOT preserved, and was never guaranteed.** An earlier
+   revision of this section claimed dispatches start in the order their lines
+   were read, resting on tokio's `Semaphore` being FIFO. That reasoning is
+   wrong and the claim is withdrawn. The semaphore hands out permits in the
+   order they were *requested*, and under this design each request is first
+   made inside its own spawned task — so the queue is ordered by the
+   scheduler's choice of which task to poll first, not by stdin order. The
+   superseded version reasoned about the old code, where the reader itself
+   awaited the permit in line order; that ordering was a by-product of the
+   very await that deadlocked the loop, and it leaves with it.
+
+   Accepted, not merely observed. JSON-RPC pipelining carries no ordering
+   guarantee for concurrent requests: a client that sends without waiting has
+   asked for concurrency. The one ordering the gateway does owe — the
+   `initialize` response before any frame a later line produces — is unaffected,
+   because `initialize` is dispatched inline and takes no in-flight slot
+   (`tests/mik_7212_mrtr7_stdio_acs.rs`, row 323). Restoring stdin start order
+   would mean funnelling every admitted dispatch through one coordinator that
+   awaits admission on the client's behalf, which reintroduces a single
+   serialising point to buy a property no caller may rely on.
 
 ### Acceptance
 
