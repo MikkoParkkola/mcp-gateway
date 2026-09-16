@@ -559,3 +559,32 @@ async fn a_step_with_no_tool_reference_is_refused_before_it_runs() {
     );
     assert_eq!(ran, vec![0], "the unnamed step was run anyway");
 }
+
+/// ROW 13. A step that omits `arguments` is run with an empty object.
+///
+/// The invariant: the loop in `search.rs` defaults to `json!({})`, so the
+/// driver must too. `null` is not the same argument — a backend whose
+/// `inputSchema` declares an object type refuses it — and a wiring change that
+/// silently altered what every argument-less step sends would be a behaviour
+/// change smuggled inside a security fix.
+#[tokio::test]
+async fn a_step_with_no_arguments_is_run_with_an_empty_object() {
+    let chain = vec![json!({"tool": "srv:read_one"})];
+    let mut seen: Vec<Value> = Vec::new();
+    let mut seal = |_idx: usize, _round: &InputRequired| Ok(String::new());
+
+    let outcome = {
+        let mut run = |idx: usize, _tool: String, args: Value| {
+            seen.push(args);
+            std::future::ready(Ok(completed_result(idx)))
+        };
+        drive_chain(&chain, 0, &mut run, &mut seal).await
+    };
+
+    outcome.expect("an argument-less step is well formed");
+    assert_eq!(
+        seen,
+        vec![json!({})],
+        "an omitted `arguments` must not be null"
+    );
+}

@@ -104,7 +104,11 @@ where
                 Error::json_rpc(-32602, format!("Chain step {idx}: missing 'tool' field"))
             })?
             .to_string();
-        let arguments = step.get("arguments").cloned().unwrap_or(Value::Null);
+        // An empty object, not `null`: the live loop this replaces defaults the
+        // same way, and a backend whose `inputSchema` requires an object refuses
+        // `null`. A driver that changed the default would turn a wiring change
+        // into a behaviour change for every step that omits the field.
+        let arguments = step.get("arguments").cloned().unwrap_or_else(|| json!({}));
         let result = run_step(idx, tool_ref.clone(), arguments).await?;
 
         // Classified before the result is recorded, so a step that asked is
