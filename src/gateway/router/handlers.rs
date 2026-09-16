@@ -196,9 +196,7 @@ fn declares_tasks_extension(params: Option<&Value>) -> bool {
                         .get("io.modelcontextprotocol/clientCapabilities")
                 })
         })
-        .is_some_and(|caps| {
-            ExtensionSet::from_capabilities(caps).contains(Extension::Tasks)
-        })
+        .is_some_and(|caps| ExtensionSet::from_capabilities(caps).contains(Extension::Tasks))
 }
 
 /// The task ids a `subscriptions/listen` names, if it names any.

@@ -98,7 +98,7 @@ copy drifts and the original is checked by CI: `tests/mik_7272_conformance.rs`,
 
 | # | Statement | Why it is uncovered | The test that closes it |
 |---|---|---|---|
-| Minor 1 | `extensions` field on client and server capabilities | Tracked gap; the work is scoped and unstarted | E1-E5 of `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md` |
+| Minor 1 | `extensions` field on client and server capabilities | Partly closed, still uncovered as a whole. E5 landed 2026-09-16 (`src/gateway/router/tests/task_execution_adapter/refusals.rs:386`) and was not a missing test but a wiring defect: the router's `declares_tasks_extension` gate read the key with `.is_some()` while `ExtensionSet::from_capabilities` required an object, so a client could declare `{tasks: 3}` and pass the live gate. E4's positive direction is exercised behaviourally by the admitted-task rows in the same module; E1-E3 (server-side `ServerCapabilities.extensions` serialisation) are still unwritten | E1-E5 of `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md` |
 
 Minor 11 is the cell `NFR.CONFORMANCE.1` names as "modern URL-elicitation
 completion removal", and minor 10's second clause was the one it names as

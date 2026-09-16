@@ -403,7 +403,7 @@ async fn e5_a_non_object_settings_value_is_not_a_tasks_declaration() {
 
         let refused = post(&state, "key-a", malformed).await;
 
-        assert_eq!(
+        std::assert_eq!(
             refused.pointer("/error/code").and_then(Value::as_i64),
             Some(i64::from(
                 crate::protocol::era::MISSING_REQUIRED_CLIENT_CAPABILITY
