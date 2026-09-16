@@ -24,6 +24,16 @@ text in front of a person that the configured firewall exists to refuse.
 Severity HIGH, and it gates the merge rather than the deploy, because the
 gateway's purpose is to stand between a client and untrusted backends.
 
+Fixed on this branch, and the finding text above is preserved as it was written.
+`BridgeDispatcher` implements `ChallengeGate`, and its `admit` calls
+`enforce_firewall_challenge` (`src/gateway/meta_mcp/invoke.rs:889`). The bridge
+consults the gate inside the round loop before every `ask`
+(`src/gateway/input_bridge.rs:464`), so rounds 2..N are scanned as well as the
+first, and the production construction site passes the dispatcher as the gate
+(`src/gateway/meta_mcp/invoke.rs:993`). `firewall` is a default feature, so a
+stock build enforces it. The design review and the tests that pin this are
+recorded below.
+
 **2. The stdio carve-out recorded in the criteria ledger is stale.**
 `MIK-7212.MRTR.7a` and `.7b` in `docs/requirements/RELEASE-4.0.0-criteria-status.md`
 both state that stdio is descoped to MIK-7387 and that
