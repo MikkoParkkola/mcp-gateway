@@ -7,11 +7,17 @@ an owner decision that this file does not touch.
 
 ## Verdict
 
-The regression is a **4.0.0-only, per-response cost that scales with response
-payload size, confined to exactly `tools/call` and `tools/list`**. It is the
-second, unconditional response-firewall scan that `finalize_response_for_delivery`
-runs on the delivered JSON-RPC result, together with the full deep clone and
-deep comparison that its `PreserveInputRequired` mutation policy forces.
+The regression is a **4.0.0-only, per-response cost confined to exactly
+`tools/call` and `tools/list`**. It is the second, unconditional
+response-firewall scan that `finalize_response_for_delivery` runs on the
+delivered JSON-RPC result, plus the full deep clone of that result which its
+`PreserveInputRequired` mutation policy forces.
+
+The cost has two parts, and which one dominates depends on the method: a **fixed
+~7–13 µs paid per scan** and a **marginal ~13–15 µs per kB of result**. On the
+graded metric, `tools/call` (271-byte result, one scan becoming two), the fixed
+term dominates — about two thirds of it. On `tools/list` (16,097-byte result,
+zero scans becoming one), the per-byte term does.
 
 Two independent lines carry it, one free and one measured:
 
@@ -76,14 +82,19 @@ excursion is not instrument noise. It also localises the change to the
 3.5.1→4.0.0 step, not to 3.5.0→3.5.1.
 
 **Conclusion of the ladder: the regression is confined to exactly `tools/call`
-and `tools/list`, and it scales with response size.** The `tools/list` result is
-the whole meta-tool surface — many kilobytes of tool schemas; the `tools/call`
-result is one small pinned payload (`WORKLOAD_OK case=042 bundle=deterministic`).
-The costs differ by ~7×, in the direction of, and roughly in proportion to, the
-bytes in the response.
+and `tools/list`, and the larger response carries the larger cost.** Measured on
+the C arm under the pinned config (§2.4): the `tools/list` result is **16,097
+bytes** — 17 tool schemas — and the `tools/call` result is **271 bytes**
+(the pinned `WORKLOAD_OK case=042 bundle=deterministic` payload in its wrapper).
 
-That shape — *these two methods, in proportion to response bytes* — is a
-fingerprint. There is exactly one gate in 4.0.0 that matches it.
+It is **not** proportional, and that is the informative part. Bytes differ by
+**59×**; cost differs by **7.4×**. A purely per-byte model over-predicts
+`tools/list` relative to `tools/call` by an order of magnitude, so a large share
+of what 4.0.0 added has to be a **fixed cost paid once per scan**, independent of
+payload. §2.4 puts numbers on both halves.
+
+That shape — *these two methods and no others, with both a fixed and a per-byte
+component* — is a fingerprint. There is exactly one gate in 4.0.0 that matches it.
 
 ## 2. The mechanism — one gate in 4.0.0 matches that fingerprint exactly
 
@@ -141,19 +152,30 @@ At B (3.5.1) the only response scan on this path is in the `tools/call` arm
 target. The meta `tools/list` response is **never scanned at B** — no caller of
 `check_response` handles it on the meta surface.
 
+That loop runs **exactly once** for this workload, not zero and not many. Its
+`backend_targets` come from `backend_tool_targets_for_call`
+(`src/gateway/router/authorization.rs:19-39`), which for `gateway_invoke` —
+the tool the workload calls — returns `target_from_invoke_arguments(arguments)`
+collected into a `Vec`: one target, `workload`/`workload_probe`. So B's
+`tools/call` count is 1, and the table below is "1 → 2", not "0 → 2".
+
 | method | B (3.5.1) | C (4.0.0) | delta in passes |
 |---|---|---|---|
 | `initialize` | 0 scans | 0 scans | **0** — matches the flat rung |
-| `tools/list` | **0 scans** | **1 scan + 1 deep clone** of a multi-kB tool surface | 0 → 1 |
-| `tools/call` | 1 scan, no clone | **2 scans + 1 deep clone** of a small payload | 1 → 2 |
+| `tools/list` | **0 scans** | **1 scan + 1 deep clone** of a 16 kB tool surface | 0 → 1 |
+| `tools/call` | 1 scan, no clone | **2 scans + 1 deep clone** of a 271-byte payload | 1 → 2 |
 
 C's `tools/call` pays twice because the arm-local scan survived the refactor and
 the new finalizer was added on top of it, not in place of it:
 
-- `handlers.rs:1633` — inside the `tools/call` arm, `check_response_artifact(...,
-  FinalResponse, ResponseMutationPolicy::Redact)`
+- `handlers.rs:1633` — inside the meta `tools/call` arm, `check_response_artifact(...,
+  FinalResponse, ResponseMutationPolicy::Redact)`. The enclosing arm was read:
+  it is `"tools/call" => 'tools_call: {` at `handlers.rs:1196`, and the scanned
+  `call_response` is bound at `handlers.rs:1600-1606` from
+  `state.meta_mcp.handle_tools_call(id, tool_name, arguments, …)`, 27 lines above
+  the scan. This is the arm the workload's `gateway_invoke` request takes.
 - `handlers.rs:1824` — the unconditional finalizer,
-  `ResponseMutationPolicy::PreserveInputRequired`
+  `ResponseMutationPolicy::PreserveInputRequired`, after the `match method`
 
 Both target `ResponseArtifactKind::FinalResponse`. The same bytes are inspected
 twice per `tools/call`.
@@ -179,7 +201,7 @@ Two of those are O(response size):
    `response_scanner` pass plus the `redactor.scan_and_redact` walk, both over
    the whole result tree.
 
-The clone is the sharper observation. Its only consumer is
+The clone is the most obviously wasteful of the two. Its only consumer is
 `protected_value_changed` (`:112-125`), and under `PreserveInputRequired` that
 function compares exactly two top-level keys:
 
@@ -190,12 +212,62 @@ ResponseMutationPolicy::PreserveInputRequired => {
 }
 ```
 
-So 4.0.0 deep-clones a multi-kilobyte tool-surface response in order to compare
-two top-level keys that a `tools/list` result does not carry. The comparison is
+So 4.0.0 deep-clones a 16 kB tool-surface response in order to compare two
+top-level keys that a `tools/list` result does not carry. The comparison is
 O(1); the clone that feeds it is O(payload).
 
-That is the payload scaling the ladder measured: `tools/list` (whole meta-tool
-surface) pays ~252 µs, `tools/call` (one short pinned payload) pays ~34 µs, and
+### 2.4 How much of it is per-scan, how much is per-byte
+
+Result sizes, measured directly against a C-arm gateway launched on the pinned
+config (one `curl` per method, compact JSON encoding of the `result` object):
+
+| method | `result` bytes | note |
+|---|---|---|
+| `tools/list` | **16,097** | 17 tool schemas — the whole meta surface |
+| `tools/call` | **271** | the pinned payload plus its MCP content wrapper |
+
+Fit `cost = fixed_per_scan × scans + k × bytes × scans` to the two ablated
+effects from §3 (`tools/list` 213.3 µs over 1 scan; `tools/call` 21.2 µs over 2
+scans):
+
+> **fixed ≈ 7.1 µs per scan, k ≈ 12.8 µs per kB**
+
+Fit it instead to the graded run's own gaps (252.4 µs and 34.1 µs, the latter
+net of B's own ~0.6 µs scan, so 34.7 µs of C-side cost):
+
+> **fixed ≈ 13.3 µs per scan, k ≈ 14.9 µs per kB**
+
+The per-byte term agrees closely across the two fits (12.8 vs 14.9 µs/kB); the
+fixed term does not (7.1 vs 13.3), which is expected — the ablation accounts for
+62–85% of the graded gap and the unattributed residual lands mostly in the
+intercept. Treat it as **roughly 7–13 µs of fixed cost per scan and 13–15 µs per
+kB of result**.
+
+Two consequences:
+
+- **On `tools/call`, the fixed cost dominates.** Of the 21.2 µs ablated, the
+  per-byte term over two scans of 271 bytes is only **6.9 µs (33%)**; the other
+  **14.3 µs (67%)** is fixed per-scan overhead paid twice. On the graded 34.7 µs
+  the split is 8.1 / 26.7, i.e. 77% fixed. The clone at `response.rs:38` is real
+  but is **not** the main cost on the graded metric — it is the main cost on
+  `tools/list`, where 16 kB × ~13 µs/kB is most of the 213 µs.
+- **B's old scan had no comparable fixed cost.** B's single `check_response` over
+  the same 271-byte payload ablates to **−0.6 µs** (rep 1). Whatever the ~7–13 µs
+  per-scan overhead is, 4.0.0 introduced it; it is not inherited from 3.5.1.
+
+What that fixed cost actually is — the `targets.to_vec()/sort/dedup`, the
+`audit.log_response_artifact` call at `response.rs:58`, scanner setup, or
+something else — is **not established here**. Only its size is.
+
+**A caveat on the fit:** two data points and two free parameters means the fit is
+exact by construction and cannot, on its own, distinguish one `tools/call` scan
+from two. The two-scan claim rests on the code (two `check_response_artifact`
+call sites, §2.2), not on this arithmetic. A third point at a different
+`tools/call` payload size would make the fit itself discriminating; it was not
+measured.
+
+That is the shape the ladder saw: `tools/list` (16 kB, one new scan) pays
+~252 µs, `tools/call` (271 B, one scan becoming two) pays ~34 µs, and
 `initialize` and `/health`, which never enter the gate, pay nothing.
 
 ## 3. Confirmatory ablation — turn the scan off and the gap mostly goes away
@@ -293,6 +365,13 @@ this is the probe's own noise floor: **roughly ±10 µs**. That sets the bar the
 other two rows have to clear — `tools/list` clears it by 20×, `tools/call` by
 about 2×.
 
+**On using rep 2 for the C-only deltas while discounting its C−B columns.** That
+is deliberate, and it is not cherry-picking. `B-pinned-2` is contaminated (below),
+which poisons any column that subtracts B from C. It cannot reach a C-only paired
+delta: `C-pinned-2` and `C-ablate-2` are the same binary, run back to back, with
+one config flag between them. The C-only pair is the treatment comparison; the
+C−B columns are a cross-check. Rep 2 is used for the first and not the second.
+
 ### Where this evidence is weak — stated, not buried
 
 1. **The B control is noisy, and one B rep is contaminated.** `B-pinned-2`
@@ -326,18 +405,27 @@ about 2×.
 | It is not transport, middleware, session, router or per-`POST /mcp` cost | **Proven** — `/health` and `initialize` both flat, C between A and B on each |
 | It appeared at 3.5.1 → 4.0.0, not 3.5.0 → 3.5.1 | **Proven** — A and B agree to 0.4 µs on both regressed metrics |
 | The responsible code is the 4.0.0 response-firewall pass reached via `finalize_response_for_delivery` | **Proven on `tools/list`** (85% of the effect ablated, reproducing to 1 µs); **strongly supported on `tools/call`** (62% ablated, right direction both reps, but only ~2× this box's noise floor) |
-| `tools/call` is scanned **twice** per request at 4.0.0 | **Proven by construction** — two `check_response_artifact` call sites, `handlers.rs:1633` (`Redact`) and `handlers.rs:1824` (`PreserveInputRequired`), both on `ResponseArtifactKind::FinalResponse` |
+| `tools/call` is scanned **twice** per request at 4.0.0 | **Proven by construction** — two `check_response_artifact` call sites, `handlers.rs:1633` (`Redact`) and `handlers.rs:1824` (`PreserveInputRequired`), both on `ResponseArtifactKind::FinalResponse`; the enclosing arm at 1633 was read and is the meta `tools/call` arm (`handlers.rs:1196`, `call_response` bound at 1600-1606) |
+| B scans `tools/call` exactly once, not zero times | **Proven by construction** — `backend_tool_targets_for_call` returns one target for `gateway_invoke` (`authorization.rs:19-39`) |
 | `tools/list` was never scanned on the meta path at 3.5.1 | **Proven** — no `check_response` caller covers it at B; `response_security.rs` and `firewall/response.rs` do not exist at B |
 | A full deep clone of the result is taken to support an O(1) two-key comparison | **Proven by construction** — `response.rs:38` vs `response.rs:112-125` |
+| The cost is **not** proportional to payload — there is a large fixed per-scan term | **Proven** — 59× byte ratio against a 7.4× cost ratio; fits give ~7–13 µs/scan fixed and ~13–15 µs/kB marginal (§2.4) |
+| On the graded `tools/call` metric, the fixed per-scan term dominates the clone | **Supported, not proven** — follows from the §2.4 fit (~6.9 of 21.2 µs is per-byte), which is exact-by-construction on two points |
+| The ~7–13 µs fixed per-scan cost is new at 4.0.0 | **Supported** — B's single scan of the same 271-byte payload ablates to −0.6 µs |
+| *Which* component carries the fixed per-scan cost (target vec/sort/dedup, `audit.log_response_artifact`, scanner setup, …) | **Not established.** Not investigated. |
 | The residual — ~13 µs on `tools/call`, ~39 µs on `tools/list` — is also 4.0.0 response work | **Not established.** Unattributed. |
 
 ## 5. Not claimed
 
-- **No fix.** The clone at `response.rs:38`, the duplicate `tools/call` pass, and
-  the unconditional finalizer are each obvious places to look, and none of them
-  is evaluated here for correctness, security consequence or release risk.
-  Whether the second pass is redundant or deliberately defence-in-depth is a
-  question for the owner of that code, not an inference from a latency number.
+- **No fix.** The clone at `response.rs:38`, the duplicate `tools/call` pass, the
+  unconditional finalizer, and whatever carries the ~7–13 µs fixed per-scan cost
+  are each obvious places to look, and none of them is evaluated here for
+  correctness, security consequence or release risk. Note that §2.4 says the
+  clone is *not* where the graded metric's time mostly goes — on a 271-byte
+  `tools/call` result the per-byte term is ~6.9 µs of ~21 µs — so the cheapest
+  fix to reason about is not necessarily the one that moves p50. Whether the
+  second pass is redundant or deliberately defence-in-depth is a question for the
+  owner of that code, not an inference from a latency number.
 - **No verdict change.** `01-compile-quiet-rerun.md` stands: scoped A/B/C p50
   FAIL, run-level VOID exit 3 on D1 admission. This file explains the FAIL; it
   does not regrade it.
@@ -350,13 +438,20 @@ about 2×.
   is a quarter of that metric's own within-cell spread, and `initialize` does not
   enter the gate.
 
-## 6. If one more measurement is wanted
+## 6. If more measurement is wanted
 
-The `tools/call` arm is the one that carries the graded metric and it is the one
-resting on ~2× the noise floor. A quiet-box rerun of exactly this probe — same
-script, gate held for the whole sequence, 3 reps instead of 2 — would move
-"strongly supported" to "proven" on `tools/call` without any new code. That is a
-measurement decision, not a blocker on this diagnosis.
+Two cheap additions, neither a blocker on this diagnosis:
+
+1. **A quiet-box rerun of exactly this probe** — same script, gate held for the
+   whole sequence, 3 reps instead of 2. The `tools/call` arm carries the graded
+   metric and rests on ~2× the noise floor; this would move it from "strongly
+   supported" to "proven" with no new code.
+2. **A third `tools/call` payload size.** The §2.4 fit has two points and two
+   parameters, so it is exact by construction and cannot itself discriminate one
+   scan from two. One extra paired rep against a `tools/call` returning a much
+   larger result would over-determine the fit: a two-scan model and a one-scan
+   model predict measurably different costs there, and the ablation would then
+   corroborate §2.2's code reading instead of merely being consistent with it.
 
 ## Artefacts
 
@@ -364,4 +459,10 @@ Host: measurement box, `~/perf-workload/runs/2026-09-16-fwprobe/`.
 Eight `*.summary.json`, eight `*.k6.txt`, per-rep gateway stdout/stderr (all
 empty), `config.sha256`, `quiet-gate.log`. Probe script
 `~/perf-workload/fw_probe.sh`. Source read at the pinned arm checkouts
-`~/perf-workload/arms/{B,C}`.
+`~/perf-workload/arms/{B,C}`. Payload sizes measured against a C-arm gateway
+launched on `cfg/pinned.yaml`, one `curl` per method.
+
+Extracts copied into this directory as `04-fwprobe-artefacts.txt`: config
+hashes, the `ablate.yaml` diff, the full quiet-gate log, the per-rep p50 table
+with `http_error_rate` / `checks` / `http_reqs`, per-rep stderr byte counts, and
+the two result sizes.

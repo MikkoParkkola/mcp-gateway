@@ -158,6 +158,14 @@ magnitude past anything measured here.
 
 ## What this rules out, and what it does not
 
+> **Mechanism found.** The p50 FAIL recorded here is diagnosed in
+> `03-finding-response-firewall-p50.md`: 4.0.0's new response-firewall scan on
+> the delivered result, gated on `matches!(method, "tools/call" | "tools/list")`.
+> `tools/call` is scanned twice there, `tools/list` goes from never scanned to
+> scanned. Confirmed by ablation; the raw probe artefacts are in
+> `04-fwprobe-artefacts.txt`. That file is a diagnosis only — it does not
+> regrade this one.
+
 **Ruled out — a structural warm-up deficiency.** In `hdrfix-v2` the first
 measured rep of both failing cells was the outlier (B1 p99 2.979 against
 B2/B3 ≈1.1–1.2; C1 highest of its three), which is the signature of one warm-up

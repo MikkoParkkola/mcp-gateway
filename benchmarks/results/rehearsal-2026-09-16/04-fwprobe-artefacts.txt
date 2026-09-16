@@ -53,3 +53,12 @@ C-pinned-2       0.3386   0.4380   1.2966   0.4448      0   1.0000   32835
 0 C-pinned-1.gateway.stderr
 0 C-pinned-2.gateway.stderr
 0 total
+
+## result payload sizes, C arm, pinned config (one curl per method)
+   compact JSON encoding of the JSON-RPC `result` object
+
+   tools/list   16097 bytes   (17 tool schemas)
+   tools/call     271 bytes   (pinned WORKLOAD_OK payload in its MCP content wrapper)
+
+   byte ratio 59.4x against a cost ratio of 252.4/34.1 = 7.4x
+   => the added cost is not purely per-byte; see 03 section 2.4
