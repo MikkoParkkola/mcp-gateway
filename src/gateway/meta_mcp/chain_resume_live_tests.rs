@@ -7,10 +7,9 @@
 //!
 //! Revision 1 shipped the stop and is pinned by rows that hand-build the
 //! envelope. Nothing there drives a resume, so the defect these rows exist for
-//! — the redeemed answers never reaching the step that asked — is invisible to
-//! a green suite. They are `#[ignore]`d until Revision 2 lands, for the reason
-//! the ignored row in `server/mod.rs` gives: watched here so the defect is not
-//! pinned as correct.
+//! — the redeemed answers never reaching the step that asked — was invisible
+//! to a green suite. These rows drive the real entry point instead, so what
+//! they pin is the behaviour a client sees.
 
 use std::sync::{Arc, Mutex};
 
@@ -176,7 +175,6 @@ fn chain() -> Value {
 }
 
 #[tokio::test]
-#[ignore = "MRTR.12 Revision 2 is designed, not built: a resume is refused at step 0"]
 async fn mrtr_12_resume_applies_the_answers_to_the_pending_step() {
     let stub = Arc::new(AsksOnce::default());
     let meta = meta_over(Arc::clone(&stub));

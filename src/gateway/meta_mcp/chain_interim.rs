@@ -159,12 +159,28 @@ fn refused(reason: &ContinuationError) -> Error {
 }
 
 /// What a validated resume is allowed to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainResumePlan {
     /// First step the resume may run. Steps `0..next_step` already ran.
     pub next_step: usize,
     /// Rounds this exchange has spent, carried forward from the envelope.
     pub rounds_used: u32,
+    /// The backend's own state for the question it is holding.
+    ///
+    /// Carried, not looked up: it is the half of the answer the client never
+    /// sees, and dropping it is what made a resume ask the same question again.
+    pub backend_request_state: Option<String>,
+    /// The exchange this resume continues, so the step-scoped envelope minted
+    /// for it names the hold already open rather than opening a second one.
+    pub hold_key: String,
+    /// The deadline of the *first* stop. Frozen for the whole exchange: a
+    /// re-ask that re-initialised it would hand a re-asking backend an
+    /// unbounded wall-clock window.
+    pub expires_at: u64,
+    /// The backend the exchange belongs to.
+    pub backend_id: String,
+    /// The caller this envelope was sealed to.
+    pub principal_fingerprint: String,
 }
 
 /// Validate a presented resume against the chain, the caller, and the ledger.
@@ -242,7 +258,144 @@ pub async fn plan_chain_resume(
     Ok(ChainResumePlan {
         next_step,
         rounds_used: payload.rounds_used,
+        backend_request_state: payload.backend_request_state.clone(),
+        hold_key: payload.hold_key.clone(),
+        expires_at: payload.expires_at,
+        backend_id: payload.backend_id.clone(),
+        principal_fingerprint: payload.principal_fingerprint.clone(),
     })
+}
+
+/// Translate a validated chain resume into the step-scoped envelope the
+/// ordinary redemption path expects.
+///
+/// `redeem_retry` is this gateway's one correct redemption: it checks purpose,
+/// binding, hold and ledger, and lifts `backend_request_state` into the
+/// `OutboundRetry` that travels to the backend. The chain driver feeds that
+/// path rather than growing a second one, so the pending step is invoked with
+/// an envelope bound to the *step* — `original_request_digest` over its own
+/// server, tool and arguments — instead of the chain-wide one, which
+/// `redeemable_by` would refuse.
+///
+/// The resume this call presented, if it presented one.
+///
+/// Read from the caller's parsed retry fields, not from `arguments`: the
+/// specification makes `requestState` a sibling of `arguments`, and
+/// `RetryFields::from_params` is where every other redemption in this gateway
+/// reads it. A chain resume that had to hide the handle inside the tool's own
+/// arguments would be the one redemption spelled differently, and a
+/// spec-conformant client would present a handle nothing here could see.
+///
+/// # Errors
+///
+/// Fails if a handle is presented without a verified identity to bind it to,
+/// or if the handle does not open against this chain.
+pub async fn presented_resume(
+    state: &ContinuationState,
+    retry: &crate::protocol::mrtr::RetryFields,
+    chain: &[Value],
+    identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    now: u64,
+) -> Result<Option<ChainResumePlan>> {
+    let Some(token) = retry.request_state.as_deref() else {
+        return Ok(None);
+    };
+    let fingerprint = crate::protocol::mrtr::principal_fingerprint(identity).ok_or_else(|| {
+        crate::Error::json_rpc(-32602, "A chain resume requires a verified caller identity")
+    })?;
+    plan_chain_resume(state, token, chain, &fingerprint, now)
+        .await
+        .map(Some)
+}
+
+/// The pending step's own redemption handle, carried with the answers.
+///
+/// The chain-scoped handle the caller presented is bound to the whole chain
+/// array and its `jti` was spent planning this resume, so handing it to
+/// `invoke_tool` is what made a resume fail at step 0. This translates it into
+/// one bound to the step that asked.
+///
+/// # Errors
+///
+/// Fails if the pending step carries no usable tool reference, or if the
+/// keyring refuses to mint.
+pub fn step_retry_for(
+    state: &ContinuationState,
+    plan: &ChainResumePlan,
+    chain: &[Value],
+    input_responses: Option<Value>,
+    now: u64,
+) -> Result<crate::protocol::mrtr::RetryFields> {
+    let step = plan.next_step;
+    let tool_ref = chain[step]
+        .get("tool")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            crate::Error::json_rpc(
+                -32602,
+                format!("Chain step {step} has no tool reference to resume"),
+            )
+        })?;
+    let (tool_name, server) = crate::gateway::meta_mcp_helpers::parse_code_mode_tool_ref(tool_ref);
+    let server = server.ok_or_else(|| {
+        crate::Error::json_rpc(
+            -32602,
+            format!("Chain step {step}: tool reference is missing server prefix"),
+        )
+    })?;
+    let arguments = chain[step]
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    Ok(crate::protocol::mrtr::RetryFields {
+        request_state: Some(mint_step_resume(
+            state, plan, server, tool_name, &arguments, now,
+        )?),
+        input_responses,
+        ..Default::default()
+    })
+}
+
+/// The hold is carried, not re-opened: the exchange the backend is holding is
+/// the one [`plan_chain_resume`] just verified. `redeem_retry` closes it itself
+/// once the step runs, so every later stop opens its own through the ordinary
+/// mint — carrying the key past this point would seal a successor against a
+/// hold already `Gone`.
+///
+/// The `jti` is fresh. The one that reached here was spent by the redemption
+/// that produced `plan`, so a copy would fail the ledger on every resume.
+///
+/// # Errors
+///
+/// Fails if the keyring refuses to mint.
+pub fn mint_step_resume(
+    state: &ContinuationState,
+    plan: &ChainResumePlan,
+    server: &str,
+    tool: &str,
+    arguments: &Value,
+    now: u64,
+) -> Result<String> {
+    let payload = Payload {
+        backend_id: plan.backend_id.clone(),
+        backend_request_state: plan.backend_request_state.clone(),
+        principal_fingerprint: plan.principal_fingerprint.clone(),
+        original_request_digest: crate::protocol::mrtr::original_request_digest(
+            server, tool, arguments,
+        ),
+        purpose: ContinuationPurpose::BackendInput,
+        next_step: None,
+        rounds_used: 0,
+        hold_key: plan.hold_key.clone(),
+        expires_at: plan.expires_at,
+        issued_at: now,
+        origin_replica: state.replica().to_string(),
+        jti: uuid::Uuid::new_v4().to_string(),
+    };
+    state
+        .keyring()
+        .mint(&payload)
+        .map_err(|error| Error::json_rpc(-32603, error.to_string()))
 }
 
 /// Seal the envelope a chain stop hands back, from the one the step already has.

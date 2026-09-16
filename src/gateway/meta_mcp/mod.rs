@@ -221,6 +221,43 @@ pub struct MetaMcpCallerContext<'a> {
     pub channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
 }
 
+impl<'a> MetaMcpCallerContext<'a> {
+    /// The same caller, presenting different multi-round-trip fields.
+    ///
+    /// A chain runs its steps as one caller, and only the step that was
+    /// stopped may redeem the answers. Rebuilding the context per step is what
+    /// keeps that structural: `task` is not carried, because a chain step
+    /// never begins a background task of its own — the intent was already
+    /// taken at the dispatch gate above.
+    pub(crate) fn with_retry<'b>(
+        &self,
+        retry: &'b crate::protocol::mrtr::RetryFields,
+    ) -> MetaMcpCallerContext<'b>
+    where
+        'a: 'b,
+    {
+        MetaMcpCallerContext {
+            is_modern: self.is_modern,
+            protocol_revision: self.protocol_revision,
+            credential_principal: self.credential_principal,
+            execution: self.execution,
+            signing: self.signing,
+            authorizer: self.authorizer,
+            api_key_name: self.api_key_name,
+            agent_id: self.agent_id,
+            grant_subject: self.grant_subject.clone(),
+            verified_identity: self.verified_identity,
+            is_admin: self.is_admin,
+            input_capabilities: self.input_capabilities,
+            confirmation: self.confirmation.clone(),
+            retry,
+            task: None,
+            era: self.era,
+            channel: self.channel,
+        }
+    }
+}
+
 // ============================================================================
 // MetaMcp struct
 // ============================================================================

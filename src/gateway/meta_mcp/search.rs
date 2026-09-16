@@ -496,7 +496,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
-        use super::chain_interim::{plan_chain_resume, seal_chain_stop};
+        use super::chain_interim::{presented_resume, seal_chain_stop, step_retry_for};
 
         if chain.is_empty() {
             return Err(Error::json_rpc(-32602, "Chain must not be empty"));
@@ -506,29 +506,34 @@ impl MetaMcp {
         // A presented resume decides where the chain starts and how many rounds
         // this exchange has already spent. Both are sealed, so neither is a
         // number the caller can choose.
-        //
-        // From `caller.retry`, not from `arguments`: the specification makes
-        // `requestState` a sibling of `arguments`, and `RetryFields::from_params`
-        // is where every other redemption in this gateway reads it. A chain
-        // resume that had to hide the handle inside the tool's own arguments
-        // would be the one redemption in the gateway spelled differently, and a
-        // spec-conformant client would present a handle nothing here could see.
-        let (start_step, rounds_used) = match caller.retry.request_state.as_deref() {
-            Some(token) => {
-                let fingerprint =
-                    crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)
-                        .ok_or_else(|| {
-                            Error::json_rpc(
-                                -32602,
-                                "A chain resume requires a verified caller identity",
-                            )
-                        })?;
-                let plan =
-                    plan_chain_resume(&self.continuation, token, &chain, &fingerprint, now).await?;
-                (plan.next_step, plan.rounds_used)
-            }
-            None => (0, 0),
+        let resume = presented_resume(
+            &self.continuation,
+            caller.retry,
+            &chain,
+            caller.verified_identity,
+            now,
+        )
+        .await?;
+        let (start_step, rounds_used) = resume
+            .as_ref()
+            .map_or((0, 0), |plan| (plan.next_step, plan.rounds_used));
+
+        // The pending step is invoked through the ordinary redemption path, so
+        // the chain-scoped handle is translated into one bound to that step.
+        let step_resume = match resume.as_ref() {
+            Some(plan) => Some(step_retry_for(
+                &self.continuation,
+                plan,
+                &chain,
+                caller.retry.input_responses.clone(),
+                now,
+            )?),
+            None => None,
         };
+        let frozen_expiry = resume.as_ref().map(|plan| plan.expires_at);
+        let step_retry = step_resume
+            .as_ref()
+            .unwrap_or(&crate::protocol::mrtr::NO_RETRY);
 
         let mut run_step = |idx: usize, tool_ref: String, arguments: Value| async move {
             let (tool_name, server_opt) = parse_code_mode_tool_ref(&tool_ref);
@@ -548,7 +553,20 @@ impl MetaMcp {
                 "arguments": arguments,
             });
 
-            match self.invoke_tool(&invoke_args, session_id, caller).await {
+            // The answers belong to the step that asked for them and to no
+            // other. Successors run with an empty retry, which makes "applies
+            // to the pending step only" structural rather than asserted: there
+            // is nothing left for them to redeem or forward.
+            let step_caller = caller.with_retry(if idx == start_step {
+                step_retry
+            } else {
+                &crate::protocol::mrtr::NO_RETRY
+            });
+
+            match self
+                .invoke_tool(&invoke_args, session_id, &step_caller)
+                .await
+            {
                 Ok(result) => Ok(result),
                 // A refusal stays a refusal. Flattening it into -32603 told
                 // the caller their chain hit an internal error when in fact
@@ -590,6 +608,14 @@ impl MetaMcp {
             // every mint. The bound belongs to the chain exchange, so the count
             // carried by the resume is what gets incremented.
             previous.rounds_used = rounds_used;
+            // The deadline belongs to the exchange, not to the round. The
+            // envelope just minted for this question carries a fresh one, so a
+            // resumed chain re-freezes it to the first stop's — including when
+            // the chain stops at a *different* step, which is a new question
+            // but the same exchange.
+            if let Some(expiry) = frozen_expiry {
+                previous.expires_at = expiry;
+            }
             let backend_state = previous.backend_request_state.clone();
             let payload = seal_chain_stop(&previous, chain_ref, idx, backend_state);
             self.continuation
