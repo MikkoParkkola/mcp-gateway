@@ -34,6 +34,7 @@ use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
+use crate::protocol::extensions::{Extension, ExtensionSet};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
 use crate::security::{extract_agent_identity, sanitize_json_value, validate_agent_identity};
@@ -179,17 +180,25 @@ fn reaches_tasks_extension(method: &str, params: Option<&Value>) -> bool {
 /// Per request, never remembered: a declaration is a statement about the
 /// message carrying it, and a client that declared once is not thereby a client
 /// that can handle a task handle on every later call.
+///
+/// The read is delegated to [`ExtensionSet::from_capabilities`] rather than
+/// spelled out here, because the two must not diverge and they had: this gate
+/// tested the key with `.is_some()`, so a settings value of `3` opened it while
+/// the typed reader rejected the same declaration as malformed. That reader
+/// owns the rule -- settings must be an object, presence is not agreement --
+/// and the refusal below already advertises that shape.
 fn declares_tasks_extension(params: Option<&Value>) -> bool {
     params
         .and_then(|p| {
-            p.pointer("/_meta/io.modelcontextprotocol~1clientCapabilities/extensions")
+            p.pointer("/_meta/io.modelcontextprotocol~1clientCapabilities")
                 .or_else(|| {
                     p.get("_meta")?
-                        .get("io.modelcontextprotocol/clientCapabilities")?
-                        .get("extensions")
+                        .get("io.modelcontextprotocol/clientCapabilities")
                 })
         })
-        .is_some_and(|ext| ext.get(TASKS_EXTENSION).is_some())
+        .is_some_and(|caps| {
+            ExtensionSet::from_capabilities(caps).contains(Extension::Tasks)
+        })
 }
 
 /// The task ids a `subscriptions/listen` names, if it names any.

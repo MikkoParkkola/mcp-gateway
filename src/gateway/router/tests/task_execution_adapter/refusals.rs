@@ -367,3 +367,55 @@ async fn fixture_control_an_allowed_eligible_call_dispatches_and_settles() {
          target could not pass this row on the counter alone: {settled}"
     );
 }
+
+/// E5 — presence is not agreement: a non-object settings value is not a
+/// declaration.
+///
+/// `ExtensionSet::from_capabilities` (`protocol/extensions.rs:82-101`) keeps
+/// only extensions whose settings value is an object, and states the reason:
+/// accepting a null, a number or a string "let a malformed declaration switch
+/// on behaviour the peer never validly negotiated". The refusal this row
+/// expects already advertises that shape — the gate answers with
+/// `{"extensions": {TASKS_EXTENSION: {}}}`, an object, so a gate that then
+/// accepts `3` contradicts its own error payload.
+///
+/// The request declares the modern era properly (`modern` supplies
+/// `protocolVersion`), so a refusal here is the extension gate, not the shape
+/// gate above it — the distinction §3.2 of the Cluster B test plan insists on.
+#[tokio::test]
+async fn e5_a_non_object_settings_value_is_not_a_tasks_declaration() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+
+    for (id, settings) in [(150, json!(3)), (151, json!(null))] {
+        let mut malformed = modern(
+            id,
+            "tools/call",
+            json!({
+                "name": "gateway_invoke",
+                "arguments": { "server": BACKEND, "tool": TOOL, "arguments": {} },
+                "task": {}
+            }),
+            false,
+        );
+        malformed["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+            json!({ "extensions": { TASKS_EXTENSION: settings } });
+
+        let refused = post(&state, "key-a", malformed).await;
+
+        assert_eq!(
+            refused.pointer("/error/code").and_then(Value::as_i64),
+            Some(i64::from(
+                crate::protocol::era::MISSING_REQUIRED_CLIENT_CAPABILITY
+            )),
+            "a settings value of `{settings}` is not a declaration of the tasks \
+             extension, so the gate must refuse with the missing-capability \
+             code: {refused}"
+        );
+        assert!(
+            refused.pointer("/result/taskId").is_none(),
+            "and it must not be handed a task handle it never said it could \
+             hold: {refused}"
+        );
+    }
+}

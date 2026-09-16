@@ -264,11 +264,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the process it replaced. This binds only when `server.modern_protocol` is on;
   with it off, scale as before.
 
-  **The tasks extension is not implemented.** `io.modelcontextprotocol/tasks` is
-  never advertised, so no client negotiates it. The types in the tree are short
-  of the specification — three statuses of five, two required fields missing, a
-  string where a JSON-RPC error object belongs — and turning the advertisement
-  on before that is fixed would break a client that trusted the identifier.
+  **The tasks extension is advertised, and its model is deliberately short.**
+  `server/discover` advertises `io.modelcontextprotocol/tasks`; the `initialize`
+  result does not, because the 2026-07-28 lifecycle scopes that handshake to
+  clients the extension is not for. The types in the tree remain short of the
+  specification — three statuses of five, two required fields missing, a string
+  where a JSON-RPC error object belongs — and closing that gap is MIK-7311.
+  Advertising while the model is short is the intended 4.0.0 state: discovery
+  states which extension the gateway speaks. A request reaching the extension
+  must declare it in that same request's `_meta`, and a declaration whose
+  settings value is not an object is refused rather than honoured.
   MIK-7311 owns the conformant implementation.
 
 ### Changed
