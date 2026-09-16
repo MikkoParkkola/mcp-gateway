@@ -54,19 +54,21 @@ This posture is consistent with the governing framework:
 
 ## Contributors
 
-Outside contributions accepted into the work, in the order they were merged. A
-contributor's acceptance of [`CLA.md`](CLA.md) is recorded in the pull request
-that introduced their first contribution; where that record is outstanding, or
-where the contribution predates [`CLA.md`](CLA.md) (added 2026-07-11), this
-table says so rather than implying an acceptance that was never given.
+Outside contributions accepted into the work, in the order they were merged.
+[`CLA.md`](CLA.md) binds on submission — contributing is acceptance, and no
+signature is required — so a contribution made while the CLA was in the
+repository is covered by it. A contributor may also record the acceptance
+explicitly in their pull request. Where a contribution predates
+[`CLA.md`](CLA.md) (added 2026-07-11) the CLA does not reach it, and this table
+says so rather than implying an acceptance that was never given.
 
 | Contributor | Contribution | Pull request | CLA on record |
 |---|---|---|---|
 | Bryan Zick, submitted by [v4de](https://github.com/v4de) | `structuredContent` in responses from tools that declare an `outputSchema`, as the MCP 2025-06-18 spec requires | [#159](https://github.com/MikkoParkkola/mcp-gateway/pull/159) | **not applicable** — merged 2026-04-27, before `CLA.md` existed |
 | [v4de](https://github.com/v4de) | Rust 1.95 clippy, rustfmt and compilation fixes across ~15 sites | [#160](https://github.com/MikkoParkkola/mcp-gateway/pull/160) | **not applicable** — merged 2026-04-28, before `CLA.md` existed |
-| [terafin](https://github.com/terafin) | Parallel, timeout-bounded backend fan-out for `prompts/list` and `resources/list`; cancellation-safe cleanup of in-flight transport requests | [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465) | **outstanding** — requested 2026-09-04, after the merge |
-| [yfcyfc123234](https://github.com/yfcyfc123234) | `APPDATA` and `LOCALAPPDATA` passed through to stdio child processes on Windows | [#522](https://github.com/MikkoParkkola/mcp-gateway/pull/522) | **outstanding** — not requested |
-| [yfcyfc123234](https://github.com/yfcyfc123234) | One host-platform parser for configured stdio commands, following `CommandLineToArgvW` rules on Windows; `doctor` fails invalid quoting instead of reporting a false pass | [#564](https://github.com/MikkoParkkola/mcp-gateway/pull/564) | **outstanding** — not requested |
+| [terafin](https://github.com/terafin) | Parallel, timeout-bounded backend fan-out for `prompts/list` and `resources/list`; cancellation-safe cleanup of in-flight transport requests | [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
+| [yfcyfc123234](https://github.com/yfcyfc123234) | `APPDATA` and `LOCALAPPDATA` passed through to stdio child processes on Windows | [#522](https://github.com/MikkoParkkola/mcp-gateway/pull/522) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
+| [yfcyfc123234](https://github.com/yfcyfc123234) | One host-platform parser for configured stdio commands, following `CommandLineToArgvW` rules on Windows; `doctor` fails invalid quoting instead of reporting a false pass | [#564](https://github.com/MikkoParkkola/mcp-gateway/pull/564) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
 
 ## Third-party material
 
