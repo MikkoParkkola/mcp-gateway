@@ -2359,6 +2359,10 @@ mod search_disclosure_e2e;
 mod trace_correlation_tests;
 
 #[cfg(test)]
+#[path = "chain_resume_live_tests.rs"]
+mod chain_resume_live_tests;
+
+#[cfg(test)]
 #[path = "account_entry_point_authz_tests.rs"]
 mod account_entry_point_authz_tests;
 

@@ -262,13 +262,17 @@ site — so this is a design gap, not a missing test.
 
 ### What is wrong
 
-1. **The answers never arrive.** `ChainResumePlan` carries `next_step` and
-   `rounds_used` and discards the redeemed envelope's `backend_request_state`.
-   `run_step` builds `{server, tool, arguments}` only. A resume therefore
-   re-invokes the pending step with its original chain arguments and no answers,
-   so the backend asks the same question again and the exchange burns rounds to
-   the cap. The caller cannot supply the answers through the chain array either:
-   `chain_digest` binds the whole array, so a modified step is refused.
+1. **The resume cannot complete the chain at all.** `ChainResumePlan` carries
+   `next_step` and `rounds_used` and discards the redeemed envelope's
+   `backend_request_state`. Worse, `execute_chain` hands each step the caller
+   *verbatim* (`search.rs:551`), so the pending step re-presents the
+   **chain-scoped** handle to `redeem_retry`: bound to `chain_digest`, and
+   already spent by `plan_chain_resume`. Observed live — a resume returns
+   `Chain step 0 (srv:ask) failed: continuation rejected`, pinned by the
+   falsifier row below. Even reading past that refusal, the answers would not
+   arrive: `run_step` builds `{server, tool, arguments}` only. The caller cannot
+   route them through the chain array either — `chain_digest` binds the whole
+   array, so a modified step is refused.
 2. **The deadline resets on every re-ask.** `seal_chain_stop` is documented to
    copy the deadline, never re-initialise it. Its only caller hands it the
    *freshly minted step envelope* and patches `rounds_used` back in, so
