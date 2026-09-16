@@ -10,9 +10,11 @@
 //!
 //! Design: `docs/design/2026-09-16-mrtr-12-chain-interim-stop.md`.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use crate::protocol::continuation::{ContinuationState, Payload};
+use crate::protocol::continuation::{
+    ContinuationError, ContinuationPurpose, ContinuationState, Payload, Routing,
+};
 use crate::protocol::mrtr::InputRequired;
 use crate::{Error, Result};
 
@@ -45,10 +47,12 @@ pub fn classify_step_result(
     tool_ref: &str,
     result: &Value,
 ) -> Result<Option<InputRequired>> {
-    let _ = (idx, tool_ref, result);
-    unimplemented!(
-        "MRTR.12: classify a step result as completed, interim, or a malformed interim claim"
-    )
+    if !InputRequired::claims_input_required(result) {
+        return Ok(None);
+    }
+    InputRequired::from_result(result)
+        .map(Some)
+        .ok_or_else(|| malformed_interim_error(idx, tool_ref))
 }
 
 /// Run `chain[start_step..]`, stopping at the first validated interim round.
@@ -71,8 +75,57 @@ pub fn drive_chain(
     run_step: &mut dyn FnMut(usize, &str, &Value) -> Result<Value>,
     seal_stop: &mut dyn FnMut(usize, &InputRequired) -> Result<String>,
 ) -> Result<Value> {
-    let _ = (chain, start_step, run_step, seal_stop);
-    unimplemented!("MRTR.12: run the chain tail and stop at the first validated interim round")
+    let mut completed: Vec<Value> = Vec::new();
+    for (idx, step) in chain.iter().enumerate().skip(start_step) {
+        let tool_ref = step.get("tool").and_then(Value::as_str).unwrap_or_default();
+        let arguments = step.get("arguments").cloned().unwrap_or(Value::Null);
+        let result = run_step(idx, tool_ref, &arguments)?;
+
+        // Classified before the result is recorded, so a step that asked is
+        // never pushed as an answer — the whole defect is one `Ok` treated as
+        // two different things.
+        let Some(round) = classify_step_result(idx, tool_ref, &result)? else {
+            completed.push(result);
+            continue;
+        };
+
+        // The token replaces the backend's own `requestState` in the response.
+        // The backend's state is authorization it issued to us, not to the
+        // caller; it travels sealed inside the envelope, and what the caller
+        // echoes is the handle that carries it back.
+        let request_state = seal_stop(idx, &round)?;
+        return Ok(json!({
+            "resultType": "input_required",
+            "pendingStep": idx,
+            "pendingTool": tool_ref,
+            "inputRequests": round
+                .requests
+                .iter()
+                .cloned()
+                .collect::<serde_json::Map<String, Value>>(),
+            "requestState": request_state,
+            "steps": completed.len(),
+            "results": completed,
+        }));
+    }
+    Ok(json!({"steps": completed.len(), "results": completed}))
+}
+
+/// What the chain digest binds: the whole chain array, canonically.
+///
+/// Over the array rather than the step a resume starts at, because the binding
+/// exists to stop a substituted *successor* — the steps `next_step` licenses
+/// the gateway to run without the caller presenting them again.
+fn chain_digest(chain: &[Value]) -> String {
+    let canonical = crate::hashing::canonical_json(&json!(chain));
+    crate::hashing::sha256_hex_chunks([canonical.as_bytes()])
+}
+
+/// The refusal a presented resume earns, in the spelling `invoke.rs` uses for
+/// the backend-input domain: the client learns it cannot redeem, never which
+/// binding told us so.
+fn refused(reason: &ContinuationError) -> Error {
+    Error::json_rpc(-32602, reason.client_message())
 }
 
 /// What a validated resume is allowed to do.
@@ -104,8 +157,61 @@ pub async fn plan_chain_resume(
     principal_fingerprint: &str,
     now: u64,
 ) -> Result<ChainResumePlan> {
-    let _ = (state, token, chain, principal_fingerprint, now);
-    unimplemented!("MRTR.12: validate a sealed chain resume and yield the steps it may run")
+    let payload = state
+        .keyring()
+        .open(token, now)
+        .map_err(|reason| refused(&reason))?;
+
+    // Purpose first, for the reason `invoke.rs` gives at its own redemption:
+    // an envelope minted for another domain is *authentic*, so only its purpose
+    // can refuse it, and a refusal arriving after the hold or the ledger was
+    // touched would spend what the exchange it really belongs to still needs.
+    payload
+        .require_purpose(ContinuationPurpose::ChainResume)
+        .map_err(|reason| refused(&reason))?;
+    payload
+        .redeemable_by(principal_fingerprint, &chain_digest(chain))
+        .map_err(|reason| refused(&reason))?;
+
+    // `next_step` is the index of the step that asked, so the chain must still
+    // contain it. `chain.len()` is already past the end: it names a step that
+    // never existed, not a resume with nothing left to run.
+    let Some(next_step) = payload.next_step.filter(|step| *step < chain.len()) else {
+        return Err(refused(&ContinuationError::NotAuthentic));
+    };
+
+    // Before the hold and the ledger, and unlike them it is worth naming: a
+    // caller that has hit the cap can stop presenting the handle, which is
+    // exactly what a generic refusal would leave it retrying.
+    if payload.rounds_used >= MAX_CHAIN_ROUNDS {
+        return Err(Error::json_rpc(
+            -32602,
+            format!(
+                "This chain exchange has used its {MAX_CHAIN_ROUNDS} interim rounds;                  start it again rather than answering once more"
+            ),
+        ));
+    }
+
+    // MRTR.6, unchanged for this domain: the exchange must still be open, here.
+    // A key the table never knew and one whose exchange has ended both answer
+    // `Gone`, and both refuse before the redemption is spent.
+    if state.in_flight().route(&payload.hold_key, now).await == Routing::Gone {
+        return Err(refused(&ContinuationError::NotAuthentic));
+    }
+
+    // Last, so nothing above burns the caller's one redemption.
+    if !state
+        .ledger()
+        .consume(&payload.jti, payload.expires_at, now)
+        .await
+    {
+        return Err(refused(&ContinuationError::NotAuthentic));
+    }
+
+    Ok(ChainResumePlan {
+        next_step,
+        rounds_used: payload.rounds_used,
+    })
 }
 
 /// Seal the successor envelope for a chain that stopped again at the same step.
@@ -115,8 +221,15 @@ pub async fn plan_chain_resume(
 /// re-asking backend an unbounded sequence of resumable rounds.
 #[must_use]
 pub fn reseal_chain_resume(previous: &Payload, backend_request_state: Option<String>) -> Payload {
-    let _ = (previous, backend_request_state);
-    unimplemented!("MRTR.12: carry next_step, rounds_used and the deadline into the next envelope")
+    Payload {
+        backend_request_state,
+        // A fresh handle. The `jti` that reached this re-ask was consumed by
+        // the redemption that ran the step, so carrying it forward would seal
+        // an envelope the ledger has already retired.
+        jti: uuid::Uuid::new_v4().to_string(),
+        rounds_used: previous.rounds_used.saturating_add(1),
+        ..previous.clone()
+    }
 }
 
 /// The upstream tool error a malformed interim claim earns.
