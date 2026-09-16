@@ -266,17 +266,6 @@ pub async fn plan_chain_resume(
     })
 }
 
-/// Translate a validated chain resume into the step-scoped envelope the
-/// ordinary redemption path expects.
-///
-/// `redeem_retry` is this gateway's one correct redemption: it checks purpose,
-/// binding, hold and ledger, and lifts `backend_request_state` into the
-/// `OutboundRetry` that travels to the backend. The chain driver feeds that
-/// path rather than growing a second one, so the pending step is invoked with
-/// an envelope bound to the *step* — `original_request_digest` over its own
-/// server, tool and arguments — instead of the chain-wide one, which
-/// `redeemable_by` would refuse.
-///
 /// The resume this call presented, if it presented one.
 ///
 /// Read from the caller's parsed retry fields, not from `arguments`: the
@@ -314,6 +303,14 @@ pub async fn presented_resume(
 /// array and its `jti` was spent planning this resume, so handing it to
 /// `invoke_tool` is what made a resume fail at step 0. This translates it into
 /// one bound to the step that asked.
+///
+/// `redeem_retry` is this gateway's one correct redemption: it checks purpose,
+/// binding, hold and ledger, and lifts `backend_request_state` into the
+/// `OutboundRetry` that travels to the backend. The chain driver feeds that
+/// path rather than growing a second one, so the pending step is invoked with
+/// an envelope bound to the *step* — `original_request_digest` over its own
+/// server, tool and arguments — instead of the chain-wide one, which
+/// `redeemable_by` would refuse.
 ///
 /// # Errors
 ///
