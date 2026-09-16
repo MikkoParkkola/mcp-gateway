@@ -1,3 +1,8 @@
+> By opening this pull request you accept the [Contributor License Agreement](https://github.com/MikkoParkkola/mcp-gateway/blob/main/CLA.md).
+> It binds on submission — there is nothing to sign. You keep your copyright,
+> and you grant a relicensable copyright and patent licence so commercial
+> licences can be offered for this Noncommercial-licensed code.
+
 ## What this PR does
 
 
