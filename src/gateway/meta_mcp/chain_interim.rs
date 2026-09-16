@@ -146,7 +146,7 @@ where
 /// Over the array rather than the step a resume starts at, because the binding
 /// exists to stop a substituted *successor* — the steps `next_step` licenses
 /// the gateway to run without the caller presenting them again.
-fn chain_digest(chain: &[Value]) -> String {
+pub(crate) fn chain_digest(chain: &[Value]) -> String {
     let canonical = crate::hashing::canonical_json(&json!(chain));
     crate::hashing::sha256_hex_chunks([canonical.as_bytes()])
 }
