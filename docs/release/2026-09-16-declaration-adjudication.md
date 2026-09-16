@@ -172,7 +172,55 @@ Both seats agree the direction is right — parity with the direct `tools/call`
 path and with the task worker's `Native` arm. Neither found a reason to keep
 wrapping interim results.
 
+## The two rules, ratified
+
+Both reviews left the same two rules unwritten. They are the design, not a
+hardening pass, and the chain half states the matching versions of them
+(`docs/design/2026-09-16-mrtr-12-chain-interim-stop.md`).
+
+### Validation before promotion (MRTR.11b)
+
+A result is promoted only if `InputRequired::from_result`
+(`src/protocol/mrtr.rs:225`) accepts it. `resultType: "input_required"` written
+into a backend's output is a claim, not a qualification: the parse also requires
+a well-formed `inputRequests` or `requestState` (`:155`). A result that claims
+the type and fails the parse is answered with an upstream tool error naming the
+backend and tool — never promoted, and never wrapped in a way that lets the
+claim through unexamined. Both review seats reached this independently and rated
+it HIGH: without it, an untrusted backend turns any completed answer into a
+client-facing question loop carrying text it authored.
+
+When promotion does happen, `inputRequests` is emitted as the keyed object the
+backend sent. `InputRequired::requests` is a `Vec<(String, Value)>`
+(`:206`) whose keys are the server's own, and its doc comment records why they
+must survive: the server looks for exactly those keys on the retry, so an answer
+under a different key "is lost as surely as one that was never collected"
+(`:201-205`).
+
+### The fallback rule (what a client that cannot read a promoted round gets)
+
+Promotion is conditioned on what the caller declared, not on the payload alone.
+A shape that flips per result, with nothing negotiated, is the failure the
+second seat named.
+
+| Caller | What it receives |
+| --- | --- |
+| Declares it can read a top-level interim round | The promoted native result |
+| Has the elicitation bridge | The question through the bridge, as today |
+| Neither | The wrapped text, unchanged from today's behaviour |
+
+The third row is not a regression: the text is readable, and a single call that
+returns a question has no silent successor. This is deliberately *not* what a
+chain does — a chain returns a step-scoped error there, because a legacy caller
+reading an apparently complete chain whose tail never ran is the one outcome
+worth refusing.
+
+The `response_delivery_tests.rs:510` test is retargeted, not deleted. It pins a
+property rather than a shape: that the firewall treats a wrapped question as
+trusted-immutable. It keeps that assurance under a name marking it as
+legacy-bridge coverage.
+
 ## Where this stands
 
-Design reviewed, not yet implemented. Before code: write the validation rule and
-the legacy-client fallback into the design, then a failing test first.
+Design reviewed and both rules ratified. Next: the failing tests, reviewed as
+tests, then implementation.
