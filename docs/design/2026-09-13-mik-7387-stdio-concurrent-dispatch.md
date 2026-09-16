@@ -42,19 +42,24 @@ read.
 
 ### 1. One writer, owning stdout
 
-An `mpsc::UnboundedSender<Value>` feeding a single task that owns
-`tokio::io::stdout()` and writes one serialized frame plus `\n` per message.
+An `mpsc::Sender<Value>` bounded at `STDOUT_QUEUE_DEPTH` (1024) feeding a single
+task that owns `tokio::io::stdout()` and writes one serialized frame plus `\n`
+per message.
 Every producer — responses and outbound requests alike — sends on that channel
 and never touches stdout. This is what makes row 324's framing assertion true
 by construction rather than by luck: with a shared unlocked writer, two tasks
 serializing into the same handle can interleave mid-frame.
 
-Unbounded is deliberate, and the honest reason is not deadlock: the writer only
-writes and never waits on a dispatch task, so a bounded queue could not deadlock
-against it. The tradeoff is unbounded memory against backpressure that has
-nowhere to go — the only producer worth throttling is a client that has already
-been served, and slowing the writer would not slow it. For one spawned client,
-memory wins.
+The queue was unbounded when this document was first ratified, on the argument
+that the writer only writes and never waits on a dispatch task, so a bounded
+queue could not deadlock against it, and that the only producer worth throttling
+is a client that has already been served. That argument still holds for
+deadlock. It was superseded on memory: an unbounded queue lets a client that
+stops reading stdout grow the process without limit, and "one spawned client"
+is not a trust boundary — a buggy client reaches the same state as a hostile
+one. `STDOUT_QUEUE_DEPTH` (1024) is the bound that replaced it, and the cost is
+that a producer can now park on a full queue. `close` racing that park is a
+known defect, tracked against `src/gateway/server/stdio_channel.rs:124`.
 
 ### 2. `initialize` stays inline; everything else is spawned
 
@@ -98,7 +103,7 @@ timed-out prompt is the expected cause and is not an error.
 
 ```
 pending: DashMap<String, oneshot::Sender<Value>>
-writer:  mpsc::UnboundedSender<Value>
+writer:  mpsc::Sender<Value>            // bounded, STDOUT_QUEUE_DEPTH
 ```
 
 `send_request` registers the oneshot under `id` behind
@@ -187,7 +192,8 @@ dispatch stays invisible until EOF.
 
 | Risk | Mitigation |
 |---|---|
-| Unbounded spawn under a flood of inbound lines | Accepted for stdio: one client, which spawned this process. Noted, not defended — a bound belongs with a real producer |
+| Unbounded spawn under a flood of inbound lines | A bound was added after ratification: `MAX_CONCURRENT_STDIO_DISPATCHES` (64), held as a semaphore permit for the life of each dispatch. The bound is enforced by awaiting a permit **inside the read loop**, which is itself a defect — see the row below |
+| Awaiting an admission permit parks the only stdin reader | OPEN, confirmed at `src/gateway/server/mod.rs:2552`. Past 64 concurrent bridged dispatches the 65th line blocks the reader, and the replies those 64 are waiting for can only be routed by the reader now parked. This is the N=1 deadlock this document exists to remove, relocated to N=65. Admission must become non-blocking |
 | A dispatch that never finishes stalls the EOF drain | The drain is bounded; past the bound the abort guards fire, which is strictly today's behaviour and no worse |
 | Telemetry lock contention | One `std::sync::Mutex` around a synchronous persist, never held across an await (§5) |
 | Out-of-order responses break an unknown consumer | Searched the three stdio test files; only row 323 asserts ordering, and §2 preserves it |
