@@ -66,9 +66,13 @@ impl TraceContext {
     }
 
     /// The trace id, which is what correlates records across the hop.
+    ///
+    /// `None` when the caller propagated `baggage` alone: baggage is its own
+    /// W3C specification and carries no trace id, so there is nothing to
+    /// correlate on. A caller that sent one is not given one.
     #[must_use]
-    pub fn trace_id(&self) -> &str {
-        &self.trace_id
+    pub fn trace_id(&self) -> Option<&str> {
+        Some(&self.trace_id)
     }
 
     /// The `_meta` fields to send onward, unchanged.
@@ -128,12 +132,129 @@ mod tests {
     }
 
     #[test]
-    fn baggage_alone_does_not_rescue_a_malformed_traceparent() {
+    fn baggage_alone_is_never_a_correlation_key() {
         // Guards the parse order: baggage must never become a correlation key
-        // in its own right.
+        // in its own right. It still PROPAGATES on its own — that is
+        // `baggage_alone_propagates_without_any_traceparent` — so the property
+        // this row owns is the key, not the presence.
+        let context = TraceContext::from_meta(&json!({ "baggage": "userId=alice" }))
+            .expect("baggage alone propagates");
+        assert_eq!(context.trace_id(), None);
+    }
+
+    // ── T7: the four §3.4b grammar predicates, one row each (A9: each input
+    // breaks exactly one thing, and its permitted neighbour is asserted).
+
+    #[test]
+    fn uppercase_hex_is_rejected_and_the_lowercase_neighbour_accepted() {
+        // W3C trace-context: traceparent is lowercase hex only.
+        let upper = "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01";
+        assert!(parent_of(upper).is_none(), "uppercase must be refused");
+        assert!(parent_of(TRACEPARENT).is_some(), "lowercase must be kept");
+    }
+
+    #[test]
+    fn version_ff_is_rejected_and_version_00_accepted() {
+        // W3C reserves ff; it is never a valid version.
+        let ff = "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        assert!(parent_of(ff).is_none(), "version ff must be refused");
+        assert!(parent_of(TRACEPARENT).is_some());
+    }
+
+    #[test]
+    fn all_zero_parent_id_is_rejected_and_a_nonzero_one_accepted() {
+        // The span id has the same invalid-value rule as the trace id.
+        let zero = "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01";
+        assert!(parent_of(zero).is_none(), "all-zero parent-id must be refused");
+        assert!(parent_of(TRACEPARENT).is_some());
+    }
+
+    #[test]
+    fn a_five_field_traceparent_is_accepted_and_emitted_verbatim() {
+        // A future version may carry more fields: read the first four, ignore
+        // the rest, and emit byte-for-byte what arrived.
+        let five = "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra";
+        let onward = TraceContext::from_meta(&json!({ "traceparent": five }))
+            .expect("a valid future version parses")
+            .to_meta();
+        assert_eq!(onward["traceparent"], json!(five));
+    }
+
+    // ── T8a: charset, one row per opaque field. traceparent's charset is the
+    // hex rule above, so it has no separate row.
+
+    #[test]
+    fn tracestate_carrying_a_control_character_is_dropped() {
+        let onward = TraceContext::from_meta(&json!({
+            "traceparent": TRACEPARENT,
+            "tracestate": "vendor=a\rb",
+        }))
+        .expect("the traceparent is valid")
+        .to_meta();
+        assert!(onward.get("tracestate").is_none(), "got {onward}");
+        assert_eq!(onward["traceparent"], json!(TRACEPARENT), "the parent survives");
+    }
+
+    #[test]
+    fn baggage_carrying_a_control_character_is_dropped() {
+        let onward = TraceContext::from_meta(&json!({
+            "traceparent": TRACEPARENT,
+            "baggage": "userId=a\nb",
+        }))
+        .expect("the traceparent is valid")
+        .to_meta();
+        assert!(onward.get("baggage").is_none(), "got {onward}");
+        assert_eq!(onward["traceparent"], json!(TRACEPARENT), "the parent survives");
+    }
+
+    // ── T5/T6: baggage is its own W3C specification and does not depend on a
+    // trace context. T5b/T6b: tracestate annotates a parent and dies with it.
+
+    #[test]
+    fn baggage_alone_propagates_without_any_traceparent() {
+        let onward = TraceContext::from_meta(&json!({ "baggage": "userId=alice" }))
+            .expect("baggage alone still propagates")
+            .to_meta();
+        assert_eq!(onward["baggage"], json!("userId=alice"));
+        assert!(onward.get("traceparent").is_none(), "nothing is minted");
+    }
+
+    #[test]
+    fn baggage_survives_a_malformed_traceparent() {
+        let onward = TraceContext::from_meta(&json!({
+            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
+            "baggage": "userId=alice",
+        }))
+        .expect("baggage propagates even when the parent is refused")
+        .to_meta();
+        assert_eq!(onward["baggage"], json!("userId=alice"));
+        assert!(onward.get("traceparent").is_none(), "a refused parent is dropped");
+    }
+
+    #[test]
+    fn tracestate_alone_is_dropped_without_a_traceparent() {
         assert_eq!(
-            TraceContext::from_meta(&json!({ "baggage": "userId=alice" })),
-            None
+            TraceContext::from_meta(&json!({ "tracestate": "vendor=opaque" })),
+            None,
+            "orphaned tracestate has nothing to annotate"
         );
+    }
+
+    #[test]
+    fn tracestate_is_dropped_with_a_malformed_traceparent() {
+        assert_eq!(
+            TraceContext::from_meta(&json!({
+                "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
+                "tracestate": "vendor=opaque",
+            })),
+            None,
+            "tracestate dies with the parent it annotates"
+        );
+    }
+
+    /// Parse helper: did a `traceparent` survive as a correlation key?
+    fn parent_of(traceparent: &str) -> Option<String> {
+        TraceContext::from_meta(&json!({ "traceparent": traceparent }))
+            .and_then(|tc| tc.trace_id().map(str::to_string))
     }
 }
