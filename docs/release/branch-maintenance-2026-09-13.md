@@ -70,3 +70,27 @@ such commits. These are unmerged work, not stale refs. Deleting them is a
 decision about content, so the next step is `docs/release/branch-criteria-survey.md`,
 which asks per branch whether it carries code satisfying a pending v4.0.0
 criterion. A branch is only a cleanup candidate once that question has an answer.
+
+## 2026-09-16 sweep — nothing retirable, and the reason is worth recording
+
+80 local branches, 54 worktrees, 4.7 GiB under `~/github/.worktrees`. Only five
+branches are contained in `origin/main`; one of them is `main`. The other four
+were checked against the delete gate and **none can be retired today**:
+
+| Branch | Worktree | Why it stays |
+|---|---|---|
+| `feat/v4-bounded-audit-reads` | `v4-audit-bounded` | 4 uncommitted entries incl. untracked `src/control_plane/reverse_reader.rs` and `src/control_plane/store/` |
+| `fix/v4-integration-ci-green` | `v4-ci-green` | 3 modified source files incl. `tests/mik_7212_mrtr7_stdio_acs.rs` |
+| `merge/v4-integration-main` | `v4-merge` | 222 entries, mostly staged — a whole licence flip and three workflow files |
+| `codex/v4-next-integration` | `mcp-v4-next-integration` | base of open PR #512; the remote is ahead of the local ref (`47f2c23d` vs `dbc06304`) |
+
+Every one of the first three has `git rev-list --count <branch> --not --remotes`
+= 0, so the commits are safe — the risk is in the **trees**, not the refs.
+`git worktree remove` refused all three without `--force`, which is the gate
+working: the untracked and staged files exist nowhere else and may belong to a
+session still running. They are not force-removed and not archived; the sweep
+returns them untouched.
+
+The disk figure is not a reason to act: 4.7 GiB total, and all but four
+worktrees are ~27 MiB because they carry no `target/`. The cost here is
+cognitive, not spatial.
