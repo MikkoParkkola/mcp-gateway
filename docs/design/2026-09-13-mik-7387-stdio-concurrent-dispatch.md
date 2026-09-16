@@ -359,36 +359,91 @@ the way the 1024 boundary fails.
 
 Both go in `tests/mik_7212_mrtr7_stdio_acs.rs` beside the four rows that already
 use `StdioSession::spawn`. Both park work by withholding a client answer: a
-bridge-producing call asks the client a question, and a client that never answers
-holds the dispatch open for as long as the test needs.
+bridge-producing call makes the gateway send `elicitation/create` on the
+client's channel, and a client that never answers holds that dispatch open for
+as long as the test needs. Every read is bounded — `read_until_id` is under
+`READ_TIMEOUT` (`:62`, 10s) and `collect_lines` takes an explicit window — and
+the burst itself goes under a timeout too, so a gateway that stops reading fails
+the row instead of hanging CI.
 
-1. **`the_reader_keeps_reading_past_the_admission_cap`** — send `initialize`,
-   then 65 bridge-producing calls, answering none. Assert every one of the 65 is
-   accepted: the gateway emits 64 bridge prompts (admission's cap) and no
-   `-32000` for the 65th, then answer one and assert its response arrives. This
-   is the regression pin for `d0c68e15`, the defect where `acquire_owned().await`
-   inside the loop parked the only reader at the 65th request. Today that defect
-   is pinned only by a unit row on the non-async helper.
+1. **`the_reader_keeps_reading_past_the_admission_cap`**
 
-2. **`the_excess_past_the_inflight_cap_is_refused_not_queued`** — send
-   `initialize`, then 1025 bridge-producing calls. Assert at least one `-32000
-   server busy` response, and that an accepted call still completes when its
-   answer is sent. This is the row the release owner's 2026-09-16 ruling names.
+   Send `initialize` and **wait for its response** before anything else; an
+   unsynchronised burst races initialization and produces errors that have
+   nothing to do with the caps. Then send 65 bridge-producing calls with
+   distinct ids and answer none. Drain stdout and assert exactly 64
+   `elicitation/create` frames and no `-32000` for any of the 65.
 
-### Two traps this plan must not fall into
+   Then take the id of a prompt the test has **actually received** — never a
+   predetermined one, since dispatch order is not stdin order (`9b0caa1e`) and
+   the chosen call may be the one still parked — answer it, and assert two
+   things: that call's response arrives, **and a 65th `elicitation/create`
+   appears**. The second assertion is the one that matters. Without it a gateway
+   that reads the 65th line and silently drops it passes green, which is the
+   exact shape a careless "fix" to `d0c68e15` would take. With it, the reverted
+   defect fails the row twice over: the parked reader never consumes the answer,
+   so neither the response nor the 65th prompt arrives.
 
-- **Stdout must be drained while stdin is written.** `STDOUT_QUEUE_DEPTH` is
-  1024 and the refusal is sent with `try_send` (the deliberate choice recorded
-  above: awaiting a full queue would park the reader, which is the bug). A test
-  that writes 1025 frames without reading the far end fills the queue and
-  exercises the dropped-refusal path closed by `fffc5fde`, not the refusal path
-  it meant to assert. The harness reads and writes concurrently.
-- **The 65 row asserts acceptance, the 1025 row asserts refusal.** They cross
+2. **`the_excess_past_the_inflight_cap_is_refused_not_queued`**
+
+   Same synchronised `initialize`. Then 1023 bridge-producing calls: assert no
+   `-32000` for any of them. Then three more: assert at least one `-32000 server
+   busy`, and that **every** `-32000` carries an id from that trailing group.
+   Nothing is answered, so no permit is released mid-burst, and the read loop
+   consults `inflight` in line order — the first N accepted are the first N
+   sent.
+
+   Why 1023 plus a group of three rather than "send 1024, then assert the 1025th
+   is refused": `initialize`'s own dispatch takes an inflight permit and releases
+   it at `drop(slot)` (`mod.rs:2648`), which is not ordered against the response
+   the test waited for. The observable boundary therefore carries one slot of
+   slack. Pinning it to the window [1023, 1026] is what the harness can honestly
+   assert, and it still fails any regressed cap — 64, 512 — which the weaker
+   "at least one `-32000` somewhere in 1025" does not.
+
+### Three traps this plan must not fall into
+
+- **Drain stdout before asserting, and know why.** The recorded reason used to
+  be queue overflow; at these sizes that is wrong. Admission is 64, so both rows
+  put only about 66 frames on stdout (the `initialize` response, 64 prompts, one
+  refusal) — far short of the 1024-slot queue and of the pipe buffer. Neither
+  row reaches the dropped-refusal path closed by `fffc5fde`. The drain is still
+  mandatory, for the ordinary reason that an undrained pipe shows the test none
+  of the frames it asserts on. A row that genuinely fills the queue — answer
+  every accepted call — is a different row and is not written here.
+- **Stdin blocks too.** `StdioSession::send` has no timeout of its own. Writing
+  1026 frames to a child that has stopped reading fills the pipe and parks the
+  test, turning a regression into a CI hang instead of a failure. The burst goes
+  under a timeout whose message names the frame it was writing.
+- **The 65 row asserts acceptance, the 1026 row asserts refusal.** They cross
   different caps and they are not two sizes of one test. Row 1 crosses
   `admission` (64), where the correct behaviour is that work is admitted and
   parks inside its own task. Row 2 crosses `inflight` (1024), where the correct
   behaviour is refusal. A test that expects refusal at 65 would encode the
   rejected design.
+
+Stderr needs no trap: `StdioSession::spawn` inherits it rather than piping it
+(`tests/mik_7212_mrtr7_stdio_acs.rs:220-222`, with the reason in a comment).
+Keep it that way — piping it for capture without a concurrent drain deadlocks
+the child at this volume, which the existing handful-of-request rows never
+reach.
+
+### Verifying the rows before the criteria flip
+
+A row that cannot fail proves nothing, and both of these assert against a
+gateway that already works. Before `MIK-7212.MRTR.7a` and `.7b` are recorded
+met, mutate and re-run: halve `MAX_INFLIGHT_STDIO_REQUESTS` and row 2 must go
+red; reintroduce the inline `acquire_owned().await` of `d0c68e15` in the read
+loop and row 1 must go red. Green against either mutation means the row does not
+pin what it claims, whatever its name says.
+
+### Record follow-through
+
+The release ledger, the blocking rollup and the readiness board all hold
+`MIK-7212.MRTR.7a` and `.7b` on "the seam is unbuilt". That premise is
+overturned here, and the 2026-09-16 ruling rests on it. The hold itself stands —
+the rows are still unwritten — but each of those records gets repointed at this
+addendum, so the reason on file is the true one: the work is test-only.
 
 ### What this addendum does not change
 
@@ -397,3 +452,56 @@ refusal, the silent refusal of notifications, and the withdrawal of the stdin
 start-order claim (`9b0caa1e`) all stand exactly as ratified. The third
 acceptance row — stdout closed mid-session with stdin open — is out of scope
 here: it needs no saturation and it is not what the MRTR rows block on.
+
+### Review, 2026-09-17
+
+Two independent non-Claude seats on the plan above, before any test code exists:
+`glm-5.3` and `deepseek-v4-pro:0813`. Both returned `VERDICT: SHIP-WITH-FIXES`.
+(`gpt` is rate-limited until 2026-09-19 and `grok` returns 402, hence this pair.)
+Every finding was adjudicated at source rather than taken on the reviewer's
+word; the rows above are the revised ones.
+
+Upheld and applied, both seats independently:
+
+- Row 1 asserted nothing about the 65th request, so a gateway that reads it and
+  drops it passed green. The row now answers a received prompt and requires the
+  65th `elicitation/create` to appear.
+- Row 2's "at least one `-32000`" stayed green for any cap between 65 and 1024,
+  so it could not tell the real boundary from a regression. The row now pins the
+  boundary to a window, with the one-slot slack explained rather than assumed
+  away.
+- Neither row waited for the `initialize` response before its burst. Both do now.
+- Neither row said anything about the child's stderr. Checked at source: it is
+  inherited, not piped, so the deadlock the seats warned about cannot happen —
+  recorded rather than silently dropped, because a later row that pipes stderr
+  for capture would reintroduce it.
+
+Upheld and applied, one seat:
+
+- `glm-5.3`: the answered call must be one the test has actually seen a prompt
+  for. Answering a predetermined id assumes the start-order claim withdrawn in
+  `9b0caa1e` and hangs whenever that id is the parked one.
+- `glm-5.3`: the stdout-drain trap was misstated. At 64 admitted dispatches these
+  rows emit ~66 frames and cannot fill a 1024-slot queue, so the mechanism named
+  was not the one they face. Restated with its true binding condition; the drain
+  stays mandatory for the ordinary reason.
+- `glm-5.3`: nothing verified that the rows can fail. Added the mutation check —
+  halve the inflight constant, restore the `d0c68e15` inline await — as a gate
+  before the criteria flip.
+- `glm-5.3`: the ledger, rollup and board still cite the overturned premise.
+  Added as explicit follow-through.
+- `deepseek-v4-pro`: "the harness reads and writes concurrently" was asserted
+  without evidence. It was also false. `StdioSession` sends and reads on one task
+  (`send`, `read_until_id`, `collect_lines`); there is no background drain. The
+  sentence is gone, and checking it produced a trap neither seat named: `send`
+  has no timeout, so a gateway that stops reading parks the test in a pipe write
+  and turns a regression into a CI hang. That is the answer to "where does this
+  correction overclaim" — there, and nowhere else found.
+
+Recorded, not applied:
+
+- `glm-5.3` proposed a further row: fill the stdout queue by answering every
+  accepted call, then assert stdin answers are still consumed. That is the
+  invariant's remaining leg and it is worth having, but it belongs with the
+  deferred third acceptance row (stdout closed mid-session), not with the two
+  rows `MIK-7212.MRTR.7a` and `.7b` block on.
