@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::CONFIRMATION_INPUT_KEY;
 use super::chain_interim::{
     ChainResumePlan, MAX_CHAIN_ROUNDS, classify_step_result, drive_chain, malformed_interim_error,
-    plan_chain_resume, reseal_chain_resume,
+    plan_chain_resume, seal_chain_stop,
 };
 use crate::Result;
 use crate::protocol::continuation::{ContinuationPurpose, ContinuationState, Payload};
@@ -482,7 +482,7 @@ async fn a_re_asking_step_is_refused_at_the_round_cap_with_next_step_unchanged()
         .expect("a resume below the cap is allowed");
     assert_eq!(planned.next_step, 1);
 
-    let resealed = reseal_chain_resume(&below_cap, Some(BACKEND_STATE.into()));
+    let resealed = seal_chain_stop(&below_cap, &chain, 1, Some(BACKEND_STATE.into()));
     assert_eq!(
         resealed.next_step,
         Some(1),
@@ -587,4 +587,59 @@ async fn a_step_with_no_arguments_is_run_with_an_empty_object() {
         vec![json!({})],
         "an omitted `arguments` must not be null"
     );
+}
+
+/// ROW 14. A first stop converts the step's own envelope into a chain resume.
+///
+/// The invariant: the envelope a stopping step arrives with was minted for that
+/// step alone — `invoke.rs` sealed it over the step's own request, in the
+/// backend-input domain, with no step index. Handing it back unchanged would
+/// give the caller a token `plan_chain_resume` refuses on purpose, on digest
+/// and on the absent `next_step`: a stop nobody can resume. The conversion is
+/// what makes the round trip exist, and it re-seals rather than mints, or the
+/// backend holding one exchange would be charged for two.
+#[tokio::test]
+async fn a_first_stop_seals_the_chain_identity_onto_the_steps_envelope() {
+    let state = ContinuationState::new();
+    let chain = three_step_chain();
+    let hold_key = state
+        .in_flight()
+        .hold("srv", NOW + HOLD_SECONDS, NOW)
+        .await
+        .expect("the in-flight table has room for one exchange");
+    let step_scoped = Payload::mint(
+        "srv".into(),
+        Some(BACKEND_STATE.into()),
+        CALLER.into(),
+        "digest-of-the-single-step-request".into(),
+        "replica-a".into(),
+        hold_key.clone(),
+        NOW,
+    );
+    assert_eq!(
+        step_scoped.purpose,
+        ContinuationPurpose::BackendInput,
+        "the step's own envelope is not a chain resume to begin with"
+    );
+
+    let sealed = seal_chain_stop(&step_scoped, &chain, 1, Some(BACKEND_STATE.into()));
+
+    assert_eq!(sealed.purpose, ContinuationPurpose::ChainResume);
+    assert_eq!(
+        sealed.original_request_digest,
+        chain_digest(&chain),
+        "the resume is not bound to the chain it may run"
+    );
+    assert_eq!(sealed.next_step, Some(1));
+    assert_eq!(
+        sealed.hold_key, hold_key,
+        "a chain stop opened a second exchange for a backend already holding one"
+    );
+    assert_ne!(sealed.jti, step_scoped.jti, "the retired handle was reused");
+
+    let token = state.keyring().mint(&sealed).expect("mint");
+    let planned = plan_chain_resume(&state, &token, &chain, CALLER, NOW + 1)
+        .await
+        .expect("the envelope a first stop hands back must be redeemable");
+    assert_eq!(planned.next_step, 1);
 }

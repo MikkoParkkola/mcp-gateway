@@ -245,15 +245,36 @@ pub async fn plan_chain_resume(
     })
 }
 
-/// Seal the successor envelope for a chain that stopped again at the same step.
+/// Seal the envelope a chain stop hands back, from the one the step already has.
+///
+/// `previous` is whatever envelope the stopping step arrived with: the
+/// step-scoped one `invoke.rs` minted for a first stop, or the chain envelope
+/// from the resume that ran the step when it asks again. Both are re-sealed
+/// rather than replaced, because the hold that `begin_exchange` opened is
+/// already in `previous` — minting a second envelope would open a second
+/// exchange for a backend that is holding one.
+///
+/// Three fields are set rather than carried, and each is what makes the result
+/// a *chain* resume: the purpose, so an envelope minted for one step cannot be
+/// redeemed as a licence to run a chain; the digest over the whole chain, so a
+/// resume presenting different steps is refused; and `next_step`, which is the
+/// step that asked and not the one `previous` happened to name.
 ///
 /// `rounds_used` is incremented and the deadline is copied, never
 /// re-initialised: a replacement envelope that reset either would hand a
 /// re-asking backend an unbounded sequence of resumable rounds.
 #[must_use]
-pub fn reseal_chain_resume(previous: &Payload, backend_request_state: Option<String>) -> Payload {
+pub fn seal_chain_stop(
+    previous: &Payload,
+    chain: &[Value],
+    next_step: usize,
+    backend_request_state: Option<String>,
+) -> Payload {
     Payload {
         backend_request_state,
+        purpose: ContinuationPurpose::ChainResume,
+        original_request_digest: chain_digest(chain),
+        next_step: Some(next_step),
         // A fresh handle. The `jti` that reached this re-ask was consumed by
         // the redemption that ran the step, so carrying it forward would seal
         // an envelope the ledger has already retired.
