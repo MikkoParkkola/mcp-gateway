@@ -127,9 +127,23 @@ to 0 of 3: its passing state depends on fixture files being committed rather
 than on any code guard, and a skip branch that would have made the test honest
 was added and then deliberately reverted.
 
-Three grades stay INCONCLUSIVE pending a run, because the re-grade was read-only
-and the build lock was held: MIK-7320's `FIXTURE.3`, and the suite-green half of
-MIK-7214's `HDR.6`.
+Two grades stay INCONCLUSIVE pending a run, because the re-grade was read-only:
+MIK-7320's `FIXTURE.3`, and the suite-green half of MIK-7214's `HDR.6`.
+
+A targeted run at `54dc8e5e` — `mik_7217_acs`, `mik_7214_acs` and
+`mik_7214_header_9_acs`, 73 tests, 0 failed, **0 ignored** — closes neither, and
+the reason is worth stating rather than quietly banking the green. Both criteria
+name the full `cargo test --all-features --no-fail-fast` suite; a three-binary
+run under default features answers a narrower question. The feature gap is not
+hypothetical: the same fixture suite reports 22 tests under `--all-features` and
+32 without, so the two runs do not even cover the same rows. What the targeted
+run does establish is that no `#[ignore]` is hiding inside those three files at
+HEAD, and that the committed goldens still match.
+
+`FIXTURE.1` stays PARTIAL regardless of any green. Its test panics
+unconditionally when the fixture is missing, so it is green because four golden
+files are committed, not because a guard holds — and the skip branch that would
+have made that honest was added in `9c8fa8b3` and reverted in `ec633332`.
 
 ## Closing comments that cite evidence which is not there
 
