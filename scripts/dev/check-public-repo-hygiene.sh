@@ -108,6 +108,18 @@ root_doc_allowlist=(
   "llms.txt"
 )
 
+# Files a user copies or follows verbatim. An absolute path out of whoever
+# authored the line sends them to a directory that exists on one machine.
+shipped_surfaces=(
+  "gateway.example.yaml"
+  "README.md"
+  "docs/QUICKSTART.md"
+  "docs/DEPLOYMENT.md"
+  "docs/OAUTH_CONFIG.md"
+  "docs/REMOTE_BACKENDS.md"
+  "llms.txt"
+)
+
 report_failure() {
   local message="$1"
   printf 'FAIL: %s\n' "$message" >&2
@@ -161,6 +173,13 @@ while IFS= read -r file; do
     fi
   done
 done < <(git ls-files)
+
+for surface in "${shipped_surfaces[@]}"; do
+  [[ -f "$surface" ]] || continue
+  if match="$(grep -E -n -m 1 '(/Users|/home)/[a-z][a-z0-9_-]*/' "$surface" || true)"; [[ -n "$match" ]]; then
+    report_failure "$surface carries a home-directory path a reader cannot have: $match"
+  fi
+done
 
 while IFS= read -r file; do
   [[ -n "$file" ]] || continue
