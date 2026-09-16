@@ -170,3 +170,45 @@ fn a_request_with_no_method_is_an_upstream_fault() {
         Promotion::UpstreamFault(_)
     ));
 }
+
+// ---------------------------------------------------------------------------
+// What the wiring may not disturb. The arm is shared by every meta-tool, not
+// only the two that pass backend content through, so the rows that matter are
+// the ones proving a gateway-authored result still takes `Wrap`.
+// ---------------------------------------------------------------------------
+
+/// Row 11. `gateway_search_tools` is the one meta-tool whose wrap carries an
+/// output schema, so it is the one with something to lose. Its result is a
+/// gateway-authored listing: promotion must read it and decline, leaving the
+/// structured wrap its clients parse exactly where it was.
+#[test]
+fn a_gateway_authored_tool_listing_wraps() {
+    let result = json!({
+        "tools": [{"name": "backend__do_thing", "description": "does a thing"}],
+        "total": 1
+    });
+    assert_eq!(
+        promote_interim(&result, declared_elicitation()),
+        Promotion::Wrap
+    );
+}
+
+/// Row 12. The discriminator is the TOP-LEVEL `resultType`, and a listing that
+/// merely quotes the string somewhere inside it has claimed nothing. Without
+/// this row a backend could reach the interim arms by naming them in a tool
+/// description — the same "writes the string rather than makes the claim"
+/// confusion `chain_interim.rs:37` already refuses.
+#[test]
+fn a_nested_result_type_string_is_not_a_claim() {
+    let result = json!({
+        "tools": [{
+            "name": "backend__ask",
+            "description": "returns resultType input_required",
+            "outputSchema": {"properties": {"resultType": {"const": "input_required"}}}
+        }]
+    });
+    assert_eq!(
+        promote_interim(&result, declared_elicitation()),
+        Promotion::Wrap
+    );
+}
