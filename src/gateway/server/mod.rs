@@ -2414,17 +2414,30 @@ impl Gateway {
         // Why the loop can end before EOF: see `run_stdout_writer`.
         let mut stdout_died = false;
 
-        while let Ok(Some(line)) = reader.next_line().await {
+        loop {
             // A closed queue means the stdout writer has exited, so every
             // answer from here on would be written nowhere. Executing the
             // request anyway performs its side effect and discards the only
             // record of it, which is strictly worse than refusing to start:
             // stop admitting, and let the drain below finish what was already
             // accepted.
-            if writer.is_closed() {
-                stdout_died = true;
-                break;
-            }
+            //
+            // Raced against the read rather than checked after it, because a
+            // client that stops reading need not also stop being idle: waiting
+            // for a line that never comes would leave the gateway and its
+            // backend tasks alive with nowhere to answer. `biased` so a dead
+            // stdout wins a tie instead of admitting one more request.
+            let line = tokio::select! {
+                biased;
+                () = writer.closed() => {
+                    stdout_died = true;
+                    break;
+                }
+                read = reader.next_line() => match read {
+                    Ok(Some(line)) => line,
+                    _ => break,
+                },
+            };
 
             let line = line.trim().to_string();
             if line.is_empty() {
@@ -2540,6 +2553,15 @@ impl Gateway {
                     .acquire_owned()
                     .await
                     .expect("the admission semaphore is never closed");
+                // The wait for a permit is unbounded, so stdout can die inside
+                // it. Admission was checked against a queue that may no longer
+                // exist; dispatching now would run the side effect and throw
+                // the answer away, which is the case this whole guard exists
+                // to prevent.
+                if writer.is_closed() {
+                    stdout_died = true;
+                    break;
+                }
                 dispatches.spawn(async move {
                     task.await;
                     drop(permit);
@@ -2549,7 +2571,11 @@ impl Gateway {
             }
         }
 
-        if stdout_died {
+        // `writer.is_closed()` as well as the flag: stdout can die during the
+        // wait for a line that never comes, and the loop then leaves by the EOF
+        // arm. Reporting that as an ordinary EOF would hand the operator the
+        // one message that hides why the session ended.
+        if stdout_died || writer.is_closed() {
             warn!("stdio: stdout is gone, refusing further requests and shutting down");
         } else {
             info!("stdio: EOF reached, shutting down");

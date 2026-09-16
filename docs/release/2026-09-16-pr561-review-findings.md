@@ -212,7 +212,49 @@ State at `a3409375`: `cargo test --features firewall --lib` = 4942 passed, 0
 failed; `--test mik_7212_mrtr7_bridge_acs` = 32 passed, 0 failed;
 `cargo clippy --all-targets --features firewall -- -D warnings` clean.
 
-Still open on this row, and not addressed by either commit: the stdio package has
-not been reviewed as a package, the dead-stdout finding above is confirmed and
-unfixed, and the duplicate-request-id question at `src/protocol/mrtr.rs:200`
-remains unverified.
+Still open on this row after `a3409375`: the stdio package has not been reviewed
+as a package, the dead-stdout finding above was confirmed and unfixed, and the
+duplicate-request-id question at `src/protocol/mrtr.rs:200` remains unverified.
+
+## The replay fix, 2026-09-16
+
+Review of `a3409375` returned one MEDIUM from gpt: a dispatched refusal settled
+the idempotency key with a bare `{code, message}` body, so the replay came back
+as a generic `-32600` and the caller counted the gateway's own refusal against
+the client's circuit breaker. `322de814` stores a private marker
+(`FIREWALL_REFUSAL_MARKER`, `src/idempotency.rs`) alongside the body and restores
+`ResponseFirewallRefused` on the replay path. The marker cannot be forged: the
+only other writer of a cached error body serializes a `JsonRpcError`, whose
+fields are `code`, `message` and `data`, and `b0a5703f` pins that with a test
+that fills all three with the marker and asserts the stored body still does not
+present as a refusal. Review round 3 on `322de814`: gpt SHIP, kimi
+SHIP-WITH-FIXES on a misplaced doc comment, fixed in `b0a5703f`.
+
+## The dead-stdout fix, 2026-09-16
+
+`2415fdc9` closes the finding above. The read loop now breaks when the stdout
+queue is closed, so a gateway whose stdout has gone refuses to start new work
+instead of running side effects whose only record is discarded. The EOF drain is
+unchanged — requests already accepted still get their answers, they simply have
+nowhere to go. The writer loop moved into `Gateway::run_stdout_writer`, which is
+what lets the dead-sink path be driven as production drives it rather than by a
+fixture reimplementing it; `src/gateway/server/tests/stdout_death_admission.rs`
+pins both directions and the shutdown log now distinguishes a dead stdout from
+an ordinary EOF.
+
+Falsifier: making the writer ignore a failed write leaves the queue open, and
+`a_dead_stdout_closes_the_queue_the_read_loop_admits_on` fails on its 5-second
+timeout. Restored afterwards.
+
+Stated gap, not a claim of coverage: the read loop's own `break` is not covered
+by a test. The loop reads `tokio::io::stdin()` directly and is not injectable
+without a refactor larger than this fix. The tests pin the signal the loop reads,
+not the loop's consumption of it.
+
+State at `2415fdc9`: `cargo test --features firewall --lib` = 4946 passed, 0
+failed; `cargo clippy --all-targets --features firewall -- -D warnings` clean;
+`cargo fmt --check` clean.
+
+Still open on this row: the stdio package has not been reviewed as a package, and
+the duplicate-request-id question at `src/protocol/mrtr.rs:200` remains
+unverified.

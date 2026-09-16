@@ -45,7 +45,12 @@ impl AsyncWrite for DeadSink {
 }
 
 /// A stdout that is still there: the writer must keep the queue open.
-struct LiveSink;
+///
+/// Reports each write on a channel so the assertion below observes the writer
+/// after it has handled the frame. Asserting on the channel alone would pass
+/// against a writer that closed after every successful write, because the test
+/// would win the race with the spawned task.
+struct LiveSink(tokio::sync::mpsc::UnboundedSender<usize>);
 
 impl AsyncWrite for LiveSink {
     fn poll_write(
@@ -53,6 +58,7 @@ impl AsyncWrite for LiveSink {
         _cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        let _ = self.0.send(buf.len());
         Poll::Ready(Ok(buf.len()))
     }
 
@@ -93,13 +99,24 @@ async fn a_dead_stdout_closes_the_queue_the_read_loop_admits_on() {
 
 #[tokio::test]
 async fn a_live_stdout_keeps_the_queue_open() {
+    let (reported, mut seen_by_the_sink) = tokio::sync::mpsc::unbounded_channel();
     let (writer, queue) = tokio::sync::mpsc::channel(8);
-    let task = tokio::spawn(Gateway::run_stdout_writer(LiveSink, queue));
+    let task = tokio::spawn(Gateway::run_stdout_writer(LiveSink(reported), queue));
 
     writer
         .send(json!({"jsonrpc": "2.0", "id": 1, "result": {}}))
         .await
         .expect("a live sink accepts the frame");
+
+    // Both frames of the write — payload then newline — before the assertion,
+    // so the writer has finished with this frame and any close it would do has
+    // already happened.
+    for _ in 0..2 {
+        tokio::time::timeout(std::time::Duration::from_secs(5), seen_by_the_sink.recv())
+            .await
+            .expect("the writer reaches the sink")
+            .expect("the sink reports the write");
+    }
 
     assert!(
         !writer.is_closed(),
