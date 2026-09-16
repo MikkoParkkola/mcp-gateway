@@ -193,10 +193,25 @@ redemption normally.
 4. A resume presented by a different caller is refused (fingerprint binding).
 5. A resume presented twice is refused the second time (`jti` consumed).
 6. A step whose result claims `input_required` but fails
-   `InputRequired::from_result` does not stop the chain and does not mint a
-   token; the caller gets an upstream tool error naming the step.
+   `InputRequired::from_result` **aborts** the chain: no token is minted, no
+   successor step runs, and the caller gets an upstream tool error naming the
+   failing step. The malformed claim is a fail-closed stop, not a resumable
+   one — the earlier wording of this row read as licence to continue past it,
+   which would let an untrusted backend run a chain's tail behind a control
+   result nobody validated.
 7. A step held at the destructive-confirmation gate stops the chain; its
    successors do not run.
+8. Redemption invariants, one assertion each: `next_step` is present and in
+   range for the sealed chain; the purpose is `ChainResume` and no other; the
+   envelope matches the held exchange it claims. A redemption re-enters the
+   pending step through its existing hold rather than invoking it afresh.
+9. A destructive-gated step resumed across a chain performs its action exactly
+   once. The `ChainResume` token resumes transport only; the confirmation grant
+   stays independently bound and redeems normally. This pins the design's most
+   dangerous interaction from both sides — no bypass, and no double execution.
+10. A single step that asks again after being answered is refused once
+    `rounds_used` reaches the per-exchange cap, with `next_step` unchanged
+    across every one of those rounds.
 
 ## The three open questions, answered
 
@@ -206,7 +221,10 @@ redemption normally.
    does not control; returning them needs none of those. The cost is that a
    caller wanting the whole chain concatenates two segments, which the
    `pendingStep` field makes unambiguous. Both review seats endorsed keeping
-   accumulation on the caller's side.
+   accumulation on the caller's side. The consequence is a contract, not an
+   inconvenience: the stopping response is the **only** durable carrier of the
+   completed steps, so a caller must persist them before it redeems the
+   continuation. The gateway cannot re-serve them.
 
 2. **A resume may not shorten the tail.** The sealed
    `original_request_digest` covers the whole chain array, so a resume that
