@@ -148,6 +148,9 @@ meta_mcp:
 
 backends:
   tavily:
+    # `command` is parsed with host-platform rules: POSIX shlex on unix,
+    # CommandLineToArgvW on Windows (so `C:\Windows\py.exe …` keeps its
+    # backslashes; quote paths that contain spaces).
     command: "npx -y @anthropic/mcp-server-tavily"
     description: "Web search"
     env:

@@ -145,7 +145,7 @@ impl StdioTransport {
     ///
     /// Returns an error if the command cannot be spawned or MCP initialization fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
-        let parts = shlex::split(&self.command).ok_or_else(|| {
+        let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
             Error::Config(format!(
                 "Invalid stdio command quoting: {}",
                 crate::security::summarize_stdio_command(&self.command)

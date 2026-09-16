@@ -386,7 +386,7 @@ fn backend_to_info(name: &str, backend: &BackendConfig) -> BackendInfo {
 
 /// Executable plus argument count. Argument values are never returned.
 fn summarize_command(command: &str) -> BackendCommandInfo {
-    match shlex::split(command) {
+    match crate::transport::split_command(command) {
         Some(parts) if !parts.is_empty() => BackendCommandInfo {
             executable: parts[0].clone(),
             argument_count: parts.len().saturating_sub(1),

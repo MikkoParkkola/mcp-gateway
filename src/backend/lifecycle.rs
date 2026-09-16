@@ -58,7 +58,7 @@ fn stdio_executable_hint(transport: &TransportConfig) -> Option<String> {
     let TransportConfig::Stdio { command, .. } = transport else {
         return None;
     };
-    shlex::split(command)?.into_iter().next()
+    crate::transport::split_command(command)?.into_iter().next()
 }
 
 pub(super) struct ResolvedStdioLaunch {
