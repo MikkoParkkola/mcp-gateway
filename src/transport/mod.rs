@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Transport implementations for MCP backends
 
+mod command_split;
 mod http;
 pub(crate) mod notification_sink;
 mod stdio;
 pub mod websocket;
 
+pub use self::command_split::{split_command, split_command_unix, split_command_windows};
 pub use self::http::HttpTransport;
 pub use self::stdio::StdioTransport;
 pub use self::websocket::McpFrame;

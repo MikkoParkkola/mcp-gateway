@@ -46,6 +46,8 @@ failsafe:
     interval: 30s
     timeout: 5s
 backends:
+  # `command` uses host-platform parsing (POSIX shlex on unix; CommandLineToArgvW
+  # on Windows). Quote paths that contain spaces.
   gitnexus:
     description: Codebase knowledge graph — impact analysis, blast radius, call chains, clusters, execution flows. 16 MCP tools.
     enabled: true

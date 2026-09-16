@@ -455,9 +455,32 @@ fn check_stdio_backend(name: &str, transport: &TransportConfig) -> Option<CheckR
         return None;
     };
 
-    // Extract the binary / script name for `which`-style check.
-    let bin = command.split_whitespace().next()?;
     let label = format!("{name}: command");
+
+    // Same parser spawn will use — a config that cannot split cannot PASS.
+    let parts = match mcp_gateway::transport::split_command(command) {
+        None => {
+            return Some(
+                CheckResult::fail(label, "invalid command quoting")
+                    .with_category("backend_stdio")
+                    .with_hint(
+                        "Fix quoting in backends.*.command (host platform rules; unterminated quotes are rejected)"
+                            .to_string(),
+                    ),
+            );
+        }
+        Some(parts) if parts.is_empty() => {
+            return Some(
+                CheckResult::fail(label, "empty command")
+                    .with_category("backend_stdio")
+                    .with_hint(
+                        "Set backends.*.command to an executable plus arguments".to_string(),
+                    ),
+            );
+        }
+        Some(parts) => parts,
+    };
+    let bin = parts[0].as_str();
 
     // We only verify the command exists, not actually launch it
     // (launching would block and side-effects are unpredictable).

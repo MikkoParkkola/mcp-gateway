@@ -122,7 +122,7 @@ fn safe_status_text(status: StatusCode, body: &str) -> String {
 /// Stdio command for diagnostics: executable name + argument count, never argv.
 #[must_use]
 pub fn summarize_stdio_command(command: &str) -> String {
-    match shlex::split(command) {
+    match crate::transport::split_command(command) {
         Some(parts) if !parts.is_empty() => {
             let n = parts.len().saturating_sub(1);
             format!("{} ({n} argument(s) redacted)", parts[0])
