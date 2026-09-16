@@ -233,7 +233,7 @@ with no structural coupling to the gates.
 |---|---|---|
 | `src/gateway/meta_mcp/tests.rs:4707` | `B10_EXPECTED_TOOLS`, 14 names pinned for a modern sessionless connection | drops `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`, `gateway_get_profile`, `gateway_list_profiles` → 9 names |
 | `src/gateway/meta_mcp/tests.rs:5399` | `B01_EXPECTED_TOOLS`, the same 14 plus two surfaced backend tools | same five drop → 11 entries |
-| `benchmarks/token_savings.py:162` | `GATEWAY_TOOLS`, the canonical README-benchmark definitions, length-checked against `public_claims.json` at `:322` | the same five definitions are deleted |
+| `benchmarks/token_savings.py:162` | `GATEWAY_TOOLS`, the canonical README-benchmark definitions, length-checked against `public_claims.json` at `:322` | **six** definitions are deleted, not five: this roster is the 17-tool ceiling, so `gateway_get_stats` drops here as well as the five above. 17 − 6 = 11 |
 
 ### Derived constant and its cross-checks
 
@@ -582,13 +582,21 @@ two different kinds:
 
 | | Figure | Quantification |
 |---|---|---|
-| **The band** | **9-17** | Universal, over both axes: every gate combination at the ceiling standing. Nine with every gate off, seventeen with every gate on. This is what `tests/nfr_perf_4_meta_tool_band.rs` asserts (§4.1). |
+| **The band** | **9-17** | Universal over the **gate** axis, held at the ceiling standing: nine with every gate off, seventeen with every gate on. This is what `tests/nfr_perf_4_meta_tool_band.rs` asserts (§4.1). It is *not* quantified over caller standing, and must never be written as though it were — the fixture cannot vary standing, because `meta_tool_count` calls `handle_tools_list` with no caller (`tests/public_claims_validation.rs:68-72`), so every measurement it takes is an admin one. The standing axis is carried by the three labelled figures below, not folded into the range. |
 | **The headline** | **11** | The admin ceiling in the **shipped default gate configuration** — no playbooks, no profiles, cost governance off, `expose_stats_tool` off. This is where the cut's value shows up, and it is the number the `NFR.PERF.4` restatement names. |
 | Beside it | **7** | Default HTTP caller (auth off, standard standing), same gate configuration. |
 | Beside it | **10** | Stdio caller (always admin, never a webhook registry), same gate configuration. |
 
 Each of the last three is labelled with its standing wherever it is published.
 None of them is presented as the range.
+
+Prose labelling is the weakest enforcement this document relies on: it holds
+only as long as every future editor reads §5. Carry the three figures as
+structured fields in `benchmarks/public_claims.json` beside `meta_tools`, each
+naming its standing, so `tests/public_claims_validation.rs` drift-checks them
+the way it already drift-checks the ceiling. That converts the one claim class
+here with no test behind it into the one the repository created that file to
+protect.
 
 ### The cut does not lower the maximum
 
