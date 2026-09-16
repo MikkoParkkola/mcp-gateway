@@ -104,18 +104,49 @@ The chain stops and returns, at the top level of the tool result:
   "steps": 2,
   "results": [ {"step": 0, …}, {"step": 1, …} ],
   "resultType": "input_required",
-  "inputRequests": [ … ],
+  "inputRequests": { "<id>": { … }, … },
   "requestState": "<sealed continuation token>",
   "pendingStep": 2,
   "pendingTool": "server:tool_name"
 }
 ```
 
+`inputRequests` is re-serialised as the keyed object the backend sent, not as
+an array. `InputRequired::requests` holds `Vec<(String, Value)>`
+(`src/protocol/mrtr.rs:206`) because the keys are the server's own and it looks
+for exactly those again on the retry — its doc comment says an answer returned
+under a different key "is lost as surely as one that was never collected"
+(`:201-205`). A pair list serialised positionally would reach the client as
+`[[id, request], …]`, from which no valid answer can be constructed.
+
 `results` carries the steps that genuinely ran. `pendingStep` names the step
 that asked — without it a caller reading `steps: 2` cannot tell whether step 2
 failed, was skipped, or is waiting. The resumed call returns the same shape for
 `next_step..n`; a caller that wants the whole chain concatenates the two. No
 server-side result storage, no stitching in the gateway.
+
+### One token, not two: the handoff from the step-scoped envelope
+
+By the time `execute_chain` sees an interim result, a continuation has already
+been minted for that step. `src/gateway/meta_mcp/invoke.rs:2348` calls
+`mint_continuation(...)` with the backend's `request_state` and overwrites
+`result["requestState"]` with the sealed envelope, so the backend's own opaque
+string never reaches the client. The chain must not mint a second envelope
+beside it: two redeemable tokens for one stop means a client can answer the
+step without resuming the chain, and the chain without answering the step.
+
+The chain re-seals that envelope rather than adding one. The `ChainResume`
+token carries the same backend `request_state` the step-scoped one held, plus
+the chain identity, `next_step`, `rounds_used` and the deadline. Exactly one
+token is redeemable, and the step-scoped envelope is never emitted on the chain
+path.
+
+Redemption applies the caller's answers to the pending step **only**. The
+retry context — the answers and the backend `requestState` — is cleared before
+step `next_step + 1` runs, so a successor cannot inherit an answer collected
+for its predecessor. A chain whose pending step is held at the
+destructive-confirmation gate is the same case: the held state travels in the
+one envelope and is redeemed once, at that step.
 
 ### Validation before promotion (the MRTR.11b rule, applied here)
 
@@ -130,10 +161,20 @@ result.
 
 ### Bounding
 
-A chain of `n` steps can stop at most `n` times, because each stop seals a
-strictly larger `next_step`. A single step asking repeatedly is bounded by the
-existing per-exchange round bound, which the chain does not widen. There is no
-new unbounded loop.
+A chain of `n` steps can stop at most `n` times *at distinct steps*, because
+each stop seals a strictly larger `next_step`. That is not the whole bound: a
+single step may ask again after being answered, sealing the same `next_step`
+each time, and the per-exchange round bound that would otherwise stop it lives
+inside the legacy bridge's `run` (`src/gateway/meta_mcp/invoke.rs:2158,2255`).
+A native chain resume never enters the bridge, so it inherits nothing.
+
+The envelope therefore seals two more fields: `rounds_used`, incremented on
+every mint including a re-ask at an unchanged `next_step`, and the original
+exchange deadline. A resume is refused once `rounds_used` reaches the
+per-exchange cap or the deadline has passed, and a replacement envelope may
+never reset either — both are copied forward, never re-initialised. Without
+that, a backend that asks one question forever sustains an unbounded
+continuation sequence at a single step.
 
 ### Interaction with the destructive-confirmation gate
 
@@ -157,15 +198,37 @@ redemption normally.
 7. A step held at the destructive-confirmation gate stops the chain; its
    successors do not run.
 
-## Open questions for review
+## The three open questions, answered
 
-1. **Is returning the completed results in the stopping response the right
-   call**, versus holding them and emitting one array at the end? The design
-   takes the former because it needs no new storage and no eviction policy, at
-   the cost of making the caller concatenate.
-2. **Should a resume be allowed to shorten the tail** — a caller who, having
-   seen steps 0..1, no longer wants step 3? Today the digest forbids it. That
-   is the conservative choice; it may be the wrong one.
-3. **Legacy clients.** A caller that cannot read a top-level interim round sees
-   a chain that stopped early with no readable reason. MRTR.11b's fallback rule
-   must cover the chain response too, and this design does not yet state it.
+1. **Completed results travel in the stopping response**, rather than being
+   held for one array at the end. Holding them needs server-side storage keyed
+   by continuation, an eviction policy, and a size bound on a value the gateway
+   does not control; returning them needs none of those. The cost is that a
+   caller wanting the whole chain concatenates two segments, which the
+   `pendingStep` field makes unambiguous. Both review seats endorsed keeping
+   accumulation on the caller's side.
+
+2. **A resume may not shorten the tail.** The sealed
+   `original_request_digest` covers the whole chain array, so a resume that
+   dropped step 3 would be a different chain than the one authorised. Allowing
+   it would mean re-authorising at redemption time — a second authorisation
+   path on the resume route, which is precisely where a replay defence is
+   cheapest to get wrong. A caller that no longer wants the tail abandons the
+   envelope and issues a new chain; abandonment costs nothing, because the
+   gateway stores no results.
+
+3. **A legacy client never receives a top-level interim chain response.** The
+   rule is the MRTR.11b rule applied to chains, with one addition. Where the
+   client has the elicitation bridge, the question goes through the bridge as
+   it does today and the chain continues in-process. Where it does not, the
+   chain returns a step-scoped upstream error naming `pendingStep` and
+   `pendingTool`, mints **no** `ChainResume` token, and runs **no** successor
+   step. The failure mode this forecloses is the dangerous one: a legacy caller
+   reading an apparently complete chain whose tail silently never ran.
+
+## Where this stands
+
+Design reviewed 2026-09-16 and amended for the findings. Every claim the review
+disputed was re-checked against source before it was accepted; the citations
+above are that check, not the reviewer's word. Next: the failing tests,
+reviewed as tests, then implementation.
