@@ -305,13 +305,21 @@ combinations, not 256: the axis count is gate *fields*, not gated tools. Each
 iteration builds an in-process `MetaMcp` and serialises one `tools/list`, so 64
 is not a CI cost worth sampling around, and no sampling rule is proposed.
 
-`meta_mcp_with` needs three more wirings, all of which already exist:
+`meta_mcp_with` needs three more wirings, all of which already exist — and one
+existing wiring that this change breaks:
 
 | Axis | Wiring | Where |
 |---|---|---|
 | `cost_report` | `with_cost_governance(enforcer, registry)` | `src/gateway/meta_mcp/mod.rs:1189` (consuming builder, `cost-governance` feature) |
 | `playbooks` | `set_playbook_engine(engine)` | `src/gateway/meta_mcp/invoke.rs:3898` |
 | `profiles` | `with_profile_registry(registry)` | `src/gateway/meta_mcp/mod.rs:696` (consuming builder) |
+| `stats` | **re-wire**: today the axis attaches a collector — `stats.then(|| Arc::new(UsageStats::new()))` (`tests/nfr_perf_4_meta_tool_band.rs:48`) — which after the cut no longer moves the gate at all | must drive the new `meta_mcp.expose_stats_tool` flag instead; `rg -n 'expose_stats_tool' src/` returns nothing today, so unlike the three above this wiring is created by this change |
+
+The `stats` row is a fourth instance of this section's own failure mode, and the
+quietest: the other three axes are absent and can be noticed missing, while this
+one keeps looping over a boolean that has stopped selecting anything. Both
+settings would serve the same surface, and the axis would report green for a
+gate it no longer touches.
 
 `cost_report`'s gate source is `self.cost_registry.is_some()`
 (`Option<Arc<CostRegistry>>` at `mod.rs:384`, `None` at `:580`), which the
@@ -344,22 +352,37 @@ or lists the tools, found with `rg -n --hidden --no-ignore "14-17|14–17|14 to
 - `src/gateway/meta_mcp_tool_defs.rs:575-583` — `MetaToolGates`: two new fields.
 - `src/gateway/meta_mcp_tool_defs.rs:596-603` — the doc comment stating the
   `14-17` band and its webhook rationale; becomes `9-17`.
-- `src/gateway/meta_mcp_tool_defs.rs:604-636` — `build_meta_tools`: five pushes
-  move behind gates.
+- `src/gateway/meta_mcp_tool_defs.rs:604-636` — `build_meta_tools`: **four**
+  pushes move behind gates, not six. `gateway_get_stats` (`:609`) and
+  `gateway_cost_report` (`:612`) are already gated pushes here; what changes for
+  those two is the gate *source* in `mod.rs`, not the push. The four that move
+  are the base pushes at `:616` and `:622`.
 - `src/gateway/meta_mcp/mod.rs:1600-1615` — the gate sources.
 - `src/routing_profile/mod.rs:331-334` — one accessor for the private
   `profiles` map.
 - `src/config/mod.rs:1484-1497` — the `expose_stats_tool` flag on
   `MetaMcpConfig`.
-- `src/honest_task_tokens.rs:22` — `README_META_TOOLS`, 17 → 11.
+- `src/honest_task_tokens.rs:19-22` — `README_META_TOOLS`, 17 → 11, **and the
+  doc comment above it**, which spells the figure out ("Seventeen, not
+  sixteen"). Editing only `:22` leaves a comment asserting seventeen over a
+  constant reading eleven — a stale comment is model input, so it is a defect,
+  not a cosmetic miss.
+
+  Found by a search class the rest of §4's discovery omits: every site search
+  here matches digits, so a count written as an English word is invisible to
+  all of them. Run for this section: `rg -uu -i '\b(fourteen|seventeen)\b'`
+  over `*.md *.rs *.yaml *.py`. It returns this site and `ARCHITECTURE.md:42`
+  (already listed at §5 below), and one false positive —
+  `src/config_reload/mod.rs:467` counts config sections, not meta-tools.
 - `src/gateway/meta_mcp_tool_defs.rs:817-826` (`governed_meta_tool_names`) and
   `src/gateway/destructive_confirmation.rs:231-238` (`DESTRUCTIVE_META_TOOLS`)
   — both construct `MetaToolGates` as **exhaustive** struct literals with every
   flag `true`, so both stop compiling (`E0063`) until the two new fields are
   added. Add `playbooks: true, profiles: true`. Do **not** silence the error
   with `..Default::default()`: the derive at `:574` makes that compile and
-  quietly drops five tools out of the operator allow-list's governed set and
-  out of the destructive-confirmation set at once. Per §7, remove the
+  quietly drops the **four** tools the two new fields govern —
+  `gateway_run_playbook` and the three profile tools — out of the operator
+  allow-list's governed set and out of the destructive-confirmation set at once. Per §7, remove the
   `Default` derive at `:574` in the same change so that door stays shut.
 - `tests/nfr_perf_4_meta_tool_band.rs` — see §4.1. Three new loop axes in
   `meta_mcp_with` (`:41`) and the loop nest (`:64`) **first**, then `BAND` at
@@ -376,6 +399,17 @@ or lists the tools, found with `rg -n --hidden --no-ignore "14-17|14–17|14 to
   17 → 11.
 - `benchmarks/token_savings.py:19-21` — the docstring restating the band.
 - `benchmarks/token_savings.py:162` — the `GATEWAY_TOOLS` definitions.
+- `benchmarks/public_claims.json` — **new** structured fields beside
+  `meta_tools` for the three standing-labelled figures §7 requires (ceiling 11,
+  default HTTP 7, stdio 10), each naming the standing it was measured at.
+  Without these the three figures ship with prose labelling as their only
+  enforcement, which §7 calls the weakest thing it relies on.
+- `tests/public_claims_validation.rs` — **new** derivation for those fields.
+  The existing `meta_tool_count` helper (`:68-72`) calls `handle_tools_list`
+  with no caller, so every figure it takes is an admin one; the default-HTTP 7
+  cannot be derived without a count path that passes a standard-standing
+  caller. That path is part of this change, not a follow-up: a published figure
+  no test derives is the drift class this file exists to stop.
 
 ### Prose
 
@@ -606,9 +640,11 @@ deleted by this change.** All seventeen tools remain built, dispatchable and
 listable. An operator who configures playbooks, routing profiles, cost
 governance and `expose_stats_tool` is served all seventeen, exactly as today.
 
-The value of the cut is entirely in the default. It moves five tools from
-"listed for everyone" to "listed for the operators who asked for them", which
-is why the band's top does not move and the headline's does.
+The value of the cut is entirely in the default. It moves **six** tools from
+"listed for everyone" to "listed for the operators who asked for them" — the
+four base pushes plus the two whose gates are always on today — which is why
+the band's top does not move and the headline's does. Six is the number 17 − 11
+requires; four is the number of pushes §5 edits.
 
 ### Follow-through on removing the `Default` derive
 
