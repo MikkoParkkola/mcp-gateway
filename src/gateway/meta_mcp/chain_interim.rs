@@ -10,6 +10,8 @@
 //!
 //! Design: `docs/design/2026-09-16-mrtr-12-chain-interim-stop.md`.
 
+use std::future::Future;
+
 use serde_json::{Value, json};
 
 use crate::protocol::continuation::{
@@ -63,29 +65,53 @@ pub fn classify_step_result(
 /// observable — the invariant a chain stop exists to protect is about the
 /// successor that must not execute, and nothing in a returned value shows that.
 ///
+/// `run_step` is async and takes its arguments owned. The live caller invokes a
+/// backend, so a synchronous callback could not express it, and the seam this
+/// driver exists to hold would be a second loop beside the one that ships.
+/// Owned arguments keep the returned future free of borrows from the loop,
+/// which is what lets the caller write a plain `async move` block.
+///
+/// The caller labels its own failures. A step error travels out of `run_step`
+/// already carrying its step index and its kind — a refusal must stay a refusal
+/// rather than arriving as an internal error — so this driver propagates rather
+/// than rewraps.
+///
 /// [`ContinuationPurpose::ChainResume`]: crate::protocol::continuation::ContinuationPurpose::ChainResume
 ///
 /// # Errors
 ///
 /// Propagates a step's own failure, and returns an upstream tool error for a
 /// malformed interim claim.
-pub fn drive_chain(
+pub async fn drive_chain<R, F>(
     chain: &[Value],
     start_step: usize,
-    run_step: &mut dyn FnMut(usize, &str, &Value) -> Result<Value>,
-    seal_stop: &mut dyn FnMut(usize, &InputRequired) -> Result<String>,
-) -> Result<Value> {
+    mut run_step: R,
+    mut seal_stop: impl FnMut(usize, &InputRequired) -> Result<String>,
+) -> Result<Value>
+where
+    R: FnMut(usize, String, Value) -> F,
+    F: Future<Output = Result<Value>>,
+{
     let mut completed: Vec<Value> = Vec::new();
     for (idx, step) in chain.iter().enumerate().skip(start_step) {
-        let tool_ref = step.get("tool").and_then(Value::as_str).unwrap_or_default();
+        // A step with no tool reference is refused, never run under an empty
+        // name: every other refusal in this module fails closed, and a chain
+        // that silently skips an unnamed step still runs its successors.
+        let tool_ref = step
+            .get("tool")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::json_rpc(-32602, format!("Chain step {idx}: missing 'tool' field"))
+            })?
+            .to_string();
         let arguments = step.get("arguments").cloned().unwrap_or(Value::Null);
-        let result = run_step(idx, tool_ref, &arguments)?;
+        let result = run_step(idx, tool_ref.clone(), arguments).await?;
 
         // Classified before the result is recorded, so a step that asked is
-        // never pushed as an answer — the whole defect is one `Ok` treated as
+        // never pushed as an answer -- the whole defect is one `Ok` treated as
         // two different things.
-        let Some(round) = classify_step_result(idx, tool_ref, &result)? else {
-            completed.push(result);
+        let Some(round) = classify_step_result(idx, &tool_ref, &result)? else {
+            completed.push(json!({"step": idx, "tool": tool_ref, "result": result}));
             continue;
         };
 

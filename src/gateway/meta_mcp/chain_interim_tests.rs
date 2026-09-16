@@ -124,8 +124,8 @@ impl StepLog {
 /// so nothing after it may run on the assumption that it did, and the caller
 /// must be told which step is waiting rather than left to infer it from a
 /// count.
-#[test]
-fn chain_stops_at_the_asking_step_and_names_it_as_pending() {
+#[tokio::test]
+async fn chain_stops_at_the_asking_step_and_names_it_as_pending() {
     let chain = three_step_chain();
     let mut log = StepLog::new(|idx| {
         Ok(if idx == 1 {
@@ -137,15 +137,15 @@ fn chain_stops_at_the_asking_step_and_names_it_as_pending() {
     let mut sealed: Vec<usize> = Vec::new();
 
     let response = {
-        let mut run = |idx: usize, _tool: &str, _args: &Value| {
+        let mut run = |idx: usize, _tool: String, _args: Value| {
             log.ran.push(idx);
-            (log.reply)(idx)
+            std::future::ready((log.reply)(idx))
         };
         let mut seal = |idx: usize, _round: &InputRequired| {
             sealed.push(idx);
             Ok("sealed-token".to_string())
         };
-        drive_chain(&chain, 0, &mut run, &mut seal)
+        drive_chain(&chain, 0, &mut run, &mut seal).await
     };
 
     let response = response.expect("a stop is a successful result, not an error");
@@ -172,18 +172,18 @@ fn chain_stops_at_the_asking_step_and_names_it_as_pending() {
 /// The invariant: the steps before the stop are exactly the ones most likely to
 /// have had effects, so replaying them is not a conservative fallback — it is
 /// a second execution of work the caller already paid for.
-#[test]
-fn resume_runs_the_unrun_tail_and_never_re_runs_a_completed_step() {
+#[tokio::test]
+async fn resume_runs_the_unrun_tail_and_never_re_runs_a_completed_step() {
     let chain = three_step_chain();
     let mut log = StepLog::new(|idx| Ok(completed_result(idx)));
 
     let response = {
-        let mut run = |idx: usize, _tool: &str, _args: &Value| {
+        let mut run = |idx: usize, _tool: String, _args: Value| {
             log.ran.push(idx);
-            (log.reply)(idx)
+            std::future::ready((log.reply)(idx))
         };
         let mut seal = |_idx: usize, _round: &InputRequired| Ok(String::new());
-        drive_chain(&chain, 1, &mut run, &mut seal)
+        drive_chain(&chain, 1, &mut run, &mut seal).await
     };
 
     let response = response.expect("the tail of an answered chain runs to completion");
@@ -266,8 +266,8 @@ async fn resume_presented_twice_is_refused_the_second_time() {
 /// worse, be stepped past — an untrusted backend would run the chain's tail
 /// behind a control result nobody parsed. No token, no successor, and an error
 /// that names which step lied.
-#[test]
-fn malformed_interim_claim_aborts_with_no_token_and_no_successor() {
+#[tokio::test]
+async fn malformed_interim_claim_aborts_with_no_token_and_no_successor() {
     let malformed = json!({"resultType": "input_required", "inputRequests": "surprise"});
     assert!(
         InputRequired::claims_input_required(&malformed)
@@ -286,15 +286,15 @@ fn malformed_interim_claim_aborts_with_no_token_and_no_successor() {
     let mut sealed: Vec<usize> = Vec::new();
 
     let outcome = {
-        let mut run = |idx: usize, _tool: &str, _args: &Value| {
+        let mut run = |idx: usize, _tool: String, _args: Value| {
             log.ran.push(idx);
-            (log.reply)(idx)
+            std::future::ready((log.reply)(idx))
         };
         let mut seal = |idx: usize, _round: &InputRequired| {
             sealed.push(idx);
             Ok("must-not-be-minted".to_string())
         };
-        drive_chain(&chain, 0, &mut run, &mut seal)
+        drive_chain(&chain, 0, &mut run, &mut seal).await
     };
 
     let error = outcome.expect_err("a malformed claim must not succeed");
@@ -322,8 +322,8 @@ fn malformed_interim_claim_aborts_with_no_token_and_no_successor() {
 /// has not performed its action, so a successor that runs has been handed a
 /// world its predecessor never created — and nothing in today's response tells
 /// the caller which of the two happened.
-#[test]
-fn destructive_gate_hold_stops_the_chain_before_its_successor() {
+#[tokio::test]
+async fn destructive_gate_hold_stops_the_chain_before_its_successor() {
     let chain = three_step_chain();
     let mut log = StepLog::new(|idx| {
         Ok(if idx == 1 {
@@ -334,12 +334,12 @@ fn destructive_gate_hold_stops_the_chain_before_its_successor() {
     });
 
     let response = {
-        let mut run = |idx: usize, _tool: &str, _args: &Value| {
+        let mut run = |idx: usize, _tool: String, _args: Value| {
             log.ran.push(idx);
-            (log.reply)(idx)
+            std::future::ready((log.reply)(idx))
         };
         let mut seal = |_idx: usize, _round: &InputRequired| Ok("sealed-token".to_string());
-        drive_chain(&chain, 0, &mut run, &mut seal)
+        drive_chain(&chain, 0, &mut run, &mut seal).await
     };
 
     let response = response.expect("a gate hold stops the chain, it does not fail it");
@@ -414,38 +414,41 @@ async fn redemption_refuses_every_next_step_it_did_not_seal() {
 /// the reverse domain separation — a confirmation grant cannot resume a chain.
 /// The forward direction needs a gateway-level test against the confirmation
 /// redemption path (`meta_mcp::mod::redeem_confirmation`), not this seam.
-#[test]
-fn destructive_gated_step_resumed_across_a_chain_acts_exactly_once() {
+#[tokio::test]
+async fn destructive_gated_step_resumed_across_a_chain_acts_exactly_once() {
     let chain = three_step_chain();
     let mut actions: Vec<&'static str> = Vec::new();
     let mut ran: Vec<(u8, usize)> = Vec::new();
 
     // Phase one: the gated step is held, so it must not act.
     {
-        let mut run = |idx: usize, _tool: &str, _args: &Value| -> Result<Value> {
+        let mut run = |idx: usize, _tool: String, _args: Value| {
             ran.push((1, idx));
-            Ok(if idx == 1 {
+            std::future::ready(Ok(if idx == 1 {
                 gate_result()
             } else {
                 completed_result(idx)
-            })
+            }))
         };
         let mut seal = |_idx: usize, _round: &InputRequired| Ok("sealed-token".to_string());
-        let stopped =
-            drive_chain(&chain, 0, &mut run, &mut seal).expect("the gate hold stops the chain");
+        let stopped = drive_chain(&chain, 0, &mut run, &mut seal)
+            .await
+            .expect("the gate hold stops the chain");
         assert_eq!(stopped["pendingStep"], json!(1));
     }
     // Phase two: the answered step redeems its confirmation and acts, once.
     {
-        let mut run = |idx: usize, _tool: &str, _args: &Value| -> Result<Value> {
+        let mut run = |idx: usize, _tool: String, _args: Value| {
             ran.push((2, idx));
             if idx == 1 {
                 actions.push("srv:asks");
             }
-            Ok(completed_result(idx))
+            std::future::ready(Ok(completed_result(idx)))
         };
         let mut seal = |_idx: usize, _round: &InputRequired| Ok(String::new());
-        drive_chain(&chain, 1, &mut run, &mut seal).expect("the answered chain completes");
+        drive_chain(&chain, 1, &mut run, &mut seal)
+            .await
+            .expect("the answered chain completes");
     }
 
     assert_eq!(
@@ -497,4 +500,62 @@ async fn a_re_asking_step_is_refused_at_the_round_cap_with_next_step_unchanged()
     let at_cap_token = state.keyring().mint(&resealed).expect("mint");
     let refused = plan_chain_resume(&state, &at_cap_token, &chain, CALLER, NOW + 2).await;
     assert!(refused.is_err(), "a step asked past the round cap");
+}
+
+/// ROW 11. A completed step keeps the envelope `gateway_execute` already ships.
+///
+/// The invariant: `execute_chain` records each step as `{step, tool, result}`,
+/// and that array is the response its callers parse today. A driver that
+/// recorded the bare result would change the shipped payload — a breaking
+/// change arriving inside a security fix, which is the shape of change nobody
+/// reads the release notes for.
+#[tokio::test]
+async fn a_completed_step_is_recorded_with_its_index_and_tool() {
+    let chain = three_step_chain();
+    let mut run =
+        |idx: usize, _tool: String, _args: Value| std::future::ready(Ok(completed_result(idx)));
+    let mut seal = |_idx: usize, _round: &InputRequired| Ok(String::new());
+
+    let response = drive_chain(&chain, 0, &mut run, &mut seal)
+        .await
+        .expect("a chain of completed steps runs to the end");
+
+    assert_eq!(response["steps"], json!(3));
+    let first = &response["results"][0];
+    assert_eq!(first["step"], json!(0));
+    assert_eq!(
+        first["tool"],
+        json!("srv:read_one"),
+        "the step's tool reference is what tells a caller which result is whose"
+    );
+    assert_eq!(first["result"], completed_result(0));
+}
+
+/// ROW 12. A step with no tool reference is refused, not run unnamed.
+///
+/// The invariant: the driver used to read the reference with
+/// `unwrap_or_default`, so a malformed step ran under the empty tool name and
+/// its successors ran after it. Fail-open on a malformed step is the same
+/// defect class this module exists to close — the successor runs on the
+/// strength of something that never properly happened.
+#[tokio::test]
+async fn a_step_with_no_tool_reference_is_refused_before_it_runs() {
+    let chain = vec![json!({"tool": "srv:read_one"}), json!({"arguments": {}})];
+    let mut ran: Vec<usize> = Vec::new();
+    let mut seal = |_idx: usize, _round: &InputRequired| Ok(String::new());
+
+    let outcome = {
+        let mut run = |idx: usize, _tool: String, _args: Value| {
+            ran.push(idx);
+            std::future::ready(Ok(completed_result(idx)))
+        };
+        drive_chain(&chain, 0, &mut run, &mut seal).await
+    };
+
+    let error = outcome.expect_err("an unnamed step must not be run");
+    assert!(
+        error.to_string().contains("missing 'tool' field"),
+        "the refusal must name what is missing: {error}"
+    );
+    assert_eq!(ran, vec![0], "the unnamed step was run anyway");
 }
