@@ -2567,7 +2567,14 @@ impl Gateway {
                         // parking the reader, and awaiting a full stdout queue
                         // parks it just the same. A queue with no room is
                         // already telling the client to slow down.
-                        let _ = writer.try_send(refusal);
+                        if writer.try_send(refusal).is_err() {
+                            // Dropped, not buffered: any wait here is the
+                            // parked reader again. Logged because the client
+                            // is then holding an id that will never be
+                            // answered, and the drop is the only record of
+                            // why.
+                            warn!("stdio: the refusal itself could not be queued, id unanswered");
+                        }
                     }
                     continue;
                 };
