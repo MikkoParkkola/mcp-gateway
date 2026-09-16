@@ -253,7 +253,7 @@ reviewed as tests, then implementation.
 
 ---
 
-## Revision 2 — the resume half (proposed 2026-09-16, under review)
+## Revision 2 — the resume half (proposed 2026-09-16, built 2026-09-17)
 
 Revision 1 shipped the stop. Wiring the call site (`eba5a492`) exposed that the
 resume half, as designed, cannot complete a stopped chain. Three independent
@@ -363,3 +363,28 @@ them recorded that it could not read `redeem_retry`'s tail. It closes the hold
 itself (`invoke.rs:747`), so a resume routed through it frees the slot before
 the step runs, and it is the design's own carry-the-key-onward rule that was
 wrong. That rule is now inverted above.
+
+### What shipped (2026-09-17)
+
+The resume half is built, on the seven rows above. What the code names:
+
+- `PendingChainInterim::with_retry` carries the redeemable handle into the
+  step-scoped envelope that the retry mints, and nothing past redemption —
+  `redeem_retry` closes the hold at `src/gateway/meta_mcp/invoke.rs:747`, so
+  every later stop opens its own.
+- `presented_resume` is the single reader of the presented handle: it validates,
+  binds the chain digest, and refuses a second presentation of the same handle.
+- `step_retry_for` mints a fresh `jti` per step and freezes `expires_at` at the
+  first stop, so a re-ask inherits the exchange deadline instead of re-arming
+  the 300s TTL.
+- `chain_digest` widened to `pub(crate)` so the live rows bind the digest
+  production binds, rather than a copy of it.
+- `seal_chain_stop` keeps its `backend_request_state` parameter. The design said
+  drop it; dropping it is a wider diff than the fix needs, and it is inert.
+
+Two of the rows were mutation-checked rather than merely green:
+`previous.rounds_used = 0` is caught by the two-stop row, and commenting out the
+frozen-expiry carry is caught by `mrtr_12_a_later_stop_keeps_the_exchange_deadline`
+(289s of re-armed TTL). That deadline row mints its handle by hand with
+`deadline = now + 11`: two live stops mint inside the same second, so a row that
+compares one live stop's `expires_at` to the next asserts nothing.
