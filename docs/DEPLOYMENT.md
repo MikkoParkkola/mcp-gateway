@@ -928,6 +928,12 @@ meta_mcp:
     - gateway_invoke
 ```
 
+Those are the names of the classic surface. A gateway running Code Mode offers a
+different pair, `gateway_search` and `gateway_execute`, and the allow-list filters
+that pair by the same rule — so a list naming only classic tools leaves a Code
+Mode gateway with no tools at all. Write the list for the surface the gateway
+actually serves.
+
 Empty (the default) exposes the full surface, which the gateway itself bands at
 14 to 17 tools: the webhook, statistics and config-reload tools are listed only
 when the thing they report on is actually attached, and a webhook endpoint needs
@@ -941,9 +947,12 @@ scope; it governs the gateway's own tools only.
 
 Two things worth knowing before you shrink it:
 
-- **Omitting `gateway_invoke` makes every backend tool unreachable.** The
-  gateway warns at startup instead of refusing, because a surface built purely
-  from `surfaced_tools` is a legitimate deployment.
+- **Omitting `gateway_invoke` cuts off the route to backend tools that are not
+  pinned.** Anything listed in `surfaced_tools` still appears and still answers,
+  and Code Mode's `gateway_execute` is its own route; everything reachable only
+  by name through `gateway_invoke` becomes uncallable. The gateway warns at
+  startup rather than refusing, because a surface built purely from
+  `surfaced_tools` is a legitimate deployment.
 - **The saving is smaller than the tool count suggests.** The full 17 schemas
   measure about 14K characters, roughly 3.5K tokens; the four routing tools are
   a third of that, so cutting all the way to the minimal example above recovers

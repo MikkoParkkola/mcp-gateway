@@ -19,9 +19,10 @@ meta_mcp:
   warm_start: []
   surfaced_tools: []
   # Which of the gateway's own meta-tools this gateway lists and accepts.
-  # Empty (the default) exposes all of them: 17 on an HTTP listener, 14 over
-  # stdio, where the webhook, stats and config-reload tools have nothing to
-  # answer with. A non-empty list is an allow-list, applied by one predicate to
+  # Empty (the default) exposes all of them: the gateway bands its own surface at
+  # 14 to 17, listing the webhook, stats and config-reload tools only when the
+  # thing they report on is attached. A non-empty list is an allow-list, applied
+  # by one predicate to
   # both `tools/list` and `tools/call`, so a hidden tool is also uncallable.
   # Backend tools reached through `gateway_invoke` are unaffected.
   # A minimal routing surface -- discover and call, no gateway management:
@@ -29,9 +30,11 @@ meta_mcp:
   #     - gateway_list_servers
   #     - gateway_search_tools
   #     - gateway_invoke
-  # Omitting gateway_invoke leaves every backend tool unreachable; the gateway
-  # logs a warning at startup rather than failing, because a surface built only
-  # of surfaced_tools is a legitimate, if unusual, deployment.
+  # These are classic-surface names; a Code Mode gateway serves gateway_search
+  # and gateway_execute instead, and the same filter applies to them.
+  # Omitting gateway_invoke leaves backend tools reachable only through
+  # surfaced_tools; the gateway logs a warning at startup rather than failing,
+  # because a surface built only of surfaced_tools is a legitimate deployment.
   exposed_meta_tools: []
 streaming:
   enabled: true
