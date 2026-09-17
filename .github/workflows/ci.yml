@@ -40,6 +40,10 @@ jobs:
         run: scripts/ci/check-hosted-runners.sh --self-test
       - name: Require every job to run on a GitHub-hosted runner
         run: scripts/ci/check-hosted-runners.sh
+      - name: Validate the 800-LOC ratchet
+        run: scripts/ci/check-loc-ceiling.sh --self-test
+      - name: Hold the 800-LOC ceiling deviation at its current count
+        run: scripts/ci/check-loc-ceiling.sh
 
   service-template-smoke:
     name: Service template smoke
