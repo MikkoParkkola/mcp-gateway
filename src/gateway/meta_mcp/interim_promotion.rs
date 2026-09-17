@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MRTR.11a/.11b — deciding how a meta-tool result reaches the client.
 //!
 //! The synchronous request thread wraps every meta-tool result:

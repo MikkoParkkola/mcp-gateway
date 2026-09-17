@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MRTR.11a/.11b — the presentation decision, pinned row by row.
 //!
 //! Each row names the single check that decides it. The seam is wired into
