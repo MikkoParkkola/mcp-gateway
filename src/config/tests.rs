@@ -1097,7 +1097,10 @@ fn agent_config(secret: Option<&str>, rsa: Option<&str>) -> Config {
         rs256_public_key: rsa.map(str::to_string),
         scopes: Vec::new(),
         issuer: None,
-        audience: None,
+        // An agent with no audience is refused before the key checks below
+        // ever run, so a key-material fixture has to set one or it would
+        // assert against the audience refusal instead.
+        audience: Some("mcp-gateway-test".to_string()),
     }];
     c
 }
@@ -1162,7 +1165,7 @@ fn one_sound_agent_does_not_excuse_a_forgeable_sibling() {
             rs256_public_key: None,
             scopes: Vec::new(),
             issuer: None,
-            audience: None,
+            audience: Some("mcp-gateway-test".to_string()),
         });
     let err = c
         .validate()
@@ -1171,6 +1174,30 @@ fn one_sound_agent_does_not_excuse_a_forgeable_sibling() {
         err.to_string().contains("weak"),
         "the message must name the agent that is wrong, not the sound one: {err}"
     );
+}
+
+/// An agent with a sound key but no audience is still refused, and the refusal
+/// covers RS256 as well as HS256 — the RSA branch exits the loop early, so a
+/// guard placed after it would leave every RS256 agent audience-less.
+#[test]
+fn an_agent_with_no_audience_fails_validation_whichever_key_it_holds() {
+    const RSA: &str =
+        "-----BEGIN PUBLIC KEY-----\nunused-by-config-validation\n-----END PUBLIC KEY-----";
+    for (label, secret, rsa) in [
+        ("hs256", Some(&"k".repeat(32)[..]), None),
+        ("rs256", None, Some(RSA)),
+    ] {
+        let mut c = agent_config(secret, rsa);
+        c.agent_auth.agents[0].audience = None;
+        let err = c
+            .validate()
+            .expect_err(&format!("a {label} agent with no audience was accepted"));
+        let err = err.to_string();
+        assert!(
+            err.contains("svc") && err.contains("audience"),
+            "the {label} refusal must name the agent and the missing audience: {err}"
+        );
+    }
 }
 
 #[test]

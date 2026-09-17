@@ -163,9 +163,25 @@ pub fn validate_agent_token(
     let claims = token_data.claims;
 
     // 6. Manual audience check.
-    if let Some(ref expected_aud) = agent.audience {
-        check_audience_claim(claims.aud.as_ref(), expected_aud)?;
-    }
+    //
+    // An agent with no configured audience is refused rather than exempted. The
+    // verification key is the agent's own secret or public key, so whenever that
+    // key is shared across relying parties -- an IdP signing RS256 for many
+    // audiences with one key pair is the ordinary case -- a token minted for
+    // another service verifies here. Audience binding is what refuses that
+    // substitution, and skipping it on `None` made the refusal opt-in.
+    //
+    // Config validation already refuses such an agent at load, so this arm is
+    // unreachable through the configured ingress. It is what makes "a definition
+    // with no audience cannot validate a token" a property of the verifier
+    // rather than of one caller, since `AgentRegistry::register` is public and
+    // validates nothing.
+    let Some(ref expected_aud) = agent.audience else {
+        return Err(JwtError::JwtVerification(
+            jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidAudience),
+        ));
+    };
+    check_audience_claim(claims.aud.as_ref(), expected_aud)?;
 
     // 7. Collect scopes from the agent definition (the source of truth for what
     //    the agent is *allowed* to access).  JWT `scope` claim is informational
@@ -268,6 +284,12 @@ mod tests {
     use crate::gateway::oauth::agents::AgentDefinition;
     use jsonwebtoken::{EncodingKey, Header};
 
+    /// Audience shared by [`make_hs256_agent`] and [`hs256_token`] so the
+    /// fixture pair validates. Since an agent with no audience is now refused,
+    /// a fixture that left it `None` would test the refusal rather than the
+    /// behaviour each row is about.
+    const FIXTURE_AUDIENCE: &str = "mcp-gateway-test";
+
     fn make_hs256_agent(id: &str, secret: &str) -> AgentDefinition {
         AgentDefinition {
             client_id: id.to_string(),
@@ -276,8 +298,34 @@ mod tests {
             rs256_public_key: None,
             scopes: vec!["tools:*".to_string()],
             issuer: None,
-            audience: None,
+            audience: Some(FIXTURE_AUDIENCE.to_string()),
         }
+    }
+
+    /// Mint a correctly-signed HS256 token carrying an explicit `aud` claim.
+    ///
+    /// Separate from [`hs256_token`] because the audience rows need a token that
+    /// is valid in every respect *except* who it was minted for.
+    fn hs256_token_with_aud(sub: &str, secret: &str, aud: &str) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .cast_signed();
+
+        let claims = serde_json::json!({
+            "sub": sub,
+            "exp": now + 3600,
+            "iat": now,
+            "aud": aud,
+        });
+
+        jsonwebtoken::encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap()
     }
 
     fn hs256_token(sub: &str, secret: &str, exp_offset_secs: i64) -> String {
@@ -291,6 +339,7 @@ mod tests {
             "sub": sub,
             "exp": now + exp_offset_secs,
             "iat": now,
+            "aud": FIXTURE_AUDIENCE,
         });
 
         jsonwebtoken::encode(
@@ -518,5 +567,44 @@ mod tests {
     #[test]
     fn extract_sub_rejects_malformed_token() {
         assert!(extract_sub_unverified("not-a-jwt").is_err());
+    }
+
+    // MIK-6746.CONTRACT.1 / C1 -- an agent with no configured audience must not
+    // accept a token minted for somebody else.
+    //
+    // The verification key is the agent's own secret or public key. Whenever
+    // that key is shared across relying parties -- the normal case for an IdP
+    // signing RS256 for many audiences with one key pair -- a token minted for
+    // another service verifies here. Audience binding is what stops that
+    // substitution, and before this row it was opt-in: `audience: None` skipped
+    // `check_audience_claim` entirely.
+    #[test]
+    fn agent_without_configured_audience_refuses_a_correctly_signed_token() {
+        // GIVEN: an agent that configures no expected audience.
+        let reg = AgentRegistry::new();
+        reg.register(AgentDefinition {
+            client_id: "agent-1".to_string(),
+            name: "agent-1".to_string(),
+            hs256_secret: Some("shared-signing-secret".to_string()),
+            rs256_public_key: None,
+            scopes: vec!["tools:*".to_string()],
+            issuer: None,
+            audience: None,
+        });
+
+        // AND: a token that is correct in every other respect -- right subject,
+        // right secret, unexpired -- but was minted for a different service.
+        let token = hs256_token_with_aud(
+            "agent-1",
+            "shared-signing-secret",
+            "https://some-other-service.example",
+        );
+
+        // WHEN / THEN: refused. This returned Ok before the guard landed.
+        assert!(
+            validate_agent_token(&token, &reg).is_err(),
+            "an agent with no configured audience must not accept a token \
+             minted for another service"
+        );
     }
 }

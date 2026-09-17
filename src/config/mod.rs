@@ -914,6 +914,24 @@ impl Config {
                     agent.client_id
                 )));
             }
+            // Audience must be checked BEFORE the RSA early exit below, or an
+            // audience-less RS256 agent would load and the startup refusal
+            // would cover only HS256. Without a configured audience the
+            // verifier cannot tell a token minted for this gateway from one
+            // minted for any other relying party that shares the signing key.
+            if agent
+                .audience
+                .as_deref()
+                .is_none_or(|a| a.trim().is_empty())
+            {
+                return Err(Error::ConfigValidation(format!(
+                    "agent_auth.agents['{}'] sets no audience. The signing key \
+                     may be shared with other relying parties, so without an \
+                     expected `aud` this agent accepts tokens minted for them. \
+                     Set audience to the identifier this gateway is known by.",
+                    agent.client_id
+                )));
+            }
             if has_rsa {
                 continue;
             }
