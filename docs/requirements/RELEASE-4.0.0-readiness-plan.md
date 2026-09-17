@@ -87,12 +87,48 @@ hold a *real* channel: HTTP takes `state.proxy_manager.as_ref()`
 (`handlers.rs:1602`) and the stdio serve loop takes the pipe it already reads
 (`server/mod.rs:3198`).
 
-What is left is timing. 65 identical calls travel one path and split 59/6, then
-58/7, and six consecutive macOS runs never split at all. That is the signature
-of a race on bridge-session registration: a call arriving before the session is
-registered gets `NoSession` and is minted a continuation, and one arriving after
-is asked. Locating the registration point relative to the dispatcher accepting
-calls is the next measurement, and it is not yet made.
+**Retired — there is no registration race, because there is no session map (V).**
+This was previously read as "a race on bridge-session registration". That
+hypothesis is dead: `src/gateway/input_bridge.rs` contains no session map and no
+registration point — `rg 'insert|remove'` over it matches only two metrics
+labels (`:673-674`). `DeliveryError::NoSession` has exactly one origin, the
+null-object channel `NoClientChannel` (`:350-361`), which returns it
+unconditionally. Nothing can race on registering something that is never
+registered.
+
+**Settled — the split is a path split, not a schedule (V).** The channel a
+dispatch carries is decided by which caller builds the request. The stdio serve
+loop passes the pipe it already reads (`src/gateway/server/mod.rs:3198`, whose
+comment says "Non-serve-loop callers still pass `NoClientChannel`"), so a call
+on the serve loop can be asked. The task-service execution path builds its
+context with the opposite pairing
+(`src/gateway/task_service/execution/context.rs:127-132`): it preserves
+`input_capabilities: self.input_capabilities` — the caller's *declared*
+capabilities — while hardcoding `confirmation: ConfirmationChannel::Unavailable`
+and `channel: &NoClientChannel`. That is the declared-but-undeliverable state
+constructed by hand, and it is exactly the combination that walks past `plan`
+(the capability is declared, so nothing refuses) into a delivery that cannot
+succeed, into the empty arm, into a minted continuation.
+
+**Therefore the fix moves off the arm (I).** The arm is where the symptom
+surfaces; the defect is a context that promises a capability it structurally
+cannot serve. The invariant to pin is *a request context holding
+`NoClientChannel` must not declare input capabilities* — enforced where the
+context is built, which makes the inconsistent state unrepresentable instead of
+adding a downstream error arm. This also kills Option A for a second and
+stronger reason than the HTTP handlers: "declared capability, no session"
+describes the task path exactly, and erroring on it would break task execution,
+which is *supposed* to run with no live client channel.
+
+Still inferred, and cheap to settle: that 7a's 6-7 fabricated results arrive
+through this path specifically. The census already histograms error codes and
+messages, so the change carries its own measurement — no probe branch, and the
+earlier one was inert anyway (no test installs a `tracing` subscriber and CI
+sets no `RUST_LOG`).
+
+`MIK-7212.WIRE.10` is the test row that joins the two halves end to end; the
+source comment at `input_bridge.rs:344-348` already names it as missing.
+
 
 **Therefore:** the two rows split. 7a is the silent downgrade, and the arm must
 stop minting whatever the cause — a caller that asked for a bridged elicitation
