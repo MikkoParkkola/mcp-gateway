@@ -302,7 +302,7 @@ impl StdioSession {
         enough: impl Fn(&[String]) -> bool,
     ) -> Vec<String> {
         let mut lines = Vec::new();
-        let _ = timeout(budget, async {
+        let ended = timeout(budget, async {
             while let Ok(Some(line)) = self.stdout.next_line().await {
                 lines.push(line);
                 if enough(&lines) {
@@ -311,6 +311,19 @@ impl StdioSession {
             }
         })
         .await;
+        // Which of the three ways collection ended is what separates a budget cut
+        // too fine from a question that never arrived, and the count alone does
+        // not say which. Printed rather than returned: cargo surfaces it for the
+        // run that failed and swallows it for the runs that did not.
+        eprintln!(
+            "collect_lines_until: {} after {} lines",
+            match ended {
+                Err(_) => "the budget expired",
+                Ok(()) if enough(&lines) => "the expected count arrived",
+                Ok(()) => "stdout ended",
+            },
+            lines.len()
+        );
         let _ = timeout(settle, async {
             while let Ok(Some(line)) = self.stdout.next_line().await {
                 lines.push(line);
@@ -651,8 +664,10 @@ const BURST_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// Thirty seconds paced a healthy one. Four CI runs of this row failed with 57,
 /// 58, 59 and 63 of the expected 64 questions arrived -- a spread that sits just
-/// under the cap rather than at a fixed number, which is what a budget expiring
-/// mid-arrival looks like and not what a lost admission would look like. The
+/// under the cap rather than at a fixed number. That shape fits a budget
+/// expiring mid-arrival; on its own it does not rule out a small
+/// load-proportional drop, so what settles it is the row passing under the
+/// raised budget, not the spread. The
 /// settle window cannot cause it: that phase only runs once the read loop has
 /// already broken. Nor can [`BURST_TIMEOUT`], which bounds the send side: it is
 /// unwrapped with `.expect`, so exhausting it panics as a parked reader rather
