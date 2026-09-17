@@ -1,0 +1,12 @@
+# §11 pin values, resolved 2026-09-13 (machine-derived)
+k6_image (grafana/k6:0.54.0) = sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755
+docs/requirements/RELEASE-4.0.0-workload-contract.md = sha256:6bada5f908d5dbb18a6fe0b67b648ba855b651f79e9dc82eb5f0b1c034ec662b
+benchmarks/workload/run_workload.sh = sha256:a8a28089e68969e9881ae7f168fb8d6bd124a469b7621582bd14e0b930b276ba
+benchmarks/workload/eval_workload.py = sha256:784195bdcf5464a6abc842e8ff3dd777662276bff879650eb4b0f987e29cc147
+benchmarks/workload/mcp_backend.py = sha256:41b26fca2c318de3d5927a532a3c76e1896f3c76d8f0fb4792e792af0211adf3
+benchmarks/workload/k6_workload.js = sha256:9d3844c3144345d7b59ec4a08ac8aa5c1b57868dd1f1696d00b7b19a736d39bc
+benchmarks/workload/gateway.workload.yaml = sha256:811b7a63557fac6ba4cf5bb66517a02c6ea47e0a8317a18090d0286c56d45727
+benchmarks/workload/gateway.workload.mixed.yaml = sha256:bc775b8506b0f7cb3cbd4110ee06a6df04e86a8da93ca4358b08e16bd624a324
+checkout v3.5.0 = 32f135a61fb50c20a044fb4c2347bc1cf8015d89
+checkout v3.5.1 = e138680a542b41fa156a94a1ffc9decd9692be77
+checkout HEAD = 790898c661bb80b9979021890a1ef6f5099dd637

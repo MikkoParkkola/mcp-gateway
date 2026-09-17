@@ -1,0 +1,14 @@
+# NFR.WORKLOAD.1 gateway configuration -- cell E, mixed-era, report-only.
+#
+# Identical to gateway.workload.yaml except that the fixture pins a legacy
+# protocol version while the client requests the modern one, which is what
+# makes this cell mixed-era. Cell E is measured and never compared, so the
+# gating cells A, B and C keep a single byte-identical config between them.
+
+server:
+  host: "127.0.0.1"
+
+backends:
+  workload:
+    command: "python3 ${WORKLOAD_FIXTURE} --protocol-version 2025-06-18"
+    description: "Deterministic fixture backend for NFR.WORKLOAD.1 (mixed-era)"

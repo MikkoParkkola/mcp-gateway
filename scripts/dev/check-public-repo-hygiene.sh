@@ -64,6 +64,63 @@ blocked_reasons=(
   "protected auth material"
 )
 
+# Every tracked file at the repository root. Not filtered by extension: the
+# material this rule exists to catch arrives as an agent brief, a generated map
+# or an extensionless review prompt, and an extension filter lets each of those
+# through. A new root entry is a deliberate act, so it is added here by hand.
+root_doc_allowlist=(
+  ".dockerignore"
+  ".gitignore"
+  ".gitleaksignore"
+  ".license-scope-exclude"
+  ".trivyignore"
+  "Cargo.lock"
+  "Cargo.toml"
+  "Dockerfile"
+  "LICENSE"
+  "LICENSE-MIT"
+  "LICENSE-NONCOMMERCIAL"
+  "Makefile"
+  "demo.gif"
+  "demo.tape"
+  "gateway.example.yaml"
+  "glama.json"
+  "security-controls.toml"
+  "server.json"
+  "smithery.yaml"
+  "ARCHITECTURE.md"
+  "AUTHORSHIP.md"
+  "CHANGELOG.md"
+  "CLA.md"
+  "CLAUDE.md"
+  "CODE_OF_CONDUCT.md"
+  "COMMERCIAL.md"
+  "CONTRIBUTING.md"
+  "LICENSE-EE.md"
+  "LICENSES.md"
+  "NOTICE.md"
+  "README.md"
+  "SECURITY.md"
+  # Tracked under protest: the numerical-claim drift check and the MIK-6977
+  # acceptance test both read this generated map, so removing it from the tree
+  # would silently drop two claim surfaces. Untangle those first.
+  "codebase-map.md"
+  "llms.txt"
+)
+
+# Files a user copies or follows verbatim. An absolute path out of whoever
+# authored the line sends them to a directory that exists on one machine.
+shipped_surfaces=(
+  "gateway.example.yaml"
+  "README.md"
+  "docs/QUICKSTART.md"
+  "docs/DEPLOYMENT.md"
+  "docs/MULTI_USER.md"
+  "docs/OAUTH_CONFIG.md"
+  "docs/REMOTE_BACKENDS.md"
+  "llms.txt"
+)
+
 report_failure() {
   local message="$1"
   printf 'FAIL: %s\n' "$message" >&2
@@ -116,6 +173,25 @@ while IFS= read -r file; do
       printf 'Remediation: move the material to ignored docs/strategy/, docs/positioning/, docs/competitive/, or docs/competitive-intelligence/ as appropriate.\n' >&2
     fi
   done
+done < <(git ls-files)
+
+for surface in "${shipped_surfaces[@]}"; do
+  [[ -f "$surface" ]] || continue
+  if match="$(grep -E -n -m 1 '(/Users|/home)/[a-z][a-z0-9_-]*/' "$surface" || true)"; [[ -n "$match" ]]; then
+    report_failure "$surface carries a home-directory path a reader cannot have: $match"
+  fi
+done
+
+while IFS= read -r file; do
+  [[ -n "$file" ]] || continue
+  [[ "$file" == */* ]] && continue
+  allowed=0
+  for permitted in "${root_doc_allowlist[@]}"; do
+    [[ "$file" == "$permitted" ]] && allowed=1 && break
+  done
+  if [[ "$allowed" -eq 0 ]]; then
+    report_failure "$file is a top-level file that is not on the root allowlist; move it under docs/ or add it to root_doc_allowlist in this script"
+  fi
 done < <(git ls-files)
 
 if (( failures > 0 )); then

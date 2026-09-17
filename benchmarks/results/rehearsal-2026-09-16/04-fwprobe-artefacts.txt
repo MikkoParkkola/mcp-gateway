@@ -1,0 +1,64 @@
+# fw_probe 2026-09-16 — raw artefacts (diagnostic probe, NOT a graded run)
+
+## config.sha256
+8b638a9e7e20d55eaead735dd8761bb78a41c547d21513e52ca7d5ea392fa65e  /home/mikko/perf-workload/runs/2026-09-16-fwprobe/cfg/pinned.yaml
+0a8b2dc52b8d4c9d712fb8f158b3697ac07852549184dd68592a2dcdfe7f1d3d  /home/mikko/perf-workload/runs/2026-09-16-fwprobe/cfg/ablate.yaml
+
+## ablate.yaml delta vs pinned.yaml
+16a17,20
+> 
+> security:
+>   firewall:
+>     scan_responses: false
+
+## quiet-gate.log
+2026-09-16T15:07:36Z before load=7.19 rustc=0
+0 cargo=1
+2026-09-16T15:07:55Z gate-wait load=6.53 rustc=1 cargo=1
+2026-09-16T15:08:25Z gate-wait load=8.87 rustc=0 cargo=1
+2026-09-16T15:08:55Z gate-wait load=7.91 rustc=0 cargo=1
+2026-09-16T15:09:25Z gate-wait load=7.05 rustc=1 cargo=1
+2026-09-16T15:09:55Z gate-wait load=9.00 rustc=1 cargo=1
+2026-09-16T15:10:25Z gate-wait load=7.92 rustc=0 cargo=1
+2026-09-16T15:10:55Z gate-open load=6.88
+2026-09-16T15:10:55Z before load=6.88 rustc=0 cargo=0
+2026-09-16T15:10:56Z C-pinned-1 load=6.88
+2026-09-16T15:11:57Z C-ablate-1 load=4.74
+2026-09-16T15:12:57Z B-pinned-1 load=3.28
+2026-09-16T15:13:58Z B-ablate-1 load=2.72
+2026-09-16T15:14:59Z C-pinned-2 load=7.58
+2026-09-16T15:16:00Z C-ablate-2 load=9.53
+2026-09-16T15:17:01Z B-pinned-2 load=8.09
+2026-09-16T15:18:02Z B-ablate-2 load=7.80
+2026-09-16T15:19:03Z after load=9.09 rustc=0 cargo=1
+
+## per-rep p50 (ms) and run health
+rep              health     init     list     call    err   checks    reqs
+B-ablate-1       0.3060   0.3850   0.9936   0.3762      0   1.0000   32827
+B-ablate-2       0.3252   0.4082   0.9969   0.3733      0   1.0000   32879
+B-pinned-1       0.3157   0.3757   0.8977   0.3768      0   1.0000   32927
+B-pinned-2       0.3291   0.4005   1.0029   0.4011      0   1.0000   32875
+C-ablate-1       0.3218   0.4036   0.9410   0.3889      0   1.0000   32927
+C-ablate-2       0.3363   0.4347   1.0838   0.4268      0   1.0000   32851
+C-pinned-1       0.3302   0.4055   1.1548   0.4131      0   1.0000   32891
+C-pinned-2       0.3386   0.4380   1.2966   0.4448      0   1.0000   32835
+
+## gateway stderr bytes per rep
+0 B-ablate-1.gateway.stderr
+0 B-ablate-2.gateway.stderr
+0 B-pinned-1.gateway.stderr
+0 B-pinned-2.gateway.stderr
+0 C-ablate-1.gateway.stderr
+0 C-ablate-2.gateway.stderr
+0 C-pinned-1.gateway.stderr
+0 C-pinned-2.gateway.stderr
+0 total
+
+## result payload sizes, C arm, pinned config (one curl per method)
+   compact JSON encoding of the JSON-RPC `result` object
+
+   tools/list   16097 bytes   (17 tool schemas)
+   tools/call     271 bytes   (pinned WORKLOAD_OK payload in its MCP content wrapper)
+
+   byte ratio 59.4x against a cost ratio of 252.4/34.1 = 7.4x
+   => the added cost is not purely per-byte; see 03 section 2.4
