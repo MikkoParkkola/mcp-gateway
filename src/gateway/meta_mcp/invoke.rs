@@ -2271,7 +2271,12 @@ impl MetaMcp {
                 Err(crate::gateway::input_bridge::BridgeError::Delivery {
                     error: crate::gateway::input_bridge::DeliveryError::NoSession,
                     ..
-                }) => {}
+                }) => {
+                    // PROBE (throwaway branch, MIK-7387): this arm is silent by
+                    // construction, so a hit on it is invisible in any CI log.
+                    // Do not merge.
+                    warn!(target: "mcp_gateway::probe", "PROBE_NOSESSION_ARM");
+                }
                 // A policy refusal keeps its type across the bridge boundary.
                 // `error_response_preserving_status` carries a dedicated
                 // `ResponseFirewallRefused` arm that builds the delivery-refusal
@@ -2357,6 +2362,9 @@ impl MetaMcp {
         // never be shown is a redeemable envelope for an exchange that cannot
         // happen.
         if let Some(interim) = interim {
+            // PROBE (throwaway branch, MIK-7387): counts continuations minted
+            // for a call the fixture answered with `input_required`. Do not merge.
+            warn!(target: "mcp_gateway::probe", "PROBE_MINT_SITE");
             let Some(envelope) = mint_continuation(
                 &self.continuation,
                 caller,
