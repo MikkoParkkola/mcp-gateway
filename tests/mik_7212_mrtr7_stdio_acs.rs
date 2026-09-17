@@ -654,7 +654,10 @@ const BURST_TIMEOUT: Duration = Duration::from_secs(30);
 /// under the cap rather than at a fixed number, which is what a budget expiring
 /// mid-arrival looks like and not what a lost admission would look like. The
 /// settle window cannot cause it: that phase only runs once the read loop has
-/// already broken. A runner slow enough to need more than this is parked.
+/// already broken. Nor can [`BURST_TIMEOUT`], which bounds the send side: it is
+/// unwrapped with `.expect`, so exhausting it panics as a parked reader rather
+/// than reaching the arrival-count assertion that actually failed. A runner slow
+/// enough to need more than this budget is parked.
 const COLLECT_BUDGET: Duration = Duration::from_secs(180);
 
 /// Kept reading after the expected count arrives, so one question too many is
