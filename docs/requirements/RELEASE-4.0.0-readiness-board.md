@@ -21,10 +21,10 @@ carries it.
 This board answers *how far along* per cluster; the ledger now answers it per
 criterion. `RELEASE-4.0.0-scope-status.json` carries `stage` and `blocked_on` on
 every row, and `scripts/release/check_scope_acceptance.py` prints one line on
-every run:
+every run (shape, not a snapshot -- run the gate for current values):
 
 ```
-Stage burnup: 21/31 met; ungraded 0 | graded 7 | built 3 | on-line 0 | proven 0 | met 21; held: MIK-6745.JOURNEY.1 (external), NFR.WORKLOAD.1 (operator), NFR.DEMO.1 (external)
+Stage burnup: <met>/<total> met; ungraded N | graded N | built N | on-line N | proven N | met N; held: <id> (external), <id> (operator)
 ```
 
 The ladder is ordered — ungraded, graded, built, on-line, proven, met — and only
