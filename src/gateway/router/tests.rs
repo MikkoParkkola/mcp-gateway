@@ -3656,3 +3656,107 @@ async fn ac_order_2_a_modern_caller_is_refused_gateway_set_profile() {
 }
 
 mod openwebui_adapter;
+
+/// C5 route parity (MIK-6746): agent-identity enforcement must not depend on
+/// which URL the caller picks. `require_id` and the `known_agents` allowlist
+/// are checked in `meta_mcp_dispatch` for `/mcp`; the direct `/mcp/{name}`
+/// route reaches the same backends, so a guard missing there is an allowlist
+/// a client bypasses by changing the path.
+async fn direct_route_state_with_identity(
+    config: crate::config::AgentIdentityConfig,
+) -> (Arc<AppState>, tempfile::TempDir) {
+    let backend = Arc::new(Backend::new(
+        "demo",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(RouterNotificationTestTransport::success());
+    backend.set_transport_for_test(transport);
+
+    let (mut state, store_dir) = test_router_app_state().await;
+    Arc::get_mut(&mut state)
+        .expect("state is uniquely owned here")
+        .agent_identity_config = config;
+    let _ = state.backends.register(backend);
+    (state, store_dir)
+}
+
+fn direct_route_call(agent_id: Option<&str>) -> axum::http::Request<axum::body::Body> {
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/demo")
+        .header("content-type", "application/json");
+    if let Some(id) = agent_id {
+        builder = builder.header("x-agent-id", id);
+    }
+    builder
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": { "name": "search", "arguments": {} }
+            })
+            .to_string(),
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn direct_route_rejects_a_missing_agent_id_when_require_id_is_set() {
+    let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
+        enabled: true,
+        require_id: true,
+        known_agents: vec![],
+    })
+    .await;
+    let response = create_router(state)
+        .oneshot(direct_route_call(None))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "require_id is enforced on /mcp, so /mcp/{{name}} must refuse too"
+    );
+}
+
+#[tokio::test]
+async fn direct_route_rejects_an_agent_outside_the_allowlist() {
+    let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
+        enabled: true,
+        require_id: true,
+        known_agents: vec!["known-agent".to_string()],
+    })
+    .await;
+    let response = create_router(state)
+        .oneshot(direct_route_call(Some("stranger")))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "an agent absent from known_agents must not be admitted by URL choice"
+    );
+}
+
+#[tokio::test]
+async fn direct_route_admits_an_allowlisted_agent() {
+    // Control: the guard refuses the two rows above because of identity, not
+    // because it refuses the direct route outright.
+    let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
+        enabled: true,
+        require_id: true,
+        known_agents: vec!["known-agent".to_string()],
+    })
+    .await;
+    let response = create_router(state)
+        .oneshot(direct_route_call(Some("known-agent")))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
