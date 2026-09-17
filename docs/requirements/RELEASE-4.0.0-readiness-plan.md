@@ -22,7 +22,46 @@ semantics, and it re-promotes the silent downgrade from candidate to likely
 cause. The consequence the ticket cares about follows from it: a caller that
 asked for a bridged elicitation is answered with a continuation envelope instead.
 
-**Still open — what causes the 58-versus-64 deficit (A).** `prompts_in`
+**Settled — 7a is the downgrade, and nothing on 7a is parked (V).** CI run
+`35254650457` re-ran the census and the split moved: 59 asks, 6 plain results,
+59 refusals against the same 65 calls. Decomposed by role rather than by count,
+`elicitation/create` are gateway-to-client requests while `results` and `errors`
+are the responses to the 65 tool calls, so the discriminator is
+responses-versus-calls: 6 + 59 = 65, and the run before it 7 + 58 = 65. Every
+call was answered. A dispatch starved of an admission permit emits nothing
+inside the window, so a cap-driven deficit would leave responses *short* of
+calls; on 7a it is exact, twice, at two different split points. The cap is
+therefore ruled out **on 7a only**, the deficit is wholly the manufactured
+result, and the moving split point is the race.
+
+**Newly separated — 7b loses calls outright (V).** The same subtraction on 7b
+does not balance. The loop sends `FIRST_CALL_ID..=last_over_cap`, which is
+`2..=1027` for `INFLIGHT_CAP` 1024, so 1026 calls
+(`tests/mik_7212_mrtr7_stdio_acs.rs:895-899`). Responses are 964 + 20 + 2 = 986,
+leaving 40 calls that produced no response line at all; the earlier run leaves
+47. That is the parked population the cap hypothesis predicts, so 7b is a
+distinct defect from 7a and the cap remains live on it.
+
+**Retired — the CI probe was inert (V).** The throwaway branch carried two
+`tracing::warn!` calls at the empty arm and the mint (`ccd7669f`). Neither fired
+in CI, and not because the arm was cold: no test installs a `tracing`
+subscriber and the workflow sets no `RUST_LOG`, so the macros had nowhere to
+emit. Zero hits is no evidence either way. The census already histograms error
+codes *and* error messages, which is a working instrument, so the fix carries
+its own measurement and no second probe branch is needed.
+
+**Corrected — the guard named in the source comment does not hold.** The comment
+at `src/gateway/meta_mcp/invoke.rs:2247-2264` argues stdio can never reach the
+empty arm because `stdio_caller_context` declares `Declared::NONE`, so `plan`
+refuses one step before delivery. That helper
+(`src/gateway/server/mod.rs:3665`) has one caller, a test at `:4287`. The live
+stdio dispatch uses `build_stdio_caller_context` (`:3142`, called from
+`dispatch_tools_call` at `:3303`), which declares
+`request_shape.declared_capabilities()` or the client's handshake capabilities.
+So on the live path the ask does go out, and a delivery that finds no session
+does reach the empty arm. The 59 asks observed over stdio are that.
+
+**Historical — what the deficit was thought to be (A).** `prompts_in`
 (`:749-755`) filters the entire captured buffer and never decrements, so 58 is a
 count of *cumulative emissions*. That was read as ruling out the 64-permit cap,
 on the grounds that a permit delays a frame rather than suppressing it. The
@@ -34,14 +73,15 @@ delay becomes indistinguishable from suppression in the count. So
 cumulative-versus-concurrent does not discriminate here, and the cap remains a
 live explanation for the deficit alongside the downgrade.
 
-**Therefore:** no separate cap defect is filed *yet* — not because it is ruled
-out, but because the probe has not run. And a fix at the `NoSession` arm is not
-yet known to turn either row green: both rows assert exactly 64, so if any part
-of the deficit is window-driven the fix lands at 58 + k and the row stays red.
-That is the hypothesis the CI probe tests, not a conclusion.
+**Therefore:** the two rows split. 7a is the downgrade and nothing else, so the
+fix at the empty arm is expected to turn it green; the falsifier is stated
+before the edit, because "green" has a shape. Post-fix 7a should read 64 asks,
+1 admission refusal, 0 plain results. If it reads 65 asks instead, admission is
+not refusing at the cap — a different defect, and worth knowing which one
+arrived. 7b carries its own ticket for the 40 unanswered calls; a fix at the arm
+is not expected to close it.
 
-Unexplained either way: why the deficit lands near 58 rather than some other
-value, and why six consecutive macOS runs never lose the race.
+Unexplained either way: why six consecutive macOS runs never lose the race.
 
 ## Gap inventory
 
