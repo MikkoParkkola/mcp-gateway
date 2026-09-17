@@ -150,6 +150,26 @@ What a real measurement needs, concretely:
 - Running it costs live LLM API calls and wall-clock time per trial x
   114 queries x however many repeats are needed for stable statistics --
   explicitly out of scope for the baseline-and-freeze half of this ticket.
+- A *different kind of gate* from the section 4 floors, which is the part
+  that cannot be reached by simply running something. Every floor in
+  section 4 was trusted only after a falsifier: perturb the measurement,
+  watch the named floor go red, revert, confirm the run regenerates
+  byte-identically. A live-agent measurement has no byte-identical
+  regeneration. It is stochastic, and its model version (`gpt-5.6-luna`
+  for the MIK-6977 run) is external to this repository and cannot be
+  pinned by a commit the way `f241b464` pins the ranker -- so the same
+  three numbers re-measured later are not comparable to these by equality.
+  Flooring these families therefore needs a gate built on repeats and a
+  stated tolerance band, which no one has designed. That is a design
+  decision, not a measurement someone can go take.
+
+Simulating the agent instead -- assume it picks rank 1, searches again
+when rank 1 is wrong, and sum the tokens that pattern would imply -- would
+produce deterministic, falsifiable-looking numbers for all three families
+from the corpus already in this directory. It is rejected. Simulated agent
+behaviour recorded as measurement is the fabrication this section exists
+to prevent, and the tidiness of the resulting numbers is what makes it
+dangerous rather than what makes it acceptable.
 
 No number is given for these three. Do not treat their absence as zero.
 
