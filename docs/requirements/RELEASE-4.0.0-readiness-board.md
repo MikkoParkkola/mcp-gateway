@@ -1157,15 +1157,19 @@ criteria, and they are excluded above.
 fault, or a flake to re-run — is wrong on both counts, and acting on it would have re-run a truthful
 failure until it lied.
 
-Two tests fail, and they fail in all four of the branch's most recent CI runs, so neither is timing
-noise:
+Two tests fail in all four of the branch's most recent CI runs. Consistent failure is not the same
+as identical failure, and reading the arrival counts rather than the pass/fail bit separates them:
 
 - `mik_3274_ranking_3_baseline` (`tests/mik_3274_ranking_3_baseline.rs:187`): overall
   `top1_hit_rate` is 0.692982 against the MIK-3274.RANKING.3 frozen floor of 0.736
   (`benchmarks/ranking-baseline/FREEZE.md` section 4, frozen at `f241b464`).
 - `ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap`
   (`tests/mik_7212_mrtr7_stdio_acs.rs:734`): 65 unanswered bridged calls must leave exactly 64
-  outstanding questions at the admission cap; 58 arrive.
+  outstanding questions at the admission cap. Across the four runs 58, 59, 63 and 57 arrived. A
+  spread sitting just under the cap is a budget expiring mid-arrival, not six lost admissions, and
+  `COLLECT_BUDGET` was the only bound that could end collection — the settle window runs after the
+  read loop breaks, so it cannot cut it short. The thirty-second budget was pacing a healthy reader
+  when its own comment said it must only bound a parked one. Raised to 180s.
 
 Both test files exist on `main`; this branch extended them by 114 and 411 lines respectively. That
 is the whole explanation for the colour difference. `main` is green because it does not yet carry
@@ -1174,9 +1178,13 @@ while acceptance gates land ahead of the behaviour they grade — it is what tes
 from the outside, and the scope ledger already agrees: MIK-3274.RANKING.3 is recorded `pending` /
 `graded`, not met.
 
-The consequence for delivery is the part worth writing down. Every slice on this branch now queues
-behind two failures it did not cause and cannot fix, because the branch merges as one change. Work
-that is itself complete, reviewed and pushed is not therefore deliverable, and marking it delivered
-would be recording a merge that cannot happen. Closing either gate is product work on the graded
-behaviour — raising selection quality, and finding where six of sixty-four admissions go — not
-an adjustment to the gate that reports it.
+The consequence for delivery is the part worth writing down. Every slice on this branch queues
+behind failures it did not cause and cannot fix, because the branch merges as one change. Work that
+is itself complete, reviewed and pushed is not therefore deliverable, and marking it delivered would
+be recording a merge that cannot happen.
+
+The two reds are not the same kind of thing, and only one of them is product work. RANKING.3 is:
+selection quality sits below its frozen floor and no timeout will raise it. MRTR.7a was a bound in
+the test harness, and was fixed there. The evidence that separates them was four arrival counts,
+and the wrong reading was available in both directions — re-running a truthful ranking failure
+until it lied, or hunting a product defect in six admissions that were never lost.

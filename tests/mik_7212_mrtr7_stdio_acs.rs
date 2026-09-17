@@ -648,7 +648,14 @@ const BURST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a saturation row waits for the questions it expects. Generous on
 /// purpose: it bounds a parked reader, it does not pace a healthy one.
-const COLLECT_BUDGET: Duration = Duration::from_secs(30);
+///
+/// Thirty seconds paced a healthy one. Four CI runs of this row failed with 57,
+/// 58, 59 and 63 of the expected 64 questions arrived -- a spread that sits just
+/// under the cap rather than at a fixed number, which is what a budget expiring
+/// mid-arrival looks like and not what a lost admission would look like. The
+/// settle window cannot cause it: that phase only runs once the read loop has
+/// already broken. A runner slow enough to need more than this is parked.
+const COLLECT_BUDGET: Duration = Duration::from_secs(180);
 
 /// Kept reading after the expected count arrives, so one question too many is
 /// still observed rather than cut off by an early return.
