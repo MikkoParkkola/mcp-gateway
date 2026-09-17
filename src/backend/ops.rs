@@ -392,6 +392,49 @@ impl Backend {
         result
     }
 
+    /// Record a failed dispatch against the slot's failsafe, log it, and count
+    /// it. `exchange` is the noun the log line opens with; the request and the
+    /// notification paths differ in nothing else, so they share this.
+    fn record_dispatch_error(
+        &self,
+        entry: &super::PooledEntry,
+        latency: std::time::Duration,
+        error: &Error,
+        exchange: &'static str,
+    ) {
+        let rate_limited = entry
+            .failsafe
+            .record_dispatch_failure(&error.to_string(), latency);
+        if rate_limited {
+            tracing::warn!(
+                error = %error,
+                latency_ms = latency.as_millis(),
+                "{exchange} rate limited"
+            );
+        } else {
+            tracing::error!(
+                error = %error,
+                latency_ms = latency.as_millis(),
+                "{exchange} failed"
+            );
+        }
+        telemetry_metrics::counter!(
+            "mcp_backend_requests_total",
+            "backend" => self.name.clone(),
+            "status" => if rate_limited { "rate_limited" } else { "error" }
+        )
+        .increment(1);
+    }
+
+    /// Record how long one dispatch took, whatever its outcome.
+    fn record_dispatch_latency(&self, latency: std::time::Duration) {
+        telemetry_metrics::histogram!(
+            "mcp_backend_request_duration_seconds",
+            "backend" => self.name.clone()
+        )
+        .record(latency.as_secs_f64());
+    }
+
     /// Record the outcome of one dispatch attempt against the slot's failsafe
     /// and the request-duration metrics, split out of [`Self::request_attempted`]
     /// purely to keep that function under the line budget -- the logic and its
@@ -432,31 +475,9 @@ impl Backend {
                 )
                 .increment(1);
             }
-            Err(e) => {
-                let text = e.to_string();
-                let rate_limited = entry.failsafe.record_dispatch_failure(&text, latency);
-                if rate_limited {
-                    tracing::warn!(
-                        error = %e,
-                        latency_ms = latency.as_millis(),
-                        "Request rate limited"
-                    );
-                } else {
-                    tracing::error!(error = %e, latency_ms = latency.as_millis(), "Request failed");
-                }
-                telemetry_metrics::counter!(
-                    "mcp_backend_requests_total",
-                    "backend" => self.name.clone(),
-                    "status" => if rate_limited { "rate_limited" } else { "error" }
-                )
-                .increment(1);
-            }
+            Err(e) => self.record_dispatch_error(entry, latency, e, "Request"),
         }
-        telemetry_metrics::histogram!(
-            "mcp_backend_request_duration_seconds",
-            "backend" => self.name.clone()
-        )
-        .record(latency.as_secs_f64());
+        self.record_dispatch_latency(latency);
     }
 
     /// Send a notification to the backend via the canonical shared slot's
@@ -560,31 +581,9 @@ impl Backend {
                 )
                 .increment(1);
             }
-            Err(e) => {
-                let text = e.to_string();
-                let rate_limited = entry.failsafe.record_dispatch_failure(&text, latency);
-                if rate_limited {
-                    tracing::warn!(
-                        error = %e,
-                        latency_ms = latency.as_millis(),
-                        "Notification rate limited"
-                    );
-                } else {
-                    tracing::error!(error = %e, latency_ms = latency.as_millis(), "Notification failed");
-                }
-                telemetry_metrics::counter!(
-                    "mcp_backend_requests_total",
-                    "backend" => self.name.clone(),
-                    "status" => if rate_limited { "rate_limited" } else { "error" }
-                )
-                .increment(1);
-            }
+            Err(e) => self.record_dispatch_error(&entry, latency, e, "Notification"),
         }
-        telemetry_metrics::histogram!(
-            "mcp_backend_request_duration_seconds",
-            "backend" => self.name.clone()
-        )
-        .record(latency.as_secs_f64());
+        self.record_dispatch_latency(latency);
 
         result
     }
