@@ -4,39 +4,44 @@ Measured at `a0d9acbc` on `work/v4-audit-adjudication`. Every count below is a
 command run in this tree, not a recollection; where a number is inferred or
 assumed the row says so.
 
-## The counter that changes the MIK-7387 ruling
+## MIK-7387: what the census settles, and what it does not
 
-`prompts_in` (`tests/mik_7212_mrtr7_stdio_acs.rs:749-755`) filters the *entire*
-captured line buffer for `elicitation/create` frames and never decrements. The
-58 both red rows observe is therefore **cumulative emissions**, not
-concurrently-outstanding prompts. That distinction settles the open question and
-inverts the argument recorded in
-`docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch-review.md`:
+Two claims were tangled together on this ticket. They have different strengths
+and only one of them is settled, so they are separated here.
 
-- A 64-permit semaphore **cannot** hold a cumulative count below 64. A permit
-  delays a dispatch; it does not suppress the frame the dispatch eventually
-  writes. So `MAX_CONCURRENT_STDIO_DISPATCHES` is ruled out as the bound on this
-  number, and the "pinned at 58 under a 16x load change is the signature of a
-  cap" reading is wrong for a cumulative counter — a cap plateaus concurrency,
-  it does not create a deficit in emissions.
-- A cumulative deficit means 6 dispatches reached the bridge and wrote something
-  other than an outbound elicitation. The census closes on exactly that: 7a is
-  58 + 7 = 65 calls, 7b is 58 + 966 + 2 = 1026, and the only site that
-  manufactures a plain `result` for a call the fixture answered with
-  `input_required` is the empty `NoSession` arm at
-  `src/gateway/meta_mcp/invoke.rs:2271-2274`, which falls through to the minted
-  continuation at `:2358`.
+**Settled — the plain results are manufactured by the gateway (V).** The fixture
+backend returns `input_required` for every call that arrives without
+`inputResponses` (`tests/mik_7212_mrtr7_stdio_acs.rs:147-172`), so a plain
+success result cannot originate at the backend. The census closes on the call
+counts: 7a is 58 + 7 = 65, 7b is 58 + 966 + 2 = 1026. A dispatch parked on an
+admission permit emits *nothing* — it is still waiting — so it cannot be the
+source of a plain result either. The only site that manufactures one is the empty
+`NoSession` arm at `src/gateway/meta_mcp/invoke.rs:2271-2274`, falling through to
+the minted continuation at `:2358`. This leg needs no argument about counting
+semantics, and it re-promotes the silent downgrade from candidate to likely
+cause. The consequence the ticket cares about follows from it: a caller that
+asked for a bridged elicitation is answered with a continuation envelope instead.
 
-**Consequence:** the silent-downgrade mechanism is re-promoted from candidate to
-likely cause, there is **no** separate 58-to-64 cap defect to file, and the
-operator's standing "include MIK-7387 and fix the `NoSession` arm" ruling is
-re-validated rather than undermined. A fix at that arm can turn both rows green,
-because the 6 missing questions are questions those calls should have asked.
+**Still open — what causes the 58-versus-64 deficit (A).** `prompts_in`
+(`:749-755`) filters the entire captured buffer and never decrements, so 58 is a
+count of *cumulative emissions*. That was read as ruling out the 64-permit cap,
+on the grounds that a permit delays a frame rather than suppressing it. The
+reading does not hold, because the observation window is bounded:
+`COLLECT_BUDGET` is 30s (`:734`) and the bridge's `per_prompt` timeout is also
+30s (`src/gateway/input_bridge.rs:280`). At a 1:1 ratio, a dispatch starved of a
+permit held for a full prompt timeout can never emit inside the window, and
+delay becomes indistinguishable from suppression in the count. So
+cumulative-versus-concurrent does not discriminate here, and the cap remains a
+live explanation for the deficit alongside the downgrade.
 
-Still unexplained, and marked as such: why the deficit lands near 58 rather than
-some other value, and why six consecutive macOS runs never lose the race. Load
-dependence (6 downgrades at 65 calls, 968 at 1026) is consistent with a race the
-Mac simply wins every time.
+**Therefore:** no separate cap defect is filed *yet* — not because it is ruled
+out, but because the probe has not run. And a fix at the `NoSession` arm is not
+yet known to turn either row green: both rows assert exactly 64, so if any part
+of the deficit is window-driven the fix lands at 58 + k and the row stays red.
+That is the hypothesis the CI probe tests, not a conclusion.
+
+Unexplained either way: why the deficit lands near 58 rather than some other
+value, and why six consecutive macOS runs never lose the race.
 
 ## Gap inventory
 
@@ -44,7 +49,7 @@ Mac simply wins every time.
 |---|---|---|---|
 | 1 | Acceptance criteria ledger | 177 MET, 2 PARTIAL, 2 N/A (`RELEASE-4.0.0-criteria-status.md`) | the 2 PARTIAL do |
 | 2 | Two red CI rows | `ac_mrtr_7a_*` / `ac_mrtr_7b_*` red in CI, 6/6 green on macOS | yes |
-| 3 | DoD gate sheet | 36 PASS, 27 PARTIAL, 18 NOT EVALUATED, 3 OUTSTANDING, 12 N/A | the FAIL and the unmeasured do |
+| 3 | DoD gate sheet | 51 distinct gates, 31 carrying a non-pass verdict somewhere. Row counts are higher (27 PARTIAL, 18 NOT EVALUATED, 3 OUTSTANDING) because ten gates carry a verdict in two sections and are counted twice | the FAIL and the unmeasured do |
 | 4 | 800-LOC ceiling | 57 production files breach, ~80,845 LOC; deviation accepted via MIK-7478, ratchet not in CI | no (accepted), ratchet does |
 | 5 | Housekeeping | 45 worktrees, ~20.7 GB of build dirs, disk 94.8% | no |
 
@@ -87,7 +92,8 @@ operator decision; wave 3 is the part only the operator can do.
 3. **Clear the mechanical gates** by recording the evidence each one asks for:
    effort, dependency state, labels, learnings, API surface delta, debt
    trajectory, doc redundancy, temp files. These are NOT EVALUATED because
-   nobody ran them, not because they fail.
+   nobody ran them — an assumption, not a measurement. Running them may turn
+   some into FAILs, and the wave-0 size depends on that going the other way.
 4. **Post the consolidated DoD comment** on the tracking issue, closing the §1
    PARTIAL.
 
