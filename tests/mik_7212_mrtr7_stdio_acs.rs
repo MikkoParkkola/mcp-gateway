@@ -417,6 +417,15 @@ fn census_of(lines: &[String]) -> String {
     // frame itself is the only authority left: it names the shape directly
     // instead of inviting a fourth guess.
     let mut plain_samples: Vec<String> = Vec::new();
+    // MCP carries a tool-level failure INSIDE a successful response, as
+    // `isError: true` beside the text (`meta_mcp/invoke.rs`). A census that
+    // buckets by frame shape alone therefore files every refusal the gateway
+    // answered correctly under `results`, which is the bucket that means "a
+    // call answered instead of asking". Nine circuit-breaker trips were read
+    // as nine fabricated successes that way. Histogrammed by message because
+    // the shape is shared by every tool-level refusal and only the text names
+    // which one happened.
+    let mut refusals: BTreeMap<String, usize> = BTreeMap::new();
     let mut errors: BTreeMap<i64, usize> = BTreeMap::new();
     // `-32003` carries at least four distinct meanings in this codebase
     // (budget exhaustion, a missing client capability, forbidden, and service
@@ -438,6 +447,12 @@ fn census_of(lines: &[String]) -> String {
                 } else if let Some(result) = frame.get("result") {
                     if result.get("requestState").is_some() {
                         continuations += 1;
+                    } else if result.get("isError").and_then(Value::as_bool) == Some(true) {
+                        let text = result
+                            .pointer("/content/0/text")
+                            .and_then(Value::as_str)
+                            .unwrap_or("<no text>");
+                        *refusals.entry(text.to_owned()).or_default() += 1;
                     } else {
                         results += 1;
                         if plain_samples.len() < 3 {
@@ -459,13 +474,14 @@ fn census_of(lines: &[String]) -> String {
         .collect();
     format!(
         "census of {} collected lines: {} unparsable, methods {:?}, {} plain results, \
-         {} continuation results, errors {:?}, error messages {:?}{}\
-         {}{}",
+         {} continuation results, tool-level refusals {:?}, errors {:?}, \
+         error messages {:?}{}{}{}",
         lines.len(),
         unparsable.len(),
         methods,
         results,
         continuations,
+        refusals,
         errors,
         messages,
         samples.concat(),
@@ -789,6 +805,21 @@ fn refused_ids(frames: &[Value]) -> Vec<i64> {
         .collect()
 }
 
+/// Every id whose answer was a tool-level refusal rather than a question.
+///
+/// A dispatch the gateway declined once it was already admitted -- a tripped
+/// circuit breaker is the one observed in CI -- answers the MCP way, as a
+/// `result` carrying `isError: true`, not as a JSON-RPC error. It is a terminal
+/// answer to an admitted call, so it belongs with the questions when counting
+/// what admission let run, and nowhere near the plain-result count.
+fn tool_refused_ids(frames: &[Value]) -> Vec<i64> {
+    frames
+        .iter()
+        .filter(|frame| frame.pointer("/result/isError").and_then(Value::as_bool) == Some(true))
+        .filter_map(|frame| frame.get("id").and_then(Value::as_i64))
+        .collect()
+}
+
 /// MIK-7212.MRTR.7a — the single stdin reader keeps reading past the admission
 /// cap, so a client that pipelines more bridged calls than may run at once is
 /// still served.
@@ -859,7 +890,9 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     // Answer a question the test has actually received. A predetermined id
     // assumes dispatches start in stdin order, which 9b0caa1e withdrew, and
     // would hang whenever the chosen call is the one still parked.
-    let answered = prompts[0]
+    let answered = prompts
+        .first()
+        .expect("the count above admits a run of pure refusals; one question must remain to answer")
         .get("id")
         .cloned()
         .expect("an elicitation/create the gateway wrote carries an id");
@@ -966,12 +999,22 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
     // once saturated would satisfy the assertions above. Work accepted before
     // the cap must still complete when its answer arrives.
     let prompts = prompts_in(&frames);
+    // Every admitted call must reach a terminal outcome, and asking is only one
+    // of them: a dispatch the gateway declines after admission -- in CI, a
+    // tripped circuit breaker on the fixture backend, which a fast local run
+    // never reaches -- answers with `isError: true` inside a result. That
+    // consumed an admission slot and produced an answer, so it counts toward
+    // what admission let run. Counting questions alone read those refusals as
+    // missing work and failed the row for a defect that was not there.
+    let declined = tool_refused_ids(&frames);
     assert_eq!(
-        prompts.len(),
+        prompts.len() + declined.len(),
         usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative"),
         "saturating inflight must not change what admission lets run: {} \
-         questions are outstanding, not {ADMISSION_CAP}. {}",
+         questions outstanding plus {} declined after admission is not \
+         {ADMISSION_CAP}. {}",
         prompts.len(),
+        declined.len(),
         census_of(&lines)
     );
     let answered = prompts[0]
