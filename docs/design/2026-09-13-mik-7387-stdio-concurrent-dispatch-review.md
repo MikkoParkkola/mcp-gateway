@@ -76,3 +76,48 @@ correct against the test that motivated it.
 - Emit a counter alongside the `debug!` for unmatched pending replies, so late
   answers (expected) are distinguishable from key-normalisation routing bugs
   (defects) without reading debug logs.
+
+## Observed in CI: the untested `NoSession` branch is reached
+
+The last recommendation above was not acted on, and the branch it names is now
+the cause of two red rows. Recorded here rather than in a new document because
+this review is where the gap was first called.
+
+`ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap` and
+`ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued` both assert
+64 outstanding questions and both observe 58 (CI run 35248322170; an earlier run
+gave 57/58). The census the tests print themselves:
+
+| | 7a (65 calls) | 7b (1025 calls) |
+| --- | --- | --- |
+| `elicitation/create` | 58 | 58 |
+| plain results | 7 | 966 |
+| `-32003` | 58 | 11 |
+| `-32000` busy | 0 | 2 |
+
+The prompt count is pinned at 58 across a 16x load change while plain results
+scale with load, so the 64-slot admission cap is not what bounds it.
+
+Ruled out at source: admission permits are moved into the spawned task and
+dropped on every exit path (`src/gateway/server/mod.rs:2645`), so there is no
+permit leak; `read_only_tools` defaults to empty and the test config declares no
+idempotency section (`src/config/features/idempotency.rs:7`), so that cache never
+engages; and the fixture backend is stateless, answering every call without
+`inputResponses` with `input_required` plus an elicitation
+(`tests/mik_7212_mrtr7_stdio_acs.rs:147-172`), so every plain result frame is
+manufactured by the gateway rather than returned by the backend.
+
+The manufacturing site is the empty match arm at
+`src/gateway/meta_mcp/invoke.rs:2270`. Falling through leaves `interim` set, so
+the ask goes out as a minted continuation (`invoke.rs:2358`) instead of a bridged
+elicitation. The comment above that arm (`invoke.rs:2247`) states the invariant
+that made it safe — stdio declares `Declared::NONE`, so `plan` refuses before
+`ask` and the failure lands as `Refused`, never `NoSession` — then names this
+work package as "the only thing that lifts it", names `MIK-7212.WIRE.10` as the
+missing row, and warns that until it lands "an edit to either half breaks this
+silently". That is what happened.
+
+Consequence beyond the two rows: a caller that asked for a bridged elicitation is
+silently answered with a continuation envelope instead. Including this package in
+4.0.0 requires handling `NoSession` for the concurrent stdio caller and writing
+`MIK-7212.WIRE.10`; excluding it leaves both rows moot.
