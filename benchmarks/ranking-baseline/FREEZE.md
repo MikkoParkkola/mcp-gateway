@@ -4,13 +4,22 @@ Owner: this ticket's baseline-and-freeze half only. Ordering/live-agent
 half (discovery turns, invalid invocations, total completed-task tokens)
 is out of scope here; see "Not measurable from the corpus alone" below.
 
-Frozen at commit `b121451e959ee99b34945cd0fece1379ddaff37a`, 2026-09-14,
-on branch `docs/mik-3274-ranking-3-baseline`.
+Frozen at commit `f241b464acf6007a88ebc2b576c0825350b018a1`, 2026-09-14.
+
+The measurement was originally taken on branch
+`docs/mik-3274-ranking-3-baseline` at `b121451e959ee99b34945cd0fece1379ddaff37a`
+and this record cited that commit. That branch was never merged: `b121451e` is
+not an ancestor of the release line, so the pin named a commit no release build
+contains. `f241b464` is its rebased copy on the release line (an ancestor of
+`origin/main`), and `git diff b121451e f241b464 -- benchmarks/ranking-baseline/
+tests/mik_3274_ranking_3_baseline.rs src/ranking/` is empty -- same corpus, same
+harness, same ranker. Re-pinning corrects the citation; it does not re-measure.
 
 ## 1. Absence claim re-verification (step 1)
 
 Commands run against this commit, `src/ranking/` on this branch (identical
-to `main` at `8ab4bc5d` -- `src/ranking/` has not changed there):
+to `main` at `8ab4bc5d` -- `src/ranking/` has not changed there, and is still
+byte-identical at `f241b464` and at the current release-line HEAD):
 
 ```
 $ rg -ni "levenshtein|damerau|jaro|edit_distance|trigram|ngram|fuzzy" src/ranking/
@@ -178,11 +187,18 @@ ticket's deliverable.
 
 This corpus (`corpus.json`), harness (`../../tests/mik_3274_ranking_3_baseline.rs`),
 and selection-quality baseline (`results.json`, reproduced in section 3
-above) are frozen as of commit `b121451e959ee99b34945cd0fece1379ddaff37a`
+above) are frozen as of commit `f241b464acf6007a88ebc2b576c0825350b018a1`
 (2026-09-14), before any fuzzy-ranking implementation exists in
-`src/ranking/` (verified in section 1). Landing `RANKING.1` closes this
+`src/ranking/` (verified in section 1). All three are present in that
+commit's tree; this record itself landed afterwards, since it records the
+freeze rather than being frozen by it. Landing `RANKING.1` closes this
 ordering window permanently -- any post-hoc corpus or threshold set after
 that point no longer satisfies MIK-3274.RANKING.3 as written.
+
+The section 4 floors are enforced by the harness: it asserts every frozen
+floor after writing `results.json`, so a selection-quality regression turns
+`cargo test --test mik_3274_ranking_3_baseline` red. The three unmeasured
+families in section 3 have no floor and are asserted on by nothing.
 
 Editing `corpus.json`, `gen_corpus.py`, or the floor thresholds above after
 this freeze date requires the same justification bar as unfreezing any
