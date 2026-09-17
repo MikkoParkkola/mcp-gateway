@@ -5,7 +5,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # NFR.DEMO.1 — recorded demonstrations
 
-VERDICT: NFR.DEMO.1: 1 of 5 scenarios RECORDED, 4 BLOCKED (scenario 4 on MIK-7469; scenarios 2, 3 and 5 on build budget, not on product behaviour)
+VERDICT: NFR.DEMO.1: 2 of 5 scenarios RECORDED, 3 BLOCKED (scenario 4 on MIK-7469; scenarios 2 and 3 on build budget, not on product behaviour)
 
 The machine-readable evidence is [`nfr-demo-1-recordings.json`](nfr-demo-1-recordings.json).
 This page is the human-readable half: what each rule in the gate is answering, and
@@ -58,7 +58,38 @@ classification. The driver warms each backend with a tool call first. The design
 did not mention this; anyone writing a further scenario against the era fields
 needs the same warm-up.
 
-## Scenarios 2, 3 and 5 — BLOCKED on build budget
+## Scenario 5 — error-budget diagnosis/recovery (RECORDED, 8/8 rows PASS)
+
+Driver `scripts/release/demo/5-error-budget.sh`, transcript
+`docs/release/demo/5-error-budget-transcript.txt`, rows
+`docs/release/demo/5-error-budget-results.json`.
+
+One stdio peer that fails every tool call while a marker file exists, and an
+error budget tuned short for the camera (`threshold: 0.5`, `min_samples: 3`).
+The peer answers; the operator injects the fault and does nothing; the budget
+kills the backend on the second failure.
+
+**Diagnosis** is the gateway's own numbers through `gateway_get_stats`:
+`server_safety` reports `killed: true`, `error_rate: "66.7%"`,
+`window: {successes: 1, failures: 2}`. Those numbers are arithmetic from the
+config, not copied from a run: the window holds the one healthy call plus the
+failures, the budget is first evaluated once it holds `min_samples` = 3 calls,
+and 2/3 is already over the 0.5 threshold. A build that kills early or late
+moves them. While killed the gateway **refuses** (`-32000 … currently disabled
+by operator kill switch`) rather than forwarding to a peer it knows is sick.
+
+**Recovery** is `gateway_revive_server`, which reports `was_killed: true`, and
+the next call succeeds. A **server**-level kill has no auto-cooldown — the
+cooldown in `examples/gateway-full.yaml` applies to per-*capability* disables —
+so recovery is an operator action, not a timer the recording waits out.
+
+**Trap found while recording.** The scenario config switches the response cache
+off on purpose. With it on, a cached reply answers every retry, the sick peer is
+never reached, and the budget never sees a failure: the first run of this driver
+recorded a "healthy" peer through four injected faults. Any future fault
+scenario needs the same key.
+
+## Scenarios 2 and 3 — BLOCKED on build budget
 
 Not recorded in this pass, and blocked on the cost of building the fixtures, not
 on any gateway behaviour. Nothing found during the research suggests the
@@ -67,7 +98,6 @@ next pass starts from code, not from a search:
 
 - **Scenario 2 (reconnectable task)** — needs a standalone stdio task peer (~150 lines, design §Scenario 2).
 - **Scenario 3 (two personal accounts)** — enforcement at `src/gateway/meta_mcp/mod.rs:1040` (`enforce_oauth_isolation_for`), refusal `-32001` at `mod.rs:1105-1111`, `meta_route_isolation_refused` at `mod.rs:1119`.
-- **Scenario 5 (error-budget diagnosis/recovery)** — budget config at `examples/gateway-full.yaml:107-118`; kill-switch lines at `src/kill_switch/mod.rs:120` / `:130` / `:470`. A **server**-level kill has no auto-cooldown, so recovery is the `gateway_revive_server` meta-tool (`src/gateway/meta_mcp/invoke.rs:3327`), not a timer the recording waits out.
 
 ## Scenario 4 — BLOCKED on MIK-7469
 

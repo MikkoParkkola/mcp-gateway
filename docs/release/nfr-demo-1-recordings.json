@@ -1,6 +1,6 @@
 {
   "criterion": "NFR.DEMO.1",
-  "verdict": "NFR.DEMO.1: 1 of 5 scenarios RECORDED, 4 BLOCKED (scenario 4 on MIK-7469; scenarios 2, 3 and 5 on build budget, not on product behaviour)",
+  "verdict": "NFR.DEMO.1: 2 of 5 scenarios RECORDED, 3 BLOCKED (scenario 4 on MIK-7469; scenarios 2 and 3 on build budget, not on product behaviour)",
   "revision_under_test": {
     "gateway_version": "mcp-gateway 4.0.0",
     "binary_sha256": "6e38ee5f55e2eabc5bc751c3dc42a7b0e92a4171d435b78341c3615f2d1acd70",
@@ -124,12 +124,71 @@
       "id": 5,
       "slug": "error-budget",
       "criterion_phrase": "error-budget diagnosis/recovery",
-      "status": "blocked",
-      "blocked_on": "Not built in this pass: needs a fault-injecting stdio peer plus a tuned error_budget config and a driver. Budget, not a product defect; the mechanism was located (examples/gateway-full.yaml:107-118 for the budget config; src/kill_switch/mod.rs:120/130/470 for the engage, release and auto-recovery lines). Note for whoever builds it: a SERVER-level kill has no auto-cooldown, so recovery is the gateway_revive_server meta-tool (src/gateway/meta_mcp/invoke.rs:3327), not a timer the recording waits out.",
+      "status": "recorded",
+      "driver": "scripts/release/demo/5-error-budget.sh",
+      "transcript": "docs/release/demo/5-error-budget-transcript.txt",
+      "results_json": "docs/release/demo/5-error-budget-results.json",
       "versions": {
-        "note": "not recorded; no versions were exercised"
+        "gateway": "mcp-gateway 4.0.0",
+        "peer_protocol_version": "2025-06-18",
+        "error_budget_threshold": "0.5",
+        "error_budget_min_samples": "3",
+        "error_budget_window_size": "10",
+        "error_budget_window_duration": "5m",
+        "response_cache": "disabled for this recording"
       },
-      "negative_control": "A build with a broken budget shows the peer failing past the configured threshold with no 'Kill switch engaged' line, or a revive that does not restore service."
+      "negative_control": "A broken build shows the peer failing past the threshold with the backend still live (killed=false), keeps forwarding calls to a peer already known sick instead of refusing them, or reports was_killed=false on the revive. The kill-time window numbers are arithmetic from the config (one healthy call plus two failures is the first evaluation at min_samples=3, and 2/3 = 66.7% is already over the 0.5 threshold), so a build that kills early or late moves them and the rows fail.",
+      "notes": "The response cache is switched off in the scenario config on purpose: with it on, a cached reply answers each retry, the sick peer is never reached and the budget never sees a failure. The first run of this driver recorded exactly that and is the reason the config carries the key explicitly. A SERVER-level kill has no auto-cooldown, so recovery here is the gateway_revive_server meta-tool (src/gateway/meta_mcp/invoke.rs:3327), not a timer the recording waits out; the cooldown in the config example applies to per-CAPABILITY disables.",
+      "rows": [
+        {
+          "id": "S5.HEALTHY_CALL_SUCCEEDS",
+          "expected": "budget_ping ok present",
+          "actual": "budget_ping ok present",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.BUDGET_KILLED_THE_BACKEND",
+          "expected": "true",
+          "actual": "true",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.ERROR_RATE_AT_KILL",
+          "expected": "\"66.7%\"",
+          "actual": "\"66.7%\"",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.WINDOW_SUCCESSES_AT_KILL",
+          "expected": "1",
+          "actual": "1",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.WINDOW_FAILURES_AT_KILL",
+          "expected": "2",
+          "actual": "2",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.REFUSED_WHILE_KILLED",
+          "expected": "is currently disabled by operator kill switch present",
+          "actual": "is currently disabled by operator kill switch present",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.REVIVE_SAW_A_KILLED_SERVER",
+          "expected": "true",
+          "actual": "true",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.CALL_SUCCEEDS_AFTER_REVIVE",
+          "expected": "budget_ping ok present",
+          "actual": "budget_ping ok present",
+          "status": "PASS"
+        }
+      ]
     }
   ]
 }
