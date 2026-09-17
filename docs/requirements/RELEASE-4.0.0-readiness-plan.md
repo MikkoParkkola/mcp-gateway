@@ -73,13 +73,42 @@ delay becomes indistinguishable from suppression in the count. So
 cumulative-versus-concurrent does not discriminate here, and the cap remains a
 live explanation for the deficit alongside the downgrade.
 
-**Therefore:** the two rows split. 7a is the downgrade and nothing else, so the
-fix at the empty arm is expected to turn it green; the falsifier is stated
-before the edit, because "green" has a shape. Post-fix 7a should read 64 asks,
-1 admission refusal, 0 plain results. If it reads 65 asks instead, admission is
-not refusing at the cap — a different defect, and worth knowing which one
-arrived. 7b carries its own ticket for the 40 unanswered calls; a fix at the arm
-is not expected to close it.
+**Open — which `NoSession` this is (I).** The obvious fix, erroring whenever the
+caller declared the input capability, is wrong: the two production paths that
+declare are the HTTP handlers
+(`src/gateway/router/handlers.rs:1471,1561,1593,1902`) and live stdio
+(`src/gateway/server/mod.rs:3184`), and a stateless HTTP caller declaring
+elicitation with no session is the legitimate case the continuation exists to
+serve. Splitting on the channel does not work either. `NoClientChannel`
+(`src/gateway/input_bridge.rs:350-362`) returns `DeliveryError::NoSession`
+unconditionally, so one variant carries both "there is nowhere to send this"
+and "a real channel, but the session is gone" — yet both callers that matter
+hold a *real* channel: HTTP takes `state.proxy_manager.as_ref()`
+(`handlers.rs:1602`) and the stdio serve loop takes the pipe it already reads
+(`server/mod.rs:3198`).
+
+What is left is timing. 65 identical calls travel one path and split 59/6, then
+58/7, and six consecutive macOS runs never split at all. That is the signature
+of a race on bridge-session registration: a call arriving before the session is
+registered gets `NoSession` and is minted a continuation, and one arriving after
+is asked. Locating the registration point relative to the dispatcher accepting
+calls is the next measurement, and it is not yet made.
+
+**Therefore:** the two rows split. 7a is the silent downgrade, and the arm must
+stop minting whatever the cause — a caller that asked for a bridged elicitation
+and cannot be reached must fail loudly, which also removes the round-two replay
+hazard the arm's own note describes. But the discriminator that lets it keep
+serving stateless HTTP callers is not settled, so the edit is not made here.
+The falsifier is stated in advance: post-fix 7a should read 64 asks, 1
+admission refusal, 0 plain results. If it reads 65 asks, admission is not
+refusing at the cap — a different defect. 7b carries its own ticket for the 40
+unanswered calls; a fix at the arm is not expected to close it.
+
+Also required in the same edit, per review: the comment at
+`invoke.rs:2247-2264` asserts a guard that does not hold on the live path and
+must be replaced by the actual rule, and the new error needs a stable distinct
+message so the census histogram discriminates it inside `-32003` without a new
+protocol code.
 
 Unexplained either way: why six consecutive macOS runs never lose the race.
 
