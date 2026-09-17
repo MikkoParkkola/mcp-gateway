@@ -1,7 +1,12 @@
 {
   "criterion": "NFR.DEMO.1",
-  "verdict": "",
-  "revision_under_test": {},
+  "verdict": "NFR.DEMO.1: 1 of 5 scenarios RECORDED, 4 BLOCKED (scenario 4 on MIK-7469; scenarios 2, 3 and 5 on build budget, not on product behaviour)",
+  "revision_under_test": {
+    "gateway_version": "mcp-gateway 4.0.0",
+    "binary_sha256": "6e38ee5f55e2eabc5bc751c3dc42a7b0e92a4171d435b78341c3615f2d1acd70",
+    "build_sha_confidence": "assumption",
+    "provenance": "The binary was copied from a peer worktree's target/debug tree (/Users/mikko/github/.worktrees/v4-codeql-record/target/debug/mcp-gateway) because this machine had too little free disk to build. The binary embeds no commit SHA and the crate has no build.rs, so the source revision behind it is an ASSUMPTION, not a measurement -- hence build_sha_confidence. The sha256 above is measured and pins the exact bytes the recording ran against."
+  },
   "scenarios": [
     {
       "id": 1,
@@ -11,33 +16,98 @@
       "driver": "scripts/release/demo/1-mixed-era.sh",
       "transcript": "docs/release/demo/1-mixed-era-transcript.txt",
       "results_json": "docs/release/demo/1-mixed-era-results.json",
-      "versions": {},
-      "negative_control": "",
-      "rows": []
+      "versions": {
+        "gateway": "mcp-gateway 4.0.0",
+        "modern_peer_protocol_version": "2026-07-28",
+        "legacy_peer_protocol_version": "2025-06-18",
+        "client_protocol_version_for_negotiation_row": "2025-06-18"
+      },
+      "negative_control": "A broken build shows era_source=assumed / era_evidence=never_probed on a backend that WAS probed (the unprobed default leaking into a probed backend), or answers the legacy client with the modern revision. Both are distinct strings, so the expected/actual comparison goes FAIL rather than silently passing.",
+      "notes": "Backends start lazily and the era probe runs on the backend START path (src/backend/lifecycle.rs:322, resolve_era_after_start). The driver therefore issues a tool call through each peer BEFORE reading gateway_list_servers; reading the era fields first reports never_probed, which is the unprobed default and not a classification. The design did not mention this.",
+      "rows": [
+        {
+          "id": "S1.MODERN_CALL_SUCCEEDS",
+          "expected": "modern_peer answered: mixed-era present",
+          "actual": "modern_peer answered: mixed-era present",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.LEGACY_CALL_SUCCEEDS",
+          "expected": "legacy_peer answered: mixed-era present",
+          "actual": "legacy_peer answered: mixed-era present",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.MODERN_ERA",
+          "expected": "modern",
+          "actual": "modern",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.MODERN_ERA_SOURCE",
+          "expected": "probed",
+          "actual": "probed",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.MODERN_ERA_EVIDENCE",
+          "expected": "discover_modern",
+          "actual": "discover_modern",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.LEGACY_ERA",
+          "expected": "legacy",
+          "actual": "legacy",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.LEGACY_ERA_SOURCE",
+          "expected": "probed",
+          "actual": "probed",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.LEGACY_ERA_EVIDENCE",
+          "expected": "discover_not_modern",
+          "actual": "discover_not_modern",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.NEGOTIATED_VERSION_FOR_LEGACY_CLIENT",
+          "expected": "2025-06-18",
+          "actual": "2025-06-18",
+          "status": "PASS"
+        }
+      ]
     },
     {
       "id": 2,
       "slug": "reconnectable-task",
       "criterion_phrase": "reconnectable task",
-      "status": "recorded",
-      "driver": "scripts/release/demo/2-reconnectable-task.sh",
-      "transcript": "docs/release/demo/2-reconnectable-task-transcript.txt",
-      "results_json": "docs/release/demo/2-reconnectable-task-results.json",
-      "versions": {},
-      "negative_control": "",
-      "rows": []
+      "status": "blocked",
+      "blocked_on": "Not built in this pass: needs a standalone stdio task peer (~150 lines, design §Scenario 2) plus a driver. Budget, not a product defect -- no gateway behaviour was found that would prevent the recording.",
+      "versions": {
+        "note": "not recorded; no versions were exercised"
+      },
+      "negative_control": "See design §Scenario 2: a build that loses the task shows a resumed session with no prior task id, or a task that cannot be reattached after disconnect."
     },
     {
       "id": 3,
       "slug": "personal-accounts",
       "criterion_phrase": "two personal accounts",
-      "status": "recorded",
-      "driver": "scripts/release/demo/3-personal-accounts.sh",
-      "transcript": "docs/release/demo/3-personal-accounts-transcript.txt",
-      "results_json": "docs/release/demo/3-personal-accounts-results.json",
-      "versions": {},
-      "negative_control": "",
-      "rows": []
+      "status": "blocked",
+      "blocked_on": "Not built in this pass: needs a two-identity OAuth passthrough fixture and a driver. Budget, not a product defect; the enforcement path was located (src/gateway/meta_mcp/mod.rs:1040 enforce_oauth_isolation_for, -32001 at mod.rs:1105-1111, meta_route_isolation_refused at mod.rs:1119).",
+      "versions": {
+        "note": "not recorded; no versions were exercised"
+      },
+      "negative_control": "A build that leaks shows account A's credential reaching account B's call, or the isolation refusal (-32001) absent where the design says it must appear.",
+      "not_evidence_for": [
+        {
+          "criterion": "MIK-6745.JOURNEY.1",
+          "reason": "Ruling 3. This scenario, once recorded, uses a scripted provider fixture and proves only the gateway's isolation enforcement. It is not a journey recording against a real identity provider and must not be reused as evidence for MIK-6745.JOURNEY.1."
+        }
+      ]
     },
     {
       "id": 4,
@@ -46,21 +116,20 @@
       "status": "blocked",
       "blocked_on": "MIK-7469",
       "versions": {
-        "note": "not recorded; ordering is unsettled"
+        "note": "not recorded; no versions were exercised"
       },
-      "negative_control": "pending: see design scenario 4"
+      "negative_control": "Declared out of scope for this pass by the task brief; see MIK-7469 and design §Scenario 4 for the negative control that recording would carry."
     },
     {
       "id": 5,
       "slug": "error-budget",
       "criterion_phrase": "error-budget diagnosis/recovery",
-      "status": "recorded",
-      "driver": "scripts/release/demo/5-error-budget.sh",
-      "transcript": "docs/release/demo/5-error-budget-transcript.txt",
-      "results_json": "docs/release/demo/5-error-budget-results.json",
-      "versions": {},
-      "negative_control": "",
-      "rows": []
+      "status": "blocked",
+      "blocked_on": "Not built in this pass: needs a fault-injecting stdio peer plus a tuned error_budget config and a driver. Budget, not a product defect; the mechanism was located (examples/gateway-full.yaml:107-118 for the budget config; src/kill_switch/mod.rs:120/130/470 for the engage, release and auto-recovery lines). Note for whoever builds it: a SERVER-level kill has no auto-cooldown, so recovery is the gateway_revive_server meta-tool (src/gateway/meta_mcp/invoke.rs:3327), not a timer the recording waits out.",
+      "versions": {
+        "note": "not recorded; no versions were exercised"
+      },
+      "negative_control": "A build with a broken budget shows the peer failing past the configured threshold with no 'Kill switch engaged' line, or a revive that does not restore service."
     }
   ]
 }
