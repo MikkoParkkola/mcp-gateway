@@ -41,6 +41,7 @@
 //! half of row 308 is uncovered, and closing it needs a row of its own here
 //! rather than a wider assertion on an existing one.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -390,6 +391,54 @@ fn frames_lenient(lines: &[String]) -> Vec<Value> {
         .iter()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .collect()
+}
+
+/// What the collected stream actually contained, for a shortfall's failure text.
+///
+/// [`frames_lenient`] drops an unparsable line with `.ok()`, so a mangled line
+/// does not fail a row, it just lowers the count -- indistinguishable from a
+/// question that was never asked. The saturation rows fail with a count a few
+/// short of the cap and no way to tell those apart, so they report the census
+/// alongside the count: a line the parser refused is a different defect from a
+/// call that answered instead of asking, and both are different from a call
+/// that produced nothing at all.
+fn census_of(lines: &[String]) -> String {
+    let mut unparsable: Vec<&str> = Vec::new();
+    let mut methods: BTreeMap<String, usize> = BTreeMap::new();
+    let mut results = 0usize;
+    let mut errors: BTreeMap<i64, usize> = BTreeMap::new();
+    for line in lines {
+        match serde_json::from_str::<Value>(line) {
+            Err(_) => unparsable.push(line.as_str()),
+            Ok(frame) => {
+                if let Some(method) = frame.get("method").and_then(Value::as_str) {
+                    *methods.entry(method.to_owned()).or_default() += 1;
+                } else if let Some(code) = frame.pointer("/error/code").and_then(Value::as_i64) {
+                    *errors.entry(code).or_default() += 1;
+                } else if frame.get("result").is_some() {
+                    results += 1;
+                }
+            }
+        }
+    }
+    let samples: Vec<String> = unparsable
+        .iter()
+        .take(3)
+        .map(|line| {
+            let head: String = line.chars().take(160).collect();
+            format!("\n      {head:?}")
+        })
+        .collect();
+    format!(
+        "census of {} collected lines: {} unparsable, methods {:?}, {} results, \
+         errors {:?}{}",
+        lines.len(),
+        unparsable.len(),
+        methods,
+        results,
+        errors,
+        samples.concat(),
+    )
 }
 
 /// Index of the first line that is a server-to-client request for `method`.
@@ -759,8 +808,9 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
         prompts.len(),
         usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative"),
         "admission bounds what may run at 64, so 65 unanswered bridged calls \
-         must produce exactly 64 outstanding questions; {} arrived",
-        prompts.len()
+         must produce exactly 64 outstanding questions; {} arrived. {}",
+        prompts.len(),
+        census_of(&lines)
     );
     assert!(
         refused_ids(&frames).is_empty(),
@@ -883,8 +933,9 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
         prompts.len(),
         usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative"),
         "saturating inflight must not change what admission lets run: {} \
-         questions are outstanding, not {ADMISSION_CAP}",
-        prompts.len()
+         questions are outstanding, not {ADMISSION_CAP}. {}",
+        prompts.len(),
+        census_of(&lines)
     );
     let answered = prompts[0]
         .get("id")
