@@ -1,0 +1,18 @@
+$ python3 test_eval_workload.py
+eval_workload self-check
+  ok  pass/equal -> exit 0
+  ok  pass/inside budget -> exit 0
+  ok  fail/p50 over -> exit 1
+  ok  fail/p99 over -> exit 1
+  ok  fail/min baseline -> exit 1
+  ok  inconclusive/spread -> exit 2
+  ok  void/health version -> exit 3
+  ok  void/missing sha -> exit 3
+  ok  void/unpinned k6 -> exit 3
+  ok  void/semantic -> exit 3
+  ok  void/http error -> exit 3
+  ok  void/checks -> exit 3
+  ok  void/missing rep -> exit 3
+  ok  void/unparseable -> exit 3
+all eval_workload checks passed
+EXIT=0
