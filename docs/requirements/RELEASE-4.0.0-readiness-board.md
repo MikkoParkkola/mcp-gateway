@@ -1150,3 +1150,33 @@ the header once and in cell prose often; only position identifies the column.
 
 Four cells hold a sentence rather than `yes` or `no`. They are roll-ups and a correction note, not
 criteria, and they are excluded above.
+
+## 2026-09-17 — the branch is red because the gates work, not because CI is broken
+
+`main` is green at `6d033b42`. The release branch is red. The tempting reading — an infrastructure
+fault, or a flake to re-run — is wrong on both counts, and acting on it would have re-run a truthful
+failure until it lied.
+
+Two tests fail, and they fail in all four of the branch's most recent CI runs, so neither is timing
+noise:
+
+- `mik_3274_ranking_3_baseline` (`tests/mik_3274_ranking_3_baseline.rs:187`): overall
+  `top1_hit_rate` is 0.692982 against the MIK-3274.RANKING.3 frozen floor of 0.736
+  (`benchmarks/ranking-baseline/FREEZE.md` section 4, frozen at `f241b464`).
+- `ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap`
+  (`tests/mik_7212_mrtr7_stdio_acs.rs:734`): 65 unanswered bridged calls must leave exactly 64
+  outstanding questions at the admission cap; 58 arrive.
+
+Both test files exist on `main`; this branch extended them by 114 and 411 lines respectively. That
+is the whole explanation for the colour difference. `main` is green because it does not yet carry
+these gates, not because it satisfies them. A red branch against a green base is the expected shape
+while acceptance gates land ahead of the behaviour they grade — it is what test-first looks like
+from the outside, and the scope ledger already agrees: MIK-3274.RANKING.3 is recorded `pending` /
+`graded`, not met.
+
+The consequence for delivery is the part worth writing down. Every slice on this branch now queues
+behind two failures it did not cause and cannot fix, because the branch merges as one change. Work
+that is itself complete, reviewed and pushed is not therefore deliverable, and marking it delivered
+would be recording a merge that cannot happen. Closing either gate is product work on the graded
+behaviour — raising selection quality, and finding where six of sixty-four admissions go — not
+an adjustment to the gate that reports it.
