@@ -238,8 +238,10 @@ pub struct AgentDefinitionConfig {
     /// Required whenever `agent_auth` is enabled: configuration validation
     /// refuses an agent that sets none, because the signing key may be shared
     /// with other relying parties and an unchecked `aud` would then accept
-    /// their tokens. `Option` only so an absent field yields a named error
-    /// rather than a serde failure.
+    /// their tokens. An empty or whitespace-only value is refused on the same
+    /// grounds -- it names no relying party, so it cannot distinguish one.
+    /// `Option` only so an absent field yields a named error rather than a
+    /// serde failure.
     #[serde(default)]
     pub audience: Option<String>,
 }

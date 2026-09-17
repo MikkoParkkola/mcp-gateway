@@ -34,7 +34,10 @@ exercises the enforced path at the config boundary.
 
 **Layer 1 — refuse the config.** Extend the existing `agent_auth` validation loop
 in `src/config/mod.rs:895` with: an enabled agent that sets no `audience` is a
-`ConfigValidation` error naming the agent's `client_id`.
+`ConfigValidation` error naming the agent's `client_id`. Empty and
+whitespace-only values are refused on the same terms: a blank `aud` names no
+relying party, so it distinguishes none, and accepting it would reopen the gap
+through a config that merely looks filled in.
 
 The loop is the right home — it already refuses an agent that sets both key
 types, with the reasoning recorded in-line: *"`AgentDefinition` already documents

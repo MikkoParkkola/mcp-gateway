@@ -1203,6 +1203,10 @@ fn an_agent_with_no_audience_fails_validation_whichever_key_it_holds() {
 #[test]
 fn agent_auth_disabled_ignores_key_material_entirely() {
     let mut c = agent_config(Some(""), None);
+    // Deliberate, not incidental: a disabled block skips the audience guard as
+    // well as the key checks, which is why `None` is still reachable at the
+    // verifier and why that layer is not redundant with this one.
+    c.agent_auth.agents[0].audience = None;
     c.agent_auth.enabled = false;
     c.validate()
         .expect("a disabled agent_auth block verifies nothing and gates nothing");

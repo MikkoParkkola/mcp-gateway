@@ -600,11 +600,19 @@ mod tests {
             "https://some-other-service.example",
         );
 
-        // WHEN / THEN: refused. This returned Ok before the guard landed.
+        // WHEN / THEN: refused, and refused *for the audience*. A bare
+        // `is_err()` would still pass if a later change started rejecting this
+        // token for some unrelated reason, so the row asserts the kind.
+        let err = validate_agent_token(&token, &reg).expect_err(
+            "an agent with no configured audience accepted a token minted for another service",
+        );
         assert!(
-            validate_agent_token(&token, &reg).is_err(),
-            "an agent with no configured audience must not accept a token \
-             minted for another service"
+            matches!(
+                err,
+                JwtError::JwtVerification(ref e)
+                    if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::InvalidAudience)
+            ),
+            "the refusal must be an audience failure, not an incidental one: {err:?}"
         );
     }
 }
