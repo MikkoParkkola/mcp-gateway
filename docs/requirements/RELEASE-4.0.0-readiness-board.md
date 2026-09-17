@@ -1215,3 +1215,26 @@ harness from a child that stopped emitting.
 
 The delivery consequence is unchanged in shape but worse in substance: this branch now carries
 three red rows, not two, and only one of them was ever a harness bound.
+
+**The census: nothing is lost, the calls are being refused.**
+Run 35247358407 carried a census of the collected stream, and it removes two hypotheses at once.
+Not one line was unparsable, in either row, so the lenient parser is not silently eating mangled
+output and concurrent writes to stdout are not interleaving. And the frames account for every call
+sent. In 7a: 7 results plus 58 errors carrying `-32003` is exactly the 65 calls pipelined. In 7b:
+965 results plus 59 questions plus 2 refusals covers the 1026 sent.
+
+So the missing questions were never missing in the sense assumed. The calls are not parked, not
+dropped and not late. They resolve -- with an error. Fifty-eight of sixty-five in 7a come back
+`-32003`, and the row reads a shortfall of questions because a refused call never asks one.
+
+Two things follow. The first is a defect in the row itself: `refused_ids` matches only `-32000`, so
+the assertion that none of the 65 may be refused passed over 58 refusals wearing a different code.
+That assertion has been reporting success about a population it cannot see. The second is the
+product question, now much better posed than "where do six questions go": under what condition does
+a bridged call that should wait for an answer instead terminate with `-32003`, on a loaded machine
+and never on an idle one.
+
+`-32003` is not a single meaning in this codebase -- it covers budget exhaustion, a missing client
+capability, forbidden, and service unavailable. The code alone does not name the defect, and the
+child's stderr is not captured under `cargo test`, so the next run carries the error text back
+through the frame itself.
