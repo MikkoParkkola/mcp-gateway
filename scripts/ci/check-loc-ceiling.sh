@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Ratchet on the DoD "Files <= 800 LOC" gate.
 #
 # 57 production files in src/ breach the ceiling today. Splitting them is not in
