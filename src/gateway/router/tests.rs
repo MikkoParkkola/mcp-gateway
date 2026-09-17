@@ -3721,6 +3721,17 @@ async fn direct_route_rejects_a_missing_agent_id_when_require_id_is_set() {
         StatusCode::FORBIDDEN,
         "require_id is enforced on /mcp, so /mcp/{{name}} must refuse too"
     );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.pointer("/error/code"), Some(&json!(-32600)));
+    let message = json
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        message.contains("require_id"),
+        "the refusal must name the policy that caused it, got: {message}"
+    );
 }
 
 #[tokio::test]
@@ -3741,6 +3752,57 @@ async fn direct_route_rejects_an_agent_outside_the_allowlist() {
         StatusCode::FORBIDDEN,
         "an agent absent from known_agents must not be admitted by URL choice"
     );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.pointer("/error/code"), Some(&json!(-32600)));
+    let message = json
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        message.contains("known_agents"),
+        "the refusal must name the allowlist, got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn direct_route_rejects_an_unlisted_agent_even_when_id_is_optional() {
+    // The allowlist is independent of require_id: it applies whenever an
+    // identity resolves. Documented wrongly before this row existed.
+    let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
+        enabled: true,
+        require_id: false,
+        known_agents: vec!["known-agent".to_string()],
+    })
+    .await;
+    let response = create_router(state)
+        .oneshot(direct_route_call(Some("stranger")))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "require_id: false governs the absent-ID case only, not the allowlist"
+    );
+}
+
+#[tokio::test]
+async fn direct_route_admits_an_absent_agent_id_when_it_is_optional() {
+    // Control for the row above: with require_id false and no ID supplied the
+    // guard stays out of the way, so the refusal there is the allowlist.
+    let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
+        enabled: true,
+        require_id: false,
+        known_agents: vec!["known-agent".to_string()],
+    })
+    .await;
+    let response = create_router(state)
+        .oneshot(direct_route_call(None))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

@@ -42,8 +42,9 @@ pub struct AgentIdentityConfig {
     pub require_id: bool,
     /// Optional allowlist of accepted agent IDs.
     ///
-    /// When non-empty and `require_id = true`, any `agent_id` not in this list
-    /// is rejected.  When empty the allowlist check is skipped entirely.
+    /// When non-empty, any resolved `agent_id` outside this list is rejected —
+    /// independently of `require_id`, which governs only the absent-ID case.
+    /// When empty the allowlist check is skipped entirely.
     #[serde(default)]
     pub known_agents: Vec<String>,
 }
