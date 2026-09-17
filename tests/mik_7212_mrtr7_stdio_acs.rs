@@ -406,6 +406,12 @@ fn census_of(lines: &[String]) -> String {
     let mut unparsable: Vec<&str> = Vec::new();
     let mut methods: BTreeMap<String, usize> = BTreeMap::new();
     let mut results = 0usize;
+    // A minted continuation is a `result` frame too, distinguished only by the
+    // `requestState` the gateway writes into it (`meta_mcp/invoke.rs`). Counting
+    // both as "results" collapses a fabricated plain answer and a re-emitted
+    // question into one number, which is the discrimination this census exists
+    // to make.
+    let mut continuations = 0usize;
     let mut errors: BTreeMap<i64, usize> = BTreeMap::new();
     // `-32003` carries at least four distinct meanings in this codebase
     // (budget exhaustion, a missing client capability, forbidden, and service
@@ -424,8 +430,12 @@ fn census_of(lines: &[String]) -> String {
                     if let Some(message) = frame.pointer("/error/message").and_then(Value::as_str) {
                         *messages.entry(message.to_owned()).or_default() += 1;
                     }
-                } else if frame.get("result").is_some() {
-                    results += 1;
+                } else if let Some(result) = frame.get("result") {
+                    if result.get("requestState").is_some() {
+                        continuations += 1;
+                    } else {
+                        results += 1;
+                    }
                 }
             }
         }
@@ -439,12 +449,13 @@ fn census_of(lines: &[String]) -> String {
         })
         .collect();
     format!(
-        "census of {} collected lines: {} unparsable, methods {:?}, {} results, \
-         errors {:?}, error messages {:?}{}",
+        "census of {} collected lines: {} unparsable, methods {:?}, {} plain results, \
+         {} continuation results, errors {:?}, error messages {:?}{}",
         lines.len(),
         unparsable.len(),
         methods,
         results,
+        continuations,
         errors,
         messages,
         samples.concat(),
