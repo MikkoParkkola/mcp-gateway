@@ -63,7 +63,7 @@ backends:
   trvl:
     description: Travel search - flights and hotels via Google (inspired by fli)
     enabled: true
-    command: /Users/mikko/github/trvl/bin/trvl mcp
+    command: /path/to/trvl/bin/trvl mcp
     cwd: null
     protocol_version: null
     timeout: 30s
@@ -89,7 +89,6 @@ capabilities:
   name: gateway
   directories:
   - ./capabilities
-  - /Users/mikko/github/mcp-gateway-private/capabilities
 cache:
   enabled: true
   default_ttl: 60s

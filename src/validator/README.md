@@ -141,7 +141,7 @@ cargo run --example validator_demo
 
 ## CLI Integration
 
-See `CLI_INTEGRATION_VALIDATOR.md` for details on adding CLI commands. Integration is deferred until after Auto-Discovery feature (#45) is complete to avoid conflicts.
+See [`docs/cli-integration-validator.md`](../../docs/cli-integration-validator.md) for details on adding CLI commands. Integration is deferred until after Auto-Discovery feature (#45) is complete to avoid conflicts.
 
 Proposed commands:
 ```bash
