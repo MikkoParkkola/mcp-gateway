@@ -476,6 +476,19 @@ fn word_matches_text(word: &str, text: &str) -> bool {
         .any(|full| *full != word && text.contains(*full))
 }
 
+/// The first `chars` characters of `word`, or `None` when `word` is shorter.
+///
+/// Byte slicing panics when the index falls inside a multi-byte character, so
+/// a prefix rule stated in characters has to be cut on character boundaries.
+/// For ASCII input the result is the same slice the byte cut produced.
+fn char_prefix(word: &str, chars: usize) -> Option<&str> {
+    let end = word
+        .char_indices()
+        .nth(chars)
+        .map_or(word.len(), |(at, _)| at);
+    (word[..end].chars().count() == chars).then_some(&word[..end])
+}
+
 /// Build suggestions from the tag index when a search returns zero results.
 ///
 /// Finds tags that share a common prefix with any query word (length ≥ 3) or
@@ -500,8 +513,8 @@ pub(crate) fn build_suggestions(query: &str, all_tags: &[String]) -> Vec<String>
             // Substring: tag contains the word
             tag_lower.contains(*word)
             // Or: word is long enough and shares a common prefix with the tag
-            || (word.len() >= MIN_PREFIX_LEN
-                && tag_lower.starts_with(&word[..MIN_PREFIX_LEN]))
+            || char_prefix(word, MIN_PREFIX_LEN)
+                .is_some_and(|prefix| tag_lower.starts_with(prefix))
         });
         if is_match {
             seen.insert(tag_lower);
