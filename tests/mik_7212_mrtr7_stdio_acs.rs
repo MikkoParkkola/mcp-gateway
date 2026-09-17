@@ -407,6 +407,12 @@ fn census_of(lines: &[String]) -> String {
     let mut methods: BTreeMap<String, usize> = BTreeMap::new();
     let mut results = 0usize;
     let mut errors: BTreeMap<i64, usize> = BTreeMap::new();
+    // `-32003` carries at least four distinct meanings in this codebase
+    // (budget exhaustion, a missing client capability, forbidden, and service
+    // unavailable), so the code alone does not name the defect. The child's
+    // stderr is not captured under `cargo test`, so the text has to come back
+    // through the frame or not at all.
+    let mut messages: BTreeMap<String, usize> = BTreeMap::new();
     for line in lines {
         match serde_json::from_str::<Value>(line) {
             Err(_) => unparsable.push(line.as_str()),
@@ -415,6 +421,9 @@ fn census_of(lines: &[String]) -> String {
                     *methods.entry(method.to_owned()).or_default() += 1;
                 } else if let Some(code) = frame.pointer("/error/code").and_then(Value::as_i64) {
                     *errors.entry(code).or_default() += 1;
+                    if let Some(message) = frame.pointer("/error/message").and_then(Value::as_str) {
+                        *messages.entry(message.to_owned()).or_default() += 1;
+                    }
                 } else if frame.get("result").is_some() {
                     results += 1;
                 }
@@ -431,12 +440,13 @@ fn census_of(lines: &[String]) -> String {
         .collect();
     format!(
         "census of {} collected lines: {} unparsable, methods {:?}, {} results, \
-         errors {:?}{}",
+         errors {:?}, error messages {:?}{}",
         lines.len(),
         unparsable.len(),
         methods,
         results,
         errors,
+        messages,
         samples.concat(),
     )
 }
