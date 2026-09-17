@@ -659,21 +659,20 @@ fn elicitation_answer(id: &Value) -> Value {
 /// under this bound it fails the row instead of hanging CI.
 const BURST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long a saturation row waits for the questions it expects. Generous on
-/// purpose: it bounds a parked reader, it does not pace a healthy one.
+/// How long a saturation row waits for the questions it expects.
 ///
-/// Thirty seconds paced a healthy one. Four CI runs of this row failed with 57,
-/// 58, 59 and 63 of the expected 64 questions arrived -- a spread that sits just
-/// under the cap rather than at a fixed number. That shape fits a budget
-/// expiring mid-arrival; on its own it does not rule out a small
-/// load-proportional drop, so what settles it is the row passing under the
-/// raised budget, not the spread. The
-/// settle window cannot cause it: that phase only runs once the read loop has
-/// already broken. Nor can [`BURST_TIMEOUT`], which bounds the send side: it is
-/// unwrapped with `.expect`, so exhausting it panics as a parked reader rather
-/// than reaching the arrival-count assertion that actually failed. A runner slow
-/// enough to need more than this budget is parked.
-const COLLECT_BUDGET: Duration = Duration::from_secs(180);
+/// Thirty seconds was once read as too tight: four CI runs failed with 57, 58,
+/// 59 and 63 of the expected 64 questions, a spread just under the cap. Raising
+/// this to 180s tested that reading and refuted it. The row then ran for its
+/// full budget -- 187.60s wall clock for the binary -- and still collected 58,
+/// while the sibling inflight row collected 60. Six times the budget moved the
+/// count by nothing, so the missing questions are not late, they do not arrive.
+///
+/// The value is back at its original 30s because the extra 150s buys no
+/// evidence and costs every green run. What separates a parked reader from a
+/// child that stopped emitting is the end-cause line `collect_lines_until`
+/// prints on failure, not a larger number here.
+const COLLECT_BUDGET: Duration = Duration::from_secs(30);
 
 /// Kept reading after the expected count arrives, so one question too many is
 /// still observed rather than cut off by an early return.

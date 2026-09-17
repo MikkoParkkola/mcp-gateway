@@ -1196,3 +1196,22 @@ aborts the row with "the child stopped reading stdin mid-burst", and the observe
 arrival-count assertion further down. The second: whether a row that may now run for 182 seconds
 fits its job budget. It does — `timeout-minutes` appears once in `ci.yml`, on the Kani job; the
 `Tests` job inherits GitHub's 360-minute default.
+
+**Correction, later the same day: the budget was not the constraint, and MRTR.7a is not fixed.**
+Run 35243154704 carried the 180-second budget and the row still failed, at 58 of 64 questions --
+with the sibling row `ac_mrtr_7b` failing alongside it at 60 of 64, which the earlier account did
+not mention. The test binary reports `finished in 187.60s`, so collection did not end early: it
+waited out the whole raised budget and the remaining questions never came. Six times the budget
+moved the arrival count by nothing.
+
+That refutes the reading recorded above. A spread just under the cap is consistent with a budget
+expiring mid-arrival, but it is equally consistent with a fixed handful of admitted calls that
+never emit at all, and the 180-second run is the experiment that distinguishes them. It came down
+on the second reading. The budget is therefore back at 30 seconds, where it costs nothing, and the
+open question moves to where it belonged: why six of sixty-four admitted calls produce no question
+inside three minutes. The end-cause line the collector now prints on failure -- budget expired
+versus stdout ended -- is the next piece of evidence, and it separates a parked reader in the
+harness from a child that stopped emitting.
+
+The delivery consequence is unchanged in shape but worse in substance: this branch now carries
+three red rows, not two, and only one of them was ever a harness bound.
