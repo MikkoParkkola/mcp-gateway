@@ -40,7 +40,13 @@ fn discover(query: &str) -> Vec<SearchResult> {
     let candidates: Vec<SearchResult> = catalogue()
         .iter()
         .filter(|t| tool_matches_query(t, query))
-        .map(|t| SearchResult::new("cat", t.name.as_str(), t.description.clone().unwrap_or_default()))
+        .map(|t| {
+            SearchResult::new(
+                "cat",
+                t.name.as_str(),
+                t.description.clone().unwrap_or_default(),
+            )
+        })
         .collect();
     ranker
         .rank(candidates, query)
@@ -114,7 +120,10 @@ fn build_suggestions_does_not_panic_on_a_multi_byte_query_word() {
 /// Split the frozen corpus into cases the shipped table resolves and cases it
 /// does not. No fixture row is labelled: the partition is whatever the table
 /// turns out to cover, computed at run time.
-fn corpus_partition() -> (Vec<(&'static str, &'static str)>, Vec<(&'static str, &'static str)>) {
+fn corpus_partition() -> (
+    Vec<(&'static str, &'static str)>,
+    Vec<(&'static str, &'static str)>,
+) {
     fixture_rows(CORPUS)
         .into_iter()
         .partition(|(query, intended)| {

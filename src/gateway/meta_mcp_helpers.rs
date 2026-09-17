@@ -13,7 +13,7 @@ use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, PromptsCapability, RequestId,
     ResourcesCapability, ServerCapabilities, Tool, ToolsCallResult, ToolsCapability,
 };
-use crate::ranking::{SearchResult, expand_synonyms};
+use crate::ranking::{SearchResult, expand_abbreviations, expand_synonyms};
 use crate::stats::StatsSnapshot;
 use crate::{Error, Result};
 
@@ -456,14 +456,24 @@ pub(crate) fn tool_matches_query(tool: &Tool, query: &str) -> bool {
         .any(|word| word_matches_text(word, &name_lower) || word_matches_text(word, &desc_lower))
 }
 
-/// Return `true` if `word` or any of its synonyms appears as a substring of `text`.
+/// Return `true` if `word`, any of its synonyms, or any expansion of it as a
+/// supported abbreviation appears as a substring of `text`.
+///
+/// Abbreviations are consulted last, so this only ever admits more than before:
+/// nothing that matched already stops matching.
 fn word_matches_text(word: &str, text: &str) -> bool {
     if text.contains(word) {
         return true;
     }
-    expand_synonyms(word)
+    if expand_synonyms(word)
         .iter()
         .any(|syn| *syn != word && text.contains(*syn))
+    {
+        return true;
+    }
+    expand_abbreviations(word)
+        .iter()
+        .any(|full| *full != word && text.contains(*full))
 }
 
 /// Build suggestions from the tag index when a search returns zero results.
