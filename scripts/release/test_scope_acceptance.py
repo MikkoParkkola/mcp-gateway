@@ -206,6 +206,7 @@ class AcceptanceTests(unittest.TestCase):
             ("stage", "shipped"),
             ("stage", "proven"),
             ("blocked_on", "someone"),
+            ("blocked_on", "operator"),
         ):
             with self.subTest(field=field, value=value):
                 self.setUp()

@@ -109,7 +109,9 @@ def stage_burnup(criteria):
         for row in criteria
         if isinstance(row, dict) and row.get("blocked_on") in ("operator", "external")
     ]
-    line = " | ".join(f"{stage} {counts[stage]}" for stage in STAGES)
+    line = f"{counts['met']}/{len(criteria)} met; " + " | ".join(
+        f"{stage} {counts[stage]}" for stage in STAGES
+    )
     return line + (f"; held: {', '.join(held)}" if held else "; held: none")
 
 
@@ -193,6 +195,10 @@ def inspect_contract(root, document, data, baseline):
             errors.append(
                 f"{ident}: blocked_on must be one of {', '.join(BLOCKED_ON)}"
             )
+        elif row["blocked_on"] != "none" and row["stage"] == "met":
+            # Nothing is still held by someone once it is finished, and a row
+            # claiming both would keep a closed criterion on the held list.
+            errors.append(f"{ident}: a met criterion cannot still be blocked")
         if not isinstance(row["note"], str) or not row["note"].strip():
             errors.append(f"{ident}: a verdict needs a nonempty explanatory note")
         errors.extend(
