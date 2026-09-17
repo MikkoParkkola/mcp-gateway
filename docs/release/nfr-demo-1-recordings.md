@@ -5,7 +5,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # NFR.DEMO.1 — recorded demonstrations
 
-VERDICT: NFR.DEMO.1: 2 of 5 scenarios RECORDED, 3 BLOCKED (scenario 4 on MIK-7469; scenarios 2 and 3 on build budget, not on product behaviour)
+VERDICT: NFR.DEMO.1: 3 of 5 scenarios RECORDED, 2 BLOCKED (scenario 4 on MIK-7469; scenario 2 on build budget, not on product behaviour)
 
 The machine-readable evidence is [`nfr-demo-1-recordings.json`](nfr-demo-1-recordings.json).
 This page is the human-readable half: what each rule in the gate is answering, and
@@ -58,6 +58,45 @@ classification. The driver warms each backend with a tool call first. The design
 did not mention this; anyone writing a further scenario against the era fields
 needs the same warm-up.
 
+## Scenario 3 — two personal accounts (RECORDED, 8/8 rows PASS)
+
+Driver `scripts/release/demo/3-personal-accounts.sh`, transcript
+`docs/release/demo/3-personal-accounts-transcript.txt`, rows
+`docs/release/demo/3-personal-accounts-results.json`.
+
+Alice and Bob share one gateway. Two API keys and no `single_user` override put
+the gateway in the multi-user posture (`AuthConfig::implies_multi_user`), which
+is the posture the isolation guard defends. Each has a personal backend; a third
+backend carries `oauth.enabled: true` with `shared_account` unset, so the
+gateway holds one person's login for it.
+
+Proven: each account reaches its own backend; **neither reaches the other's**
+(both rows assert the *absence* of the other peer's answer, so a leak flips
+them); and the personally-bound backend is **refused** with `-32001` — "one
+user's token is never served to another" (ADR-008 INV-2) — rather than answered
+with a credential that belongs to somebody else.
+
+### Two findings this recording surfaced
+
+**The catalogue is not account-scoped.** `gateway_list_servers` returns the same
+list to both keys: each account sees the other's backend, and the
+personally-bound backend that neither may invoke. Credential isolation holds —
+what crosses the boundary is metadata, backend names and descriptions.
+`meta_route_isolation_refused` (`src/gateway/meta_mcp/mod.rs:1119`) exists to
+omit isolation-refused backends from list paths, and this list path does not
+consult it. The recording carries this as
+`S3.CATALOGUE_IS_NOT_ACCOUNT_SCOPED`, written as a **characterisation** row: it
+asserts the behaviour as observed, so a build that starts scoping the catalogue
+makes the row FAIL and forces the finding to be revisited rather than quietly
+closed. Whether this is a defect or accepted behaviour is an owner decision.
+
+**The ADR-008 INV-2 refusal is spelled twice.**
+`src/gateway/meta_mcp/invoke.rs:1430-1440` builds its own `-32001` saying "one
+user's **token**"; `enforce_oauth_isolation_for` at
+`src/gateway/meta_mcp/mod.rs:1105-1111` says "one user's **credential**".
+`gateway_invoke` takes the first. Both are correct refusals — the duplication is
+the risk, because a fix to one arm does not reach the other.
+
 ## Scenario 5 — error-budget diagnosis/recovery (RECORDED, 8/8 rows PASS)
 
 Driver `scripts/release/demo/5-error-budget.sh`, transcript
@@ -89,15 +128,12 @@ never reached, and the budget never sees a failure: the first run of this driver
 recorded a "healthy" peer through four injected faults. Any future fault
 scenario needs the same key.
 
-## Scenarios 2 and 3 — BLOCKED on build budget
+## Scenario 2 — BLOCKED on build budget
 
-Not recorded in this pass, and blocked on the cost of building the fixtures, not
-on any gateway behaviour. Nothing found during the research suggests the
-recordings would fail. The manifest carries the located mechanism for each so the
-next pass starts from code, not from a search:
-
-- **Scenario 2 (reconnectable task)** — needs a standalone stdio task peer (~150 lines, design §Scenario 2).
-- **Scenario 3 (two personal accounts)** — enforcement at `src/gateway/meta_mcp/mod.rs:1040` (`enforce_oauth_isolation_for`), refusal `-32001` at `mod.rs:1105-1111`, `meta_route_isolation_refused` at `mod.rs:1119`.
+Not recorded in this pass, and blocked on the cost of building the fixture, not
+on any gateway behaviour: it needs a standalone stdio task peer (~150 lines,
+design §Scenario 2). Nothing found during the research suggests the recording
+would fail.
 
 ## Scenario 4 — BLOCKED on MIK-7469
 

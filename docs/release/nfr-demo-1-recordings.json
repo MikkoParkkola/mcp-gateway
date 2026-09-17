@@ -1,6 +1,6 @@
 {
   "criterion": "NFR.DEMO.1",
-  "verdict": "NFR.DEMO.1: 2 of 5 scenarios RECORDED, 3 BLOCKED (scenario 4 on MIK-7469; scenarios 2 and 3 on build budget, not on product behaviour)",
+  "verdict": "NFR.DEMO.1: 3 of 5 scenarios RECORDED, 2 BLOCKED (scenario 4 on MIK-7469; scenario 2 on build budget, not on product behaviour)",
   "revision_under_test": {
     "gateway_version": "mcp-gateway 4.0.0",
     "binary_sha256": "6e38ee5f55e2eabc5bc751c3dc42a7b0e92a4171d435b78341c3615f2d1acd70",
@@ -96,16 +96,86 @@
       "id": 3,
       "slug": "personal-accounts",
       "criterion_phrase": "two personal accounts",
-      "status": "blocked",
-      "blocked_on": "Not built in this pass: needs a two-identity OAuth passthrough fixture and a driver. Budget, not a product defect; the enforcement path was located (src/gateway/meta_mcp/mod.rs:1040 enforce_oauth_isolation_for, -32001 at mod.rs:1105-1111, meta_route_isolation_refused at mod.rs:1119).",
+      "status": "recorded",
+      "driver": "scripts/release/demo/3-personal-accounts.sh",
+      "transcript": "docs/release/demo/3-personal-accounts-transcript.txt",
+      "results_json": "docs/release/demo/3-personal-accounts-results.json",
       "versions": {
-        "note": "not recorded; no versions were exercised"
+        "gateway": "mcp-gateway 4.0.0",
+        "peer_protocol_version": "2025-06-18",
+        "auth_posture": "multi-user (two API keys, no single_user override)",
+        "personal_binding": "backend oauth.enabled=true, shared_account unset",
+        "response_cache": "disabled for this recording"
       },
-      "negative_control": "A build that leaks shows account A's credential reaching account B's call, or the isolation refusal (-32001) absent where the design says it must appear.",
+      "negative_control": "A build that leaks shows Alice's call reaching bob_notes, or the personally-bound backend answering instead of refusing. Two rows assert the ABSENCE of the other account's answer, so a leak flips them; the refusal row asserts the shipped -32001 wording, so losing the guard flips that one.",
       "not_evidence_for": [
         {
           "criterion": "MIK-6745.JOURNEY.1",
-          "reason": "Ruling 3. This scenario, once recorded, uses a scripted provider fixture and proves only the gateway's isolation enforcement. It is not a journey recording against a real identity provider and must not be reused as evidence for MIK-6745.JOURNEY.1."
+          "reason": "Ruling 3. The peers here are scripted stdio fixtures and the accounts are API keys, not logins at a real identity provider. The recording proves the gateway's own isolation enforcement and nothing about a user's journey through a provider, so it must not be reused as evidence for MIK-6745.JOURNEY.1."
+        }
+      ],
+      "findings": [
+        {
+          "id": "S3.FINDING.CATALOGUE_NOT_ACCOUNT_SCOPED",
+          "summary": "gateway_list_servers is not account-scoped: both API keys receive the same catalogue, including the other account's backend and the personally-bound backend neither may invoke. Credential isolation holds; what crosses the boundary is metadata (backend names and descriptions). Note that meta_route_isolation_refused (src/gateway/meta_mcp/mod.rs:1119) exists to omit isolation-refused backends from list paths, and this list path does not consult it.",
+          "carried_as": "row S3.CATALOGUE_IS_NOT_ACCOUNT_SCOPED, written as a characterisation: it asserts the behaviour as observed so a build that starts scoping the catalogue makes the row FAIL and forces the finding to be revisited rather than quietly closed.",
+          "owner_decision_needed": true
+        },
+        {
+          "id": "S3.FINDING.REFUSAL_SPELLED_TWICE",
+          "summary": "The ADR-008 INV-2 refusal is built independently in two places with divergent wording: src/gateway/meta_mcp/invoke.rs:1430-1440 says \"one user's TOKEN\" and src/gateway/meta_mcp/mod.rs:1105-1111 says \"one user's CREDENTIAL\". gateway_invoke takes the first. Both are -32001 and both are correct refusals; the duplication is the risk, since a fix to one arm does not reach the other.",
+          "carried_as": "row S3.PERSONAL_BACKEND_REFUSED asserts the invoke.rs wording",
+          "owner_decision_needed": true
+        }
+      ],
+      "rows": [
+        {
+          "id": "S3.ALICE_REACHES_HER_OWN",
+          "expected": "alice_notes answered: private present",
+          "actual": "alice_notes answered: private present",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.BOB_REACHES_HIS_OWN",
+          "expected": "bob_notes answered: private present",
+          "actual": "bob_notes answered: private present",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.ALICE_CANNOT_REACH_BOBS",
+          "expected": "absent",
+          "actual": "absent",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.BOB_CANNOT_REACH_ALICES",
+          "expected": "absent",
+          "actual": "absent",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.CATALOGUE_IS_NOT_ACCOUNT_SCOPED",
+          "expected": "alice_notes,bob_notes,gateway,personal_inbox",
+          "actual": "alice_notes,bob_notes,gateway,personal_inbox",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.CATALOGUE_LISTS_THE_UNINVOKABLE_BACKEND",
+          "expected": "personal_inbox present",
+          "actual": "personal_inbox present",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.PERSONAL_BACKEND_REFUSED",
+          "expected": "one user's token is never served to another present",
+          "actual": "one user's token is never served to another present",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.PERSONAL_BACKEND_DID_NOT_ANSWER",
+          "expected": "absent",
+          "actual": "absent",
+          "status": "PASS"
         }
       ]
     },
