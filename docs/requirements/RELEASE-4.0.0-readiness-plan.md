@@ -96,35 +96,41 @@ null-object channel `NoClientChannel` (`:350-361`), which returns it
 unconditionally. Nothing can race on registering something that is never
 registered.
 
-**Settled — the split is a path split, not a schedule (V).** The channel a
-dispatch carries is decided by which caller builds the request. The stdio serve
-loop passes the pipe it already reads (`src/gateway/server/mod.rs:3198`, whose
-comment says "Non-serve-loop callers still pass `NoClientChannel`"), so a call
-on the serve loop can be asked. The task-service execution path builds its
-context with the opposite pairing
-(`src/gateway/task_service/execution/context.rs:127-132`): it preserves
-`input_capabilities: self.input_capabilities` — the caller's *declared*
-capabilities — while hardcoding `confirmation: ConfirmationChannel::Unavailable`
-and `channel: &NoClientChannel`. That is the declared-but-undeliverable state
-constructed by hand, and it is exactly the combination that walks past `plan`
-(the capability is declared, so nothing refuses) into a delivery that cannot
-succeed, into the empty arm, into a minted continuation.
+**Settled — a defect class, not yet 7a's origin (V).** Enumerating every
+non-test construction site of `NoClientChannel` leaves two that pair a null
+channel with declared input capabilities, and both are real:
 
-**Therefore the fix moves off the arm (I).** The arm is where the symptom
-surfaces; the defect is a context that promises a capability it structurally
-cannot serve. The invariant to pin is *a request context holding
-`NoClientChannel` must not declare input capabilities* — enforced where the
-context is built, which makes the inconsistent state unrepresentable instead of
-adding a downstream error arm. This also kills Option A for a second and
-stronger reason than the HTTP handlers: "declared capability, no session"
-describes the task path exactly, and erroring on it would break task execution,
-which is *supposed* to run with no live client channel.
+1. `src/gateway/task_service/execution/context.rs:127` carries
+   `input_capabilities: self.input_capabilities` — the caller's declaration —
+   while hardcoding `confirmation: ConfirmationChannel::Unavailable` and
+   `channel: &NoClientChannel`. Every other deliberately-dropped field there
+   (`execution: None`, `signing: None`, the confirmation) carries a comment
+   justifying the drop; `input_capabilities` carries none, which is what a
+   field threaded through without a decision looks like.
+2. The stdio batch path (`src/gateway/server/mod.rs:3419`) sets
+   `handshake_capabilities: Declared::NONE` beside the null channel and says so
+   ("Nothing to declare to either"). That guard is bypassed one level up:
+   `build_stdio_caller_context` (`:3142`) resolves
+   `input_capabilities: if is_modern { request_shape.declared_capabilities() }
+   else { client.handshake_capabilities }`, so for a modern request the
+   per-request declaration wins and `handshake_capabilities` is never read.
 
-Still inferred, and cheap to settle: that 7a's 6-7 fabricated results arrive
-through this path specifically. The census already histograms error codes and
-messages, so the change carries its own measurement — no probe branch, and the
-earlier one was inert anyway (no test installs a `tracing` subscriber and CI
-sets no `RUST_LOG`).
+Neither is yet shown to be 7a's origin, and the earlier reading of this section
+that attributed 7a to the task path was wrong: the task path is entered only
+from `src/gateway/router/handlers.rs:1544`, gated on `params["task"]` being
+present, and 7a sends plain calls with no `task` field. The batch path needs a
+batch, which 7a also does not send. The invariant worth pinning is independent
+of which one fires: *a context holding `NoClientChannel` must not declare input
+capabilities* — enforced where the context is built, which makes the
+inconsistent state unrepresentable rather than adding a downstream error arm,
+and which is a narrower claim than erroring on "declared but no session" (that
+description also covers legitimate task execution, which is supposed to run
+with no live client channel).
+
+7a's own origin stays open. The census already histograms error codes and
+messages, so making the suspect path return a distinct message measures it with
+no probe branch — and the earlier `tracing` probe was inert anyway, since no
+test installs a subscriber and CI sets no `RUST_LOG`.
 
 `MIK-7212.WIRE.10` is the test row that joins the two halves end to end; the
 source comment at `input_bridge.rs:344-348` already names it as missing.
