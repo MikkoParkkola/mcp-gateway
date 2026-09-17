@@ -412,6 +412,11 @@ fn census_of(lines: &[String]) -> String {
     // question into one number, which is the discrimination this census exists
     // to make.
     let mut continuations = 0usize;
+    // The bodies of the plain results, not just how many. Three hypotheses about
+    // what fabricates them have now been eliminated by counting alone, and the
+    // frame itself is the only authority left: it names the shape directly
+    // instead of inviting a fourth guess.
+    let mut plain_samples: Vec<String> = Vec::new();
     let mut errors: BTreeMap<i64, usize> = BTreeMap::new();
     // `-32003` carries at least four distinct meanings in this codebase
     // (budget exhaustion, a missing client capability, forbidden, and service
@@ -435,6 +440,10 @@ fn census_of(lines: &[String]) -> String {
                         continuations += 1;
                     } else {
                         results += 1;
+                        if plain_samples.len() < 3 {
+                            let body: String = result.to_string().chars().take(240).collect();
+                            plain_samples.push(format!("\n      {body:?}"));
+                        }
                     }
                 }
             }
@@ -450,7 +459,8 @@ fn census_of(lines: &[String]) -> String {
         .collect();
     format!(
         "census of {} collected lines: {} unparsable, methods {:?}, {} plain results, \
-         {} continuation results, errors {:?}, error messages {:?}{}",
+         {} continuation results, errors {:?}, error messages {:?}{}\
+         {}{}",
         lines.len(),
         unparsable.len(),
         methods,
@@ -459,6 +469,12 @@ fn census_of(lines: &[String]) -> String {
         errors,
         messages,
         samples.concat(),
+        if plain_samples.is_empty() {
+            ""
+        } else {
+            "\n    plain result samples:"
+        },
+        plain_samples.concat(),
     )
 }
 
