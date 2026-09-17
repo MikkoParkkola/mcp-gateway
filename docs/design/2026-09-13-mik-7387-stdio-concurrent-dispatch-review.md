@@ -107,20 +107,24 @@ engages; and the fixture backend is stateless, answering every call without
 (`tests/mik_7212_mrtr7_stdio_acs.rs:147-172`), so every plain result frame is
 manufactured by the gateway rather than returned by the backend.
 
-The manufacturing site is the empty match arm at
-`src/gateway/meta_mcp/invoke.rs:2270`. Falling through leaves `interim` set, so
-the ask goes out as a minted continuation (`invoke.rs:2358`) instead of a bridged
-elicitation. The comment above that arm (`invoke.rs:2247`) states the invariant
+The only candidate manufacturing site is the empty match arm at
+`src/gateway/meta_mcp/invoke.rs:2271-2274`. Falling through leaves `interim` set,
+so the ask goes out as a minted continuation (`invoke.rs:2358`) instead of a
+bridged elicitation, and it is the only arm that can reach the mint:
+`ChallengeRefused` returns `ResponseFirewallRefused` and the catch-all
+`Err(error)` arm at `:2306` returns -32003. That makes it the candidate rather
+than the established cause — see "Not reproduced locally" below. The comment
+above that arm (`invoke.rs:2247`) states the invariant
 that made it safe — stdio declares `Declared::NONE`, so `plan` refuses before
 `ask` and the failure lands as `Refused`, never `NoSession` — then names this
 work package as "the only thing that lifts it", names `MIK-7212.WIRE.10` as the
 missing row, and warns that until it lands "an edit to either half breaks this
 silently". That is what happened.
 
-Consequence beyond the two rows: a caller that asked for a bridged elicitation is
-silently answered with a continuation envelope instead. Including this package in
-4.0.0 requires handling `NoSession` for the concurrent stdio caller and writing
-`MIK-7212.WIRE.10`; excluding it leaves both rows moot.
+Consequence beyond the two rows, if the candidate is the cause: a caller that
+asked for a bridged elicitation is silently answered with a continuation envelope
+instead. That consequence is what makes the include/exclude call load-bearing, and
+it is the claim the next section qualifies.
 
 The census closes exactly against the call counts, and that is what carries the
 finding. 7a sends 65 calls (`FIRST_CALL_ID..=FIRST_CALL_ID + ADMISSION_CAP`,
@@ -140,3 +144,35 @@ though: the `NoSession` arm is `=> {}` and emits no `warn!`, unlike the
 construction. The 74 `TimedOut` warnings are the other half of the census — the
 58 elicitations that did go out and then expired against the bridge timeout,
 which is what the -32003 frames report.
+
+## Not reproduced locally: both rows are green off CI
+
+The mechanism above is inference from the CI census. It was then tested directly
+and the test did not confirm it, because the failure does not occur here at all.
+
+Two probes were added temporarily — a `warn!` inside the empty `NoSession` arm
+and a second at the continuation mint — and the file was run on macOS
+(`cargo test --all-features --test mik_7212_mrtr7_stdio_acs`), six consecutive
+times. Every run: **6 passed, 0 failed**, in about 10s, with **zero hits on
+either probe**. The probes were removed afterwards; nothing here is committed.
+
+So on a healthy run neither the silent arm nor the mint is reached, all 64
+dispatches park as the rows expect, and both rows pass. The 58-versus-64
+shortfall, the 966 plain results and the silent downgrade are all specific to
+CI. That is a real finding rather than an absence of one, and it changes the
+shape of the work in two ways:
+
+- The mechanism cannot be confirmed or refuted from a machine where the failure
+  never happens. Confirming it needs the probes run in the environment that
+  fails, not another local run.
+- A count that is green six times locally and pinned at 58 in CI is at least
+  partly a property of the environment. A count *pinned* under a 16x load change
+  is the signature of a cap, and `MAX_CONCURRENT_STDIO_DISPATCHES` is 64 with its
+  permit held across the bridge await — so the earlier claim in this document
+  that the 64-slot cap "is not what bounds it" was argued backwards and should
+  not be relied on.
+
+Consequently a fix written against the `NoSession` arm today would be written
+against an unconfirmed cause, and could not be shown to turn either row green: a
+row asserting 64 outstanding questions and observing 58 is not made green by
+changing what the other calls are told.
