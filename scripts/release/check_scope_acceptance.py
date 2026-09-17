@@ -163,7 +163,7 @@ def inspect_contract(root, document, data, baseline):
     if not isinstance(criteria, list):
         errors.append("criteria must be a list")
         criteria = []
-    for row in criteria:
+    for position, row in enumerate(criteria, start=1):
         if not isinstance(row, dict) or set(row) != {
             "id",
             "status",
@@ -172,8 +172,13 @@ def inspect_contract(root, document, data, baseline):
             "evidence",
             "note",
         }:
+            # Name the offending row: the rest of its diagnostics are skipped, so
+            # without this the reader has to diff the whole ledger by hand.
+            named = isinstance(row, dict) and isinstance(row.get("id"), str)
+            label = row["id"] if named else f"criterion #{position}"
             errors.append(
-                "each criterion needs id, status, stage, blocked_on, evidence and note"
+                f"{label}: each criterion needs id, status, stage, blocked_on,"
+                " evidence and note"
             )
             continue
         ident = row["id"]

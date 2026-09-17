@@ -355,7 +355,10 @@ class ContractInterfaceTests(unittest.TestCase):
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assert_exact_diagnostic(
-            result.stderr, "each criterion needs id, status, stage, blocked_on, evidence and note"
+            result.stderr, (
+                "GH462.CONFIG.1: each criterion needs id, status, stage, "
+                "blocked_on, evidence and note"
+            )
         )
         self.assertNotIn("GH452.SESSION.1", result.stderr)
 
