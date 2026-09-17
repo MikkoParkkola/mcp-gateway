@@ -1,8 +1,8 @@
 # MIK-3274.RANKING.1 — fuzzy ranking for abbreviations and word boundaries
 
 Status: design, reviewed round 1 (two independent reviewers, both
-SHIP-WITH-FIXES, all findings applied — see §8). Two questions in §7 await
-an owner decision. Date: 2026-09-12.
+SHIP-WITH-FIXES, all findings applied — see §8). Both questions in §7 are
+ruled, independently reviewed and accepted. Date: 2026-09-12.
 Branch: `feat/v4-ranking-fuzzy`. Release: 4.0.0, package DISCOVERY.
 Scope: this document covers **MIK-3274.RANKING.1 only**. RANKING.2 (authorization
 and truncation ordering) and RANKING.3 (measured thresholds) are separate rows
@@ -182,7 +182,8 @@ Freeze protocol, binding on implementation:
 
 1. The corpus lands **first**, in its own commit, in its own file, before a
    single table entry exists. Its commit SHA is recorded in this document at
-   that point. The table commit is strictly after that SHA, and the ordering is
+   that point: **`a62dafc8`**, `src/ranking/fixtures/abbreviation-corpus.tsv`
+   and `abbreviation-catalogue.tsv`. The table commit is strictly after that SHA, and the ordering is
    auditable in `git log` by anyone grading the row.
 2. The corpus file is **not edited after the freeze**. Not to add a case the
    table misses, not to reword one. A corpus that can still be edited is one
@@ -410,21 +411,31 @@ integrator grades evidence.
 | Exact-identifier primary sort key changes existing result order | It only moves a tool the caller named exactly; any reordering it causes is the acceptance clause being honoured. Covered by the before/after comparison for "existing relevant matches". |
 | Fixing the `build_suggestions` panic changes zero-result suggestion output | The repair is character-safe truncation of the same rule; ASCII queries, which is every existing test, are byte-identical. |
 
-## 7. Open questions for review
+## 7. Questions raised, and how they were ruled
 
 Round one resolved the three questions this section previously carried: one
 expansion table per term reusing `SYNONYM_MULTIPLIER` (§3.2 rule 3), boundary
 handling on tool names only (§3.3), and separators derived from
-`char::is_alphanumeric` rather than a fixed ASCII set (§3.3). What remains open:
+`char::is_alphanumeric` rather than a fixed ASCII set (§3.3). The two that
+remained are now ruled, independently reviewed and accepted:
 
-1. Is the exact-identifier primary sort key (§3.4) accepted as RANKING.1 work,
-   or should it be raised as its own defect against the ranker? It is a
-   pre-existing gap, it is what the acceptance control tests, and fixing it here
-   is a few lines — but it is the only part of this design that changes ordering
-   for queries containing no abbreviation.
-2. Should the `build_suggestions` character-safety repair (§3.5) ship in this
-   diff or as a separate one-line fix? It is reachable from the Unicode control
-   this row owns, but it is not ranking code.
+1. **The exact-identifier primary sort key (§3.4) ships as RANKING.1 work**, on
+   this branch. §5 requires the exact-identifier control to be tested against a
+   competing highly-used sibling, which the current code fails; splitting the
+   sort key into its own defect would leave the row ungradeable.
+2. **The `build_suggestions` character-safety repair (§3.5) ships on this branch
+   as its own separate commit**, not folded into the ranking change. It stays
+   scoped to character-safe prefix handling, and ASCII behaviour stays
+   byte-identical.
+
+**Correction to an earlier claim in this section.** Question 1 previously said
+the sort key is "the only part of this design that changes ordering for queries
+containing no abbreviation". That is inaccurate. The boundary tie-break (§3.3)
+reorders such queries too, wherever two candidates reach **equal final scores** —
+no abbreviation need be present for that to happen, and `cat` against
+`catalog_list` versus `concat` is exactly such a query. Both changes are covered
+by the before/after comparison the "existing relevant matches" clause owes;
+neither can cross a score difference.
 
 ## 8. Review record
 
@@ -460,4 +471,6 @@ match positions it tests (§3.3), the exact-identifier fix names its
 no-API-widening implementation route (§3.4), and the "four expansion sites"
 count is recorded as verified repo-wide rather than asserted (§3.2 rule 2).
 
-No implementation code is written until the two questions in §7 are answered.
+Both §7 questions are answered, so implementation proceeds on this branch
+under the freeze protocol in §3.2: corpus commit first, table commit strictly
+after it.
