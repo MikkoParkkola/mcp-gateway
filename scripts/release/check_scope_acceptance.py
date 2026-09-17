@@ -91,6 +91,28 @@ def manifest_version_errors(root):
     return version, []
 
 
+# Ordered delivery stages. A criterion advances left to right; only the last
+# one satisfies the tag gate. The intermediate stages exist so that a day of
+# real progress is visible in the tracker instead of reading as no movement.
+STAGES = ("ungraded", "graded", "built", "on-line", "proven", "met")
+BLOCKED_ON = ("none", "operator", "external")
+
+
+def stage_burnup(criteria):
+    """Render the per-stage counts in stage order, plus what is externally held."""
+    counts = {stage: 0 for stage in STAGES}
+    for row in criteria:
+        if isinstance(row, dict) and row.get("stage") in counts:
+            counts[row["stage"]] += 1
+    held = [
+        f"{row['id']} ({row['blocked_on']})"
+        for row in criteria
+        if isinstance(row, dict) and row.get("blocked_on") in ("operator", "external")
+    ]
+    line = " | ".join(f"{stage} {counts[stage]}" for stage in STAGES)
+    return line + (f"; held: {', '.join(held)}" if held else "; held: none")
+
+
 def evidence_errors(root, evidence, label, required):
     if not isinstance(evidence, list):
         return [f"{label}: evidence must be a list of repository file paths"]
@@ -143,10 +165,14 @@ def inspect_contract(root, document, data, baseline):
         if not isinstance(row, dict) or set(row) != {
             "id",
             "status",
+            "stage",
+            "blocked_on",
             "evidence",
             "note",
         }:
-            errors.append("each criterion needs id, status, evidence and note")
+            errors.append(
+                "each criterion needs id, status, stage, blocked_on, evidence and note"
+            )
             continue
         ident = row["id"]
         if not isinstance(ident, str):
@@ -157,6 +183,16 @@ def inspect_contract(root, document, data, baseline):
         seen.add(ident)
         if row["status"] not in ("pending", "met"):
             errors.append(f"{ident}: status must be pending or met")
+        if row["stage"] not in STAGES:
+            errors.append(f"{ident}: stage must be one of {', '.join(STAGES)}")
+        elif (row["stage"] == "met") != (row["status"] == "met"):
+            # Only the terminal stage may claim the tag-blocking status, so a row
+            # cannot advertise progress it has not finished or hide a finished one.
+            errors.append(f"{ident}: stage 'met' and status 'met' must agree")
+        if row["blocked_on"] not in BLOCKED_ON:
+            errors.append(
+                f"{ident}: blocked_on must be one of {', '.join(BLOCKED_ON)}"
+            )
         if not isinstance(row["note"], str) or not row["note"].strip():
             errors.append(f"{ident}: a verdict needs a nonempty explanatory note")
         errors.extend(
@@ -279,6 +315,7 @@ def main(argv=None):
         f"Scope contract consistent: {len(data['criteria'])} criteria; "
         f"{len(pending)} pending criteria/decisions; {len(blockers)} baseline blocking rows."
     )
+    print("Stage burnup: " + stage_burnup(data["criteria"]))
     if require_acceptance and (pending or blockers):
         print(
             "Release acceptance incomplete:\n  " + "\n  ".join(pending + blockers),

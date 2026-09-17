@@ -4,6 +4,8 @@
     {
       "id": "GH462.CONFIG.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "tests/gh462_config_preservation.rs"
       ],
@@ -12,6 +14,8 @@
     {
       "id": "GH452.SESSION.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "tests/gh452_session_owner.rs",
         "docs/release/gh452-session-ownership-evidence.json"
@@ -21,6 +25,8 @@
     {
       "id": "MIK-7377.SIGNING.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "tests/message_signing_delivery.rs",
         "tests/message_signing_config.rs",
@@ -32,6 +38,8 @@
     {
       "id": "MIK-7334.CATALOGUE.1",
       "status": "pending",
+      "stage": "graded",
+      "blocked_on": "none",
       "evidence": [
         "src/backend/metadata.rs",
         "src/backend/tests.rs",
@@ -44,6 +52,8 @@
     {
       "id": "MIK-7387.STDIO.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "src/gateway/server/mod.rs",
         "src/gateway/server/stdio_channel.rs",
@@ -56,6 +66,8 @@
     {
       "id": "MIK-7387.STDIO.2",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "src/gateway/server/mod.rs",
         "src/gateway/server/stdio_channel.rs",
@@ -67,6 +79,8 @@
     {
       "id": "MIK-7387.STDIO.3",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "src/gateway/server/mod.rs",
         "src/gateway/server/stdio_channel.rs",
@@ -78,6 +92,8 @@
     {
       "id": "MIK-7388.CANCEL.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "src/gateway/proxy.rs"
       ],
@@ -86,6 +102,8 @@
     {
       "id": "MIK-7311.LIFECYCLE.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "tests/mik_7272_task_1_acs.rs",
         "tests/task_expiry_http_lifecycle.rs",
@@ -96,6 +114,8 @@
     {
       "id": "MIK-7311.LIFECYCLE.2",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "tests/mik_7272_task_1_acs.rs",
         "src/gateway/router/handlers.rs",
@@ -106,6 +126,8 @@
     {
       "id": "MIK-7311.LIFECYCLE.3",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "tests/task_upstream_recovery.rs",
         "docs/requirements/scope-grading-2026-09-12.md"
@@ -115,6 +137,8 @@
     {
       "id": "MIK-7311.LIFECYCLE.4",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "tests/task_upstream_recovery.rs",
         "src/gateway/task_service/execution/upstream.rs"
@@ -124,6 +148,8 @@
     {
       "id": "MIK-7311.LIFECYCLE.5",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "src/gateway/task_service/service.rs",
         "src/gateway/task_service/store.rs",
@@ -143,6 +169,8 @@
     {
       "id": "MIK-6744.STORE.1",
       "status": "pending",
+      "stage": "graded",
+      "blocked_on": "none",
       "evidence": [
         "src/personal_accounts/store_tests.rs",
         "src/personal_accounts/service_refresh_tests.rs",
@@ -159,6 +187,8 @@
     {
       "id": "MIK-6744.STORE.2",
       "status": "pending",
+      "stage": "graded",
+      "blocked_on": "none",
       "evidence": [
         "src/personal_accounts/service.rs",
         "src/personal_accounts/mod.rs",
@@ -172,6 +202,8 @@
     {
       "id": "MIK-6745.JOURNEY.1",
       "status": "pending",
+      "stage": "graded",
+      "blocked_on": "external",
       "evidence": [
         "src/personal_accounts/service.rs",
         "tests/oauth_cancellation.rs",
@@ -187,6 +219,8 @@
     {
       "id": "MIK-6745.JOURNEY.2",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "src/gateway/meta_mcp/account_rest_tests.rs",
         "src/gateway/meta_mcp/mod.rs",
@@ -201,6 +235,8 @@
     {
       "id": "MIK-6745.JOURNEY.3",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "src/gateway/meta_mcp/account_entry_point_authz_tests.rs",
         "src/gateway/meta_mcp/mod.rs"
@@ -210,6 +246,8 @@
     {
       "id": "MIK-6746.CONTRACT.1",
       "status": "pending",
+      "stage": "graded",
+      "blocked_on": "none",
       "evidence": [
         "src/gateway/oauth/jwt.rs",
         "src/gateway/oauth/agents.rs",
@@ -231,6 +269,8 @@
     {
       "id": "MIK-3274.RANKING.1",
       "status": "pending",
+      "stage": "built",
+      "blocked_on": "none",
       "evidence": [
         "src/ranking/scoring.rs",
         "src/ranking/tests.rs"
@@ -240,6 +280,8 @@
     {
       "id": "MIK-3274.RANKING.2",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "src/gateway/meta_mcp/search.rs",
         "src/gateway/meta_mcp/search_ranking_authz_tests.rs",
@@ -250,6 +292,8 @@
     {
       "id": "MIK-3274.RANKING.3",
       "status": "pending",
+      "stage": "graded",
+      "blocked_on": "none",
       "evidence": [
         "benchmarks/ranking-baseline/FREEZE.md",
         "benchmarks/ranking-baseline/corpus.json",
@@ -262,6 +306,8 @@
     {
       "id": "MIK-7332.DISCOVERY.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "src/gateway/search_disclosure.rs",
         "src/gateway/meta_mcp/search_disclosure_e2e.rs",
@@ -273,6 +319,8 @@
     {
       "id": "MIK-7235.PIN.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "docs/capability-pin-policy.md",
         "tests/capability_pin_policy.rs",
@@ -288,6 +336,8 @@
     {
       "id": "MIK-6710.AUDIT.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "src/control_plane/store.rs",
         "src/gateway/ui/control_plane.rs",
@@ -300,6 +350,8 @@
     {
       "id": "NFR.CONFORMANCE.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-conformance-matrix.md",
         "tests/mik_7272_conformance.rs",
@@ -310,6 +362,8 @@
     {
       "id": "NFR.WORKLOAD.1",
       "status": "pending",
+      "stage": "built",
+      "blocked_on": "operator",
       "evidence": [
         "tests/load/k6_gateway.js"
       ],
@@ -318,6 +372,8 @@
     {
       "id": "NFR.UPGRADE.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "scripts/release/nfr_upgrade_1_rehearsal.sh",
         "scripts/release/fixtures/nfr_upgrade_1_mount_stub.py",
@@ -330,6 +386,8 @@
     {
       "id": "NFR.RELEASEGATE.1",
       "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
       "evidence": [
         "docs/release/v4.0.0-scope-contract-validation.md",
         ".github/workflows/ci.yml",
@@ -343,6 +401,8 @@
     {
       "id": "NFR.DEMO.1",
       "status": "pending",
+      "stage": "built",
+      "blocked_on": "external",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-update.md",
         "docs/requirements/RELEASE-4.0.0-scope-tests.md"
@@ -352,6 +412,8 @@
     {
       "id": "NFR.BUILD.1",
       "status": "pending",
+      "stage": "graded",
+      "blocked_on": "none",
       "evidence": [
         "docs/release/v4.0.0-supported-matrix.md",
         ".github/workflows/ci.yml",

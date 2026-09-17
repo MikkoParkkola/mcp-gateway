@@ -68,6 +68,8 @@ class AcceptanceTests(unittest.TestCase):
                 {
                     "id": "GH462.CONFIG.1",
                     "status": "met",
+                    "stage": "met",
+                    "blocked_on": "none",
                     "evidence": ["proof.md"],
                     "note": "Reviewed byte-preservation result.",
                 }
@@ -113,7 +115,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(self.cli("--release"), 0)
 
     def test_consistent_pending_work_is_not_release_acceptance(self):
-        self.data["criteria"][0].update(status="pending", evidence=[])
+        self.data["criteria"][0].update(status="pending", stage="proven", evidence=[])
         self.assertEqual(self.cli("--check"), 0)
         self.assertEqual(self.cli("--release"), 1)
 
@@ -198,6 +200,18 @@ class AcceptanceTests(unittest.TestCase):
             with self.subTest(status=status):
                 self.data["criteria"][0]["status"] = status
                 self.assertTrue(self.inspect()[0])
+
+    def test_stage_cannot_disagree_with_status_or_leave_the_ladder(self):
+        for field, value in (
+            ("stage", "shipped"),
+            ("stage", "proven"),
+            ("blocked_on", "someone"),
+        ):
+            with self.subTest(field=field, value=value):
+                self.setUp()
+                self.data["criteria"][0][field] = value
+                self.assertTrue(self.inspect()[0])
+                self.assertEqual(self.cli("--check"), 2)
 
     def test_resolved_decision_needs_selection_and_evidence(self):
         self.data["decisions"][0]["selection"] = ""
@@ -286,6 +300,8 @@ class PublishCheckTests(unittest.TestCase):
         criterion = {
             "id": "GH462.CONFIG.1",
             "status": "pending",
+            "stage": "proven",
+            "blocked_on": "none",
             "evidence": [],
             "note": "Awaiting release acceptance evidence.",
         }
@@ -293,6 +309,8 @@ class PublishCheckTests(unittest.TestCase):
             criterion = {
                 "id": "GH462.CONFIG.1",
                 "status": "met",
+                "stage": "met",
+                "blocked_on": "none",
                 "evidence": ["proof.md"],
                 "note": "Reviewed byte-preservation result.",
             }
