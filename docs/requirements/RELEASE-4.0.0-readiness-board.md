@@ -1188,3 +1188,11 @@ selection quality sits below its frozen floor and no timeout will raise it. MRTR
 the test harness, and was fixed there. The evidence that separates them was four arrival counts,
 and the wrong reading was available in both directions — re-running a truthful ranking failure
 until it lied, or hunting a product defect in six admissions that were never lost.
+
+Two questions an independent review raised against that diagnosis, both checked rather than assumed.
+The first: the same arrival signature would appear if the adjacent 30-second bound on the *send*
+side had expired instead. It cannot — that bound is unwrapped with `.expect`, so exhausting it
+aborts the row with "the child stopped reading stdin mid-burst", and the observed failure was the
+arrival-count assertion further down. The second: whether a row that may now run for 182 seconds
+fits its job budget. It does — `timeout-minutes` appears once in `ci.yml`, on the Kani job; the
+`Tests` job inherits GitHub's 360-minute default.
