@@ -96,6 +96,9 @@ def manifest_version_errors(root):
 # real progress is visible in the tracker instead of reading as no movement.
 STAGES = ("ungraded", "graded", "built", "on-line", "proven", "met")
 BLOCKED_ON = ("none", "operator", "external")
+# Anything but "none" is someone else's turn. Deriving the held set keeps a
+# blocker category added later from validating but staying invisible.
+HELD_ON = tuple(value for value in BLOCKED_ON if value != "none")
 
 
 def stage_burnup(criteria):
@@ -107,7 +110,7 @@ def stage_burnup(criteria):
     held = [
         f"{row['id']} ({row['blocked_on']})"
         for row in criteria
-        if isinstance(row, dict) and row.get("blocked_on") in ("operator", "external")
+        if isinstance(row, dict) and row.get("blocked_on") in HELD_ON
     ]
     line = f"{counts['met']}/{len(criteria)} met; " + " | ".join(
         f"{stage} {counts[stage]}" for stage in STAGES

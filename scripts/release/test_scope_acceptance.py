@@ -98,8 +98,9 @@ class AcceptanceTests(unittest.TestCase):
             path.write_text(content)
         # The baseline counter has its own regression suite. Isolate its exit
         # here while exercising real CLI reads, parsing and release-mode exit.
+        self.stdout = io.StringIO()
         with (
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(self.stdout),
             contextlib.redirect_stderr(io.StringIO()),
             mock.patch.object(gate, "ROOT", self.root),
             mock.patch.object(
@@ -202,17 +203,35 @@ class AcceptanceTests(unittest.TestCase):
                 self.assertTrue(self.inspect()[0])
 
     def test_stage_cannot_disagree_with_status_or_leave_the_ladder(self):
-        for field, value in (
-            ("stage", "shipped"),
-            ("stage", "proven"),
-            ("blocked_on", "someone"),
-            ("blocked_on", "operator"),
+        stages = ", ".join(gate.STAGES)
+        blockers = ", ".join(gate.BLOCKED_ON)
+        disagree = "stage 'met' and status 'met' must agree"
+        for patch, expected in (
+            ({"stage": "shipped"}, f"stage must be one of {stages}"),
+            ({"stage": "proven"}, disagree),
+            ({"stage": "met", "status": "pending"}, disagree),
+            ({"blocked_on": "someone"}, f"blocked_on must be one of {blockers}"),
+            ({"blocked_on": "operator"}, "a met criterion cannot still be blocked"),
         ):
-            with self.subTest(field=field, value=value):
+            with self.subTest(**patch):
                 self.setUp()
-                self.data["criteria"][0][field] = value
-                self.assertTrue(self.inspect()[0])
+                self.data["criteria"][0].update(patch)
+                # Match the exact diagnostic. Every input here also trips a
+                # neighbouring rule, so asserting "some error" would stay green
+                # with the rule under test deleted or widened.
+                self.assertIn(f"GH462.CONFIG.1: {expected}", self.inspect()[0])
                 self.assertEqual(self.cli("--check"), 2)
+
+    def test_a_held_criterion_is_accepted_and_named_in_the_burnup(self):
+        self.data["criteria"][0].update(
+            status="pending", stage="proven", blocked_on="external", evidence=[]
+        )
+        self.assertEqual(self.cli("--check"), 0)
+        self.assertIn(
+            "Stage burnup: 0/1 met; ungraded 0 | graded 0 | built 0"
+            " | on-line 0 | proven 1 | met 0; held: GH462.CONFIG.1 (external)",
+            self.stdout.getvalue(),
+        )
 
     def test_resolved_decision_needs_selection_and_evidence(self):
         self.data["decisions"][0]["selection"] = ""
