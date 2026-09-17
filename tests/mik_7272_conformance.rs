@@ -178,14 +178,8 @@ const MINOR: &[Row] = &[
         requirement: "MIK-7272.EXT.1",
         role: Role::Both,
         transport: Transport::Any,
-        // Empty, and tracked in `TRACKED_GAPS` below. The two tests named
-        // here until now exercised `ExtensionSet` negotiation and never
-        // the `extensions` field on serialised capabilities, which is what this
-        // statement is about — so the cell asserted coverage that did not
-        // exist, and the assertion below could not tell, because it checks that
-        // a string was written and not that the string names a test.
-        //
-        // The server half is covered. E1-E3 of
+        // Both halves, and the client half is the one that was open. The
+        // server half was always covered: E1-E3 of
         // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`
         // live in `src/gateway/meta_mcp_helpers_tests.rs`, and
         // `ac_ext_1_a_the_builder_serializes_the_map_it_was_given` is the one
@@ -195,20 +189,29 @@ const MINOR: &[Row] = &[
         // `discovery_extensions()` directly. The other two each survive one of
         // those two mutations.
         //
-        // The client half cannot be tested, and the reason is a PRODUCT gap,
-        // not a missing test: `ExtensionSet::from_capabilities`
-        // (`src/protocol/extensions.rs:82`) has no production caller. Nothing
-        // on the `tools/call` path recovers the extensions a client declares in
-        // `_meta`, so E4 and E5 -- which assert the recovered set at the invoke
-        // funnel -- have nothing to assert against. Rewriting them as direct
-        // `from_capabilities` calls would pass while the function stays
-        // unreachable, which is what the plan rules out.
+        // The client half was a PRODUCT gap, not a missing test:
+        // `ExtensionSet::from_capabilities` had no production caller, so E4 and
+        // E5 had nothing to assert against and rewriting them as direct
+        // `from_capabilities` calls would have passed while the function stayed
+        // unreachable. It has a caller now — `handlers.rs` recovers the set
+        // from the classified request shape on the `tools/call` funnel and
+        // feeds it to the adoption counter — so the two rows assert against
+        // production code. E4 drives the real router and requires the counter
+        // to move; E5 drives the production classifier and requires a non-object
+        // settings value to recover nothing, which is what separates a real
+        // implementation from one answering off the capability name list.
         //
-        // So the cell stays empty. This statement is `Role::Both`, and citing
-        // E1-E3 here would claim the client half on server-side evidence --
-        // the same defect with a later date on it. It closes when the recovery
-        // is wired, not when more tests are written.
-        evidence: &[],
+        // This statement is `Role::Both`, so it cites both halves. Citing
+        // E1-E3 alone would claim the client half on server-side evidence. Only
+        // the `ac_`-prefixed rows are citable here; E2 and E3 are
+        // `extensions_reach_the_wire_when_the_gateway_implements_one` and
+        // `empty_extensions_are_omitted_so_discovery_stays_additive`, in the
+        // same file, and each survives one of the two mutations E1 catches.
+        evidence: &[
+            "gateway::meta_mcp_helpers_tests::ac_ext_1_a_the_builder_serializes_the_map_it_was_given",
+            "gateway::router::tests::task_execution_adapter::client_extensions::ac_ext_1_d_a_declared_extension_is_recovered_on_the_tools_call_path",
+            "gateway::router::tests::task_execution_adapter::client_extensions::ac_ext_1_e_a_non_object_settings_value_is_not_a_declaration",
+        ],
     },
     Row {
         statement: "2. OpenTelemetry trace context propagation through _meta",
@@ -353,15 +356,14 @@ fn all_rows() -> Vec<&'static Row> {
 /// of those states can be reached by leaving the file alone, which is the
 /// point: a permanently red suite teaches everyone to ignore red, and a silent
 /// exemption teaches nobody anything.
-const TRACKED_GAPS: &[(&str, &str)] = &[(
-    "1. extensions field on client and server capabilities",
-    "`ExtensionSet::from_capabilities` (src/protocol/extensions.rs:82) has no \
-         production caller, so nothing on the `tools/call` path recovers client \
-         extensions and the client half of this statement cannot be asserted \
-         against production code -- a product gap, not a missing test. The \
-         server half is carried by E1-E3 of \
-         docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
-)];
+/// Empty, and that is the state this criterion closes in. The single entry
+/// here until 2026-09-17 named the client half of minor 1, and it named a
+/// PRODUCT gap rather than a missing test: `ExtensionSet::from_capabilities`
+/// had no production caller, so no test could assert against production code.
+/// It has one now — `classify_request` recovers the set and the `tools/call`
+/// funnel records it — so the gap is closed by the implementation, not by
+/// exempting the row.
+const TRACKED_GAPS: &[(&str, &str)] = &[];
 
 #[test]
 fn matrix_has_no_empty_cells() {

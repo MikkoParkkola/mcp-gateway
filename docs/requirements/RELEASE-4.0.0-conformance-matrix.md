@@ -86,19 +86,36 @@ instrument that can see it.
 
 ## Matrix
 
-### Statements with evidence — COVERED (20 of 21)
+### Statements with evidence — COVERED (21 of 21)
 
-All nine major statements and minor 2-12 carry at least one evidence
-reference, and every cited name resolves to a defined test. The cells, roles
+All nine major statements and all twelve minor statements carry at least one
+evidence reference, and every cited name resolves to a defined test. The cells, roles
 and transports are in the source of truth rather than copied here, because a
 copy drifts and the original is checked by CI: `tests/mik_7272_conformance.rs`,
 `MAJOR` at `:52` and `MINOR` at `:175`.
 
-### Statements without evidence — UNCOVERED (1 of 21)
+### Statements without evidence — UNCOVERED (0 of 21)
 
-| # | Statement | Why it is uncovered | The test that closes it |
-|---|---|---|---|
-| Minor 1 | `extensions` field on client and server capabilities | Partly closed, still uncovered as a whole. E5 landed 2026-09-16 (`src/gateway/router/tests/task_execution_adapter/refusals.rs:386`) and was not a missing test but a wiring defect: the router's `declares_tasks_extension` gate read the key with `.is_some()` while `ExtensionSet::from_capabilities` required an object, so a client could declare `{tasks: 3}` and pass the live gate. E4's positive direction is exercised behaviourally by the admitted-task rows in the same module; E1-E3 (server-side `ServerCapabilities.extensions` serialisation) are written and green at `src/gateway/meta_mcp_helpers_tests.rs:866`, `:889` and `:908`; this cell read "still unwritten" until 2026-09-17, when a re-read of source found them | E1-E5 of `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md` |
+None. Minor 1 was the last one, and it closed on 2026-09-17 by implementation
+rather than by exemption. The client half was a product gap, not a missing
+test: `ExtensionSet::from_capabilities` had no production caller, so the two
+rows that assert recovery had nothing to assert against. `handlers.rs` now
+recovers the declared set from the classified request shape on the `tools/call`
+funnel and feeds it to the adoption counter, and the rows assert against that:
+`ac_ext_1_d_...` drives the real router and requires the counter to move,
+`ac_ext_1_e_...` drives the production classifier and requires a non-object
+settings value to recover nothing — the discriminator against an
+implementation answering off the capability name list. Both live in
+`src/gateway/router/tests/task_execution_adapter/client_extensions.rs`. The
+server half (E1-E3) was already green at
+`src/gateway/meta_mcp_helpers_tests.rs:866`, `:889` and `:908`.
+
+One assumption in the E4/E5 test plan did not survive contact: it proposed
+exact deltas on the adoption counter on the premise that nothing else in the
+tree declares this extension with a valid settings object. `support.rs:169`
+declares it with `{}` on every task-adapter request, so the counter is moved by
+every sibling test in the process. The rows assert a strict increase and a
+classifier-level negative instead, which is why neither is an arithmetic race.
 
 Minor 11 is the cell `NFR.CONFORMANCE.1` names as "modern URL-elicitation
 completion removal", and minor 10's second clause was the one it names as
@@ -223,18 +240,18 @@ written.
 
 | Disposition | Count |
 |---|---|
-| COVERED | 19 |
-| UNCOVERED | 2 |
+| COVERED | 21 |
+| UNCOVERED | 0 |
 | **Population (statements)** | **21** |
 
-The two UNCOVERED statements are the two entries of `TRACKED_GAPS` in
-`tests/mik_7272_conformance.rs`, and that is enforced rather than asserted
+`TRACKED_GAPS` in `tests/mik_7272_conformance.rs` is empty, which is the
+state this criterion closes in, and that is enforced rather than asserted
 here: `matrix_has_no_empty_cells` fails on an untracked empty row, and
 `a_tracked_gap_is_still_a_gap` fails on an exemption whose row has since gained
 evidence or disappeared. This document and the executable matrix cannot drift
 apart on the count without one of those two tests going red.
 
-19 + 2 = 21, and only changelog statements are counted. The four N/A rows above
+21 + 0 = 21, and only changelog statements are counted. The four N/A rows above
 are axis cells, not statements: they record why a role/transport combination
 raises no obligation, so they neither add to the population nor absorb any
 statement from it. Clause-level gaps (minor 11 has two) are recorded as
@@ -244,10 +261,14 @@ and mixing units is how a tally stops being checkable.
 
 ## Grade
 
-**PARTIAL.** Rule 4 makes this mechanical: UNCOVERED is not empty, so the
-criterion is not met. The remaining work is minor 1 alone — Cluster B's
-E1-E5. What this revision delivered is the matrix, its population
-rule, the missing statement, the count assertion that would have caught it, the
-N/A reasons, the one N/A that turned out to be a gap, and minor 10's row closed
-by four mutation-tested tests — which is the bulk of the criterion and the
-part that makes the remainder checkable.
+**MET.** Rule 4 makes this mechanical: UNCOVERED is empty and COVERED equals
+the 21-statement population, so the criterion is met. The four N/A cells are
+axis cells and are unchanged.
+
+The grade is worth reading with its history attached. This document graded
+PARTIAL from the revision that built it until 2026-09-17, and the gap it named
+was always the same one: minor 1's client half. It did not close by writing a
+test — two attempts to write one would have passed against an unreachable
+function — it closed by giving `ExtensionSet::from_capabilities` a production
+caller. A matrix that could be satisfied by more tests would have graded MET
+months earlier and been wrong.

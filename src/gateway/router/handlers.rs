@@ -865,6 +865,12 @@ async fn meta_mcp_dispatch(
     // moved by the per-method check below, ~100 lines before the caller context
     // is built.
     let declared_capabilities = shape.declared_capabilities();
+    // The other half of the extension exchange. `server/discover` states what
+    // this gateway speaks; this reads back what the client declared, so
+    // adoption is measured on the live path rather than assumed. Recovered
+    // from the capability value rather than `declared_capabilities`, which is
+    // a name list and cannot tell a valid settings object from a bare number.
+    crate::protocol_revision_telemetry::observe_client_extensions(&shape.client_extensions());
     // Owned: `shape` is moved ~100 lines before the caller is built. Classifier
     // output, never the duplicate-header sentinel.
     //

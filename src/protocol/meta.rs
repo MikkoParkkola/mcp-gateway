@@ -39,6 +39,8 @@
 use serde_json::Value;
 use tracing::info;
 
+use super::extensions::ExtensionSet;
+
 /// `_meta` key: the protocol version a request is written against. Required.
 pub const KEY_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
 /// `_meta` key: the capabilities the client declares for this request. Required.
@@ -68,6 +70,18 @@ pub struct RequestFields {
     /// server may not rely on what was not declared, and explicitly-absent is
     /// still absent.
     pub declared_capabilities: Declared,
+    /// Protocol extensions the client declared, filtered to the ones this
+    /// gateway knows.
+    ///
+    /// Recovered here and not derived from [`Self::declared_capabilities`]:
+    /// that field is a name list, and the specification's settings object is
+    /// what says a declaration is valid. A peer that writes a non-object under
+    /// a known identifier has not negotiated it, and only the value can tell
+    /// those apart.
+    ///
+    /// Bounded like its sibling for the same reason — the set holds known
+    /// enum variants, never the peer's own subtree.
+    pub client_extensions: ExtensionSet,
     /// The client's self-reported name, for logs and displays.
     ///
     /// **Never an authorization input.** The specification says clients *SHOULD
@@ -168,6 +182,10 @@ pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) ->
 
     let version = meta.get(KEY_PROTOCOL_VERSION);
     let capabilities = meta.get(KEY_CLIENT_CAPABILITIES);
+    // Kept before the `as_object` narrowing below shadows the binding:
+    // `ExtensionSet::from_capabilities` reads the whole value, and `Declared`
+    // reads the map.
+    let capabilities_value = capabilities;
 
     // Declaration, not presence: only the protocol keys count. `_meta` also
     // carries tracing and vendor extensions, and a 2025 client that sends a
@@ -217,6 +235,9 @@ pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) ->
     RequestShape::Modern(Box::new(RequestFields {
         protocol_version: protocol_version.to_string(),
         declared_capabilities: Declared::parse(capabilities),
+        client_extensions: capabilities_value
+            .map(ExtensionSet::from_capabilities)
+            .unwrap_or_default(),
         client_info_name: meta
             .get(KEY_CLIENT_INFO)
             .and_then(|i| i.get("name"))
@@ -499,6 +520,18 @@ impl RequestShape {
         match self {
             RequestShape::Modern(f) => f.declared_capabilities,
             _ => Declared::NONE,
+        }
+    }
+
+    /// Protocol extensions the client declared, as recovered from `_meta`.
+    ///
+    /// Empty for a legacy or malformed request: neither carries a capability
+    /// declaration, and an extension nobody declared was not negotiated.
+    #[must_use]
+    pub fn client_extensions(&self) -> ExtensionSet {
+        match self {
+            RequestShape::Modern(f) => f.client_extensions.clone(),
+            _ => ExtensionSet::default(),
         }
     }
 
