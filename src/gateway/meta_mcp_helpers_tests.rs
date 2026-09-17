@@ -4,6 +4,9 @@ use super::*;
 use crate::gateway::meta_mcp_tool_defs::MetaToolGates;
 use crate::ranking::SearchResult;
 
+#[path = "meta_mcp_helpers_tests/abbreviations.rs"]
+mod abbreviations;
+
 #[path = "meta_mcp_helpers_tests/response.rs"]
 mod response;
 
