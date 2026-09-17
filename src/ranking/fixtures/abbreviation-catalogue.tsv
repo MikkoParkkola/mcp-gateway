@@ -1,0 +1,32 @@
+# Catalogue the held-out corpus is evaluated against, frozen with it.
+#
+# Realistic shapes, including conflicting siblings that share a prefix with an
+# intended tool, so a case cannot resolve by being the only candidate.
+#
+# Format: tool_name<TAB>description.
+kubernetes_list_pods	List pods in a Kubernetes cluster namespace
+kubernetes_drain_node	Cordon and drain a Kubernetes node
+config_reload	Reload gateway configuration from disk
+config_export	Export the effective configuration
+message_send	Send a message to a channel
+message_history	Read channel message history
+service_restart	Restart a managed service
+service_status	Report service health
+package_install	Install a package from the registry
+package_audit	Audit installed packages for advisories
+database_query	Run a read-only query against a database
+database_migrate	Apply pending database migrations
+image_generate	Generate an image from a prompt
+image_resize	Resize an existing image
+permissions_check	Check effective permissions for a principal
+permissions_grant	Grant a permission to a principal
+internationalization_status	Report internationalization coverage per locale
+localization_export	Export localization catalogues for translation
+credentials_rotate	Rotate stored credentials for a backend
+credentials_list	List stored credential handles
+management_console	Open the management console session
+transfer_file	Transfer a file between backends
+accessibility_audit	Audit a rendered page for accessibility defects
+template_render	Render a template with supplied variables
+quantity_adjust	Adjust the quantity on an order line
+concatenate_records	Concatenate record batches into one payload
