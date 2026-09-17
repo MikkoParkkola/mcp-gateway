@@ -117,13 +117,13 @@ fn build_suggestions_does_not_panic_on_a_multi_byte_query_word() {
 
 // ── §5: held-out abbreviations, and the unsupported-match control ───
 
+/// Frozen corpus rows as `(query, intended tool)`.
+type CorpusRows = Vec<(&'static str, &'static str)>;
+
 /// Split the frozen corpus into cases the shipped table resolves and cases it
 /// does not. No fixture row is labelled: the partition is whatever the table
 /// turns out to cover, computed at run time.
-fn corpus_partition() -> (
-    Vec<(&'static str, &'static str)>,
-    Vec<(&'static str, &'static str)>,
-) {
+fn corpus_partition() -> (CorpusRows, CorpusRows) {
     fixture_rows(CORPUS)
         .into_iter()
         .partition(|(query, intended)| {
