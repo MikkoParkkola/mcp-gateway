@@ -100,6 +100,49 @@ pub fn expand_synonyms(word: &str) -> &'static [&'static str] {
     }
 }
 
+/// Return the abbreviation group for a given word (all lowercase).
+///
+/// Only **non-prefix** abbreviations belong here. Prefix forms such as `repo`
+/// for `repository` or `auth` for `authentication` already match by substring
+/// containment, so an entry for one would add table weight and change nothing.
+///
+/// Consulted only after literal containment and [`expand_synonyms`] have both
+/// failed, and matches are discounted by the same [`SYNONYM_MULTIPLIER`] — both
+/// are "matched only through expansion", and the discount is never compounded.
+///
+/// A term appears in exactly one expansion table; overlap with
+/// [`expand_synonyms`] is a review error. Each group names the catalogue term
+/// it serves, and the list stays short enough to review on one screen.
+///
+/// # Extending the abbreviation map
+///
+/// Add a `match` arm mapping every member to the full group (bidirectional),
+/// and name the catalogue term that justifies it.
+#[must_use]
+pub(crate) fn expand_abbreviations(word: &str) -> &'static [&'static str] {
+    match word {
+        // kubernetes: cluster and controller tooling, deploy manifests
+        "k8s" | "kubernetes" => &["k8s", "kubernetes"],
+        // config: the gateway's single most common catalogue noun
+        "cfg" | "config" | "configuration" => &["cfg", "config", "configuration"],
+        // message: message signing, delivery and meta-route payloads
+        "msg" | "message" => &["msg", "message"],
+        // service: task service and managed backend services
+        "svc" | "service" => &["svc", "service"],
+        // package: crate, npm and Homebrew packaging surfaces
+        "pkg" | "package" => &["pkg", "package"],
+        // database: stores backing usage, accounts and transparency logs
+        "db" | "database" => &["db", "database"],
+        // image: container images and image-generating capabilities
+        "img" | "image" => &["img", "image"],
+        // permissions: tool profiles and routing authorization
+        "perms" | "permissions" => &["perms", "permissions"],
+        // credentials: personal-account and backend credential handling
+        "creds" | "credentials" => &["creds", "credentials"],
+        _ => &[],
+    }
+}
+
 /// Score multiplier applied to synonym-expanded matches.
 ///
 /// Exact matches retain their full score; synonym matches are discounted
@@ -116,6 +159,11 @@ fn text_contains_with_synonyms(text: &str, word: &str) -> (bool, bool) {
     }
     for syn in expand_synonyms(word) {
         if *syn != word && text.contains(*syn) {
+            return (true, true);
+        }
+    }
+    for full in expand_abbreviations(word) {
+        if *full != word && text.contains(*full) {
             return (true, true);
         }
     }
@@ -249,9 +297,55 @@ pub(super) fn score_text_relevance(
                 }
             }
         }
+        // An abbreviation reaches no coverage tier, so without this it would be
+        // admitted by the filter only to be ranked last at 0.0.
+        for full in expand_abbreviations(query) {
+            if *full != query {
+                if tool_lower.contains(full) {
+                    return 5.0 * SYNONYM_MULTIPLIER;
+                }
+                if desc_lower.contains(full) {
+                    return 2.0 * SYNONYM_MULTIPLIER;
+                }
+            }
+        }
     }
 
     0.0
+}
+
+/// Return `true` when every query word that occurs in `name_lower` has at
+/// least one occurrence starting at a token boundary.
+///
+/// A position is boundary-aligned when it is the start of the haystack or is
+/// immediately preceded by a non-alphanumeric character. Deriving separators
+/// from `char::is_alphanumeric` rather than a fixed ASCII set keeps this
+/// consistent with the Unicode rule and cannot miss a separator the catalogue
+/// adopts later.
+///
+/// Words that do not occur in the name do not participate — they are already
+/// accounted for in the score this tie-break is breaking. A candidate with no
+/// matched word at all is not aligned, so it cannot float above a genuine
+/// mid-token match on a vacuous "all of none" reading.
+pub(super) fn name_is_boundary_aligned(name_lower: &str, words: &[&str]) -> bool {
+    let mut matched_any = false;
+    for word in words {
+        let mut occurrences = name_lower.match_indices(word).peekable();
+        if occurrences.peek().is_none() {
+            continue;
+        }
+        matched_any = true;
+        let aligned = occurrences.any(|(at, _)| {
+            name_lower[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|prev| !prev.is_alphanumeric())
+        });
+        if !aligned {
+            return false;
+        }
+    }
+    matched_any
 }
 
 /// Extract a bracketed tag section from a lowercased description by its prefix.
@@ -308,6 +402,9 @@ pub(super) fn is_keyword_match_with_synonyms(desc_lower: &str, word: &str) -> bo
     expand_synonyms(word)
         .iter()
         .any(|syn| *syn != word && is_keyword_match(desc_lower, syn))
+        || expand_abbreviations(word)
+            .iter()
+            .any(|full| *full != word && is_keyword_match(desc_lower, full))
 }
 
 fn count_keyword_matches(desc_lower: &str, words: &[&str]) -> usize {

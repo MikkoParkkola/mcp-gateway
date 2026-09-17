@@ -497,26 +497,46 @@ fn poisoned_profile(deny_weak: bool) -> RoutingProfileConfig {
     }
 }
 
-/// As `RANKING_FIXTURES`, collected in the OPPOSITE order: the exact-name
+/// As `RANKING_FIXTURES`, collected in the OPPOSITE order: the stronger text
 /// match is collected first and the heavily-used `weak_match` second.
 ///
 /// The order matters for the potency controls below. With `RANKING_FIXTURES`,
 /// `weak_match` is collected first, so a `limit` of 1 keeps it whether ranking
 /// promoted it or never ran at all — a control on those fixtures cannot tell
 /// "the boost is potent" from "ranking was skipped". Here the two disagree:
-/// only an applied boost puts `weak_match` ahead of the exact match.
+/// only an applied boost puts `weak_match` ahead of the stronger match. Keep
+/// `weak_match` SECOND; re-sorting this fixture silently guts that proof.
+///
+/// The first entry is `zebracorn_tool`, deliberately NOT a tool named exactly
+/// `QUERY`. Design §3.4 (`docs/design/2026-09-12-mik-3274-ranking-abbreviations.md`)
+/// retires score-only ordering as a premise: an exact identifier match is the
+/// PRIMARY sort key, ahead of score, so no usage multiplier can promote
+/// anything past a tool the caller named exactly. A potency control founded on
+/// beating an exact-name match would assert the one outcome the ranker now
+/// guarantees cannot happen. `zebracorn_tool` contains the query without
+/// equalling it (`scoring.rs:280`, 5.0), so both candidates carry
+/// `exact_identifier == false`, the primary key is inert here, and the usage
+/// boost is once again the only thing that can decide first place.
 const POTENCY_FIXTURES: &[(&str, &str)] = &[
-    (QUERY, "the exact name match"),
+    ("zebracorn_tool", "a near-name zebracorn tool"),
     ("weak_match", "a zebracorn adjacent helper"),
 ];
 
 /// CONTROL for the two tests below — the poison has to actually work.
 ///
 /// Without a denial, 10^12 uses lift `weak_match` (relevance 2.0) to
-/// `2.0 * (1 + log2(10^12 + 1) * 0.15)`, about 13.9, above the exact-name
-/// match's 10.0. If this test ever fails the usage boost has stopped being
-/// potent enough to promote anything, and the two denial tests below would
-/// pass whether or not authorization ran.
+/// `2.0 * (1 + log2(10^12 + 1) * 0.15)`, about 13.9, above `zebracorn_tool`'s
+/// 5.0 (`scoring.rs:280`, a name that contains the query without equalling
+/// it). If this test ever fails the usage boost has stopped being potent
+/// enough to promote anything, and the two denial tests below would pass
+/// whether or not authorization ran.
+///
+/// The name says "the exact match" for the premise this control was FOUNDED on
+/// and no longer uses: it once pinned `weak_match` above a tool named exactly
+/// `QUERY`, which design §3.4's exact-identifier primary sort key forbids by
+/// construction. The job is unchanged — prove the boost is potent — and it is
+/// now proved against a stronger text match. Do not restore the old fixture:
+/// it asserts the defect §3.4 fixed.
 ///
 /// Uses `POTENCY_FIXTURES`, not `RANKING_FIXTURES`: see the note there. On
 /// `RANKING_FIXTURES` this assertion also holds when ranking is skipped
@@ -979,8 +999,9 @@ async fn code_mode_forbidden_mcp_tool_loses_to_an_allowed_one() {
 /// That control runs the CLASSIC route, which serialises through
 /// `json_to_search_result`; Code Mode uses `json_to_code_mode_search_result`.
 /// If the Code Mode conversion ever dropped the server/tool keying the ranker
-/// looks usage up by, the boost would silently zero, the exact-name match would
-/// win on its bare 10.0, and
+/// looks usage up by, the boost would silently zero, `zebracorn_tool` would win
+/// on its bare 5.0 (design §3.4 retired the exact-name premise this control was
+/// founded on — see `POTENCY_FIXTURES`), and
 /// `code_mode_forbidden_heavily_used_tool_loses_to_an_allowed_one` would pass
 /// without `tool_allowed` doing anything. This pins the premise that test needs.
 ///
