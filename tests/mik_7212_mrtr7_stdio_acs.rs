@@ -287,6 +287,39 @@ impl StdioSession {
         lines
     }
 
+    /// Collect until `enough` holds, then keep reading for `settle`.
+    ///
+    /// A fixed window asserts a timing coincidence: every admitted request has
+    /// to have written its question before the window closes, which a loaded CI
+    /// runner does not guarantee. Waiting for the count removes that race
+    /// without weakening the row -- `budget` still bounds a parked reader into a
+    /// failure, and `settle` still lets an over-admitted extra arrive and redden
+    /// the assertion.
+    async fn collect_lines_until(
+        &mut self,
+        budget: Duration,
+        settle: Duration,
+        enough: impl Fn(&[String]) -> bool,
+    ) -> Vec<String> {
+        let mut lines = Vec::new();
+        let _ = timeout(budget, async {
+            while let Ok(Some(line)) = self.stdout.next_line().await {
+                lines.push(line);
+                if enough(&lines) {
+                    break;
+                }
+            }
+        })
+        .await;
+        let _ = timeout(settle, async {
+            while let Ok(Some(line)) = self.stdout.next_line().await {
+                lines.push(line);
+            }
+        })
+        .await;
+        lines
+    }
+
     async fn shutdown(mut self) {
         drop(self.stdin.take());
         let _ = self.child.kill().await;
@@ -613,6 +646,14 @@ fn elicitation_answer(id: &Value) -> Value {
 /// under this bound it fails the row instead of hanging CI.
 const BURST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a saturation row waits for the questions it expects. Generous on
+/// purpose: it bounds a parked reader, it does not pace a healthy one.
+const COLLECT_BUDGET: Duration = Duration::from_secs(30);
+
+/// Kept reading after the expected count arrives, so one question too many is
+/// still observed rather than cut off by an early return.
+const SETTLE_WINDOW: Duration = Duration::from_secs(2);
+
 /// `MAX_CONCURRENT_STDIO_DISPATCHES` (`src/gateway/server/mod.rs:83`). Not
 /// importable from an integration test, so it is repeated here and the row
 /// fails loudly if it ever moves.
@@ -677,7 +718,12 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     .await
     .expect("the child stopped reading stdin mid-burst: the reader parked");
 
-    let lines = session.collect_lines(COLLECT_WINDOW).await;
+    let wanted = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
+    let lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+            prompts_in(&frames_lenient(seen)).len() >= wanted
+        })
+        .await;
     let frames = frames_lenient(&lines);
     assert!(
         saw_method(&received, "initialize"),
@@ -772,7 +818,12 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
     .await
     .expect("the child stopped reading stdin mid-burst: the reader parked");
 
-    let lines = session.collect_lines(COLLECT_WINDOW).await;
+    let wanted = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
+    let lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+            prompts_in(&frames_lenient(seen)).len() >= wanted
+        })
+        .await;
     let frames = frames_lenient(&lines);
     assert!(
         saw_method(&received, "initialize"),
