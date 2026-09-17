@@ -16,6 +16,31 @@ actually along*, which is the only thing this file is for. Nothing here is
 restated from those two — where a cell needs a reason it names the file that
 carries it.
 
+## Stage ladder (added 2026-09-17)
+
+This board answers *how far along* per cluster; the ledger now answers it per
+criterion. `RELEASE-4.0.0-scope-status.json` carries `stage` and `blocked_on` on
+every row, and `scripts/release/check_scope_acceptance.py` prints one line on
+every run:
+
+```
+Stage burnup: 21/31 met; ungraded 0 | graded 7 | built 3 | on-line 0 | proven 0 | met 21; held: MIK-6745.JOURNEY.1 (external), NFR.WORKLOAD.1 (operator), NFR.DEMO.1 (external)
+```
+
+The ladder is ordered — ungraded, graded, built, on-line, proven, met — and only
+`met` satisfies the tag gate. The gate rejects a row whose `stage` and `status`
+disagree and a `met` row that is still blocked, so the intermediate stages cannot
+be used to claim acceptance early. `held:` names every row waiting on the operator
+or on something outside this repository: those move when the block lifts, not when
+someone works harder.
+
+Rate, without another file: every stage change is a commit against the ledger, so
+`git log --format='%ad %h %s' --date=short -- docs/requirements/RELEASE-4.0.0-scope-status.json`
+is the dated movement history. Stage advances per day over a window, against the
+ladder steps still owed by the pending rows, is the arithmetic — and it is only
+honest with `held:` rows excluded, because nothing this side of the operator moves
+them.
+
 Verified 2026-09-03 against the worktree at `fix/mrtr2-continuation-handle`
 (`5c29494a`), except cluster A, re-verified at `b5d4ce7f` and stamped in its own
 row. A cell reading **no** means a search found nothing, not that nobody intends
