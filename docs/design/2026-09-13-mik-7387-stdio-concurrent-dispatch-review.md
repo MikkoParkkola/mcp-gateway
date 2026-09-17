@@ -88,7 +88,7 @@ this review is where the gap was first called.
 64 outstanding questions and both observe 58 (CI run 35248322170; an earlier run
 gave 57/58). The census the tests print themselves:
 
-| | 7a (65 calls) | 7b (1025 calls) |
+| | 7a (65 calls) | 7b (1026 calls) |
 | --- | --- | --- |
 | `elicitation/create` | 58 | 58 |
 | plain results | 7 | 966 |
@@ -121,3 +121,22 @@ Consequence beyond the two rows: a caller that asked for a bridged elicitation i
 silently answered with a continuation envelope instead. Including this package in
 4.0.0 requires handling `NoSession` for the concurrent stdio caller and writing
 `MIK-7212.WIRE.10`; excluding it leaves both rows moot.
+
+The census closes exactly against the call counts, and that is what carries the
+finding. 7a sends 65 calls (`FIRST_CALL_ID..=FIRST_CALL_ID + ADMISSION_CAP`,
+`tests/mik_7212_mrtr7_stdio_acs.rs:743-795`) and 58 + 7 = 65. 7b sends 1,026
+(`INFLIGHT_CAP` is 1024 at `:865`, and the burst runs `2..=1027` at `:895-899`)
+and 58 + 966 + 2 = 1026. Every call that does not win an elicitation is answered
+with a plain result. No error path can produce that shape: the fixture returns
+`input_required` for any call without `inputResponses`, so a refused, rate-limited
+or failed call surfaces as an error frame, never as a success.
+
+An independent review read the same CI log and attributed the plain results to
+backend rate limiting, on the grounds that the log records
+`Delivery { error: TimedOut }` and never `NoSession`. It was right about the call
+count and the review is what corrected it here. The absence is not evidence,
+though: the `NoSession` arm is `=> {}` and emits no `warn!`, unlike the
+`ChallengeRefused` arm below it, so a hit on it is invisible in any log by
+construction. The 74 `TimedOut` warnings are the other half of the census — the
+58 elicitations that did go out and then expired against the bridge timeout,
+which is what the -32003 frames report.
