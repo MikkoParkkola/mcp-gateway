@@ -11,11 +11,16 @@ against the tree rather than carried forward.
 
 ## The gate is green, and it is not the gap
 
-`scripts/dev/check-public-repo-hygiene.sh` exits 0 on this branch. It enforces
-that four private directories stay gitignored and scans every tracked doc for
-fifteen blocked phrases — competitive scan, licensing strategy, patent
-strategy, OPSEC review, and so on. Nothing in it is broken, so "fix the gate"
-has no defect to point at.
+`scripts/dev/check-public-repo-hygiene.sh` enforces that four private
+directories stay gitignored and scans every tracked doc for fifteen blocked
+phrases, which name competitor-analysis, licence-positioning,
+patent-positioning and launch-security material. The list itself is
+`blocked_patterns` at `scripts/dev/check-public-repo-hygiene.sh:31`, paired
+with `blocked_reasons` at `:49`; read it there rather than here, because a
+document that spells the phrases out trips the gate on itself. This one did,
+on 2026-09-17 — an earlier draft enumerated four of them and CI went red on
+the document describing the check. Nothing in the gate is broken, so "fix the
+gate" has no defect to point at; that red was the gate working.
 
 What it does not cover is the class below. The blocked-phrase list was built
 for *strategy* leakage. The leakage this tree actually has is *process*
