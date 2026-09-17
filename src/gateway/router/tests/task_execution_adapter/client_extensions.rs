@@ -19,13 +19,22 @@
 //!   and the only writer of this series is the recovery under test — remove the
 //!   call in `handlers.rs` and no test in the process can move it — so a strict
 //!   increase is an oracle and an exact delta is a race.
-//! * **E5 is the discriminator, and deterministic.** It drives the production
-//!   classifier directly, with the params and header version the fixture sends,
-//!   and reads the recovered set with no global in the path. An implementation
-//!   answering from `declared_capabilities` — the name list at `meta.rs` —
-//!   would pass the control and fail the discriminator, because that path
+//! * **E5 bounds the classifier, and is deterministic.** It drives the
+//!   production classifier directly, with the params and header version the
+//!   fixture sends, and reads the recovered set with no global in the path. An
+//!   implementation answering from `declared_capabilities` — the name list at
+//!   `meta.rs` — passes the control and fails this row, because that path
 //!   filters only nulls and `3` is not null. The specification requires an
 //!   object of settings; presence of the key is not agreement.
+//!
+//! What the pair does **not** bound, recorded because an independent review of
+//! the closing commit raised it: a handler that counted extension keys itself
+//! while the classifier stayed correct would pass both rows. E4 cannot separate
+//! its own request's contribution from a concurrent sibling's, so it cannot
+//! carry a negative, and E5 never reaches the handler. Closing that needs a
+//! request-scoped observation seam; the process-wide counter cannot be made
+//! into one. The single line in `handlers.rs` that feeds `client_extensions()`
+//! to the counter is the unguarded link.
 //!
 //! The identifier must be a recognised one. `from_capabilities` filters through
 //! `Extension::from_id`, so a synthetic identifier is discarded *by a correct

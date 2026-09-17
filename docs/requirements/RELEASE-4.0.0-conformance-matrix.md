@@ -104,11 +104,13 @@ recovers the declared set from the classified request shape on the `tools/call`
 funnel and feeds it to the adoption counter, and the rows assert against that:
 `ac_ext_1_d_...` drives the real router and requires the counter to move,
 `ac_ext_1_e_...` drives the production classifier and requires a non-object
-settings value to recover nothing — the discriminator against an
-implementation answering off the capability name list. Both live in
+settings value to recover nothing, which is what a capability name list — the
+path that filters only nulls, and `3` is not null — cannot do. Both live in
 `src/gateway/router/tests/task_execution_adapter/client_extensions.rs`. The
 server half (E1-E3) was already green at
 `src/gateway/meta_mcp_helpers_tests.rs:866`, `:889` and `:908`.
+
+Recorded limit, found by independent review of the closing commit and not closed by it: the pair does not discriminate an end-to-end name-list implementation. A handler that counted extension-key presence while the classifier stayed correct would pass both rows, because the strict-increase oracle cannot distinguish this request's contribution from a concurrent sibling's. Closing that needs a request-scoped observation seam, which does not exist; the process-wide counter cannot carry the claim. What the rows do prove is that production recovers and counts client extensions on the live request funnel, and that the classifier feeding that counter one line above rejects a non-object settings value. The observation also runs before method dispatch, so the counter covers every request carrying declared capabilities, not tools/call alone -- a superset of the obligation.
 
 One assumption in the E4/E5 test plan did not survive contact: it proposed
 exact deltas on the adoption counter on the premise that nothing else in the

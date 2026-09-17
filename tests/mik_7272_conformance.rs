@@ -198,8 +198,11 @@ const MINOR: &[Row] = &[
         // feeds it to the adoption counter — so the two rows assert against
         // production code. E4 drives the real router and requires the counter
         // to move; E5 drives the production classifier and requires a non-object
-        // settings value to recover nothing, which is what separates a real
-        // implementation from one answering off the capability name list.
+        // settings value to recover nothing, which a capability name list
+        // cannot do, since that path filters only nulls. Neither row bounds a
+        // handler that counted extension keys itself while the classifier
+        // stayed correct — E4 cannot carry a negative against a process-wide
+        // counter — and the module doc on those rows records that limit.
         //
         // This statement is `Role::Both`, so it cites both halves. Citing
         // E1-E3 alone would claim the client half on server-side evidence. Only
