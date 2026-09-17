@@ -239,6 +239,48 @@ class AcceptanceTests(unittest.TestCase):
         self.data["decisions"][0].update(selection="Selected", evidence=[])
         self.assertTrue(self.inspect()[0])
 
+    def test_evidence_may_cite_a_line_or_a_range(self):
+        (self.root / "proof.md").write_text("one\ntwo\nthree\n")
+        self.data["criteria"][0]["evidence"] = ["proof.md:2", "proof.md:1-3"]
+        self.assertEqual(self.inspect(), ([], [], []))
+
+    def test_evidence_line_beyond_the_last_line_is_invalid(self):
+        self.data["criteria"][0]["evidence"] = ["proof.md:99"]
+        errors, _, _ = self.inspect()
+        self.assertTrue(any("line 99" in error for error in errors), errors)
+
+    def test_evidence_line_citation_requires_an_existing_path(self):
+        self.data["criteria"][0]["evidence"] = ["absent.md:1"]
+        errors, _, _ = self.inspect()
+        self.assertTrue(any("absent.md:1" in error for error in errors), errors)
+
+    def test_evidence_range_must_be_ordered(self):
+        (self.root / "proof.md").write_text("one\ntwo\nthree\n")
+        self.data["criteria"][0]["evidence"] = ["proof.md:3-1"]
+        errors, _, _ = self.inspect()
+        self.assertTrue(any("range" in error for error in errors), errors)
+
+    def test_decision_may_carry_a_documented_rationale(self):
+        # A ruling records why it was taken and who took it. The four required
+        # keys stay mandatory; the optional ones must not be an escape hatch.
+        self.data["decisions"][0].update(
+            resolved="2026-09-17",
+            authority="release owner ruling recorded in this ledger",
+            rationale="A narrower published claim would be the dishonest one.",
+            consequence="The parent criterion stays pending on its other checks.",
+        )
+        self.assertEqual(self.inspect(), ([], [], []))
+
+    def test_decision_rejects_an_undocumented_key(self):
+        self.data["decisions"][0]["freeform"] = "smuggled"
+        errors, _, _ = self.inspect()
+        self.assertTrue(any("freeform" in error for error in errors), errors)
+
+    def test_optional_decision_field_must_carry_text(self):
+        self.data["decisions"][0]["rationale"] = "   "
+        errors, _, _ = self.inspect()
+        self.assertTrue(any("rationale" in error for error in errors), errors)
+
     def test_pending_decision_cannot_claim_a_selection(self):
         self.data["decisions"][0]["status"] = "pending"
         self.assertTrue(self.inspect()[0])

@@ -128,7 +128,11 @@ def evidence_errors(root, evidence, label, required):
         if not isinstance(item, str) or not item.strip():
             errors.append(f"{label}: invalid evidence path")
             continue
-        path = pathlib.Path(item)
+        cite, span = split_citation(item)
+        if span is None and cite is None:
+            errors.append(f"{label}: evidence line citation must be numeric: {item}")
+            continue
+        path = pathlib.Path(cite)
         resolved = (root / path).resolve()
         if path.is_absolute() or not resolved.is_relative_to(root.resolve()):
             errors.append(
@@ -136,7 +140,40 @@ def evidence_errors(root, evidence, label, required):
             )
         elif not resolved.is_file():
             errors.append(f"{label}: evidence file does not exist: {item}")
+        elif span:
+            first, last = span
+            if first > last:
+                errors.append(f"{label}: evidence range runs backwards: {item}")
+                continue
+            lines = len(resolved.read_text(errors="replace").splitlines())
+            if last > lines:
+                errors.append(
+                    f"{label}: evidence cites line {last} of a"
+                    f" {lines}-line file: {item}"
+                )
     return errors
+
+
+def split_citation(item):
+    """Split "path:12" or "path:12-18" into the path and its line span.
+
+    A citation that names lines is checked against the file, so a stale line
+    number cannot keep passing as proof after the file it points into moves on.
+    Returns (None, None) when the suffix is present but not numeric.
+    """
+    head, sep, tail = item.rpartition(":")
+    if not sep or not tail:
+        return item, None
+    first, _, last = tail.partition("-")
+    if not first.isdigit() or (last and not last.isdigit()):
+        return (None, None) if head else (item, None)
+    return head, (int(first), int(last or first))
+
+
+DECISION_KEYS = frozenset({"id", "status", "selection", "evidence"})
+DECISION_NOTES = frozenset(
+    {"resolved", "authority", "rationale", "consequence", "not_evidence"}
+)
 
 
 def inspect_contract(root, document, data, baseline):
@@ -225,15 +262,18 @@ def inspect_contract(root, document, data, baseline):
         errors.append("decisions must be a list")
         decisions = []
     for row in decisions:
-        if not isinstance(row, dict) or set(row) != {
-            "id",
-            "status",
-            "selection",
-            "evidence",
-        }:
+        if not isinstance(row, dict) or not DECISION_KEYS <= set(row):
             errors.append("each decision needs id, status, selection and evidence")
             continue
         ident = row["id"]
+        # A ruling carries why it was taken and who took it. The four keys above
+        # stay mandatory; the rest is a closed set so the row cannot become a
+        # dumping ground for prose the gate never reads.
+        for key in sorted(set(row) - DECISION_KEYS - DECISION_NOTES):
+            errors.append(f"{ident}: {key} is not a decision field")
+        for key in sorted(DECISION_NOTES & set(row)):
+            if not isinstance(row[key], str) or not row[key].strip():
+                errors.append(f"{ident}: {key} must carry text when present")
         if not isinstance(ident, str):
             errors.append("decision ID must be a string")
             continue
