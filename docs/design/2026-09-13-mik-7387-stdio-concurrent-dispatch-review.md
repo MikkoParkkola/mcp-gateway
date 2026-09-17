@@ -96,7 +96,8 @@ gave 57/58). The census the tests print themselves:
 | `-32000` busy | 0 | 2 |
 
 The prompt count is pinned at 58 across a 16x load change while plain results
-scale with load, so the 64-slot admission cap is not what bounds it.
+scale with load. That was first read here as ruling out the 64-slot dispatch cap;
+it is the opposite, and the correction is at the end of this document.
 
 Ruled out at source: admission permits are moved into the spawned task and
 dropped on every exit path (`src/gateway/server/mod.rs:2645`), so there is no
