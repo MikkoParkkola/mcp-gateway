@@ -1,0 +1,66 @@
+{
+  "criterion": "NFR.DEMO.1",
+  "verdict": "",
+  "revision_under_test": {},
+  "scenarios": [
+    {
+      "id": 1,
+      "slug": "mixed-era",
+      "criterion_phrase": "mixed-era interaction",
+      "status": "recorded",
+      "driver": "scripts/release/demo/1-mixed-era.sh",
+      "transcript": "docs/release/demo/1-mixed-era-transcript.txt",
+      "results_json": "docs/release/demo/1-mixed-era-results.json",
+      "versions": {},
+      "negative_control": "",
+      "rows": []
+    },
+    {
+      "id": 2,
+      "slug": "reconnectable-task",
+      "criterion_phrase": "reconnectable task",
+      "status": "recorded",
+      "driver": "scripts/release/demo/2-reconnectable-task.sh",
+      "transcript": "docs/release/demo/2-reconnectable-task-transcript.txt",
+      "results_json": "docs/release/demo/2-reconnectable-task-results.json",
+      "versions": {},
+      "negative_control": "",
+      "rows": []
+    },
+    {
+      "id": 3,
+      "slug": "personal-accounts",
+      "criterion_phrase": "two personal accounts",
+      "status": "recorded",
+      "driver": "scripts/release/demo/3-personal-accounts.sh",
+      "transcript": "docs/release/demo/3-personal-accounts-transcript.txt",
+      "results_json": "docs/release/demo/3-personal-accounts-results.json",
+      "versions": {},
+      "negative_control": "",
+      "rows": []
+    },
+    {
+      "id": 4,
+      "slug": "large-catalogue",
+      "criterion_phrase": "large-catalogue discovery",
+      "status": "blocked",
+      "blocked_on": "MIK-7469",
+      "versions": {
+        "note": "not recorded; ordering is unsettled"
+      },
+      "negative_control": "pending: see design scenario 4"
+    },
+    {
+      "id": 5,
+      "slug": "error-budget",
+      "criterion_phrase": "error-budget diagnosis/recovery",
+      "status": "recorded",
+      "driver": "scripts/release/demo/5-error-budget.sh",
+      "transcript": "docs/release/demo/5-error-budget-transcript.txt",
+      "results_json": "docs/release/demo/5-error-budget-results.json",
+      "versions": {},
+      "negative_control": "",
+      "rows": []
+    }
+  ]
+}
