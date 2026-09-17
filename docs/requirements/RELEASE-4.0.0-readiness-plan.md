@@ -119,7 +119,7 @@ Unexplained either way: why six consecutive macOS runs never lose the race.
 | 1 | Acceptance criteria ledger | 177 MET, 2 PARTIAL, 2 N/A (`RELEASE-4.0.0-criteria-status.md`) | the 2 PARTIAL do |
 | 2 | Two red CI rows | `ac_mrtr_7a_*` / `ac_mrtr_7b_*` red in CI, 6/6 green on macOS | yes |
 | 3 | DoD gate sheet | 51 distinct gates, 31 carrying a non-pass verdict somewhere. Row counts are higher (27 PARTIAL, 18 NOT EVALUATED, 3 OUTSTANDING) because ten gates carry a verdict in two sections and are counted twice | the FAIL and the unmeasured do |
-| 4 | 800-LOC ceiling | 57 production files breach, ~80,845 LOC; deviation accepted via MIK-7478, ratchet not in CI | no (accepted), ratchet does |
+| 4 | 800-LOC ceiling | 57 production files breach, ~80,845 LOC; deviation accepted via MIK-7478, ratchet now a CI step (`.github/workflows/ci.yml:43-46`, commit `40834072`) holding at exactly 57 | no — closed as a bounded deviation |
 | 5 | Housekeeping | 45 worktrees, ~20.7 GB of build dirs, disk 94.8% | no |
 
 The two PARTIAL criteria are the release-gating half of gap 1:
@@ -138,8 +138,9 @@ Gap 3 splits three ways, and the split is what makes it tractable:
   H7 no-redundant-docs, H8 no-temp-files.
 - **Needs a measurement run**: D1 TESTED, D3 MEASURED, D4 DRY, D5 CONTRACTS, D6
   E2E, D8 OBSERVABLE, D10 0-BUG, D11 OPTIMIZED, D15 CLEAN, B3 DURABLE, T1c
-  PQC-READINESS, H6 no-orphans, H9 no-duplicate-functions (the `ops.rs:318`
-  versus `:456` 17-line duplicate is the known instance), plus §5 coverage
+  PQC-READINESS, H6 no-orphans, H9 no-duplicate-functions (its one known
+  instance, the 17-line duplicate in `src/backend/ops.rs`, is closed by
+  `5154d11e`; the gate still needs a repo-wide sweep), plus §5 coverage
   no-drop, which needs coverage on both sides of the merge-base.
 - **Operator acts only**: D18 MERGED (PR #528 is a draft), D21 CANARY (no rc
   published, so no exposure staged), D20 ROLLBACK execution.
@@ -151,13 +152,18 @@ operator decision; wave 3 is the part only the operator can do.
 
 ### Wave 0 — no build, no operator
 
-1. **Land the LOC ratchet** (MIK-7478 AC 1). Add the fail-fast one-liner as a
-   `release-criteria` step asserting the breach count is `<= 57` and
-   monotonically decreasing. This turns gap 4 from an open FAIL into a measured,
-   bounded deviation, which is what the DoD asks of an accepted deviation.
-2. **Fix the H9 duplicate** at `src/gateway/ops.rs:318` and `:456` — 17
-   duplicated lines, one extraction, and H9 stops being PARTIAL on its one known
-   instance.
+1. **~~Land the LOC ratchet~~ (MIK-7478 AC 1) — DONE (V).** The gate is a
+   `release-criteria` step pair at `.github/workflows/ci.yml:43-46` (commit
+   `40834072`): `check-loc-ceiling.sh --self-test` proves the counter is honest
+   (800 exactly is not a breach, test sources excluded) and
+   `check-loc-ceiling.sh` holds the count at exactly 57, failing on drift in
+   *either* direction. Both exit 0 in this tree. Gap 4 is now a measured,
+   bounded deviation, which is what the DoD asks of an accepted one.
+2. **~~Fix the H9 duplicate~~ — DONE (V).** The 17-line duplicate was at
+   `src/backend/ops.rs` (the plan previously cited the pre-move path
+   `src/gateway/ops.rs:318`/`:456`); commit `5154d11e` shares the failed-dispatch
+   tail between both paths. H9 is closed on its one known instance — the gate
+   still needs a repo-wide sweep to become PASS rather than PARTIAL.
 3. **Clear the mechanical gates** by recording the evidence each one asks for:
    effort, dependency state, labels, learnings, API surface delta, debt
    trajectory, doc redundancy, temp files. These are NOT EVALUATED because
