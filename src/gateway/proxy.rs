@@ -452,8 +452,14 @@ impl ProxyManager {
         }
     }
 
-    /// Broadcast `notifications/roots/list_changed` to all backends
-    /// when the client reports a roots change.
+    /// Fan `notifications/roots/list_changed` out to the connected *client*
+    /// sessions when the client reports a roots change.
+    ///
+    /// Not to backends, despite what this comment said until 2026-09-11:
+    /// `StreamingManager::broadcast` iterates client sessions. The distinction
+    /// matters because the method is in `REMOVED_IN_2026_07_28`, so a reader
+    /// trusting the old wording would count this as a fifth outbound sender to
+    /// gate (`MIK-7217.OUTBOUND.1`) when there is no backend send here at all.
     pub fn broadcast_roots_changed(&self) {
         let notification = TaggedNotification {
             source: "client".to_string(),
@@ -1115,6 +1121,113 @@ mod tests {
         );
     }
 
+    /// MIK-7388.CANCEL.1 — cancelling one bridged exchange reclaims its pending
+    /// state and cannot hand its answer to another exchange.
+    ///
+    /// The sibling above proves the map is drained. Drainage alone does not
+    /// settle the criterion: the map is keyed by request id, so what it leaves
+    /// open is what a late POST-back for a cancelled id does to the exchange
+    /// still parked beside it. Two concurrent prompts on one session are the
+    /// smallest arrangement where a mis-keyed delivery is observable — a
+    /// resolve that matched on session alone, or one that took the first
+    /// waiting entry, would answer the survivor with the cancelled call's
+    /// reply and every single-exchange test would still pass.
+    #[tokio::test]
+    async fn mik_7388_cancel_1_a_cancelled_exchange_cannot_be_answered_into_another() {
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-cross"));
+        let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
+
+        // GIVEN: two exchanges in flight on one session, neither of them
+        // answered. The proxy timeout is far beyond anything this test does,
+        // so no timeout arm can be what cleans up.
+        let prompt = |session: &str| {
+            let proxy = Arc::clone(&proxy);
+            let session = session.to_string();
+            tokio::spawn(async move {
+                proxy
+                    .forward_sampling_with_response(
+                        &session,
+                        &never_answered_sampling_params(),
+                        Duration::from_secs(30),
+                    )
+                    .await
+            })
+        };
+        // Receiving each prompt proves its entry is registered and the call is
+        // parked on its receiver, and yields the id the client would answer.
+        macro_rules! next_id {
+            () => {{
+                let delivered = tokio::time::timeout(Duration::from_millis(500), rx_session.recv())
+                    .await
+                    .expect("the session must receive the prompt")
+                    .expect("channel open");
+                assert_eq!(delivered.data["method"], "sampling/createMessage");
+                delivered.data["id"]
+                    .as_str()
+                    .expect("a prompt carries its own id")
+                    .to_string()
+            }};
+        }
+
+        let cancelled = prompt(&session);
+        let id_cancelled = next_id!();
+        let survivor = prompt(&session);
+        let id_survivor = next_id!();
+        assert_ne!(id_cancelled, id_survivor, "each prompt must get its own id");
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            2,
+            "precondition: two in-flight exchanges"
+        );
+
+        // WHEN: one is cancelled mid-await and its answer arrives afterwards.
+        // Joining the aborted handle is what makes this deterministic: abort()
+        // only requests cancellation, and the future is not dropped until the
+        // task is reaped.
+        cancelled.abort();
+        let _ = cancelled.await;
+        let late = json!({
+            "role": "assistant",
+            "content": {"type": "text", "text": "for the cancelled call"},
+        });
+        let delivered = proxy.resolve_pending(&id_cancelled, &session, late.clone());
+
+        // THEN: the cancelled exchange is gone, and refusing its answer is not
+        // done by consuming somebody else's entry.
+        assert!(
+            !delivered,
+            "a cancelled exchange has no caller left to deliver to"
+        );
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            1,
+            "the surviving exchange must still be pending"
+        );
+
+        // AND: the survivor answers as itself, with its own reply.
+        let own = json!({
+            "role": "assistant",
+            "content": {"type": "text", "text": "for the surviving call"},
+        });
+        assert!(
+            proxy.resolve_pending(&id_survivor, &session, own.clone()),
+            "the surviving exchange must still be answerable"
+        );
+        let got = tokio::time::timeout(Duration::from_millis(500), survivor)
+            .await
+            .expect("the surviving call must return")
+            .expect("its task must not panic")
+            .expect("it must succeed");
+        assert_eq!(got, own, "the survivor must receive its own answer");
+        assert_ne!(got, late, "and never the cancelled exchange's");
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "both entries reclaimed"
+        );
+    }
+
     /// MIK-7212 WIRE-11 (elicitation): the sibling of the sampling case above.
     ///
     /// `forward_elicitation_with_response` registers in the SAME
@@ -1313,5 +1426,88 @@ mod tests {
             0,
             "an undeliverable bridge send must not strand its pending entry"
         );
+    }
+
+    // ── NFR.CONFORMANCE.1, minor 11 — removed elicitation surface ───────
+
+    /// Minor 11, clause (a) — neither live elicitation forward path can put
+    /// `elicitationId` on the wire.
+    ///
+    /// The 2026-07-28 changelog removes the field from URL-mode elicitation
+    /// requests. A 2025-11-25 backend still sends it, and the gateway forwards
+    /// elicitation to the connected client on two paths — the fire-and-forget
+    /// [`ProxyManager::forward_elicitation`] and the awaited
+    /// [`ProxyManager::forward_elicitation_with_response`]. Both are asserted,
+    /// because a removal proven on one path and not the other is not a removal.
+    ///
+    /// **What actually strips it, stated so the test does not overclaim:** the
+    /// typed read. Both paths re-serialise from [`ElicitationCreateParams`]
+    /// (`protocol::messages`), which names four fields and carries no
+    /// `#[serde(flatten)]`, so every key the gateway cannot name is gone by the
+    /// time a frame is built. Neither path inspects the client's era. The field
+    /// is therefore dropped for a modern client AND for a legacy one, which is
+    /// stricter than the changelog requires and is the behaviour this pins. A
+    /// future `flatten` added for pass-through fidelity would regain the field
+    /// on both, and this test is what would notice.
+    ///
+    /// The router's own `parse_elicitation_params` (`router/helpers.rs`) is
+    /// `pub(super)`; its entire body is the `serde_json::from_value` call made
+    /// here, so the typed read under test is the one the handler performs.
+    #[tokio::test]
+    async fn ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths() {
+        let raw = json!({
+            "mode": "url",
+            "message": "Authorise the deploy",
+            "url": "https://example.test/authorise",
+            "elicitationId": "elicit-2025-11-25-42",
+        });
+        let params: ElicitationCreateParams =
+            serde_json::from_value(raw).expect("a 2025-11-25 URL-mode request still parses");
+
+        let mux = make_multiplexer();
+        // Held for the whole test: `send_to_session` reports failure against a
+        // session whose receiver has been dropped, and a test that lost its
+        // receiver would pass the assertions below on zero delivered frames.
+        let (session, mut rx) = mux.get_or_create_session(Some("sess-minor-11a"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+
+        assert!(
+            proxy.forward_elicitation(&session, &params),
+            "the fire-and-forget forward must reach the session"
+        );
+
+        // Nothing ever answers, so the awaited path is ended by the outer
+        // timeout. The frame it sent is already in the receiver by then.
+        let _ = tokio::time::timeout(
+            Duration::from_millis(50),
+            proxy.forward_elicitation_with_response(&session, &params, Duration::from_secs(30)),
+        )
+        .await;
+
+        let mut seen = 0;
+        while let Ok(frame) = rx.try_recv() {
+            seen += 1;
+            assert_eq!(
+                frame.data["method"], "elicitation/create",
+                "frame {seen} is not the elicitation request"
+            );
+            let sent = &frame.data["params"];
+            assert!(
+                sent.get("elicitationId").is_none(),
+                "frame {seen} carried the removed elicitationId field: {sent}"
+            );
+            // The neighbour assertion: a forward that dropped everything would
+            // satisfy the line above and forward no question at all.
+            assert_eq!(sent["mode"], "url", "frame {seen} lost the mode");
+            assert_eq!(
+                sent["url"], "https://example.test/authorise",
+                "frame {seen} lost the url"
+            );
+            assert_eq!(
+                sent["message"], "Authorise the deploy",
+                "frame {seen} lost the message"
+            );
+        }
+        assert_eq!(seen, 2, "both forward paths must have been exercised");
     }
 }

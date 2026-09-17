@@ -16,7 +16,9 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
-use mcp_gateway::protocol::continuation::{ContinuationError, Keyring, Payload, Purpose};
+use mcp_gateway::protocol::continuation::{
+    ContinuationError, ContinuationPurpose, Keyring, Payload,
+};
 
 fn payload() -> Payload {
     Payload {
@@ -35,7 +37,7 @@ fn payload() -> Payload {
         hold_key: "exchange-1".to_string(),
         // A backend `input_required` continuation: this file's envelopes are
         // the ones a backend retry redeems, not confirmation grants.
-        purpose: Purpose::BackendInput,
+        purpose: ContinuationPurpose::BackendInput,
     }
 }
 
@@ -818,7 +820,7 @@ mod idempotency {
 
 mod hardening {
     use mcp_gateway::protocol::continuation::{
-        ConsumedLedger, ContinuationError, InFlight, Keyring, Payload, Purpose, Routing,
+        ConsumedLedger, ContinuationError, ContinuationPurpose, InFlight, Keyring, Payload, Routing,
     };
 
     fn payload() -> Payload {
@@ -838,7 +840,7 @@ mod hardening {
             hold_key: "exchange-1".into(),
             // A backend `input_required` continuation, the domain every case
             // in this module mints and redeems in.
-            purpose: Purpose::BackendInput,
+            purpose: ContinuationPurpose::BackendInput,
         }
     }
 
@@ -1039,7 +1041,9 @@ mod hardening {
 }
 
 mod mint_budget {
-    use mcp_gateway::protocol::continuation::{ContinuationError, Keyring, Payload, Purpose};
+    use mcp_gateway::protocol::continuation::{
+        ContinuationError, ContinuationPurpose, Keyring, Payload,
+    };
 
     fn payload() -> Payload {
         Payload {
@@ -1058,7 +1062,7 @@ mod mint_budget {
             hold_key: "exchange-1".into(),
             // A backend `input_required` continuation, the domain every case
             // in this module mints and redeems in.
-            purpose: Purpose::BackendInput,
+            purpose: ContinuationPurpose::BackendInput,
         }
     }
 
@@ -1129,7 +1133,9 @@ mod mint_budget {
 }
 
 mod envelope_size {
-    use mcp_gateway::protocol::continuation::{ContinuationError, Keyring, Payload, Purpose};
+    use mcp_gateway::protocol::continuation::{
+        ContinuationError, ContinuationPurpose, Keyring, Payload,
+    };
 
     fn payload_with_state(state: String) -> Payload {
         Payload {
@@ -1148,7 +1154,7 @@ mod envelope_size {
             hold_key: "exchange-1".into(),
             // A backend `input_required` continuation, the domain every case
             // in this module mints and redeems in.
-            purpose: Purpose::BackendInput,
+            purpose: ContinuationPurpose::BackendInput,
         }
     }
 

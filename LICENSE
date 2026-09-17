@@ -1,15 +1,17 @@
-mcp-gateway uses mixed, per-file licensing.
+mcp-gateway is licensed under the PolyForm Noncommercial License 1.0.0.
 
-- Files whose header carries `// SPDX-License-Identifier: MIT` (on the line
-  immediately following the SPDX-FileCopyrightText copyright line) are licensed
-  under the MIT License: see LICENSE-MIT.
-- Every other file is licensed under the PolyForm Noncommercial License 1.0.0:
-  see LICENSE-NONCOMMERCIAL. This is the default; absence of an MIT header means
-  PolyForm-Noncommercial.
+- Every first-party file in this repository is licensed under the PolyForm
+  Noncommercial License 1.0.0: see LICENSE-NONCOMMERCIAL. Each file carries a
+  SPDX-FileCopyrightText copyright line followed by
+  `// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`. There is no second
+  license and no allowlist.
+- LICENSE-MIT remains in the tree because it is the license text the MIT grants
+  in earlier releases refer to — the 3.0.0–3.2.1 packages and the MIT-headered
+  core files from 3.3.0 onward in the 3.x line. It governs those artifacts as
+  distributed, not the current tree.
 
-Noncommercial and personal use is free. Commercial use of the
-Noncommercial-licensed code (effectively the whole runnable gateway) requires a
-commercial license — see COMMERCIAL.md.
+Noncommercial and personal use is free. Commercial use requires a commercial
+license — see COMMERCIAL.md.
 
 Full explanation: LICENSES.md
-Licensing correction for v3.0.0–v3.2.1: NOTICE.md
+Licensing history for the releases distributed under MIT: NOTICE.md

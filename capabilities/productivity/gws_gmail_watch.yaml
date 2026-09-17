@@ -1,3 +1,4 @@
+sha256: 5b3b0ea5a74480d4cd98f38e60b7438507bdecb53b16b704799efd0adcd6b789
 fulcrum: "1.0"
 name: gws_gmail_watch
 description: Set up Gmail push notifications via Cloud Pub/Sub. Watches for changes to the mailbox and sends notifications to the specified topic.

@@ -35,6 +35,29 @@ pub struct SessionLifecycle {
     tracked: RwLock<std::collections::HashMap<String, u64>>,
 }
 
+/// How long an identity's derived state outlives its last observed request.
+///
+/// The revision removed protocol sessions, so nothing signals a disconnect and
+/// the only honest question left is "has this identity been quiet long enough".
+/// Five minutes is the answer the reclaim-latency bound in the design is stated
+/// against: a caller idle this long has its per-identity state reclaimed, and a
+/// caller still working keeps pushing its deadline forward.
+pub const IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Seconds since the Unix epoch, the unit every deadline in this module uses.
+///
+/// One helper so the seam between this module's `u64` seconds and callers that
+/// think in `Instant` is crossed in exactly one place. A clock set backwards
+/// delays a reclaim and one set forwards reclaims early; both touch derived
+/// state only, which is why wall-clock is acceptable here and a monotonic
+/// `Instant` — unloggable, unpersistable, uncomparable across a restart — is
+/// not.
+pub fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 impl SessionLifecycle {
     /// Create a new empty lifecycle registry.
     pub fn new() -> Self {
@@ -116,12 +139,14 @@ impl SessionLifecycle {
         self.tracked.write().remove(key);
     }
 
-    /// Reclaim every tracked key whose deadline has passed.
+    /// Reclaim every tracked key whose deadline has passed, and report how
+    /// many were reclaimed.
     ///
     /// Each key fires the handlers exactly once and is then forgotten: these
     /// callbacks free things, and a handler that runs twice for one key is its
-    /// own defect.
-    pub fn reap(&self, now: u64) {
+    /// own defect. The count is the keys removed, not the keys examined, so a
+    /// caller logging a sweep can tell an idle sweep from a busy one.
+    pub fn reap(&self, now: u64) -> usize {
         let expired: Vec<String> = {
             let mut tracked = self.tracked.write();
             let expired: Vec<String> = tracked
@@ -134,11 +159,13 @@ impl SessionLifecycle {
             }
             expired
         };
+        let reclaimed = expired.len();
         for key in expired {
             // Already removed above. `on_disconnect` would remove it again, and
             // a second removal can only take an entry someone re-registered.
             self.fire_cleanup(&key);
         }
+        reclaimed
     }
 
     /// How many keys are awaiting reclamation.
@@ -150,6 +177,29 @@ impl SessionLifecycle {
     pub fn handler_count(&self) -> usize {
         self.callbacks.read().len()
     }
+}
+
+/// Register the firewall's per-identity cleanup with a lifecycle registry.
+///
+/// Held as a `Weak`, never an `Arc`: the registry outlives a request and would
+/// otherwise keep the firewall — and every scanner and tracker it owns — alive
+/// for the process lifetime. An upgrade that fails means the firewall is gone,
+/// and so is the state this handler existed to reclaim.
+///
+/// Production code calls this at gateway startup. Tests call the same function,
+/// because a test that registers its own handler proves only that a test can
+/// register one.
+#[cfg(feature = "firewall")]
+pub fn wire_session_lifecycle(
+    lifecycle: &Arc<SessionLifecycle>,
+    firewall: &Arc<crate::security::firewall::Firewall>,
+) {
+    let firewall = Arc::downgrade(firewall);
+    lifecycle.register("firewall-anomaly", move |key| {
+        if let Some(firewall) = firewall.upgrade() {
+            firewall.on_session_end(key);
+        }
+    });
 }
 
 #[cfg(test)]

@@ -21,7 +21,7 @@ use mcp_gateway::{
 ///
 /// `config_path` is the globally selected `--config`, passed in from `main`
 /// because `Cli` parses it before the subcommand is dispatched.
-pub fn run_accounts_command(cmd: AccountsCommand, config_path: Option<&Path>) -> ExitCode {
+pub fn run_accounts_command(cmd: &AccountsCommand, config_path: Option<&Path>) -> ExitCode {
     match cmd {
         AccountsCommand::InitStore => run_init_store(config_path),
     }

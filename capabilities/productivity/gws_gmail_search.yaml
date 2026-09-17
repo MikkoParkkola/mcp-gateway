@@ -1,3 +1,4 @@
+sha256: 585823f3c69ccf98d27c434f0182cc7c9adc463ba7b1563eeabb98bb13093924
 fulcrum: "1.0"
 name: gws_gmail_search
 description: Search Gmail messages using Gmail search syntax. Returns message IDs and metadata.

@@ -148,10 +148,10 @@ fn s03_each_invalid_store_configuration_refuses_before_authority_creation() {
             "overflow_bytes" => settings.max_authority_bytes = usize::MAX,
             "same_roots" => settings.authority_dir = settings.store_dir.clone(),
             "records_contain_authority" => {
-                settings.authority_dir = settings.store_dir.join("authority")
+                settings.authority_dir = settings.store_dir.join("authority");
             }
             "authority_contains_records" => {
-                settings.store_dir = settings.authority_dir.join("records")
+                settings.store_dir = settings.authority_dir.join("records");
             }
             "relative_records" => settings.store_dir = "records".into(),
             "relative_authority" => settings.authority_dir = "authority".into(),

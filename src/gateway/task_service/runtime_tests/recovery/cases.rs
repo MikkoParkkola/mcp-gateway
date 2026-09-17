@@ -159,6 +159,10 @@ async fn a_second_startup_rewrites_nothing_the_first_one_recovered() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end recovery scenario read as a single sequence"
+)]
 async fn a_recovered_task_still_answers_the_owner_and_key_that_created_it() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("tasks");

@@ -86,6 +86,7 @@ async fn state(
 
     let state = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+        session_lifecycle: None,
         tasks,
         task_executor,
         env: None,

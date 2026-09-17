@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Real gateway/backend fixture shared by signing and response-firewall tests.
 //!
-//! No AppState or signer is installed by this fixture: the shipped binary reads
+//! No `AppState` or signer is installed by this fixture: the shipped binary reads
 //! its isolated YAML and runs its production constructor.
 
 use std::path::Path;
@@ -30,7 +30,6 @@ pub struct BackendFixture {
 
 struct BackendRequest {
     body: Value,
-    headers: axum::http::HeaderMap,
 }
 
 impl BackendFixture {
@@ -48,39 +47,36 @@ impl BackendFixture {
         let app_tools = Arc::clone(&tools);
         let app = axum::Router::new().route(
             "/",
-            axum::routing::post(
-                move |headers: axum::http::HeaderMap, axum::Json(request): axum::Json<Value>| {
-                    let received = Arc::clone(&app_received);
-                    let result = Arc::clone(&app_result);
-                    let tools = Arc::clone(&app_tools);
-                    async move {
-                        received
-                            .lock()
-                            .expect("backend recorder")
-                            .push(BackendRequest {
-                                body: request.clone(),
-                                headers,
-                            });
-                        let id = request.get("id").cloned().unwrap_or(Value::Null);
-                        let response = match request.get("method").and_then(Value::as_str) {
-                            Some("initialize") => json!({"jsonrpc": "2.0", "id": id, "result": {
-                                "protocolVersion": "2025-06-18",
-                                "capabilities": {"tools": {}},
-                                "serverInfo": {"name": BACKEND, "version": "test"}
-                            }}),
-                            Some("tools/list") => json!({"jsonrpc": "2.0", "id": id,
+            axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
+                let received = Arc::clone(&app_received);
+                let result = Arc::clone(&app_result);
+                let tools = Arc::clone(&app_tools);
+                async move {
+                    received
+                        .lock()
+                        .expect("backend recorder")
+                        .push(BackendRequest {
+                            body: request.clone(),
+                        });
+                    let id = request.get("id").cloned().unwrap_or(Value::Null);
+                    let response = match request.get("method").and_then(Value::as_str) {
+                        Some("initialize") => json!({"jsonrpc": "2.0", "id": id, "result": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": BACKEND, "version": "test"}
+                        }}),
+                        Some("tools/list") => json!({"jsonrpc": "2.0", "id": id,
                             "result": tools.read().expect("backend tools").clone()}),
-                            Some("tools/call") => json!({"jsonrpc": "2.0", "id": id,
+                        Some("tools/call") => json!({"jsonrpc": "2.0", "id": id,
                             "result": result.read().expect("backend result").clone()}),
-                            Some("notifications/initialized") => json!({}),
-                            _ => json!({"jsonrpc": "2.0", "id": id, "error": {
-                                "code": -32601, "message": "fixture method not found"
-                            }}),
-                        };
-                        axum::Json(response)
-                    }
-                },
-            ),
+                        Some("notifications/initialized") => json!({}),
+                        _ => json!({"jsonrpc": "2.0", "id": id, "error": {
+                            "code": -32601, "message": "fixture method not found"
+                        }}),
+                    };
+                    axum::Json(response)
+                }
+            }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -105,17 +101,6 @@ impl BackendFixture {
             .iter()
             .filter(|request| request.body["method"] == "tools/call")
             .map(|request| request.body.clone())
-            .collect()
-    }
-
-    /// Headers of the same tools/call requests exposed by calls(), in order.
-    pub fn call_headers(&self) -> Vec<axum::http::HeaderMap> {
-        self.received
-            .lock()
-            .expect("backend recorder")
-            .iter()
-            .filter(|request| request.body["method"] == "tools/call")
-            .map(|request| request.headers.clone())
             .collect()
     }
 
@@ -178,7 +163,7 @@ impl HttpGateway {
     }
 
     /// Run the production CLI with explicit child-local fixture environment.
-    /// Overrides follow env_clear; they never change the test runner's process.
+    /// Overrides follow `env_clear`; they never change the test runner's process.
     pub async fn start_with_env(config: Value, env: &[(&str, &std::ffi::OsStr)]) -> Self {
         let mut config = config;
         let directory = tempfile::tempdir().expect("gateway directory");
@@ -290,6 +275,11 @@ impl HttpGateway {
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the json! macro clones its inputs regardless, so borrowing here saves \
+              nothing and only forces an & at every call site"
+)]
 pub fn invoke(id: Value, nonce: Value, arguments: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
         "name": "gateway_invoke", "arguments": {

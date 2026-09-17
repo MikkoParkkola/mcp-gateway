@@ -87,7 +87,7 @@ impl TaskService {
         let store = TaskStore::open(path, limits)
             .await
             .map_err(|_| ServiceError::Unavailable)?;
-        if admission.import_tasks(store.restored_bindings()).is_err() {
+        if admission.import_tasks(&store.restored_bindings()).is_err() {
             let _ = store.close().await;
             return Err(ServiceError::Unavailable);
         }
@@ -138,9 +138,8 @@ impl TaskService {
                 }
             }
             Ok(TaskAdmission::InFlight) => Ok(CreateOutcome::InFlight),
-            Ok(TaskAdmission::Unavailable) => Ok(CreateOutcome::Unavailable),
             Err(Refusal::Mismatch) => Ok(CreateOutcome::Mismatch),
-            Err(_) => Ok(CreateOutcome::Unavailable),
+            Ok(TaskAdmission::Unavailable) | Err(_) => Ok(CreateOutcome::Unavailable),
         }
     }
 
@@ -195,14 +194,14 @@ impl TaskService {
     /// task — would be a lifecycle change wearing an acknowledgement. The payload
     /// belongs to the input-required round that will consume it; interpreting it
     /// here would be that round's AC row answered by the wrong increment.
-    pub(crate) async fn update(
+    pub(crate) fn update(
         &self,
         principal: &str,
         id: &str,
         _revision: u64,
         _payload: Value,
-    ) -> Result<CommittedTask, ServiceError> {
-        self.get(principal, id)
+    ) -> impl std::future::Future<Output = Result<CommittedTask, ServiceError>> {
+        std::future::ready(self.get(principal, id))
     }
 
     /// Tests own a by-value service. Production holds `Arc<TaskService>` and
@@ -243,10 +242,11 @@ impl TaskService {
     /// The admission-owned digest for a principal. A principal admission refuses
     /// to hash owns nothing, so it is told what anyone naming a task they do not
     /// own is told.
+    // A method, not an associated function: callers hold a service and should
+    // not have to name the admission type to learn who owns a task.
+    #[expect(clippy::unused_self, reason = "the service is the caller's vocabulary")]
     pub(crate) fn owner(&self, principal: &str) -> Result<TaskOwner, ServiceError> {
-        self.admission
-            .owner(principal)
-            .map_err(|_| ServiceError::NotFound)
+        ExecutionAdmission::owner(principal).map_err(|_| ServiceError::NotFound)
     }
 }
 

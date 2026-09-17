@@ -94,7 +94,12 @@ impl NonceStore {
     fn expire_for_test(&self, nonce: &str) {
         // This existing fixture hook expires one chosen real record. Keep its
         // production expiry index consistent with the stored timestamp.
-        let expired = self.now() - self.replay_window - Duration::from_secs(1);
+        let expired = self
+            .now()
+            .checked_sub(self.replay_window)
+            .unwrap()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap();
         let mut state = self.state.lock();
         state
             .seen
@@ -117,7 +122,7 @@ impl NonceStore {
         self.state.try_lock().is_some()
     }
 
-    fn distinct_storage_key_for_test(&self, first: &str) -> String {
+    fn distinct_storage_key_for_test(first: &str) -> String {
         // Different keys now intentionally contend on the one global guard.
         format!("{first}-other")
     }
@@ -480,7 +485,7 @@ fn signing_nonce_last_global_slot_race_observes_one_shared_guard() {
     let (store, arrival, release) = paused_store("first-key");
     // The baseline selector is only fixture staging: it avoids accidentally
     // testing two keys on the same old shard and falsely blessing that lock.
-    let second_key = store.distinct_storage_key_for_test("first-key");
+    let second_key = NonceStore::distinct_storage_key_for_test("first-key");
     assert_ne!(second_key, "first-key");
     let store = Arc::new(store);
     let first_store = Arc::clone(&store);

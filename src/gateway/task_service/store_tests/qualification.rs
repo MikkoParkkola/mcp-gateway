@@ -222,6 +222,10 @@ async fn task_q_reopened_records_enumerate_import_and_preserve_deadline() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end scenario over every refusal kind read as a single sequence is the point of the test"
+)]
 async fn task_q_expiry_refusals_leave_durable_and_admission_capacity() {
     for kind in [
         "not-terminal",

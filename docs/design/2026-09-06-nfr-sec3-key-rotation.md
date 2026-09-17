@@ -1,6 +1,10 @@
 # NFR.SEC.3 — rotatable continuation keys, retained for the max lifetime
 
 Status: DESIGN, dual-reviewed, no code exists. Author: `sec-nfr`, 2026-09-06.
+Updated 2026-09-09: Q1 — the one DEFERRED question, and the one that blocked every implementation
+piece — is RESOLVED by team-lead ruling R24, which takes the recommended branch. Citations
+re-derived against the worktree the same day; five were stale and are repaired. No option, claim
+or mechanism in this document changed.
 Round-by-round verdicts live in the table below, not in this line — a status line carrying round
 state is stale the moment a leg returns, and it was, twice.
 
@@ -114,7 +118,7 @@ confirmation pass against the current revision is owed before this design is cal
 ## MRTR.5 is the constraint that decides this design — and its text is narrower than the first draft claimed
 
 Per-process key material is not an accident of the current build. It is the stated
-enforcement mechanism for MRTR.5, at `src/protocol/continuation.rs:776-788`, verified at
+enforcement mechanism for MRTR.5, at `src/protocol/continuation.rs:809-816`, verified at
 source for this design rather than quoted from a prior report:
 
 > Key material is generated here, per process, and written nowhere. So an envelope sealed
@@ -135,7 +139,7 @@ the strongest form this property can take.
 
 Quoted rather than paraphrased, because the first draft of this section argued from the
 enforcement comment instead of the criterion and overstated the result. The criterion is two
-rows in `docs/requirements/RELEASE-4.0.0-criteria-status.md:132-133`:
+rows in `docs/requirements/RELEASE-4.0.0-criteria-status.md:137-138`:
 
 > `MIK-7212.MRTR.5a` — a continuation MUST be single-use
 > `MIK-7212.MRTR.5b` — a continuation MUST expire
@@ -185,9 +189,9 @@ Already built:
 - `open` (`:473`) selects by `kid` and refuses with an unknown-key error once material is gone.
 - Three tests hand-build multi-key rings (`tests/mik_7212_acs.rs:195-245`).
 
-Missing in production: `ContinuationState::new` (`:823`) builds a one-key ring from one
+Missing in production: `ContinuationState::new` (`:852`) builds a one-key ring from one
 fresh random key; its only construction site is `MetaMcp::new`
-(`src/gateway/meta_mcp/mod.rs:438`), reached only from startup paths. Config reload never
+(`src/gateway/meta_mcp/mod.rs:465`), reached only from startup paths. Config reload never
 rebuilds it. So: no rotate operation, no retention deadline, no retire-after-lifetime.
 
 ## Recommended: per-replica in-place rotation (option C)
@@ -305,7 +309,7 @@ deadline; the rotation code must not carry a second copy of the number.
 
 ### The real mechanical work
 
-`ContinuationState` lives behind an `Arc` (`src/gateway/meta_mcp/mod.rs:230`) and `open`
+`ContinuationState` lives behind an `Arc` (`src/gateway/meta_mcp/mod.rs:257`) and `open`
 takes `&self`, so the key vector must become interior-mutable — **`std::sync::RwLock`**, taken
 for READ on every `open` and for WRITE only by the rotation inside `mint`. That split only
 works because the mint counter is NOT inside the lock: `minted` is an `AtomicU64` on the key
@@ -381,7 +385,7 @@ reintroduces the split this revision removed, and it would do so invisibly, beca
 clocks agree until they do not.
 
 The startup key is the one case with no `now` to be stamped from: `ContinuationState::new`
-(`continuation.rs:823`) builds it from the RNG at process start, and keeping `Keyring::new`
+(`continuation.rs:852`) builds it from the RNG at process start, and keeping `Keyring::new`
 clockless is the whole point. So its `created_at` is stamped by the FIRST MINT, from that
 mint's `issued_at`, BEFORE the age check runs. The alternative is a missing stamp read as
 zero, under which the first mint sees an infinitely old key and rotates a key that has never
@@ -469,6 +473,19 @@ has checkable properties rather than prose:
 
 ### C6 security pre-analysis — STRIDE short-form
 
+**The threat, in four fields.** *Attacker:* anyone holding a continuation handle, or able to
+obtain one — the boundary is `unauth`, and the handle is the whole credential. *What they control:*
+the handle bytes, when they present them, and how often. Nothing inside the process: not the key,
+not the ledger, not the clock. *What they gain today:* a key that never changes for the life of the
+process. There is no rotate operation at all (`rg -n 'fn rotate' src/protocol/continuation.rs` →
+zero hits), so a key suspected of compromise cannot be replaced except by a restart, which drops
+every in-flight continuation with it — the operator's only lever is an outage. *What this design
+denies:* the unbounded key lifetime. A key is retired on age and dropped once nothing it sealed can
+still be redeemed, so a compromised key's usable window closes at one rotation interval plus
+`CONTINUATION_LIFETIME_SECS` rather than at process exit, and closing it costs no restart.
+*What it does NOT deny, deliberately:* theft of a live handle inside its 300-second window. That is
+the single-use ledger's job under MRTR.5, and rotation neither helps nor harms it.
+
 Trust domain: `unauth` at the boundary (a continuation handle arrives from whatever holds it);
 the keyring itself never leaves the process. Crypto: AES-256-GCM, unchanged by this design —
 symmetric only, so T1c is an auto-PASS and no key agreement or signature is introduced.
@@ -537,19 +554,56 @@ fields, and nothing depending on an open one gets built first.
 
 | # | question | fail-fast |
 |---|---|---|
-| 1 | Does the criterion's author read "rotatable" as requiring operator-supplied material? If yes, (c) does not meet it and (b) returns. | **DEFERRED** — askable, not checkable. *Owner:* the team lead. *What resolves it:* the ruling on whether `RELEASE-4.0.0-test-plan.md:301` stands as written, asked and unanswered. *When:* before ANY implementation begins — this design ships as design either way, and no code is written against an unanswered Q1. *If it resolves badly:* option (b) returns and this document becomes the record of why (c) was preferred, not the plan. Blocks all four implementation pieces; blocks nothing in the design itself. |
+| 1 | Does the criterion's author read "rotatable" as requiring operator-supplied material? If yes, (c) does not meet it and (b) returns. | **RESOLVED**, askable. *Asked of:* the team lead. *The answer:* ruling R24 (`docs/release/2026-09-08-team-lead-rulings.md:411-440`, 2026-09-08) takes branch **(c)** — per-replica lazy rotation inside `mint` — and REFUSES (b), on the ground that operator-supplied shared keys make `docs/requirements/RELEASE-4.0.0-test-plan.md:301` (MRTR.5) unsatisfiable: "`test-plan.md:301` stands as written. `MRTR.5` is untouched." The branch-(b) substance — durable ledger, reload-driven rotation, in-flight continuity — is **MIK-7312, sequenced after this release**. *What it changed:* it unblocked implementation. The four pieces this design blocked on Q1 may now be built as written, and the ruling adds that this design declining three of the four (b) pieces "is ruled correct … so it needs no separate §P3 event", so no design event is owed for them either. |
 | 2 | What is "the max lifetime" as a number, and is it bounded anywhere today? RETAINED is unimplementable without it. | RESOLVED, checkable. `rg CONTINUATION_LIFETIME_SECS src/` — `const CONTINUATION_LIFETIME_SECS: u64 = 300` at `src/protocol/continuation.rs:128`, not a parameter and deliberately not one. The retention window is therefore 300 seconds, a compile-time constant. It changed the design: the retention deadline needs no new config and no new plumbing. |
 | 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design twice: first the "free trigger" claim turned out half true, and then review showed the reload trigger was the wrong choice altogether. Every trigger was eventually dropped: the watcher for its plumbing, then the meta-tool and the interval task in round 2, in favour of an age check on the `now` already injected into `mint`. Written up above rather than left as a table cell. |
 
-Question 1 is load-bearing: a yes reverses the recommendation. One documentation delta rides
-on it, recorded here rather than done: `docs/requirements/RELEASE-4.0.0-criteria-status.md:353`
-states **"Branch (b) is the one taken"**, which this design contradicts. It is deliberately NOT
-edited yet — that cell is the ledger's record of a decision only the team lead can change, and
-rewriting it to match my own recommendation before the ruling would be the design marking its
-own homework. It is a §P4a obligation attached to the Q1 answer: (c) confirmed, the cell is
-rewritten in this change; (b) confirmed, the cell was right and this document becomes history. It is DEFERRED rather than
-resolved because only the requester can settle it, and a design that recorded it as "asked"
-would be claiming a third state the process does not have.
+Question 1 was load-bearing, and the answer went the way this design recommended. Nothing in the
+recommendation changes; what changes is that it is now implementable. The §P4a obligation attached
+to the Q1 answer comes due with it, and is the subject of the next section.
+
+## The ruling and the ledger disagree, and the ruling wins (§P4a, verified at source)
+
+R24 answers Q1 and, in the same passage, states that this design's citation of the ledger cell
+reading **"Branch (b) is the one taken"** is stale — that "that string does not exist in the
+ledger". **That claim is false at source, and the check is one line.** At the ruling file's own
+HEAD and in this worktree:
+
+```
+$ git grep -c "Branch (b) is the one taken" HEAD -- docs/requirements/RELEASE-4.0.0-criteria-status.md
+1
+$ rg -c "Branch (b) is the one taken" docs/requirements/RELEASE-4.0.0-criteria-status.md
+1
+```
+
+The string is live, on the `NFR.SEC.3` row (`docs/requirements/RELEASE-4.0.0-criteria-status.md:371`,
+last touched by `eb025890`). My own citation of it was stale only in its LINE NUMBER — `:353`, now
+`:371` — which is why the ruling read the row as gone. So the ledger still directs branch (b) while
+the ruling takes branch (c), and a reader who finds the ledger first will build the refused option.
+
+Three consequences, none of them a reopening of the ruling:
+
+1. **The ruling governs.** It carries the requester's recorded agreement; a design does not
+   overturn a ruling by finding a defect in one of its supporting claims, and this defect is in a
+   citation-freshness remark, not in the reasoning that refuses (b).
+2. **The ledger row is due for rewrite, and this change does not make it.** Its file is
+   peer-held — it carries another session's uncommitted work in this shared worktree — and §P5 is
+   explicit that another session's uncommitted work is not mine to touch. Recorded as an
+   operator-visible item rather than silently left: the `NFR.SEC.3` row must stop saying branch (b)
+   is taken, and the same row's code citations (`:823`, `mod.rs:438`, `:776-788`) have drifted in
+   exactly the way mine had.
+3. **A verified-false claim inside a ruling is worth one line, not a round.** Recorded here so the
+   next reader does not re-run the same grep and reach the opposite conclusion.
+
+**Citations re-derived 2026-09-09.** Every `file:line` in this document was re-checked against the
+worktree rather than trusted from the ledger, after the team lead's warning that the ledger had
+drifted. Five were stale and are repaired: the per-process key-material passage (`:776-788` →
+`:809-816`), `ContinuationState::new` (`:823` → `:852`, twice), its construction site
+(`mod.rs:438` → `:465`), the `Arc` field (`mod.rs:230` → `:257`), and the MRTR.5 criterion rows
+(`criteria-status.md:132-133` → `:137-138`). The load-bearing ones held unchanged:
+`CONTINUATION_LIFETIME_SECS` at `continuation.rs:128`, `open` at `:473`, the kid resolution at
+`:489`, the expiry check at `:508`, and `fn key` at `:524-530`. An index is never evidence; the
+file is.
 
 ## The repo already ticketed option (b), and sequenced it after this release
 

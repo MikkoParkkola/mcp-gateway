@@ -128,6 +128,12 @@ impl Meter {
         Self
     }
 
+    #[expect(
+        clippy::unused_self,
+        reason = "self is consumed by value on purpose: taking ownership ends the \
+                  RAII scope explicitly here rather than at the end of the caller's \
+                  block, even though Meter itself carries no fields to read"
+    )]
     fn stop(self) -> Measured {
         ACTIVE.with(|active| active.set(false));
         Measured {

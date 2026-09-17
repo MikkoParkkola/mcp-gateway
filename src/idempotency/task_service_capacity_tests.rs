@@ -64,7 +64,7 @@ fn capacity_01_a_batch_landing_exactly_on_the_slot_limit_imports() {
     let imported_bytes: usize = batch.iter().map(|(record, _)| record.metadata_bytes).sum();
 
     service
-        .import_tasks(batch)
+        .import_tasks(&batch)
         .expect("exactly SLOT_LIMIT held records is the bound, not one past it");
 
     let held = service.snapshot();
@@ -77,8 +77,9 @@ fn capacity_01_a_batch_landing_exactly_on_the_slot_limit_imports() {
     let (seed_a_id, kept_a) = existing_task(service.admit_task(task_request(PRINCIPAL, "seed-a")));
     assert_eq!(seed_a_id, "task-seed-a");
     assert_eq!(kept_a, seed_a);
-    let (seed_b_id, kept_b) = existing_task(service.admit_task(task_request(PRINCIPAL, "seed-b")));
-    assert_eq!(seed_b_id, "task-seed-b");
+    let (second_seed_id, kept_b) =
+        existing_task(service.admit_task(task_request(PRINCIPAL, "seed-b")));
+    assert_eq!(second_seed_id, "task-seed-b");
     assert_eq!(kept_b, seed_b);
 
     // The first and last imported records are recoverable by their own keys, so
@@ -117,7 +118,7 @@ fn capacity_02_a_batch_one_record_over_the_slot_limit_commits_nothing() {
     let batch = RESTORABLE.to_vec();
     assert_eq!(seeded.entries + batch.len(), SLOT_LIMIT + 1);
 
-    assert_eq!(service.import_tasks(batch).unwrap_err(), Refusal::Capacity);
+    assert_eq!(service.import_tasks(&batch).unwrap_err(), Refusal::Capacity);
     assert_eq!(service.snapshot(), seeded);
 
     // The held record keeps its handle and its binding: a refused batch is not a

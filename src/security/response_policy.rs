@@ -15,6 +15,7 @@ pub(crate) struct ResponsePolicyTarget {
 
 /// Internal response admission requires at least one server-bound policy target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) struct InvalidResponseTargets;
 
 /// Existing audit labels attached by the server dispatch boundary.
@@ -29,6 +30,7 @@ pub(crate) struct ResponseCorrelation<'a> {
 /// Distinguishes a served result from an internally consumed legacy question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) enum ResponseArtifactKind {
     FinalResponse,
     BridgeChallenge,
@@ -36,6 +38,7 @@ pub(crate) enum ResponseArtifactKind {
 
 /// A backend question must retain the meaning bound to its answer and state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) enum ResponseMutationPolicy {
     Redact,
     Immutable,

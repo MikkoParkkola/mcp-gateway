@@ -59,7 +59,9 @@ impl Transport for CountingTransport {
 }
 
 /// A registry holding one backend whose calls are counted.
-fn counted_backend(name: &str) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
+pub(in crate::gateway::meta_mcp) fn counted_backend(
+    name: &str,
+) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
@@ -82,7 +84,9 @@ fn counted_backend(name: &str) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
 /// authorizer is the only thing that varies. A fixture that assembled the
 /// context some other way would prove the double works rather than that the
 /// chokepoint is reached.
-fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
+pub(in crate::gateway::meta_mcp) fn ctx(
+    authorizer: &(dyn ToolAuthorizer + Sync),
+) -> MetaMcpCallerContext<'_> {
     MetaMcpCallerContext {
         signing: None,
         execution: None,
@@ -104,7 +108,7 @@ fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
     }
 }
 
-fn invoke_args(server: &str, tool: &str) -> Value {
+pub(in crate::gateway::meta_mcp) fn invoke_args(server: &str, tool: &str) -> Value {
     json!({ "server": server, "tool": tool, "arguments": {} })
 }
 
@@ -740,6 +744,8 @@ fn captured_external_gateway_invoke(
 /// do.
 #[tokio::test]
 async fn authz_20_refused_call_consumes_no_nonce() {
+    const NONCE: &str = "nonce-used-once";
+
     let (registry, _calls) = counted_backend("alpha");
     let mut meta = MetaMcp::new(registry);
     meta.enable_message_signing(
@@ -751,8 +757,6 @@ async fn authz_20_refused_call_consumes_no_nonce() {
         Duration::from_secs(300),
         false,
     );
-
-    const NONCE: &str = "nonce-used-once";
 
     let (mut denied_signing, denied_args) = captured_external_gateway_invoke(NONCE);
     let refused =
@@ -803,15 +807,14 @@ async fn authz_13a_surfaced_tool_denied() {
             tool: "surfaced_read".to_string(),
         }]);
 
-    let response = meta
-        .handle_tools_call(
-            crate::protocol::RequestId::Number(1),
-            "surfaced_read",
-            json!({}),
-            None,
-            ctx(&DenyAll),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        crate::protocol::RequestId::Number(1),
+        "surfaced_read",
+        json!({}),
+        None,
+        ctx(&DenyAll),
+    ))
+    .await;
 
     assert!(
         response.error.is_some(),
@@ -831,15 +834,14 @@ async fn authz_13a_surfaced_tool_allowed_reaches_the_backend() {
             tool: "surfaced_read".to_string(),
         }]);
 
-    let response = meta
-        .handle_tools_call(
-            crate::protocol::RequestId::Number(1),
-            "surfaced_read",
-            json!({}),
-            None,
-            ctx(&AllowAll),
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        crate::protocol::RequestId::Number(1),
+        "surfaced_read",
+        json!({}),
+        None,
+        ctx(&AllowAll),
+    ))
+    .await;
 
     assert!(
         response.error.is_none(),
@@ -1125,7 +1127,7 @@ async fn authz_cache_4e_unknown_revision_skips_cache_not_all_caching() {
     );
 }
 
-/// CACHE.4b / 4.f.2 — LiveConfig::set bumps the shared epoch so a subsequent
+/// CACHE.4b / 4.f.2 — `LiveConfig::set` bumps the shared epoch so a subsequent
 /// invoke misses. Hit control before the set.
 #[tokio::test]
 async fn authz_cache_4b_live_config_set_strands_the_prior_entry() {

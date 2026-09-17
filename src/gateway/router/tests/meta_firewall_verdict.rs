@@ -173,6 +173,7 @@ async fn app_state_with_rules(
 
     let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+        session_lifecycle: None,
         env: None,
         backends,
         meta_mcp,

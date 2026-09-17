@@ -16,6 +16,8 @@ pub(crate) mod discover;
 mod doctor;
 mod identity;
 mod kubernetes;
+// Only the config exporter consumes these client-path helpers.
+#[cfg_attr(not(feature = "config-export"), allow(dead_code))]
 pub mod paths;
 mod plugin;
 mod protocol_import;

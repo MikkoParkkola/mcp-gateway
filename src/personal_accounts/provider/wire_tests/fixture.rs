@@ -5,6 +5,7 @@
 //! synchronisation points, so no test guesses when the server got there: a PAUSE
 //! BARRIER and an awaitable failed-handshake count.
 
+use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -254,23 +255,20 @@ async fn serve(
     gate: Option<&Arc<Gate>>,
 ) {
     let accepted = timeout(FIXTURE_TIMEOUT, acceptor.accept(stream)).await;
-    let mut tls = match accepted {
-        Ok(Ok(tls)) => {
-            log.lock().expect("fixture log").handshakes_ok += 1;
-            tls
-        }
+    let mut tls = if let Ok(Ok(tls)) = accepted {
+        log.lock().expect("fixture log").handshakes_ok += 1;
+        tls
+    } else {
         // Refused cert, refused name, torn-down connection: one counter, and the
         // only server-side fact the untrusted-certificate test can wait on.
-        Ok(Err(_)) | Err(_) => {
-            let observed = {
-                let mut log = log.lock().expect("fixture log");
-                log.handshakes_failed += 1;
-                log.handshakes_failed
-            };
-            // Published AFTER the guard drops: a woken waiter wants that lock.
-            failed.send_replace(observed);
-            return;
-        }
+        let observed = {
+            let mut log = log.lock().expect("fixture log");
+            log.handshakes_failed += 1;
+            log.handshakes_failed
+        };
+        // Published AFTER the guard drops: a woken waiter wants that lock.
+        failed.send_replace(observed);
+        return;
     };
 
     let Ok(Some(request)) = timeout(FIXTURE_TIMEOUT, read_request(&mut tls)).await else {
@@ -450,7 +448,7 @@ pub(super) fn response(
         body.len()
     );
     for (name, value) in headers {
-        head.push_str(&format!("{name}: {value}\r\n"));
+        let _ = write!(head, "{name}: {value}\r\n");
     }
     head.push_str("\r\n");
     let mut bytes = head.into_bytes();

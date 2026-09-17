@@ -185,11 +185,29 @@ const MINOR: &[Row] = &[
         // exist, and the assertion below could not tell, because it checks that
         // a string was written and not that the string names a test.
         //
-        // The honest evidence is E1-E5 of
-        // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`.
-        // Naming them before they exist would keep the suite green while
-        // pointing at nothing, which is the same defect with a later date on
-        // it. Cluster B closes this cell when it writes them.
+        // The server half is covered. E1-E3 of
+        // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`
+        // live in `src/gateway/meta_mcp_helpers_tests.rs`, and
+        // `ac_ext_1_a_the_builder_serializes_the_map_it_was_given` is the one
+        // that pins identity: it injects a probe identifier the production
+        // source can never emit, so it is red both when the builder drops its
+        // argument and when the builder ignores the argument and reads
+        // `discovery_extensions()` directly. The other two each survive one of
+        // those two mutations.
+        //
+        // The client half cannot be tested, and the reason is a PRODUCT gap,
+        // not a missing test: `ExtensionSet::from_capabilities`
+        // (`src/protocol/extensions.rs:82`) has no production caller. Nothing
+        // on the `tools/call` path recovers the extensions a client declares in
+        // `_meta`, so E4 and E5 -- which assert the recovered set at the invoke
+        // funnel -- have nothing to assert against. Rewriting them as direct
+        // `from_capabilities` calls would pass while the function stays
+        // unreachable, which is what the plan rules out.
+        //
+        // So the cell stays empty. This statement is `Role::Both`, and citing
+        // E1-E3 here would claim the client half on server-side evidence --
+        // the same defect with a later date on it. It closes when the recovery
+        // is wired, not when more tests are written.
         evidence: &[],
     },
     Row {
@@ -270,12 +288,43 @@ const MINOR: &[Row] = &[
         ],
     },
     Row {
-        statement: "10. Loosen inputSchema and outputSchema to JSON Schema 2020-12",
+        statement: "10. Loosen inputSchema and outputSchema to JSON Schema 2020-12, \
+                    and structuredContent to any JSON value",
         requirement: "MIK-6865.SCHEMA.1",
         role: Role::Server,
         transport: Transport::Any,
         evidence: &[
-            "mik_7272_exploit_acs::schema::ac_schema_1_no_meta_tool_nests_an_object_inside_an_array",
+            // (a) A 2020-12 keyword absent from draft-07 is accepted in both
+            // an inputSchema and an outputSchema rather than rejected.
+            "capability::schema_validator::tests::ac_schema_10a_accepts_2020_12_keywords_absent_from_draft_07",
+            // (b) A scalar and a bare-array structuredContent survive
+            // enforce_output_schema unchanged under a matching non-object
+            // outputSchema.
+            "gateway::meta_mcp::invoke::response_transform_tests::ac_schema_10b_scalar_structured_content_survives_enforce_output_schema",
+            "gateway::meta_mcp::invoke::response_transform_tests::ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema",
+            // (c) A declared outputSchema is byte-identical in a tools/list
+            // wire response to the one the capability declared.
+            "gateway::meta_mcp::tests::ac_schema_10c_declared_output_schema_is_byte_identical_on_the_wire",
+        ],
+    },
+    Row {
+        statement: "11. Remove the notifications/elicitation/complete notification and the \
+                    elicitationId field of URL mode elicitation requests",
+        requirement: "NFR.CONFORMANCE.1",
+        role: Role::Both,
+        transport: Transport::Any,
+        evidence: &[
+            // (a) The live forward paths cannot put `elicitationId` on the
+            // wire: both re-serialise from `ElicitationCreateParams`, which
+            // names four fields and carries no `flatten`.
+            "gateway::proxy::tests::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths",
+            // (a), legacy half. The relay for a client that must be asked
+            // directly carries the params whole, because 2025-11-25 did not
+            // remove the field.
+            "mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11a_a_legacy_bridge_relay_retains_elicitation_id",
+            // (b) The removed notification is refused before a frame leaves,
+            // at the one site whose method a backend supplies.
+            "mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11b_elicitation_complete_is_refused_unsent",
         ],
     },
     Row {
@@ -306,8 +355,12 @@ fn all_rows() -> Vec<&'static Row> {
 /// exemption teaches nobody anything.
 const TRACKED_GAPS: &[(&str, &str)] = &[(
     "1. extensions field on client and server capabilities",
-    "Cluster B writes E1-E5 of \
-     docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
+    "`ExtensionSet::from_capabilities` (src/protocol/extensions.rs:82) has no \
+         production caller, so nothing on the `tools/call` path recovers client \
+         extensions and the client half of this statement cannot be asserted \
+         against production code -- a product gap, not a missing test. The \
+         server half is carried by E1-E3 of \
+         docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
 )];
 
 #[test]
@@ -359,11 +412,46 @@ fn a_tracked_gap_is_still_a_gap() {
 fn every_statement_names_the_requirement_that_owns_it() {
     // Traceability in the other direction: a row whose requirement is unnamed
     // cannot be closed against the requirements document, so its verdict has
-    // nowhere to go.
+    // nowhere to go. What this asserted until now was the prefix `MIK-`, which
+    // is one of the two id shapes the scope documents allocate -- the
+    // release-wide criteria are `NFR.` ids, and minor 11 is owned by one of
+    // them. A prefix check could not tell an unallocated owner from an
+    // allocated one either way, so the id is resolved against the requirements
+    // corpus instead: an invented owner now fails here.
+    let docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/requirements");
+    let mut corpus = String::new();
+    for entry in std::fs::read_dir(&docs)
+        .expect("requirements directory is readable")
+        .flatten()
+    {
+        let path = entry.path();
+        if path.is_file() {
+            corpus
+                .push_str(&std::fs::read_to_string(&path).expect("requirements file is readable"));
+        }
+    }
+
     for row in all_rows() {
+        // A cell may name several ids and abbreviate a run as `.1-.10`. The
+        // first is the owning one, and the only one resolved here.
+        let owner = row
+            .requirement
+            .split([',', ' '])
+            .next()
+            .unwrap_or_default()
+            .split("-.")
+            .next()
+            .unwrap_or_default();
+
         assert!(
-            row.requirement.contains("MIK-"),
+            owner.starts_with("MIK-") || owner.starts_with("NFR."),
             "no owning requirement for: {}",
+            row.statement
+        );
+
+        assert!(
+            corpus.contains(owner),
+            "'{}' is owned by {owner}, and no such requirement is defined in docs/requirements",
             row.statement
         );
     }
@@ -414,6 +502,25 @@ fn the_matrix_covers_every_major_change() {
         9,
         "the 2026-07-28 changelog lists nine major changes; this matrix has {}",
         MAJOR.len()
+    );
+}
+
+#[test]
+fn the_matrix_covers_every_minor_change() {
+    // The count MAJOR has had since this file was written, and MINOR had not.
+    // Item 11 was missing for exactly the reason the major-change counter
+    // exists: a statement nobody listed is verified by nothing and fails
+    // nothing, so the only thing that can notice it is a count taken against
+    // the changelog rather than against the list itself.
+    //
+    // Twelve, from the changelog's own `Minor changes` heading. Its later
+    // `Deprecated`, `Other schema changes`, `Governance` and `Process`
+    // sections are deliberately outside both lists and outside this count.
+    assert_eq!(
+        MINOR.len(),
+        12,
+        "the 2026-07-28 changelog lists twelve minor changes; this matrix has {}",
+        MINOR.len()
     );
 }
 

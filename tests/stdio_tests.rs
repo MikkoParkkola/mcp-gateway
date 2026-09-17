@@ -11,6 +11,7 @@
 
 use mcp_gateway::config::Config;
 use mcp_gateway::gateway::Gateway;
+use mcp_gateway::gateway::test_helpers::CallerStanding;
 use mcp_gateway::protocol::RequestId;
 use serde_json::json;
 
@@ -107,6 +108,7 @@ async fn test_stdio_initialize_produces_valid_response() {
 
     let _state = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+        session_lifecycle: None,
         env: None,
         backends: Arc::clone(&backends),
         meta_mcp: Arc::clone(&meta_mcp),
@@ -191,7 +193,8 @@ async fn test_stdio_tools_list_returns_meta_tools() {
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
 
     let id = RequestId::Number(2);
-    let response = meta_mcp.handle_tools_list_with_params(id, None, Some("stdio-test"));
+    let response =
+        meta_mcp.handle_tools_list_with_params(id, None, Some("stdio-test"), CallerStanding::Admin);
 
     let serialized = serde_json::to_value(&response).expect("serialize");
     assert!(

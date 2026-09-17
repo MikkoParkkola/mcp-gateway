@@ -209,7 +209,7 @@ impl CountedBackend {
         );
     }
 
-    fn result(&self) -> Value {
+    fn result() -> Value {
         json!({
             "content": [{ "type": "text", "text": MARKER }],
             "structuredContent": { "marker": MARKER }
@@ -269,7 +269,7 @@ impl Transport for CountedBackend {
                 }
                 Ok(JsonRpcResponse::success(
                     RequestId::Number(1),
-                    self.result(),
+                    Self::result(),
                 ))
             }
             _ => Ok(JsonRpcResponse::success(RequestId::Number(1), json!({}))),

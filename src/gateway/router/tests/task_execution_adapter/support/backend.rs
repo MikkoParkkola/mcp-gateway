@@ -68,18 +68,28 @@ impl GateHandle {
     /// dispatch is genuinely in flight, rather than one that has not been
     /// dispatched at all — two states a status poll cannot tell apart.
     ///
-    /// Bounded by attempts rather than by a clock, and for the same reason
-    /// `poll_until_terminal` is: a route that never dispatches must make its
-    /// rows FAIL, not hang the whole test binary waiting for a message that is
-    /// never sent. `yield_now` is what lets the spawned worker — and the
-    /// `spawn_blocking` durable write it awaits — make progress; it is not a
-    /// delay, and no row's correctness depends on how many turns it takes.
+    /// Bounded by a deadline, so that a route that never dispatches makes its
+    /// rows FAIL rather than hang the whole test binary waiting for a message
+    /// that is never sent. `yield_now` is what lets the spawned worker — and
+    /// the `spawn_blocking` durable write it awaits — make progress; it is not
+    /// a delay, and no row's correctness depends on how long it takes.
+    ///
+    /// A turn count cannot bound this wait: the loop never parks the runtime,
+    /// so any fixed number of turns is really a budget of CPU microseconds,
+    /// and the `spawn_blocking` handoff crosses a thread. That budget is
+    /// generous on an idle machine and starves under CI load.
     pub(crate) async fn wait_for_dispatch(&mut self) {
-        const ATTEMPTS: usize = 20_000;
-        for _ in 0..ATTEMPTS {
+        const DISPATCH_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + DISPATCH_BOUND;
+        loop {
             match self.arrived.try_recv() {
                 Ok(()) => return,
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "no dispatch reached the backend in {DISPATCH_BOUND:?}; \
+                         the task was accepted and never handed to the executor"
+                    );
                     tokio::task::yield_now().await;
                 }
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
@@ -87,10 +97,6 @@ impl GateHandle {
                 }
             }
         }
-        panic!(
-            "no dispatch reached the backend in {ATTEMPTS} scheduler turns; \
-             the task was accepted and never handed to the executor"
-        );
     }
 
     /// Let one held dispatch answer.

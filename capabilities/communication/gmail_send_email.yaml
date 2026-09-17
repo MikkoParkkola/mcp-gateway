@@ -1,3 +1,4 @@
+sha256: 0cdd1c4aae7dd5ebe63ddd97a41e3e3566131ee9d9126680fcf2162345a360de
 fulcrum: "1.0"
 name: gmail_send_email
 description: Send email via Gmail API. Requires OAuth 2.0 authentication with Gmail send scope.

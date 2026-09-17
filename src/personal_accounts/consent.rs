@@ -39,6 +39,16 @@ pub(crate) enum GuardedCommit {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum GuardedCommitError {
     #[error("guarded consent commit is not implemented")]
+    // `unix` in the predicate, not just `not(test)`: on a non-unix target the
+    // module-level expectation in `super` already covers every dead item here,
+    // and two expectations over one diagnostic leave the inner one unfulfilled.
+    #[cfg_attr(
+        all(not(test), unix),
+        expect(
+            dead_code,
+            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+        )
+    )]
     RuntimeNotImplemented,
     #[error(transparent)]
     Store(#[from] AccountError),
@@ -50,6 +60,18 @@ impl PersonalAccountStore {
     /// The comparison and the publication run under ONE acquisition of the
     /// authority lock, which is the entire point: between two of them, a
     /// competing grant or revoke lands and is lost.
+    // MIK-6744.STORE.1: guarded-commit is built and unit-tested but has no
+    // caller outside its own #[cfg(test)] tree until the consent-commit
+    // journey wires it in. `expect` (not `allow`) so this self-deletes the
+    // moment production wiring adds a real caller; `cfg_attr(not(test), ..)`
+    // keeps the expectation out of the `lib test` compile unit, where the
+    // test-tree caller already makes the lint fire (dead_code would not fire
+    // there, so a bare `expect` would itself become an `unfulfilled_lint_expectations`
+    // error under `--all-targets`).
+    #[cfg_attr(
+        all(not(test), not(kani)),
+        expect(dead_code, reason = "MIK-6744.STORE.1")
+    )]
     pub(crate) fn commit_grant_if_unchanged(
         &self,
         account: &AccountKey,
@@ -252,10 +274,22 @@ pub(crate) mod witness {
 
     impl Recording {
         /// A position in the log, so a case can bracket exactly one call.
+        #[expect(
+            clippy::unused_self,
+            reason = "self is the held SERIAL guard: it proves a Recording is alive \
+                      for this call even though the log itself is read through the \
+                      global state() slot, not a field on self"
+        )]
         pub(crate) fn mark(&self) -> usize {
             state().as_ref().map_or(0, |state| state.log.len())
         }
 
+        #[expect(
+            clippy::unused_self,
+            reason = "self is the held SERIAL guard: it proves a Recording is alive \
+                      for this call even though the log itself is read through the \
+                      global state() slot, not a field on self"
+        )]
         pub(crate) fn since(&self, mark: usize) -> Vec<(Phase, u64)> {
             state()
                 .as_ref()
@@ -264,6 +298,12 @@ pub(crate) mod witness {
         }
 
         /// Arm the in-lock park for the next acquisition of the watched store.
+        #[expect(
+            clippy::unused_self,
+            reason = "self is the held SERIAL guard: it proves a Recording is alive \
+                      for this call even though the armed state lives in the global \
+                      state() slot, not a field on self"
+        )]
         pub(crate) fn arm_park(&self) -> Park {
             let (entered_tx, entered_rx) = channel();
             let (release_tx, release_rx) = channel();
@@ -284,6 +324,12 @@ pub(crate) mod witness {
         /// the competitor's own logged arrival, not on a sleep and not on a
         /// guess about the scheduler.
         #[track_caller]
+        #[expect(
+            clippy::unused_self,
+            reason = "self is the held SERIAL guard: it proves a Recording is alive \
+                      for this call even though the log itself is read through the \
+                      global state() slot, not a field on self"
+        )]
         pub(crate) fn wait_for_attempt_since(&self, mark: usize) -> u64 {
             let deadline = Instant::now() + DEADLOCK;
             let mut slot = state();

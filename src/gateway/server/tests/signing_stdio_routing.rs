@@ -5,6 +5,8 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::router::backend_tool_targets_for_call;
 use serde_json::{Value, json};
 
+type RoutingCase = (&'static str, Value, &'static [(&'static str, &'static str)]);
+
 #[tokio::test]
 async fn stdio_followup_routing_projection_preserves_backend_target_identity() {
     let meta_mcp = MetaMcp::new(std::sync::Arc::new(crate::backend::BackendRegistry::new()));
@@ -54,7 +56,7 @@ async fn stdio_followup_routing_projection_preserves_backend_target_identity() {
         "arguments": {"body": payload_sentinel}
     });
 
-    let cases: &[(&str, Value, &[(&str, &str)])] = &[
+    let cases: &[RoutingCase] = &[
         (
             "gateway_execute",
             execute_chain,

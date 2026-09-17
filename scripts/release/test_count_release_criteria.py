@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """A number in a heading must say what it counts, immediately.
 
 The release plan's title and one of its section headings each carried a total
@@ -394,6 +394,101 @@ def test_the_live_documents_agree_with_the_ledger():
     assert counter.rollup_membership(criteria, counter.ROLLUP.read_text()) == []
 
 
+CLAUSE_QUALIFIED = "\n".join(
+    [
+        "| MIK-7272.EXT.1 (clause: declare) | declare | T | MET | held | no |",
+        "| MIK-7272.EXT.1 (clause: honour) | honour | T | PARTIAL | open | yes |",
+    ]
+)
+
+
+def test_a_clause_qualified_id_is_read_as_a_criterion():
+    # The ledger splits one criterion into named clauses by suffixing the id
+    # with ` (clause: <word>)`. An anchored id pattern rejects that spelling,
+    # so both rows fell to the malformed branch and the blocking enumeration
+    # could not be produced at all.
+    criteria, malformed = counter.rows(CLAUSE_QUALIFIED)
+    assert malformed == []
+    assert criteria == [
+        ("MIK-7272.EXT.1", "no", "MIK-7272.EXT.1 (clause: declare)"),
+        ("MIK-7272.EXT.1", "yes", "MIK-7272.EXT.1 (clause: honour)"),
+    ]
+
+
+def test_a_malformed_clause_qualifier_is_reported_rather_than_read_loosely():
+    # Only the ledger's own spelling is a clause. A parenthesised word without
+    # the `clause:` key is a typo, and a row that claims to be a criterion and
+    # is not readable as one is malformed, never absent.
+    table = "| MIK-7272.EXT.1 (declare) | declare | T | MET | held | no |"
+    assert counter.rows(table) == ([], ["MIK-7272.EXT.1 (declare)"])
+
+
+def test_a_clause_row_covers_the_requirement_it_splits():
+    # The requirement declares the unsuffixed id; only clause rows exist for it.
+    assert counter.CLAUSE.sub("", "MIK-7272.EXT.1 (clause: honour)") == (
+        "MIK-7272.EXT.1"
+    )
+
+
+def test_a_letter_split_is_not_stripped_like_a_clause():
+    # `.1a` and `.1b` are two criteria, so neither may stand in for a declared
+    # `.1`; stripping them is what made every split invisible to the coverage.
+    assert counter.CLAUSE.sub("", "MIK-7213.CACHE.4a") == "MIK-7213.CACHE.4a"
+
+
+# The `core open` term of the burndown OPEN formula is "neither MET-in-any-
+# qualified-form nor N/A". The Coverage line reports BLOCKING rows, which is a
+# different set: a PARTIAL row flagged non-blocking is open by the formula and
+# absent from the blocking count. The tracker published the blocking count as
+# `core open` for six consecutive entries because nothing emitted the other
+# number. These rows pin the difference.
+OPEN_LEDGER = "\n".join(
+    [
+        "| NFR.SEC.7 | signing | T, M | PARTIAL | evidence | yes |",
+        "| NFR.PERF.1 | latency | T, M | PARTIAL | evidence | no |",
+        "| MIK-7272.ORDER.1 | order | MET (structural) | evidence | no |",
+        "| NFR.COMPAT.3 | config | D | N/A (waived) | evidence | no |",
+        "| MIK-6704.IDENT.1a | identity | MET | evidence | no |",
+    ]
+)
+
+
+def test_open_rows_counts_a_partial_row_that_is_not_blocking():
+    assert counter.open_rows(OPEN_LEDGER) == ["NFR.SEC.7", "NFR.PERF.1"]
+
+
+def test_open_rows_admits_every_qualified_met_and_waived_form():
+    met_only = "\n".join(
+        line for line in OPEN_LEDGER.splitlines() if "PARTIAL" not in line
+    )
+    assert counter.open_rows(met_only) == []
+
+
+def test_open_rows_shares_its_population_with_the_row_parser():
+    """A row `rows` calls malformed is not silently open, and not silently shut.
+
+    The two terms are published side by side, so a private row filter here
+    would let this one rest on a smaller set of rows than the blocking count
+    beside it -- the drift the derivation exists to end, one column across.
+    `rows` reports the row; `main` refuses on a report, so the number is never
+    printed beside a row neither term counted.
+    """
+    flagged = OPEN_LEDGER.replace(
+        "| NFR.SEC.7 | signing | T, M | PARTIAL | evidence | yes |",
+        "| NFR.SEC.7 | signing | T, M | PARTIAL | evidence | no (flagged) |",
+    )
+    _found, malformed = counter.rows(flagged)
+    assert malformed == ["NFR.SEC.7"]
+    assert counter.open_rows(flagged) == ["NFR.PERF.1"]
+
+
+def test_open_rows_differs_from_the_blocking_count_it_is_mistaken_for():
+    found, _ = counter.rows(OPEN_LEDGER)
+    blocking = sum(1 for _p, flag, _s in found if flag == "yes")
+    assert blocking == 1
+    assert len(counter.open_rows(OPEN_LEDGER)) == 2
+
+
 if __name__ == "__main__":
     # CI runs this file as a script, not under pytest. Without this the module
     # defines its tests, exits 0, and the gate reports a pass having asserted
@@ -414,3 +509,5 @@ if __name__ == "__main__":
         f"{len(failed)} failed of {sum(1 for n in globals() if n.startswith('test_'))}"
     )
     sys.exit(1 if failed else 0)
+
+

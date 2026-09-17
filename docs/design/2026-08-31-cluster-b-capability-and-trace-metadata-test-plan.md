@@ -561,7 +561,18 @@ them bears on coverage: if §4.4.3 is answered "both routes", OTEL.1 gains the d
 `POST /mcp/{name}`, which carries no `_meta` at all — and this plan gains a row it does not
 currently have.
 
-## 11. Review round 1 — findings and their disposal
+## 11. Review history — findings and their disposal
+
+**§11 and §12 are NON-NORMATIVE and stay in this file deliberately.** They are dated evidence, not
+specification: §11 records who found what and which commit closed it, §12 reproduces the command
+output the normative sections cite. Nothing in §1-§10 depends on reading them, and a case is never
+justified by a row here. They are not split into a separate log because a disposal that lives away
+from the plan it disposed of is a disposal nobody re-reads when the plan next changes — and two of
+the findings below were only visible as *repeats* because the earlier round sat beside them. If
+this section outgrows the plan it annotates, that trade has flipped and it should be split then,
+for that reason.
+
+### 11.0 Round 1
 
 Two vendors, identical material (this document at `41ef8347`, 27,888 bytes, submitted as the plan
 alone rather than a tree diff). Both returned **SHIP-WITH-FIXES**. A third leg, `kimi-review`,
@@ -683,7 +694,29 @@ claimed-versus-verified column to §11's disposal tables; and re-derive §6's "F
 here" against its six subsections. None blocks the red suite, and each is a plan-level tidy that
 the next verdict-bearing round can take.
 
+### 11.3 Round 3 — findings and their disposal
+
+Same two legs, on the plan and design as repaired through round 2. Recorded per finding: what
+closed it, and whether it was closed by a commit or died at source.
+
+| finding | disposal |
+|---|---|
+| gpt F1 — the OTEL.1 problem statement graded a tree that had moved | **repaired**, `5eee7325`: the statement is recast as history pinned to `b8cfc7e4`, with what `a694dce5` closed and what it left open stated beside it. |
+| gpt F2 — §3.4b's four-predicate table read as current when four had landed | **repaired**, `215cb7b8`: the table keeps its original evidence column and gains an `a694dce5` column; the residual five-field version-`00` row is named as the one predicate still open. |
+| gpt F3 — T1-T6b graded red against a pin where their tests exist | **repaired**, `63a03462`: each row is regraded as a retrofit against `a694dce5^` and names the landed test; the redness that remains is the wiring, not the helper. |
+| gpt F4 — E1 cannot inject an extension source into the entry points | **died at source**: the E1 row already states this in its own text — it tests the injectable `build_server_capabilities` seam and records the two entry points as taking no extension argument. No repair, no round spent. |
+| gpt F5 — §3.1's falsifier pinned to `6daf020f^` cannot compile | **died at source**: §3.1 already replaced the ref-pinned restore with three one-line mutations, and says why a restore that cannot reach the assertion produces no evidence. |
+| gpt IMPROVEMENT — E4/E5 fixtures can be refused before the extension read | **repaired**, `3c50fbe0`: new §3.2 states the fixture contract read from `meta.rs` and `handlers.rs`. |
+| gpt IMPROVEMENT — E7 is recorded as non-discriminating and still counted | **eliminated**, `3c50fbe0`: the row and the section defending it are deleted; the distinction it was reaching for is prose in §6.5. |
+| gpt IMPROVEMENT — review transcripts sit inside a normative plan | **answered in place**, this section's preamble: §11 and §12 are labelled non-normative, with the reason they are not split. |
+| grok — DELETE T0 as subsumed by T11 | **died at source**: the two rows are at different levels and observe different seams. T0 is a **unit** case on the production extractor — feed a body, assert `from_meta`'s three recovered values against the literals — and it is green on the parse and red only on the reach. T11 is an **integration** case observing the invoke funnel. Delete T0 and a parse regression arrives as a T11 failure attributed to the carrier, which is the attribution §5.2's preamble is built to keep straight. |
+| both vendors — §3.1 should assert `"extensions": {}` on an empty source | **died at source**: the field carries `skip_serializing_if = "HashMap::is_empty"` (`types.rs:255`) precisely so an already-supported version's initialize result stays byte-identical. E2 asserts absence, and asserting the empty object would demand a breaking handshake change. |
+
 ## 12. Evidence — the checks, run on 2026-09-06, with their output
+
+**Non-normative, and dated: every command below was run on 2026-09-06 against `b8cfc7e4`.** Where
+the tree has moved since, the normative section says so and names its own pin; a snapshot here is
+never the current state of the code.
 
 A reviewer's HIGH finding on this plan was that its citations shipped as *measured* while nothing
 recorded that any had been run. The answer to that finding is this section, and running it is what

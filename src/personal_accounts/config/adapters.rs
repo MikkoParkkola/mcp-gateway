@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `accounts.adapters` — the Open WebUI signed-header adapter CONFIGURATION.
+//! `accounts.adapters` — the Open `WebUI` signed-header adapter CONFIGURATION.
 //!
 //! SCOPE, STATED PLAINLY. This module is configuration only. It declares the
 //! approved field names, refuses a block that cannot be honoured, and resolves
@@ -81,7 +81,7 @@ pub(crate) enum AdapterKind {
     OpenwebuiSignedHeader,
 }
 
-/// One configured Open WebUI adapter, exactly the approved field set.
+/// One configured Open `WebUI` adapter, exactly the approved field set.
 ///
 /// `deny_unknown_fields` matches the surrounding `accounts` block's posture: a
 /// typo'd knob must be a startup refusal, never a silently inert line. The two
@@ -138,7 +138,7 @@ fn default_clock_skew_seconds() -> u64 {
     DEFAULT_CLOCK_SKEW_SECONDS
 }
 
-/// The literal issuer an Open WebUI assertion is bound to.
+/// The literal issuer an Open `WebUI` assertion is bound to.
 const ISSUER: &str = "open-webui";
 
 /// At least this many resolved secret bytes, per the approved prose.
@@ -492,7 +492,7 @@ pub(crate) fn validate_no_gateway_material_reuse(
         };
         match material {
             Some(value) if !value.is_empty() => {
-                gateway.push((credential.label(), value.into_bytes()))
+                gateway.push((credential.label(), value.into_bytes()));
             }
             _ => {}
         }

@@ -85,7 +85,7 @@ async fn raw_vault_backend_must_not_borrow_the_global_signed_assertion_strategy(
     // a matched `signed_assertion` backend REACHES the transport and carries a
     // minted assertion — not the backend's static header.
     let (meta, dispatches) = raw_gateway(raw_cfg(PropagationStrategyKind::SignedAssertion, true));
-    execute(&meta, RAW_BACKEND, Some(&alice))
+    Box::pin(execute(&meta, RAW_BACKEND, Some(&alice)))
         .await
         .expect("a matched signed_assertion backend must still dispatch");
     let call = dispatches.only();
@@ -100,7 +100,7 @@ async fn raw_vault_backend_must_not_borrow_the_global_signed_assertion_strategy(
 
     for required in [true, false] {
         let (meta, dispatches) = raw_gateway(raw_cfg(PropagationStrategyKind::Vault, required));
-        let error = execute(&meta, RAW_BACKEND, Some(&alice))
+        let error = Box::pin(execute(&meta, RAW_BACKEND, Some(&alice)))
             .await
             .err()
             .unwrap_or_else(|| {

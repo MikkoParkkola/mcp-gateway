@@ -63,7 +63,6 @@ use crate::gateway::oauth::GatewayKeyPair;
 use crate::gateway::server::account_bindings::install_account_strategies;
 use crate::identity_propagation::{IdentityPropagationConfig, PropagationStrategyKind};
 use crate::key_server::oidc::VerifiedIdentity;
-use crate::personal_accounts::CustodyHandle;
 use crate::personal_accounts::config::{
     AccountDescriptor, AccountsConfig, AccountsLimits, DescriptorMode,
 };
@@ -71,6 +70,7 @@ use crate::personal_accounts::identity::AccountDescriptor as AccountKeyDescripto
 use crate::personal_accounts::{
     AccountCustody, AccountKey, GrantRecord, PersonalAccountStore, StoreConfig,
 };
+use crate::personal_accounts::{ConsentExpectation, CustodyHandle, GrantVersion};
 use crate::personal_accounts::{
     CredentialLease, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
     ReleasedCredentials, TokenRefresh,
@@ -215,6 +215,26 @@ pub(super) fn grant(access_token: &str, expires_at: u64) -> GrantRecord {
         provider_account_id: Some("synthetic-provider-account-4410".into()),
         client_id: "synthetic-google-client".into(),
     }
+}
+
+/// The `(expectation, record)` pair that publishes a genuinely NEW grant on top
+/// of `current` for the SAME account: the compare-and-set expectation naming the
+/// grant now in the store, and a successor at [`REFRESHED_REVISION`] carrying
+/// different token material. Used to reconnect an account underneath a
+/// credential that was already prepared.
+pub(super) fn reconnect_from(
+    current: &GrantRecord,
+    access_token: &str,
+) -> (ConsentExpectation, GrantRecord) {
+    let expectation = ConsentExpectation::Connected(GrantVersion {
+        generation: current.generation.clone(),
+        token_revision: current.token_revision,
+        authorization_epoch: current.authorization_epoch,
+        descriptor_revision: current.descriptor_revision.clone(),
+    });
+    let mut next = grant(access_token, current.expires_at);
+    next.token_revision = REFRESHED_REVISION;
+    (expectation, next)
 }
 
 fn store_config(root: &std::path::Path) -> StoreConfig {
@@ -433,6 +453,7 @@ impl crate::transport::Transport for CapturingTransport {
         _params: Option<Value>,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
+        _resend: crate::transport::ResendPermission,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
         self.dispatches.calls.lock().push(Dispatch {
             headers: extra_headers.to_vec(),

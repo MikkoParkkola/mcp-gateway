@@ -1,3 +1,4 @@
+sha256: 500e7556250cdc3c159e3044a863c7d3447168cff7ab6f8ab5d66ec98212336e
 fulcrum: "1.0"
 name: drive_download
 description: Download file content from Google Drive by file ID

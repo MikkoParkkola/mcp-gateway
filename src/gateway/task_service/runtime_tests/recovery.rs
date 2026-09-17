@@ -197,93 +197,16 @@ async fn seed_store(
         .expect("admission hashes the fixture principal")
         .as_digest()
         .to_owned();
+    let fixture = RowFixture {
+        service: &service,
+        owner: &owner,
+        operation: &operation,
+        representation: &representation,
+        workers: &workers,
+    };
     let mut seeded = Vec::new();
     for (key, seed, expected) in rows {
-        let task = Task::create_at(
-            "write",
-            chrono::Utc::now(),
-            TaskOptions {
-                ttl_ms: Some(86_400_000),
-                poll_interval_ms: Some(1_000),
-            },
-        );
-        let slot = Arc::clone(&workers);
-        let created = service
-            .create(
-                request(key, &operation, &representation),
-                &task,
-                "fixture",
-                move || slot.try_acquire_owned().ok(),
-            )
-            .await
-            .expect("the fixture store accepts a create");
-        let CreateOutcome::Created { task, slot } = created else {
-            panic!("row {key} must originate in a real committed task");
-        };
-        // The permit belongs to the worker that never ran; a restart fixture
-        // holds none of it.
-        drop(slot);
-        let id = task.task.id().to_owned();
-        let mut revision = task.revision;
-        match seed {
-            Seed::Undispatched | Seed::V2Undispatched | Seed::Legacy => {}
-            Seed::Dispatched | Seed::V2Dispatched => {
-                service
-                    .store
-                    .mark_dispatched(&owner, &id, revision)
-                    .await
-                    .expect("the dispatch marker is durable");
-            }
-            Seed::InputRequired => {
-                let round = InputRequired {
-                    requests: vec![(
-                        "confirm".to_owned(),
-                        json!({"method": "elicitation/create", "params": {}}),
-                    )],
-                    request_state: Some("opaque-to-the-previous-process".to_owned()),
-                };
-                revision = service
-                    .store
-                    .transition(
-                        &owner,
-                        &id,
-                        revision,
-                        TaskTransition::RequireInput(round),
-                        chrono::Utc::now(),
-                    )
-                    .await
-                    .expect("the fixture opens an input round")
-                    .revision;
-            }
-            Seed::Terminal | Seed::Failed | Seed::Cancelled => {
-                let event = match seed {
-                    Seed::Terminal => TaskTransition::Complete(terminal_result()),
-                    Seed::Failed => TaskTransition::Fail(crate::protocol::JsonRpcError {
-                        code: -32042,
-                        message: "persisted terminal failure".to_owned(),
-                        data: Some(json!({"marker": "failed-before-restart"})),
-                    }),
-                    Seed::Cancelled => TaskTransition::Cancel,
-                    _ => unreachable!("the terminal match arm contains only terminal seeds"),
-                };
-                revision = service
-                    .store
-                    .transition(&owner, &id, revision, event, chrono::Utc::now())
-                    .await
-                    .expect("the fixture settles a task")
-                    .revision;
-            }
-        }
-        let committed = service.get(OWNER, &id).expect("the seeded row is readable");
-        seeded.push(Seeded {
-            key,
-            seed,
-            expected,
-            id,
-            revision: committed.revision,
-            wire: serde_json::to_value(committed.task.wire()).unwrap(),
-        });
-        assert_eq!(seeded.last().unwrap().revision, revision);
+        seeded.push(seed_row(&fixture, key, seed, expected).await);
     }
     service.close().await.expect("custody is released");
     drop(admission);
@@ -295,6 +218,120 @@ async fn seed_store(
         }
     }
     seeded
+}
+
+/// Fixture wiring shared by every row committed into the same store. Grouped
+/// so `seed_row` takes one fixture handle plus the three things that vary
+/// per row.
+struct RowFixture<'a> {
+    service: &'a TaskService,
+    owner: &'a str,
+    operation: &'a Value,
+    representation: &'a Value,
+    workers: &'a Arc<Semaphore>,
+}
+
+/// Commit and settle one row into the shape its `Seed` describes. Split out of
+/// `seed_store` so each row's fixture setup reads as one sequence.
+async fn seed_row(
+    fixture: &RowFixture<'_>,
+    key: &'static str,
+    seed: Seed,
+    expected: Option<Expected>,
+) -> Seeded {
+    let task = Task::create_at(
+        "write",
+        chrono::Utc::now(),
+        TaskOptions {
+            ttl_ms: Some(86_400_000),
+            poll_interval_ms: Some(1_000),
+        },
+    );
+    let slot = Arc::clone(fixture.workers);
+    let created = fixture
+        .service
+        .create(
+            request(key, fixture.operation, fixture.representation),
+            &task,
+            "fixture",
+            move || slot.try_acquire_owned().ok(),
+        )
+        .await
+        .expect("the fixture store accepts a create");
+    let CreateOutcome::Created { task, slot } = created else {
+        panic!("row {key} must originate in a real committed task");
+    };
+    // The permit belongs to the worker that never ran; a restart fixture
+    // holds none of it.
+    drop(slot);
+    let id = task.task.id().to_owned();
+    let mut revision = task.revision;
+    match seed {
+        Seed::Undispatched | Seed::V2Undispatched | Seed::Legacy => {}
+        Seed::Dispatched | Seed::V2Dispatched => {
+            fixture
+                .service
+                .store
+                .mark_dispatched(fixture.owner, &id, revision)
+                .await
+                .expect("the dispatch marker is durable");
+        }
+        Seed::InputRequired => {
+            let round = InputRequired {
+                requests: vec![(
+                    "confirm".to_owned(),
+                    json!({"method": "elicitation/create", "params": {}}),
+                )],
+                request_state: Some("opaque-to-the-previous-process".to_owned()),
+            };
+            revision = fixture
+                .service
+                .store
+                .transition(
+                    fixture.owner,
+                    &id,
+                    revision,
+                    TaskTransition::RequireInput(round),
+                    chrono::Utc::now(),
+                )
+                .await
+                .expect("the fixture opens an input round")
+                .revision;
+        }
+        Seed::Terminal | Seed::Failed | Seed::Cancelled => {
+            let event = match seed {
+                Seed::Terminal => TaskTransition::Complete(terminal_result()),
+                Seed::Failed => TaskTransition::Fail(crate::protocol::JsonRpcError {
+                    code: -32042,
+                    message: "persisted terminal failure".to_owned(),
+                    data: Some(json!({"marker": "failed-before-restart"})),
+                }),
+                Seed::Cancelled => TaskTransition::Cancel,
+                _ => unreachable!("the terminal match arm contains only terminal seeds"),
+            };
+            revision = fixture
+                .service
+                .store
+                .transition(fixture.owner, &id, revision, event, chrono::Utc::now())
+                .await
+                .expect("the fixture settles a task")
+                .revision;
+        }
+    }
+    let committed = fixture
+        .service
+        .get(OWNER, &id)
+        .expect("the seeded row is readable");
+    let row = Seeded {
+        key,
+        seed,
+        expected,
+        id,
+        revision: committed.revision,
+        wire: serde_json::to_value(committed.task.wire()).unwrap(),
+    };
+    assert_eq!(row.revision, revision);
+    row
 }
 
 /// Turn one committed record into the legacy shape, in place: version 1 and no

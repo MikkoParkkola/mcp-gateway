@@ -31,10 +31,11 @@
 //!   member of the set is `gateway_kill_server` — the annotated one and the
 //!   explicit floor — and it is not in design §2's dispatchable-tool list.
 //! * A modern request carries no session at all (`handlers.rs:702-707`,
-//!   `ORDER.2`), so `require_destructive_confirmation` always gets
-//!   `SamplingError::NoSession` ⇒ `Unsupported`, and `ConfirmationPolicy::for_modern()`
-//!   turns that into a refusal. The tasks extension is modern-only, so no
-//!   task-augmented call can ever reach a *confirmed* destructive gate.
+//!   `ORDER.2`), so the gate cannot elicit over a session channel. It answers
+//!   such a caller in band instead (`meta_mcp/mod.rs:2545`): the destructive
+//!   call comes back as an `input_required` question, and the confirmed retry
+//!   is a second request. Either way the answer is produced above the handoff,
+//!   which is what these rows measure.
 //!
 //! So the rows below assert X14 — no record before the gates have run —
 //! using the refusals that genuinely apply to a task-eligible tool, plus the
@@ -226,8 +227,8 @@ async fn x14_a_refusal_above_the_handoff_creates_no_task_and_leaves_the_key_free
         "and nothing was dispatched anywhere else either: {refused}"
     );
 
-    let reused = key_is_still_free(&state, "key-a", "x14-key", 141).await;
-    let id = task_id(&reused);
+    let key_still_free = key_is_still_free(&state, "key-a", "x14-key", 141).await;
+    let id = task_id(&key_still_free);
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     assert_carries_the_backend_result(&settled);
     std::assert_eq!(
@@ -245,8 +246,14 @@ async fn x14_a_refusal_above_the_handoff_creates_no_task_and_leaves_the_key_free
 /// the handoff, so a task-augmented call to it must be answered by the gate and
 /// must leave no record behind. Today the record is minted at
 /// `handlers.rs:1194`, above the admin pre-check at `:1242` and far above the
-/// gate — so today this call is answered with a handle to a task that nothing
+/// gate — so a record minted there is a durable record of an action nothing
 /// confirmed, which is exactly the refusal-ordering defect.
+///
+/// The gate answers a modern caller with the in-band confirmation question
+/// rather than a refusal; the refusal path, for a caller nobody can ask, is
+/// covered by `meta_mcp::tests::an_unconfirmable_destructive_call_is_refused_and_marked`.
+/// What this row measures is the same either way: the answer came from the
+/// gate, above the handoff, and left nothing behind.
 ///
 /// The credential is the admin one on purpose: without it the admin gate refuses
 /// first and the row would never observe the destructive gate at all.
@@ -274,9 +281,12 @@ async fn x14_a_destructive_tool_refused_at_the_gate_creates_no_task_record() {
     )
     .await;
 
-    assert!(
-        refused.get("error").is_some(),
-        "a destructive action whose confirmation cannot be obtained is refused \
+    std::assert_eq!(
+        refused
+            .pointer("/result/resultType")
+            .and_then(Value::as_str),
+        Some("input_required"),
+        "a destructive action is answered by the gate, not dispatched \
          ({status}): {refused}"
     );
     assert!(
@@ -291,8 +301,8 @@ async fn x14_a_destructive_tool_refused_at_the_gate_creates_no_task_record() {
          dispatched: {refused}"
     );
 
-    let reused = key_is_still_free(&state, "key-admin", "x14-destructive", 144).await;
-    let id = task_id(&reused);
+    let key_still_free = key_is_still_free(&state, "key-admin", "x14-destructive", 144).await;
+    let id = task_id(&key_still_free);
     let settled = poll_until_terminal(&state, "key-admin", &id).await;
     assert_carries_the_backend_result(&settled);
     std::assert_eq!(

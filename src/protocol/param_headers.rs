@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `x-mcp-header` schema validation (MIK-7214.HEADER.7/.8).
 //!
 //! A backend declares, inside a tool's `inputSchema`, that one property's value

@@ -112,7 +112,7 @@ impl Fixture {
 ///
 /// The env file is the ONLY place the key material appears; the config holds an
 /// `env:` reference to it, exactly as a deployment does.
-fn fixture(accounts: Accounts<'_>) -> Fixture {
+fn fixture(accounts: &Accounts<'_>) -> Fixture {
     // Guards the hand-written base64 above: a mistyped constant would otherwise
     // make a key-length test pass for the wrong reason.
     let decoded = base64::engine::general_purpose::STANDARD
@@ -142,7 +142,7 @@ fn fixture(accounts: Accounts<'_>) -> Fixture {
         .expect("the fixture root resolves");
 
     let env_path = root.join("accounts.env");
-    std::fs::write(&env_path, format!("{KEY_VAR}={}\n", key_of(&accounts)))
+    std::fs::write(&env_path, format!("{KEY_VAR}={}\n", key_of(accounts)))
         .expect("write the fixture env file");
 
     let body = match accounts {
@@ -276,7 +276,7 @@ fn expect_connected(lookup: AccountLookup) -> GrantRecord {
 /// An omitted `accounts` block must leave startup exactly as it was.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn omitted_accounts_starts_an_ordinary_gateway_with_no_custody() {
-    let fx = fixture(Accounts::Omitted);
+    let fx = fixture(&Accounts::Omitted);
 
     let gateway = build(&fx.config_path)
         .await
@@ -302,7 +302,7 @@ async fn omitted_accounts_starts_an_ordinary_gateway_with_no_custody() {
 /// unreachable by construction.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_misconfigured_accounts_block_is_refused_by_real_resolution() {
-    let fx = fixture(Accounts::Configured(SHORT_KEY_B64));
+    let fx = fixture(&Accounts::Configured(SHORT_KEY_B64));
 
     // Built rather than spelled out, so the assertion cannot drift from the
     // message the configuration layer actually renders.
@@ -338,7 +338,7 @@ async fn a_misconfigured_accounts_block_is_refused_by_real_resolution() {
 /// bytes only through an env file, and a wrong key cannot produce this record.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_started_gateway_owns_the_existing_store_and_reads_its_seeded_grant() {
-    let fx = fixture(Accounts::Configured(KEY_B64));
+    let fx = fixture(&Accounts::Configured(KEY_B64));
     let seeded = fx.seed();
 
     let gateway = build(&fx.config_path)
@@ -379,7 +379,7 @@ async fn a_started_gateway_owns_the_existing_store_and_reads_its_seeded_grant() 
 /// mistyped, serving an empty custody instead of refusing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn construction_refuses_when_no_store_has_been_initialized() {
-    let fx = fixture(Accounts::Configured(KEY_B64));
+    let fx = fixture(&Accounts::Configured(KEY_B64));
 
     let (gateway, outcome) = build_typed(&fx.config_path).await;
     let error = not_scaffold(outcome, "an uninitialized store")
@@ -411,7 +411,7 @@ async fn construction_refuses_when_no_store_has_been_initialized() {
 /// outcomes no constant answer can produce.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_second_gateway_refuses_while_the_first_owns_the_locks() {
-    let fx = fixture(Accounts::Configured(KEY_B64));
+    let fx = fixture(&Accounts::Configured(KEY_B64));
     fx.seed();
 
     let first = build(&fx.config_path)
@@ -453,7 +453,7 @@ async fn a_second_gateway_refuses_while_the_first_owns_the_locks() {
 /// gateway is still holding.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_account_shutdown_frees_both_locks_while_the_gateway_stays_alive() {
-    let fx = fixture(Accounts::Configured(KEY_B64));
+    let fx = fixture(&Accounts::Configured(KEY_B64));
     let seeded = fx.seed();
 
     let gateway = build(&fx.config_path).await.expect("custody starts");
@@ -525,12 +525,13 @@ async fn explicit_account_shutdown_frees_both_locks_while_the_gateway_stays_aliv
 /// environment and the env file are untouched.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_disabled_accounts_block_starts_an_ordinary_gateway_with_no_custody() {
-    let fx = fixture(Accounts::Configured(KEY_B64));
-
     // Anchored: a fixture that renames, reindents or duplicates this line must
     // move this test with it, instead of silently leaving an ENABLED block here
     // and turning the assertions below into a copy of the AC-1 test.
     const ENABLED: &str = "\n  enabled: true\n";
+
+    let fx = fixture(&Accounts::Configured(KEY_B64));
+
     let yaml = std::fs::read_to_string(&fx.config_path).expect("the fixture config is readable");
     assert_eq!(
         yaml.matches(ENABLED).count(),

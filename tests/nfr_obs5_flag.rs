@@ -110,6 +110,7 @@ async fn state(base: &Config, modern_protocol: bool) -> (Arc<AppState>, tempfile
 
     let state = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+        session_lifecycle: None,
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
         backends,

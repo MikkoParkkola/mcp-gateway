@@ -4,6 +4,8 @@
 //! (read-only / destructive / idempotent / open-world) that a backend did not
 //! declare itself, from naming conventions.
 
+use std::collections::HashSet;
+
 use crate::protocol::param_headers::mirrored_params;
 use crate::protocol::{Tool, ToolAnnotations};
 use tracing::warn;
@@ -149,7 +151,26 @@ fn exclude_invalid_header_tools(server: &str, tools: &mut Vec<Tool>) {
 /// response only, so an invalid tool stayed visible through
 /// `BackendMetadata::get_tools_shared`. Order is load-bearing: a tool that is
 /// about to be dropped is not worth annotating.
-pub(crate) fn prepare_tool_metadata(server: &str, tools: &mut Vec<Tool>) {
+///
+/// Returns the tools whose backend-declared annotations grant resend
+/// permission explicitly. They are read before `normalize_tool_annotations`
+/// runs, because it replaces every omitted hint with an inference: afterwards
+/// `get_and_increment` carries `readOnlyHint: true` like any tool that
+/// declared one, and the distinction ADR-012 amendment A1 rests on — only an
+/// explicit `true` grants permission, absent and false both deny — no longer
+/// exists to be read.
+pub(crate) fn prepare_tool_metadata(server: &str, tools: &mut Vec<Tool>) -> HashSet<String> {
     exclude_invalid_header_tools(server, tools);
+    let resend_permitted = tools
+        .iter()
+        .filter(|tool| {
+            tool.annotations.as_ref().is_some_and(|annotations| {
+                annotations.read_only_hint == Some(true)
+                    || annotations.idempotent_hint == Some(true)
+            })
+        })
+        .map(|tool| tool.name.clone())
+        .collect();
     normalize_tool_annotations(server, tools);
+    resend_permitted
 }

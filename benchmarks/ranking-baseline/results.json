@@ -1,0 +1,1617 @@
+{
+  "criterion": "MIK-3274.RANKING.3",
+  "tool_inventory_size": 119,
+  "corpus_size": 114,
+  "candidate_pool_size": 119,
+  "overall_top1_hit_rate": 0.7368421052631579,
+  "overall_top3_hit_rate": 0.8596491228070176,
+  "overall_top5_hit_rate": 0.9035087719298246,
+  "overall_mean_reciprocal_rank": 0.8071325869622403,
+  "by_derivation": {
+    "abbreviation": {
+      "n": 15,
+      "top1_hit_rate": 0.8,
+      "top3_hit_rate": 0.8666666666666667,
+      "mean_reciprocal_rank": 0.8282186948853616
+    },
+    "description_lead": {
+      "n": 24,
+      "top1_hit_rate": 0.9583333333333334,
+      "top3_hit_rate": 1.0,
+      "mean_reciprocal_rank": 0.9791666666666666
+    },
+    "name_phrase": {
+      "n": 30,
+      "top1_hit_rate": 0.7,
+      "top3_hit_rate": 0.9666666666666667,
+      "mean_reciprocal_rank": 0.8288888888888889
+    },
+    "shared_prefix_ambiguous": {
+      "n": 13,
+      "top1_hit_rate": 0.9230769230769231,
+      "top3_hit_rate": 1.0,
+      "mean_reciprocal_rank": 0.9615384615384616
+    },
+    "tag_query": {
+      "n": 20,
+      "top1_hit_rate": 0.6,
+      "top3_hit_rate": 0.6,
+      "mean_reciprocal_rank": 0.6329018122400476
+    },
+    "typo": {
+      "n": 12,
+      "top1_hit_rate": 0.3333333333333333,
+      "top3_hit_rate": 0.5833333333333334,
+      "mean_reciprocal_rank": 0.5054276315789473
+    }
+  },
+  "cases": [
+    {
+      "id": "name_phrase::agent_search",
+      "derivation": "name_phrase",
+      "query": "agent search",
+      "gold_tools": [
+        "agent_search"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::box_extract",
+      "derivation": "name_phrase",
+      "query": "box extract",
+      "gold_tools": [
+        "box_extract"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::bus_subscribe",
+      "derivation": "name_phrase",
+      "query": "bus subscribe",
+      "gold_tools": [
+        "bus_subscribe"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::calendar_list_events",
+      "derivation": "name_phrase",
+      "query": "calendar list events",
+      "gold_tools": [
+        "calendar_list_events"
+      ],
+      "best_gold_rank": 2,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "id": "name_phrase::contacts_list",
+      "derivation": "name_phrase",
+      "query": "contacts list",
+      "gold_tools": [
+        "contacts_list"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::drive_download",
+      "derivation": "name_phrase",
+      "query": "drive download",
+      "gold_tools": [
+        "drive_download"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::github_create_issue",
+      "derivation": "name_phrase",
+      "query": "github create issue",
+      "gold_tools": [
+        "github_create_issue"
+      ],
+      "best_gold_rank": 2,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "id": "name_phrase::github_search_repos",
+      "derivation": "name_phrase",
+      "query": "github search repos",
+      "gold_tools": [
+        "github_search_repos"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::gmail_labels",
+      "derivation": "name_phrase",
+      "query": "gmail labels",
+      "gold_tools": [
+        "gmail_labels"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::gmail_search",
+      "derivation": "name_phrase",
+      "query": "gmail search",
+      "gold_tools": [
+        "gmail_search"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::gws_chat_send",
+      "derivation": "name_phrase",
+      "query": "gws chat send",
+      "gold_tools": [
+        "gws_chat_send"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::gws_drive_upload",
+      "derivation": "name_phrase",
+      "query": "gws drive upload",
+      "gold_tools": [
+        "gws_drive_upload"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::gws_gmail_send",
+      "derivation": "name_phrase",
+      "query": "gws gmail send",
+      "gold_tools": [
+        "gws_gmail_send"
+      ],
+      "best_gold_rank": 3,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.3333333333333333
+    },
+    {
+      "id": "name_phrase::gws_sheets_read",
+      "derivation": "name_phrase",
+      "query": "gws sheets read",
+      "gold_tools": [
+        "gws_sheets_read"
+      ],
+      "best_gold_rank": 2,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "id": "name_phrase::hackernews_get_item",
+      "derivation": "name_phrase",
+      "query": "hackernews get item",
+      "gold_tools": [
+        "hackernews_get_item"
+      ],
+      "best_gold_rank": 5,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": true,
+      "reciprocal_rank": 0.2
+    },
+    {
+      "id": "name_phrase::image_to_text",
+      "derivation": "name_phrase",
+      "query": "image to text",
+      "gold_tools": [
+        "image_to_text"
+      ],
+      "best_gold_rank": 2,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "id": "name_phrase::jira_search",
+      "derivation": "name_phrase",
+      "query": "jira search",
+      "gold_tools": [
+        "jira_search"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::linear_create_issue",
+      "derivation": "name_phrase",
+      "query": "linear create issue",
+      "gold_tools": [
+        "linear_create_issue"
+      ],
+      "best_gold_rank": 2,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "id": "name_phrase::linear_get_teams",
+      "derivation": "name_phrase",
+      "query": "linear get teams",
+      "gold_tools": [
+        "linear_get_teams"
+      ],
+      "best_gold_rank": 3,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.3333333333333333
+    },
+    {
+      "id": "name_phrase::linear_update_issue",
+      "derivation": "name_phrase",
+      "query": "linear update issue",
+      "gold_tools": [
+        "linear_update_issue"
+      ],
+      "best_gold_rank": 2,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "id": "name_phrase::notion_create_page",
+      "derivation": "name_phrase",
+      "query": "notion create page",
+      "gold_tools": [
+        "notion_create_page"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::openpencil_design",
+      "derivation": "name_phrase",
+      "query": "openpencil design",
+      "gold_tools": [
+        "openpencil_design"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::pyghidra_reverse",
+      "derivation": "name_phrase",
+      "query": "pyghidra reverse",
+      "gold_tools": [
+        "pyghidra_reverse"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::salesforce_query",
+      "derivation": "name_phrase",
+      "query": "salesforce query",
+      "gold_tools": [
+        "salesforce_query"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::stripe_charges",
+      "derivation": "name_phrase",
+      "query": "stripe charges",
+      "gold_tools": [
+        "stripe_charges"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::trawl_extract",
+      "derivation": "name_phrase",
+      "query": "trawl extract",
+      "gold_tools": [
+        "trawl_extract"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::video_create",
+      "derivation": "name_phrase",
+      "query": "video create",
+      "gold_tools": [
+        "video_create"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::wayback_availability",
+      "derivation": "name_phrase",
+      "query": "wayback availability",
+      "gold_tools": [
+        "wayback_availability"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::weather_current",
+      "derivation": "name_phrase",
+      "query": "weather current",
+      "gold_tools": [
+        "weather_current"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "name_phrase::youtube_search",
+      "derivation": "name_phrase",
+      "query": "youtube search",
+      "gold_tools": [
+        "youtube_search"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::audio_tts",
+      "derivation": "description_lead",
+      "query": "convert text to natural-sounding speech",
+      "gold_tools": [
+        "audio_tts"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::bus_pull",
+      "derivation": "description_lead",
+      "query": "agent bus — poll for",
+      "gold_tools": [
+        "bus_pull"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::calendar_list_events",
+      "derivation": "description_lead",
+      "query": "list upcoming calendar events from",
+      "gold_tools": [
+        "calendar_list_events"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::contacts_search",
+      "derivation": "description_lead",
+      "query": "search google contacts by name",
+      "gold_tools": [
+        "contacts_search"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::ecb_exchange_rates",
+      "derivation": "description_lead",
+      "query": "get official ecb foreign exchange",
+      "gold_tools": [
+        "ecb_exchange_rates"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::github_get_repo",
+      "derivation": "description_lead",
+      "query": "get github repository metadata by",
+      "gold_tools": [
+        "github_get_repo"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::gmail_labels",
+      "derivation": "description_lead",
+      "query": "list all gmail labels for",
+      "gold_tools": [
+        "gmail_labels"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::gmail_send_email",
+      "derivation": "description_lead",
+      "query": "send email via gmail api",
+      "gold_tools": [
+        "gmail_send_email"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::gws_docs_write",
+      "derivation": "description_lead",
+      "query": "create a new google docs",
+      "gold_tools": [
+        "gws_docs_write"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::gws_gmail_search",
+      "derivation": "description_lead",
+      "query": "search gmail messages using gmail",
+      "gold_tools": [
+        "gws_gmail_search"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::gws_sheets_read",
+      "derivation": "description_lead",
+      "query": "read values from a google",
+      "gold_tools": [
+        "gws_sheets_read"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::hackernews_show",
+      "derivation": "description_lead",
+      "query": "get the ids of current",
+      "gold_tools": [
+        "hackernews_show"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::internet_archive_metadata",
+      "derivation": "description_lead",
+      "query": "fetch the full metadata of",
+      "gold_tools": [
+        "internet_archive_metadata"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::linear_comment_integration",
+      "derivation": "description_lead",
+      "query": "linear comment webhook for real-time",
+      "gold_tools": [
+        "linear_comment_integration"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::linear_get_teams",
+      "derivation": "description_lead",
+      "query": "list all linear teams with",
+      "gold_tools": [
+        "linear_get_teams"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::linear_viewer",
+      "derivation": "description_lead",
+      "query": "get current authenticated linear user",
+      "gold_tools": [
+        "linear_viewer"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::number_facts",
+      "derivation": "description_lead",
+      "query": "get interesting facts about numbers",
+      "gold_tools": [
+        "number_facts"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::public_holidays",
+      "derivation": "description_lead",
+      "query": "get public holidays for any",
+      "gold_tools": [
+        "public_holidays"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::salesforce_query",
+      "derivation": "description_lead",
+      "query": "execute a salesforce soql query",
+      "gold_tools": [
+        "salesforce_query"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::stripe_create_payment_intent",
+      "derivation": "description_lead",
+      "query": "create a stripe paymentintent to",
+      "gold_tools": [
+        "stripe_create_payment_intent"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::uuid_generate",
+      "derivation": "description_lead",
+      "query": "generate uuids using uuid tools",
+      "gold_tools": [
+        "uuid_generate"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::voice_list",
+      "derivation": "description_lead",
+      "query": "list the ai voices available",
+      "gold_tools": [
+        "voice_list"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "description_lead::weather_current",
+      "derivation": "description_lead",
+      "query": "get current weather using open-meteo",
+      "gold_tools": [
+        "weather_current"
+      ],
+      "best_gold_rank": 2,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "id": "description_lead::youtube_subscription_videos",
+      "derivation": "description_lead",
+      "query": "get recent videos from your",
+      "gold_tools": [
+        "youtube_subscription_videos"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::academic",
+      "derivation": "tag_query",
+      "query": "academic",
+      "gold_tools": [
+        "semantic_scholar"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::address-book",
+      "derivation": "tag_query",
+      "query": "address-book",
+      "gold_tools": [
+        "contacts_list"
+      ],
+      "best_gold_rank": 11,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.09090909090909091
+    },
+    {
+      "id": "tag_query::albums",
+      "derivation": "tag_query",
+      "query": "albums",
+      "gold_tools": [
+        "musicbrainz_search"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::archive",
+      "derivation": "tag_query",
+      "query": "archive",
+      "gold_tools": [
+        "gmail_batch_modify",
+        "gmail_modify",
+        "wayback_availability",
+        "wayback_save"
+      ],
+      "best_gold_rank": 4,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": true,
+      "reciprocal_rank": 0.25
+    },
+    {
+      "id": "tag_query::atlassian",
+      "derivation": "tag_query",
+      "query": "atlassian",
+      "gold_tools": [
+        "confluence_search",
+        "jira_search"
+      ],
+      "best_gold_rank": 85,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.011764705882352941
+    },
+    {
+      "id": "tag_query::audit",
+      "derivation": "tag_query",
+      "query": "audit",
+      "gold_tools": [
+        "cisco_scanner"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::avatar",
+      "derivation": "tag_query",
+      "query": "avatar",
+      "gold_tools": [
+        "avatar_list",
+        "video_agent_create",
+        "video_create"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::billing",
+      "derivation": "tag_query",
+      "query": "billing",
+      "gold_tools": [
+        "stripe_charges",
+        "stripe_create_payment_intent"
+      ],
+      "best_gold_rank": 68,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.014705882352941176
+    },
+    {
+      "id": "tag_query::bus",
+      "derivation": "tag_query",
+      "query": "bus",
+      "gold_tools": [
+        "agent_search",
+        "bus_announce",
+        "bus_publish",
+        "bus_pull",
+        "bus_subscribe"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::capture",
+      "derivation": "tag_query",
+      "query": "capture",
+      "gold_tools": [
+        "screenshot_url"
+      ],
+      "best_gold_rank": 4,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": true,
+      "reciprocal_rank": 0.25
+    },
+    {
+      "id": "tag_query::cdp",
+      "derivation": "tag_query",
+      "query": "cdp",
+      "gold_tools": [
+        "desktop_event_bus"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::changelog",
+      "derivation": "tag_query",
+      "query": "changelog",
+      "gold_tools": [
+        "github_get_release"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::charge",
+      "derivation": "tag_query",
+      "query": "charge",
+      "gold_tools": [
+        "stripe_charges"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::checkout",
+      "derivation": "tag_query",
+      "query": "checkout",
+      "gold_tools": [
+        "stripe_create_payment_intent"
+      ],
+      "best_gold_rank": 72,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.013888888888888888
+    },
+    {
+      "id": "tag_query::climate",
+      "derivation": "tag_query",
+      "query": "climate",
+      "gold_tools": [
+        "weather"
+      ],
+      "best_gold_rank": 60,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.016666666666666666
+    },
+    {
+      "id": "tag_query::code-review",
+      "derivation": "tag_query",
+      "query": "code-review",
+      "gold_tools": [
+        "github_create_pr"
+      ],
+      "best_gold_rank": 99,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.010101010101010102
+    },
+    {
+      "id": "tag_query::comments",
+      "derivation": "tag_query",
+      "query": "comments",
+      "gold_tools": [
+        "linear_comment_integration",
+        "linear_get_issue"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::company",
+      "derivation": "tag_query",
+      "query": "company",
+      "gold_tools": [
+        "prh_company"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::computation",
+      "derivation": "tag_query",
+      "query": "computation",
+      "gold_tools": [
+        "wolfram_llm_query"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "tag_query::contacts",
+      "derivation": "tag_query",
+      "query": "contacts",
+      "gold_tools": [
+        "contacts_list",
+        "contacts_search",
+        "salesforce_query"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::ai",
+      "derivation": "abbreviation",
+      "query": "ai",
+      "gold_tools": [
+        "box_extract"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::box",
+      "derivation": "abbreviation",
+      "query": "box",
+      "gold_tools": [
+        "box_extract"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::bus",
+      "derivation": "abbreviation",
+      "query": "bus",
+      "gold_tools": [
+        "agent_search",
+        "bus_announce",
+        "bus_publish",
+        "bus_pull",
+        "bus_subscribe"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::cdn",
+      "derivation": "abbreviation",
+      "query": "cdn",
+      "gold_tools": [
+        "cloudflare_manage"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::cdp",
+      "derivation": "abbreviation",
+      "query": "cdp",
+      "gold_tools": [
+        "desktop_event_bus"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::cdx",
+      "derivation": "abbreviation",
+      "query": "cdx",
+      "gold_tools": [
+        "wayback_cdx"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::chat",
+      "derivation": "abbreviation",
+      "query": "chat",
+      "gold_tools": [
+        "gws_chat_send",
+        "slack_post_message"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::code",
+      "derivation": "abbreviation",
+      "query": "code",
+      "gold_tools": [
+        "github_search_repos"
+      ],
+      "best_gold_rank": 54,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.018518518518518517
+    },
+    {
+      "id": "abbreviation::crm",
+      "derivation": "abbreviation",
+      "query": "crm",
+      "gold_tools": [
+        "salesforce_query"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::data",
+      "derivation": "abbreviation",
+      "query": "data",
+      "gold_tools": [
+        "gws_sheets_append",
+        "gws_sheets_read"
+      ],
+      "best_gold_rank": 14,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.07142857142857142
+    },
+    {
+      "id": "abbreviation::dns",
+      "derivation": "abbreviation",
+      "query": "dns",
+      "gold_tools": [
+        "cloudflare_manage"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::docs",
+      "derivation": "abbreviation",
+      "query": "docs",
+      "gold_tools": [
+        "gws_docs_read",
+        "gws_docs_write"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::ecb",
+      "derivation": "abbreviation",
+      "query": "ecb",
+      "gold_tools": [
+        "ecb_exchange_rates"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "abbreviation::edit",
+      "derivation": "abbreviation",
+      "query": "edit",
+      "gold_tools": [
+        "linear_update_issue"
+      ],
+      "best_gold_rank": 3,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.3333333333333333
+    },
+    {
+      "id": "abbreviation::feed",
+      "derivation": "abbreviation",
+      "query": "feed",
+      "gold_tools": [
+        "youtube_subscription_videos"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::bus",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "bus",
+      "gold_tools": [
+        "bus_announce",
+        "bus_publish",
+        "bus_pull",
+        "bus_subscribe"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::calendar",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "calendar",
+      "gold_tools": [
+        "calendar_create_event",
+        "calendar_free_slots",
+        "calendar_get_attachment",
+        "calendar_list_events"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::github",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "github",
+      "gold_tools": [
+        "github_create_issue",
+        "github_create_pr",
+        "github_get_release",
+        "github_get_repo",
+        "github_search_repos"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::gmail",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "gmail",
+      "gold_tools": [
+        "gmail_batch_modify",
+        "gmail_get_attachment",
+        "gmail_get_message",
+        "gmail_labels",
+        "gmail_modify",
+        "gmail_profile",
+        "gmail_save_attachment",
+        "gmail_search",
+        "gmail_send_email"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::gws",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "gws",
+      "gold_tools": [
+        "gws_calendar_events",
+        "gws_calendar_insert",
+        "gws_chat_send",
+        "gws_docs_read",
+        "gws_docs_write",
+        "gws_drive_list",
+        "gws_drive_upload",
+        "gws_gmail_forward",
+        "gws_gmail_reply",
+        "gws_gmail_search",
+        "gws_gmail_send",
+        "gws_gmail_triage",
+        "gws_gmail_watch",
+        "gws_sheets_append",
+        "gws_sheets_read",
+        "gws_tasks_create",
+        "gws_tasks_list"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::hackernews",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "hackernews",
+      "gold_tools": [
+        "hackernews_ask",
+        "hackernews_get_item",
+        "hackernews_show",
+        "hackernews_top",
+        "hackernews_user"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::internet",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "internet",
+      "gold_tools": [
+        "internet_archive_changes",
+        "internet_archive_metadata",
+        "internet_archive_search"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::linear",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "linear",
+      "gold_tools": [
+        "linear_add_comment",
+        "linear_attach_url",
+        "linear_comment_integration",
+        "linear_create_issue",
+        "linear_create_project",
+        "linear_create_webhook",
+        "linear_get_issue",
+        "linear_get_teams",
+        "linear_list_issues",
+        "linear_list_projects",
+        "linear_search_issues",
+        "linear_update_issue",
+        "linear_viewer"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::random",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "random",
+      "gold_tools": [
+        "random_joke",
+        "random_quote",
+        "random_user"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::stripe",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "stripe",
+      "gold_tools": [
+        "stripe_charges",
+        "stripe_create_payment_intent",
+        "stripe_list_charges"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::video",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "video",
+      "gold_tools": [
+        "video_agent_create",
+        "video_create",
+        "video_download",
+        "video_get"
+      ],
+      "best_gold_rank": 2,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "id": "shared_prefix_ambiguous::wayback",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "wayback",
+      "gold_tools": [
+        "wayback_availability",
+        "wayback_cdx",
+        "wayback_save"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "shared_prefix_ambiguous::youtube",
+      "derivation": "shared_prefix_ambiguous",
+      "query": "youtube",
+      "gold_tools": [
+        "youtube_history",
+        "youtube_search",
+        "youtube_subscription_videos",
+        "youtube_subscriptions"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "typo::agent_search",
+      "derivation": "typo",
+      "query": "agnet search",
+      "gold_tools": [
+        "agent_search"
+      ],
+      "best_gold_rank": 2,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "id": "typo::contacts_list",
+      "derivation": "typo",
+      "query": "contcats list",
+      "gold_tools": [
+        "contacts_list"
+      ],
+      "best_gold_rank": 3,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.3333333333333333
+    },
+    {
+      "id": "typo::github_create_issue",
+      "derivation": "typo",
+      "query": "gituhb create issue",
+      "gold_tools": [
+        "github_create_issue"
+      ],
+      "best_gold_rank": 4,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": true,
+      "reciprocal_rank": 0.25
+    },
+    {
+      "id": "typo::gmail_labels",
+      "derivation": "typo",
+      "query": "gmial labels",
+      "gold_tools": [
+        "gmail_labels"
+      ],
+      "best_gold_rank": 2,
+      "top1_hit": false,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "id": "typo::hackernews_get_item",
+      "derivation": "typo",
+      "query": "hackenrews get item",
+      "gold_tools": [
+        "hackernews_get_item"
+      ],
+      "best_gold_rank": 5,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": true,
+      "reciprocal_rank": 0.2
+    },
+    {
+      "id": "typo::jira_search",
+      "derivation": "typo",
+      "query": "jiar search",
+      "gold_tools": [
+        "jira_search"
+      ],
+      "best_gold_rank": 19,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.05263157894736842
+    },
+    {
+      "id": "typo::linear_get_teams",
+      "derivation": "typo",
+      "query": "linaer get teams",
+      "gold_tools": [
+        "linear_get_teams"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "typo::notion_create_page",
+      "derivation": "typo",
+      "query": "notoin create page",
+      "gold_tools": [
+        "notion_create_page"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "typo::pyghidra_reverse",
+      "derivation": "typo",
+      "query": "pyghdira reverse",
+      "gold_tools": [
+        "pyghidra_reverse"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "typo::stripe_charges",
+      "derivation": "typo",
+      "query": "strpie charges",
+      "gold_tools": [
+        "stripe_charges"
+      ],
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "id": "typo::video_create",
+      "derivation": "typo",
+      "query": "viedo create",
+      "gold_tools": [
+        "video_create"
+      ],
+      "best_gold_rank": 16,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.0625
+    },
+    {
+      "id": "typo::weather_current",
+      "derivation": "typo",
+      "query": "weahter current",
+      "gold_tools": [
+        "weather_current"
+      ],
+      "best_gold_rank": 6,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.16666666666666666
+    }
+  ]
+}

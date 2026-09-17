@@ -2,13 +2,18 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Transport implementations for MCP backends
 
+mod command_split;
 mod http;
+pub(crate) mod notification_sink;
 mod stdio;
 pub mod websocket;
 
+pub use self::command_split::{split_command, split_command_unix, split_command_windows};
 pub use self::http::HttpTransport;
 pub use self::stdio::StdioTransport;
 pub use self::websocket::McpFrame;
+
+use std::collections::HashSet;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -16,6 +21,67 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 
 use crate::{Result, protocol::JsonRpcResponse};
+
+/// Whether a request the gateway already put on the wire may be sent a second
+/// time (ADR-012 A3).
+///
+/// A transport failure after the backend acted is indistinguishable from one
+/// before it, so no resend site can decide this on its own — the permission
+/// travels down from the layer that knows the method and the tool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResendPermission {
+    /// Do not re-issue; surface the original error instead.
+    Denied,
+    /// The call is provably free of a duplicable side effect.
+    Permitted,
+}
+
+/// Methods that cannot carry a side effect, so re-issuing one is safe.
+///
+/// Deliberately an allowlist rather than a denylist: a method added to MCP
+/// later must inherit `Denied`, not permission (ADR-012 A3, amendment 2).
+const SIDE_EFFECT_FREE_METHODS: &[&str] = &[
+    "initialize",
+    "ping",
+    "tools/list",
+    // The modern-era liveness probe (`Backend::liveness_method`). Read-only in
+    // the same sense as `tools/list`: it asks the peer what it is, changes
+    // nothing, and the probe depends on session recovery being able to resend
+    // it the way `ping` always could (MIK-7217, OUTBOUND.1).
+    "server/discover",
+    "resources/list",
+    "resources/read",
+    "prompts/list",
+    "prompts/get",
+];
+
+/// The single resend predicate, shared by both resend sites (the backend retry
+/// layer and HTTP session-expiry recovery) so the two cannot drift apart.
+///
+/// A `tools/call` is permitted only when its tool is in `permitted` — the set
+/// the backend built from explicit `readOnlyHint`/`idempotentHint` annotations
+/// (ADR-012 A1). Everything else is permitted only by the allowlist above.
+#[must_use]
+pub fn resend_permission<S: std::hash::BuildHasher>(
+    method: &str,
+    params: Option<&Value>,
+    permitted: &HashSet<String, S>,
+) -> ResendPermission {
+    if method == "tools/call" {
+        let named = params
+            .and_then(|params| params.get("name"))
+            .and_then(Value::as_str);
+        return match named {
+            Some(name) if permitted.contains(name) => ResendPermission::Permitted,
+            _ => ResendPermission::Denied,
+        };
+    }
+    if SIDE_EFFECT_FREE_METHODS.contains(&method) {
+        ResendPermission::Permitted
+    } else {
+        ResendPermission::Denied
+    }
+}
 
 /// Transport trait for MCP communication
 #[async_trait]
@@ -38,12 +104,20 @@ pub trait Transport: Send + Sync {
     /// behavior byte-for-byte. Transports that carry no HTTP headers (stdio,
     /// websocket) ignore both `extra_headers` and `identity_key` and behave
     /// exactly like [`Transport::request`]. Default impl ignores them.
+    ///
+    /// `_resend` says whether this one request may be re-issued should the
+    /// transport have to recover mid-flight (ADR-012 A3). It is a parameter,
+    /// not transport state, for the same tenant-isolation reason the headers
+    /// are: on a shared transport, one caller's read-only call must not license
+    /// a resend of another caller's side-effecting one. The default impl
+    /// ignores it because it recovers nothing.
     async fn request_with_headers(
         &self,
         method: &str,
         params: Option<Value>,
         _extra_headers: &[(String, String)],
         _identity_key: Option<&str>,
+        _resend: ResendPermission,
     ) -> Result<JsonRpcResponse> {
         self.request(method, params).await
     }
@@ -148,18 +222,21 @@ pub trait Transport: Send + Sync {
 /// The entry is meant to live exactly as long as the request does, so the guard
 /// removes it on drop. On the success path the reader has already removed the
 /// entry, making the removal a harmless no-op.
-pub(crate) struct PendingRequestGuard<'a> {
-    pending: &'a DashMap<String, oneshot::Sender<JsonRpcResponse>>,
+///
+/// Generic over the reply payload: the stdio transport's map carries
+/// [`JsonRpcResponse`], and the gateway's stdio client channel carries the raw
+/// reply frame as a `Value`, because that is what `ClientChannel::send_request`
+/// hands back (`src/gateway/proxy.rs:523`). One guard, both maps — a second
+/// copy of this type is a second place for the cancellation contract to rot.
+pub(crate) struct PendingRequestGuard<'a, T = JsonRpcResponse> {
+    pending: &'a DashMap<String, oneshot::Sender<T>>,
     key: String,
 }
 
-impl<'a> PendingRequestGuard<'a> {
+impl<'a, T> PendingRequestGuard<'a, T> {
     /// Wrap a `pending` map entry so it is removed when the guard drops.
     #[must_use]
-    pub(crate) fn new(
-        pending: &'a DashMap<String, oneshot::Sender<JsonRpcResponse>>,
-        key: &str,
-    ) -> Self {
+    pub(crate) fn new(pending: &'a DashMap<String, oneshot::Sender<T>>, key: &str) -> Self {
         Self {
             pending,
             key: key.to_string(),
@@ -167,7 +244,7 @@ impl<'a> PendingRequestGuard<'a> {
     }
 }
 
-impl Drop for PendingRequestGuard<'_> {
+impl<T> Drop for PendingRequestGuard<'_, T> {
     fn drop(&mut self) {
         self.pending.remove(&self.key);
     }

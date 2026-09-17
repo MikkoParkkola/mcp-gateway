@@ -65,7 +65,7 @@ impl Mode {
     }
 }
 
-fn tools_list_request(id: Value) -> Value {
+fn tools_list_request(id: &Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/list", "params": {}})
 }
 
@@ -211,7 +211,7 @@ async fn http_tools_list_at(gateway: &HttpGateway, session: &str, path: &str, id
         .client
         .post(format!("{}{path}", gateway.url))
         .header("mcp-session-id", session)
-        .json(&tools_list_request(json!(id)))
+        .json(&tools_list_request(&json!(id)))
         .send()
         .await
         .expect("gateway HTTP response");
@@ -306,7 +306,7 @@ async fn traditional_http_tools_list(mode: Mode) {
     let gateway = HttpGateway::start(config).await;
     let session = gateway.initialize().await;
     let response = gateway
-        .call(&session, &tools_list_request(json!(mode.label())))
+        .call(&session, &tools_list_request(&json!(mode.label())))
         .await;
     let tools = listed_tools(&response);
     assert_invoke_schema(tools, mode);
@@ -318,7 +318,7 @@ async fn traditional_stdio_tools_list(mode: Mode) {
     let mut config = fixture_config(&backend.url);
     mode.apply(&mut config);
     let mut gateway = StdioGateway::start(config).await;
-    let response = gateway.call(tools_list_request(json!(mode.label()))).await;
+    let response = gateway.call(tools_list_request(&json!(mode.label()))).await;
     let tools = listed_tools(&response);
     assert_invoke_schema(tools, mode);
     assert_foreign_tools_lack_nonce(tools);
@@ -372,7 +372,7 @@ async fn http_code_mode_schemas_never_gain_nonce() {
     let gateway = HttpGateway::start(config).await;
     let session = gateway.initialize().await;
     let static_list = gateway
-        .call(&session, &tools_list_request(json!("code-mode-static")))
+        .call(&session, &tools_list_request(&json!("code-mode-static")))
         .await;
     assert_code_mode_surface(listed_tools(&static_list));
 }
@@ -384,7 +384,7 @@ async fn stdio_code_mode_schemas_never_gain_nonce() {
     config["code_mode"] = json!({"enabled": true});
     let mut gateway = StdioGateway::start(config).await;
     let response = gateway
-        .call(tools_list_request(json!("stdio-code-mode")))
+        .call(tools_list_request(&json!("stdio-code-mode")))
         .await;
     assert_code_mode_surface(listed_tools(&response));
 }
@@ -404,7 +404,7 @@ async fn http_url_override_code_mode_does_not_borrow_invoke_nonce() {
     assert_code_mode_surface(listed_tools(&override_list));
 
     let traditional = gateway
-        .call(&session, &tools_list_request(json!("traditional-control")))
+        .call(&session, &tools_list_request(&json!("traditional-control")))
         .await;
     assert_invoke_schema(listed_tools(&traditional), Mode::Required);
 }
@@ -419,7 +419,7 @@ async fn http_exposure_filter_does_not_readd_suppressed_tools() {
     let hidden_gateway = HttpGateway::start(hide_invoke).await;
     let hidden_session = hidden_gateway.initialize().await;
     let hidden_response = hidden_gateway
-        .call(&hidden_session, &tools_list_request(json!("hide-invoke")))
+        .call(&hidden_session, &tools_list_request(&json!("hide-invoke")))
         .await;
     let hidden = listed_tools(&hidden_response);
     let hidden_names: BTreeSet<&str> = hidden
@@ -445,7 +445,7 @@ async fn http_exposure_filter_does_not_readd_suppressed_tools() {
     let gateway = HttpGateway::start(keep_invoke).await;
     let session = gateway.initialize().await;
     let kept_response = gateway
-        .call(&session, &tools_list_request(json!("expose-invoke")))
+        .call(&session, &tools_list_request(&json!("expose-invoke")))
         .await;
     let kept = listed_tools(&kept_response);
     let kept_names: BTreeSet<&str> = kept

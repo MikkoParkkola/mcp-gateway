@@ -115,6 +115,7 @@ async fn test_router_app_state_with(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -172,6 +173,7 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -227,6 +229,7 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -305,6 +308,7 @@ async fn test_router_app_state_with_provenance_backend(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -393,6 +397,7 @@ async fn test_router_app_state_minting_without_route_audit(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -451,6 +456,7 @@ async fn test_router_app_state_with_ssrf(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -523,6 +529,7 @@ async fn test_router_app_state_with_auth(auth: &AuthConfig) -> (Arc<AppState>, t
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -590,6 +597,7 @@ async fn test_router_app_state_with_auth_and_config(
     .expect("the configured fixture task store opens");
 
     let state = Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -886,6 +894,55 @@ fn ac_control_3b_absent_params_meta_changes_nothing() {
         merge_client_meta(args, Some(&params), true),
         json!({"q": 1})
     );
+}
+
+/// BLOCK-3: the predicate the router feeds to `merge_client_meta` answers
+/// "would this gateway confirm the name exists", not "is this one of ours".
+/// A surfaced backend tool answers yes to the first question, so the client's
+/// `_meta` was injected into arguments the backend never asked for.
+#[test]
+fn block3_a_surfaced_backend_tool_does_not_take_the_clients_meta() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let params = json!({
+        "name": "backend__tool",
+        "arguments": {"city": "Oslo"},
+        "_meta": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    });
+    let (name, args) = extract_tools_call_params(Some(&params));
+    let merged = merge_client_meta(args, Some(&params), meta.exposes_meta_tool(name));
+    assert_eq!(
+        merged,
+        json!({"city": "Oslo"}),
+        "`backend__tool` is not a gateway meta-tool, so the direct route must \
+         hand the backend the arguments the client actually sent"
+    );
+}
+
+/// BLOCK-3, the other half: narrowing the predicate must not drop the merge for
+/// a name the gateway does own. An admin tool is included deliberately — the
+/// router asks this predicate *before* its admin pre-check, so an admin name
+/// missing from the roster would lose the client's `_meta` silently.
+#[test]
+fn block3_a_governed_meta_tool_still_takes_the_clients_meta() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    for tool in ["gateway_invoke", "gateway_kill_server"] {
+        let params = json!({
+            "name": tool,
+            "arguments": {"server": "weather"},
+            "_meta": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+        });
+        let (name, args) = extract_tools_call_params(Some(&params));
+        let merged = merge_client_meta(args, Some(&params), meta.exposes_meta_tool(name));
+        assert_eq!(
+            merged,
+            json!({
+                "server": "weather",
+                "_meta": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+            }),
+            "{tool} is a gateway meta-tool, so its handler must still see the \
+             client's `_meta`"
+        );
+    }
 }
 
 // =====================================================================
@@ -2647,16 +2704,14 @@ async fn run_step_with_identity(
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
     };
-    state
-        .meta_mcp
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_run_playbook",
-            serde_json::json!({ "name": "scoped", "arguments": {} }),
-            None,
-            caller,
-        )
-        .await
+    Box::pin(state.meta_mcp.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_run_playbook",
+        serde_json::json!({ "name": "scoped", "arguments": {} }),
+        None,
+        caller,
+    ))
+    .await
 }
 
 /// Run a one-step playbook through the production path, with the real router
@@ -2670,7 +2725,10 @@ async fn run_step_as(
     server: &str,
     tool: &str,
 ) -> JsonRpcResponse {
-    run_step_with_identity(state, client, None, None, server, tool).await
+    Box::pin(run_step_with_identity(
+        state, client, None, None, server, tool,
+    ))
+    .await
 }
 
 /// The text a dispatch came back with, whether it succeeded or failed.
@@ -2697,7 +2755,7 @@ async fn authz_1_playbook_step_outside_client_backend_scope_is_refused() {
         test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/")).await;
     let client = scoped_client("scoped", vec!["alpha".to_string()], None);
 
-    let response = run_step_as(&state, &client, "beta", "read").await;
+    let response = Box::pin(run_step_as(&state, &client, "beta", "read")).await;
 
     let msg = response_text(&response);
     assert!(
@@ -2720,7 +2778,7 @@ async fn authz_1a_playbook_step_inside_client_backend_scope_is_not_refused() {
         test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     let client = scoped_client("scoped", vec!["alpha".to_string()], None);
 
-    let response = run_step_as(&state, &client, "alpha", "read").await;
+    let response = Box::pin(run_step_as(&state, &client, "alpha", "read")).await;
 
     // The backend is unreachable, so this fails at the network — deliberately.
     // What must NOT appear is an authorization refusal: the point is that the
@@ -2743,7 +2801,7 @@ async fn authz_2_playbook_step_outside_client_tool_scope_is_refused() {
         Some(vec!["safe_*".to_string()]),
     );
 
-    let response = run_step_as(&state, &client, "alpha", "danger_tool").await;
+    let response = Box::pin(run_step_as(&state, &client, "alpha", "danger_tool")).await;
 
     let msg = response_text(&response);
     assert!(
@@ -2766,7 +2824,7 @@ async fn authz_2a_playbook_step_inside_client_tool_scope_is_not_refused() {
         Some(vec!["safe_*".to_string()]),
     );
 
-    let response = run_step_as(&state, &client, "alpha", "safe_read").await;
+    let response = Box::pin(run_step_as(&state, &client, "alpha", "safe_read")).await;
 
     assert_eq!(
         super::handlers::refusal_status(&response),
@@ -2797,7 +2855,7 @@ async fn authz_playbook_denial_maps_to_forbidden() {
         test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/")).await;
     let client = scoped_client("scoped", vec!["alpha".to_string()], None);
 
-    let response = run_step_as(&state, &client, "beta", "read").await;
+    let response = Box::pin(run_step_as(&state, &client, "beta", "read")).await;
     assert!(
         response.error.is_some(),
         "the step must be refused: {}",
@@ -2863,16 +2921,14 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
     };
-    let response = state
-        .meta_mcp
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_run_playbook",
-            serde_json::json!({ "name": "no_such_playbook", "arguments": {} }),
-            None,
-            caller,
-        )
-        .await;
+    let response = Box::pin(state.meta_mcp.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_run_playbook",
+        serde_json::json!({ "name": "no_such_playbook", "arguments": {} }),
+        None,
+        caller,
+    ))
+    .await;
 
     assert!(
         response.error.is_some(),
@@ -2906,7 +2962,13 @@ async fn authz_four_refusal_branches_carry_the_status() {
         vec!["alpha".to_string()],
         Some(vec!["safe_*".to_string()]),
     );
-    let tool_refusal = run_step_as(&scoped_state, &tool_scoped, "alpha", "danger_tool").await;
+    let tool_refusal = Box::pin(run_step_as(
+        &scoped_state,
+        &tool_scoped,
+        "alpha",
+        "danger_tool",
+    ))
+    .await;
     assert_eq!(
         super::handlers::refusal_status(&tool_refusal),
         Some(StatusCode::FORBIDDEN),
@@ -2917,7 +2979,8 @@ async fn authz_four_refusal_branches_carry_the_status() {
     let backend_scoped = scoped_client("scoped", vec!["alpha".to_string()], None);
     let (backend_state, _backend_store) =
         test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/")).await;
-    let backend_refusal = run_step_as(&backend_state, &backend_scoped, "beta", "read").await;
+    let backend_refusal =
+        Box::pin(run_step_as(&backend_state, &backend_scoped, "beta", "read")).await;
     assert_eq!(
         super::handlers::refusal_status(&backend_refusal),
         Some(StatusCode::FORBIDDEN),
@@ -2940,8 +3003,13 @@ async fn authz_four_refusal_branches_carry_the_status() {
         ));
     }
     let unrestricted = scoped_client("scoped", vec![], None);
-    let policy_refusal =
-        run_step_as(&policy_state, &unrestricted, "alpha", "globally_blocked").await;
+    let policy_refusal = Box::pin(run_step_as(
+        &policy_state,
+        &unrestricted,
+        "alpha",
+        "globally_blocked",
+    ))
+    .await;
     assert_eq!(
         super::handlers::refusal_status(&policy_refusal),
         Some(StatusCode::FORBIDDEN),
@@ -2949,7 +3017,13 @@ async fn authz_four_refusal_branches_carry_the_status() {
         response_text(&policy_refusal)
     );
 
-    let name_refusal = run_step_as(&policy_state, &unrestricted, "alpha", "bad/name").await;
+    let name_refusal = Box::pin(run_step_as(
+        &policy_state,
+        &unrestricted,
+        "alpha",
+        "bad/name",
+    ))
+    .await;
     assert_eq!(
         super::handlers::refusal_status(&name_refusal),
         Some(StatusCode::FORBIDDEN),
@@ -2981,7 +3055,7 @@ async fn authz_3_playbook_step_denied_by_global_tool_policy_is_refused() {
     }
     let client = scoped_client("scoped", vec![], None);
 
-    let response = run_step_as(&state, &client, "alpha", "globally_blocked").await;
+    let response = Box::pin(run_step_as(&state, &client, "alpha", "globally_blocked")).await;
 
     let msg = response_text(&response);
     assert!(
@@ -3011,7 +3085,7 @@ async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
     }
     let client = scoped_client("scoped", vec![], None);
 
-    let response = run_step_as(&state, &client, "alpha", "permitted").await;
+    let response = Box::pin(run_step_as(&state, &client, "alpha", "permitted")).await;
 
     assert_eq!(
         super::handlers::refusal_status(&response),
@@ -3117,8 +3191,15 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
         ..CertIdentity::default()
     };
 
-    let refused =
-        run_step_with_identity(&state, &client, Some(&cert), None, "alpha", "blocked").await;
+    let refused = Box::pin(run_step_with_identity(
+        &state,
+        &client,
+        Some(&cert),
+        None,
+        "alpha",
+        "blocked",
+    ))
+    .await;
     assert_eq!(
         super::handlers::refusal_status(&refused),
         Some(StatusCode::FORBIDDEN),
@@ -3126,8 +3207,15 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
         response_text(&refused)
     );
 
-    let permitted =
-        run_step_with_identity(&state, &client, Some(&cert), None, "alpha", "permitted").await;
+    let permitted = Box::pin(run_step_with_identity(
+        &state,
+        &client,
+        Some(&cert),
+        None,
+        "alpha",
+        "permitted",
+    ))
+    .await;
     assert_eq!(
         super::handlers::refusal_status(&permitted),
         None,
@@ -3165,8 +3253,15 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
         raw_scopes: vec!["tools:alpha:permitted:*".to_string()],
     };
 
-    let refused =
-        run_step_with_identity(&state, &client, None, Some(&agent), "alpha", "blocked").await;
+    let refused = Box::pin(run_step_with_identity(
+        &state,
+        &client,
+        None,
+        Some(&agent),
+        "alpha",
+        "blocked",
+    ))
+    .await;
     assert_eq!(
         super::handlers::refusal_status(&refused),
         Some(StatusCode::FORBIDDEN),
@@ -3174,8 +3269,15 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
         response_text(&refused)
     );
 
-    let permitted =
-        run_step_with_identity(&state, &client, None, Some(&agent), "alpha", "permitted").await;
+    let permitted = Box::pin(run_step_with_identity(
+        &state,
+        &client,
+        None,
+        Some(&agent),
+        "alpha",
+        "permitted",
+    ))
+    .await;
     assert_eq!(
         super::handlers::refusal_status(&permitted),
         None,
@@ -3186,7 +3288,15 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
 
     // And with NO agent identity at all, agent auth being enabled must refuse:
     // the check is fail-closed, and this pins that it still is.
-    let anonymous = run_step_with_identity(&state, &client, None, None, "alpha", "permitted").await;
+    let anonymous = Box::pin(run_step_with_identity(
+        &state,
+        &client,
+        None,
+        None,
+        "alpha",
+        "permitted",
+    ))
+    .await;
     assert_eq!(
         super::handlers::refusal_status(&anonymous),
         Some(StatusCode::FORBIDDEN),
@@ -3234,16 +3344,14 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
     };
-    let response = state
-        .meta_mcp
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_run_playbook",
-            serde_json::json!({ "name": "no_such_playbook", "arguments": {} }),
-            None,
-            caller,
-        )
-        .await;
+    let response = Box::pin(state.meta_mcp.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_run_playbook",
+        serde_json::json!({ "name": "no_such_playbook", "arguments": {} }),
+        None,
+        caller,
+    ))
+    .await;
 
     let error = response.error.as_ref().expect("the control must error");
     assert!(

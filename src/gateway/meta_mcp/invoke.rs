@@ -31,6 +31,11 @@ use crate::provider::transforms::ResponseTransform;
 use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
+/// `logger` field on every `notifications/message` this module raises
+/// (ADR-014 §3). One name for both sites: a caller filtering on the logger
+/// wants the tool-invocation channel, not one name per outcome.
+const GATEWAY_INVOKE_LOGGER: &str = "gateway.invoke";
+
 /// The per-user identity-propagation credential resolved once for a single
 /// dispatch (MIK-6704 / ADR-007). Carries the headers to put on the wire and
 /// the cache binding to isolate cached results by user+audience. The default
@@ -553,17 +558,23 @@ pub(super) fn retry_origin_backend(
 ) -> Option<Result<String>> {
     let token = retry.request_state.as_deref()?;
     let now = crate::protocol::continuation::now_unix_secs();
-    Some(
-        continuation
-            .keyring()
-            .open(token, now)
-            .map(|payload| payload.backend_id)
-            .map_err(|error| {
-                warn!(%error, "Continuation refused before routing");
-                record_continuation_rejection(continuation_error_reason(&error));
-                rejected_continuation(&error)
-            }),
-    )
+    let payload = match continuation.keyring().open(token, now) {
+        Ok(payload) => payload,
+        Err(error) => {
+            warn!(%error, "Continuation refused before routing");
+            record_continuation_rejection(continuation_error_reason(&error));
+            return Some(Err(rejected_continuation(&error)));
+        }
+    };
+    // A destructive confirmation continues no backend exchange: this gateway
+    // asked the question and its own gate reads the answer. `None` already
+    // means "nothing to route", which is exactly true here — routing it would
+    // hand the answer to a backend named after a meta-tool, and the gate that
+    // must see it would never run.
+    if payload.purpose == crate::protocol::continuation::ContinuationPurpose::DestructiveConfirm {
+        return None;
+    }
+    Some(Ok(payload.backend_id))
 }
 
 /// Open the continuation a retry presents and recover what the backend gets
@@ -616,7 +627,7 @@ async fn redeem_retry(
     // arrived after either would leave the caller's own honest retry with
     // nothing left to redeem.
     payload
-        .require_purpose(crate::protocol::continuation::Purpose::BackendInput)
+        .require_purpose(crate::protocol::continuation::ContinuationPurpose::BackendInput)
         .map_err(|error| {
             warn!(
                 server,
@@ -1074,114 +1085,7 @@ impl MetaMcp {
         result: Value,
     ) -> Result<Value> {
         let mut result = result;
-        // === POST-INVOKE: Response contract gate (issue #133, D1) ===
-        //
-        // Validates the response against the per-tool contract declared in
-        // config.  Default-deny (fail_closed=true) can block responses from
-        // tools with no declared contract.
-        //
-        // Runs BEFORE D2 anomaly screening so contract violations abort early.
-        if let Some(ref contract_cfg) = self.response_contract {
-            let text = crate::security::response_inspect::extract_text_from_result(&result);
-            let tool_entry = contract_cfg.tools.get(tool);
-
-            // fail_closed: no contract declared for this tool → treat as violation
-            if contract_cfg.fail_closed && tool_entry.is_none() {
-                let effective_action_mode = contract_cfg.action_mode;
-                warn!(
-                    server,
-                    tool,
-                    trace_id,
-                    reason = "no_contract_declared",
-                    detail = "fail_closed is enabled and no contract is declared for this tool",
-                    "Response contract violation"
-                );
-                if effective_action_mode {
-                    return Err(Error::json_rpc(
-                        -32603,
-                        format!(
-                            "Tool '{tool}' on server '{server}' response blocked by contract gate: \
-                             no contract declared and fail_closed is enabled."
-                        ),
-                    ));
-                }
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert(
-                        "_contract_violation".to_string(),
-                        serde_json::Value::Bool(true),
-                    );
-                    obj.insert(
-                        "_contract_reason".to_string(),
-                        serde_json::Value::String("no_contract_declared".to_string()),
-                    );
-                }
-            } else if !text.is_empty() {
-                // Build effective contract merging global defaults with per-tool overrides.
-                let effective_max_bytes = tool_entry
-                    .and_then(|e| e.max_bytes)
-                    .or(contract_cfg.default_max_bytes);
-                let effective_action_mode = tool_entry
-                    .and_then(|e| e.action_mode)
-                    .unwrap_or(contract_cfg.action_mode);
-                let patterns: &[String] =
-                    tool_entry.map_or(&[], |e| e.forbidden_patterns.as_slice());
-
-                let forbidden_patterns = if patterns.is_empty() {
-                    regex::RegexSet::empty()
-                } else {
-                    match regex::RegexSet::new(patterns) {
-                        Ok(set) => set,
-                        Err(e) => {
-                            warn!(
-                                server,
-                                tool,
-                                trace_id,
-                                error = %e,
-                                "Failed to compile forbidden_patterns for tool contract — skipping pattern check"
-                            );
-                            regex::RegexSet::empty()
-                        }
-                    }
-                };
-
-                let contract = crate::security::response_contract::ToolResponseContract {
-                    max_bytes: effective_max_bytes,
-                    forbidden_patterns,
-                    action_mode: effective_action_mode,
-                };
-
-                if let Some(violation) = contract.validate(&text) {
-                    warn!(
-                        server,
-                        tool,
-                        trace_id,
-                        reason = violation.reason,
-                        detail = %violation.detail,
-                        "Response contract violation"
-                    );
-                    if violation.should_block {
-                        return Err(Error::json_rpc(
-                            -32603,
-                            format!(
-                                "Tool '{tool}' on server '{server}' response blocked by contract gate: \
-                                 {} — {}",
-                                violation.reason, violation.detail
-                            ),
-                        ));
-                    }
-                    if let Some(obj) = result.as_object_mut() {
-                        obj.insert(
-                            "_contract_violation".to_string(),
-                            serde_json::Value::Bool(true),
-                        );
-                        obj.insert(
-                            "_contract_reason".to_string(),
-                            serde_json::Value::String(violation.reason.to_string()),
-                        );
-                    }
-                }
-            }
-        }
+        self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
         //
@@ -1232,6 +1136,126 @@ impl MetaMcp {
         }
 
         Ok(self.apply_context_integrity(server, tool, api_key_name, trace_id, result))
+    }
+
+    /// The response contract gate (issue #133, D1), split out of
+    /// [`Self::apply_response_gates`] purely to keep that function under the
+    /// line budget — logic, ordering and return semantics are unchanged.
+    ///
+    /// Validates the response against the per-tool contract declared in
+    /// `config`. Default-deny (`fail_closed=true`) can block responses from
+    /// tools with no declared contract.
+    ///
+    /// Runs BEFORE D2 anomaly screening so contract violations abort early.
+    fn apply_response_contract_gate(
+        &self,
+        server: &str,
+        tool: &str,
+        trace_id: &str,
+        result: &mut Value,
+    ) -> Result<()> {
+        let Some(ref contract_cfg) = self.response_contract else {
+            return Ok(());
+        };
+        let text = crate::security::response_inspect::extract_text_from_result(result);
+        let tool_entry = contract_cfg.tools.get(tool);
+
+        // fail_closed: no contract declared for this tool → treat as violation
+        if contract_cfg.fail_closed && tool_entry.is_none() {
+            let effective_action_mode = contract_cfg.action_mode;
+            warn!(
+                server,
+                tool,
+                trace_id,
+                reason = "no_contract_declared",
+                detail = "fail_closed is enabled and no contract is declared for this tool",
+                "Response contract violation"
+            );
+            if effective_action_mode {
+                return Err(Error::json_rpc(
+                    -32603,
+                    format!(
+                        "Tool '{tool}' on server '{server}' response blocked by contract gate: \
+                         no contract declared and fail_closed is enabled."
+                    ),
+                ));
+            }
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "_contract_violation".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+                obj.insert(
+                    "_contract_reason".to_string(),
+                    serde_json::Value::String("no_contract_declared".to_string()),
+                );
+            }
+        } else if !text.is_empty() {
+            // Build effective contract merging global defaults with per-tool overrides.
+            let effective_max_bytes = tool_entry
+                .and_then(|e| e.max_bytes)
+                .or(contract_cfg.default_max_bytes);
+            let effective_action_mode = tool_entry
+                .and_then(|e| e.action_mode)
+                .unwrap_or(contract_cfg.action_mode);
+            let patterns: &[String] = tool_entry.map_or(&[], |e| e.forbidden_patterns.as_slice());
+
+            let forbidden_patterns = if patterns.is_empty() {
+                regex::RegexSet::empty()
+            } else {
+                match regex::RegexSet::new(patterns) {
+                    Ok(set) => set,
+                    Err(e) => {
+                        warn!(
+                            server,
+                            tool,
+                            trace_id,
+                            error = %e,
+                            "Failed to compile forbidden_patterns for tool contract — skipping pattern check"
+                        );
+                        regex::RegexSet::empty()
+                    }
+                }
+            };
+
+            let contract = crate::security::response_contract::ToolResponseContract {
+                max_bytes: effective_max_bytes,
+                forbidden_patterns,
+                action_mode: effective_action_mode,
+            };
+
+            if let Some(violation) = contract.validate(&text) {
+                warn!(
+                    server,
+                    tool,
+                    trace_id,
+                    reason = violation.reason,
+                    detail = %violation.detail,
+                    "Response contract violation"
+                );
+                if violation.should_block {
+                    return Err(Error::json_rpc(
+                        -32603,
+                        format!(
+                            "Tool '{tool}' on server '{server}' response blocked by contract gate: \
+                             {} — {}",
+                            violation.reason, violation.detail
+                        ),
+                    ));
+                }
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert(
+                        "_contract_violation".to_string(),
+                        serde_json::Value::Bool(true),
+                    );
+                    obj.insert(
+                        "_contract_reason".to_string(),
+                        serde_json::Value::String(violation.reason.to_string()),
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Inner implementation executed within a trace-ID scope.
@@ -1356,19 +1380,16 @@ impl MetaMcp {
         // resolved `cache_binding` (user+audience) is mixed into every cache key
         // so per-user results cache in ISOLATION rather than leaking across users
         // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
-        let caller_credential = match self
+        let caller_credential = if let Some(idp_cfg) = self
             .backends
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         {
-            Some(idp_cfg) => {
-                self.resolve_caller_credential(server, &idp_cfg, verified_identity)
-                    .await?
-            }
-            None => {
-                self.refuse_unbound_account_backend(server)?;
-                CallerCredential::default()
-            }
+            self.resolve_caller_credential(server, &idp_cfg, verified_identity)
+                .await?
+        } else {
+            self.refuse_unbound_account_backend(server)?;
+            CallerCredential::default()
         };
 
         // ADR-008 INV-2 fail-closed guard. On a multi-user gateway, a backend
@@ -1391,6 +1412,20 @@ impl MetaMcp {
                 server = %server,
                 "refused: multi-user gateway would serve a gateway-held OAuth token \
                  that is not isolated per user (ADR-008 INV-2)"
+            );
+            // ADR-014 §3: the same fact, on the caller's own stream. A refusal
+            // the client can see beats one it has to ask an operator to read
+            // out of a log, and the `-32001` below carries the remedy but not
+            // the severity.
+            crate::transport::notification_sink::emit_log(
+                crate::protocol::LoggingLevel::Warning,
+                GATEWAY_INVOKE_LOGGER,
+                &serde_json::json!({
+                    "message": "refused: multi-user gateway would serve a gateway-held \
+                                OAuth token that is not isolated per user (ADR-008 INV-2)",
+                    "server": server,
+                    "tool": tool,
+                }),
             );
             return Err(Error::json_rpc(
                 -32001,
@@ -1494,6 +1529,17 @@ impl MetaMcp {
             (&self.idempotency_cache, &idem_key, &idem_fingerprint)
         {
             match enforce(idem_cache, key, fingerprint)? {
+                // A dispatched call that failed is terminal: serving the stored
+                // error is what stops the retry re-running a side effect that
+                // may already have committed (ADR-012 consequence 1).
+                GuardOutcome::CachedError(error) => {
+                    let (code, message) = crate::idempotency::cached_error_parts(&error);
+                    debug!(
+                        server,
+                        tool, key, trace_id, "Idempotency cache hit (failed)"
+                    );
+                    return Err(Error::json_rpc(code, message));
+                }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(server, tool, key, trace_id, "Idempotency cache hit");
                     if let Some(ref stats) = self.stats {
@@ -1605,6 +1651,21 @@ impl MetaMcp {
             tool     = %tool,
             trace_id = %trace_id,
             "tool invoked"
+        );
+        // ADR-014 §3: the audit line, on the stream of the request that asked
+        // for it. Same fields as the `tracing` call above, deliberately -- a
+        // caller correlating its own invocations should not have to map one
+        // vocabulary onto another.
+        crate::transport::notification_sink::emit_log(
+            crate::protocol::LoggingLevel::Info,
+            GATEWAY_INVOKE_LOGGER,
+            &serde_json::json!({
+                "message": "tool invoked",
+                "agent_id": agent_label,
+                "server": server,
+                "tool": tool,
+                "trace_id": trace_id,
+            }),
         );
         debug!(server, tool, trace_id, "Invoking tool");
 
@@ -1733,7 +1794,22 @@ impl MetaMcp {
                 }
             }
             Err(e) => {
-                if let Some(reservation) = idem_reservation.as_mut() {
+                // ADR-012 consequence 1: a reservation may be released only
+                // when the backend cannot have acted, because a released key
+                // readmits the retry that would execute the side effect a
+                // second time. `is_pre_dispatch()` is that allowlist, and it
+                // is deliberately tight (`src/error.rs`); every other dispatch
+                // error is a call that may already have acted, so its
+                // reservation stays live and is settled as a terminal failure
+                // by the commit below.
+                //
+                // `take()` is load-bearing rather than stylistic: a released
+                // reservation left in the `Option` would be picked up by that
+                // commit and re-inserted as a completed entry, which makes the
+                // release a no-op and the key permanently wrong.
+                if e.is_pre_dispatch()
+                    && let Some(mut reservation) = idem_reservation.take()
+                {
                     reservation.release();
                 }
                 // Classify the error and convert to a structured tool-level
@@ -1752,7 +1828,8 @@ impl MetaMcp {
                     },
                 );
                 // Still record the error budget failure (already done above via
-                // `record_error_budget`).  Idempotency key was cleaned up above.
+                // `record_error_budget`).  The idempotency reservation is left
+                // for the commit below unless the refusal was pre-dispatch.
                 attach_recovery(
                     json!({
                         "isError": true,
@@ -1775,9 +1852,11 @@ impl MetaMcp {
         // The backend has acted. Every early return below this point must settle
         // the idempotency key as completed rather than release it: a released key
         // readmits the retry that would execute the side effect a second time.
-        // `release()` on the dispatch-error path above has already settled, so
-        // this is a no-op there. The stored value withholds the response body on
-        // purpose — a gate below may be about to block it.
+        // The dispatch-error path above releases only a refusal that provably
+        // never reached the backend, and takes the reservation when it does, so
+        // a dispatched failure arrives here still live and is settled by this
+        // commit. The stored value withholds the response body on purpose — a
+        // gate below may be about to block it.
         //
         // An interim result is excluded because there the backend has said it
         // did *not* act: it stopped to ask. Settling one would be false and
@@ -2543,51 +2622,13 @@ impl MetaMcp {
                 // so per-user results cache in isolation instead of being dropped
                 // (IDP.8 — replaces the earlier blanket cache bypass).
                 if !cred.headers.is_empty() {
-                    // Fail-closed hardening: a minted credential must never
-                    // reach the caller without a durable audit record, so an
-                    // audit-write failure here aborts the mint instead of
-                    // proceeding to `Ok(CallerCredential{..})`.
-                    //
-                    // Operator-misconfig fail-OPEN guard: the audit helper
-                    // treats `logger = None` (transparency log disabled) as a
-                    // no-op `Ok(())`. On a `required` backend that would let a
-                    // minted per-user credential go on the wire with NO audit
-                    // record — the "no mint without a durable audit record"
-                    // guarantee silently evaporating via misconfiguration. When
-                    // propagation is REQUIRED but no transparency log is
-                    // configured, fail closed on the SAME path as an audit-write
-                    // failure rather than mint blind. (Non-required backends
-                    // keep the `None -> Ok(())` best-effort behavior — a mint
-                    // there is not covered by the durable-record guarantee.)
-                    if idp_cfg.required && audit_logger.is_none() {
-                        return Err(Error::Internal(format!(
-                            "identity-propagation is required for backend '{server}' but no \
-                             transparency log is configured; refusing to mint a per-user \
-                             credential without a durable audit record"
-                        )));
-                    }
-                    if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
-                        audit_logger,
-                        "idp_mint",
-                        &subject_id,
+                    Self::audit_minted_credential(
                         server,
-                        Some(audience),
-                        None,
-                    ) {
-                        // CWE-209: `audit_err` can carry the transparency-log
-                        // filesystem path / IO detail. Keep it in the server log
-                        // only; return a generic client-facing message so the
-                        // sensitive detail never reaches the JSON-RPC caller
-                        // (mirrors the direct route in backend_handlers.rs).
-                        tracing::warn!(
-                            server,
-                            error = %audit_err,
-                            "identity-propagation mint audit write failed"
-                        );
-                        return Err(Error::Internal(format!(
-                            "identity-propagation audit unavailable for backend '{server}'"
-                        )));
-                    }
+                        idp_cfg,
+                        audit_logger,
+                        &subject_id,
+                        audience,
+                    )?;
                 }
                 Ok(CallerCredential {
                     headers: cred.headers,
@@ -2596,6 +2637,61 @@ impl MetaMcp {
             }
             Err(e) => refuse(format!("credential minting failed: {e}")),
         }
+    }
+
+    /// Fail-closed hardening: a minted credential must never reach the caller
+    /// without a durable audit record, so an audit-write failure here aborts
+    /// the mint instead of letting it proceed. Split out of
+    /// [`Self::resolve_caller_credential`] purely to keep that function under
+    /// the line budget — logic and ordering are unchanged.
+    ///
+    /// Operator-misconfig fail-OPEN guard: the audit helper treats `logger =
+    /// None` (transparency log disabled) as a no-op `Ok(())`. On a `required`
+    /// backend that would let a minted per-user credential go on the wire
+    /// with NO audit record — the "no mint without a durable audit record"
+    /// guarantee silently evaporating via misconfiguration. When propagation
+    /// is REQUIRED but no transparency log is configured, fail closed on the
+    /// SAME path as an audit-write failure rather than mint blind.
+    /// (Non-required backends keep the `None -> Ok(())` best-effort
+    /// behavior — a mint there is not covered by the durable-record
+    /// guarantee.)
+    fn audit_minted_credential(
+        server: &str,
+        idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
+        audit_logger: Option<&crate::security::TransparencyLogger>,
+        subject_id: &str,
+        audience: &str,
+    ) -> Result<()> {
+        if idp_cfg.required && audit_logger.is_none() {
+            return Err(Error::Internal(format!(
+                "identity-propagation is required for backend '{server}' but no \
+                 transparency log is configured; refusing to mint a per-user \
+                 credential without a durable audit record"
+            )));
+        }
+        if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
+            audit_logger,
+            "idp_mint",
+            subject_id,
+            server,
+            Some(audience),
+            None,
+        ) {
+            // CWE-209: `audit_err` can carry the transparency-log filesystem
+            // path / IO detail. Keep it in the server log only; return a
+            // generic client-facing message so the sensitive detail never
+            // reaches the JSON-RPC caller (mirrors the direct route in
+            // backend_handlers.rs).
+            tracing::warn!(
+                server,
+                error = %audit_err,
+                "identity-propagation mint audit write failed"
+            );
+            return Err(Error::Internal(format!(
+                "identity-propagation audit unavailable for backend '{server}'"
+            )));
+        }
+        Ok(())
     }
 
     /// Resolve the account credential a CAPABILITY tool needs, before any
@@ -3130,7 +3226,16 @@ impl MetaMcp {
     /// `gateway_get_stats` — gateway statistics with per-backend error budget
     /// and circuit-breaker status.
     #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
-    pub(super) async fn get_stats(&self, _args: &Value, caller_is_admin: bool) -> Result<Value> {
+    pub(super) async fn get_stats(
+        &self,
+        _args: &Value,
+        // The admin flag only decides whether cost figures are included, and
+        // that block is feature-gated. Relaxed on the parameter itself, in
+        // exactly the build where its one use disappears, so dropping that use
+        // under the feature still warns and unrelated bindings stay linted.
+        #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
+        caller_is_admin: bool,
+    ) -> Result<Value> {
         let stats = self
             .stats
             .as_ref()
@@ -3389,7 +3494,7 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
             (ErrorCategory::NotFound, format!("Not found: '{name}'"))
         }
         Error::BackendTimeout(msg) => (ErrorCategory::Timeout, msg.clone()),
-        Error::BackendUnavailable(msg) | Error::Transport(msg) => {
+        Error::BackendUnavailable(msg) | Error::Transport(msg) | Error::TransportConnect(msg) => {
             (ErrorCategory::BackendError, msg.clone())
         }
         // Protocol errors carry upstream HTTP failures as their message
@@ -3617,6 +3722,29 @@ mod error_classification_tests {
         }
     }
 
+    /// Row 16c - the client-facing category must not move when a status-carried
+    /// refusal starts arriving as `Error::JsonRpc` instead of `Error::Transport`.
+    /// Both already map to `BackendError`; this pins that, because the transport
+    /// rows cannot reach this classifier.
+    #[test]
+    fn row_16c_a_json_rpc_refusal_and_a_transport_fault_share_one_category() {
+        use super::classify_dispatch_error;
+        use crate::Error;
+
+        for error in [
+            Error::json_rpc(-32601, "Method not found: server/discover"),
+            Error::Transport("HTTP 404".to_string()),
+        ] {
+            assert!(
+                matches!(
+                    classify_dispatch_error(&error).0,
+                    ErrorCategory::BackendError
+                ),
+                "expected BackendError for {error:?}"
+            );
+        }
+    }
+
     #[test]
     fn genuine_validation_errors_default_to_validation() {
         // Schema/param errors must keep the prior behaviour.
@@ -3646,6 +3774,7 @@ mod error_classification_tests {
 mod response_transform_tests {
     use serde_json::json;
 
+    use crate::capability::validate_output;
     use crate::projection::schema::{ActorSpec, ProjectionSpec, SubjectSpec};
     use crate::provider::Transform as _;
     use crate::provider::transforms::ResponseTransform;
@@ -4018,6 +4147,66 @@ mod response_transform_tests {
         assert_eq!(result["content"][0]["text"], json!("bad input"));
     }
 
+    // Minor 10 (b) — MIK-6865.SCHEMA.1: a scalar or bare-array
+    // `structuredContent` must survive `enforce_output_schema` unchanged when
+    // the declared `outputSchema` itself is non-object (`type: string`,
+    // `type: array`). Every other fixture in this file declares
+    // `type: object`; this is the clause none of them exercise.
+    #[test]
+    fn ac_schema_10b_scalar_structured_content_survives_enforce_output_schema() {
+        let schema = json!({ "type": "string" });
+
+        // The discriminating assertion. `enforce_output_schema` is advisory on
+        // mismatch (see its else arm) and returns the payload either way, so
+        // the survival check below passes whether the scalar validated or was
+        // rejected and waved through. Only this one fails if support for a
+        // non-object `outputSchema` regresses.
+        let validation = validate_output(&json!("hello"), &schema);
+        assert!(
+            validation.is_valid(),
+            "a scalar structuredContent must validate against a type: string outputSchema, not merely survive: {}",
+            validation.format_output_error(&schema)
+        );
+
+        let result = enforce_output_schema(
+            "demo",
+            "echo",
+            json!({
+                "content": [{"type": "text", "text": "hello"}],
+                "structuredContent": "hello",
+                "isError": false
+            }),
+            Some(&schema),
+        );
+
+        assert_eq!(result["structuredContent"], json!("hello"));
+    }
+
+    #[test]
+    fn ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema() {
+        let schema = json!({ "type": "array", "items": { "type": "string" } });
+
+        let validation = validate_output(&json!(["a", "b"]), &schema);
+        assert!(
+            validation.is_valid(),
+            "a bare-array structuredContent must validate against a type: array outputSchema, not merely survive: {}",
+            validation.format_output_error(&schema)
+        );
+
+        let result = enforce_output_schema(
+            "demo",
+            "list_things",
+            json!({
+                "content": [{"type": "text", "text": "[\"a\",\"b\"]"}],
+                "structuredContent": ["a", "b"],
+                "isError": false
+            }),
+            Some(&schema),
+        );
+
+        assert_eq!(result["structuredContent"], json!(["a", "b"]));
+    }
+
     #[tokio::test]
     async fn response_transform_runs_before_output_validation() {
         let transform = ResponseTransform::new(&TransformConfig {
@@ -4269,6 +4458,7 @@ mod identity_propagation_enforcement_tests {
             _params: Option<Value>,
             extra_headers: &[(String, String)],
             identity_key: Option<&str>,
+            _resend: crate::transport::ResendPermission,
         ) -> crate::Result<crate::protocol::JsonRpcResponse> {
             *self.captured.lock() = extra_headers.to_vec();
             self.captured_identity

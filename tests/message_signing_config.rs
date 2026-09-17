@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7406 / SIGNING.2: effective signing configuration and literal persistence.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use mcp_gateway::config::{Config, EnvOverlay};
@@ -51,7 +52,7 @@ impl ConfigFixture {
         let mut contents = String::new();
         for (name, value) in [(&self.current_var, current), (&self.previous_var, previous)] {
             if let Some(value) = value {
-                contents.push_str(&format!("{name}={value}\n"));
+                let _ = writeln!(contents, "{name}={value}");
             }
         }
         std::fs::write(self.env_path(), contents).expect("write signing env fixture");
@@ -86,8 +87,8 @@ impl ConfigFixture {
 fn signing_config() -> Config {
     let mut config = Config::default();
     config.security.message_signing.enabled = true;
-    config.security.message_signing.shared_secret = CURRENT.to_owned();
-    config.security.message_signing.previous_secret = PREVIOUS.to_owned();
+    CURRENT.clone_into(&mut config.security.message_signing.shared_secret);
+    PREVIOUS.clone_into(&mut config.security.message_signing.previous_secret);
     config
 }
 
@@ -460,7 +461,7 @@ fn signing_config_validates_previous_key_bytes_and_operational_settings() {
         match config.validate() {
             Ok(()) => failures.push(case),
             Err(error) => {
-                assert_safe_error(Err(error), field, &[CURRENT, PREVIOUS, &forbidden_previous])
+                assert_safe_error(Err(error), field, &[CURRENT, PREVIOUS, &forbidden_previous]);
             }
         }
     }

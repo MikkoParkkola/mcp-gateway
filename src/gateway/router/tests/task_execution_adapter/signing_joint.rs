@@ -128,7 +128,12 @@ fn durable_records(store: &tempfile::TempDir) -> Vec<String> {
                 .to_string_lossy()
                 .into_owned()
         })
-        .filter(|name| name.starts_with("task-") && name.ends_with(".json"))
+        .filter(|name| {
+            name.starts_with("task-")
+                && std::path::Path::new(name.as_str())
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        })
         .collect();
     records.sort();
     records
@@ -225,11 +230,11 @@ fn assert_signed_for_nonce(body: &Value, nonce: &str) -> String {
         .expect("verifier stdin")
         .write_all(&serde_json::to_vec(&input).expect("verifier input JSON"))
         .expect("write verifier input");
-    let verified = verifier.wait_with_output().expect("wait for MAC verifier");
+    let outcome = verifier.wait_with_output().expect("wait for MAC verifier");
     assert!(
-        verified.status.success(),
+        outcome.status.success(),
         "independent delivered MAC verification failed: {}: {body}",
-        String::from_utf8_lossy(&verified.stderr)
+        String::from_utf8_lossy(&outcome.stderr)
     );
     mac.to_owned()
 }

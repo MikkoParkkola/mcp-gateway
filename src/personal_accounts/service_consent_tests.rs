@@ -30,6 +30,12 @@ fn one_authority_session(events: &[(Phase, u64)]) -> bool {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end scenario walking absent/connected/revoked expectations \
+              through stale and current commits in sequence; splitting it would hide \
+              that each stage depends on the store state the previous stage left behind"
+)]
 fn stale_consent_expectation_cannot_overwrite_newer_grant_or_revoke() {
     let (tmp, store) = seed(&[]);
     let provider = ScriptedProvider::new();
@@ -167,20 +173,24 @@ fn a_current_absent_expectation_commits_the_first_grant() {
         "current absent commit",
     )
     .expect("a first-time connection commits against a current Absent capture");
-    assert!(
+    assert_eq!(
         expect_connected(
             fx.service
                 .store()
                 .lookup(&alice())
                 .expect("after first grant")
-        ) == first
+        ),
+        first
     );
     fx.assert_quiet("current absent commit");
 
     let Fixture { tmp, service, .. } = fx;
     drop(service);
     let store = PersonalAccountStore::open(config(tmp.path())).expect("reopen");
-    assert!(expect_connected(store.lookup(&alice()).expect("reopen")) == first);
+    assert_eq!(
+        expect_connected(store.lookup(&alice()).expect("reopen")),
+        first
+    );
 }
 
 /// Reconnecting after a revoke captures `Revoked`. Refusing it strands the user
@@ -210,20 +220,24 @@ fn a_current_revoked_expectation_commits_a_reconnection() {
         "current revoked commit",
     )
     .expect("a reconnection commits against a current Revoked capture");
-    assert!(
+    assert_eq!(
         expect_connected(
             fx.service
                 .store()
                 .lookup(&alice())
                 .expect("after reconnection")
-        ) == reconnected
+        ),
+        reconnected
     );
     fx.assert_quiet("current revoked commit");
 
     let Fixture { tmp, service, .. } = fx;
     drop(service);
     let store = PersonalAccountStore::open(config(tmp.path())).expect("reopen");
-    assert!(expect_connected(store.lookup(&alice()).expect("reopen")) == reconnected);
+    assert_eq!(
+        expect_connected(store.lookup(&alice()).expect("reopen")),
+        reconnected
+    );
 }
 
 /// A descriptor change fences the account; the reconnect journey that follows
@@ -254,20 +268,24 @@ fn a_current_reconnect_required_expectation_commits_a_reconnection() {
         "current reconnect-required commit",
     )
     .expect("a reconnection commits against a current ReconnectRequired capture");
-    assert!(
+    assert_eq!(
         expect_connected(
             fx.service
                 .store()
                 .lookup(&alice())
                 .expect("after reconnection")
-        ) == reconnected
+        ),
+        reconnected
     );
     fx.assert_quiet("current reconnect-required commit");
 
     let Fixture { tmp, service, .. } = fx;
     drop(service);
     let store = PersonalAccountStore::open(config(tmp.path())).expect("reopen");
-    assert!(expect_connected(store.lookup(&alice()).expect("reopen")) == reconnected);
+    assert_eq!(
+        expect_connected(store.lookup(&alice()).expect("reopen")),
+        reconnected
+    );
 }
 
 #[test]
@@ -313,7 +331,10 @@ fn a_stale_reconnect_required_expectation_is_fenced_by_a_newer_grant() {
     let Fixture { tmp, service, .. } = fx;
     drop(service);
     let store = PersonalAccountStore::open(config(tmp.path())).expect("reopen");
-    assert!(expect_connected(store.lookup(&alice()).expect("reopen")) == winner);
+    assert_eq!(
+        expect_connected(store.lookup(&alice()).expect("reopen")),
+        winner
+    );
 }
 
 /// The sequential cases above cannot tell a guarded commit from
@@ -344,19 +365,23 @@ fn a_conditional_consent_commit_takes_the_authority_lock_exactly_once() {
          the comparison and the publication; lookup-then-commit logs two \
          sessions. observed: {events:?}"
     );
-    assert!(
+    assert_eq!(
         expect_connected(
             fx.service
                 .store()
                 .lookup(&alice())
                 .expect("after witnessed commit")
-        ) == first
+        ),
+        first
     );
 
     let Fixture { tmp, service, .. } = fx;
     drop(service);
     let store = PersonalAccountStore::open(config(tmp.path())).expect("reopen");
-    assert!(expect_connected(store.lookup(&alice()).expect("reopen")) == first);
+    assert_eq!(
+        expect_connected(store.lookup(&alice()).expect("reopen")),
+        first
+    );
 }
 
 #[test]
@@ -390,7 +415,10 @@ fn the_guarded_store_entrypoint_fences_a_stale_expectation_without_writing() {
     assert!(durable == grant(), "the fenced commit changed nothing");
     drop(store);
     let store = PersonalAccountStore::open(config(tmp.path())).expect("reopen");
-    assert!(expect_connected(store.lookup(&alice()).expect("reopen")) == grant());
+    assert_eq!(
+        expect_connected(store.lookup(&alice()).expect("reopen")),
+        grant()
+    );
 }
 
 /// The defect this whole primitive exists for, run as a real race — with the
@@ -494,7 +522,10 @@ fn a_competing_writer_cannot_land_between_the_comparison_and_the_commit() {
         .expect("drop all thread references before reopen");
     drop(store);
     let store = PersonalAccountStore::open(config(tmp.path())).expect("reopen");
-    assert!(expect_connected(store.lookup(&alice()).expect("reopen")) == competing_record);
+    assert_eq!(
+        expect_connected(store.lookup(&alice()).expect("reopen")),
+        competing_record
+    );
 }
 
 /// The falsifier for the predicate the two cases above accept with.

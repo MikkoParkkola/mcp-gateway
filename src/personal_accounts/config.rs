@@ -315,7 +315,7 @@ impl Default for AccountsLimits {
     fn default() -> Self {
         Self {
             store_entries: 10000,
-            authority_bytes: 16777216,
+            authority_bytes: 16_777_216,
         }
     }
 }
@@ -325,6 +325,10 @@ impl Default for AccountsLimits {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum AccountsConfigError {
     #[error("accounts configuration resolution is not implemented")]
+    #[expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+    )]
     RuntimeNotImplemented,
     #[error("accounts.schema_version must be the literal accounts.v1")]
     SchemaVersion,
@@ -350,6 +354,10 @@ pub(crate) enum AccountsConfigError {
     #[error("accounts.limits.{field} must be a positive integer within bounds")]
     Limit { field: &'static str },
     #[error("accounts contains unknown field {field}")]
+    #[expect(
+        dead_code,
+        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+    )]
     UnknownField { field: String },
     /// Named by account id and by what is wrong with it. `problem` is a fixed
     /// phrase, never a configured value: an echoed `client_secret_ref` would
@@ -692,20 +700,20 @@ fn validate_managed(
 
     // RFC 8707 resource is an absolute URI, not necessarily https: a urn: is
     // a legitimate resource identifier.
-    if !descriptor
+    if descriptor
         .resource
         .as_ref()
-        .is_some_and(|value| Url::parse(value).is_ok())
+        .is_none_or(|value| Url::parse(value).is_err())
     {
         return Err(fail("resource must be present and nonempty"));
     }
     if !https_host(&descriptor.issuer) {
         return Err(fail("issuer must be present and nonempty"));
     }
-    if !descriptor
+    if descriptor
         .client_id
         .as_ref()
-        .is_some_and(|value| !value.is_empty())
+        .is_none_or(std::string::String::is_empty)
     {
         return Err(fail("client_id must be present and nonempty"));
     }

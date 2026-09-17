@@ -118,6 +118,10 @@ async fn expiry_deletes_every_expired_terminal_row_with_its_key_and_capacity() {
 /// sweep would take. Retention is asserted while sentinels are actually being
 /// swept, so a loop that never ran cannot pass this row.
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end sweep scenario across four retention reasons and two passes; splitting it would hide that retention is observed across real sweeps, not asserted piecemeal"
+)]
 async fn expiry_retains_unexpired_null_ttl_and_live_rows_across_real_sweeps() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("tasks");
@@ -243,6 +247,10 @@ async fn expiry_retains_unexpired_null_ttl_and_live_rows_across_real_sweeps() {
 /// requires the original terminal status there; it does not exhaust every
 /// possible transient state between observations.
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "a single scenario walking a parked commit through poll, release, join, restart and reopen; splitting it would separate assertions from the shared in-flight state they depend on"
+)]
 async fn guard_shutdown_joins_an_in_flight_sweep_before_the_store_closes() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("tasks");

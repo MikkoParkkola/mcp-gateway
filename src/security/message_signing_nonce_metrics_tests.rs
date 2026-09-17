@@ -421,6 +421,9 @@ fn authenticated_client_debug_redacts_the_nested_quota_principal() {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path. The
+        // assertion below reads the Debug rendering to prove the secret is
+        // redacted, so this field only has to be a recognisable literal.
         principal: "0123456789ab".to_string(),
         quota_principal: Some(quota),
         authenticated: true,

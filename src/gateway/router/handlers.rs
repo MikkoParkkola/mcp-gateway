@@ -15,8 +15,8 @@ use tracing::{debug, info, warn};
 
 use super::AppState;
 use super::authorization::{
-    RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
-    refusal_principal, require_admin_tool_access,
+    CallerStanding, RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call,
+    is_admin_meta_tool, refusal_principal, require_admin_tool_access,
 };
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
@@ -27,6 +27,8 @@ use super::helpers::{
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+#[cfg(feature = "firewall")]
+use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -542,9 +544,49 @@ pub(super) async fn health_handler(
     }
 }
 
-/// Meta-MCP handler (POST /mcp)
-#[allow(clippy::too_many_lines)]
+/// Meta-MCP handler (POST /mcp).
+///
+/// `Accept` ALONE decides the body shape (S-01): a stream carrying only the
+/// result frame is a conforming answer, so branching on whether the backend
+/// happened to raise a notification would give one `Accept` two body types.
+///
+/// The dispatch runs inside a notification sink, and the sink IS the request
+/// scoping (S-03): two concurrent POSTs are two tasks, so a backend
+/// notification can only ever be appended to the call that provoked it.
+/// `MIK-7272.SUB.2b`.
 pub(super) async fn meta_mcp_handler(
+    state: State<Arc<AppState>>,
+    http_request: axum::http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    let offers_event_stream = http_request
+        .headers()
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/event-stream"));
+
+    let dispatch = async {
+        Box::pin(meta_mcp_dispatch(state, http_request))
+            .await
+            .into_response()
+    };
+
+    if offers_event_stream {
+        // Scope rather than collect: the client offered a stream, so the first
+        // notification decides the body shape instead of waiting for dispatch.
+        let (scoped, rx) = crate::transport::notification_sink::scope(dispatch);
+        crate::gateway::streaming::first_event_wins_stream(scoped, rx).await
+    } else {
+        // Still scoped, and still drained alongside: `publish` sheds on a full
+        // sink, and a client that did not offer a stream must not make a
+        // backend's notifications count against that depth.
+        let (response, _notifications) =
+            crate::transport::notification_sink::collect(dispatch).await;
+        response
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn meta_mcp_dispatch(
     State(state): State<Arc<AppState>>,
     http_request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
@@ -832,6 +874,13 @@ pub(super) async fn meta_mcp_handler(
     let protocol_revision_owned =
         crate::protocol::meta::cache_protocol_revision(&shape, declared_version, session_revision)
             .map(str::to_owned);
+
+    // ADR-014 §4. Set here, beside the other shape-derived facts and above
+    // every early return below, so a later reordering cannot silently darken
+    // the emitter: the dispatch this scopes is already inside the sink opened
+    // by `meta_mcp_handler`, and a request that never reaches the checks below
+    // still declared what it declared.
+    crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
 
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
@@ -1186,6 +1235,7 @@ pub(super) async fn meta_mcp_handler(
                 params.as_ref(),
                 Some(session_id.as_str()),
                 code_mode_url_active,
+                CallerStanding::of_client(client.as_ref()),
             )
         }
         // Labelled so the destructive-confirmation gate can answer *through* the
@@ -1315,6 +1365,19 @@ pub(super) async fn meta_mcp_handler(
                     } else {
                         session_id.clone()
                     };
+                    // Renew this identity's reclaim deadline on every call, so
+                    // a sweep only reclaims state nobody has touched for
+                    // `IDLE_TTL`. An empty identity is never tracked: the
+                    // firewall refuses it rather than scoring it, so it holds
+                    // no per-identity state to reclaim.
+                    if let Some(ref lifecycle) = state.session_lifecycle
+                        && !control_identity.is_empty()
+                    {
+                        lifecycle.track(
+                            control_identity.clone(),
+                            session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
+                        );
+                    }
                     let verdict = fw.check_request(
                         &session_id,
                         target.server,
@@ -1468,26 +1531,28 @@ pub(super) async fn meta_mcp_handler(
                 match tasks::task_intent_for_call(
                     &state,
                     id.clone(),
-                    tool_name,
-                    &arguments,
-                    is_modern,
-                    &retry,
-                    verified_identity.as_ref(),
-                    &owner,
-                    client.as_ref(),
-                    oauth_agent_identity.as_ref(),
-                    cert_identity.as_ref(),
-                    api_key_name,
-                    agent_id,
-                    grant_subject.clone(),
-                    client.as_ref().is_some_and(|c| c.admin),
-                    declared_capabilities,
-                    Some(session_id.as_str()),
-                    protocol_revision_owned.as_deref(),
+                    tasks::TaskIntentRequest {
+                        tool_name,
+                        arguments: &arguments,
+                        is_modern,
+                        retry: &retry,
+                        verified_identity: verified_identity.as_ref(),
+                        owner: &owner,
+                        client: client.as_ref(),
+                        oauth_agent_identity: oauth_agent_identity.as_ref(),
+                        cert_identity: cert_identity.as_ref(),
+                        api_key_name,
+                        agent_id,
+                        grant_subject: grant_subject.clone(),
+                        is_admin: client.as_ref().is_some_and(|c| c.admin),
+                        input_capabilities: declared_capabilities,
+                        session_id: Some(session_id.as_str()),
+                        protocol_revision: protocol_revision_owned.as_deref(),
+                    },
                 ) {
                     Ok(intent) => intent,
                     Err(refusal) => {
-                        return build_response(refusal, &session_id, StatusCode::BAD_REQUEST);
+                        return build_response(*refusal, &session_id, StatusCode::BAD_REQUEST);
                     }
                 }
             } else {
@@ -1522,16 +1587,28 @@ pub(super) async fn meta_mcp_handler(
                 // HTTP holds the multiplexer, so this caller really can
                 // be sent a request of the gateway's own.
                 channel: state.proxy_manager.as_ref(),
-                // Always `Elicit`, including when no session was
-                // presented. HTTP can carry an asker; whether one
-                // answered is what `policy` decides. Mapping a
+                // Era decides who can be asked. A modern caller has no
+                // session to hold an elicitation open, so it is asked
+                // in-band and bound to its answer by a continuation.
+                //
+                // A legacy caller always gets `Elicit`, including when no
+                // session was presented. HTTP can carry an asker; whether
+                // one answered is what `policy` decides. Mapping a
                 // sessionless request to `Unavailable` would refuse the
                 // legacy caller this path deliberately still warns.
-                confirmation:
-                    crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit {
-                        proxy: &state.proxy_manager,
-                        policy: confirmation_policy,
-                    },
+                confirmation: match era {
+                    crate::protocol::meta::Era::Modern => {
+                        crate::gateway::destructive_confirmation::ConfirmationChannel::InBand {
+                            continuation: &state.continuation,
+                        }
+                    }
+                    crate::protocol::meta::Era::Legacy => {
+                        crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit {
+                            proxy: &state.proxy_manager,
+                            policy: confirmation_policy,
+                        }
+                    }
+                },
             };
             if let Some(context) = signing_context.as_mut()
                 && let Err(error) = state.meta_mcp.prepare_signing_invocation(
@@ -1597,13 +1674,19 @@ pub(super) async fn meta_mcp_handler(
             };
             execution = owned_execution;
             caller.execution = execution.as_ref();
+            // `call_response` is mutated only by the firewall response scan below.
+            #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
             let mut call_response = if let Some(response) = replay {
                 response
             } else {
-                state
-                    .meta_mcp
-                    .handle_tools_call(id, tool_name, arguments, Some(session_id.as_str()), caller)
-                    .await
+                Box::pin(state.meta_mcp.handle_tools_call(
+                    id,
+                    tool_name,
+                    arguments,
+                    Some(session_id.as_str()),
+                    caller,
+                ))
+                .await
             };
 
             // Firewall: post-invocation response scan + credential redaction.
@@ -1630,38 +1713,35 @@ pub(super) async fn meta_mcp_handler(
                         external_server: "gateway",
                         external_tool: &external_tool,
                     };
-                    match fw.check_response_artifact(
+                    if let Ok(verdict) = fw.check_response_artifact(
                         result_val,
                         &response_targets,
                         &correlation,
                         crate::security::response_policy::ResponseArtifactKind::FinalResponse,
                         crate::security::response_policy::ResponseMutationPolicy::Redact,
                     ) {
-                        Ok(verdict) => {
-                            if !verdict.allowed || verdict.action == FirewallAction::Block {
-                                warn!(
-                                    targets = response_targets.len(),
-                                    findings = verdict.findings.len(),
-                                    "Firewall: response blocked"
-                                );
-                                refused = true;
-                            } else if verdict.action == FirewallAction::Warn {
-                                warn!(
-                                    targets = response_targets.len(),
-                                    findings = verdict.findings.len(),
-                                    "Firewall: response warning"
-                                );
-                            }
-                        }
-                        // No authenticated target means nothing can admit this
-                        // artifact; fail closed exactly as a Block would.
-                        Err(_) => {
+                        if !verdict.allowed || verdict.action == FirewallAction::Block {
                             warn!(
                                 targets = response_targets.len(),
-                                "Firewall: response inspection lacked a policy target"
+                                findings = verdict.findings.len(),
+                                "Firewall: response blocked"
                             );
                             refused = true;
+                        } else if verdict.action == FirewallAction::Warn {
+                            warn!(
+                                targets = response_targets.len(),
+                                findings = verdict.findings.len(),
+                                "Firewall: response warning"
+                            );
                         }
+                    } else {
+                        // No authenticated target means nothing can admit this
+                        // artifact; fail closed exactly as a Block would.
+                        warn!(
+                            targets = response_targets.len(),
+                            "Firewall: response inspection lacked a policy target"
+                        );
+                        refused = true;
                     }
                 }
                 if refused {
@@ -1687,7 +1767,11 @@ pub(super) async fn meta_mcp_handler(
         "resources/read" => {
             state
                 .meta_mcp
-                .handle_resources_read(id, params.as_ref())
+                .handle_resources_read(
+                    id,
+                    params.as_ref(),
+                    CallerStanding::of_client(client.as_ref()),
+                )
                 .await
         }
         "resources/templates/list" => {

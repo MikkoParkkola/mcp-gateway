@@ -440,6 +440,15 @@ is **stale** -- that string does not exist in the ledger, and the live row frame
 gap as (c) does. Correcting another lane's artefact is not `ext1-otel1`'s work;
 recording it here is enough.
 
+> **Note appended 2026-09-09 (record-keeping only; R24 stands unchanged).** The
+> sentence above is right that the cell was stale and wrong that the string was
+> absent: "Branch (b) is the one taken" was live at
+> `RELEASE-4.0.0-criteria-status.md:371` when this ruling was written, having
+> landed in `005c24a3` on 2026-09-06, two days before this ruling (`db42dd8a`).
+> Left uncorrected, it went on to brief a lane onto (b). The cell has now been
+> rewritten to (c) with the evidence, so a reader sent looking for that string
+> will not find it — which is the only reason this note exists.
+
 Acceptance-criterion identifiers for this criterion are the lane's to author with
 the §P2 test plan (`MIK-7417.SEC3.<n>`), reviewed with the plan. Not a question.
 

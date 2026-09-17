@@ -137,6 +137,10 @@ fn concurrent_expired_refresh_single_flights_one_provider_call_and_unblocks_inde
 /// can serve one account's rotation to another. Each case below moves exactly
 /// one field, so a partition missing that field fails on that case and names it.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario walking every one-field-apart variant against a held account through refresh, durable state, and reopen; splitting it would separate assertions from the shared held-lease state they depend on"
+)]
 fn single_flight_partitions_on_the_complete_account_key_not_the_subject() {
     block_on(async {
         let alice_key = alice();

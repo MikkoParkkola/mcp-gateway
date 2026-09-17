@@ -30,7 +30,7 @@ license terms the Licensor chooses, **including proprietary and commercial
 terms**, and to sublicense these rights through multiple tiers.
 
 This authority is what lets the Licensor include your Contribution in both the
-free (PolyForm Noncommercial 1.0.0 / MIT-core) distribution **and** in paid
+free (PolyForm Noncommercial 1.0.0) distribution **and** in paid
 commercial licenses of mcp-gateway.
 
 ## 3. Patent license

@@ -1,3 +1,4 @@
+sha256: f7f84c2328cf1d42c184b1646dd7688f27590153966447c26ba91a00ca363b47
 fulcrum: "1.0"
 name: gmail_modify
 description: Modify Gmail message labels (mark read/unread, archive, trash, star, add/remove labels). Use removeLabelIds ["UNREAD"] to mark as read, ["INBOX"] to archive, or addLabelIds ["STARRED"] to star.

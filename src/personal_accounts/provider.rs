@@ -426,7 +426,7 @@ async fn discover<H: ProviderHttp>(
                     .ok_or(ProviderBuildError::InvalidMetadata);
             }
             // No document: this location does not serve one. Next.
-            Ok(_) | Err(HttpError::Retryable(_)) => continue,
+            Ok(_) | Err(HttpError::Retryable(_)) => {}
             Err(HttpError::Terminal(_)) => return Err(ProviderBuildError::InvalidMetadata),
         }
     }

@@ -112,14 +112,6 @@ impl<'a> CallerIdentity<'a> {
             (None, None) => None,
         }
     }
-
-    /// The identity's own value, untagged — for a key that carries no second
-    /// identity arm to collide with.
-    pub(super) fn value(self) -> &'a str {
-        match self {
-            Self::Binding(value) | Self::Subject(value) => value,
-        }
-    }
 }
 
 /// Build the response-cache key for a `gateway_invoke` call.

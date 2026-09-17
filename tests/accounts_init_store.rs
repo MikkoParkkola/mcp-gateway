@@ -40,17 +40,23 @@ struct Fixture {
 /// file that does not define `KEY_VAR` at all.
 fn fixture(key_value: Option<&str>) -> Fixture {
     let root = tempfile::TempDir::new().expect("tempdir");
-    let store = root.path().join("store");
-    let authority = root.path().join("authority");
+    // Canonicalised deliberately. The initializer refuses a store root whose
+    // ancestors include a symlink, and on macOS the system temp directory
+    // lives under `/var`, which is a symlink to `/private/var`. Without this
+    // the refusal cases would pass for the wrong reason and the success case
+    // could not pass at all.
+    let base = root.path().canonicalize().expect("canonical tempdir");
+    let store = base.join("store");
+    let authority = base.join("authority");
 
-    let env_path = root.path().join("keys.env");
+    let env_path = base.join("keys.env");
     let env_body = match key_value {
         Some(value) => format!("{KEY_VAR}={value}\n"),
         None => "ACCOUNTS_INIT_STORE_UNRELATED=1\n".to_string(),
     };
     fs::write(&env_path, env_body).expect("env file");
 
-    let config = root.path().join("gateway.yaml");
+    let config = base.join("gateway.yaml");
     fs::write(
         &config,
         format!(

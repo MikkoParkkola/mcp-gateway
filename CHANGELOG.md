@@ -97,7 +97,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search results do not advertise tools the operator turned off.
   ([#470](https://github.com/MikkoParkkola/mcp-gateway/pull/470))
 
-## [4.0.0] - 2026-08-29
+## [4.0.0] - unreleased
+
+> Not yet tagged. The latest release is 3.5.1 (2026-09-04), which was tagged after this
+> section was started and therefore appears above it.
+>
+> Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). `gateway.yaml` loads
+> unchanged; the strict `env_files` parsing is the one change that refuses a start rather than
+> warns.
 
 ### Changed
 
@@ -115,6 +122,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they are not served to any. Reading them under the old key would defeat the
   separation this change exists to enforce, so the gateway re-registers and
   re-authorizes instead. No configuration change is needed.
+
+- **A response is cached only under a protocol revision the gateway can
+  identify.** The response cache is keyed by the revision a request was served
+  under, and a request whose revision cannot be determined is not cached at all
+  (`cache_protocol_revision`, `src/protocol/meta.rs:514`). A modern request
+  carries its revision in the body. A legacy-shaped request must supply it in
+  the `MCP-Protocol-Version` header or have bound one by completing
+  `initialize` on the session (`:522`). Anything else resolves to "no revision",
+  which is documented as fail-closed and means skip the cache (`:512`). Earlier
+  versions had no such key, so a response fetched for a caller that declared no
+  revision could be served to a caller asking under a different one.
+
+  **A stateless client loses response caching on upgrade.** A bare `POST` that
+  sends no `MCP-Protocol-Version` header and never runs `initialize` — the shape
+  common to load generators, probes and short scripts — is no longer served from
+  cache, and that traffic reaches the backends instead. Nothing errors, so the
+  symptom is throughput and backend load rather than a failure, and the
+  gateway's own rate limits then apply to calls that previously never reached
+  them. Send the header on stateless requests, or complete `initialize` and
+  reuse the session; either restores caching and neither needs a configuration
+  change.
 
 ### Fixed
 
@@ -190,6 +218,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were. Scanning is per logical line, as the parser reads them.
 
 ### Added
+
+- **`meta_mcp.exposed_meta_tools` restricts the meta-tool surface** (GH issue 449):
+  an allow-list of meta-tools to expose, enforced on both `tools/list` and
+  `tools/call` for every meta-tool built-in, including the two Code Mode tools
+  (`gateway_search`, `gateway_execute`). The field is new in 4.0.0 and defaults to
+  empty, which exposes everything as before, so no existing configuration changes
+  behaviour on upgrade. An allow-list that omits `gateway_invoke` is honoured and
+  logged as a warning, since it leaves backend tools unreachable through the
+  gateway. `meta_mcp.surfaced_tools` is a separate list and is unaffected.
 
 - **First start after upgrading to 4.0.0 prints what changed underneath it.**
   The release re-keys OAuth credentials, refuses a malformed `env_files` line at

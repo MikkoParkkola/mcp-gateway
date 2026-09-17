@@ -93,6 +93,24 @@ impl Backend {
             .unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
+    /// Withhold the shared metadata cache for a `per_user` backend (MIK-7334
+    /// CATALOGUE.1).
+    ///
+    /// `PoolKey::Shared` — the transport `get_or_fetch_shared` would fetch
+    /// over — is one connection shared by every caller regardless of
+    /// identity (see `pool.rs`). A `session_mode = per_user` backend has no
+    /// per-identity catalogue fetch anywhere in this codebase today, so the
+    /// only honest fix is to withhold rather than serve a shared-connection
+    /// answer under a caller's own identity: isolation holds by
+    /// construction (no per-user catalogue fetch exists yet), not by cache
+    /// keying. This is checked once, here, because `has_cached_tools`,
+    /// `cached_tools_count`, `get_cached_tool`, and `get_cached_tools_snapshot`
+    /// all read the cache this method would otherwise populate — leaving it
+    /// empty makes every one of those readers withhold too.
+    fn withholds_shared_metadata(&self) -> bool {
+        self.session_mode() == Some(crate::identity_propagation::SessionMode::PerUser)
+    }
+
     async fn get_cached_list_shared<T, F>(
         &self,
         cache: &CachedMetadata<Vec<T>>,
@@ -103,6 +121,14 @@ impl Backend {
     where
         F: Fn(Value) -> Result<Vec<T>>,
     {
+        if self.withholds_shared_metadata() {
+            debug!(
+                backend = %self.name,
+                kind,
+                "Withholding shared metadata cache for per_user backend (MIK-7334 CATALOGUE.1)"
+            );
+            return Ok(Arc::new(Vec::new()));
+        }
         cache
             .get_or_fetch_shared(self.cache_ttl, || async {
                 // Hold the transport open for the whole fetch WITHOUT claiming
@@ -136,10 +162,55 @@ impl Backend {
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
         self.get_cached_list_shared(&self.tools_cache, "tools/list", "tools", |result| {
             let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
-            prepare_tool_metadata(&self.name, &mut tools);
+            // Discovery is where the explicit annotations are still readable,
+            // and it always precedes a `tools/call` (ADR-012 A1).
+            *self.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
             Ok(tools)
         })
         .await
+    }
+
+    /// Record the tools whose backend-declared annotations grant resend
+    /// permission explicitly (ADR-012 A1).
+    ///
+    /// The internal discovery path writes this from `get_tools_shared`, but the
+    /// direct `/mcp/{name}` route forwards `tools/list` itself and never goes
+    /// through it. A client that only ever uses that route therefore left the
+    /// set empty, and `resend_policy_for` denied retries to explicitly
+    /// retry-safe tools. The permitted set must be captured before
+    /// `normalize_tool_annotations` runs, which is why the caller passes the
+    /// return value of `prepare_tool_metadata` rather than the tools.
+    // The direct-route caller in `gateway::router::backend_handlers` is not on
+    // this branch yet. `expect` rather than `allow` so the gate errors the
+    // moment that caller lands and this marker must come off.
+    #[expect(
+        dead_code,
+        reason = "direct-route caller lands with the resend plumbing"
+    )]
+    pub(crate) fn set_resend_permitted(&self, permitted: std::collections::HashSet<String>) {
+        *self.resend_permitted.write() = permitted;
+    }
+
+    /// Snapshot of the tools currently recorded as explicitly resend-permitted.
+    ///
+    /// Clones under the read lock, like [`Self::get_cached_tools_snapshot`], so
+    /// the caller never holds a guard. The dispatch-path reader
+    /// (`Backend::resend_decision`) deliberately does NOT use this: it passes the
+    /// guard straight to `resend_permission`, which is cheaper and runs on every
+    /// dispatched request.
+    ///
+    /// This exists so a route that writes the set can prove it wrote it, which
+    /// is a test's job: the production readers all take the guard directly, so
+    /// under `--all-targets` the lib target compiles this away rather than
+    /// carrying an accessor nothing calls.
+    #[cfg(test)]
+    #[must_use]
+    #[expect(
+        dead_code,
+        reason = "direct-route caller lands with the resend plumbing"
+    )]
+    pub(crate) fn resend_permitted_snapshot(&self) -> std::collections::HashSet<String> {
+        self.resend_permitted.read().clone()
     }
 
     /// # Errors

@@ -215,8 +215,8 @@ fn header(wire: &Wire, name: &str) -> String {
         .to_string()
 }
 
-fn tool_call() -> Option<Value> {
-    Some(json!({ "name": TOOL, "arguments": {} }))
+fn tool_call() -> Value {
+    json!({ "name": TOOL, "arguments": {} })
 }
 
 /// (a) A modern-only peer: production startup asks, never handshakes, and the
@@ -232,7 +232,7 @@ async fn a_modern_only_peer_starts_without_a_handshake_and_takes_a_task_call() {
     let backend = backend_at(&url);
 
     let response = backend
-        .request_with_task_capability("tools/call", tool_call(), &[], None)
+        .request_with_task_capability("tools/call", Some(tool_call()), &[], None)
         .await
         .expect("a modern peer must be startable and callable without a handshake");
     assert!(response.error.is_none(), "{:?}", response.error);
@@ -302,7 +302,7 @@ async fn a_legacy_peer_falls_back_to_the_handshake_and_is_refused_the_tasks_opti
     let backend = backend_at(&url);
 
     let response = backend
-        .request("tools/call", tool_call())
+        .request("tools/call", Some(tool_call()))
         .await
         .expect("a legacy peer must still start and answer");
     assert!(response.error.is_none(), "{:?}", response.error);
@@ -357,7 +357,7 @@ async fn a_legacy_peer_falls_back_to_the_handshake_and_is_refused_the_tasks_opti
     // Having probed must not make the peer look modern. The typed path is
     // refused locally and nothing further reaches the wire.
     let refused = backend
-        .request_with_task_capability("tools/call", tool_call(), &[], None)
+        .request_with_task_capability("tools/call", Some(tool_call()), &[], None)
         .await;
     assert!(
         refused.is_err(),

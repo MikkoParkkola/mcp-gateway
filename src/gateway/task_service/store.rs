@@ -36,7 +36,7 @@ const STORE_MODE: u32 = 0o700;
 /// reviewed `oauth::storage::create_secret_tmp` retry bound.
 const TEMP_ATTEMPTS: u64 = 8;
 
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum StoreError {
     #[error("task store unavailable")]
     Unavailable,
@@ -564,7 +564,13 @@ impl Shared {
             .clone()
     }
 
+    // `&self` is load-bearing even here: the cfg(test) twin above reads the
+    // hook slot, and every caller writes `self.hook()`. One shape, two bodies.
     #[cfg(not(test))]
+    #[expect(
+        clippy::unused_self,
+        reason = "keeps one shape with the cfg(test) twin"
+    )]
     fn hook(&self) -> Option<CommitHook> {
         None
     }
@@ -738,11 +744,10 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, Stor
             return Err(StoreError::UnsafeStore);
         }
         fits(limits, entries.len())?;
-        let bytes = read_bounded(&mut file, limits.record_bytes).map_err(|error| {
-            if error == StoreError::Capacity {
+        let bytes = read_bounded(&mut file, limits.record_bytes).inspect_err(|error| {
+            if *error == StoreError::Capacity {
                 tracing::warn!(path = %path.display(), "task record exceeds the record budget");
             }
-            error
         })?;
         let record: Record = serde_json::from_slice(&bytes).map_err(|error| {
             tracing::warn!(%error, path = %path.display(), "task record does not parse");

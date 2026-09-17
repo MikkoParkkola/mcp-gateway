@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The REAL pinned-SDK upstream-recovery vertical.
 //!
-//! Everything below is actual: the peer is fastmcp 4.0.3 + fastmcp-tasks 4.0.3
-//! + pydocket 0.25.0 under the pinned interpreter, its Docket backend is a
+//! Everything below is actual: the peer is fastmcp 4.0.3 + fastmcp-tasks 4.0.3 +
+//! pydocket 0.25.0 under the pinned interpreter, its Docket backend is a
 //! dedicated Redis service, the gateway is the production binary with
 //! authentication ON, and the owners are verified OIDC subjects whose bearers
 //! are checked by `key_server::OidcVerifier` against a temporary HTTPS issuer.

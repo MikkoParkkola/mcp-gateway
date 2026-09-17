@@ -11,6 +11,10 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end auth scenario read as a single sequence is the point of the test"
+)]
 async fn openwebui_assertion_is_checked_after_real_gateway_authentication() {
     let dir = tempfile::tempdir().unwrap();
     let env_path = dir.path().join("adapter.env");
@@ -172,6 +176,10 @@ accounts:
 /// refused — plus that the two installations stay DISTINCT principals, which is
 /// the property the last-wins map destroyed silently rather than loudly.
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end auth scenario read as a single sequence is the point of the test"
+)]
 async fn installations_sharing_one_header_each_verify_with_their_own_key() {
     let dir = tempfile::tempdir().unwrap();
     let env_path = dir.path().join("shared-header.env");

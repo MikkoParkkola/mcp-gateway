@@ -1,3 +1,4 @@
+sha256: df2bf853950e3e283538b2c628e8240e9b9d21c88e6c1616de3eb33e1ae66f56
 fulcrum: "1.0"
 name: gws_tasks_create
 description: Create a new task in Google Tasks. Supports setting title, notes, due date, and parent task for subtasks.

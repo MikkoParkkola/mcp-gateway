@@ -1,3 +1,4 @@
+sha256: e02c9e620e0663f4aee158cc589933c7ac3e8ca48e5ce24a7d01b7c0cc9a0d4d
 fulcrum: "1.0"
 name: gws_sheets_append
 description: Append rows to a Google Sheets spreadsheet. Adds data after the last row in the specified range.

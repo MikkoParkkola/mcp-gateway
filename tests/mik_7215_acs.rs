@@ -267,6 +267,7 @@ mod http {
 
         let state = Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+            session_lifecycle: None,
             env: None,
             meta_mcp: Arc::new(
                 MetaMcp::new(Arc::clone(&backends)).with_exposed_meta_tools(exposed),
@@ -394,11 +395,21 @@ mod http {
     }
 
     /// A modern `tools/call`, same shape, for a named tool.
+    /// The `params._meta` key carrying an idempotency key, spelled out here
+    /// the way every other scanner in this suite spells it
+    /// (`crate::protocol::mrtr::IDEMPOTENCY_KEY_META` in the gateway): a test
+    /// that imports the constant cannot catch a rename of the wire contract.
+    const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+
     fn modern_tools_call(id: i64, name: &str, arguments: Value) -> Value {
         let mut request = modern_tools_list(id);
         request["method"] = json!("tools/call");
         request["params"]["name"] = json!(name);
         request["params"]["arguments"] = arguments;
+        // A modern call that could mutate is inadmissible without an explicit
+        // idempotency key, and that refusal precedes every branch the rows
+        // below observe. Keyed by `id` so no two rows share an operation.
+        request["params"]["_meta"][IDEMPOTENCY_KEY_META] = json!(format!("acs-{id}"));
         request
     }
 
@@ -739,6 +750,10 @@ mod http {
                     "arguments": { "server": "any-backend" },
                     "_meta": {
                         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        // Without this the call is refused for a missing
+                        // idempotency key before it reaches the confirmation
+                        // branch this row is about.
+                        IDEMPOTENCY_KEY_META: "acs-confirm-1",
                         "io.modelcontextprotocol/clientCapabilities": {},
                         "io.modelcontextprotocol/clientInfo": {
                             "name": "ExampleClient", "version": "1.0.0"
@@ -755,38 +770,47 @@ mod http {
             StatusCode::OK,
             "JSON-RPC reports errors in the body: {body}"
         );
+        // A modern caller has no session to hold an elicitation open, but it
+        // can be asked in band: the gate answers with the confirmation
+        // question and the caller confirms by retrying with the answer
+        // (`destructive_confirmation.rs:137`). The refusal branch belongs to a
+        // caller nobody can ask at all — the stdio dispatcher
+        // (`server/mod.rs:2856`) and the task route
+        // (`router/handlers/tasks.rs:301`) carry that channel.
+        //
+        // What this row asserts either way: the call was answered by the gate
+        // and the destructive action did not run.
         assert_eq!(
-            body.pointer("/error/code").and_then(Value::as_i64),
-            Some(-32001),
-            "an unconfirmable destructive call must be refused, not run: {body}"
+            body.pointer("/result/resultType").and_then(Value::as_str),
+            Some("input_required"),
+            "an unconfirmed destructive call must be asked about, not run: {body}"
         );
-        // Distinguishes the two -32001 exits: a DECLINED operator says
-        // "Operator declined", an absent one says confirmation could not be
-        // obtained. Asserting only the code would pass on the wrong branch.
-        let message = body
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        // Distinguishes the question from any other `input_required` exit on
+        // the path: the ask must be the destructive-confirmation one.
         assert!(
-            message.contains("none could be obtained"),
-            "the refusal must be the unconfirmable branch, not a decline: {message}"
+            body.pointer("/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1")
+                .is_some(),
+            "the ask must be the destructive-confirmation one: {body}"
         );
         // Guards two things at once, both invisible to every other assertion
         // here. (1) The fixture's `arguments` key must be the one production
-        // reads (`server`), or the description degrades to the `<unknown>`
-        // fallback. (2) The refusal must actually interpolate the description:
-        // the prefix asserted above is a format-string literal that precedes
-        // the interpolation, so deleting `{action_desc}` from the format string
-        // leaves the prefix, the code, and the describer's own unit tests all
-        // green. `docs/DEPLOYMENT.md` promises the refusal names the action, so
-        // this asserts the whole action phrase, not just the argument inside it.
+        // reads (`server`), or the description degrades to the fallback text.
+        // (2) The ask must actually interpolate the description, so deleting
+        // `{action_desc}` from it leaves the title, the shape, and the
+        // describer's own unit tests all green. `docs/DEPLOYMENT.md` promises
+        // the gate names the action, so this asserts the whole action phrase,
+        // not just the argument inside it.
+        let description = body
+            .pointer("/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1/description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         assert!(
-            message.contains("kill server 'any-backend'"),
-            "the refusal must name the action it refused, not the fallback text: {message}"
+            description.contains("kill server 'any-backend'"),
+            "the ask must name the action it is about, not the fallback text: {description}"
         );
         assert!(
-            body.get("result").is_none(),
-            "a refused destructive call must not also return a result: {body}"
+            body.pointer("/result/content").is_none(),
+            "an unconfirmed destructive call must not also return a tool result: {body}"
         );
     }
 
@@ -1001,6 +1025,10 @@ mod http {
                     "arguments": { "server": "row17-sentinel" },
                     "_meta": {
                         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        // Without this the call is refused for a missing
+                        // idempotency key before it reaches the confirmation
+                        // branch this row is about.
+                        IDEMPOTENCY_KEY_META: "acs-confirm-1",
                         "io.modelcontextprotocol/clientCapabilities": {},
                         "io.modelcontextprotocol/clientInfo": {
                             "name": "ExampleClient", "version": "1.0.0"
@@ -1011,13 +1039,11 @@ mod http {
             Some("admin-key"),
         )
         .await;
-        let message = refusal
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
         assert!(
-            message.contains("none could be obtained"),
-            "this row observes the unconfirmable branch; another -32001 exit proves nothing about it: {refusal}"
+            refusal
+                .pointer("/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1")
+                .is_some(),
+            "this row observes the unconfirmed branch; another exit proves nothing about it: {refusal}"
         );
         assert_eq!(
             accounting.client_circuit_state("row17-client"),

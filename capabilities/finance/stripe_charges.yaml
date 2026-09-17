@@ -1,3 +1,4 @@
+sha256: 24c8f05a8825a73bcd7373d7e4bb9907e9bb4e26de3e132c9a4532e74cf58548
 fulcrum: "1.0"
 name: stripe_charges
 description: Create a Stripe charge to collect a payment from a customer

@@ -49,8 +49,7 @@ mod account_strategies;
 mod token_exchange;
 
 pub(crate) use account_strategies::{
-    AccountCredential, AccountStrategyRegistry, DeclaredAccount, InstalledAccount,
-    PreparedAccountCredential,
+    AccountCredential, AccountStrategyRegistry, InstalledAccount, PreparedAccountCredential,
 };
 pub use token_exchange::TokenExchangeStrategy;
 

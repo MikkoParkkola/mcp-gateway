@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Open WebUI assertion adapter: a signed header, verified with adapter-owned
+//! Open `WebUI` assertion adapter: a signed header, verified with adapter-owned
 //! HMAC material, turned into a namespaced [`VerifiedIdentity`].
 //!
 //! WHAT THIS IS NOT. It is not an authentication path. It runs strictly AFTER
@@ -238,7 +238,7 @@ impl Refusal {
     }
 }
 
-/// Verify an Open WebUI assertion header, when one is present.
+/// Verify an Open `WebUI` assertion header, when one is present.
 ///
 /// Pass-through is the default: a request carrying no configured assertion
 /// header is untouched, so wiring this layer changes nothing for callers that

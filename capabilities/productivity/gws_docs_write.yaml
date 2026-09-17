@@ -1,3 +1,4 @@
+sha256: fbf8c000299f143205b4e7a8141a8a127922dbf49b64ebadb477ec3790ed627c
 fulcrum: "1.0"
 name: gws_docs_write
 description: Create a new Google Docs document or write content to an existing one using batch update requests.

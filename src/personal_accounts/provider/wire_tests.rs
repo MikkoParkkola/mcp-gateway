@@ -384,17 +384,18 @@ async fn embedded_userinfo_and_an_ip_literal_never_reach_the_wire() {
         "an IP literal is refused by the production SSRF guard, before any socket"
     );
 
-    let log = fixture.log();
-    assert_eq!(
-        log.requests.len(),
-        requests,
-        "no refused URL produced an HTTP request"
-    );
-    assert_eq!(
-        log.connections, connections,
-        "and none opened a connection either: these refusals precede the wire"
-    );
-    drop(log);
+    {
+        let log = fixture.log();
+        assert_eq!(
+            log.requests.len(),
+            requests,
+            "no refused URL produced an HTTP request"
+        );
+        assert_eq!(
+            log.connections, connections,
+            "and none opened a connection either: these refusals precede the wire"
+        );
+    }
 
     fixture.stop().await;
 }

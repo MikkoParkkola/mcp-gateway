@@ -234,6 +234,9 @@ capabilities:
 backends:
   # Example: stdio backend (spawns a subprocess)
   # tavily:
+  #   # `command` is parsed with host-platform rules (POSIX shlex on unix;
+  #   # CommandLineToArgvW on Windows). Backslash paths are fine on Windows;
+  #   # quote any path that contains spaces.
   #   command: "npx -y @anthropic/mcp-server-tavily"
   #   description: "Web search via Tavily"
   #   enabled: true

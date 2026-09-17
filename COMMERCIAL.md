@@ -1,21 +1,22 @@
 # Commercial Use
 
-`mcp-gateway` uses **mixed, per-file licensing**, and the default is Noncommercial (as
-of v3.3.0).
+`mcp-gateway` is licensed under the **PolyForm Noncommercial License 1.0.0** (as
+of v4.0.0).
 
-- The default license is **PolyForm Noncommercial 1.0.0**. Every source file is
-  Noncommercial unless its first line is `// SPDX-License-Identifier: MIT`.
-- Only a small **MIT core** of simple, generic building blocks is MIT (listed in
-  `.mit-core-allowlist`; see `LICENSES.md`).
+- Every first-party file in the repository is Noncommercial and carries an
+  explicit `// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0` header.
+  There is no second license and no allowlist (see `LICENSES.md`).
 - Releases before v3.3.0 were published with MIT metadata for code now licensed
-  as Noncommercial; those copies stay MIT (a granted license cannot be revoked)
-  but are deprecated. See `NOTICE.md`.
+  as Noncommercial, and v3.3.0 onward in the 3.x line shipped a small MIT core
+  under per-file MIT headers. Those copies stay MIT for their recipients (a
+  granted license cannot be revoked), but the 3.0.0–3.2.1 releases are
+  deprecated and there is no MIT core from v4.0.0 onward. See `NOTICE.md`.
 
-**Running the gateway commercially requires a commercial license.** The runnable
-gateway — dispatch, transport, backend management, ranking/authorization, the
-capability registry/engine, identity, security, governance, cost, deployment —
-is Noncommercial. The MIT core is reusable building blocks, not a runnable
-free-for-commercial gateway.
+**Running the gateway commercially requires a commercial license.** The whole
+project — dispatch, transport, backend management, ranking/authorization, the
+capability registry/engine, identity, security, governance, cost, deployment,
+and the generic building blocks that were MIT in the 3.x line — is
+Noncommercial.
 
 Examples that require a commercial license:
 
@@ -56,11 +57,13 @@ Custom terms are available for larger or unusual deployments, including:
 - High-scale deployments, regulated environments, procurement-specific contract terms, indemnity, support, SLA, or custom development.
 - Strategic partnerships, revenue share, attribution plus upstream collaboration, or annual invoicing.
 
-## Future Noncommercial-licensed modules
+## Future modules
 
-New features that are primarily valuable for enterprise governance, identity, audit, cost control, security policy, hosted operations, multi-tenant service operation, or commercial platform integration may be added as Noncommercial-licensed files under PolyForm Noncommercial 1.0.0.
+New features are licensed under PolyForm Noncommercial 1.0.0 like the rest of the repository, including features that are primarily valuable for enterprise governance, identity, audit, cost control, security policy, hosted operations, multi-tenant service operation, or commercial platform integration.
 
-This does not change the MIT license for existing MIT releases or for core gateway files that remain MIT.
+This does not change the MIT license for the earlier releases that were
+distributed under MIT — neither the 3.0.0–3.2.1 packages nor the MIT-headered
+core files in the 3.x line from v3.3.0 onward.
 
 ## Contact
 

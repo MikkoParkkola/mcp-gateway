@@ -26,9 +26,9 @@ use crate::security::ToolPolicy;
 use crate::security::firewall::Firewall;
 
 mod authorization;
+pub use authorization::CallerStanding;
 pub(crate) use authorization::{
     ADMIN_META_TOOLS, OwnedRouterAuthorizer, RouterAuthorizer, backend_tool_targets_for_call,
-    is_admin_meta_tool,
 };
 mod backend_handlers;
 mod handlers;
@@ -142,6 +142,11 @@ pub struct AppState {
     /// (`idp_mint` / `idp_refuse`) into the same hash chain (MIK-6740). `None`
     /// when the transparency log is disabled — audit writes are then a no-op.
     pub transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
+    /// Lifecycle registry for TTL-reaped per-identity state
+    /// (`MIK-7215.CONTROL.4`). `None` when the gateway was constructed
+    /// without lifecycle wiring — tests and any embedder that does not run
+    /// the reaper — in which case tracking and sweeping are both no-ops.
+    pub session_lifecycle: Option<Arc<crate::gateway::session_lifecycle::SessionLifecycle>>,
 }
 
 /// Create the router.
@@ -173,8 +178,11 @@ impl AppState {
     }
 }
 
-pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router {
-    let auth_state = AuthState {
+/// The `AuthState` needed by [`auth_middleware`], split out of
+/// [`create_router_with`] purely to keep that function under the line
+/// budget — logic and ordering are unchanged.
+fn build_auth_state(state: &Arc<AppState>) -> AuthState {
+    AuthState {
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
@@ -189,7 +197,11 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
                     .as_deref()
                     .is_some_and(|u| u.starts_with("https://"))
         },
-    };
+    }
+}
+
+pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router {
+    let auth_state = build_auth_state(&state);
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).
     let agent_auth_state = state.agent_auth.clone();

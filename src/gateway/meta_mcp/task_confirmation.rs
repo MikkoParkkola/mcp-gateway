@@ -21,7 +21,7 @@
 //!   continuation layer already binds. Change any of them and the retry is a
 //!   different request presenting someone else's grant.
 //! * **The domain is sealed, not assumed.** The envelope is
-//!   [`Purpose::DestructiveConfirm`]; a backend-elicitation envelope cannot
+//!   [`ContinuationPurpose::DestructiveConfirm`]; a backend-elicitation envelope cannot
 //!   authorise a destructive task, and this one cannot continue a backend
 //!   exchange (`meta_mcp::invoke::redeem_retry` refuses it before it touches
 //!   the hold or the spent ledger).
@@ -37,7 +37,7 @@ use crate::gateway::task_service::OwnedAdmissionRequest;
 use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::admission::ExecutionAdmission;
 use crate::key_server::oidc::VerifiedIdentity;
-use crate::protocol::continuation::{Payload, Purpose, now_unix_secs};
+use crate::protocol::continuation::{ContinuationPurpose, Payload, now_unix_secs};
 use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::{RetryFields, principal_fingerprint};
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -63,7 +63,7 @@ const ACCEPT: &str = "accept";
 
 /// Domain tag for the operation digest sealed into a grant. Tagged so this
 /// digest can never collide with the backend-request digest the same field
-/// carries for a [`Purpose::BackendInput`] envelope.
+/// carries for a [`ContinuationPurpose::BackendInput`] envelope.
 const DIGEST_DOMAIN: &str = "mcp-gateway.destructive-confirmation.v1";
 
 /// What the gate decided.
@@ -331,7 +331,7 @@ impl MetaMcp {
         // Domain before bindings: an envelope minted to continue a backend
         // exchange is authentic, and authenticity is not authority.
         if payload
-            .require_purpose(Purpose::DestructiveConfirm)
+            .require_purpose(ContinuationPurpose::DestructiveConfirm)
             .is_err()
         {
             warn!(
@@ -464,36 +464,41 @@ impl MetaMcp {
 mod tests {
     use super::*;
 
-    fn digest_of(name: &str, arguments: Value, task: Value, key: &str) -> String {
-        operation_digest(name, &arguments, &task, key)
+    fn digest_of(name: &str, arguments: &Value, task: &Value, key: &str) -> String {
+        operation_digest(name, arguments, task, key)
     }
 
     #[test]
     fn every_bound_field_changes_the_digest() {
-        let base = digest_of("erase", json!({"record": "a"}), json!({}), "key-a");
+        let base = digest_of("erase", &json!({"record": "a"}), &json!({}), "key-a");
         assert_ne!(
             base,
-            digest_of("read", json!({"record": "a"}), json!({}), "key-a"),
+            digest_of("read", &json!({"record": "a"}), &json!({}), "key-a"),
             "name"
         );
         assert_ne!(
             base,
-            digest_of("erase", json!({"record": "b"}), json!({}), "key-a"),
+            digest_of("erase", &json!({"record": "b"}), &json!({}), "key-a"),
             "arguments"
         );
         assert_ne!(
             base,
-            digest_of("erase", json!({"record": "a"}), json!({"ttl": 1}), "key-a"),
+            digest_of(
+                "erase",
+                &json!({"record": "a"}),
+                &json!({"ttl": 1}),
+                "key-a"
+            ),
             "task options"
         );
         assert_ne!(
             base,
-            digest_of("erase", json!({"record": "a"}), json!({}), "key-b"),
+            digest_of("erase", &json!({"record": "a"}), &json!({}), "key-b"),
             "idempotency key"
         );
         assert_eq!(
             base,
-            digest_of("erase", json!({"record": "a"}), json!({}), "key-a"),
+            digest_of("erase", &json!({"record": "a"}), &json!({}), "key-a"),
             "the same call digests the same way"
         );
     }

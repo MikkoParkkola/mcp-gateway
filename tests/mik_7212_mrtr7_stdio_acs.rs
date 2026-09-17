@@ -35,8 +35,9 @@
 //!
 //! Row 308 wants a legacy client **on an SSE session** to receive its
 //! `elicitation/create` on its own connection. No row covers that: this file
-//! drives stdio, the sibling file drives trait fakes, and the projection test
-//! in `mik_7212_acs.rs` calls `Bridge::to_legacy_client` in process. The SSE
+//! drives stdio, the sibling file drives trait fakes against the live
+//! `InputBridge::run`, and the projection test in `mik_7212_acs.rs` calls
+//! `Bridge::to_legacy_client`, all in process. The SSE
 //! half of row 308 is uncovered, and closing it needs a row of its own here
 //! rather than a wider assertion on an existing one.
 

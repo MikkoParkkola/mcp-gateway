@@ -144,9 +144,10 @@ fn record_files(config: &StoreConfig) -> Vec<String> {
 }
 
 fn manifest_len(config: &StoreConfig) -> usize {
-    std::fs::metadata(config.authority_dir.join("authority.json"))
+    let len = std::fs::metadata(config.authority_dir.join("authority.json"))
         .expect("the authority manifest exists after a commit")
-        .len() as usize
+        .len();
+    usize::try_from(len).expect("manifest length fits in usize")
 }
 
 /// The two directories a hand-built authority needs, without going through

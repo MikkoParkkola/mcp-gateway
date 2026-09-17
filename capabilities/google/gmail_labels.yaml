@@ -1,3 +1,4 @@
+sha256: ca0ad0089d80d24f2e488fc95a85955103ee9b0355ac2bd01fd9d13e58232e3e
 fulcrum: "1.0"
 name: gmail_labels
 description: List all Gmail labels for the authenticated user

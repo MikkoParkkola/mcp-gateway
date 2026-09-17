@@ -152,7 +152,7 @@ fn guard(url: &str) -> Result<(), HttpError> {
 }
 
 async fn send(request: reqwest::RequestBuilder) -> Result<HttpResponse, HttpError> {
-    let response = request.send().await.map_err(classify)?;
+    let response = request.send().await.map_err(|e| classify(&e))?;
     let status = response.status();
     // With `Policy::none()` a redirect is DELIVERED rather than raised as an
     // error, so it arrives here as a 3xx status. Treating it as an ordinary
@@ -177,7 +177,7 @@ async fn read_bounded(response: reqwest::Response) -> Result<String, HttpError> 
     let mut stream = response.bytes_stream();
     let mut body: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(classify)?;
+        let chunk = chunk.map_err(|e| classify(&e))?;
         if body.len().saturating_add(chunk.len()) > MAX_BODY_BYTES {
             return Err(HttpError::Terminal(TerminalFailure::Unacceptable));
         }
@@ -188,14 +188,14 @@ async fn read_bounded(response: reqwest::Response) -> Result<String, HttpError> 
 
 /// Map a transport error, defaulting to terminal. See the module header for why
 /// the default is the safe direction rather than the informative one.
-fn classify(error: reqwest::Error) -> HttpError {
+fn classify(error: &reqwest::Error) -> HttpError {
     if error.is_redirect() {
         HttpError::Terminal(TerminalFailure::Redirect)
     } else if error.is_timeout() {
         // No answer at all, and no statement about the host: the one case that
         // may legitimately advance to the next candidate.
         HttpError::Retryable(RetrievalFailure::Unreachable)
-    } else if names_certificate_failure(&error) {
+    } else if names_certificate_failure(error) {
         HttpError::Terminal(TerminalFailure::Certificate)
     } else {
         HttpError::Terminal(TerminalFailure::Unclassified)
@@ -231,7 +231,7 @@ mod embedded_userinfo_guard_tests {
     const USER: &str = "not-a-real-user";
     const PASS: &str = "not-a-real-secret";
 
-    fn is_unacceptable(result: &Result<(), HttpError>) -> bool {
+    fn is_unacceptable(result: Result<(), HttpError>) -> bool {
         matches!(
             result,
             Err(HttpError::Terminal(TerminalFailure::Unacceptable))
@@ -255,7 +255,7 @@ mod embedded_userinfo_guard_tests {
         let url = format!("https://{USER}:{PASS}@accounts.example.com/token");
         let result = guard(&url);
         assert!(
-            is_unacceptable(&result),
+            is_unacceptable(result),
             "embedded user:pass must be Terminal(Unacceptable), not a DNS/SSRF refusal"
         );
     }
@@ -263,12 +263,12 @@ mod embedded_userinfo_guard_tests {
     #[test]
     fn username_only_is_terminal_unacceptable() {
         let url = format!("https://{USER}@accounts.example.com/token");
-        assert!(is_unacceptable(&guard(&url)));
+        assert!(is_unacceptable(guard(&url)));
     }
 
     #[test]
     fn empty_username_with_password_is_terminal_unacceptable() {
         let url = format!("https://:{PASS}@accounts.example.com/token");
-        assert!(is_unacceptable(&guard(&url)));
+        assert!(is_unacceptable(guard(&url)));
     }
 }
