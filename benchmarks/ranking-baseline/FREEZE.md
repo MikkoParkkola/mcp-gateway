@@ -91,6 +91,15 @@ relevance alone), calls the unmodified `SearchRanker::rank()` for every
 corpus query, and records where the best-ranked gold tool landed. Full
 per-case output is in `benchmarks/ranking-baseline/results.json`.
 
+**Determinism correction, 2026-09-18.** The pool is now sorted by capability
+name before ranking. `fs::read_dir` yields entries in filesystem order and the
+ranker breaks ties by pool position, so the harness scored a different sequence
+on APFS than on ext4: the section 4 floors reproduced on the machine that
+measured them and went red in CI on the same commit (overall top-1 0.692982
+against a 0.736 floor, run 35330982796). No floor is edited -- the sorted pool
+measures 0.7456 top-1, 0.8684 top-3 and 0.8172 MRR, clearing every frozen
+threshold. The floors stand as written and are now reproducible anywhere.
+
 ### Selection quality -- MEASURED
 
 | metric | value |

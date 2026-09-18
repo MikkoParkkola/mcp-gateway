@@ -1181,7 +1181,7 @@ mod tests {
     /// directory holding live refresh tokens, unreferenced, for as long as the
     /// install lives. Their survival is asserted at source by
     /// `legacy_single_user_record_is_not_reachable_under_the_4_0_0_issuer_key`
-    /// (src/oauth/upgrade_path_tests.rs). An operator told only "you will
+    /// (`src/oauth/upgrade_path_tests.rs`). An operator told only "you will
     /// re-authenticate" has no reason to go delete them, so the notice says so
     /// and this pins that it keeps saying so.
     #[test]

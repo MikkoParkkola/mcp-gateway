@@ -117,7 +117,15 @@ async fn load_candidate_pool() -> Vec<(String, String)> {
     let defs = CapabilityLoader::load_directories(&dir_refs)
         .await
         .expect("load production capability inventory");
-    defs.into_iter().map(|d| (d.name, d.description)).collect()
+    // Sorted by name: `fs::read_dir` yields entries in filesystem order, so an
+    // unsorted pool ranks a different sequence on APFS than on ext4 and the
+    // frozen floors only reproduce on the machine that measured them. Ties in
+    // the ranker are broken by pool position, which is what makes the order
+    // load-bearing rather than cosmetic.
+    let mut pool: Vec<(String, String)> =
+        defs.into_iter().map(|d| (d.name, d.description)).collect();
+    pool.sort_by(|a, b| a.0.cmp(&b.0));
+    pool
 }
 
 fn rank_case(pool: &[(String, String)], ranker: &SearchRanker, case: &CorpusCase) -> CaseResult {
