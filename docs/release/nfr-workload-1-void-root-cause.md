@@ -1,0 +1,82 @@
+# NFR.WORKLOAD.1 VOID: root cause
+
+`eval_workload.py` returned `VERDICT: VOID (exit 3)` on
+`/home/mikko/perf-workload/run-20260918` with `C1: semantic assertion rate
+below 100%`. The cause is a gateway behaviour change, not a harness defect and
+not a configuration miss.
+
+## What the cells measured
+
+| cell | arm | semantic assertion rate | http_req_failed |
+|---|---|---|---|
+| A0-A3 | v3.5.0 (`32f135a6`) | 100.00% | 0.00% |
+| B0-B3 | v3.5.1 | 100.00% | 0.00% |
+| C0-C3 | v4 (`a2505be0`) | 48.65 / 48.66 / 48.74 / 48.71% | 0.00% |
+| D1 | v4, modern era | n/a | 33.33% |
+
+Every failure is an HTTP 200 carrying a JSON-RPC error. `initialize` and
+`tools/list` pass 100%; only `tools/call` fails (C1: 4146 of 8155).
+
+## Mechanism
+
+The v4 backend health probe sends MCP `ping`. The workload fixture answers
+`-32601 unsupported method` (`benchmarks/workload/mcp_backend.py:95-96`), which
+is a complete answer proving the process is alive. `record_unserved_probe`
+(`src/backend/lifecycle.rs:1181-1221`) counts that answer as unserved and
+escalates on the third in a row (`UNSERVED_ESCALATION = 3`, `:33`). Escalation
+trips the circuit breaker, which then rejects every subsequent `tools/call`.
+
+Observed on an independently reproduced run (gateway log `/tmp/c12.log`, Spark):
+
+    11:45:20  Health probe was not served  method="ping" code=-32601 consecutive=1
+    11:45:30  Health probe was not served  method="ping" code=-32601 consecutive=2
+    11:45:40  record_failure{reason="health probe unserved"} failures=1..5 threshold=5
+    11:45:40  Circuit breaker opened backend=workload reason=health probe unserved
+    11:45:40  Circuit open, rejecting request  (every tools/call from here on)
+
+The probe runs every 10s, so the breaker opens ~30s into a 60s cell. That is
+the ~50% rate, and the variance between runs (48.66% in the artifact,
+34.42% on re-run) is the probe phase relative to cell start. v3.5.0 and v3.5.1
+have no such probe, which is why both score 100%.
+
+## Reproduction and exclusions
+
+- Reproduced on a fresh gateway from the same C-arm binary: 34.42%
+  (`initialize` 100%, `tools/list` 100%, `tools/call` 34%).
+- curl cannot reproduce: 500/500 correct at 50-way concurrency on fresh
+  connections, 6/6 on one reused connection, 4/4 replaying the k6
+  `initialize` -> `tools/call` sequence. None of those runs lasted 30s.
+- Configuration is excluded. The Void-10 fix is present in the config the run
+  used: `cache.enabled: false` and `failsafe.rate_limit` 500 rps / 500 burst
+  (`config/gateway.workload.yaml:24-30`).
+- An earlier probe of ours reported 81 of 200 concurrent calls missing the
+  pinned payload. That was concurrent shell appends interleaving into one file:
+  the 200 lines held 200 `WORKLOAD_OK` occurrences with 52 lines carrying two.
+  The gateway returned 200 correct bodies.
+
+## Two findings
+
+1. **Product.** A backend that does not implement `ping` is auto-disabled ~30s
+   after start and restart-looped. `ping` is optional for MCP servers, and
+   `-32601` is evidence the peer is alive and speaking the protocol; the code
+   comment at `:1169-1172` says as much before escalating anyway. Any real
+   backend without `ping` regresses from working on v3.5 to shedding all
+   traffic on v4.
+2. **Harness.** `C*.gateway.stdout` and `C*.gateway.stderr` in the run
+   directory are 0 bytes, so the run captured no server-side evidence. The
+   cause was only visible after re-running the cell by hand.
+
+## Consequence for the gate
+
+NFR.WORKLOAD.1 cannot be graded MET. The v4 cells measured a tripped breaker,
+not gateway throughput. The measurement is unrunnable until the escalation
+decision is settled; patching the fixture to answer `ping` would make the cells
+green while leaving the product finding in place, so the fixture must not be
+changed before finding 1 has a ruling.
+
+## Same mechanism elsewhere
+
+`tests/mik_7212_mrtr7_stdio_acs.rs` rows 7a/7b fail in CI only, and their
+post-admission declines swung from 0 to ~965 between two runs of the same
+commit. That test's stdio fixture also does not serve `ping`, and a contended
+CI runner gives the probe time to escalate where a fast local run does not.
