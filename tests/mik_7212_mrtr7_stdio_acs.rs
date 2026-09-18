@@ -1220,7 +1220,8 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
         .expect("an elicitation/create the gateway wrote carries an id");
     session.send(&elicitation_answer(&answered)).await;
 
-    let after = frames_lenient(&session.collect_lines(COLLECT_WINDOW).await);
+    let after_lines = session.collect_lines(COLLECT_WINDOW).await;
+    let after = frames_lenient(&after_lines);
     assert!(
         after.iter().any(|frame| {
             frame.get("method").is_none()
@@ -1228,8 +1229,16 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
                 && matches!(frame.get("id").and_then(Value::as_i64),
                     Some(id) if (FIRST_CALL_ID..=last_below_cap).contains(&id))
         }),
+        // This row went red once and green on the next run with the same code,
+        // so the message has to separate a stale answer from a dropped call.
+        // The id answered is an `elic-<uuid>` while the assertion matches
+        // numeric call ids, so a raw dump never says whether the call that was
+        // answered is among the errors; and `meta_mcp/invoke.rs` collapses every
+        // bridge error into one -32003, so the census histogram is the only
+        // thing that tells the bounds apart.
         "a call accepted before the cap never completed after its answer was \
-         sent, so saturation cost the client its reader: {after:?}"
+         sent, so saturation cost the client its reader. Answered {answered}. {}",
+        census_of(&after_lines)
     );
 
     session.shutdown().await;
