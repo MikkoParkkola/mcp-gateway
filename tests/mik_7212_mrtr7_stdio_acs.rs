@@ -447,12 +447,8 @@ fn census_of(lines: &[String]) -> String {
                 } else if let Some(result) = frame.get("result") {
                     if result.get("requestState").is_some() {
                         continuations += 1;
-                    } else if result.get("isError").and_then(Value::as_bool) == Some(true) {
-                        let text = result
-                            .pointer("/content/0/text")
-                            .and_then(Value::as_str)
-                            .unwrap_or("<no text>");
-                        *refusals.entry(text.to_owned()).or_default() += 1;
+                    } else if let Some(text) = tool_refusal_text(result) {
+                        *refusals.entry(text).or_default() += 1;
                     } else {
                         results += 1;
                         if plain_samples.len() < 3 {
@@ -815,9 +811,85 @@ fn refused_ids(frames: &[Value]) -> Vec<i64> {
 fn tool_refused_ids(frames: &[Value]) -> Vec<i64> {
     frames
         .iter()
-        .filter(|frame| frame.pointer("/result/isError").and_then(Value::as_bool) == Some(true))
+        .filter(|frame| frame.get("result").and_then(tool_refusal_text).is_some())
         .filter_map(|frame| frame.get("id").and_then(Value::as_i64))
         .collect()
+}
+
+/// The message of a tool-level refusal carried in a successful `result`, or
+/// `None` when the result is an ordinary answer.
+///
+/// The flag is not always where a reader reaches for it first. A backend's own
+/// result carries `isError: true` beside its content, but the meta surface
+/// wraps that result once more before it reaches the wire: `result.content[0]
+/// .text` is then the backend's JSON *as a string*, and the flag sits one
+/// level below `/result/isError`. Reading only the outer pointer files every
+/// wrapped refusal as a plain success -- the exact miscount that made a
+/// tripped circuit breaker look like fabricated work.
+fn tool_refusal_text(result: &Value) -> Option<String> {
+    let text = result.pointer("/content/0/text").and_then(Value::as_str);
+    if result.get("isError").and_then(Value::as_bool) == Some(true) {
+        return Some(text.unwrap_or("<no text>").to_owned());
+    }
+    let inner: Value = serde_json::from_str(text?).ok()?;
+    if inner.get("isError").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    Some(
+        inner
+            .pointer("/content/0/text")
+            .and_then(Value::as_str)
+            .unwrap_or("<no text>")
+            .to_owned(),
+    )
+}
+
+/// The frame shape that made a tripped circuit breaker read as fabricated work.
+///
+/// A contended runner trips the fixture backend's breaker; a fast machine never
+/// does, so no number of local reruns exercises this path and only CI ever sees
+/// it. Pinning the body here is what keeps the reader honest between those
+/// runs: without it the nesting can regress silently and the two rows above go
+/// red again on a loaded machine, months later, for a reason already diagnosed.
+#[test]
+fn a_wrapped_tool_refusal_reads_as_a_refusal() {
+    const TRIPPED: &str = "Circuit breaker open for backend 'fixture'";
+    let inner = serde_json::json!({
+        "content": [{ "text": TRIPPED, "type": "text" }],
+        "isError": true,
+    });
+    let wrapped = serde_json::json!({
+        "id": 7,
+        "result": {
+            "content": [{
+                "text": serde_json::to_string_pretty(&inner).expect("the fixture body serialises"),
+            }],
+        },
+    });
+
+    assert_eq!(
+        tool_refusal_text(&wrapped["result"]).as_deref(),
+        Some(TRIPPED),
+        "the meta surface wraps the backend result, so the flag sits one level \
+         below /result/isError; reading only the outer pointer files this \
+         refusal as a plain success"
+    );
+    assert_eq!(tool_refused_ids(std::slice::from_ref(&wrapped)), vec![7]);
+
+    // An unwrapped refusal is the same answer one layer up, and must still read.
+    assert_eq!(tool_refusal_text(&inner).as_deref(), Some(TRIPPED));
+
+    // An ordinary answer is not a refusal, whether or not its text is JSON.
+    assert_eq!(
+        tool_refusal_text(&serde_json::json!({ "content": [{ "text": "ok" }] })),
+        None
+    );
+    assert_eq!(
+        tool_refusal_text(&serde_json::json!({
+            "content": [{ "text": serde_json::json!({ "content": [] }).to_string() }],
+        })),
+        None
+    );
 }
 
 /// MIK-7212.MRTR.7a — the single stdin reader keeps reading past the admission
@@ -862,7 +934,8 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     let wanted = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
     let lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-            prompts_in(&frames_lenient(seen)).len() >= wanted
+            let seen = frames_lenient(seen);
+            prompts_in(&seen).len() + tool_refused_ids(&seen).len() >= wanted
         })
         .await;
     let frames = frames_lenient(&lines);
@@ -872,12 +945,21 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     );
 
     let prompts = prompts_in(&frames);
+    // Asking is only one terminal outcome of an admitted call. A dispatch the
+    // gateway declines after admission -- in CI, a tripped circuit breaker on
+    // the fixture backend, which a fast local run never reaches -- consumed a
+    // slot and answered, so it counts toward what admission let run. The row
+    // still discriminates: a gateway that dropped an admitted call silently
+    // produces neither a question nor a refusal and the sum falls short.
+    let declined = tool_refused_ids(&frames);
     assert_eq!(
-        prompts.len(),
+        prompts.len() + declined.len(),
         usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative"),
         "admission bounds what may run at 64, so 65 unanswered bridged calls \
-         must produce exactly 64 outstanding questions; {} arrived. {}",
+         must produce exactly 64 terminal outcomes; {} questions plus {} \
+         declined after admission arrived. {}",
         prompts.len(),
+        declined.len(),
         census_of(&lines)
     );
     assert!(
