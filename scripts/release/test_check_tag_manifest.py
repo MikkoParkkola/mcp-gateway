@@ -1085,9 +1085,21 @@ class WorkflowWiring(unittest.TestCase):
                         self.assertNotRegex(
                             piece,
                             r"(?:^|\b(?:export|declare|local|typeset|readonly)\s+)"
-                            r"(?:LIST|AMD64|ARM64)=",
+                            r"(?:LIST|AMD64|ARM64|d)=",
                             f"{workflow}: {name} reassigns a digest in its shell",
                         )
+                # Bound is not used. cosign expands the loop variable, so a
+                # `for` list that lost its platform children signs the index
+                # alone while all three bindings above still pass — the env
+                # check reads what the step declares, never what the shell
+                # reaches for.
+                body = "\n".join(block)
+                for digest_name in ("LIST", "AMD64", "ARM64"):
+                    self.assertIn(
+                        f"${{{digest_name}}}",
+                        body,
+                        f"{workflow}: {name} binds {digest_name} without expanding it",
+                    )
                 if not any(runs(c, COSIGN_VERIFY) for c in block):
                     continue
                 # An identity is what makes a signature mean something: an

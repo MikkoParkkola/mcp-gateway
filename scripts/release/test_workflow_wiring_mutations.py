@@ -232,6 +232,28 @@ CASES = [
         CAUGHT,
     ),
     (
+        # The loop variable is what cosign expands, so rebinding `d` redirects
+        # every signature in the loop while the three digest bindings above it
+        # stay untouched.
+        "loop-variable-reassigned-in-the-shell",
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"\n',
+        '            d="${{ steps.meta.outputs.version }}"\n'
+        '            cosign sign --yes "${IMAGE}@${d}"\n',
+        CAUGHT,
+    ),
+    (
+        # Binding a digest is not signing it: a `for` list that lost its
+        # platform children signs the index alone, and the job's own verify
+        # loop stays green because it checks what was signed.
+        "sign-loop-drops-the-platform-children",
+        "ci.yml",
+        '          for d in "${LIST}" "${AMD64}" "${ARM64}"; do\n'
+        '            cosign sign',
+        '          for d in "${LIST}"; do\n            cosign sign',
+        CAUGHT,
+    ),
+    (
         "digest-reassigned-inline-in-the-shell",
         "ci.yml",
         '            cosign sign --yes "${IMAGE}@${d}"\n',
