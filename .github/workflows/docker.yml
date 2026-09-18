@@ -157,37 +157,11 @@ jobs:
       # Every other gate in this file inspects the image at rest: trivy reads
       # layers, cosign signs a digest, syft walks a filesystem. None of them
       # start a container, so an image that exits on startup passes all of them
-      # and ships. Start it once, before anything is pushed.
-      #
-      # The gate reads the container's own HEALTHCHECK verdict rather than
-      # re-probing /health itself, so the line the image ships is the line under
-      # test -- a HEALTHCHECK pointing at the wrong port would otherwise stay
-      # green here forever. `--rm` is deliberately absent: it would delete the
-      # container before the failure branches can read its logs, which are the
-      # only diagnostic this step produces. The trap does the cleanup instead.
+      # and ships. Start it once, before anything is pushed. ci.yml's release
+      # publisher calls the same script -- it fires on the same tag and cannot
+      # be blocked from here, so it gates itself.
       - name: Smoke test the image (it must start and report healthy)
-        run: |
-          set -euo pipefail
-          trap 'docker rm -f smoke > /dev/null 2>&1 || true' EXIT
-          printf 'server:\n  host: 127.0.0.1\n  port: 39400\n' > "${RUNNER_TEMP}/smoke.yaml"
-          docker run -d --name smoke \
-            -v "${RUNNER_TEMP}/smoke.yaml:/config.yaml:ro" \
-            "${REGISTRY}/mikkoparkkola/mcp-gateway:scan" --config /config.yaml
-          for _ in $(seq 1 45); do
-            if [ "$(docker inspect -f '{{.State.Health.Status}}' smoke)" = "healthy" ]; then
-              echo "image starts and its own HEALTHCHECK reports healthy"
-              exit 0
-            fi
-            if [ "$(docker inspect -f '{{.State.Running}}' smoke)" != "true" ]; then
-              echo "::error::image exited on startup"
-              docker logs smoke
-              exit 1
-            fi
-            sleep 2
-          done
-          echo "::error::image never reported healthy within 90s"
-          docker logs smoke
-          exit 1
+        run: scripts/ci/smoke-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
 
       - name: Build and push
         id: build

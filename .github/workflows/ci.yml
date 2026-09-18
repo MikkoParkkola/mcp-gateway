@@ -414,6 +414,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # docker.yml runs the same gate but fires on the same tag independently and
+      # cannot block this job, so this publisher gates itself. The image is built
+      # locally first because a container can only be started from a loaded image,
+      # and the push build below is then a cache hit rather than a second compile.
+      - name: Build for the smoke test
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          tags: ghcr.io/mikkoparkkola/mcp-gateway:smoke
+          build-args: |
+            APT_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image (it must start and report healthy)
+        run: scripts/ci/smoke-image.sh ghcr.io/mikkoparkkola/mcp-gateway:smoke
+
       - name: Build and push
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
