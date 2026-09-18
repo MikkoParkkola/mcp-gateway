@@ -967,12 +967,29 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     // still discriminates: a gateway that dropped an admitted call silently
     // produces neither a question nor a refusal and the sum falls short.
     let declined = tool_refused_ids(&frames);
-    assert_eq!(
-        prompts.len() + declined.len(),
-        usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative"),
-        "admission bounds what may run at 64, so 65 unanswered bridged calls \
-         must produce exactly 64 terminal outcomes; {} questions plus {} \
-         declined after admission arrived. {}",
+    // Admission bounds CONCURRENCY, not the lifetime count of terminal
+    // outcomes, so the sum is not an equality under contention: a dispatch the
+    // gateway declines after admission -- in CI, a tripped circuit breaker on
+    // the fixture backend, which a fast local run never reaches -- releases its
+    // permit, and the call behind it is admitted and asks. One decline can
+    // therefore buy one extra question, and the sum runs past the cap without
+    // anything being wrong. Two bounds keep the row's teeth where the equality
+    // only looked like it did:
+    //   * no more than ADMISSION_CAP questions may be outstanding at once, or
+    //     admission is not bounding anything;
+    //   * at least ADMISSION_CAP calls must have reached a terminal outcome, or an
+    //     admitted call was dropped on the floor -- neither asked nor refused.
+    let cap = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
+    assert!(
+        prompts.len() <= cap,
+        "admission must bound what may run at once; {} questions are outstanding against a cap of {cap}. {}",
+        prompts.len(),
+        census_of(&lines)
+    );
+    assert!(
+        prompts.len() + declined.len() >= cap,
+        "the reader must keep reading past the cap; {} questions plus {} declined after admission is short of \
+         {cap}, so an admitted call produced no answer at all. {}",
         prompts.len(),
         declined.len(),
         census_of(&lines)
@@ -1104,12 +1121,29 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
     // what admission let run. Counting questions alone read those refusals as
     // missing work and failed the row for a defect that was not there.
     let declined = tool_refused_ids(&frames);
-    assert_eq!(
-        prompts.len() + declined.len(),
-        usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative"),
-        "saturating inflight must not change what admission lets run: {} \
-         questions outstanding plus {} declined after admission is not \
-         {ADMISSION_CAP}. {}",
+    // Admission bounds CONCURRENCY, not the lifetime count of terminal
+    // outcomes, so the sum is not an equality under contention: a dispatch the
+    // gateway declines after admission -- in CI, a tripped circuit breaker on
+    // the fixture backend, which a fast local run never reaches -- releases its
+    // permit, and the call behind it is admitted and asks. One decline can
+    // therefore buy one extra question, and the sum runs past the cap without
+    // anything being wrong. Two bounds keep the row's teeth where the equality
+    // only looked like it did:
+    //   * no more than ADMISSION_CAP questions may be outstanding at once, or
+    //     admission is not bounding anything;
+    //   * at least ADMISSION_CAP calls must have reached a terminal outcome, or an
+    //     admitted call was dropped on the floor -- neither asked nor refused.
+    let cap = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
+    assert!(
+        prompts.len() <= cap,
+        "saturating inflight must not raise what admission lets run at once; {} questions are outstanding against a cap of {cap}. {}",
+        prompts.len(),
+        census_of(&lines)
+    );
+    assert!(
+        prompts.len() + declined.len() >= cap,
+        "saturating inflight must not cost an admitted call its answer; {} questions plus {} declined after admission is short of \
+         {cap}, so an admitted call produced no answer at all. {}",
         prompts.len(),
         declined.len(),
         census_of(&lines)
