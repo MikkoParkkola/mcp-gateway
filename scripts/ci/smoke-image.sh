@@ -46,9 +46,17 @@ docker run -d --name "${NAME}" --pull never \
   "${IMAGE}" --config /config.yaml > /dev/null
 
 for _ in $(seq 1 45); do
-  if [ "$(docker inspect -f '{{.State.Health.Status}}' "${NAME}")" = "healthy" ]; then
+  STATUS="$(docker inspect -f '{{.State.Health.Status}}' "${NAME}")"
+  if [ "${STATUS}" = "healthy" ]; then
     echo "${IMAGE} starts and its own HEALTHCHECK reports healthy"
     exit 0
+  fi
+  # `unhealthy` is already the HEALTHCHECK's own verdict after its configured
+  # retries, so waiting out the rest of the budget cannot change it.
+  if [ "${STATUS}" = "unhealthy" ]; then
+    echo "::error::${IMAGE} started but its own HEALTHCHECK reports unhealthy"
+    docker logs "${NAME}"
+    exit 1
   fi
   if [ "$(docker inspect -f '{{.State.Running}}' "${NAME}")" != "true" ]; then
     echo "::error::${IMAGE} exited on startup"
