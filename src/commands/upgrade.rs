@@ -242,7 +242,10 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 const NOTICE_4_0_0_ITEMS: &[&str] = &[
     "OAuth credentials are now stored per issuer. Stored tokens from 3.x are not \
 migrated: each OAuth backend re-authenticates once, on its next use. Expect one \
-authorization prompt per backend; no config change is needed.",
+authorization prompt per backend; no config change is needed. Your 3.x token \
+files are left untouched in `~/.mcp-gateway/oauth/` and are no longer read; \
+they still hold usable refresh tokens at mode 0600, so delete them once every \
+backend has re-authorized.",
     "A malformed line in an `env_files` file now FAILS STARTUP instead of being \
 skipped silently. A typo that used to cost one missing variable now costs a \
 refused start, and says which line.",
@@ -1167,6 +1170,27 @@ mod tests {
             assert!(
                 all.contains(expected),
                 "the 4.0.0 notice no longer mentions {expected}: {all}"
+            );
+        }
+    }
+
+    /// MIK-6744.STORE.1 — item 1 must also tell the operator what the upgrade
+    /// LEAVES BEHIND, not only what it stops reading.
+    ///
+    /// Not migrating 3.x tokens strands them: the files stay in the oauth
+    /// directory holding live refresh tokens, unreferenced, for as long as the
+    /// install lives. Their survival is asserted at source by
+    /// `legacy_single_user_record_is_not_reachable_under_the_4_0_0_issuer_key`
+    /// (src/oauth/upgrade_path_tests.rs). An operator told only "you will
+    /// re-authenticate" has no reason to go delete them, so the notice says so
+    /// and this pins that it keeps saying so.
+    #[test]
+    fn notice_4_0_0_discloses_the_stranded_3_x_token_files() {
+        let item_1 = NOTICE_4_0_0_ITEMS[0].to_ascii_lowercase();
+        for expected in ["~/.mcp-gateway/oauth/", "0600", "delete them"] {
+            assert!(
+                item_1.contains(expected),
+                "notice item 1 no longer tells the operator about {expected}: {item_1}"
             );
         }
     }
