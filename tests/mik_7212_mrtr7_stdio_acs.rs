@@ -1012,7 +1012,19 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
         .expect("an elicitation/create the gateway wrote carries an id");
     session.send(&elicitation_answer(&answered)).await;
 
-    let after = frames_lenient(&session.collect_lines(COLLECT_WINDOW).await);
+    // A fixed window assumes the parked call's question lands inside it. Under
+    // CI load the answer above arrives first and the window can close before
+    // the parked dispatch is scheduled, which reddens the row for a delay
+    // rather than for the drop it exists to catch. Collect until the question
+    // arrives instead: a call read and dropped never produces one, so the
+    // budget expires and both assertions below still fail.
+    let after = frames_lenient(
+        &session
+            .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+                !prompts_in(&frames_lenient(seen)).is_empty()
+            })
+            .await,
+    );
     assert!(
         after.iter().any(|frame| {
             frame.get("method").is_none()
