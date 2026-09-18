@@ -835,7 +835,7 @@ class WorkflowWiring(unittest.TestCase):
 
         for workflow, job, gate in (
             ("release.yml", "homebrew-update", "verify"),
-            ("docker.yml", "publish-mcp-registry", "build"),
+            ("ci.yml", "publish-mcp-registry", "docker-manifest"),
         ):
             own = job_if(workflow, job)
             # The clause has to be one of the condition's own top-level
@@ -856,24 +856,24 @@ class WorkflowWiring(unittest.TestCase):
         # `… && ':latest' || ':latest'`, where both branches yield the same
         # name and the condition decides nothing.
         self.assertRegex(
-            condition("ci.yml", "docker"),
+            condition("ci.yml", "docker-manifest"),
             r"(?<![!\w.])steps\.\w+\.outputs\.is_prerelease != 'true'"
             r" && 'ghcr\.io/[^']*:latest' \|\| ''",
         )
         # The step that decides it has to exist. `steps.missing.outputs.…`
         # is not an error in Actions — it is the empty string, and `'' !=
         # 'true'` tags every release candidate :latest.
-        body = jobs("ci.yml")["docker"]
+        body = jobs("ci.yml")["docker-manifest"]
         producer = re.search(
             r"(?<![!\w.])steps\.(\w+)\.outputs\.is_prerelease != 'true'"
             r" && 'ghcr\.io/[^']*:latest'",
-            condition("ci.yml", "docker"),
+            condition("ci.yml", "docker-manifest"),
         )
-        self.assertIsNotNone(producer, "ci.yml docker: nothing decides :latest")
+        self.assertIsNotNone(producer, "ci.yml docker-manifest: nothing decides :latest")
         self.assertRegex(
             body,
             rf"(?m)^\s+id:\s*{re.escape(producer.group(1))}\s*$",
-            f"ci.yml docker: no step is id {producer.group(1)}",
+            f"ci.yml docker-manifest: no step is id {producer.group(1)}",
         )
         # And nothing tags :latest beside it. A second entry in the same
         # `tags:` list carries no expression, moves the name on every build,
@@ -954,12 +954,19 @@ class WorkflowWiring(unittest.TestCase):
                 f"release.yml: DIST_TAG is inverted: {binding}",
             )
 
-    def test_both_ghcr_publishers_sign_what_they_push(self):
-        # Both push :VERSION from the same commit on the same tag with no
-        # ordering between them, so the name resolves to whichever pushed last.
-        # If only one signs, that name can carry no signature at all while the
-        # signing workflow's own verify-by-digest still passes.
-        for workflow in ("ci.yml", "docker.yml"):
+    def test_the_single_ghcr_publisher_signs_what_it_pushes(self):
+        # One publisher owns :VERSION. A second one would push the same name
+        # from the same commit with no ordering between them, so the name
+        # would resolve to whichever pushed last and could carry no signature
+        # at all while the signing workflow's own verify-by-digest passed.
+        # docker.yml gave up the tag; it must not sign, because signing is
+        # what it would do if it had started pushing one again.
+        for command in commands("docker.yml"):
+            self.assertFalse(
+                runs(command, COSIGN_ANY),
+                f"docker.yml runs cosign, so a second publisher is back: {command}",
+            )
+        for workflow in ("ci.yml",):
             live = commands(workflow)
             # Each verb separately, and `verify` bounded so it cannot be
             # satisfied by `verify-attestation`: an attestation is not a
@@ -1002,7 +1009,7 @@ class WorkflowWiring(unittest.TestCase):
                     )
                     self.assertRegex(
                         signed,
-                        r"(?:^|\s)(?:\"[^\"]*@\$\{DIGEST\}\"|[^\s\"']*@\$\{DIGEST\})(?:\s|$)",
+                        r"(?:^|\s)(?:\"[^\"]*@\$\{\w+\}\"|[^\s\"']*@\$\{\w+\})(?:\s|$)",
                         f"{workflow}: {command}",
                     )
             # Read the binding per step, not per file. `DIGEST` is step-scoped
@@ -1013,9 +1020,17 @@ class WorkflowWiring(unittest.TestCase):
             # rejected anyway: step-scoped env is what these steps use, and an
             # assertion that accepted either could not tell a step that lost
             # its binding from one that never had it.
-            digest = re.compile(
-                r"^DIGEST: [\"']?\$\{\{\s*steps\.build\.outputs\.digest\s*\}\}[\"']?$"
-            )
+            # Every published digest, not just the list's. A client on arm64
+            # resolves the arm64 child, so a signature over the index alone
+            # leaves what that client pulls unverifiable. Each name is bound
+            # from a step output: a literal here is a digest that cannot
+            # follow the build.
+            digests = [
+                re.compile(
+                    rf"^{name}: [\"']?\$\{{\{{\s*steps\.\w+\.outputs\.\w+\s*\}}\}}[\"']?$"
+                )
+                for name in ("LIST", "AMD64", "ARM64")
+            ]
             identity = re.compile(
                 r"^IDENTITY: [\"']?https://github\.com/MikkoParkkola/mcp-gateway"
                 rf"/\.github/workflows/{re.escape(workflow)}@\$\{{\{{\s*github\.ref\s*\}}\}}[\"']?$"
@@ -1028,10 +1043,12 @@ class WorkflowWiring(unittest.TestCase):
                     continue
                 signing += 1
                 name = block[0]
-                self.assertTrue(
-                    any(digest.match(c) for c in bindings),
-                    f"{workflow}: {name} runs cosign without binding DIGEST to the build digest",
-                )
+                for digest in digests:
+                    self.assertTrue(
+                        any(digest.match(c) for c in bindings),
+                        f"{workflow}: {name} runs cosign without binding "
+                        f"every published digest to a step output",
+                    )
                 # The env binding is only worth what the shell leaves of it: a
                 # `DIGEST=` assignment in the run body rebinds the name the
                 # cosign command below expands, and the env check still passes.
@@ -1046,8 +1063,8 @@ class WorkflowWiring(unittest.TestCase):
                         self.assertNotRegex(
                             piece,
                             r"(?:^|\b(?:export|declare|local|typeset|readonly)\s+)"
-                            r"DIGEST=",
-                            f"{workflow}: {name} reassigns DIGEST in its shell",
+                            r"(?:LIST|AMD64|ARM64)=",
+                            f"{workflow}: {name} reassigns a digest in its shell",
                         )
                 if not any(runs(c, COSIGN_VERIFY) for c in block):
                     continue

@@ -543,7 +543,11 @@ jobs:
         id: list
         env:
           VERSION: ${{ steps.meta.outputs.version }}
-          IS_PRERELEASE: ${{ steps.meta.outputs.is_prerelease }}
+          # The version tag is always created; :latest moves only for a stable
+          # release, so `docker pull` with no tag cannot land on a candidate.
+          # Kept as one expression rather than a shell branch so the release
+          # guard can read which way round it is.
+          LATEST_TAG: ${{ steps.meta.outputs.is_prerelease != 'true' && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}
         run: |
           set -euo pipefail
           IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
@@ -553,11 +557,9 @@ jobs:
           # rather than failed, and a one-platform "list" published under the
           # release tag is the defect this job exists to prevent.
           test -n "${AMD64}" && test -n "${ARM64}"
-          # The version tag is always created; :latest moves only for a stable
-          # release, so `docker pull` with no tag cannot land on a candidate.
           TAGS=(--tag "${IMAGE}:${VERSION}")
-          if [ "${IS_PRERELEASE}" != "true" ]; then
-            TAGS+=(--tag "${IMAGE}:latest")
+          if [ -n "${LATEST_TAG}" ]; then
+            TAGS+=(--tag "${LATEST_TAG}")
           fi
           # This is the first and only moment the tag exists: both legs have
           # already started their own image on their own architecture.
