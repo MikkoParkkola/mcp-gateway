@@ -459,9 +459,6 @@ jobs:
           # Ephemeral local tag; never pushed. Lowercase because Docker requires
           # it and `github.repository` carries the original-case owner.
           tags: ghcr.io/mikkoparkkola/mcp-gateway:scan
-          # Must equal the push build's value exactly. A different bust value
-          # gives the two builds different apt layers, and the scan would then
-          # describe an image that never ships.
           build-args: |
             APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}
           cache-from: type=gha
