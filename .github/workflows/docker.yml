@@ -154,6 +154,34 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore
 
+      # Every other gate in this file inspects the image at rest: trivy reads
+      # layers, cosign signs a digest, syft walks a filesystem. None of them
+      # start a container, so an image that exits on startup passes all of them
+      # and ships. Start it once, against the same endpoint the Dockerfile's
+      # HEALTHCHECK probes, before anything is pushed.
+      - name: Smoke test the image (it must start and serve /health)
+        run: |
+          set -euo pipefail
+          printf 'server:\n  host: 127.0.0.1\n  port: 39400\n' > "${RUNNER_TEMP}/smoke.yaml"
+          docker run -d --name smoke \
+            -v "${RUNNER_TEMP}/smoke.yaml:/config.yaml:ro" \
+            "${REGISTRY}/mikkoparkkola/mcp-gateway:scan" --config /config.yaml
+          for _ in $(seq 1 30); do
+            if docker exec smoke wget --spider -q http://localhost:39400/health; then
+              echo "image starts and serves /health"
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' smoke)" != "true" ]; then
+              echo "::error::image exited on startup"
+              docker logs smoke
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "::error::image never served /health within 60s"
+          docker logs smoke
+          exit 1
+
       - name: Build and push
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
