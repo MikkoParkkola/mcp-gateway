@@ -27,6 +27,20 @@ trap 'docker rm -f "${NAME}" > /dev/null 2>&1 || true' EXIT
 # non-loopback bind without auth is refused by design.
 printf 'server:\n  host: 127.0.0.1\n  port: 39400\n' > "${WORKDIR}/smoke.yaml"
 
+# This gate's verdict IS the image's HEALTHCHECK, so an image that declares none
+# has nothing to read: say so in seconds rather than timing out in 90 with a
+# message that blames the gateway for a missing Dockerfile line. An inspect that
+# fails outright is a different fault -- an image that never loaded, or no daemon
+# -- and must not be reported as a missing HEALTHCHECK.
+if ! HEALTHCHECK="$(docker inspect -f '{{if .Config.Healthcheck}}declared{{end}}' "${IMAGE}")"; then
+  echo "::error::cannot inspect ${IMAGE}: it was never loaded, or the daemon is unreachable"
+  exit 1
+fi
+if [ -z "${HEALTHCHECK}" ]; then
+  echo "::error::${IMAGE} declares no HEALTHCHECK, which is the verdict this gate reads"
+  exit 1
+fi
+
 docker run -d --name "${NAME}" --pull never \
   -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
