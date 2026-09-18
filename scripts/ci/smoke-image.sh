@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Start a built image and require it to reach the HEALTHCHECK's own `healthy`
 # verdict. Both image publishers call this: docker.yml on every push and PR,
 # ci.yml on a release tag. They are separate workflows firing on the same tag
