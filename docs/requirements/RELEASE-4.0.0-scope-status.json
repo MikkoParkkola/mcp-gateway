@@ -363,14 +363,14 @@
       "id": "NFR.WORKLOAD.1",
       "status": "pending",
       "stage": "built",
-      "blocked_on": "operator",
+      "blocked_on": "none",
       "evidence": [
         "tests/load/k6_gateway.js",
         "benchmarks/results/rehearsal-2026-09-16/01-compile-quiet-rerun.md",
         "benchmarks/results/rehearsal-2026-09-16/02-pins-quiet-v1.json.txt",
         "benchmarks/results/rehearsal-2026-09-16/03-finding-response-firewall-p50.md"
       ],
-      "note": "ON THE RELEASE LINE, 2026-09-17: the NFR.WORKLOAD.1 harness is merged to origin/main as squash commit a2505be0 (PR #565). Because the merge was squashed, the original commits 790898c6 and 114d2337 are NOT ancestors of origin/main and never will be -- an ancestry test on those SHAs reports this evidence as off-line and must not be used as the check. Test for content instead: benchmarks/workload/run_workload.sh is present on origin/main and 10 benchmarks/results/rehearsal-2026-09-14/* files are tracked there. What remains is execution against the 4.0.0 candidate, not merge. Diagnosis of the earlier scores: docs/release/2026-09-16-nfr-workload-1-diagnosis.md."
+      "note": "ON THE RELEASE LINE, 2026-09-17: the NFR.WORKLOAD.1 harness is merged to origin/main as squash commit a2505be0 (PR #565). Because the merge was squashed, the original commits 790898c6 and 114d2337 are NOT ancestors of origin/main and never will be -- an ancestry test on those SHAs reports this evidence as off-line and must not be used as the check. Test for content instead: benchmarks/workload/run_workload.sh is present on origin/main and 10 benchmarks/results/rehearsal-2026-09-14/* files are tracked there. What remains is execution against the 4.0.0 candidate, not merge. Diagnosis of the earlier scores: docs/release/2026-09-16-nfr-workload-1-diagnosis.md. CORRECTED 2026-09-18: the row was never waiting on an operator answer. The diagnosis ends by ruling that both docket options were declined correctly and that the row closes on two keys in the shared workload template, so what remains is execution, not sign-off. Both keys are now committed (benchmarks/workload/gateway.workload.yaml:24-30) and a five-cell run against origin/main is executing on Spark."
     },
     {
       "id": "NFR.UPGRADE.1",
