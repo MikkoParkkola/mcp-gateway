@@ -76,10 +76,28 @@ changed before finding 1 has a ruling.
 
 ## Same mechanism elsewhere
 
-`tests/mik_7212_mrtr7_stdio_acs.rs` rows 7a/7b fail in CI only, and their
-post-admission declines swung from 0 to ~965 between two runs of the same
-commit. That test's stdio fixture also does not serve `ping`, and a contended
-CI runner gives the probe time to escalate where a fast local run does not.
+**Retracted 2026-09-18.** `tests/mik_7212_mrtr7_stdio_acs.rs` rows 7a/7b were
+attributed here to the same `ping` escalation, on the strength of the same
+CI-only signature and a fixture that does not serve `ping`. The attribution is
+wrong, and the shared signature is what made it look right: "fails only under
+load" fits every bound measured in wall-clock time, so it identifies none of
+them.
+
+Row 7a stayed red on CI run 35353793208, whose commit already contains
+`d11bf4a1` — the escalation exemption below. A cause that is already fixed on
+the branch cannot be the cause. The child's own logs from that run name the
+bound instead: 58 x `error=Delivery { key: "branch", error: TimedOut }`, the
+30-second per-prompt bound in `src/gateway/input_bridge.rs:280`, reached because
+the row answers one of its 64 outstanding questions and abandons the other 63.
+Those 58 failures reach the client as 57 top-level `-32003` frames, and
+`src/gateway/meta_mcp/invoke.rs:2336` collapses every `BridgeError` variant into
+that one code and message, so the wire cannot say which bound was hit — only
+the child's log can.
+
+What remains under 7a after the retraction is a narrower and real defect: call
+id 66, one past the admission cap, was accepted without a busy refusal, had a
+free admission permit for roughly 35 seconds as the abandoned questions timed
+out, and emitted no frame of any kind. See MIK-7387.
 
 ## 2026-09-18: finding 1 has a ruling, and the ruling is implemented
 
