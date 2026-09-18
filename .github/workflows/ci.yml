@@ -561,7 +561,15 @@ jobs:
           fi
           # This is the first and only moment the tag exists: both legs have
           # already started their own image on their own architecture.
+          #
+          # The MCP Registry validator reads io.modelcontextprotocol.server.name
+          # off what the tag resolves to. Dockerfile:42 sets it as a LABEL, which
+          # lives in each child's image config and is not carried onto an index
+          # by `imagetools create`, so it is annotated onto the index here as
+          # well. A validator that resolves a platform child and one that reads
+          # the index both find it.
           docker buildx imagetools create "${TAGS[@]}" \
+            --annotation "index:io.modelcontextprotocol.server.name=io.github.MikkoParkkola/mcp-gateway" \
             "${IMAGE}@${AMD64}" "${IMAGE}@${ARM64}"
           docker buildx imagetools inspect "${IMAGE}:${VERSION}"
           LIST="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{.Manifest.Digest}}')"
