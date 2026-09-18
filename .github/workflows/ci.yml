@@ -433,6 +433,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build once and load locally so trivy inspects the artifact BEFORE any
+      # layer reaches ghcr.io. docker.yml gates its own push this way, but a
+      # workflow cannot read another workflow's job result, so the publisher of
+      # the tags users actually pull needs its own gate rather than inheriting
+      # one. The push build below restores these layers from the gha cache, so
+      # the scanned image and the pushed image are the same image.
+      - name: Build image for vulnerability scan (load locally, no push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          # Ephemeral local tag; never pushed. Lowercase because Docker requires
+          # it and `github.repository` carries the original-case owner.
+          tags: ghcr.io/mikkoparkkola/mcp-gateway:scan
+          # Must equal the push build's value exactly. A different bust value
+          # gives the two builds different apt layers, and the scan would then
+          # describe an image that never ships.
+          build-args: |
+            APT_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy image scan (block push on fixable HIGH/CRITICAL CVEs)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mikkoparkkola/mcp-gateway:scan
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+
       - name: Build and push
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
