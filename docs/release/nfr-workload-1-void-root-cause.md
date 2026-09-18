@@ -80,3 +80,35 @@ changed before finding 1 has a ruling.
 post-admission declines swung from 0 to ~965 between two runs of the same
 commit. That test's stdio fixture also does not serve `ping`, and a contended
 CI runner gives the probe time to escalate where a fast local run does not.
+
+## 2026-09-18: finding 1 has a ruling, and the ruling is implemented
+
+The escalation decision the section above was waiting on has been settled and
+built, so the measurement is no longer unrunnable and the fixture is no longer
+frozen.
+
+- **Ruling.** `docs/requirements/RELEASE-4.0.0-requirements.md:93`
+  (MIK-7217.OUTBOUND.2(d)) now exempts `-32601` explicitly: a well-formed,
+  id-correlated `method not found` is evidence the peer is alive, not a fault.
+- **Implementation.** `src/backend/lifecycle.rs:1215-1223` resets
+  `unserved_consecutive` to zero on `METHOD_NOT_FOUND_CODE` and returns before
+  the escalation check, so a backend that never serves `ping` can no longer be
+  auto-disabled. It resets rather than skips, so a peer alternating `ping`
+  refusals with genuine faults cannot accumulate faults across the answers that
+  proved it alive. Commit `d11bf4a1`, which also closes GH #567.
+
+Consequences for the two findings:
+
+1. **Product finding — closed at head, not on the release line.** `d11bf4a1`
+   is contained only by `origin/work/v4-audit-adjudication`; it is not an
+   ancestor of `origin/main`. The fix reaches the release line when PR #561
+   merges, and NFR.WORKLOAD.1 cannot be graded against main before then.
+2. **Harness finding — still open.** `C*.gateway.stdout` / `C*.gateway.stderr`
+   were captured as 0 bytes. A re-measurement that repeats that capture bug
+   produces another number with no server-side evidence behind it, so the
+   harness fix precedes the re-run.
+
+The gate stays at `built`. Promoting it needs a re-measured throughput number
+taken against a build that contains `d11bf4a1`, with non-empty server-side
+capture. That run is a heavy workload benchmark and belongs on Spark, not on
+the Mac holding the shared build lock.
