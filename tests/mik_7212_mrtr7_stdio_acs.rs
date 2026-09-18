@@ -907,6 +907,55 @@ fn a_wrapped_tool_refusal_reads_as_a_refusal() {
     );
 }
 
+/// The two bounds that keep row 7a's teeth once a decline can buy an extra
+/// question: admission may never let more than `ADMISSION_CAP` questions stand
+/// at once, and at least that many calls must reach a terminal outcome.
+/// Returns the questions, so the row can answer one it actually received.
+fn assert_admission_bounded<'a>(frames: &'a [Value], lines: &[String]) -> Vec<&'a Value> {
+    let prompts = prompts_in(frames);
+    // Asking is only one terminal outcome of an admitted call. A dispatch the
+    // gateway declines after admission -- in CI, a tripped circuit breaker on
+    // the fixture backend, which a fast local run never reaches -- consumed a
+    // slot and answered, so it counts toward what admission let run. The row
+    // still discriminates: a gateway that dropped an admitted call silently
+    // produces neither a question nor a refusal and the sum falls short.
+    let declined = tool_refused_ids(frames);
+    // Admission bounds CONCURRENCY, not the lifetime count of terminal
+    // outcomes, so the sum is not an equality under contention: a dispatch the
+    // gateway declines after admission -- in CI, a tripped circuit breaker on
+    // the fixture backend, which a fast local run never reaches -- releases its
+    // permit, and the call behind it is admitted and asks. One decline can
+    // therefore buy one extra question, and the sum runs past the cap without
+    // anything being wrong. Two bounds keep the row's teeth where the equality
+    // only looked like it did:
+    //   * no more than ADMISSION_CAP questions may be outstanding at once, or
+    //     admission is not bounding anything;
+    //   * at least ADMISSION_CAP calls must have reached a terminal outcome, or an
+    //     admitted call was dropped on the floor -- neither asked nor refused.
+    let cap = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
+    assert!(
+        prompts.len() <= cap,
+        "admission must bound what may run at once; {} questions are outstanding against a cap of {cap}. {}",
+        prompts.len(),
+        census_of(lines)
+    );
+    assert!(
+        prompts.len() + declined.len() >= cap,
+        "the reader must keep reading past the cap; {} questions plus {} declined after admission is short of \
+         {cap}, so an admitted call produced no answer at all. {}",
+        prompts.len(),
+        declined.len(),
+        census_of(lines)
+    );
+    assert!(
+        refused_ids(frames).is_empty(),
+        "65 calls is one past admission but far short of the inflight cap, so \
+         none of them may be refused; refused: {:?}",
+        refused_ids(frames)
+    );
+    prompts
+}
+
 /// MIK-7212.MRTR.7a — the single stdin reader keeps reading past the admission
 /// cap, so a client that pipelines more bridged calls than may run at once is
 /// still served.
@@ -961,47 +1010,7 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
         "the fixture backend was never reached, so nothing could have asked"
     );
 
-    let prompts = prompts_in(&frames);
-    // Asking is only one terminal outcome of an admitted call. A dispatch the
-    // gateway declines after admission -- in CI, a tripped circuit breaker on
-    // the fixture backend, which a fast local run never reaches -- consumed a
-    // slot and answered, so it counts toward what admission let run. The row
-    // still discriminates: a gateway that dropped an admitted call silently
-    // produces neither a question nor a refusal and the sum falls short.
-    let declined = tool_refused_ids(&frames);
-    // Admission bounds CONCURRENCY, not the lifetime count of terminal
-    // outcomes, so the sum is not an equality under contention: a dispatch the
-    // gateway declines after admission -- in CI, a tripped circuit breaker on
-    // the fixture backend, which a fast local run never reaches -- releases its
-    // permit, and the call behind it is admitted and asks. One decline can
-    // therefore buy one extra question, and the sum runs past the cap without
-    // anything being wrong. Two bounds keep the row's teeth where the equality
-    // only looked like it did:
-    //   * no more than ADMISSION_CAP questions may be outstanding at once, or
-    //     admission is not bounding anything;
-    //   * at least ADMISSION_CAP calls must have reached a terminal outcome, or an
-    //     admitted call was dropped on the floor -- neither asked nor refused.
-    let cap = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
-    assert!(
-        prompts.len() <= cap,
-        "admission must bound what may run at once; {} questions are outstanding against a cap of {cap}. {}",
-        prompts.len(),
-        census_of(&lines)
-    );
-    assert!(
-        prompts.len() + declined.len() >= cap,
-        "the reader must keep reading past the cap; {} questions plus {} declined after admission is short of \
-         {cap}, so an admitted call produced no answer at all. {}",
-        prompts.len(),
-        declined.len(),
-        census_of(&lines)
-    );
-    assert!(
-        refused_ids(&frames).is_empty(),
-        "65 calls is one past admission but far short of the inflight cap, so \
-         none of them may be refused; refused: {:?}",
-        refused_ids(&frames)
-    );
+    let prompts = assert_admission_bounded(&frames, &lines);
 
     // Answer a question the test has actually received. A predetermined id
     // assumes dispatches start in stdin order, which 9b0caa1e withdrew, and
