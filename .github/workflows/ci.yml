@@ -438,7 +438,11 @@ jobs:
       # workflow cannot read another workflow's job result, so the publisher of
       # the tags users actually pull needs its own gate rather than inheriting
       # one. The push build below restores these layers from the gha cache, so
-      # the scanned image and the pushed image are the same image.
+      # on a cache hit it publishes the bytes trivy just cleared. That identity
+      # is cache-dependent, not structural: a partial miss rebuilds a layer the
+      # scan never saw. Making it structural means pushing the loaded artifact
+      # by digest instead of rebuilding — the same change #529 needs, tracked
+      # there rather than duplicated here.
       - name: Build image for vulnerability scan (load locally, no push)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
