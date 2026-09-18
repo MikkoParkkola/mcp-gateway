@@ -340,6 +340,21 @@ jobs:
       - name: Require completed acceptance in publishing context
         run: python3 scripts/release/check_scope_acceptance.py --publish-check
 
+  capability-pins:
+    name: Capability pin counts and drift
+    runs-on: ubuntu-latest
+    # tests/capability_pin_policy.rs already asserts the privilege rule and the
+    # drift rule, but only behind a full --all-features build. This is the drift
+    # half in two seconds on the cheapest runner, so a capability file rewritten
+    # without re-issuing its pin is caught before the Rust jobs finish. It also
+    # re-measures the counts printed in docs/release/v4.0.0-supported-matrix.md,
+    # which NFR.BUILD.1 C2 is graded against — a count nobody recomputes reads
+    # as evidence while being a memory of what was once true.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check capability pins against the catalogue and the matrix
+        run: bash scripts/ci/check-capability-pin-counts.sh
+
   secrets-scan:
     name: Secrets scan
     runs-on: ubuntu-latest
