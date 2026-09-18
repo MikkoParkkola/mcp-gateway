@@ -410,6 +410,14 @@ jobs:
       contents: read
       packages: write
       id-token: write # keyless cosign signing (OIDC)
+    env:
+      # Busts the runtime stage's apt layer once per run. The scan build and the
+      # push build below both read this, so the layers trivy clears are the
+      # layers that ship. Defined here rather than inline in each step for the
+      # same reason docker.yml defines it at workflow level: two inline copies
+      # can drift, and the drift is silent — the scan would still pass, just on
+      # an image nobody publishes.
+      APT_CACHE_BUST: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -455,7 +463,7 @@ jobs:
           # gives the two builds different apt layers, and the scan would then
           # describe an image that never ships.
           build-args: |
-            APT_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+            APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -487,7 +495,7 @@ jobs:
           # a release image ships whatever packages were current when that layer
           # was first built.
           build-args: |
-            APT_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+            APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
