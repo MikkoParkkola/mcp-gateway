@@ -789,6 +789,25 @@ fn undeclared_input_request(
     }
 }
 
+/// The terminal state a dropped reservation stores once the backend has acted.
+///
+/// Committed rather than completed: the call may still fail a post-dispatch
+/// gate, and a retry of the same key must be told the side effect ran rather
+/// than be readmitted to run it again or served a success the caller's own
+/// request never produced.
+fn withheld_side_effect() -> Value {
+    json!({
+        "resultType": "complete",
+        "isError": true,
+        "content": [{
+            "type": "text",
+            "text": "Side effect executed; the response was withheld by a \
+                     post-dispatch gate. Retrying with the same idempotency \
+                     key will not re-execute it."
+        }],
+    })
+}
+
 /// Re-dispatches the original call with the answers collected so far.
 ///
 /// Holds the dispatch arguments rather than a closure because
@@ -1972,16 +1991,7 @@ impl MetaMcp {
         // "side effect executed" over a backend that stopped to ask. Keying on
         // the classification would exempt exactly the shapes it rejects.
         if !stopped_to_ask && let Some(reservation) = idem_reservation.as_mut() {
-            reservation.commit(&json!({
-                "resultType": "complete",
-                "isError": true,
-                "content": [{
-                    "type": "text",
-                    "text": "Side effect executed; the response was withheld by a \
-                             post-dispatch gate. Retrying with the same idempotency \
-                             key will not re-execute it."
-                }],
-            }));
+            reservation.commit(&withheld_side_effect());
         }
 
         // MRTR.9: a question the client never said it could answer is refused
@@ -2073,7 +2083,7 @@ impl MetaMcp {
                     // reservation precisely because the backend had stopped to
                     // ask; that is no longer true.
                     if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.commit(&completed);
+                        reservation.commit(&withheld_side_effect());
                     }
                     result = completed;
                     interim = None;
