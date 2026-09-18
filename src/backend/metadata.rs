@@ -222,6 +222,19 @@ impl Backend {
             .map(|tools| tools.as_ref().clone())
     }
 
+    /// TEMPORARY STUB, today's behavior: no identity reaches a metadata fetch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the tools request fails.
+    pub async fn get_tools_for_identity(
+        &self,
+        _identity_key: Option<&str>,
+        _extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<Tool>>> {
+        self.get_tools_shared().await
+    }
+
     /// Get cached resources (or fetch if needed) without cloning the cached list.
     ///
     /// # Errors

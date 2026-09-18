@@ -1871,3 +1871,224 @@ async fn revocation_during_a_fill_is_not_served_afterwards() {
         "a revoked identity's tool schema is still resolvable"
     );
 }
+
+// ── MIK-7334.CATALOGUE.1, the residue ─────────────────────────────────────
+//
+// Withholding the shared catalogue stops the leak but leaves a `per_user`
+// backend surfacing ZERO tools: `get_cached_list_shared` short-circuits, so
+// nothing an owner could legitimately see ever reaches a reader. The fix is a
+// catalogue fetched over the SAME per-identity slot that serves that identity's
+// `tools/call`, cached on that slot — never on the backend-wide cache.
+
+/// A transport that serves one identity's catalogue and records what reached
+/// it, so a test can prove the fetch carried the caller's identity rather than
+/// falling back to the identity-less shared path.
+struct IdentityScopedTools {
+    tools: Vec<String>,
+    seen: parking_lot::Mutex<Vec<(Option<String>, Vec<(String, String)>)>>,
+}
+
+impl IdentityScopedTools {
+    fn new(tools: &[&str]) -> Self {
+        Self {
+            tools: tools.iter().map(|t| (*t).to_string()).collect(),
+            seen: parking_lot::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn identities_seen(&self) -> Vec<Option<String>> {
+        self.seen.lock().iter().map(|(id, _)| id.clone()).collect()
+    }
+
+    fn headers_seen(&self) -> Vec<Vec<(String, String)>> {
+        self.seen.lock().iter().map(|(_, h)| h.clone()).collect()
+    }
+}
+
+#[async_trait]
+impl Transport for IdentityScopedTools {
+    /// The identity-less entry point. A per-identity catalogue fetch must never
+    /// arrive here: this slot's answer is only meaningful for the caller whose
+    /// credential opened it.
+    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        Err(Error::BackendUnavailable(
+            "tools/list reached the identity-less path".to_string(),
+        ))
+    }
+
+    async fn request_with_headers(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+        _resend: crate::transport::ResendPermission,
+    ) -> Result<JsonRpcResponse> {
+        assert_eq!(method, "tools/list");
+        self.seen
+            .lock()
+            .push((identity_key.map(str::to_string), extra_headers.to_vec()));
+        Ok(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            ToolsListResult {
+                tools: self.tools.iter().map(|n| sample_tool(n)).collect(),
+                next_cursor: None,
+            },
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn seed_identity_slot(
+    backend: &Backend,
+    binding: &str,
+    tools: &[&str],
+) -> Arc<IdentityScopedTools> {
+    let transport = Arc::new(IdentityScopedTools::new(tools));
+    backend.set_pooled_transport_for_test(
+        &PoolKey::PerUser {
+            binding: binding.to_string(),
+        },
+        Arc::clone(&transport) as Arc<dyn Transport>,
+    );
+    transport
+}
+
+/// GIVEN a `per_user` backend whose `user-a` slot advertises `alpha_tool`
+/// WHEN `user-a` reads the catalogue under its own identity binding
+/// THEN it is served `alpha_tool`, over its own slot, carrying its own headers.
+#[tokio::test]
+async fn per_user_backend_serves_its_owner_catalogue() {
+    let backend = Arc::new(per_user_backend(Duration::from_secs(60)));
+    let transport = seed_identity_slot(&backend, "user-a", &["alpha_tool"]);
+    let headers = [("authorization".to_string(), "Bearer a".to_string())];
+
+    let tools = backend
+        .get_tools_for_identity(Some("user-a"), &headers)
+        .await
+        .expect("owner catalogue read");
+
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["alpha_tool"],
+        "a per_user backend surfaces no tools to the identity that owns them"
+    );
+    assert_eq!(
+        transport.identities_seen(),
+        vec![Some("user-a".to_string())],
+        "the catalogue fetch did not carry the caller's identity"
+    );
+    assert_eq!(
+        transport.headers_seen(),
+        vec![headers.to_vec()],
+        "the caller's credential headers did not reach the catalogue fetch"
+    );
+}
+
+/// GIVEN two identities whose slots advertise different catalogues
+/// WHEN each reads under its own binding
+/// THEN neither sees the other's tools, and the backend-wide cache stays empty.
+#[tokio::test]
+async fn one_identity_catalogue_is_never_served_to_another() {
+    let backend = Arc::new(per_user_backend(Duration::from_secs(60)));
+    let alpha = seed_identity_slot(&backend, "user-a", &["alpha_tool"]);
+    let beta = seed_identity_slot(&backend, "user-b", &["beta_tool"]);
+
+    let seen_by_a = backend
+        .get_tools_for_identity(Some("user-a"), &[])
+        .await
+        .expect("identity A read");
+    let seen_by_b = backend
+        .get_tools_for_identity(Some("user-b"), &[])
+        .await
+        .expect("identity B read");
+
+    let names_a: Vec<&str> = seen_by_a.iter().map(|t| t.name.as_str()).collect();
+    let names_b: Vec<&str> = seen_by_b.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names_a, vec!["alpha_tool"], "identity A's own catalogue");
+    assert_eq!(
+        names_b,
+        vec!["beta_tool"],
+        "identity B was served identity A's catalogue: {names_b:?}"
+    );
+    assert_eq!(alpha.identities_seen().len(), 1, "one fetch per identity");
+    assert_eq!(beta.identities_seen().len(), 1, "one fetch per identity");
+    assert!(
+        !backend.has_cached_tools() && backend.get_cached_tool_names().is_empty(),
+        "a per-identity catalogue reached the backend-wide cache every caller reads"
+    );
+}
+
+/// GIVEN a `per_user` backend and a caller with no resolved identity
+/// WHEN the catalogue is read
+/// THEN nothing is served: with no identity there is no owner to serve.
+#[tokio::test]
+async fn per_user_backend_without_an_identity_still_withholds() {
+    let backend = Arc::new(per_user_backend(Duration::from_secs(60)));
+    let shared = Arc::new(PerIdentityTools::new(&["alpha_tool"], Duration::ZERO));
+    backend.set_transport_for_test(Arc::clone(&shared) as Arc<dyn Transport>);
+
+    let tools = backend
+        .get_tools_for_identity(None, &[])
+        .await
+        .expect("identity-less read");
+
+    assert!(
+        tools.is_empty(),
+        "served a catalogue with no owner to serve"
+    );
+    assert_eq!(
+        shared.requests.load(Ordering::SeqCst),
+        0,
+        "an identity-less read reached the shared transport"
+    );
+}
+
+/// GIVEN a shared-credential backend (no identity propagation)
+/// WHEN a caller reads with an identity binding
+/// THEN the binding is ignored and the shared single-flight cache still serves.
+#[tokio::test]
+async fn shared_credential_backend_ignores_the_identity_binding() {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let transport = Arc::new(PerIdentityTools::new(&["alpha_tool"], Duration::ZERO));
+    backend.set_transport_for_test(Arc::clone(&transport) as Arc<dyn Transport>);
+
+    let first = backend
+        .get_tools_for_identity(Some("user-a"), &[])
+        .await
+        .expect("first read");
+    let second = backend
+        .get_tools_for_identity(Some("user-b"), &[])
+        .await
+        .expect("second read");
+
+    assert_eq!(first.len(), 1, "the shared catalogue is served as before");
+    assert_eq!(
+        second.len(),
+        1,
+        "the shared cache still serves every caller"
+    );
+    assert_eq!(
+        transport.requests.load(Ordering::SeqCst),
+        1,
+        "a shared-credential backend re-fetched instead of using its cache"
+    );
+    assert!(backend.has_cached_tools(), "the shared cache stayed empty");
+}
