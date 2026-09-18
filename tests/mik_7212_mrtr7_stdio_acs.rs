@@ -832,7 +832,12 @@ fn tool_refusal_text(result: &Value) -> Option<String> {
         return Some(text.unwrap_or("<no text>").to_owned());
     }
     let inner: Value = serde_json::from_str(text?).ok()?;
-    if inner.get("isError").and_then(Value::as_bool) != Some(true) {
+    // The full MCP refusal shape, not the flag alone: an ordinary answer whose
+    // text happens to be JSON carrying `isError` would otherwise be re-filed as
+    // a refusal and could hide one missing outcome in the admission sum.
+    if inner.get("isError").and_then(Value::as_bool) != Some(true)
+        || !inner.get("content").is_some_and(Value::is_array)
+    {
         return None;
     }
     Some(
@@ -887,6 +892,16 @@ fn a_wrapped_tool_refusal_reads_as_a_refusal() {
     assert_eq!(
         tool_refusal_text(&serde_json::json!({
             "content": [{ "text": serde_json::json!({ "content": [] }).to_string() }],
+        })),
+        None
+    );
+
+    // The flag alone is not the refusal shape: a plain answer whose text is
+    // JSON carrying `isError` is still an answer, and counting it as a refusal
+    // would let one missing outcome pass the admission sum.
+    assert_eq!(
+        tool_refusal_text(&serde_json::json!({
+            "content": [{ "text": serde_json::json!({ "isError": true }).to_string() }],
         })),
         None
     );
