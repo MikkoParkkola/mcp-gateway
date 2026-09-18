@@ -875,15 +875,36 @@ class WorkflowWiring(unittest.TestCase):
             rf"(?m)^\s+id:\s*{re.escape(producer.group(1))}\s*$",
             f"ci.yml docker-manifest: no step is id {producer.group(1)}",
         )
-        # And nothing tags :latest beside it. A second entry in the same
-        # `tags:` list carries no expression, moves the name on every build,
-        # and leaves the guarded entry above it untouched and green.
+        # And nothing else names :latest. A second `--tag` in the publisher's
+        # own argument array moves the name on every release candidate and
+        # leaves the guarded expression above it untouched and green, so the
+        # rule is about the name wherever it appears, not about one list.
         for line in live_lines("ci.yml"):
-            self.assertNotRegex(
-                line.strip(),
-                r"^-?\s*ghcr\.io/[\w./-]+:latest$",
-                f"ci.yml: :latest is tagged unconditionally: {line.strip()}",
+            if ":latest" not in line:
+                continue
+            self.assertIn(
+                "is_prerelease != 'true'",
+                line,
+                f"ci.yml: :latest is named without the channel guard: {line.strip()}",
             )
+
+    def test_the_publisher_runs_the_tag_gate_in_its_own_job(self):
+        # docker-manifest names the tag from steps.meta.outputs.version, and
+        # the gate is the step that binds it. docker-build running its own
+        # copy answers a different job's question: echo the invocation here
+        # and the publisher creates a tag whose version is the empty string.
+        body = jobs("ci.yml")["docker-manifest"]
+        invocation = re.compile(
+            r"(?:python3?|uv run)\s+scripts/release/check_tag_manifest\.py(?=\s|$)"
+        )
+        running = [
+            command
+            for block in steps("ci.yml")
+            if "\n".join(block) in body
+            for command in joined(block)
+            if runs(command, invocation)
+        ]
+        self.assertTrue(running, "ci.yml docker-manifest: nothing runs the tag gate")
 
     def test_the_prerelease_classification_is_computed(self):
         # Every guard above reads `needs.<job>.outputs.is_prerelease` from
@@ -1027,7 +1048,8 @@ class WorkflowWiring(unittest.TestCase):
             # follow the build.
             digests = [
                 re.compile(
-                    rf"^{name}: [\"']?\$\{{\{{\s*steps\.\w+\.outputs\.\w+\s*\}}\}}[\"']?$"
+                    rf"^{name}: [\"']?\$\{{\{{\s*steps\.\w+"
+                    rf"\.outputs\.{name.lower()}\s*\}}\}}[\"']?$"
                 )
                 for name in ("LIST", "AMD64", "ARM64")
             ]
