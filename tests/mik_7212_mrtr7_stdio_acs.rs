@@ -1051,10 +1051,18 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     {
         session.send(&elicitation_answer(&question)).await;
     }
+    // Same filters as `terminal_for_last` below, deliberately. A predicate that
+    // stops on any frame carrying the id would let a late busy refusal close the
+    // window on a frame the assertion then rejects, reddening the row for a
+    // refusal rather than for the drop it exists to catch.
     let settled_lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
             frames_lenient(seen)
                 .iter()
+                .filter(|frame| frame.get("method").is_none())
+                .filter(|frame| {
+                    frame.pointer("/error/code").and_then(Value::as_i64) != Some(-32000)
+                })
                 .any(|frame| frame.get("id").and_then(Value::as_i64) == Some(last_call_id))
         })
         .await;
