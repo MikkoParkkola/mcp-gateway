@@ -379,7 +379,10 @@ jobs:
 
   docker-build:
     name: Docker (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
+    # `matrix.os`, not a name of this job's own choosing: the hosted-runner
+    # guard resolves that one expression against the matrix entries below and
+    # checks each image on its own (scripts/ci/check-hosted-runners.sh).
+    runs-on: ${{ matrix.os }}
     if: startsWith(github.ref, 'refs/tags/v')
     # Each leg builds natively and starts its own image on its own architecture,
     # which is the only way an arm64 startup break is observable -- an amd64
@@ -394,10 +397,10 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-            runner: ubuntu-latest
+            os: ubuntu-latest
           - arch: arm64
             platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            os: ubuntu-24.04-arm
     # secrets-scan + secret-leak-lint added so the container image release
     # path can't ship on a tag whose push already failed a security check —
     # previously this job's needs: covered clippy/test/fmt/audit but not the
