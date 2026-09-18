@@ -2124,6 +2124,20 @@ impl MetaMcp {
                     ..
                 }) => {}
                 Err(error) => {
+                    // A round that reached the backend may have acted, so its
+                    // key must not be readmitted. `BackendFailed` is the one
+                    // variant that fails past dispatch; the rest fail in the
+                    // client-facing half, before the backend is asked again, so
+                    // their release-on-drop default still stands. Settling with
+                    // the withheld-side-effect marker matches the `Ok` arm
+                    // above: a retry of the same key is told the effect ran.
+                    if matches!(
+                        error,
+                        crate::gateway::input_bridge::BridgeError::BackendFailed { .. }
+                    ) && let Some(reservation) = idem_reservation.as_mut()
+                    {
+                        reservation.commit(&withheld_side_effect());
+                    }
                     warn!(
                         server,
                         tool,
@@ -4804,6 +4818,8 @@ mod identity_propagation_enforcement_tests {
     /// without proving the retry carried the answer anywhere.
     struct AskOnceTransport {
         calls: Arc<parking_lot::Mutex<Vec<Value>>>,
+        /// Fail the retry round instead of completing it.
+        fail_retry: bool,
     }
 
     #[async_trait::async_trait]
@@ -4818,6 +4834,13 @@ mod identity_propagation_enforcement_tests {
                 calls.push(params.unwrap_or(Value::Null));
                 calls.len()
             };
+            if round > 1 && self.fail_retry {
+                return Err(crate::Error::JsonRpc {
+                    code: -32000,
+                    message: "the backend failed the bridged retry".to_string(),
+                    data: None,
+                });
+            }
             let body = if round == 1 {
                 json!({
                     "resultType": "input_required",
@@ -4875,7 +4898,7 @@ mod identity_propagation_enforcement_tests {
     }
 
     /// A `MetaMcp` with one plain backend that asks once and then completes.
-    fn meta_that_asks_once() -> (MetaMcp, Arc<parking_lot::Mutex<Vec<Value>>>) {
+    fn meta_that_asks_once(fail_retry: bool) -> (MetaMcp, Arc<parking_lot::Mutex<Vec<Value>>>) {
         use crate::backend::Backend;
         use crate::config::{BackendConfig, TransportConfig};
 
@@ -4897,6 +4920,7 @@ mod identity_propagation_enforcement_tests {
         let calls = Arc::new(parking_lot::Mutex::new(Vec::new()));
         backend.set_transport_for_test(Arc::new(AskOnceTransport {
             calls: Arc::clone(&calls),
+            fail_retry,
         }));
         let _ = registry.register(backend);
         (MetaMcp::new(registry), calls)
@@ -4909,7 +4933,7 @@ mod identity_propagation_enforcement_tests {
     // legacy caller is handed a continuation envelope and the backend is called once.
     #[tokio::test]
     async fn legacy_caller_is_asked_in_band_and_the_backend_is_retried() {
-        let (m, calls) = meta_that_asks_once();
+        let (m, calls) = meta_that_asks_once(false);
         let asked = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let channel = AnsweringClient {
             asked: Arc::clone(&asked),
@@ -4964,6 +4988,74 @@ mod identity_propagation_enforcement_tests {
         assert!(
             retry.contains("q1"),
             "the retry carried no answer for the question asked: {retry}"
+        );
+    }
+
+    // A bridged round that fails after the backend was reached must not free the
+    // idempotency key. The first dispatch already happened — the interim is what
+    // opened the exchange — so the release-on-drop default answers a duplicate
+    // submission by running the side effect a second time.
+    #[tokio::test]
+    async fn a_failed_bridged_retry_does_not_free_the_idempotency_key() {
+        let (mut m, calls) = meta_that_asks_once(true);
+        m.enable_idempotency(
+            Arc::new(crate::idempotency::IdempotencyCache::new()),
+            std::time::Duration::from_secs(60),
+        );
+        let asked = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let channel = AnsweringClient {
+            asked: Arc::clone(&asked),
+        };
+        let declared = crate::protocol::meta::classify_request(
+            Some(&json!({"_meta": {
+                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"roots": {}},
+            }})),
+            None,
+        )
+        .declared_capabilities();
+        let retry = crate::protocol::mrtr::RetryFields {
+            input_responses: None,
+            request_state: None,
+            idempotency_key: Some("key-1".to_string()),
+            malformed: Vec::new(),
+        };
+        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            task: None,
+            signing: None,
+            execution: None,
+            credential_principal: None,
+            is_modern: false,
+            protocol_revision: None,
+            authorizer: &ALLOW_ALL_INVOKE,
+            verified_identity: None,
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            is_admin: false,
+            input_capabilities: declared,
+            retry: &retry,
+            confirmation:
+                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+            era: crate::protocol::meta::Era::Legacy,
+            channel: &channel,
+        };
+        let args = json!({"server": "asks", "tool": "ask", "arguments": {}});
+
+        let first = m
+            .invoke_tool_traced(&args, Some("session-1"), &caller, "trace-1")
+            .await;
+        assert!(first.is_err(), "the bridged retry was supposed to fail");
+        let dispatched = calls.lock().len();
+        assert_eq!(dispatched, 2, "the backend was not retried: {dispatched}");
+
+        let _second = m
+            .invoke_tool_traced(&args, Some("session-1"), &caller, "trace-2")
+            .await;
+        assert_eq!(
+            calls.lock().len(),
+            dispatched,
+            "the key was freed after a round that may have acted, so the duplicate re-executed"
         );
     }
 
