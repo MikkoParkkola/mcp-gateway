@@ -789,6 +789,98 @@ fn undeclared_input_request(
     }
 }
 
+/// Re-dispatches the original call with the answers collected so far.
+///
+/// Holds the dispatch arguments rather than a closure because
+/// [`crate::gateway::input_bridge::BackendInvoker`] is an async trait and every
+/// bridged round needs the same values the first dispatch used: a round that
+/// differed in any of them would be a second call, not a retry of this one.
+/// Every field is read off the first `accounted_dispatch` call site, argument
+/// for argument, so a parameter added there is a compile error here rather than
+/// a retry that silently diverges.
+struct BridgeDispatcher<'a> {
+    meta: &'a MetaMcp,
+    server: &'a str,
+    tool: &'a str,
+    arguments: &'a Value,
+    prompt_cache_key: Option<&'a str>,
+    inbound_meta: Option<&'a Value>,
+    want_full: bool,
+    session_id: Option<&'a str>,
+    caller_identity: Option<&'a GrantSubject>,
+    verified_identity: Option<&'a crate::key_server::oidc::VerifiedIdentity>,
+    headers: &'a [(String, String)],
+    cache_binding: Option<&'a str>,
+    account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+    api_key_name: Option<&'a str>,
+    trace_id: &'a str,
+    policy_epoch: u64,
+    protocol_revision: Option<&'a str>,
+    routing_profile: &'a str,
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
+    async fn invoke(
+        &self,
+        retry_params: Value,
+    ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
+        // Through `accounted_dispatch`, not `dispatch_to_backend`: a bridged
+        // round is a real backend call and is accounted and gated exactly like
+        // the first one. A round that skipped the accounting would let a
+        // backend that keeps asking spend an unmetered budget.
+        let outbound = OutboundRetry {
+            request_state: retry_params
+                .get("requestState")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            input_responses: retry_params.get("inputResponses").cloned(),
+        };
+        self.meta
+            .accounted_dispatch(
+                self.server,
+                self.tool,
+                self.arguments.clone(),
+                &outbound,
+                self.prompt_cache_key,
+                self.inbound_meta,
+                self.want_full,
+                self.session_id,
+                self.caller_identity,
+                self.verified_identity,
+                self.headers,
+                self.cache_binding,
+                self.account_credential.clone(),
+                self.api_key_name,
+                self.trace_id,
+                self.policy_epoch,
+                self.protocol_revision,
+                self.routing_profile,
+            )
+            .await
+            .map_err(
+                |e| crate::gateway::input_bridge::BridgeError::BackendFailed {
+                    message: e.to_string(),
+                },
+            )
+    }
+}
+
+/// Emits the bridge's counters as structured trace events.
+///
+/// ponytail: tracing rather than the metrics registry — the record carries no
+/// answer body, so a log line is a complete rendering of it. Move to a counter
+/// when an operator needs it aggregated rather than searched.
+struct TracingBridgeObserver<'a> {
+    trace_id: &'a str,
+}
+
+impl crate::gateway::input_bridge::BridgeObserver for TracingBridgeObserver<'_> {
+    fn record(&self, record: crate::gateway::input_bridge::BridgeRecord) {
+        debug!(trace_id = self.trace_id, record = ?record, "input bridge round");
+    }
+}
+
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
 /// Global across all backends; overflow wraps (u64 → effectively infinite for our purposes).
@@ -1711,6 +1803,10 @@ impl MetaMcp {
         // the only scope holding all five values the mint sealed — the backend
         // server and tool, its argument object, the caller's identity, and the
         // handle itself.
+        // Cloned before `accounted_dispatch` takes it: a bridged round must reach
+        // the backend with the credential the first round used, and an `Arc` clone
+        // is that same credential rather than a second resolution of it.
+        let bridge_account_credential = account_credential.clone();
         let outbound_retry =
             match redeem_retry(&self.continuation, caller, server, tool, &arguments).await {
                 Ok(retry) => retry,
@@ -1730,28 +1826,30 @@ impl MetaMcp {
         if let Some(execution) = caller.execution {
             execution.mark_dispatched();
         }
-        let dispatch_result = self
-            .accounted_dispatch(
-                server,
-                tool,
-                arguments.clone(),
-                &outbound_retry,
-                prompt_cache_key.as_deref(),
-                args.get("_meta"),
-                want_full,
-                session_id,
-                caller_identity,
-                verified_identity,
-                &caller_credential.headers,
-                dispatch_binding.as_deref(),
-                account_credential,
-                api_key_name,
-                trace_id,
-                policy_epoch,
-                protocol_revision,
-                &profile.name,
-            )
-            .await;
+        // Boxed: the dispatch future is the largest thing this frame ever
+        // holds, and inlining it puts `invoke_tool_traced` over
+        // `clippy::large_futures` at every call site.
+        let dispatch_result = Box::pin(self.accounted_dispatch(
+            server,
+            tool,
+            arguments.clone(),
+            &outbound_retry,
+            prompt_cache_key.as_deref(),
+            args.get("_meta"),
+            want_full,
+            session_id,
+            caller_identity,
+            verified_identity,
+            &caller_credential.headers,
+            dispatch_binding.as_deref(),
+            account_credential,
+            api_key_name,
+            trace_id,
+            policy_epoch,
+            protocol_revision,
+            &profile.name,
+        ))
+        .await;
 
         let mut result = match dispatch_result {
             Ok(value) => {
@@ -1843,7 +1941,7 @@ impl MetaMcp {
         // Answering or asking? Read once, because the same verdict decides two
         // things: whether the idempotency key may be settled as completed, and
         // whether the question may be put to this client at all.
-        let interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+        let mut interim = crate::protocol::mrtr::InputRequired::from_result(&result);
         // Whether the backend said it acted, which is a different question from
         // whether the gateway can carry what it sent. Both post-dispatch gates
         // below need this one, not `interim`.
@@ -1904,6 +2002,135 @@ impl MetaMcp {
                 "Backend asked for input of a type the client did not declare"
             );
             return Err(undeclared_input_request(server, tool, &refused));
+        }
+
+        // MIK-7212.WIRE: a legacy client is asked here, in-band, instead of
+        // being handed a continuation envelope it has no vocabulary for. A 2025
+        // client cannot redeem one, so relaying it strands the exchange at both
+        // ends — the client holds a token it cannot spend and the backend holds
+        // a round nobody will finish.
+        //
+        // Placed between the two gates on purpose. After MRTR.9, because
+        // reaching this line means the question has already been found
+        // answerable by this client. Before the mint below, because an exchange
+        // the bridge carries to completion has no continuation to redeem: on
+        // success `interim` is cleared and the mint is skipped, and the
+        // completed body then runs the same post-invoke contract and anomaly
+        // gates every non-bridged result runs. Returning early here would buy a
+        // shorter diff by skipping them.
+        //
+        // `!requests.is_empty()` is load-bearing, not defensive. An interim
+        // result may carry `requestState` and no questions at all — MRTR.2's
+        // own shape — and handing that to the bridge makes it spin rather than
+        // refuse: `plan` yields no prompts, `ask` sends nothing, the backend is
+        // re-invoked, answers the same empty interim, and `run` exhausts its
+        // rounds. There is nothing here for a client to answer, so there is
+        // nothing to bridge, and the continuation mint below is the whole of
+        // the correct behaviour for that shape.
+        if caller.era == crate::protocol::meta::Era::Legacy
+            && let Some(pending) = interim.clone()
+            && !pending.requests.is_empty()
+            && let Some(session) = session_id
+        {
+            let dispatcher = BridgeDispatcher {
+                meta: self,
+                server,
+                tool,
+                arguments: &arguments,
+                prompt_cache_key: prompt_cache_key.as_deref(),
+                inbound_meta: args.get("_meta"),
+                want_full,
+                session_id,
+                caller_identity,
+                verified_identity,
+                headers: &caller_credential.headers,
+                cache_binding: dispatch_binding.as_deref(),
+                account_credential: bridge_account_credential,
+                api_key_name,
+                trace_id,
+                policy_epoch,
+                protocol_revision,
+                routing_profile: &profile.name,
+            };
+            let observer = TracingBridgeObserver { trace_id };
+            let bridge = crate::gateway::input_bridge::InputBridge {
+                channel: caller.channel,
+                backend: &dispatcher,
+                observer: &observer,
+                bounds: crate::gateway::input_bridge::BridgeBounds::DEFAULT,
+            };
+            // `None` slice: the per-request capability slice narrows a *modern*
+            // caller's declaration, and this branch is the legacy one — there is
+            // no per-request `_meta` to narrow by, so the session store's value
+            // stands alone.
+            match bridge
+                .run(session, caller.input_capabilities, None, &pending)
+                .await
+            {
+                Ok(completed) => {
+                    // The exchange finished, so the backend has now acted and
+                    // the key may be settled. The commit above declined this
+                    // reservation precisely because the backend had stopped to
+                    // ask; that is no longer true.
+                    if let Some(reservation) = idem_reservation.as_mut() {
+                        reservation.commit(&completed);
+                    }
+                    result = completed;
+                    interim = None;
+                }
+                // No client session to reach is not a failed exchange: it is
+                // the absence of one. A legacy caller can arrive with a
+                // declared capability and no session to carry the request on —
+                // every stateless caller does — and the bridge is the wrong
+                // messenger for it, not the last one. Fall through with
+                // `interim` still set and the ask goes out as a continuation,
+                // which is what this path did before the bridge was wired in
+                // front of it.
+                //
+                // This arm does NOT reach stdio, and the reason is worth naming
+                // because no test enforces it. It takes both halves: the guard
+                // above admits nothing with an empty request map, so whatever
+                // gets here has questions in it, and `plan` — which refuses
+                // requests that are present and undeclared — then refuses every
+                // one of them, because `stdio_caller_context` declares
+                // `Declared::NONE`. `run` calls `plan` before `ask`, so that
+                // refusal lands as `Refused` one step before any delivery is
+                // attempted, never as `NoSession`. That is what keeps the
+                // deliberate stdio refusal documented on `NoClientChannel`
+                // intact, and MIK-7387 the only thing that lifts it. The two
+                // halves are pinned separately and joined by nothing:
+                // `MIK-7212.WIRE.10` in the MRTR.7 test plan is that missing
+                // row. Until it lands, an edit to either half breaks this
+                // silently, so change `Declared::NONE` or `plan`'s position and
+                // re-read this arm.
+                //
+                // ponytail: `run` walks rounds internally and a session lost on
+                // round two surfaces the same way, so the mint would replay
+                // prompts already answered. Needs a progress signal out of
+                // `run` to tell the two apart; not built, because no channel in
+                // tree fails later than round one.
+                Err(crate::gateway::input_bridge::BridgeError::Delivery {
+                    error: crate::gateway::input_bridge::DeliveryError::NoSession,
+                    ..
+                }) => {}
+                Err(error) => {
+                    warn!(
+                        server,
+                        tool,
+                        trace_id,
+                        error = ?error,
+                        "Bridged input exchange failed for a legacy client"
+                    );
+                    return Err(Error::JsonRpc {
+                        code: -32003,
+                        message: format!(
+                            "Tool '{tool}' on server '{server}' asked for input and the bridged \
+                             exchange could not be completed"
+                        ),
+                        data: None,
+                    });
+                }
+            }
         }
 
         // MRTR.2: the backend's own `requestState` never reaches the client.
@@ -4558,6 +4785,176 @@ mod identity_propagation_enforcement_tests {
             m.enable_transparency_log(leaked_test_transparency_logger());
         }
         (m, captured, captured_identity)
+    }
+
+    /// A backend that asks once and then completes.
+    ///
+    /// Stateful on purpose: a stub returning the same interim twice makes the
+    /// bridge spin to `RoundsExhausted`, which would pass for "the bridge ran"
+    /// without proving the retry carried the answer anywhere.
+    struct AskOnceTransport {
+        calls: Arc<parking_lot::Mutex<Vec<Value>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::transport::Transport for AskOnceTransport {
+        async fn request(
+            &self,
+            _method: &str,
+            params: Option<Value>,
+        ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+            let round = {
+                let mut calls = self.calls.lock();
+                calls.push(params.unwrap_or(Value::Null));
+                calls.len()
+            };
+            let body = if round == 1 {
+                json!({
+                    "resultType": "input_required",
+                    "inputRequests": {"q1": {"method": "roots/list"}},
+                    "requestState": "backend-state-1",
+                })
+            } else {
+                json!({"content": [{"type": "text", "text": "completed"}]})
+            };
+            Ok(crate::protocol::JsonRpcResponse::success(
+                crate::protocol::RequestId::Number(1),
+                body,
+            ))
+        }
+        async fn request_with_headers(
+            &self,
+            method: &str,
+            params: Option<Value>,
+            _extra_headers: &[(String, String)],
+            _identity_key: Option<&str>,
+            _resend: crate::transport::ResendPermission,
+        ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+            self.request(method, params).await
+        }
+        async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+            Ok(())
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+        async fn close(&self) -> crate::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A legacy client that answers whatever the bridge puts to it.
+    struct AnsweringClient {
+        asked: Arc<parking_lot::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::gateway::input_bridge::ClientChannel for AnsweringClient {
+        async fn send_request(
+            &self,
+            _session_id: &str,
+            _id: &str,
+            method: &str,
+            _params: Option<Value>,
+        ) -> std::result::Result<Value, crate::gateway::input_bridge::DeliveryError> {
+            self.asked.lock().push(method.to_string());
+            // A whole JSON-RPC reply, not a bare body: the bridge reads the
+            // `result` member off the frame the client put on the wire.
+            Ok(json!({"jsonrpc": "2.0", "result": {"roots": []}}))
+        }
+    }
+
+    /// A `MetaMcp` with one plain backend that asks once and then completes.
+    fn meta_that_asks_once() -> (MetaMcp, Arc<parking_lot::Mutex<Vec<Value>>>) {
+        use crate::backend::Backend;
+        use crate::config::{BackendConfig, TransportConfig};
+
+        let registry = Arc::new(BackendRegistry::new());
+        let config = BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "https://asks.internal/mcp".to_string(),
+                streamable_http: true,
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        };
+        let backend = Arc::new(Backend::new(
+            "asks",
+            config,
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        let calls = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        backend.set_transport_for_test(Arc::new(AskOnceTransport {
+            calls: Arc::clone(&calls),
+        }));
+        let _ = registry.register(backend);
+        (MetaMcp::new(registry), calls)
+    }
+
+    // MIK-7212.MRTR.7a/7b on the production path. `tests/mik_7212_mrtr7_bridge_acs.rs`
+    // constructs `InputBridge` itself, so it stays green when `invoke_tool_traced`
+    // stops building one — which is what the reconcile merge did, unnoticed. This
+    // test enters through `invoke_tool_traced`: with no bridge on that path the
+    // legacy caller is handed a continuation envelope and the backend is called once.
+    #[tokio::test]
+    async fn legacy_caller_is_asked_in_band_and_the_backend_is_retried() {
+        let (m, calls) = meta_that_asks_once();
+        let asked = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let channel = AnsweringClient {
+            asked: Arc::clone(&asked),
+        };
+        let declared = crate::protocol::meta::classify_request(
+            Some(&json!({"_meta": {
+                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"roots": {}},
+            }})),
+            None,
+        )
+        .declared_capabilities();
+        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            task: None,
+            signing: None,
+            execution: None,
+            credential_principal: None,
+            is_modern: false,
+            protocol_revision: None,
+            authorizer: &ALLOW_ALL_INVOKE,
+            verified_identity: None,
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            is_admin: false,
+            input_capabilities: declared,
+            retry: &crate::protocol::mrtr::NO_RETRY,
+            confirmation:
+                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+            era: crate::protocol::meta::Era::Legacy,
+            channel: &channel,
+        };
+        let args = json!({"server": "asks", "tool": "ask", "arguments": {}});
+        m.invoke_tool_traced(&args, Some("session-1"), &caller, "trace-1")
+            .await
+            .expect("the bridged exchange completes");
+
+        // MRTR.7a: the equivalent legacy request reached the client in band.
+        assert_eq!(
+            asked.lock().as_slice(),
+            ["roots/list".to_string()],
+            "the legacy client was never asked, so the bridge is not on the invoke path"
+        );
+        // MRTR.7b: the backend was retried, carrying the answer and its own state.
+        let calls = calls.lock().clone();
+        assert_eq!(calls.len(), 2, "the backend was not retried: {calls:?}");
+        let retry = calls[1].to_string();
+        assert!(
+            retry.contains("backend-state-1"),
+            "the retry dropped the backend's requestState: {retry}"
+        );
+        assert!(
+            retry.contains("q1"),
+            "the retry carried no answer for the question asked: {retry}"
+        );
     }
 
     // IDP.1 end-to-end via Code Mode (gateway_execute): an authenticated caller
