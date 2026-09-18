@@ -920,9 +920,11 @@ fn a_wrapped_tool_refusal_reads_as_a_refusal() {
 ///
 /// The load-bearing assertion is the last one. Counting 64 prompts and no
 /// refusal says only that the gateway did not refuse the 65th; a gateway that
-/// read the 65th line and dropped it on the floor passes that much. Requiring
-/// the 65th prompt to appear once admission frees is what separates accepted
-/// and parked from silently discarded.
+/// read the 65th line and dropped it on the floor passes that much. What
+/// separates accepted-and-parked from silently discarded is a frame carrying
+/// the 65th call's own id once admission frees -- any terminal outcome, since
+/// an admitted call that the gateway then declines still answers under its id,
+/// while a dropped one answers nothing.
 #[tokio::test]
 async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     let home = tempfile::tempdir().expect("temporary home");
@@ -1018,13 +1020,36 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     // rather than for the drop it exists to catch. Collect until the question
     // arrives instead: a call read and dropped never produces one, so the
     // budget expires and both assertions below still fail.
-    let after = frames_lenient(
-        &session
-            .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-                !prompts_in(&frames_lenient(seen)).is_empty()
-            })
-            .await,
-    );
+    let after_lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+            !prompts_in(&frames_lenient(seen)).is_empty()
+        })
+        .await;
+    let after = frames_lenient(&after_lines);
+
+    // Every one of the 64 admitted calls already asked in the first window, so
+    // a question arriving after the answer can only be the 65th's. Answering
+    // it is what makes this row cheap: the 65th's own terminal frame is
+    // otherwise its own `per_prompt` timeout (30s, `gateway/input_bridge.rs`),
+    // which a 30s collection window is racing rather than waiting for. Nothing
+    // here is asserted -- a run where the question never came has the defect
+    // this row exists to catch, and the assertion below reports it with a
+    // census instead of unwrapping into a bare panic.
+    if let Some(question) = prompts_in(&after)
+        .first()
+        .and_then(|frame| frame.get("id"))
+        .cloned()
+    {
+        session.send(&elicitation_answer(&question)).await;
+    }
+    let settled_lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+            frames_lenient(seen)
+                .iter()
+                .any(|frame| frame.get("id").and_then(Value::as_i64) == Some(last_call_id))
+        })
+        .await;
+    let settled = frames_lenient(&settled_lines);
     assert!(
         after.iter().any(|frame| {
             frame.get("method").is_none()
@@ -1035,11 +1060,31 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
         "the answered call never completed, so the reader never consumed the \
          answer: {after:?}"
     );
+    // The 65th call's OWN id, not "some question appeared". An
+    // `elicitation/create` carries the gateway's `elic-<uuid>` id and
+    // attributes to no call, so a question from any of the 64 already-admitted
+    // calls satisfied the earlier form of this assertion while the 65th sat
+    // dropped -- and, inversely, a backend that stopped serving before
+    // admission freed reddened the row for the backend's state rather than for
+    // the drop. A frame naming `last_call_id` discriminates both ways: every
+    // terminal outcome answers under the call's own id, and a call read and
+    // dropped produces no frame with that id at all.
+    let terminal_for_last = frames
+        .iter()
+        .chain(after.iter())
+        .chain(settled.iter())
+        .filter(|frame| frame.get("method").is_none())
+        .filter(|frame| frame.pointer("/error/code").and_then(Value::as_i64) != Some(-32000))
+        .any(|frame| frame.get("id").and_then(Value::as_i64) == Some(last_call_id));
     assert!(
-        !prompts_in(&after).is_empty(),
-        "the 65th call was accepted but never asked its question once \
-         admission freed, so it was read and dropped rather than parked: \
-         {after:?}"
+        terminal_for_last,
+        "call {last_call_id} is one past admission and was accepted without a \
+         busy refusal, so it must be parked and answered once admission frees. \
+         No frame carries its id, so it was read and dropped. Before the \
+         answer: {}. After: {}. Once settled: {}",
+        census_of(&lines),
+        census_of(&after_lines),
+        census_of(&settled_lines)
     );
 
     session.shutdown().await;
