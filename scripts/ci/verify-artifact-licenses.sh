@@ -26,7 +26,7 @@ done
 if grep -Eq '^include[[:space:]]*=[[:space:]]*\[' Cargo.toml; then
   inc="$(awk '/^include[[:space:]]*=[[:space:]]*\[/{f=1} f{print} f&&/\]/{exit}' Cargo.toml)"
   for f in "${REQUIRED[@]}"; do
-    printf '%s' "$inc" | grep -q "\"$f\"" || fail "Cargo.toml include[] omits $f"
+    grep -q "\"$f\"" <<<"$inc" || fail "Cargo.toml include[] omits $f"
   done
   ok "Cargo.toml include[] lists all license files"
 else
@@ -36,7 +36,7 @@ fi
 if command -v cargo >/dev/null 2>&1; then
   if listing="$(cargo package --list --allow-dirty 2>/dev/null)"; then
     for f in "${REQUIRED[@]}"; do
-      printf '%s\n' "$listing" | grep -qx "$f" || fail "cargo package tarball would omit $f"
+      grep -qx "$f" <<<"$listing" || fail "cargo package tarball would omit $f"
     done
     ok "cargo package --list contains all license files"
   fi
