@@ -89,6 +89,21 @@ checkout, buildx, metadata, the scan build, Trivy, and the startup gate. Its cos
 verify steps, all of which are `if: startsWith(github.ref, 'refs/tags/v')`, are removed with the
 tag push they attest.
 
+### Amendment: the MCP Registry publisher moves with the tag
+
+`docker.yml` has a third job, `publish-mcp-registry` (`docker.yml:259`, `needs: build`,
+skipped on a prerelease), which rewrites `server.json` to name
+`ghcr.io/mikkoparkkola/mcp-gateway:<version>` and publishes it to the public MCP Registry. The
+registry validator resolves that exact reference, so the job requires the tag to exist when it
+runs. Option C as first written would have left it publishing a reference no publisher had yet
+created — `ci.yml`'s publisher waits on 17 upstream jobs.
+
+The job therefore moves to `ci.yml` with `needs: docker-manifest`, unchanged otherwise. This is
+the same guarantee the option-C choice was made for, applied one step further out: a version is
+listed on a public discovery surface only after the suite that qualifies it has passed and the
+manifest list it names exists. Acceptance 5 gains a clause: on a stable tag the registry
+publish runs after `docker-manifest`, and `server.json`'s `packages[0].identifier` resolves.
+
 ## Acceptance
 
 1. `docker buildx imagetools inspect ghcr.io/mikkoparkkola/mcp-gateway:<version>` lists exactly
@@ -141,8 +156,20 @@ SHIP-WITH-FIXES (`~/.claude/data/reviews/runs/kimi-20260918T171203Z-58559.md`):
 | `build-push-action`'s default provenance attestation makes each leg's push an index, which `imagetools create` cannot take as a child | folded in: `provenance: false`, `sbom: false` on the matrix legs, with the pinned version cited |
 | GHCR retains untagged digests, so a failed leg's blob is not collected on its own | folded in: acceptance 4 asserts no tag, and untagged pruning is named as separate work |
 
-`gpt-review`'s account is rate-limited until 2026-09-19, and `grok-review`'s wrapper returned a
-279-byte file with no verdict — a watchdog kill, not a review, and not counted as a seat.
+`grok-review` returned SHIP-WITH-FIXES on a re-run after its first attempt was killed by the
+wrapper's watchdog (`~/.claude/data/reviews/runs/grok-20260918T171841Z-96126.md`). It read the
+repository, and its headline finding is the one the amendment above records — reached
+independently here before implementation:
+
+| finding | disposition |
+|---|---|
+| Option C strands `publish-mcp-registry` on a tag its own workflow can no longer push | the amendment: the job moves to `ci.yml` with `needs: docker-manifest` |
+| A failing arm64 leg should cancel its sibling rather than leave a half-matrix | folded in: `fail-fast: true` on the matrix |
+| Each leg needs its own buildx cache scope and an explicit `platforms:` | folded in: `scope=docker-<arch>` and `platforms: ${{ matrix.platform }}` |
+| Residual it could not settle: whether the registry validator reads the server-name off the index or a child | `Dockerfile:42` sets it as a `LABEL`, which lives in each child's config and is not carried onto an index; the create step annotates the index too, so either read finds it |
+
+`gpt-review`'s account is rate-limited until 2026-09-19, so this design ran on two seats rather
+than three.
 
 ## What this closes besides the criterion
 
