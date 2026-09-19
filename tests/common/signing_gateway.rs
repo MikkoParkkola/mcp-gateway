@@ -165,7 +165,30 @@ impl HttpGateway {
     /// Run the production CLI with explicit child-local fixture environment.
     /// Overrides follow `env_clear`; they never change the test runner's process.
     pub async fn start_with_env(config: Value, env: &[(&str, &std::ffi::OsStr)]) -> Self {
-        let mut config = config;
+        const MAX_ATTEMPTS: u32 = 5;
+        for attempt in 1..=MAX_ATTEMPTS {
+            match Self::try_start(config.clone(), env).await {
+                Ok(gateway) => return gateway,
+                // The freed port between reservation-drop and child-rebind is a
+                // known, narrow race (#557): something else on the host can grab
+                // it first, and the child then fails to bind. Rather than
+                // eliminate the window -- which would need the production binary
+                // to accept an inherited socket or self-report a chosen port --
+                // retry with a fresh reservation. A genuine startup defect does
+                // not carry this specific signature and is never silently
+                // retried away.
+                Err(message)
+                    if attempt < MAX_ATTEMPTS && message.contains("Address already in use") => {}
+                Err(message) => panic!("{message}"),
+            }
+        }
+        unreachable!("loop always returns or panics")
+    }
+
+    async fn try_start(
+        mut config: Value,
+        env: &[(&str, &std::ffi::OsStr)],
+    ) -> Result<Self, String> {
         let directory = tempfile::tempdir().expect("gateway directory");
         let reservation = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -199,10 +222,10 @@ impl HttpGateway {
         let deadline = tokio::time::Instant::now() + IO_TIMEOUT;
         loop {
             if let Some(status) = gateway.child.try_wait().expect("gateway process status") {
-                panic!(
+                return Err(format!(
                     "gateway startup fixture exited {status}: {}",
                     gateway.logs()
-                );
+                ));
             }
             if gateway
                 .client
@@ -211,16 +234,16 @@ impl HttpGateway {
                 .await
                 .is_ok_and(|response| response.status().is_success())
             {
-                break;
+                return Ok(gateway);
             }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "gateway readiness fixture timed out: {}",
-                gateway.logs()
-            );
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "gateway readiness fixture timed out: {}",
+                    gateway.logs()
+                ));
+            }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        gateway
     }
 
     pub fn logs(&self) -> String {
