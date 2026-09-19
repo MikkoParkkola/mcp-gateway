@@ -178,37 +178,41 @@ const MINOR: &[Row] = &[
         requirement: "MIK-7272.EXT.1",
         role: Role::Both,
         transport: Transport::Any,
-        // Empty, and tracked in `TRACKED_GAPS` below. The two tests named
-        // here until now exercised `ExtensionSet` negotiation and never
-        // the `extensions` field on serialised capabilities, which is what this
-        // statement is about — so the cell asserted coverage that did not
-        // exist, and the assertion below could not tell, because it checks that
-        // a string was written and not that the string names a test.
+        // Role::Both, and both halves are carried here.
         //
-        // The server half is covered. E1-E3 of
+        // The server half is E1-E3 of
         // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`
-        // live in `src/gateway/meta_mcp_helpers_tests.rs`, and
+        // in `src/gateway/meta_mcp_helpers_tests.rs`;
         // `ac_ext_1_a_the_builder_serializes_the_map_it_was_given` is the one
-        // that pins identity: it injects a probe identifier the production
-        // source can never emit, so it is red both when the builder drops its
-        // argument and when the builder ignores the argument and reads
-        // `discovery_extensions()` directly. The other two each survive one of
-        // those two mutations.
+        // that pins identity, because it injects a probe identifier the
+        // production source can never emit, so it is red both when the builder
+        // drops its argument and when the builder ignores the argument and
+        // reads `discovery_extensions()` directly. The other two each survive
+        // one of those two mutations.
         //
-        // The client half cannot be tested, and the reason is a PRODUCT gap,
-        // not a missing test: `ExtensionSet::from_capabilities`
-        // (`src/protocol/extensions.rs:82`) has no production caller. Nothing
-        // on the `tools/call` path recovers the extensions a client declares in
-        // `_meta`, so E4 and E5 -- which assert the recovered set at the invoke
-        // funnel -- have nothing to assert against. Rewriting them as direct
-        // `from_capabilities` calls would pass while the function stays
-        // unreachable, which is what the plan rules out.
+        // The client half was tracked as a PRODUCT gap until 2026-09-15, on the
+        // stated ground that `ExtensionSet::from_capabilities` had no
+        // production caller so nothing recovered client extensions. That reason
+        // was wrong, and wrong in the way minor 11's was: it is a claim about a
+        // SYMBOL where the obligation is about a FIELD.
+        // `declares_tasks_extension` read the same
+        // `_meta`/`clientCapabilities`/`extensions` field through its own
+        // hand-rolled `pointer()` parse and gated tasks dispatch on it. Two
+        // parsers, and they disagreed: the gate asked only whether the
+        // identifier was present, so `{"…/tasks": 3}` negotiated the extension
+        // at the gate while `from_capabilities` refused the same bytes.
         //
-        // So the cell stays empty. This statement is `Role::Both`, and citing
-        // E1-E3 here would claim the client half on server-side evidence --
-        // the same defect with a later date on it. It closes when the recovery
-        // is wired, not when more tests are written.
-        evidence: &[],
+        // MIK-7272.EXT.1 phase 2 deleted the hand-rolled parser. The classifier
+        // parses once into `RequestShape::Modern`, and the gate consumes
+        // `declared_extensions()`. The route-level rows below are cited rather
+        // than the parse-level ones alone, because a `classify_request`
+        // assertion stays green while the live gate runs a second parser --
+        // which is exactly how this cell came to claim a cause it did not have.
+        evidence: &[
+            "mik_7272_task_1_acs::wire::ac_ext_1_e6_a_non_object_settings_value_does_not_declare_the_extension",
+            "mik_7272_task_1_acs::wire::ac_ext_1_e7_a_valid_settings_object_still_declares_the_extension",
+            "meta_mcp_helpers_tests::ac_ext_1_a_the_builder_serializes_the_map_it_was_given",
+        ],
     },
     Row {
         statement: "2. OpenTelemetry trace context propagation through _meta",
@@ -353,15 +357,14 @@ fn all_rows() -> Vec<&'static Row> {
 /// of those states can be reached by leaving the file alone, which is the
 /// point: a permanently red suite teaches everyone to ignore red, and a silent
 /// exemption teaches nobody anything.
-const TRACKED_GAPS: &[(&str, &str)] = &[(
-    "1. extensions field on client and server capabilities",
-    "`ExtensionSet::from_capabilities` (src/protocol/extensions.rs:82) has no \
-         production caller, so nothing on the `tools/call` path recovers client \
-         extensions and the client half of this statement cannot be asserted \
-         against production code -- a product gap, not a missing test. The \
-         server half is carried by E1-E3 of \
-         docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
-)];
+/// Empty since 2026-09-15, when minor 1 — the last entry — closed.
+///
+/// Kept as an empty slice rather than deleted: the two tests below are the
+/// mechanism, and an empty list of exemptions is a stronger statement than no
+/// list at all. Both remaining entries turned out to have the WRONG CAUSE
+/// recorded against them, each discovered only when someone tried to close the
+/// gap, so an entry here is a hypothesis awaiting falsification, not a fact.
+const TRACKED_GAPS: &[(&str, &str)] = &[];
 
 #[test]
 fn matrix_has_no_empty_cells() {

@@ -36,6 +36,7 @@
 //! as a declaration. A 2025 client that sends a trace context has not thereby
 //! become a broken 2026 client.
 
+use crate::protocol::extensions::ExtensionSet;
 use serde_json::Value;
 use tracing::info;
 
@@ -78,6 +79,14 @@ pub struct RequestFields {
     /// The minimum level to emit `notifications/message` at for this request.
     /// `None` means emit none at all.
     pub log_level: Option<String>,
+    /// The extensions this request declared, parsed once.
+    ///
+    /// Parsed here rather than re-read at each gate because a second reader is
+    /// a second answer: the gate this replaced tested only that the identifier
+    /// was *present*, so `{"…/tasks": 3}` negotiated the extension while
+    /// [`ExtensionSet::from_capabilities`] refused the same bytes. One parse,
+    /// one answer — presence is not agreement.
+    pub extensions: ExtensionSet,
 }
 
 /// What a request declared itself to be.
@@ -208,6 +217,13 @@ pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) ->
     // Present but unusable is not satisfied. The required-field check above
     // asks only whether the key exists; a null, a number or an array would
     // reach dispatch as a capability declaration nothing can read.
+    // Read before the narrowing: `from_capabilities` takes the whole
+    // capability object and does its own `get("extensions")`, and
+    // `Option<&Value>` is `Copy`, so this costs nothing the narrowing needs.
+    let extensions = capabilities
+        .map(ExtensionSet::from_capabilities)
+        .unwrap_or_default();
+
     let Some(capabilities) = capabilities.and_then(Value::as_object) else {
         return RequestShape::Malformed {
             missing: vec![KEY_CLIENT_CAPABILITIES],
@@ -217,6 +233,7 @@ pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) ->
     RequestShape::Modern(Box::new(RequestFields {
         protocol_version: protocol_version.to_string(),
         declared_capabilities: Declared::parse(capabilities),
+        extensions,
         client_info_name: meta
             .get(KEY_CLIENT_INFO)
             .and_then(|i| i.get("name"))
@@ -474,6 +491,19 @@ impl RequestShape {
         match self {
             RequestShape::Modern(f) => f.declared_capabilities,
             _ => Declared::NONE,
+        }
+    }
+
+    /// The extensions this request declared.
+    ///
+    /// Empty for legacy and malformed shapes, for the reason
+    /// [`Self::declared_capabilities`] answers `Declared::NONE`: neither
+    /// carries a declaration to read.
+    #[must_use]
+    pub fn declared_extensions(&self) -> ExtensionSet {
+        match self {
+            RequestShape::Modern(f) => f.extensions.clone(),
+            _ => ExtensionSet::default(),
         }
     }
 
@@ -1010,5 +1040,74 @@ mod declared_parse_boundary_tests {
     fn a_non_revision_string_does_not() {
         assert!(!declares_modern_era("2026"));
         assert!(!declares_modern_era("banana"));
+    }
+}
+
+#[cfg(test)]
+mod declared_extensions_tests {
+    use super::classify_request;
+    use crate::protocol::extensions::Extension;
+    use serde_json::{Value, json};
+
+    /// The extensions a modern request declaring `capabilities` recovers.
+    fn declaring(capabilities: &Value) -> crate::protocol::extensions::ExtensionSet {
+        let params = json!({
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": capabilities
+            }
+        });
+        classify_request(Some(&params), Some("2026-07-28")).declared_extensions()
+    }
+
+    #[test]
+    fn ac_ext_1_e4_a_declared_extension_is_recovered_from_the_request() {
+        // GIVEN a modern request declaring the tasks extension in the shape the
+        // specification requires: an object of identifiers to settings objects.
+        let declared = declaring(&json!({
+            "extensions": { Extension::Tasks.id(): {} }
+        }));
+
+        // WHEN the envelope is classified
+        // THEN the set the gateway acts on carries that extension. Without
+        // this, a client that declared correctly is indistinguishable from one
+        // that declared nothing.
+        assert!(
+            declared.contains(Extension::Tasks),
+            "a validly declared extension must survive classification"
+        );
+    }
+
+    #[test]
+    fn ac_ext_1_e5a_an_absent_extensions_key_recovers_nothing() {
+        // GIVEN a modern request that declares capabilities but no extensions.
+        let declared = declaring(&json!({ "elicitation": {} }));
+
+        // THEN absence is absence: silence is not a declaration, and inventing
+        // one here would hand task handles to a client that never asked.
+        assert!(
+            !declared.contains(Extension::Tasks),
+            "an absent `extensions` key must not declare anything"
+        );
+    }
+
+    #[test]
+    fn ac_ext_1_e5b_a_non_object_settings_value_declares_nothing() {
+        // GIVEN the same identifier carrying a scalar instead of the settings
+        // object the specification requires. This is the shape the pre-MIK-7272
+        // gate accepted: presence is not agreement.
+        for malformed in [json!(3), json!(null), json!("yes"), json!([]), json!(true)] {
+            let declared = declaring(&json!({
+                "extensions": { Extension::Tasks.id(): malformed }
+            }));
+
+            // THEN nothing is declared. A peer that cannot spell the
+            // declaration has not negotiated the behaviour behind it.
+            assert!(
+                !declared.contains(Extension::Tasks),
+                "a non-object settings value must not declare the extension, \
+                 but {malformed} did"
+            );
+        }
     }
 }
