@@ -98,10 +98,12 @@ jobs:
         # the ratio is exactly what lets the real one through a spot check.
         # The script accounts for squash-merges itself, so a CARRIED citation
         # passes and only a genuinely unaccounted one fails.
-        run: |
-          command -v rg >/dev/null || sudo apt-get install -y -qq ripgrep
-          git fetch --no-tags origin main
-          bash scripts/release/check-cited-commits.sh origin/main
+        #
+        # The comparison ref is HEAD, the tag being released, not main: a
+        # maintenance tag cut from a release branch carries evidence main does
+        # not, and checking main would reject it. HEAD also needs no remote,
+        # so the gate makes no network call of its own.
+        run: bash scripts/release/check-cited-commits.sh HEAD
       - name: Test supplemental acceptance checks
         run: python3 scripts/release/test_scope_acceptance.py
       - name: Test the tag/manifest publish gate
