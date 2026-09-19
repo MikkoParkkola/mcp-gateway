@@ -877,11 +877,17 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.routing_profile,
             )
             .await
-            .map_err(
-                |e| crate::gateway::input_bridge::BridgeError::BackendFailed {
+            .map_err(|e| {
+                let dispatch = if e.is_pre_dispatch() {
+                    crate::gateway::input_bridge::Dispatch::NeverReached
+                } else {
+                    crate::gateway::input_bridge::Dispatch::MayHaveActed
+                };
+                crate::gateway::input_bridge::BridgeError::BackendFailed {
                     message: e.to_string(),
-                },
-            )
+                    dispatch,
+                }
+            })
     }
 }
 
@@ -2132,12 +2138,19 @@ impl MetaMcp {
                     // question that was never answered, and a backend that
                     // stopped to ask has not acted yet — the premise the `Ok`
                     // arm below rests on too. So their release-on-drop default
-                    // still stands, and this one settles with the
-                    // withheld-side-effect marker: a retry of the same key is
-                    // told the effect ran.
+                    // still stands. `BackendFailed` also covers the round that
+                    // never left the gateway — no such backend, no such tool,
+                    // an open circuit, a transport that never connected — and
+                    // that one is provably unexecuted, so it keeps the default
+                    // too. Only a round that may have acted settles with the
+                    // withheld-side-effect marker, which tells a retry of the
+                    // same key that the effect ran.
                     if matches!(
                         error,
-                        crate::gateway::input_bridge::BridgeError::BackendFailed { .. }
+                        crate::gateway::input_bridge::BridgeError::BackendFailed {
+                            dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
+                            ..
+                        }
                     ) && let Some(reservation) = idem_reservation.as_mut()
                     {
                         reservation.commit(&withheld_side_effect());
@@ -4824,6 +4837,7 @@ mod identity_propagation_enforcement_tests {
     enum RetryRound {
         Completes,
         Fails,
+        NeverReaches,
     }
 
     struct AskOnceTransport {
@@ -4843,12 +4857,22 @@ mod identity_propagation_enforcement_tests {
                 calls.push(params.unwrap_or(Value::Null));
                 calls.len()
             };
-            if round > 1 && matches!(self.retry_round, RetryRound::Fails) {
-                return Err(crate::Error::JsonRpc {
-                    code: -32000,
-                    message: "the backend failed the bridged retry".to_string(),
-                    data: None,
-                });
+            if round > 1 {
+                match self.retry_round {
+                    RetryRound::Completes => {}
+                    RetryRound::Fails => {
+                        return Err(crate::Error::JsonRpc {
+                            code: -32000,
+                            message: "the backend failed the bridged retry".to_string(),
+                            data: None,
+                        });
+                    }
+                    RetryRound::NeverReaches => {
+                        return Err(crate::Error::TransportConnect(
+                            "the bridged retry never left the gateway".to_string(),
+                        ));
+                    }
+                }
             }
             let body = if round == 1 {
                 json!({
@@ -5074,6 +5098,75 @@ mod identity_propagation_enforcement_tests {
         assert!(
             served.to_string().contains("Side effect executed"),
             "the duplicate was served something other than the withheld marker: {served}"
+        );
+    }
+
+    // The mirror image: a bridged round refused before it left the gateway —
+    // no such backend, no such tool, an open circuit, a transport that never
+    // connected — provably did not act, so its key must be readmitted. Marking
+    // it executed would strand the caller on an operation that never ran.
+    #[tokio::test]
+    async fn a_bridged_retry_refused_before_dispatch_frees_the_idempotency_key() {
+        let (mut m, calls) = meta_that_asks_once(RetryRound::NeverReaches);
+        m.enable_idempotency(
+            Arc::new(crate::idempotency::IdempotencyCache::new()),
+            std::time::Duration::from_secs(60),
+        );
+        let asked = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let channel = AnsweringClient {
+            asked: Arc::clone(&asked),
+        };
+        let declared = crate::protocol::meta::classify_request(
+            Some(&json!({"_meta": {
+                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"roots": {}},
+            }})),
+            None,
+        )
+        .declared_capabilities();
+        let retry = crate::protocol::mrtr::RetryFields {
+            input_responses: None,
+            request_state: None,
+            idempotency_key: Some("key-1".to_string()),
+            malformed: Vec::new(),
+        };
+        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            task: None,
+            signing: None,
+            execution: None,
+            credential_principal: None,
+            is_modern: false,
+            protocol_revision: None,
+            authorizer: &ALLOW_ALL_INVOKE,
+            verified_identity: None,
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            is_admin: false,
+            input_capabilities: declared,
+            retry: &retry,
+            confirmation:
+                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+            era: crate::protocol::meta::Era::Legacy,
+            channel: &channel,
+        };
+        let args = json!({"server": "asks", "tool": "ask", "arguments": {}});
+
+        let first = m
+            .invoke_tool_traced(&args, Some("session-1"), &caller, "trace-1")
+            .await;
+        assert!(first.is_err(), "the bridged retry was supposed to fail");
+        let dispatched = calls.lock().len();
+        assert_eq!(dispatched, 2, "the backend was not retried: {dispatched}");
+
+        let second = m
+            .invoke_tool_traced(&args, Some("session-1"), &caller, "trace-2")
+            .await;
+        drop(second);
+        assert!(
+            calls.lock().len() > dispatched,
+            "the key stayed settled after a round that provably did not act, so the caller \
+             cannot retry an operation that never ran"
         );
     }
 
