@@ -909,6 +909,30 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
+    async fn invoke(
+        &self,
+        retry_params: Value,
+    ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
+        // Admitted here as well as at the first dispatch, because the spend
+        // check is per backend call and `invoke_tool` ran it once, before the
+        // backend asked anything. A bridged exchange adds a call per round, so
+        // a budget enforced only at the top is a budget a backend can walk past
+        // by asking. The warnings are dropped: the ones that ride the envelope
+        // are the first call's, and a bridged round has nowhere to put its own.
+        //
+        // `NotAdmitted`, not `BackendFailed`: the round is refused before the
+        // dispatch, so there is no side effect for the settlement arm to
+        // protect and burning the idempotency key here would deny the caller a
+        // retry of work that never ran.
+        #[cfg(feature = "cost-governance")]
+        self.meta
+            .admit_spend(self.tool, self.api_key_name)
+            .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
+                message: e.to_string(),
+            })?;
+
         // Through `accounted_dispatch`, not `dispatch_to_backend`: a bridged
         // round is a real backend call and is accounted and gated exactly like
         // the first one. A round that skipped the accounting would let a
@@ -960,7 +984,13 @@ pub(super) fn classify_bridged_dispatch_error(
     if error.is_pre_dispatch() {
         crate::gateway::input_bridge::BridgeError::NotAdmitted { message }
     } else {
-        crate::gateway::input_bridge::BridgeError::BackendFailed { message }
+        // Always `MayHaveActed`: `is_pre_dispatch()` already diverted every
+        // provably-unexecuted case to `NotAdmitted` above, so anything
+        // reaching here may have run.
+        crate::gateway::input_bridge::BridgeError::BackendFailed {
+            message,
+            dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
+        }
     }
 }
 
@@ -2178,7 +2208,7 @@ impl MetaMcp {
                     verified_identity,
                     headers: &caller_credential.headers,
                     cache_binding: dispatch_binding.as_deref(),
-                    account_credential,
+                    account_credential: bridge_account_credential,
                     api_key_name,
                     trace_id,
                     policy_epoch,
@@ -2287,27 +2317,30 @@ impl MetaMcp {
                     return Err(Error::ResponseFirewallRefused);
                 }
                 Err(error) => {
-                    // A round that reached the backend leaves the key settled,
-                    // not released. `BackendFailed` is the one bridge error
-                    // that carries a dispatch whose outcome is unknown from
-                    // here, so it is the one that must not readmit a retry of
-                    // a side effect that may already have run (ADR-012
-                    // consequence 1). Every other variant ends a round that
-                    // never reached the backend — `NotAdmitted` was refused
-                    // above the dispatch, and the rest end a round the backend
-                    // answered with a question, saying it did not act — so
-                    // releasing the key is correct for them and the caller may
-                    // retry once the exchange can be carried.
-                    if let crate::gateway::input_bridge::BridgeError::BackendFailed { .. } = &error
-                        && let Some(reservation) = idem_reservation.as_mut()
+                    // A round that reached the backend may have acted, so its
+                    // key must not be readmitted. `BackendFailed` is the only
+                    // variant raised from the backend call itself; `NotAdmitted`
+                    // was refused above the dispatch, and `Deadline`,
+                    // `RequestBudgetExhausted`, `Refused`, `Delivery` and
+                    // `RoundsExhausted` all leave the backend parked on a
+                    // question that was never answered — a backend that stopped
+                    // to ask has not acted yet. So their release-on-drop default
+                    // stands. `BackendFailed { dispatch: NeverReached }` is the
+                    // round that never left the gateway — no such backend, no
+                    // such tool, an open circuit, a transport that never
+                    // connected — and that one is provably unexecuted too, so it
+                    // keeps the default as well. Only a round that may have
+                    // acted settles with the withheld-side-effect marker, which
+                    // tells a retry of the same key that the effect ran.
+                    if matches!(
+                        error,
+                        crate::gateway::input_bridge::BridgeError::BackendFailed {
+                            dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
+                            ..
+                        }
+                    ) && let Some(reservation) = idem_reservation.as_mut()
                     {
-                        reservation.fail(&json!({
-                            "code": -32003,
-                            "message": format!(
-                                "Tool '{tool}' on server '{server}' asked for input and the \
-                                 bridged exchange could not be completed"
-                            ),
-                        }));
+                        reservation.commit(&withheld_response_placeholder());
                     }
                     warn!(
                         server,
