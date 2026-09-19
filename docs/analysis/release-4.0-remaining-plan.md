@@ -26,18 +26,19 @@ the second number: 149 criteria, 193 rows, 191 met or non-blocking.
 Twelve operator asks, decomposed into 37 steps. Grouped by lane, because the
 lanes are what can run at the same time.
 
-### Lane A — meta-tool surface compaction, 17 → ~11 (the critical path)
+### Lane A — meta-tool surface compaction, 17 → 11 (the critical path)
 
 Ruled by the operator 2026-09-16: before tagging. "Ship 17, defer to 4.1.0" and
 "compact with deprecations" were both offered and declined. Design is committed
 (`3c80e533`, 615 lines) and both review seats are answered (`9f601ae1`,
-`3f64c7ca`). No code exists.
+`3f64c7ca`). The cut is implemented: the default HTTP deployment serves 11,
+stdio 10, the floor is 9 and the ceiling 17, and every cut name still dispatches.
 
 | # | Step | State |
 |---|---|---|
-| A1 | Failing tests: surface count, and every cut tool's function reachable at its new home | open |
-| A2 | Implement the cut in `src/gateway/meta_mcp/` | open |
-| A3 | README + every badge + `benchmarks/public_claims.json` + docs, in the same change | open |
+| A1 | Failing tests: surface count, and every cut tool's function reachable at its new home | **done** — `surface_compaction_tests.rs` pins the eleven-name listing and the dispatch of every cut name |
+| A2 | Implement the cut in `src/gateway/meta_mcp/` | **done** — six tools gated on the configuration that lets them answer; band 14..=17 becomes 9..=17 |
+| A3 | README + every badge + `benchmarks/public_claims.json` + docs, in the same change | **done** — `standing: admin`, `minimum: 9`, `readme_benchmark: 11`, savings 92.67% |
 | A4 | Two independent review seats | open |
 | A5 | Merge | open |
 
