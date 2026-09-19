@@ -115,6 +115,22 @@ fn build_suggestions_does_not_panic_on_a_multi_byte_query_word() {
     assert_eq!(build_suggestions("ema", &tags), vec!["email".to_string()]);
 }
 
+/// The prefix rule must still *produce* a suggestion for a multi-byte query,
+/// not merely stop panicking on one. Absence of a panic cannot tell a working
+/// character cut apart from a rule that never fires, and the zero-result path
+/// exists to return something.
+///
+/// `éémailbox` cuts at byte 3, inside the second `é`, so the byte slice this
+/// replaced panicked before it could return anything at all.
+#[test]
+fn a_multi_byte_query_word_still_earns_a_prefix_suggestion() {
+    let tags = vec!["éémail-service".to_string(), "kubernetes".to_string()];
+    assert_eq!(
+        build_suggestions("éémailbox", &tags),
+        vec!["éémail-service".to_string()]
+    );
+}
+
 // ── §5: held-out abbreviations, and the unsupported-match control ───
 
 /// Frozen corpus rows as `(query, intended tool)`.
