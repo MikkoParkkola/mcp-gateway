@@ -9,7 +9,7 @@ and how far along it is.
 
 Three numbers, reported every tick. Nothing else is progress.
 
-- **Operator steps: 1 / 37 done** (2 of the 37 are operator-gated, see below)
+- **Operator steps: 10 / 37 done** (2 of the 37 are operator-gated, see below)
 - **Blocking release criteria: 2** — `NFR.SEC.7` and `NFR.PKG.1`, both
   operator-gated. Nothing in the tree closes either one.
 - **Rows open but not blocking: 1** — `NFR.PERF.1`, where ruling 69 accepted
@@ -39,8 +39,8 @@ stdio 10, the floor is 9 and the ceiling 17, and every cut name still dispatches
 | A1 | Failing tests: surface count, and every cut tool's function reachable at its new home | **done** — `surface_compaction_tests.rs` pins the eleven-name listing and the dispatch of every cut name |
 | A2 | Implement the cut in `src/gateway/meta_mcp/` | **done** — six tools gated on the configuration that lets them answer; band 14..=17 becomes 9..=17 |
 | A3 | README + every badge + `benchmarks/public_claims.json` + docs, in the same change | **done** — `standing: admin`, `minimum: 9`, `readme_benchmark: 11`, savings 92.67% |
-| A4 | Two independent review seats | open |
-| A5 | Merge | open |
+| A4 | Two independent review seats | **done** — both non-Claude seats returned SHIP; two test-strength notes are in flight, no defect |
+| A5 | Merge | open — integration branch `lane-a/surface-compaction` carries lanes A, D4, D5, D6 and D7 |
 
 This lane owns `src/gateway/meta_mcp/mod.rs`. Nothing else may touch that file
 while it runs.
@@ -86,9 +86,9 @@ Fully parallel with everything. Runs as subagents.
 | D3 | Enumerate the untested conformance cells | **done** — see below |
 | D4 | Assert `tools/list` order determinism (`MIK-7272.ORDER.1`) instead of arguing it structurally | **done** — `ac_order_1_one_unchanged_gateway_repeats_the_same_tool_sequence`, ledger row off *(structural)* |
 | D5 | Repair the stale `HEADER.5` evidence citation in the conformance matrix | **done** — the row cites the two mirroring tests, renamed to the `ac_` convention the self-check enforces |
-| D6 | Relocate the internal process docs out of the public tree | ready to merge — 107 docs moved on a worker branch, 110 references rewritten |
-| D7 | Fix the public-repo hygiene gate | ready to merge — 27 heading markers plus 5 path markers, 5 fixtures, 0 false positives over 361 tracked docs |
-| D8 | Merge the docs change | open |
+| D6 | Relocate the internal process docs out of the public tree | **done** — 107 docs under `docs/internal/`, 123 references repointed |
+| D7 | Fix the public-repo hygiene gate | **done** — 27 heading and 5 path markers, 5 fixtures, 0 false positives over 361 tracked docs |
+| D8 | Merge the docs change | **done** — merged onto the integration branch, all three hygiene gates green |
 
 **D3 result.** The executable authority is `tests/mik_7272_conformance.rs` — a 21-row
 table, green at 8 passed 0 failed — and `RELEASE-4.0.0-conformance-matrix.md` is its
