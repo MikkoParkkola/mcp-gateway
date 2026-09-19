@@ -76,13 +76,22 @@ In `ci.yml`, the `docker` job becomes three:
    them, so acceptance 4 asserts no *tag* was created, not that no blob exists; pruning untagged
    release-package versions is a separate housekeeping ask, not a gate on this criterion.
 2. `docker-manifest` — `needs: docker-build`, reads both digests and runs
-   `docker buildx imagetools create --tag …:<version> [--tag …:latest] <digest>@sha256:…` once.
-   The tag appears only here, and only after both legs have started their own image.
-   `:latest` keeps its existing prerelease condition.
+   `docker buildx imagetools create --tag …:sha-<commit> <digest>@sha256:…` once. The index is
+   created under a provenance-only name, so no release tag is resolvable while it is unsigned.
+   The registry-name annotation is applied here and only here: annotating rewrites the index and
+   changes its digest, so repeating it on the release copy below would publish bytes no signature
+   covers.
 3. Signing, SBOM generation and verification move to `docker-manifest` and run against the manifest
    list's digest, plus each leg's digest — cosign signs what a client resolves, and a client on
    arm64 resolves the arm64 child, so signing only the list would leave the child unverifiable
    under `cosign verify` with a platform-specific reference.
+4. Only after `cosign verify` passes does the release publisher run:
+   `docker buildx imagetools create --tag …:<version> [--tag …:latest --tag …:<major>.<minor>] …@<list digest>`.
+   Copying an index by digest is a byte-identical put, so the published digest is the digest that
+   was just verified; the step after it asserts exactly that, and is the falsifier if a future
+   buildx ever rewrites on copy. `:latest` keeps its existing prerelease condition and the
+   `<major>.<minor>` pointer — which `docker.yml` used to publish through `metadata-action` —
+   hangs off that same condition, so a candidate cannot move either.
 
 In `docker.yml`, the `Build and push` step's `push:` becomes false for tags — the job keeps
 checkout, buildx, metadata, the scan build, Trivy, and the startup gate. Its cosign, SBOM and
@@ -116,6 +125,12 @@ publish runs after `docker-manifest`, and `server.json`'s `packages[0].identifie
    on a scratch tag and confirm no tag was created.
 5. `docker.yml` on a tag pushes nothing: its own run log shows the scan build and the startup gate
    and no push, and the tag's manifest list has exactly one creator.
+6. No release tag exists before `cosign verify` passes: on a tag run, the only name created
+   before the verify step is `:sha-<commit>`, and
+   `imagetools inspect :<version> --format '{{.Manifest.Digest}}'` equals the digest that was
+   signed — the job asserts this itself and fails if the copy moved the digest.
+7. On a stable tag `:<major>.<minor>` moves with `:latest`; on a prerelease neither moves, so a
+   consumer pinned to `:4.0` never receives a candidate.
 
 ## Falsifier
 
@@ -175,6 +190,7 @@ than three.
 
 - `#536` — the release publisher in `ci.yml` gains a Trivy HIGH/CRITICAL gate per leg, which is
   what that issue says it lacks.
-- `#529` — the tag is created by `imagetools create` only after both legs are signed, so no
-  window exists in which a public tag is unsigned. `docker.yml` stops pushing tags entirely, which
-  removes the second publisher the issue names.
+- `#529` — the index is built under a provenance-only `sha-<commit>` tag, signed and verified by
+  digest, and only then copied onto `:<version>` (and, for a stable release, `:latest` and
+  `:<major>.<minor>`) by digest, so no window exists in which a release tag is unsigned.
+  `docker.yml` stops pushing tags entirely, which removes the second publisher the issue names.

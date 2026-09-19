@@ -769,6 +769,62 @@ CASES = [
         "          python3 scripts/release/check_tag_manifest.py",
         TOLERATED,
     ),
+    (
+        # The shape this PR was reviewed for: the release tag created by the
+        # first `imagetools create`, before anything is signed. The tag is
+        # then pullable and unsigned for the whole signing span, and the
+        # verify-by-digest below passes anyway.
+        "release-tag-created-before-signing",
+        "ci.yml",
+        '          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}" \\\n',
+        '          docker buildx imagetools create --tag "${IMAGE}:${VERSION}" \\\n',
+        CAUGHT,
+    ),
+    (
+        # The stable major.minor pointer dropped, as the first draft of this
+        # job dropped it: consumers pinned to :4.0 stop receiving releases.
+        "major-minor-pointer-dropped",
+        "ci.yml",
+        '            MAJOR_MINOR="$(printf \'%s\' "${VERSION}" | cut -d. -f1,2)"\n'
+        '            TAGS+=(--tag "${IMAGE}:${MAJOR_MINOR}")\n',
+        "",
+        CAUGHT,
+    ),
+    (
+        # The pointer kept but moved out of the stable guard, so a release
+        # candidate moves :4.0 for every consumer pinned to it.
+        "major-minor-pointer-outside-the-stable-guard",
+        "ci.yml",
+        '          TAGS=(--tag "${IMAGE}:${VERSION}")\n'
+        '          if [ -n "${LATEST_TAG}" ]; then\n'
+        '            TAGS+=(--tag "${LATEST_TAG}")\n',
+        '          TAGS=(--tag "${IMAGE}:${VERSION}")\n'
+        '          MAJOR_MINOR_ALWAYS="$(printf \'%s\' "${VERSION}" | cut -d. -f1,2)"\n'
+        '          TAGS+=(--tag "${IMAGE}:${MAJOR_MINOR_ALWAYS}")\n'
+        '          if [ -n "${LATEST_TAG}" ]; then\n'
+        '            TAGS+=(--tag "${LATEST_TAG}")\n',
+        CAUGHT,
+    ),
+    (
+        # The second publisher back on the same name from the same commit.
+        "docker-yml-pushing-on-a-tag-again",
+        "docker.yml",
+        "        push: ${{ github.event_name != 'pull_request'"
+        " && !startsWith(github.ref, 'refs/tags/v') }}",
+        "        push: ${{ github.event_name != 'pull_request' }}",
+        CAUGHT,
+    ),
+    (
+        # Equivalent spelling: the guard written with the negation outside.
+        # A workflow nobody can reformat is a workflow whose checks get
+        # deleted instead.
+        "release-tag-copy-with-the-image-spelled-inline",
+        "ci.yml",
+        '          docker buildx imagetools create "${TAGS[@]}" "${IMAGE}@${LIST}"',
+        '          docker buildx imagetools create "${TAGS[@]}" '
+        '"ghcr.io/mikkoparkkola/mcp-gateway@${LIST}"',
+        TOLERATED,
+    ),
 ]
 
 

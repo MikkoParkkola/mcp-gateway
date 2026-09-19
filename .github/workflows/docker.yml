@@ -105,6 +105,14 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # The semver rows below are inert on a tag: the push step is false
+          # there, so ci.yml's docker-manifest is the only creator of
+          # :VERSION, :latest and :MAJOR.MINOR, and it carries the prerelease
+          # policy described here with them. They stay because this job still
+          # computes labels and tag names for the branch build, and because a
+          # tag push that reached the build step must name the same things the
+          # release publisher does.
+          #
           # latest=auto is the action's default, pinned here because the
           # prerelease channel depends on it: it withholds :latest on a
           # prerelease semver, so `docker pull` with no tag cannot land on a
@@ -181,11 +189,13 @@ jobs:
       # This job no longer pushes a release tag: ci.yml's docker-build matrix and
       # docker-manifest own ghcr.io/mikkoparkkola/mcp-gateway:VERSION, which
       # removes the two-publisher race (one manifest list, one creator) and the
-      # push-before-sign window (#529) -- the tag is created only after both
-      # architectures are signed. The image CVE gate this job pioneered now runs
-      # per leg there too (#536). What stays here is the branch and PR path:
-      # build, Trivy, and the startup gate, so a break is caught on the pull
-      # request that introduces it rather than at the tag.
+      # push-before-sign window (#529). There the index is built under a
+      # provenance-only sha- tag, signed and verified by digest, and the release
+      # tags are then put on that same verified digest -- so no release name is
+      # ever resolvable to an unsigned image. The image CVE gate this job
+      # pioneered now runs per leg there too (#536). What stays here is the
+      # branch and PR path: build, Trivy, and the startup gate, so a break is
+      # caught on the pull request that introduces it rather than at the tag.
       #
       # publish-mcp-registry moved to ci.yml with it. It rewrites server.json to
       # name :VERSION and the MCP Registry resolves that reference, so it has to

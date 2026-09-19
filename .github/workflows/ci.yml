@@ -542,15 +542,24 @@ jobs:
           merge-multiple: true
           path: digests
 
-      - name: Create the manifest list
+      # The index is built under a provenance-only name, never a release tag.
+      # A release tag created here would be pullable and unsigned for the whole
+      # signing span, and `cosign verify` by digest passes afterwards either
+      # way — it never reads a tag (#529). The release tags are put on this
+      # same digest below, once the signature over it verifies.
+      #
+      # The MCP Registry validator reads io.modelcontextprotocol.server.name
+      # off what the tag resolves to. Dockerfile:42 sets it as a LABEL, which
+      # lives in each child's image config and is not carried onto an index
+      # by `imagetools create`, so it is annotated onto the index here as
+      # well. A validator that resolves a platform child and one that reads
+      # the index both find it.
+      #
+      # Annotated exactly once. Annotating rewrites the index, which changes
+      # its digest; repeating it on the release copy below would publish bytes
+      # no signature covers.
+      - name: Create the manifest list under a provenance tag
         id: list
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
-          # The version tag is always created; :latest moves only for a stable
-          # release, so `docker pull` with no tag cannot land on a candidate.
-          # Kept as one expression rather than a shell branch so the release
-          # guard can read which way round it is.
-          LATEST_TAG: ${{ steps.meta.outputs.is_prerelease != 'true' && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}
         run: |
           set -euo pipefail
           IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
@@ -560,24 +569,12 @@ jobs:
           # rather than failed, and a one-platform "list" published under the
           # release tag is the defect this job exists to prevent.
           test -n "${AMD64}" && test -n "${ARM64}"
-          TAGS=(--tag "${IMAGE}:${VERSION}")
-          if [ -n "${LATEST_TAG}" ]; then
-            TAGS+=(--tag "${LATEST_TAG}")
-          fi
-          # This is the first and only moment the tag exists: both legs have
-          # already started their own image on their own architecture.
-          #
-          # The MCP Registry validator reads io.modelcontextprotocol.server.name
-          # off what the tag resolves to. Dockerfile:42 sets it as a LABEL, which
-          # lives in each child's image config and is not carried onto an index
-          # by `imagetools create`, so it is annotated onto the index here as
-          # well. A validator that resolves a platform child and one that reads
-          # the index both find it.
-          docker buildx imagetools create "${TAGS[@]}" \
+          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}" \
             --annotation "index:io.modelcontextprotocol.server.name=io.github.MikkoParkkola/mcp-gateway" \
             "${IMAGE}@${AMD64}" "${IMAGE}@${ARM64}"
-          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
-          LIST="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{.Manifest.Digest}}')"
+          LIST="$(docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}" \
+            --format '{{.Manifest.Digest}}')"
+          docker buildx imagetools inspect "${IMAGE}@${LIST}"
           {
             printf 'list=%s\n' "${LIST}"
             printf 'amd64=%s\n' "${AMD64}"
@@ -586,11 +583,11 @@ jobs:
 
       - name: Assert the list carries both platforms
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          LIST: ${{ steps.list.outputs.list }}
         run: |
           set -euo pipefail
           PLATFORMS="$(docker buildx imagetools inspect \
-            "ghcr.io/mikkoparkkola/mcp-gateway:${VERSION}" \
+            "ghcr.io/mikkoparkkola/mcp-gateway@${LIST}" \
             --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')"
           echo "published platforms: ${PLATFORMS}"
           for want in linux/amd64 linux/arm64; do
@@ -659,6 +656,52 @@ jobs:
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
               "${IMAGE}@${d}"
           done
+
+      # Only now does a release name exist. Copying an index by digest is a
+      # byte-identical put — the digest is unchanged, so the signature and the
+      # SBOM attestation verified above cover exactly what these tags serve.
+      - name: Publish the release tags (copy the verified index by digest)
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          LIST: ${{ steps.list.outputs.list }}
+          # The version tag is always created; :latest and the major.minor
+          # pointer move only for a stable release, so `docker pull` with no
+          # tag — or pinned to :4.0 — cannot land on a candidate. Kept as one
+          # expression rather than a shell branch so the release guard can
+          # read which way round it is, and the major.minor tag hangs off the
+          # same guard so a candidate cannot move one pointer without the
+          # other.
+          LATEST_TAG: ${{ steps.meta.outputs.is_prerelease != 'true' && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}
+        run: |
+          set -euo pipefail
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          TAGS=(--tag "${IMAGE}:${VERSION}")
+          if [ -n "${LATEST_TAG}" ]; then
+            TAGS+=(--tag "${LATEST_TAG}")
+            # Derived, never spelled: a literal stops following the release
+            # the first time the minor moves. `cut`, not `${VERSION%.*}`,
+            # which yields 4.0.0-rc on a candidate if this guard ever leaks.
+            MAJOR_MINOR="$(printf '%s' "${VERSION}" | cut -d. -f1,2)"
+            TAGS+=(--tag "${IMAGE}:${MAJOR_MINOR}")
+          fi
+          docker buildx imagetools create "${TAGS[@]}" "${IMAGE}@${LIST}"
+
+      # The falsifier for the invariant above. A copy that rewrote the index —
+      # an added annotation, a buildx that normalises — lands on a different
+      # digest, and the release tag would then serve bytes no signature covers.
+      - name: Assert the release tag resolves to the signed digest
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          LIST: ${{ steps.list.outputs.list }}
+        run: |
+          set -euo pipefail
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          PUBLISHED="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+            --format '{{.Manifest.Digest}}')"
+          if [ "${PUBLISHED}" != "${LIST}" ]; then
+            echo "::error::${IMAGE}:${VERSION} resolves to ${PUBLISHED}, not the signed ${LIST}"
+            exit 1
+          fi
 
   # Moved here from docker.yml with the tag push it depends on: this job rewrites
   # server.json to name ghcr.io/mikkoparkkola/mcp-gateway:VERSION and the MCP

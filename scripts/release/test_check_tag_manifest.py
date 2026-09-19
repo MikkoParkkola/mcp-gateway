@@ -253,6 +253,10 @@ COSIGN_VERIFY = re.compile(r"cosign\s+verify(-attestation)?(?![-\w])")
 # inside `echo "run cosign sign …"`, which signs nothing; these patterns are
 # matched against command positions by `runs()`, never searched for.
 COSIGN_ANY = re.compile(r"cosign\s+\w")
+# The one command that makes a name resolvable. Every tag the release exposes
+# is created by it, so the ordering assertions anchor on it rather than on the
+# tag strings, which also appear in `inspect` calls and log lines.
+IMAGETOOLS_CREATE = re.compile(r"docker\s+buildx\s+imagetools\s+create(?![-\w])")
 # The gate, however it is spelled. Shared by the assertion that it runs at all
 # and by the one that protects the steps running it, so a step cannot be
 # protected under one spelling and unguarded under the other.
@@ -550,8 +554,13 @@ def commands(workflow):
     return joined(inert_scalars_dropped(live_lines(workflow)))
 
 
-def steps(workflow):
+def steps(workflow, job=None):
     """A workflow's step blocks, each as a list of its executable lines.
+
+    `job` narrows the result to one job's steps, in file order. Order across a
+    whole workflow is not an ordering Actions honours — two jobs' steps
+    interleave at runtime — so any assertion that reads one step as running
+    before another has to be confined to the job that sequences them.
 
     An assertion about a command and the environment it runs in has to read
     one step at a time. A `DIGEST` bound in a neighbouring step does not reach
@@ -564,16 +573,19 @@ def steps(workflow):
     predecessor and let it inherit that step's bindings.
     """
     blocks, current, indent = [], None, None
+    where = None
 
     def close():
         nonlocal current
-        if current:
+        if current and (job is None or where == job):
             blocks.append(current)
         current = None
 
     for line in live_lines(workflow):
-        if JOB_HEADER.match(line):
+        header = JOB_HEADER.match(line)
+        if header:
             close()
+            where = header.group(1)
             indent = None
             continue
         if STEPS_KEY.match(line):
@@ -1123,6 +1135,169 @@ class WorkflowWiring(unittest.TestCase):
             # Non-vacuity: if the step scan found nothing, the per-step
             # assertions above never ran and the whole loop is decoration.
             self.assertTrue(signing, f"{workflow}: no step containing a cosign command was read")
+
+    def test_the_release_tag_is_created_only_after_the_signature_verifies(self):
+        # The window this closes: a tag created before signing is pullable and
+        # unsigned for the whole signing span, and `cosign verify` by digest
+        # passes afterwards regardless — it never reads the tag. Order is the
+        # only thing that closes it, so this reads step positions inside the
+        # one job that sequences them, not the presence of the commands.
+        blocks = steps("ci.yml", "docker-manifest")
+        self.assertTrue(blocks, "ci.yml: docker-manifest has no steps to read")
+
+        def pieces(block):
+            return [
+                piece
+                for command in joined(block)
+                for piece in segments(shell(command))
+            ]
+
+        creates, verifies = [], []
+        for index, block in enumerate(blocks):
+            found = [p for p in pieces(block) if IMAGETOOLS_CREATE.match(p)]
+            if found:
+                creates.append((index, block[0], found))
+            if any(COSIGN_VERIFY.match(p) for p in pieces(block)):
+                verifies.append(index)
+        self.assertTrue(creates, "ci.yml: docker-manifest creates no manifest list")
+        self.assertTrue(verifies, "ci.yml: docker-manifest never verifies a signature")
+
+        release = [
+            (index, name, found)
+            for index, name, found in creates[1:]
+        ]
+        self.assertTrue(
+            release,
+            "ci.yml: the only imagetools create is the one that publishes a tag",
+        )
+        # After the LAST verify: a first verify followed by the tag and then a
+        # second one would satisfy a check against the earliest index while
+        # the tag still appeared mid-flight.
+        for index, name, _ in release:
+            self.assertGreater(
+                index,
+                max(verifies),
+                f"ci.yml: {name} publishes a release tag before cosign verify",
+            )
+        # And it is the release tag, not some third provenance name.
+        self.assertTrue(
+            any(
+                "${VERSION}" in "\n".join(blocks[index])
+                for index, _, _ in release
+            ),
+            "ci.yml: no step creates the release tag :${VERSION}",
+        )
+
+        # The index is built under a provenance-only name. If the first create
+        # carried the release tag, the ordering above would hold and the tag
+        # would still have existed unsigned from that moment.
+        first, name, found = creates[0]
+        self.assertLess(first, max(verifies), f"ci.yml: {name} builds nothing to sign")
+        for piece in found:
+            for forbidden in ("${VERSION}", "latest", "LATEST_TAG", "MAJOR_MINOR"):
+                self.assertNotIn(
+                    forbidden,
+                    piece,
+                    f"ci.yml: {name} creates a release tag before signing: {piece}",
+                )
+            self.assertRegex(
+                piece,
+                r"--tag\s+[\"']?\$\{IMAGE\}:sha-\$\{GITHUB_SHA\}[\"']?",
+                f"ci.yml: {name} does not name the provenance tag: {piece}",
+            )
+
+        # The falsifier for "copying an index by digest preserves the digest".
+        # Without it the release tag can resolve to bytes no signature covers
+        # and every step above still passes.
+        proof = [
+            index
+            for index, block in enumerate(blocks)
+            if index > max(i for i, _, _ in release)
+            and "${LIST}" in "\n".join(block)
+            and "${VERSION}" in "\n".join(block)
+        ]
+        self.assertTrue(
+            proof,
+            "ci.yml: nothing asserts :${VERSION} resolves to the signed digest",
+        )
+
+    def test_the_stable_channel_keeps_its_major_minor_pointer(self):
+        # `main` published :MAJOR.MINOR through metadata-action. This job took
+        # the tag over, so consumers pinned to :4.0 break silently unless it
+        # publishes one too — under :latest's guard, or a prerelease moves the
+        # pointer every stable consumer follows.
+        blocks = [
+            block
+            for block in steps("ci.yml", "docker-manifest")
+            if any(
+                IMAGETOOLS_CREATE.match(piece)
+                for command in joined(block)
+                for piece in segments(shell(command))
+            )
+            and "${VERSION}" in "\n".join(block)
+        ]
+        self.assertEqual(
+            len(blocks), 1, "ci.yml: expected one step to create the release tags"
+        )
+        body = "\n".join(blocks[0])
+
+        # Derived, not spelled: a literal `4.0` here is a pointer that stops
+        # following the release the first time the minor moves. Exactly one
+        # derivation, whatever it is named — a second one is how the pointer
+        # gets moved outside the guard while the guarded one still reads
+        # correctly.
+        derived = re.findall(
+            r"(\w+)=[\"']?\$\([^)]*\$\{VERSION\}[^)]*cut\s+-d\.\s+-f1,2[^)]*\)", body
+        )
+        self.assertEqual(
+            len(derived),
+            1,
+            "ci.yml: expected exactly one major.minor value derived from ${VERSION}, "
+            f"found {derived}",
+        )
+        name = derived[0]
+
+        # Inside :latest's own guard, by position. Two conditions spelled
+        # alike are two conditions, and only one of them has to be edited for
+        # a candidate to start moving the stable pointer.
+        guard = re.search(
+            r'if \[ -n "\$\{LATEST_TAG\}" \]; then\n(.*?)\n\s*fi', body, re.S
+        )
+        self.assertIsNotNone(guard, "ci.yml: :latest is no longer added under a guard")
+        self.assertIn(
+            f"{name}=",
+            guard.group(1),
+            "ci.yml: the major.minor value is derived outside the stable guard",
+        )
+        self.assertIn(
+            f"${{{name}}}",
+            guard.group(1),
+            "ci.yml: the major.minor tag is not gated on the stable channel",
+        )
+        outside = body.count(f"${{{name}}}") - guard.group(1).count(f"${{{name}}}")
+        self.assertEqual(
+            outside,
+            0,
+            "ci.yml: the major.minor tag is also used outside the stable guard",
+        )
+
+    def test_the_branch_builder_still_refuses_to_push_on_a_tag(self):
+        # A regression lock, green today: docker.yml handed :VERSION over, and
+        # its push condition is the only thing keeping the second publisher
+        # from coming back on the same name from the same commit.
+        pushes = [
+            line
+            for block in steps("docker.yml")
+            for line in block
+            if re.match(r"^\s*push:", line.strip())
+        ]
+        self.assertTrue(pushes, "docker.yml: no build step declares push:")
+        for line in pushes:
+            self.assertRegex(
+                line,
+                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)",
+                f"docker.yml pushes on a tag again: {line.strip()}",
+            )
 
     def test_a_comment_is_stripped_and_a_quoted_hash_is_not(self):
         # Every assertion here reads uncommented text, so both directions are
