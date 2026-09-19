@@ -322,6 +322,9 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
 }
 
 /// Meta-MCP handler — the central dispatcher for all gateway meta-tools.
+// Independent, unrelated switches on a long-lived handler. A state machine
+// over their product would have more states than the struct has fields.
+#[allow(clippy::struct_excessive_bools)]
 pub struct MetaMcp {
     pub(super) backends: Arc<BackendRegistry>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
