@@ -69,7 +69,7 @@ fn test_path(name: &str) -> String {
 }
 
 /// The production stdio dispatcher, called exactly as `run_stdio` calls it:
-/// owned `Value` moved in, no sink, the stdio session id.
+/// owned `Value` moved in, a fresh sink, the stdio session id.
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     super::super::Gateway::dispatch_single_with_sink(
         &fixture.meta,
@@ -77,7 +77,8 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
         &fixture.mtls_policy,
         request,
         SESSION,
-        None,
+        &crate::gateway::input_bridge::NoClientChannel,
+        &Default::default(),
     )
     .await
     .expect("a request carrying an id must produce a response")

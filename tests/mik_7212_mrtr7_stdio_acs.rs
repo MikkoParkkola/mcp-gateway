@@ -194,7 +194,8 @@ fn write_config(home: &Path, backend_url: &str) {
 /// The shipped binary, spawned the way a stdio client spawns it.
 struct StdioSession {
     child: Child,
-    stdin: ChildStdin,
+    /// Taken, not dropped, so a row can close the write end and keep reading.
+    stdin: Option<ChildStdin>,
     stdout: Lines<BufReader<ChildStdout>>,
 }
 
@@ -224,7 +225,7 @@ impl StdioSession {
             .kill_on_drop(true)
             .spawn()
             .expect("spawn gateway over stdio");
-        let stdin = child.stdin.take().expect("child stdin");
+        let stdin = Some(child.stdin.take().expect("child stdin"));
         let stdout = BufReader::new(child.stdout.take().expect("child stdout")).lines();
         Self {
             child,
@@ -234,11 +235,21 @@ impl StdioSession {
     }
 
     async fn send(&mut self, message: &Value) {
-        self.stdin
+        let stdin = self.stdin.as_mut().expect("child stdin is already closed");
+        stdin
             .write_all(format!("{message}\n").as_bytes())
             .await
             .expect("write to child stdin");
-        self.stdin.flush().await.expect("flush child stdin");
+        stdin.flush().await.expect("flush child stdin");
+    }
+
+    /// Close the write end and leave the child running.
+    ///
+    /// `shutdown` also kills the child, which would answer the question this
+    /// distinction exists to ask: whether the serve loop finishes the work it
+    /// accepted before EOF, or loses it.
+    fn close_stdin(&mut self) {
+        self.stdin.take();
     }
 
     /// Read lines until one carries `id`, or the bound expires.
@@ -352,7 +363,7 @@ fn position_of_outbound(frames: &[Value], method: &str) -> Option<usize> {
 /// a test asserting only that the call returned passes against a gateway that
 /// never asked anything at all, which is exactly today's behaviour.
 #[tokio::test]
-#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec"]
+#[ignore = "MIK-7387: the transport half landed (concurrent dispatch, stdio ClientChannel); the bridge still has no production caller -- src/gateway/meta_mcp/invoke.rs:1852 mints a continuation envelope for the interim result instead of bridging it, so no elicitation/create frame is ever written"]
 async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -417,7 +428,7 @@ async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
 /// weaker version — initialize, wait, then call — proves nothing, because the
 /// interleaving it is meant to rule out cannot occur in it.
 #[tokio::test]
-#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec"]
+#[ignore = "MIK-7387: the transport half landed (concurrent dispatch, stdio ClientChannel); the bridge still has no production caller -- src/gateway/meta_mcp/invoke.rs:1852 mints a continuation envelope for the interim result instead of bridging it, so no elicitation/create frame is ever written"]
 async fn ac_mrtr_7a_bridged_request_follows_the_initialize_response() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -467,7 +478,7 @@ async fn ac_mrtr_7a_bridged_request_follows_the_initialize_response() {
 /// wrote nothing — the count is what makes the row load-bearing, and the
 /// parse is what the row actually specifies once frames exist.
 #[tokio::test]
-#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec"]
+#[ignore = "MIK-7387: the transport half landed (concurrent dispatch, stdio ClientChannel); the bridge still has no production caller -- src/gateway/meta_mcp/invoke.rs:1852 mints a continuation envelope for the interim result instead of bridging it, so no elicitation/create frame is ever written"]
 async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -503,6 +514,49 @@ async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
              JSON: {line:?}"
         );
     }
+
+    session.shutdown().await;
+}
+
+/// MIK-7387 §6 — EOF drains the dispatches the loop accepted; it does not
+/// abort them.
+///
+/// Not one of the three acceptance rows: none of them closes stdin, so without
+/// this the drain is unpinned and the next refactor re-introduces the abort the
+/// two design reviews independently rejected. In flight by construction — the
+/// call needs the backend handshake, which the fixture delays by
+/// `BACKEND_INITIALIZE_DELAY`, and stdin closes before that delay can elapse.
+#[tokio::test]
+async fn ac_mrtr_7a_request_in_flight_when_stdin_closes_still_gets_its_response() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    session.send(&initialize_request(1)).await;
+    let (_, initialized) = session.read_until_id(1).await;
+    assert!(initialized.is_some(), "the child never answered initialize");
+
+    // Both the window and the proof that there was one: the call cannot be
+    // answered until the delayed backend handshake completes, and stdin closes
+    // within microseconds of the send.
+    let sent_at = std::time::Instant::now();
+    session.send(&asking_call(2)).await;
+    session.close_stdin();
+
+    let (_, answered) = session.read_until_id(2).await;
+    assert!(
+        answered.is_some(),
+        "the request was accepted before EOF and must still be answered: EOF drains, it does not abort"
+    );
+    assert!(
+        saw_method(&received, "tools/call"),
+        "the backend never saw the call, so nothing was in flight to drain"
+    );
+    assert!(
+        sent_at.elapsed() >= BACKEND_INITIALIZE_DELAY,
+        "the answer came back faster than the handshake the fixture delays, so the dispatch was never in flight across EOF and this row would pass against an abort too"
+    );
 
     session.shutdown().await;
 }
