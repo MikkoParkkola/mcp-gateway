@@ -82,10 +82,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The cited-commit gate below walks ancestry and reads commit bodies,
+          # so it needs real history. A shallow checkout would report every
+          # citation as unreachable.
+          fetch-depth: 0
       - name: Test the counter (fail on parser regression)
         run: python3 scripts/release/test_count_release_criteria.py
       - name: Check the release-criteria ledger header against its rows
         run: python3 scripts/release/count-release-criteria.py --check
+      - name: Check every cited commit is on the release line
+        # A criterion graded on a commit that reached no release branch was
+        # graded on evidence nobody can check. 35 citations were unreachable
+        # once; 34 were benign re-squashes and the 35th hid a live defect --
+        # the ratio is exactly what lets the real one through a spot check.
+        # The script accounts for squash-merges itself, so a CARRIED citation
+        # passes and only a genuinely unaccounted one fails.
+        run: |
+          command -v rg >/dev/null || sudo apt-get install -y -qq ripgrep
+          git fetch --no-tags origin main
+          bash scripts/release/check-cited-commits.sh origin/main
       - name: Test supplemental acceptance checks
         run: python3 scripts/release/test_scope_acceptance.py
       - name: Test the tag/manifest publish gate
