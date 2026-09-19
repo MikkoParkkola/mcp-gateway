@@ -20,6 +20,11 @@ struct CachedMetadataState<T> {
     value: Option<Arc<T>>,
     cached_at: Option<Instant>,
     in_flight: Option<watch::Sender<()>>,
+    /// Bumped by every invalidation. A fill stores its answer only if the
+    /// generation it started under is still current, so an invalidation that
+    /// lands mid-fill voids that fill instead of being overwritten by it
+    /// (MIK-7334.CATALOGUE.1, "changes and revocation").
+    generation: u64,
 }
 
 impl<T> Default for CachedMetadataState<T> {
@@ -28,6 +33,7 @@ impl<T> Default for CachedMetadataState<T> {
             value: None,
             cached_at: None,
             in_flight: None,
+            generation: 0,
         }
     }
 }
@@ -41,6 +47,8 @@ enum CacheFetchState<'a, T> {
 struct FetchPermit<'a, T> {
     cache: &'a CachedMetadata<T>,
     sender: watch::Sender<()>,
+    /// The generation current when this fetch was authorized.
+    generation: u64,
 }
 
 impl<T> Drop for FetchPermit<'_, T> {
@@ -75,8 +83,19 @@ impl<T> CachedMetadata<T> {
         state.value.clone()
     }
 
-    pub(super) fn store_shared(&self, value: Arc<T>) {
+    /// Store `value` only if no invalidation has run since `generation`.
+    ///
+    /// The fill path's store. A cold fill has no stored value for
+    /// [`Self::invalidate_if`] to clear, so without this check a revocation
+    /// that lands while the fetch is on the wire is silently overwritten by
+    /// the pre-revocation answer and served for the rest of the TTL. The
+    /// fetch's own caller still receives its result; only the cache is denied
+    /// it, so the next reader re-asks.
+    fn store_if_current(&self, value: Arc<T>, generation: u64) {
         let mut state = self.state.write();
+        if state.generation != generation {
+            return;
+        }
         state.value = Some(value);
         state.cached_at = Some(Instant::now());
     }
@@ -101,11 +120,15 @@ impl<T> CachedMetadata<T> {
     /// going to the backend, which is what the caller wanted.
     pub(super) fn invalidate_if(&self, discard: impl Fn(&T) -> bool) {
         let mut state = self.state.write();
-        let should_clear = state.value.as_ref().is_some_and(|v| discard(v));
-        if should_clear {
-            state.value = None;
-            state.cached_at = None;
+        if state.value.as_ref().is_some_and(|v| !discard(v)) {
+            // A populated answer this caller did not ask to forget stays, and
+            // so does the generation: a fill already on the wire is still
+            // welcome to replace it.
+            return;
         }
+        state.value = None;
+        state.cached_at = None;
+        state.generation = state.generation.wrapping_add(1);
     }
 
     fn acquire(&self, ttl: Duration) -> CacheFetchState<'_, T> {
@@ -132,6 +155,7 @@ impl<T> CachedMetadata<T> {
         CacheFetchState::Fetch(FetchPermit {
             cache: self,
             sender,
+            generation: state.generation,
         })
     }
 
@@ -153,7 +177,7 @@ impl<T> CachedMetadata<T> {
                 CacheFetchState::Fetch(permit) => {
                     let result = fetch().await.map(Arc::new);
                     if let Ok(value) = &result {
-                        self.store_shared(Arc::clone(value));
+                        self.store_if_current(Arc::clone(value), permit.generation);
                     }
                     drop(permit);
                     return result;
@@ -282,5 +306,59 @@ mod tests {
             .expect("fetch after a no-op invalidate");
 
         assert_eq!(*value, vec![1u8, 2, 3]);
+    }
+
+    /// MIK-7334.CATALOGUE.1 conjunct 4 — "including changes and revocation".
+    ///
+    /// `invalidate_if` can only clear a value that is already stored. During a
+    /// COLD fill there is none, so the invalidate is a no-op and the in-flight
+    /// answer — fetched before the revocation, under the old authorization —
+    /// lands afterwards and is served for the rest of the TTL. The invalidate
+    /// must instead void the fill that was already on the wire when it ran.
+    #[tokio::test]
+    async fn an_invalidate_during_a_fill_is_not_overwritten_by_it() {
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        let calls = Arc::new(AtomicU32::new(0));
+        let seen = Arc::clone(&calls);
+
+        let fill = cache.get_or_fetch_shared(LONG_TTL, || {
+            let seen = Arc::clone(&seen);
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok(vec![1u8, 2, 3])
+            }
+        });
+        let revoke = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            cache.invalidate_if(Vec::is_empty);
+        };
+        let (filled, ()) = tokio::join!(fill, revoke);
+
+        assert_eq!(
+            *filled.expect("the fill still answers its own caller"),
+            vec![1u8, 2, 3],
+            "the caller that asked before the revocation still gets its answer"
+        );
+        assert!(
+            cache.snapshot_shared().is_none(),
+            "a fill that was in flight when the invalidate ran must not be cached"
+        );
+
+        let after = cache
+            .get_or_fetch_shared(LONG_TTL, || {
+                let seen = Arc::clone(&calls);
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    Ok(Vec::new())
+                }
+            })
+            .await
+            .expect("post-revocation read");
+        assert!(
+            after.is_empty(),
+            "the next reader must re-ask, not be served"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "the re-ask must be real");
     }
 }

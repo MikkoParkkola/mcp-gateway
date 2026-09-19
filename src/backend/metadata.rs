@@ -93,24 +93,26 @@ impl Backend {
             .unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
-    /// Withhold the shared metadata cache for a `per_user` backend (MIK-7334
-    /// CATALOGUE.1).
+    /// NOTE (MIK-7334.CATALOGUE.1): this path is deliberately identity-free.
     ///
-    /// `PoolKey::Shared` — the transport `get_or_fetch_shared` would fetch
-    /// over — is one connection shared by every caller regardless of
-    /// identity (see `pool.rs`). A `session_mode = per_user` backend has no
-    /// per-identity catalogue fetch anywhere in this codebase today, so the
-    /// only honest fix is to withhold rather than serve a shared-connection
-    /// answer under a caller's own identity: isolation holds by
-    /// construction (no per-user catalogue fetch exists yet), not by cache
-    /// keying. This is checked once, here, because `has_cached_tools`,
-    /// `cached_tools_count`, `get_cached_tool`, and `get_cached_tools_snapshot`
-    /// all read the cache this method would otherwise populate — leaving it
-    /// empty makes every one of those readers withhold too.
-    fn withholds_shared_metadata(&self) -> bool {
-        self.session_mode() == Some(crate::identity_propagation::SessionMode::PerUser)
-    }
-
+    /// The four metadata lists are fetched through `request_internal`, which
+    /// reaches for `shared_transport()` — the single `PoolKey::Shared` slot
+    /// (`pool.rs`) — and passes no caller identity. `pool_key_for` collapses
+    /// every non-`per_user` case to that same key, and the metadata fetch has
+    /// no identity to give it in the first place, so what is cached here is the
+    /// gateway's own static-credential catalogue and never one caller's. The
+    /// direct backend route serves those identical bytes live: it exempts
+    /// `tools/list` from its identity gate (`router/backend_handlers.rs:649`),
+    /// so `identity_key` stays `None` there too.
+    ///
+    /// A `session_mode = per_user` backend was briefly short-circuited here so
+    /// the shared answer would not be served under a caller's own identity.
+    /// That withheld all four lists from every meta discovery reader — the
+    /// backend surfaced zero tools — while route 1 kept serving the same bytes,
+    /// and it isolated nothing that was not already identity-independent.
+    /// Per-identity catalogues remain unbuilt: delivering them needs a
+    /// per-identity fetch over the caller's own pool slot, which is a mode, not
+    /// a guard.
     async fn get_cached_list_shared<T, F>(
         &self,
         cache: &CachedMetadata<Vec<T>>,
@@ -121,14 +123,6 @@ impl Backend {
     where
         F: Fn(Value) -> Result<Vec<T>>,
     {
-        if self.withholds_shared_metadata() {
-            debug!(
-                backend = %self.name,
-                kind,
-                "Withholding shared metadata cache for per_user backend (MIK-7334 CATALOGUE.1)"
-            );
-            return Ok(Arc::new(Vec::new()));
-        }
         cache
             .get_or_fetch_shared(self.cache_ttl, || async {
                 // Hold the transport open for the whole fetch WITHOUT claiming
