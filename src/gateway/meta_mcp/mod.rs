@@ -2770,3 +2770,7 @@ async fn destructive_confirmation_gate(
 #[cfg(test)]
 #[path = "outbound_log_tests.rs"]
 mod outbound_log_tests;
+
+#[cfg(test)]
+#[path = "surface_compaction_tests.rs"]
+mod surface_compaction_tests;
