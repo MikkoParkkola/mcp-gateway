@@ -40,7 +40,7 @@ stdio 10, the floor is 9 and the ceiling 17, and every cut name still dispatches
 | A2 | Implement the cut in `src/gateway/meta_mcp/` | **done** — six tools gated on the configuration that lets them answer; band 14..=17 becomes 9..=17 |
 | A3 | README + every badge + `benchmarks/public_claims.json` + docs, in the same change | **done** — `standing: admin`, `minimum: 9`, `readme_benchmark: 11`, savings 92.67% |
 | A4 | Two independent review seats | **done** — both non-Claude seats returned SHIP; two test-strength notes are in flight, no defect |
-| A5 | Merge | open — integration branch `lane-a/surface-compaction` carries lanes A, D4, D5, D6 and D7 |
+| A5 | Merge | **open, operator-gated** — [#599](https://github.com/MikkoParkkola/mcp-gateway/pull/599) carries lanes A, D4, D5, D6 and D7: 22 commits, 191 files. Merge to `main` waits for a yes |
 
 This lane owns `src/gateway/meta_mcp/mod.rs`. Nothing else may touch that file
 while it runs.
@@ -113,7 +113,7 @@ rather than carried.
 |---|---|---|
 | E1 | Apply ruling 69 to the `NFR.PERF.1` row: residual accepted, carrier named, row non-blocking | **done** — verified at source, blocking cell reads `no` |
 | E2 | Release-note sentence stating the performance claim is not end-to-end | open |
-| E3 | Sync every Linear ticket to this plan, content and status | open |
+| E3 | Sync every Linear ticket to this plan, content and status | **done** — `MIK-7265`, `MIK-7481`, `MIK-7272` and `MIK-7212` carry the current state; `MIK-7212` moved back to In Progress |
 | E4 | `NFR.PKG.1` — operator-gated, see decisions | open |
 | E5 | `NFR.SEC.7` — operator-gated, see decisions | open |
 
