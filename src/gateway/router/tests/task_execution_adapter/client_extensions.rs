@@ -68,7 +68,7 @@ fn with_tasks_settings(mut body: Value, settings: &Value) -> Value {
 /// What production recovers from `body`, through the classifier the router
 /// runs and the protocol-version header the fixture sends.
 fn recovered(body: &Value) -> ExtensionSet {
-    classify_request(body.get("params"), Some("2026-07-28")).client_extensions()
+    classify_request(body.get("params"), Some("2026-07-28")).declared_extensions()
 }
 
 #[tokio::test]
