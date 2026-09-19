@@ -49,10 +49,9 @@ fn make_reload_context(backends: Arc<BackendRegistry>) -> Arc<ReloadContext> {
 
 /// A one-step playbook, enough to make the engine non-empty.
 fn one_playbook() -> PlaybookEngine {
-    let definition: PlaybookDefinition = serde_yaml::from_str(
-        "name: probe\ndescription: makes the engine non-empty\nsteps: []\n",
-    )
-    .expect("playbook fixture must parse");
+    let definition: PlaybookDefinition =
+        serde_yaml::from_str("name: probe\ndescription: makes the engine non-empty\nsteps: []\n")
+            .expect("playbook fixture must parse");
     let mut engine = PlaybookEngine::new();
     engine.register(definition);
     engine
@@ -70,10 +69,16 @@ fn one_profile() -> ProfileRegistry {
 /// served path reads; each is set through the same entry point production
 /// uses, so a combination here is a deployment that can exist.
 #[derive(Clone, Copy)]
+// Independent gates read from six different sources; an enum would only
+// rename them, and the band is precisely the sweep over their product.
+#[allow(clippy::struct_excessive_bools)]
 struct Gates {
     stats: bool,
     webhooks: bool,
     reload: bool,
+    /// Only read where the feature that attaches a cost registry is
+    /// compiled in; the axis carries `false` alone otherwise.
+    #[cfg_attr(not(feature = "cost-governance"), allow(dead_code))]
     cost_report: bool,
     playbooks: bool,
     profiles: bool,
@@ -104,7 +109,9 @@ fn meta_mcp_with(gates: Gates) -> MetaMcp {
             enabled: true,
             ..Default::default()
         };
-        let registry = Arc::new(mcp_gateway::cost_accounting::registry::CostRegistry::new(&cfg));
+        let registry = Arc::new(mcp_gateway::cost_accounting::registry::CostRegistry::new(
+            &cfg,
+        ));
         let enforcer = Arc::new(mcp_gateway::cost_accounting::enforcer::BudgetEnforcer::new(
             cfg,
             Arc::clone(&registry),
@@ -133,6 +140,16 @@ const COST_AXIS: [bool; 2] = [false, true];
 #[cfg(not(feature = "cost-governance"))]
 const COST_AXIS: [bool; 1] = [false];
 
+/// The highest count this build can reach, which is the band's ceiling only
+/// where the cost gate can be turned on at all. Derived from the swept axes
+/// rather than from `BAND`: asserting against `BAND.end()` in a build that
+/// compiled the cost tool out would fail for the configuration rather than
+/// for a regression.
+#[cfg(feature = "cost-governance")]
+const ATTAINABLE_CEILING: usize = 17;
+#[cfg(not(feature = "cost-governance"))]
+const ATTAINABLE_CEILING: usize = 16;
+
 #[test]
 fn nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band() {
     let mut seen: Vec<usize> = Vec::new();
@@ -154,8 +171,7 @@ fn nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band() {
                                 meta_mcp_with(gates).handle_tools_list(RequestId::Number(1)),
                             )
                             .tools;
-                            let names: Vec<&str> =
-                                served.iter().map(|t| t.name.as_str()).collect();
+                            let names: Vec<&str> = served.iter().map(|t| t.name.as_str()).collect();
                             seen.push(served.len());
                             assert!(
                                 BAND.contains(&served.len()),
@@ -191,9 +207,14 @@ fn nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band() {
         Some(*BAND.start()),
         "some gate configuration must attain the floor of {BAND:?}"
     );
+    assert!(
+        BAND.contains(&ATTAINABLE_CEILING),
+        "the ceiling this build can reach must itself be inside {BAND:?}"
+    );
     assert_eq!(
         seen.iter().max().copied(),
-        Some(*BAND.end()),
-        "some gate configuration must attain the ceiling of {BAND:?}"
+        Some(ATTAINABLE_CEILING),
+        "some gate configuration must attain {ATTAINABLE_CEILING}, the highest \
+         count this build's features allow"
     );
 }

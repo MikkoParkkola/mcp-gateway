@@ -1326,10 +1326,9 @@ fn gateway_list_profiles_tool_appears_in_tools_list() {
         "probe".to_string(),
         crate::routing_profile::RoutingProfileConfig::default(),
     );
-    let mm = MetaMcp::new(Arc::new(BackendRegistry::new()))
-        .with_profile_registry(crate::routing_profile::ProfileRegistry::from_config(
-            &configs, "probe",
-        ));
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_profile_registry(
+        crate::routing_profile::ProfileRegistry::from_config(&configs, "probe"),
+    );
     // WHEN: listing tools
     let id = RequestId::Number(0);
     let resp = mm.handle_tools_list(id);
