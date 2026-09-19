@@ -576,9 +576,42 @@ pub(super) async fn health_handler(
     }
 }
 
-/// Meta-MCP handler (POST /mcp)
-#[allow(clippy::too_many_lines)]
+/// Meta-MCP handler (POST /mcp).
+///
+/// `Accept` ALONE decides the body shape (S-01): a stream carrying only the
+/// result frame is a conforming answer, so branching on whether the backend
+/// happened to raise a notification would give one `Accept` two body types.
+///
+/// The dispatch runs inside a notification sink, and the sink IS the request
+/// scoping (S-03): two concurrent POSTs are two tasks, so a backend
+/// notification can only ever be appended to the call that provoked it.
+/// `MIK-7272.SUB.2b`.
 pub(super) async fn meta_mcp_handler(
+    state: State<Arc<AppState>>,
+    http_request: axum::http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    let offers_event_stream = http_request
+        .headers()
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/event-stream"));
+
+    let (response, notifications) = crate::transport::notification_sink::collect(async {
+        Box::pin(meta_mcp_dispatch(state, http_request))
+            .await
+            .into_response()
+    })
+    .await;
+
+    if offers_event_stream {
+        crate::gateway::streaming::request_scoped_event_stream(response, notifications).await
+    } else {
+        response
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn meta_mcp_dispatch(
     State(state): State<Arc<AppState>>,
     http_request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
@@ -1770,8 +1803,23 @@ pub(super) async fn meta_mcp_handler(
     // `record_client_success` resets the consecutive-failure count, so
     // treating a refusal as a success would clear a breaker the caller had
     // genuinely tripped.
+    //
+    // An unfinished round is excluded for the same reason and by the same
+    // rule. It carries no error, so the branch below would book it as a
+    // SUCCESS and reset the very count the exclusion exists to protect: a
+    // caller could clear a breaker it had genuinely tripped by asking for a
+    // destructive call and never answering. The in-band ask deliberately does
+    // not set `confirmation_refusal` -- it is a question, not a refusal
+    // (`meta_mcp/mod.rs`, the `InBand` arm) -- so the round is recognised by
+    // what it is on the wire, which also covers every other `input_required`
+    // round the same way.
+    let unfinished_round = response
+        .result
+        .as_ref()
+        .is_some_and(|result| !crate::protocol::cacheable::is_final(result));
     if let Some(ref client) = client
         && !response.confirmation_refusal
+        && !unfinished_round
     {
         if response.error.is_some() {
             state.auth_config.record_client_failure(&client.name);

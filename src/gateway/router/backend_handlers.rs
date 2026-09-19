@@ -862,6 +862,7 @@ pub(super) async fn backend_handler(
                     Err(e) => {
                         record_client_failure(&state, client.as_ref());
                         error!(backend = %name, error = %e, "Backend request failed");
+                        settle_direct_dispatch_failure(idem_reservation.as_mut(), &e);
                         let response =
                             JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
                         build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
@@ -921,6 +922,7 @@ pub(super) async fn backend_handler(
         Err(e) => {
             record_client_failure(&state, client.as_ref());
             error!(backend = %name, error = %e, "Backend request failed");
+            settle_direct_dispatch_failure(idem_reservation.as_mut(), &e);
             let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
             build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
         }
@@ -932,17 +934,52 @@ pub(super) async fn backend_handler(
 /// second time. Called after the response scan and provenance stamp so the
 /// replay is byte-identical to what the first caller received.
 ///
-/// Only a successful result settles. On an error the reservation's `Drop`
-/// releases the key, which is what keeps the failed call retryable.
-fn settle_direct_idempotency(
+/// Both outcomes settle, because both are terminal: the backend answered. A
+/// successful result is cached and replayed; a JSON-RPC error is recorded as
+/// `Failed`, so the retry is served that error instead of executing a second
+/// time. Neither releases the key — a backend that answered may already have
+/// acted, and only a request that never left may be retried freely.
+pub(crate) fn settle_direct_idempotency(
     reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
     response: &JsonRpcResponse,
 ) {
-    if let Some(reservation) = reservation
-        && response.error.is_none()
-        && let Some(result) = response.result.as_ref()
-    {
+    let Some(reservation) = reservation else {
+        return;
+    };
+    if let Some(error) = response.error.as_ref() {
+        reservation.fail(&serde_json::json!({
+            "code": error.code,
+            "message": error.message,
+        }));
+    } else if let Some(result) = response.result.as_ref() {
         reservation.complete(result);
+    }
+}
+
+/// Settle the reservation when the forward itself failed, before any backend
+/// answer.
+///
+/// The discriminator is not "did the request leave" in the abstract but whether
+/// *this* error proves it did not. Only [`Error::is_pre_dispatch`] proves it;
+/// everything else — a timeout, a broken socket, an I/O error — is raised both
+/// while dialing and while awaiting a reply, and the backend may already have
+/// acted. Those settle as `Failed` so the retry is told the outcome could not be
+/// established, rather than being handed a clean key and a licence to duplicate
+/// the side effect.
+pub(crate) fn settle_direct_dispatch_failure(
+    reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    error: &crate::Error,
+) {
+    let Some(reservation) = reservation else {
+        return;
+    };
+    if error.is_pre_dispatch() {
+        reservation.release();
+    } else {
+        reservation.fail(&serde_json::json!({
+            "code": error.to_rpc_code(),
+            "message": error.to_string(),
+        }));
     }
 }
 

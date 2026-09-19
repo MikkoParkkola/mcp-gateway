@@ -188,6 +188,31 @@ impl Error {
         }
     }
 
+    /// Whether this error was provably raised *before* the request left for the
+    /// backend.
+    ///
+    /// The discriminator an idempotency reservation needs: only a failure that
+    /// provably never reached the backend may release the key, because only
+    /// then is a retry a first attempt rather than a possible duplicate.
+    ///
+    /// Deliberately an allowlist, not a denylist. The transport-shaped variants
+    /// (`Transport`, `BackendTimeout`, `Http`, `Io`) carry a string and nothing
+    /// else; they are raised both while dialing and while awaiting a reply, so
+    /// they cannot answer the question and must default to "dispatched". The
+    /// three listed here are raised only at connection establishment — the
+    /// breaker refusing to dial (`src/backend/ops.rs`), no client or transport
+    /// and the concurrency limit (`src/backend/ops.rs`, `src/backend/lifecycle.rs`),
+    /// and a name that resolves to no backend at all. Adding a variant here is
+    /// a claim that *every* construction site of it precedes dispatch; verify
+    /// that before you do.
+    #[must_use]
+    pub fn is_pre_dispatch(&self) -> bool {
+        matches!(
+            self,
+            Self::BackendNotFound(_) | Self::BackendUnavailable(_) | Self::CircuitOpen(_)
+        )
+    }
+
     /// Convert to JSON-RPC error code
     #[must_use]
     pub fn to_rpc_code(&self) -> i32 {

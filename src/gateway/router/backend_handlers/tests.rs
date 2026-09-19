@@ -594,3 +594,87 @@ fn normalize_tools_list_response_excludes_a_violator_beside_a_malformed_sibling(
     assert_eq!(tools.len(), 2);
     assert_eq!(tools[1]["description"], "no name field");
 }
+
+// ADR-012 — a dispatched failure settles the key; only a provably pre-dispatch
+// one releases it.
+mod dispatch_failure_settlement {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::idempotency::{GuardOutcome, IdempotencyCache, enforce};
+
+    const KEY: &str = "adr012-key";
+    const FP: &str = "tools/call:send_email";
+
+    fn reserve(cache: &Arc<IdempotencyCache>) -> crate::idempotency::IdempotencyReservation {
+        match enforce(cache, KEY, FP).expect("first admission must succeed") {
+            GuardOutcome::Proceed(reservation) => reservation,
+            GuardOutcome::CachedResult(v) => panic!("unexpected cached result: {v}"),
+        }
+    }
+
+    #[test]
+    fn dispatched_failure_keeps_the_key_and_replays_its_error() {
+        // GIVEN: an admitted key whose forward failed with a transport error —
+        // raised both while dialing and while awaiting a reply, so the backend
+        // may already have acted.
+        let cache = Arc::new(IdempotencyCache::new());
+        let mut reservation = reserve(&cache);
+
+        // WHEN: the direct route settles that failure and the reservation drops
+        settle_direct_dispatch_failure(
+            Some(&mut reservation),
+            &crate::Error::Transport("stream closed mid-call".to_string()),
+        );
+        drop(reservation);
+
+        // THEN: the retry is refused with the recorded error, not admitted
+        let err = enforce(&cache, KEY, FP).expect_err("retry must not be admitted");
+        assert_eq!(err.to_rpc_code(), -32000, "recorded code is replayed");
+        assert!(
+            err.to_string().contains("stream closed mid-call"),
+            "recorded message is replayed, got: {err}"
+        );
+    }
+
+    #[test]
+    fn backend_error_response_keeps_the_key() {
+        // GIVEN: an admitted key whose backend answered with a JSON-RPC error
+        let cache = Arc::new(IdempotencyCache::new());
+        let mut reservation = reserve(&cache);
+        let response = JsonRpcResponse::error(None, -32000, "backend refused");
+
+        // WHEN: the success path settles that response
+        settle_direct_idempotency(Some(&mut reservation), &response);
+        drop(reservation);
+
+        // THEN: the retry is served the error rather than reaching the backend
+        let err = enforce(&cache, KEY, FP).expect_err("retry must not be admitted");
+        assert_eq!(err.to_rpc_code(), -32000);
+        assert!(err.to_string().contains("backend refused"), "got: {err}");
+    }
+
+    #[test]
+    fn pre_dispatch_failure_releases_the_key() {
+        // GIVEN: an admitted key whose forward failed before the request left —
+        // the negative control that keeps the fix from wedging every blip.
+        let cache = Arc::new(IdempotencyCache::new());
+        let mut reservation = reserve(&cache);
+
+        // WHEN: the direct route settles a breaker refusal
+        settle_direct_dispatch_failure(
+            Some(&mut reservation),
+            &crate::Error::CircuitOpen("mailer".to_string()),
+        );
+        drop(reservation);
+
+        // THEN: the retry is a first attempt
+        assert!(
+            matches!(
+                enforce(&cache, KEY, FP).expect("retry must be admitted"),
+                GuardOutcome::Proceed(_)
+            ),
+            "a pre-dispatch failure must leave the key free"
+        );
+    }
+}

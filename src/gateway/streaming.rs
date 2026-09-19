@@ -591,6 +591,66 @@ mod session_ownership_tests {
     }
 }
 
+/// Re-frame an already-built JSON-RPC response as an event stream carrying the
+/// notifications the backend raised during that same call, ahead of the result.
+///
+/// Deliberately NOT one of the two existing pipes: `subscription_stream` is
+/// forbidden request-scoped traffic (SUB.2a) and `create_sse_response` is the
+/// session-scoped standalone stream. This is the response body of ONE request.
+///
+/// The result frame is the bytes the JSON path already produced, so an SSE
+/// client and a JSON client see byte-identical results -- there is no second
+/// producer of the decorated result to drift from the first. `MIK-7272.SUB.2b`.
+pub(crate) async fn request_scoped_event_stream(
+    response: axum::response::Response,
+    notifications: Vec<crate::protocol::JsonRpcNotification>,
+) -> axum::response::Response {
+    use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
+
+    // `subscriptions/listen` already answered with a stream of its own, and a
+    // refusal that never reached the dispatch has no result to frame.
+    let is_json = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("application/json"));
+    if !is_json {
+        return response;
+    }
+
+    let (mut parts, body) = response.into_parts();
+    let Ok(result_frame) = axum::body::to_bytes(body, usize::MAX).await else {
+        // The body is in memory already; a read that fails here has no result
+        // left to send, and inventing one would be worse than the plain error.
+        return (parts, axum::body::Body::empty()).into_response();
+    };
+
+    let mut sse = String::new();
+    for notification in &notifications {
+        if let Ok(frame) = serde_json::to_string(notification) {
+            sse.push_str("event: message\ndata: ");
+            sse.push_str(&frame);
+            sse.push_str("\n\n");
+        }
+    }
+    sse.push_str("event: message\ndata: ");
+    sse.push_str(&String::from_utf8_lossy(&result_frame));
+    sse.push_str("\n\n");
+
+    parts.headers.insert(
+        CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/event-stream"),
+    );
+    parts.headers.insert(
+        CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    // The re-framed body is a different length; a stale one truncates it.
+    parts.headers.remove(CONTENT_LENGTH);
+
+    (parts, axum::body::Body::from(sse)).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -848,5 +908,96 @@ mod tests {
         // THEN: give the task a tick to observe the weak ref is gone — no panic
         tokio::time::sleep(Duration::from_millis(50)).await;
         // If we reach here without a panic, the reaper exited cleanly.
+    }
+}
+
+#[cfg(test)]
+mod request_scoped_stream_tests {
+    use super::*;
+    use axum::http::header::CONTENT_TYPE;
+
+    fn json_response(body: &str) -> axum::response::Response {
+        (
+            axum::http::StatusCode::OK,
+            [(CONTENT_TYPE, "application/json")],
+            body.to_string(),
+        )
+            .into_response()
+    }
+
+    fn note(method: &str) -> crate::protocol::JsonRpcNotification {
+        crate::protocol::JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params: None,
+        }
+    }
+
+    async fn body_text(response: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    /// S-02's ordering clause: the notifications reach the stream **before the
+    /// result**. That is a claim about frame order in the body, which is what
+    /// an SSE client reads.
+    #[tokio::test]
+    async fn notifications_are_framed_ahead_of_the_result() {
+        let response = request_scoped_event_stream(
+            json_response(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
+            vec![
+                note("notifications/progress"),
+                note("notifications/message"),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "text/event-stream"
+        );
+        let body = body_text(response).await;
+        let progress = body.find("notifications/progress").expect("progress frame");
+        let message = body.find("notifications/message").expect("message frame");
+        let result = body.find(r#""result""#).expect("result frame");
+        assert!(progress < message, "capture order is preserved");
+        assert!(message < result, "every notification precedes the result");
+    }
+
+    /// S-01: `Accept` alone decides the shape, so a call that raised nothing
+    /// still answers on a stream -- one frame, and it is the result.
+    #[tokio::test]
+    async fn a_stream_with_no_notifications_still_carries_the_result() {
+        let response = request_scoped_event_stream(
+            json_response(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
+            Vec::new(),
+        )
+        .await;
+
+        let body = body_text(response).await;
+        assert_eq!(body.matches("data: ").count(), 1);
+        assert!(body.contains(r#""result""#));
+    }
+
+    /// An answer that is already a stream (`subscriptions/listen`) is left
+    /// alone: re-framing it would wrap one stream inside another.
+    #[tokio::test]
+    async fn an_answer_that_is_already_a_stream_is_passed_through() {
+        let already = (
+            axum::http::StatusCode::OK,
+            [(CONTENT_TYPE, "text/event-stream")],
+            "data: {\"already\":true}\n\n".to_string(),
+        )
+            .into_response();
+
+        let response =
+            request_scoped_event_stream(already, vec![note("notifications/progress")]).await;
+        let body = body_text(response).await;
+        assert!(
+            !body.contains("notifications/progress"),
+            "a subscription stream must not absorb request-scoped traffic (SUB.2a)"
+        );
     }
 }
