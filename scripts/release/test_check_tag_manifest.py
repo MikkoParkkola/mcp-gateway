@@ -1491,5 +1491,148 @@ class WorkflowWiring(unittest.TestCase):
             self.assertRegex(line, permitted, raw_line)
 
 
+# The smoke gate is a shell script, not a workflow, so it is read directly.
+# Overridable for the same reason the workflows are: the mutation harness
+# points these assertions at a copy.
+SMOKE = pathlib.Path(
+    os.environ.get("MCPGW_SMOKE_SCRIPT")
+    or pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "smoke-image.sh"
+)
+# A release asset URL that names a version rather than whatever is newest.
+# `releases/latest` resolves at run time, so the bytes a release runs are not
+# the bytes anyone reviewed.
+PINNED_RELEASE = re.compile(r"/releases/download/v\d+\.\d+\.\d+/")
+
+
+class SupplyChain(unittest.TestCase):
+    """The registry publisher runs a third-party binary with publish rights.
+
+    `publish-mcp-registry` hands `mcp-publisher` an OIDC token that can write
+    to a public registry under this project's name. An unpinned download gives
+    whoever can cut a release in that upstream repository -- or anyone who can
+    swap an asset on it -- that token. Pinning without verifying is only half
+    the control: a release asset can be replaced in place.
+    """
+
+    def test_the_registry_publisher_pins_and_verifies_its_publisher_binary(self):
+        body = (WORKFLOWS / "ci.yml").read_text()
+        install = [
+            block
+            for block in steps("ci.yml", job="publish-mcp-registry")
+            if any("mcp-publisher_" in line for line in block)
+        ]
+        self.assertEqual(
+            len(install), 1, "ci.yml: expected exactly one mcp-publisher download step"
+        )
+        text = "\n".join(install[0])
+        self.assertNotIn(
+            "releases/latest",
+            text,
+            "ci.yml: mcp-publisher is fetched from `releases/latest`, so the "
+            "binary handed the publish token is whatever upstream published last",
+        )
+        self.assertRegex(
+            text,
+            PINNED_RELEASE,
+            "ci.yml: the mcp-publisher download names no pinned version",
+        )
+        self.assertRegex(
+            text,
+            r"sha256sum\s+(-c|--check)",
+            "ci.yml: the mcp-publisher download is never checksum-verified",
+        )
+        # A verification that runs after the binary has already been executed
+        # verifies nothing. Both live in the install step, so the check is that
+        # no later step runs it before this one finishes -- and within the step,
+        # that the checksum line precedes the first `mcp-publisher` invocation.
+        run = text.index("sha256sum")
+        invoked = [
+            m.start() for m in re.finditer(r"\./mcp-publisher(?![-\w])", text)
+        ]
+        for at in invoked:
+            self.assertGreater(
+                at,
+                run,
+                "ci.yml: mcp-publisher is executed before its checksum is checked",
+            )
+        # File-wide, so a second unpinned fetch cannot be added elsewhere in
+        # this workflow. Matched at the download position rather than on the
+        # bare phrase, which also appears in prose explaining why it is gone.
+        self.assertEqual(
+            body.count("releases/latest/download"),
+            0,
+            "ci.yml: an unpinned `releases/latest` download remains somewhere",
+        )
+
+
+class SmokeGateCoverage(unittest.TestCase):
+    """What the container gate actually proves about the published image.
+
+    NFR.PKG.1 reads: "the container image the release publishes starts, and
+    serves an MCP request from outside the container". A gate that only reads
+    the image's own HEALTHCHECK proves the first clause and asserts the second
+    by assumption -- the HEALTHCHECK probes from inside, where a loopback bind
+    answers and a published port still reaches nothing.
+    """
+
+    def setUp(self):
+        self.body = SMOKE.read_text()
+        # Line continuations folded first. A `docker run` here spans several
+        # physical lines, and a line-anchored match reads only the first of
+        # them -- so an assertion about an argument on a later line passes
+        # whether or not the argument is there.
+        self.folded = re.sub(r"\\\n\s*", " ", self.body)
+
+    def test_the_gate_probes_the_image_from_outside_the_container(self):
+        self.assertRegex(
+            self.folded,
+            r"docker run[^\n]*(-p|--publish)\s",
+            "smoke-image.sh: no container publishes a port, so nothing can "
+            "reach the image from the runner",
+        )
+        self.assertRegex(
+            self.body,
+            r'"method"\s*:\s*"initialize"',
+            "smoke-image.sh: no MCP request is made; NFR.PKG.1 asks for one",
+        )
+        self.assertRegex(
+            self.folded,
+            r"curl[^\n]*/mcp\b",
+            "smoke-image.sh: the external probe does not reach the MCP endpoint",
+        )
+
+    def test_the_gate_exercises_the_image_as_an_operator_runs_it(self):
+        # Every `docker run` in the gate overrides the Dockerfile's CMD, so the
+        # default invocation -- the one an operator types first -- is untested.
+        # `if docker run ...` is still a run of the image: anchoring on the
+        # start of the line alone would skip the one leg that cannot use a
+        # bare command, because it expects a non-zero exit.
+        runs = re.findall(
+            r"^\s*(?:if\s+)?docker run\b.*$", self.folded, re.MULTILINE
+        )
+        self.assertTrue(runs, "smoke-image.sh: no `docker run` at all")
+        self.assertTrue(
+            any("--config" not in block for block in runs),
+            "smoke-image.sh: every run injects a --config, so the image's own "
+            "default entrypoint is never exercised",
+        )
+
+    def test_the_gate_refuses_a_healthcheck_that_proves_nothing(self):
+        # The gate's verdict IS the HEALTHCHECK, so a degenerate one -- `CMD
+        # true`, or a probe aimed at a port nothing serves -- turns the whole
+        # gate green with no evidence behind it.
+        self.assertIn(
+            ".Config.Healthcheck.Test",
+            self.body,
+            "smoke-image.sh: the HEALTHCHECK is checked for existence only, "
+            "never for being a real probe",
+        )
+        self.assertRegex(
+            self.body,
+            r"/health",
+            "smoke-image.sh: nothing pins the HEALTHCHECK to the health endpoint",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

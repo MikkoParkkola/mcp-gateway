@@ -817,6 +817,34 @@ CASES = [
         CAUGHT,
     ),
     (
+        # The unpinned fetch restored: the binary handed a publish token is
+        # whatever the upstream repository shipped most recently.
+        "mcp-publisher-back-on-releases-latest",
+        "ci.yml",
+        '"https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/${ASSET}"',
+        '"https://github.com/modelcontextprotocol/registry/releases/latest/download/${ASSET}"',
+        CAUGHT,
+    ),
+    (
+        # Pinned but unverified -- a release asset replaced in place still
+        # reaches the token, so the pin alone is not the control.
+        "mcp-publisher-pinned-but-not-verified",
+        "ci.yml",
+        "          printf '%s  %s\\n' \"${SHA256}\" \"${ASSET}\" | sha256sum --check --strict -",
+        "          # checksum check removed",
+        CAUGHT,
+    ),
+    (
+        # Tolerated by design: `--strict` hardens the check but the assertion
+        # is about a checksum running at all, and pinning the exact flag set
+        # would fail the next time the line is reasonably reworded.
+        "mcp-publisher-checksum-without-strict",
+        "ci.yml",
+        "| sha256sum --check --strict -",
+        "| sha256sum --check -",
+        TOLERATED,
+    ),
+    (
         # The second publisher back on the same name from the same commit.
         "docker-yml-pushing-on-a-tag-again",
         "docker.yml",
@@ -852,7 +880,11 @@ def verdict(directory, workflow, before, after):
     path.write_text(original.replace(before, after, 1), encoding="utf-8")
     try:
         done = subprocess.run(
-            [sys.executable, str(SUITE), "WorkflowWiring"],
+            # SupplyChain reads the same workflow copies and is one-sided in the
+            # same way, so it is mutated by the same corpus. Classes that read
+            # the working tree rather than the copy are left out: a mutation
+            # cannot reach them, so they would report tolerated for every case.
+            [sys.executable, str(SUITE), "WorkflowWiring", "SupplyChain"],
             capture_output=True,
             text=True,
             env={**os.environ, "MCPGW_WORKFLOWS_DIR": str(directory)},

@@ -730,9 +730,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # This binary is handed an OIDC token with publish rights to the public
+      # MCP Registry under this project's name, so it is pinned and verified.
+      # `releases/latest` resolved at run time: the token went to whatever the
+      # upstream repository had published most recently, which nobody here had
+      # reviewed. A pin alone is not enough either -- a release asset can be
+      # replaced in place -- so the checksum is what actually binds the bytes.
+      # Bumping the version means replacing the digest in the same commit,
+      # which is the review this step was missing.
       - name: Install mcp-publisher
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          set -euo pipefail
+          OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+          ASSET="mcp-publisher_${OS}_${ARCH}.tar.gz"
+          # Both linux legs are pinned so a runner-label change fails loudly
+          # here rather than silently reintroducing an unverified download.
+          case "${OS}_${ARCH}" in
+            linux_amd64) SHA256=a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc ;;
+            linux_arm64) SHA256=8dd75a6cf6845688b5d4e46df58d3ca26d5c8d233bb0626606e1db82c5e883e4 ;;
+            *) echo "::error::no pinned mcp-publisher checksum for ${OS}_${ARCH}"; exit 1 ;;
+          esac
+          # v1.8.1 -- the digests above are of that release's assets.
+          curl -fsSL -o "${ASSET}" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/${ASSET}"
+          printf '%s  %s\n' "${SHA256}" "${ASSET}" | sha256sum --check --strict -
+          tar xzf "${ASSET}" mcp-publisher
           chmod +x mcp-publisher
 
       - name: Set release metadata
