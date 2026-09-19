@@ -231,7 +231,23 @@ const MINOR: &[Row] = &[
         requirement: "MIK-7272.ORDER.1",
         role: Role::Server,
         transport: Transport::Http,
-        evidence: &["mik_7213_acs::http::ac_order_1_the_tool_order_is_stable_across_callers"],
+        // Two halves, because the statement has two and they fail apart. The
+        // first row builds a fresh gateway per request, so it pins
+        // cross-instance agreement — the half a hashed container breaks. The
+        // second is the statement's own wording: one unchanged gateway, asked
+        // twice, which is the only one of the two that can see ordering
+        // derived from state an earlier request left behind.
+        //
+        // Both compare sequences, and that is the load-bearing part. A
+        // rotation injected into `build_meta_tools` (scratch, reverted)
+        // reddened both rows while the same two lists compared equal once
+        // sorted, so a sorted or set comparison is green through exactly the
+        // regression these guard. That experiment also shows the surface is
+        // rebuilt per request rather than cached on the state.
+        evidence: &[
+            "mik_7213_acs::http::ac_order_1_the_tool_order_is_stable_across_callers",
+            "mik_7213_acs::http::ac_order_1_one_unchanged_gateway_repeats_the_same_tool_sequence",
+        ],
     },
     Row {
         statement: "4. Require Mcp-Method and Mcp-Name headers; support x-mcp-header",
