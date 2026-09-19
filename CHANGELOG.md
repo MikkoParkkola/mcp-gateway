@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > refuses a start rather than warning. The first start from a 3.x install prints the changes that
 > need an operator action.
 
+> **What the performance numbers are, and are not.** The 4.0.0 comparison against
+> 3.5.0 is a component benchmark, not an end-to-end one. It measures in-process
+> work with `criterion` — no wire, no backend, no queue — and reports a point
+> estimate with a bootstrap confidence interval. It therefore produces **no P50
+> and no P99**: a confidence interval is not a percentile, and the repository has
+> no client-to-backend harness at any version to take percentiles from. What the
+> measurement does support: over the 47 cases 3.5.0 and 4.0.0 share, the worst
+> regression is +6.07% (`session_sandbox/check_tool_denied`, 86.27 ns to 94.18 ns)
+> and the largest movement is a 67% improvement. Nothing approaches the 5% P50 or
+> 10% P99 budgets those bounds were written against. Read it as headroom on
+> component cost, and do not quote it as end-to-end latency.
+
 ### Added
 
 - **The kill-switch error budgets are tunable from the config file** (GH #475).
