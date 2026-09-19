@@ -253,6 +253,10 @@ COSIGN_VERIFY = re.compile(r"cosign\s+verify(-attestation)?(?![-\w])")
 # inside `echo "run cosign sign …"`, which signs nothing; these patterns are
 # matched against command positions by `runs()`, never searched for.
 COSIGN_ANY = re.compile(r"cosign\s+\w")
+# The one command that makes a name resolvable. Every tag the release exposes
+# is created by it, so the ordering assertions anchor on it rather than on the
+# tag strings, which also appear in `inspect` calls and log lines.
+IMAGETOOLS_CREATE = re.compile(r"docker\s+buildx\s+imagetools\s+create(?![-\w])")
 # The gate, however it is spelled. Shared by the assertion that it runs at all
 # and by the one that protects the steps running it, so a step cannot be
 # protected under one spelling and unguarded under the other.
@@ -550,8 +554,13 @@ def commands(workflow):
     return joined(inert_scalars_dropped(live_lines(workflow)))
 
 
-def steps(workflow):
+def steps(workflow, job=None):
     """A workflow's step blocks, each as a list of its executable lines.
+
+    `job` narrows the result to one job's steps, in file order. Order across a
+    whole workflow is not an ordering Actions honours — two jobs' steps
+    interleave at runtime — so any assertion that reads one step as running
+    before another has to be confined to the job that sequences them.
 
     An assertion about a command and the environment it runs in has to read
     one step at a time. A `DIGEST` bound in a neighbouring step does not reach
@@ -564,16 +573,19 @@ def steps(workflow):
     predecessor and let it inherit that step's bindings.
     """
     blocks, current, indent = [], None, None
+    where = None
 
     def close():
         nonlocal current
-        if current:
+        if current and (job is None or where == job):
             blocks.append(current)
         current = None
 
     for line in live_lines(workflow):
-        if JOB_HEADER.match(line):
+        header = JOB_HEADER.match(line)
+        if header:
             close()
+            where = header.group(1)
             indent = None
             continue
         if STEPS_KEY.match(line):
@@ -835,7 +847,7 @@ class WorkflowWiring(unittest.TestCase):
 
         for workflow, job, gate in (
             ("release.yml", "homebrew-update", "verify"),
-            ("docker.yml", "publish-mcp-registry", "build"),
+            ("ci.yml", "publish-mcp-registry", "docker-manifest"),
         ):
             own = job_if(workflow, job)
             # The clause has to be one of the condition's own top-level
@@ -856,34 +868,55 @@ class WorkflowWiring(unittest.TestCase):
         # `… && ':latest' || ':latest'`, where both branches yield the same
         # name and the condition decides nothing.
         self.assertRegex(
-            condition("ci.yml", "docker"),
+            condition("ci.yml", "docker-manifest"),
             r"(?<![!\w.])steps\.\w+\.outputs\.is_prerelease != 'true'"
             r" && 'ghcr\.io/[^']*:latest' \|\| ''",
         )
         # The step that decides it has to exist. `steps.missing.outputs.…`
         # is not an error in Actions — it is the empty string, and `'' !=
         # 'true'` tags every release candidate :latest.
-        body = jobs("ci.yml")["docker"]
+        body = jobs("ci.yml")["docker-manifest"]
         producer = re.search(
             r"(?<![!\w.])steps\.(\w+)\.outputs\.is_prerelease != 'true'"
             r" && 'ghcr\.io/[^']*:latest'",
-            condition("ci.yml", "docker"),
+            condition("ci.yml", "docker-manifest"),
         )
-        self.assertIsNotNone(producer, "ci.yml docker: nothing decides :latest")
+        self.assertIsNotNone(producer, "ci.yml docker-manifest: nothing decides :latest")
         self.assertRegex(
             body,
             rf"(?m)^\s+id:\s*{re.escape(producer.group(1))}\s*$",
-            f"ci.yml docker: no step is id {producer.group(1)}",
+            f"ci.yml docker-manifest: no step is id {producer.group(1)}",
         )
-        # And nothing tags :latest beside it. A second entry in the same
-        # `tags:` list carries no expression, moves the name on every build,
-        # and leaves the guarded entry above it untouched and green.
+        # And nothing else names :latest. A second `--tag` in the publisher's
+        # own argument array moves the name on every release candidate and
+        # leaves the guarded expression above it untouched and green, so the
+        # rule is about the name wherever it appears, not about one list.
         for line in live_lines("ci.yml"):
-            self.assertNotRegex(
-                line.strip(),
-                r"^-?\s*ghcr\.io/[\w./-]+:latest$",
-                f"ci.yml: :latest is tagged unconditionally: {line.strip()}",
+            if ":latest" not in line:
+                continue
+            self.assertIn(
+                "is_prerelease != 'true'",
+                line,
+                f"ci.yml: :latest is named without the channel guard: {line.strip()}",
             )
+
+    def test_the_publisher_runs_the_tag_gate_in_its_own_job(self):
+        # docker-manifest names the tag from steps.meta.outputs.version, and
+        # the gate is the step that binds it. docker-build running its own
+        # copy answers a different job's question: echo the invocation here
+        # and the publisher creates a tag whose version is the empty string.
+        body = jobs("ci.yml")["docker-manifest"]
+        invocation = re.compile(
+            r"(?:python3?|uv run)\s+scripts/release/check_tag_manifest\.py(?=\s|$)"
+        )
+        running = [
+            command
+            for block in steps("ci.yml")
+            if "\n".join(block) in body
+            for command in joined(block)
+            if runs(command, invocation)
+        ]
+        self.assertTrue(running, "ci.yml docker-manifest: nothing runs the tag gate")
 
     def test_the_prerelease_classification_is_computed(self):
         # Every guard above reads `needs.<job>.outputs.is_prerelease` from
@@ -954,12 +987,19 @@ class WorkflowWiring(unittest.TestCase):
                 f"release.yml: DIST_TAG is inverted: {binding}",
             )
 
-    def test_both_ghcr_publishers_sign_what_they_push(self):
-        # Both push :VERSION from the same commit on the same tag with no
-        # ordering between them, so the name resolves to whichever pushed last.
-        # If only one signs, that name can carry no signature at all while the
-        # signing workflow's own verify-by-digest still passes.
-        for workflow in ("ci.yml", "docker.yml"):
+    def test_the_single_ghcr_publisher_signs_what_it_pushes(self):
+        # One publisher owns :VERSION. A second one would push the same name
+        # from the same commit with no ordering between them, so the name
+        # would resolve to whichever pushed last and could carry no signature
+        # at all while the signing workflow's own verify-by-digest passed.
+        # docker.yml gave up the tag; it must not sign, because signing is
+        # what it would do if it had started pushing one again.
+        for command in commands("docker.yml"):
+            self.assertFalse(
+                runs(command, COSIGN_ANY),
+                f"docker.yml runs cosign, so a second publisher is back: {command}",
+            )
+        for workflow in ("ci.yml",):
             live = commands(workflow)
             # Each verb separately, and `verify` bounded so it cannot be
             # satisfied by `verify-attestation`: an attestation is not a
@@ -1002,7 +1042,7 @@ class WorkflowWiring(unittest.TestCase):
                     )
                     self.assertRegex(
                         signed,
-                        r"(?:^|\s)(?:\"[^\"]*@\$\{DIGEST\}\"|[^\s\"']*@\$\{DIGEST\})(?:\s|$)",
+                        r"(?:^|\s)(?:\"[^\"]*@\$\{\w+\}\"|[^\s\"']*@\$\{\w+\})(?:\s|$)",
                         f"{workflow}: {command}",
                     )
             # Read the binding per step, not per file. `DIGEST` is step-scoped
@@ -1013,9 +1053,18 @@ class WorkflowWiring(unittest.TestCase):
             # rejected anyway: step-scoped env is what these steps use, and an
             # assertion that accepted either could not tell a step that lost
             # its binding from one that never had it.
-            digest = re.compile(
-                r"^DIGEST: [\"']?\$\{\{\s*steps\.build\.outputs\.digest\s*\}\}[\"']?$"
-            )
+            # Every published digest, not just the list's. A client on arm64
+            # resolves the arm64 child, so a signature over the index alone
+            # leaves what that client pulls unverifiable. Each name is bound
+            # from a step output: a literal here is a digest that cannot
+            # follow the build.
+            digests = [
+                re.compile(
+                    rf"^{name}: [\"']?\$\{{\{{\s*steps\.\w+"
+                    rf"\.outputs\.{name.lower()}\s*\}}\}}[\"']?$"
+                )
+                for name in ("LIST", "AMD64", "ARM64")
+            ]
             identity = re.compile(
                 r"^IDENTITY: [\"']?https://github\.com/MikkoParkkola/mcp-gateway"
                 rf"/\.github/workflows/{re.escape(workflow)}@\$\{{\{{\s*github\.ref\s*\}}\}}[\"']?$"
@@ -1028,10 +1077,12 @@ class WorkflowWiring(unittest.TestCase):
                     continue
                 signing += 1
                 name = block[0]
-                self.assertTrue(
-                    any(digest.match(c) for c in bindings),
-                    f"{workflow}: {name} runs cosign without binding DIGEST to the build digest",
-                )
+                for digest in digests:
+                    self.assertTrue(
+                        any(digest.match(c) for c in bindings),
+                        f"{workflow}: {name} runs cosign without binding "
+                        f"every published digest to a step output",
+                    )
                 # The env binding is only worth what the shell leaves of it: a
                 # `DIGEST=` assignment in the run body rebinds the name the
                 # cosign command below expands, and the env check still passes.
@@ -1046,9 +1097,21 @@ class WorkflowWiring(unittest.TestCase):
                         self.assertNotRegex(
                             piece,
                             r"(?:^|\b(?:export|declare|local|typeset|readonly)\s+)"
-                            r"DIGEST=",
-                            f"{workflow}: {name} reassigns DIGEST in its shell",
+                            r"(?:LIST|AMD64|ARM64|d)=",
+                            f"{workflow}: {name} reassigns a digest in its shell",
                         )
+                # Bound is not used. cosign expands the loop variable, so a
+                # `for` list that lost its platform children signs the index
+                # alone while all three bindings above still pass — the env
+                # check reads what the step declares, never what the shell
+                # reaches for.
+                body = "\n".join(block)
+                for digest_name in ("LIST", "AMD64", "ARM64"):
+                    self.assertIn(
+                        f"${{{digest_name}}}",
+                        body,
+                        f"{workflow}: {name} binds {digest_name} without expanding it",
+                    )
                 if not any(runs(c, COSIGN_VERIFY) for c in block):
                     continue
                 # An identity is what makes a signature mean something: an
@@ -1072,6 +1135,169 @@ class WorkflowWiring(unittest.TestCase):
             # Non-vacuity: if the step scan found nothing, the per-step
             # assertions above never ran and the whole loop is decoration.
             self.assertTrue(signing, f"{workflow}: no step containing a cosign command was read")
+
+    def test_the_release_tag_is_created_only_after_the_signature_verifies(self):
+        # The window this closes: a tag created before signing is pullable and
+        # unsigned for the whole signing span, and `cosign verify` by digest
+        # passes afterwards regardless — it never reads the tag. Order is the
+        # only thing that closes it, so this reads step positions inside the
+        # one job that sequences them, not the presence of the commands.
+        blocks = steps("ci.yml", "docker-manifest")
+        self.assertTrue(blocks, "ci.yml: docker-manifest has no steps to read")
+
+        def pieces(block):
+            return [
+                piece
+                for command in joined(block)
+                for piece in segments(shell(command))
+            ]
+
+        creates, verifies = [], []
+        for index, block in enumerate(blocks):
+            found = [p for p in pieces(block) if IMAGETOOLS_CREATE.match(p)]
+            if found:
+                creates.append((index, block[0], found))
+            if any(COSIGN_VERIFY.match(p) for p in pieces(block)):
+                verifies.append(index)
+        self.assertTrue(creates, "ci.yml: docker-manifest creates no manifest list")
+        self.assertTrue(verifies, "ci.yml: docker-manifest never verifies a signature")
+
+        release = [
+            (index, name, found)
+            for index, name, found in creates[1:]
+        ]
+        self.assertTrue(
+            release,
+            "ci.yml: the only imagetools create is the one that publishes a tag",
+        )
+        # After the LAST verify: a first verify followed by the tag and then a
+        # second one would satisfy a check against the earliest index while
+        # the tag still appeared mid-flight.
+        for index, name, _ in release:
+            self.assertGreater(
+                index,
+                max(verifies),
+                f"ci.yml: {name} publishes a release tag before cosign verify",
+            )
+        # And it is the release tag, not some third provenance name.
+        self.assertTrue(
+            any(
+                "${VERSION}" in "\n".join(blocks[index])
+                for index, _, _ in release
+            ),
+            "ci.yml: no step creates the release tag :${VERSION}",
+        )
+
+        # The index is built under a provenance-only name. If the first create
+        # carried the release tag, the ordering above would hold and the tag
+        # would still have existed unsigned from that moment.
+        first, name, found = creates[0]
+        self.assertLess(first, max(verifies), f"ci.yml: {name} builds nothing to sign")
+        for piece in found:
+            for forbidden in ("${VERSION}", "latest", "LATEST_TAG", "MAJOR_MINOR"):
+                self.assertNotIn(
+                    forbidden,
+                    piece,
+                    f"ci.yml: {name} creates a release tag before signing: {piece}",
+                )
+            self.assertRegex(
+                piece,
+                r"--tag\s+[\"']?\$\{IMAGE\}:sha-\$\{GITHUB_SHA\}[\"']?",
+                f"ci.yml: {name} does not name the provenance tag: {piece}",
+            )
+
+        # The falsifier for "copying an index by digest preserves the digest".
+        # Without it the release tag can resolve to bytes no signature covers
+        # and every step above still passes.
+        proof = [
+            index
+            for index, block in enumerate(blocks)
+            if index > max(i for i, _, _ in release)
+            and "${LIST}" in "\n".join(block)
+            and "${VERSION}" in "\n".join(block)
+        ]
+        self.assertTrue(
+            proof,
+            "ci.yml: nothing asserts :${VERSION} resolves to the signed digest",
+        )
+
+    def test_the_stable_channel_keeps_its_major_minor_pointer(self):
+        # `main` published :MAJOR.MINOR through metadata-action. This job took
+        # the tag over, so consumers pinned to :4.0 break silently unless it
+        # publishes one too — under :latest's guard, or a prerelease moves the
+        # pointer every stable consumer follows.
+        blocks = [
+            block
+            for block in steps("ci.yml", "docker-manifest")
+            if any(
+                IMAGETOOLS_CREATE.match(piece)
+                for command in joined(block)
+                for piece in segments(shell(command))
+            )
+            and "${VERSION}" in "\n".join(block)
+        ]
+        self.assertEqual(
+            len(blocks), 1, "ci.yml: expected one step to create the release tags"
+        )
+        body = "\n".join(blocks[0])
+
+        # Derived, not spelled: a literal `4.0` here is a pointer that stops
+        # following the release the first time the minor moves. Exactly one
+        # derivation, whatever it is named — a second one is how the pointer
+        # gets moved outside the guard while the guarded one still reads
+        # correctly.
+        derived = re.findall(
+            r"(\w+)=[\"']?\$\([^)]*\$\{VERSION\}[^)]*cut\s+-d\.\s+-f1,2[^)]*\)", body
+        )
+        self.assertEqual(
+            len(derived),
+            1,
+            "ci.yml: expected exactly one major.minor value derived from ${VERSION}, "
+            f"found {derived}",
+        )
+        name = derived[0]
+
+        # Inside :latest's own guard, by position. Two conditions spelled
+        # alike are two conditions, and only one of them has to be edited for
+        # a candidate to start moving the stable pointer.
+        guard = re.search(
+            r'if \[ -n "\$\{LATEST_TAG\}" \]; then\n(.*?)\n\s*fi', body, re.S
+        )
+        self.assertIsNotNone(guard, "ci.yml: :latest is no longer added under a guard")
+        self.assertIn(
+            f"{name}=",
+            guard.group(1),
+            "ci.yml: the major.minor value is derived outside the stable guard",
+        )
+        self.assertIn(
+            f"${{{name}}}",
+            guard.group(1),
+            "ci.yml: the major.minor tag is not gated on the stable channel",
+        )
+        outside = body.count(f"${{{name}}}") - guard.group(1).count(f"${{{name}}}")
+        self.assertEqual(
+            outside,
+            0,
+            "ci.yml: the major.minor tag is also used outside the stable guard",
+        )
+
+    def test_the_branch_builder_still_refuses_to_push_on_a_tag(self):
+        # A regression lock, green today: docker.yml handed :VERSION over, and
+        # its push condition is the only thing keeping the second publisher
+        # from coming back on the same name from the same commit.
+        pushes = [
+            line
+            for block in steps("docker.yml")
+            for line in block
+            if re.match(r"^\s*push:", line.strip())
+        ]
+        self.assertTrue(pushes, "docker.yml: no build step declares push:")
+        for line in pushes:
+            self.assertRegex(
+                line,
+                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)",
+                f"docker.yml pushes on a tag again: {line.strip()}",
+            )
 
     def test_a_comment_is_stripped_and_a_quoted_hash_is_not(self):
         # Every assertion here reads uncommented text, so both directions are
@@ -1263,6 +1489,149 @@ class WorkflowWiring(unittest.TestCase):
             if not TAG_EXPRESSION.search(line):
                 continue
             self.assertRegex(line, permitted, raw_line)
+
+
+# The smoke gate is a shell script, not a workflow, so it is read directly.
+# Overridable for the same reason the workflows are: the mutation harness
+# points these assertions at a copy.
+SMOKE = pathlib.Path(
+    os.environ.get("MCPGW_SMOKE_SCRIPT")
+    or pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "smoke-image.sh"
+)
+# A release asset URL that names a version rather than whatever is newest.
+# `releases/latest` resolves at run time, so the bytes a release runs are not
+# the bytes anyone reviewed.
+PINNED_RELEASE = re.compile(r"/releases/download/v\d+\.\d+\.\d+/")
+
+
+class SupplyChain(unittest.TestCase):
+    """The registry publisher runs a third-party binary with publish rights.
+
+    `publish-mcp-registry` hands `mcp-publisher` an OIDC token that can write
+    to a public registry under this project's name. An unpinned download gives
+    whoever can cut a release in that upstream repository -- or anyone who can
+    swap an asset on it -- that token. Pinning without verifying is only half
+    the control: a release asset can be replaced in place.
+    """
+
+    def test_the_registry_publisher_pins_and_verifies_its_publisher_binary(self):
+        body = (WORKFLOWS / "ci.yml").read_text()
+        install = [
+            block
+            for block in steps("ci.yml", job="publish-mcp-registry")
+            if any("mcp-publisher_" in line for line in block)
+        ]
+        self.assertEqual(
+            len(install), 1, "ci.yml: expected exactly one mcp-publisher download step"
+        )
+        text = "\n".join(install[0])
+        self.assertNotIn(
+            "releases/latest",
+            text,
+            "ci.yml: mcp-publisher is fetched from `releases/latest`, so the "
+            "binary handed the publish token is whatever upstream published last",
+        )
+        self.assertRegex(
+            text,
+            PINNED_RELEASE,
+            "ci.yml: the mcp-publisher download names no pinned version",
+        )
+        self.assertRegex(
+            text,
+            r"sha256sum\s+(-c|--check)",
+            "ci.yml: the mcp-publisher download is never checksum-verified",
+        )
+        # A verification that runs after the binary has already been executed
+        # verifies nothing. Both live in the install step, so the check is that
+        # no later step runs it before this one finishes -- and within the step,
+        # that the checksum line precedes the first `mcp-publisher` invocation.
+        run = text.index("sha256sum")
+        invoked = [
+            m.start() for m in re.finditer(r"\./mcp-publisher(?![-\w])", text)
+        ]
+        for at in invoked:
+            self.assertGreater(
+                at,
+                run,
+                "ci.yml: mcp-publisher is executed before its checksum is checked",
+            )
+        # File-wide, so a second unpinned fetch cannot be added elsewhere in
+        # this workflow. Matched at the download position rather than on the
+        # bare phrase, which also appears in prose explaining why it is gone.
+        self.assertEqual(
+            body.count("releases/latest/download"),
+            0,
+            "ci.yml: an unpinned `releases/latest` download remains somewhere",
+        )
+
+
+class SmokeGateCoverage(unittest.TestCase):
+    """What the container gate actually proves about the published image.
+
+    NFR.PKG.1 reads: "the container image the release publishes starts, and
+    serves an MCP request from outside the container". A gate that only reads
+    the image's own HEALTHCHECK proves the first clause and asserts the second
+    by assumption -- the HEALTHCHECK probes from inside, where a loopback bind
+    answers and a published port still reaches nothing.
+    """
+
+    def setUp(self):
+        self.body = SMOKE.read_text()
+        # Line continuations folded first. A `docker run` here spans several
+        # physical lines, and a line-anchored match reads only the first of
+        # them -- so an assertion about an argument on a later line passes
+        # whether or not the argument is there.
+        self.folded = re.sub(r"\\\n\s*", " ", self.body)
+
+    def test_the_gate_probes_the_image_from_outside_the_container(self):
+        self.assertRegex(
+            self.folded,
+            r"docker run[^\n]*(-p|--publish)\s",
+            "smoke-image.sh: no container publishes a port, so nothing can "
+            "reach the image from the runner",
+        )
+        self.assertRegex(
+            self.body,
+            r'"method"\s*:\s*"initialize"',
+            "smoke-image.sh: no MCP request is made; NFR.PKG.1 asks for one",
+        )
+        self.assertRegex(
+            self.folded,
+            r"curl[^\n]*/mcp\b",
+            "smoke-image.sh: the external probe does not reach the MCP endpoint",
+        )
+
+    def test_the_gate_exercises_the_image_as_an_operator_runs_it(self):
+        # Every `docker run` in the gate overrides the Dockerfile's CMD, so the
+        # default invocation -- the one an operator types first -- is untested.
+        # `if docker run ...` is still a run of the image: anchoring on the
+        # start of the line alone would skip the one leg that cannot use a
+        # bare command, because it expects a non-zero exit.
+        runs = re.findall(
+            r"^\s*(?:if\s+)?docker run\b.*$", self.folded, re.MULTILINE
+        )
+        self.assertTrue(runs, "smoke-image.sh: no `docker run` at all")
+        self.assertTrue(
+            any("--config" not in block for block in runs),
+            "smoke-image.sh: every run injects a --config, so the image's own "
+            "default entrypoint is never exercised",
+        )
+
+    def test_the_gate_refuses_a_healthcheck_that_proves_nothing(self):
+        # The gate's verdict IS the HEALTHCHECK, so a degenerate one -- `CMD
+        # true`, or a probe aimed at a port nothing serves -- turns the whole
+        # gate green with no evidence behind it.
+        self.assertIn(
+            ".Config.Healthcheck.Test",
+            self.body,
+            "smoke-image.sh: the HEALTHCHECK is checked for existence only, "
+            "never for being a real probe",
+        )
+        self.assertRegex(
+            self.body,
+            r"/health",
+            "smoke-image.sh: nothing pins the HEALTHCHECK to the health endpoint",
+        )
 
 
 if __name__ == "__main__":
