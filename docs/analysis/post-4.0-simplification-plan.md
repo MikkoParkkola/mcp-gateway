@@ -13,11 +13,38 @@ Each pass below is one PR. They are ordered so that no two passes touch the same
 file, which is what lets them run concurrently without the criteria-ledger
 conflict that has cost this release repeatedly.
 
-## Ordering constraint
+## The governing target: no source file over 800 lines
 
-`src/gateway/meta_mcp/invoke.rs` is the file every branch conflicts in. **T2a
-must not start while any other PR touching `invoke.rs` is open.** Everything
-else can run in parallel.
+This is a definition-of-done criterion, and it governs a **file**, not a change.
+The 4.0 DoD check read it the other way — as a ceiling on diff size — and
+recorded §2 Code Quality as `N/A at branch scope`
+(`docs/requirements/RELEASE-4.0.0-dod-check.md:356`). Under the per-file
+reading the tree is measurably out of compliance:
+
+| Measure | Count |
+|---|---|
+| Rust files over 800 lines | **91** |
+| …in `src/` | 76 |
+| …in `tests/` | 15 |
+| Lines of excess above the ceiling | **64,284** |
+
+`scripts/dev/check-file-size.py` measures this and gates it in CI. Because 91
+files already exceed the ceiling, the gate **ratchets** off
+`scripts/dev/file-size-baseline.txt`: a listed file may shrink, it may not
+grow, and no file may newly cross 800 lines. Drop a row when the file clears
+the ceiling. Regenerate with `--update` only when deliberately re-baselining.
+
+## Sequencing: splits go last
+
+**Do not start the file splits until every other change is merged.** A split
+moves thousands of lines between files, so it conflicts with every branch that
+touches the same code — and the conflicts are the expensive add/add kind that
+cannot be resolved hunk-by-hunk. Land the behaviour work first, get the branch
+list to zero, then split against a quiet tree.
+
+Within the splits, `src/gateway/meta_mcp/invoke.rs` is the file every branch
+conflicts in: **T2a must not start while any other PR touching `invoke.rs` is
+open.** Everything else can run in parallel.
 
 ## Bottom-up passes — mechanical, ~708 lines
 
@@ -61,6 +88,15 @@ and redemption (`:594`) are a distinct concern from tool invocation and move to
 Follow the precedent already set in the same directory —
 `warmstart.rs` (1,086) and `support.rs` (1,028) are prior extractions from this
 file. Continuing that pattern is cheaper than inventing a decomposition.
+
+**T2c. The other 88 files over the ceiling.** T2a and T2b clear the two worst
+offenders, which is 9,198 of the 64,284 excess lines — 14%. The rest is a
+long tail: the next ten files are 2,000–3,986 lines each and most are test
+modules (`meta_mcp/tests.rs` 5,986, `router/tests.rs` 3,739,
+`config_reload/tests.rs` 2,983, `transport/http/tests.rs` 2,854). Test modules
+split cheaply along the behaviour they cover and carry no API risk, so take
+them first — they are the largest share of the excess at the lowest cost per
+line. Work the baseline file top-down and delete each row as it clears.
 
 ## Dropped, recorded so nobody re-derives them
 

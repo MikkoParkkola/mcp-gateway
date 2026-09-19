@@ -363,6 +363,18 @@ jobs:
       - name: Run CWE-532 leak lint
         run: python3 scripts/dev/cwe532-leak-lint.py src crates
 
+  file-size-ceiling:
+    name: File-size ceiling (800 lines)
+    # The ceiling governs a file, not a change. 91 files already exceed it, so
+    # the gate ratchets off a recorded baseline: a listed file may shrink,
+    # never grow, and no file may newly cross 800 lines. Splitting the existing
+    # offenders is sequenced after the release to avoid mass merge conflicts.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the 800-line ceiling
+        run: python3 scripts/dev/check-file-size.py
+
   control-drift-probes:
     name: Control-drift probes (NFR.SEC.7)
     # CI cannot detect drift — there is no listening install here, and by
