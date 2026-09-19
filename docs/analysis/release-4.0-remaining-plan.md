@@ -9,7 +9,7 @@ and how far along it is.
 
 Three numbers, reported every tick. Nothing else is progress.
 
-- **Operator steps: 10 / 37 done** (2 of the 37 are operator-gated, see below)
+- **Operator steps: 12 / 37 done** (2 of the 37 are operator-gated, see below)
 - **Blocking release criteria: 2** — `NFR.SEC.7` and `NFR.PKG.1`, both
   operator-gated. Nothing in the tree closes either one.
 - **Rows open but not blocking: 1** — `NFR.PERF.1`, where ruling 69 accepted
@@ -81,7 +81,7 @@ Fully parallel with everything. Runs as subagents.
 
 | # | Step | State |
 |---|---|---|
-| D1 | Multi-user gap list at source: what many-users/one-gateway/per-user-credentials needs that the tree lacks (ruling 72) | open |
+| D1 | Multi-user gap list at source: what many-users/one-gateway/per-user-credentials needs that the tree lacks (ruling 72) | in flight — landing in `docs/internal/analysis/multi-user-gap.md` |
 | D2 | Size that gap and bring the operator the real number | open |
 | D3 | Enumerate the untested conformance cells | **done** — see below |
 | D4 | Assert `tools/list` order determinism (`MIK-7272.ORDER.1`) instead of arguing it structurally | **done** — `ac_order_1_one_unchanged_gateway_repeats_the_same_tool_sequence`, ledger row off *(structural)* |
@@ -112,7 +112,7 @@ rather than carried.
 | # | Step | State |
 |---|---|---|
 | E1 | Apply ruling 69 to the `NFR.PERF.1` row: residual accepted, carrier named, row non-blocking | **done** — verified at source, blocking cell reads `no` |
-| E2 | Release-note sentence stating the performance claim is not end-to-end | open |
+| E2 | Release-note sentence stating the performance claim is not end-to-end | **done** — a note under the `[4.0.0]` heading in `CHANGELOG.md`: component benchmark, no P50 or P99, worst shared case +6.07% |
 | E3 | Sync every Linear ticket to this plan, content and status | **done** — `MIK-7265`, `MIK-7481`, `MIK-7272` and `MIK-7212` carry the current state; `MIK-7212` moved back to In Progress |
 | E4 | `NFR.PKG.1` — operator-gated, see decisions | open |
 | E5 | `NFR.SEC.7` — operator-gated, see decisions | open |
@@ -127,7 +127,7 @@ that is still moving is a check of nothing.
 | F1 | Run the `/!:improve` cycle over the landed 4.0.0 code | open |
 | F2 | Land what it finds | open |
 | F3 | Resolve the stalled `v4-merge` worktree (7 conflicted files, branch `merge/v4-integration-main`) | open |
-| F4 | Home the rescued sole-copy patches, then prune worktrees to zero | open |
+| F4 | Home the rescued sole-copy patches, then prune worktrees to zero | part done — 3 worktrees retired, 14 GB reclaimed (43 GB free). `695e66bd` was a sole copy, pushed to `origin/rescue/meta-mcp-surface-republish` and then found fully superseded. 7 remain: `v4-merge`, 2 locked, 2 unmerged-and-dirty, 1 test-strength, 1 root |
 | F5 | Final definition-of-done check: section verdicts plus the acceptance-criteria table | open |
 
 ## Two decisions that are the operator's, not mine
@@ -178,7 +178,7 @@ surface compaction.
 
 | # | Step | State |
 |---|---|---|
-| G1 | Order the 92 files by excess and by how many open branches touch each | open |
+| G1 | Order the 92 files by excess and by how many open branches touch each | in flight — landing in `docs/internal/analysis/file-size-ceiling-order.md` |
 | G2 | Bottom-up mechanical work first (~708 lines; B1 alone is 72% of it and is a half-finished test-fixture migration, not a new abstraction) | open |
 | G3 | Retry-loop consolidation — four loops become two | open |
 | G4 | The splits themselves, fanned out one file per agent | open |
