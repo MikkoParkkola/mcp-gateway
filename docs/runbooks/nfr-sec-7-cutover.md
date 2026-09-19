@@ -58,6 +58,28 @@ a stopgap that shrinks the gap from "predates the guard entirely" to "behind on 
 security path", and B as the close. Which to deploy is the operator's call; the procedure
 below is identical either way.
 
+## No guarded build has ever run in this environment
+
+The row says a build carrying the guard "has been probed twice". Both probes are real and
+both exit 0 — and neither touched this machine's install. Checked at source, because a
+status row is not evidence about what ran:
+
+| Probe | What it actually was | Evidence |
+|---|---|---|
+| 2026-09-13, port 39411 | a release binary of `bd1adbb4` **on spark** — a Linux aarch64 host — left over from the performance benchmark run, started on a free loopback port in the spark worktree | `docs/release/verify/sec7-drift-probe-2026-09-13.md`; `docs/release/v4.0.0-burndown-tracker.md:190-202` |
+| 2026-09-11, port 39466 | "a gateway built from the release tree", machine unstated | **no preserved transcript.** `docs/release/verify/` holds no 2026-09-11 file, the commit that landed the checker (`9a3d9cbe`) records no run, and the design doc records none. Ledger prose only |
+
+So: no artifact has ever been installed into `~/.local/libexec/mcp-gateway/<version>/`,
+started by `start-mcp-gateway`, given the real `servers.yaml` and secrets, pointed at the
+real `~/.mcp-gateway/`, or supervised by `launchd`. **The cutover is simultaneously the
+first deployment test of the new build in the operator's environment.** That is true of
+option A as well — the install directories are `3.3.2`, `3.4.0`, `3.4.0`, so v3.5.1 has
+never run here either.
+
+Two consequences, both built into the procedure below: the smoke in step 3 runs through
+the real launcher so that credentials, config parsing and the guard are exercised before
+any interruption, and the rollback is rehearsed in step 4 rather than assumed.
+
 ## Procedure
 
 ```sh
@@ -88,7 +110,12 @@ MCP_GATEWAY_CONFIG_DIR=$(mktemp -d) MCP_GATEWAY_PORT=39412 \
 python3 scripts/dev/check-control-drift.py http://127.0.0.1:39412/mcp   # must exit 0
 kill $SMOKE
 
-# 4. Flip the pointer (NOT $EDITOR on the symlink — that rewrites $OLD and destroys rollback)
+# 4. Rehearse the rollback, then flip. launchd reads the symlink only at exec time,
+#    so flipping it while the service runs changes nothing until step 5 — rehearse freely.
+#    NOT $EDITOR on the symlink: that rewrites $OLD and destroys the rollback target.
+ln -sfn ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway ~/.local/bin/start-mcp-gateway
+ln -sfn ~/.local/libexec/mcp-gateway/$OLD/start-mcp-gateway ~/.local/bin/start-mcp-gateway
+readlink ~/.local/bin/start-mcp-gateway   # must name $OLD: the rollback command works
 ln -sfn ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway ~/.local/bin/start-mcp-gateway
 
 # 5. Restart under launchd — this interrupts every connected MCP client
@@ -97,10 +124,20 @@ launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway
 # 6. Watch for a restart loop for ~30s (KeepAlive Crashed + ThrottleInterval 10)
 tail -f ~/.claude/logs/mcp-gateway.error.log    # repeating startup banner => roll back
 
-# 7. Grading evidence
+# 7. Grading evidence, then the three things the drift check cannot see
 python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp
-curl -s http://127.0.0.1:39401/health           # version = $NEW, all_healthy true, count 32
+xh -b --ignore-stdin :39401/health              # version = $NEW, all_healthy true, count 32
+xh -b --ignore-stdin POST :39401/mcp Accept:'application/json, text/event-stream' \
+  jsonrpc=2.0 id:=1 method=tools/list params:='{}'   # baseline 2026-09-19: 2 tools,
+                                                     # gateway_search and gateway_execute
 ```
+
+Baselines to compare against, taken from the live install 2026-09-19: `/health` →
+`{"status":"healthy","version":"3.4.0","backends":{"all_healthy":true,"count":32}}`, and
+`tools/list` → exactly `gateway_search`, `gateway_execute`. The tool surface is the
+client-visible contract every connected session depends on; a 4.0 build may expose a
+different meta-tool surface than 3.4.0, and that shows up here and nowhere in the drift
+check.
 
 Optionally repoint the stale sibling symlink `~/.local/bin/mcp-gateway` (still
 `3.4.0-851cc03f`) so a bare CLI `--version` stops disagreeing with what is serving.
@@ -138,6 +175,7 @@ ln -sfn ~/.local/libexec/mcp-gateway/3.4.0-f30539af/start-mcp-gateway ~/.local/b
 launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway
 ```
 
-Valid only because step 2 never writes into the `3.4.0-f30539af` directory. A macOS
-signing rejection shows up in step 3 as `Killed: 9`; `codesign -s - <binary>` clears it,
-and catching it there costs nobody an interruption.
+Valid only because step 2 never writes into the `3.4.0-f30539af` directory, and the first
+line is the exact command already rehearsed in step 4 — the untested part of a rollback is
+the kickstart, not the flip. A macOS signing rejection shows up in step 3 as `Killed: 9`;
+`codesign -s - <binary>` clears it, and catching it there costs nobody an interruption.
