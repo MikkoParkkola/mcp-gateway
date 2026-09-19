@@ -5,7 +5,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Design — an era-gated backend health probe (MIK-7217.OUTBOUND.1, .2)
 
 Status: design, awaiting review. Governs cluster **L** of
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md`. Supersedes nothing.
+`docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md`. Supersedes nothing.
 Prior art it must not re-litigate: `docs/design/2026-08-31-discover-outbound-era-probe.md`,
 which wired the **start-path** era probe (DISCOVER.4/.5). This design is about the
 **recurring** health probe, a different call site with different constraints.

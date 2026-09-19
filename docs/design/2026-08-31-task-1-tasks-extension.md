@@ -14,7 +14,7 @@ Criterion (`docs/requirements/RELEASE-4.0.0-criteria-status.md:160`, status ABSE
 
 ## 0. This note overturns a recorded decision
 
-`docs/requirements/RELEASE-4.0.0-dod-check.md:829-858` records the opposite disposition —
+`docs/internal/requirements/RELEASE-4.0.0-dod-check.md:829-858` records the opposite disposition —
 "4.0.0 does not advertise the tasks extension" — put to the operator, unanswered inside the
 window, and written down as the decision with the sentence "One line overturns it."
 
@@ -577,7 +577,7 @@ it records the shape the spec forbids, so it is rewritten rather than kept or de
 
 ## 9. Documents this change makes untrue
 
-- `docs/requirements/RELEASE-4.0.0-dod-check.md:829-858` — scheduled in §0.
+- `docs/internal/requirements/RELEASE-4.0.0-dod-check.md:829-858` — scheduled in §0.
 - `docs/requirements/RELEASE-4.0.0-criteria-status.md:160` — TASK.1 moves off ABSENT when the
   implementation lands, not when this note lands.
 - `src/protocol/extensions.rs:52-56` — the gap count in the doc comment is wrong (§2), and the

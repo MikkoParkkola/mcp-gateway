@@ -26,7 +26,7 @@ discovery, and MIK-7235/6710 companions, the user wrote:
 > yes, agree. ask me one question at a time if there are some decisions or scoping clarifications needed. otherwise please update docs, plans, tests, etc that would not conflict with the active claude agent's work
 
 The [scope update](RELEASE-4.0.0-scope-update.md) records those approved outcomes.
-The [delivery plan](RELEASE-4.0.0-scope-delivery.md) handles design details and
+The [delivery plan](../internal/requirements/RELEASE-4.0.0-scope-delivery.md) handles design details and
 in-flight ownership without treating ordinary implementation choices as new
 operator approvals.
 
