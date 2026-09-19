@@ -177,18 +177,19 @@ pub trait Transport: Send + Sync {
 /// The entry is meant to live exactly as long as the request does, so the guard
 /// removes it on drop. On the success path the reader has already removed the
 /// entry, making the removal a harmless no-op.
-pub(crate) struct PendingRequestGuard<'a> {
-    pending: &'a DashMap<String, oneshot::Sender<JsonRpcResponse>>,
+pub(crate) struct PendingRequestGuard<'a, V> {
+    pending: &'a DashMap<String, V>,
     key: String,
 }
 
-impl<'a> PendingRequestGuard<'a> {
+impl<'a, V> PendingRequestGuard<'a, V> {
     /// Wrap a `pending` map entry so it is removed when the guard drops.
+    ///
+    /// Generic over the value because stdio keeps two per-request maps that
+    /// need the same cancellation safety: the response channels, and the
+    /// progress registrations a minted token owns.
     #[must_use]
-    pub(crate) fn new(
-        pending: &'a DashMap<String, oneshot::Sender<JsonRpcResponse>>,
-        key: &str,
-    ) -> Self {
+    pub(crate) fn new(pending: &'a DashMap<String, V>, key: &str) -> Self {
         Self {
             pending,
             key: key.to_string(),
@@ -196,7 +197,7 @@ impl<'a> PendingRequestGuard<'a> {
     }
 }
 
-impl Drop for PendingRequestGuard<'_> {
+impl<V> Drop for PendingRequestGuard<'_, V> {
     fn drop(&mut self) {
         self.pending.remove(&self.key);
     }

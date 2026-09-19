@@ -98,10 +98,25 @@ pub struct StdioTransport {
     protocol_version: RwLock<Option<String>>,
     /// Notifications captured for a call that supplied a progress token.
     ///
-    /// Keyed by the token itself, because stdout is one multiplexed stream:
-    /// "which stream it arrived on" cannot separate two calls in flight here,
-    /// so the token the caller supplied is the whole correlation.
-    captured_notifications: dashmap::DashMap<String, Vec<JsonRpcNotification>>,
+    /// Keyed by the token the gateway *minted* for the request, never by the
+    /// one the caller supplied. Stdout is one multiplexed stream, so the token
+    /// is the whole correlation, and a caller-chosen key cannot carry it: two
+    /// callers may pick the same token, one caller may reuse a token across
+    /// calls, and `7` and `"7"` are different tokens that collapse to one
+    /// string. A minted key is unique per request by construction
+    /// (ADR-014 §"Superseded: the gateway never mints a token").
+    captured_notifications: dashmap::DashMap<String, ProgressRegistration>,
+}
+
+/// What one minted progress token owns for the life of its request.
+struct ProgressRegistration {
+    /// The token exactly as the caller sent it, JSON type included.
+    ///
+    /// Held as a `Value`, not a `String`: a caller that sent `7` is owed `7`
+    /// back and not `"7"`, and stringifying here is the aliasing defect the
+    /// minted key exists to remove.
+    caller_token: Value,
+    notifications: Vec<JsonRpcNotification>,
 }
 
 impl StdioTransport {
@@ -428,25 +443,44 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Register a progress token a caller supplied on a request.
+    /// Mint a token for a caller's request and register it, returning the
+    /// token that goes on the wire in place of the caller's own.
     ///
-    /// Until a token is registered nothing carrying it is kept: the gateway
-    /// passes a backend's own token through only when it matches one the caller
-    /// supplied, and never mints one (MIK-7272.SUB.2b, §II.6 option (i)).
+    /// The caller's token is kept beside the registration so the notifications
+    /// can be translated back before they reach the caller, which is what makes
+    /// the substitution invisible from outside the gateway.
     // Registered from `Transport::request` below, before the request is
     // written: the reader task can route a notification back before the write
     // returns, and an unregistered token is dropped.
-    pub(crate) fn register_progress_token(&self, token: &str) {
-        self.captured_notifications
-            .insert(token.to_string(), Vec::new());
+    pub(crate) fn register_progress_token(&self, caller_token: Value) -> String {
+        let minted = format!("gw-{}", uuid::Uuid::new_v4());
+        self.captured_notifications.insert(
+            minted.clone(),
+            ProgressRegistration {
+                caller_token,
+                notifications: Vec::new(),
+            },
+        );
+        minted
     }
 
-    /// Take everything captured for a token, ending its registration.
-    pub(crate) fn take_captured_notifications(&self, token: &str) -> Vec<JsonRpcNotification> {
-        self.captured_notifications
-            .remove(token)
-            .map(|(_, v)| v)
-            .unwrap_or_default()
+    /// Take everything captured for a minted token, ending its registration.
+    ///
+    /// Every notification is translated back to the caller's own token on the
+    /// way out: the minted one is a gateway-internal name and a caller that
+    /// never saw it cannot correlate on it.
+    pub(crate) fn take_captured_notifications(&self, minted: &str) -> Vec<JsonRpcNotification> {
+        let Some((_, registration)) = self.captured_notifications.remove(minted) else {
+            return Vec::new();
+        };
+        registration
+            .notifications
+            .into_iter()
+            .map(|mut notification| {
+                restore_caller_progress_token(&mut notification, &registration.caller_token);
+                notification
+            })
+            .collect()
     }
 
     /// Keep a peer notification for the call that supplied its progress token.
@@ -461,16 +495,20 @@ impl StdioTransport {
         // Note the asymmetry with the outgoing side: a request carries the
         // token under `params._meta`, a `notifications/progress` carries it as
         // a direct member of `params`.
+        // A minted key is `gw-<uuid>` and so never numeric: requiring a JSON
+        // string here rejects a numeric token outright rather than stringifying
+        // it into a collision with a string token of the same digits.
         let token = notification
             .params
             .as_ref()
             .and_then(|p| p.get("progressToken"))
-            .and_then(progress_token_string);
+            .and_then(Value::as_str)
+            .map(str::to_string);
 
         match token.and_then(|t| self.captured_notifications.get_mut(&t)) {
             Some(mut entry) => {
                 debug!(method = %notification.method, "Capturing peer notification for its caller");
-                entry.push(notification);
+                entry.notifications.push(notification);
             }
             None => {
                 debug!(method = %notification.method, "Ignoring peer notification");
@@ -551,34 +589,52 @@ impl StdioTransport {
     }
 }
 
-/// A progress token is a string or a number on the wire; the capture map is
-/// keyed by its string form so both spellings of one token agree.
-fn progress_token_string(token: &Value) -> Option<String> {
-    match token {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        _ => None,
-    }
-}
-
 /// The caller's progress token as an outgoing request carries it.
 ///
 /// Note the asymmetry with `capture_notification`: a request carries the token
 /// under `params._meta`, while an incoming `notifications/progress` carries it
 /// as a direct member of `params`. Reading the wrong shape here leaves the
 /// stdio leg dead while the HTTP one still looks green.
-fn request_progress_token(params: Option<&Value>) -> Option<String> {
+fn request_progress_token(params: Option<&Value>) -> Option<Value> {
     params
         .and_then(|p| p.get("_meta"))
         .and_then(|meta| meta.get("progressToken"))
-        .and_then(progress_token_string)
+        // A progress token is a string or a number on the wire. Anything else
+        // is not a token, and minting for it would hand the backend a
+        // correlation the caller cannot use.
+        .filter(|token| token.is_string() || token.is_number())
+        .cloned()
+}
+
+/// Put the gateway's minted token on an outgoing request in place of the
+/// caller's own.
+///
+/// Only called where `request_progress_token` already found a token, so
+/// `params._meta` is known to be an object; anything else is left alone rather
+/// than fabricated.
+fn set_request_progress_token(params: Option<&mut Value>, minted: &str) {
+    if let Some(Value::Object(params)) = params
+        && let Some(Value::Object(meta)) = params.get_mut("_meta")
+    {
+        meta.insert("progressToken".to_string(), Value::String(minted.to_string()));
+    }
+}
+
+/// Put the caller's own token back on a notification the backend addressed to
+/// the minted one.
+fn restore_caller_progress_token(notification: &mut JsonRpcNotification, caller_token: &Value) {
+    if let Some(Value::Object(params)) = notification.params.as_mut()
+        && let Some(slot) = params.get_mut("progressToken")
+    {
+        *slot = caller_token.clone();
+    }
 }
 
 #[async_trait]
 impl Transport for StdioTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         let id = self.next_id();
-        let request = JsonRpcRequest {
+        let mut request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: id.clone(),
             method: method.to_string(),
@@ -586,12 +642,21 @@ impl Transport for StdioTransport {
         };
 
         // Register before the write: the reader task can route a notification
-        // back before `write_message` returns. Never minted here -- only a
-        // token the caller supplied is honoured (MIK-7272.SUB.2b, option (i)).
-        let progress_token = request_progress_token(request.params.as_ref());
-        if let Some(token) = &progress_token {
-            self.register_progress_token(token);
-        }
+        // back before `write_message` returns, and an unregistered token is
+        // dropped. The token that goes out is the gateway's, not the caller's:
+        // the caller's is restored on the way back (ADR-014).
+        let minted_token = request_progress_token(request.params.as_ref()).map(|caller_token| {
+            let minted = self.register_progress_token(caller_token);
+            set_request_progress_token(request.params.as_mut(), &minted);
+            minted
+        });
+        // Drop the registration on every exit path including cancellation. The
+        // drain below removes it first on the paths that reach it; this covers
+        // the ones that do not, where the entry would otherwise be stranded for
+        // the transport's lifetime.
+        let _progress_cleanup = minted_token
+            .as_ref()
+            .map(|minted| PendingRequestGuard::new(&self.captured_notifications, minted));
 
         let message = serde_json::to_string(&request)?;
         let (tx, rx) = oneshot::channel();
@@ -614,11 +679,10 @@ impl Transport for StdioTransport {
             },
         };
 
-        // Drain on every exit path. `register_progress_token` inserts and only
-        // this drains, so an error return that skipped it would strand the
-        // entry for the transport's lifetime.
-        if let Some(token) = &progress_token {
-            crate::transport::notification_sink::publish(self.take_captured_notifications(token));
+        // Drain on every exit path this code reaches; `_progress_cleanup`
+        // covers the ones it does not.
+        if let Some(minted) = &minted_token {
+            crate::transport::notification_sink::publish(self.take_captured_notifications(minted));
         }
         outcome
     }
@@ -1151,14 +1215,19 @@ done
     #[test]
     fn stdio_captures_a_progress_notification_for_the_call_that_supplied_its_token() {
         let t = make_transport("cat");
-        t.register_progress_token("tok-a");
+        let minted = t.register_progress_token(serde_json::json!("tok-a"));
 
-        t.handle_response(&progress_line("tok-a", 1))
+        t.handle_response(&progress_line(&minted, 1))
             .expect("a notification must not fail the read loop");
 
-        let captured = t.take_captured_notifications("tok-a");
+        let captured = t.take_captured_notifications(&minted);
         assert_eq!(captured.len(), 1, "the notification must be kept");
         assert_eq!(captured[0].method, "notifications/progress");
+        assert_eq!(
+            captured[0].params.as_ref().unwrap()["progressToken"],
+            serde_json::json!("tok-a"),
+            "the caller is owed its own token back, not the minted one"
+        );
     }
 
     /// S-03 over stdio: two calls in flight on the one stdout. The notification
@@ -1166,16 +1235,16 @@ done
     #[test]
     fn stdio_routes_a_progress_notification_to_only_the_call_that_supplied_the_token() {
         let t = make_transport("cat");
-        t.register_progress_token("tok-a");
-        t.register_progress_token("tok-b");
+        let a = t.register_progress_token(serde_json::json!("tok-a"));
+        let b = t.register_progress_token(serde_json::json!("tok-b"));
 
-        t.handle_response(&progress_line("tok-b", 7)).unwrap();
+        t.handle_response(&progress_line(&b, 7)).unwrap();
 
         assert!(
-            t.take_captured_notifications("tok-a").is_empty(),
+            t.take_captured_notifications(&a).is_empty(),
             "the other call in flight must see nothing"
         );
-        assert_eq!(t.take_captured_notifications("tok-b").len(), 1);
+        assert_eq!(t.take_captured_notifications(&b).len(), 1);
     }
 
     /// The production request path reads the token from `params._meta`, which
@@ -1188,15 +1257,24 @@ done
             "_meta": { "progressToken": "tok-live" }
         });
         assert_eq!(
-            request_progress_token(Some(&params)).as_deref(),
-            Some("tok-live")
+            request_progress_token(Some(&params)),
+            Some(serde_json::json!("tok-live"))
         );
-        // A numeric token is the same token.
+        // A numeric token stays numeric: the caller is owed the type it sent,
+        // and stringifying here is what makes `7` and `"7"` collide.
         let numeric = serde_json::json!({ "_meta": { "progressToken": 7 } });
-        assert_eq!(request_progress_token(Some(&numeric)).as_deref(), Some("7"));
+        assert_eq!(
+            request_progress_token(Some(&numeric)),
+            Some(serde_json::json!(7))
+        );
         // No token offered, none invented.
         assert!(request_progress_token(Some(&serde_json::json!({ "name": "t" }))).is_none());
         assert!(request_progress_token(None).is_none());
+        // Neither is a token, so neither earns a registration.
+        let null = serde_json::json!({ "_meta": { "progressToken": null } });
+        assert!(request_progress_token(Some(&null)).is_none());
+        let object = serde_json::json!({ "_meta": { "progressToken": { "a": 1 } } });
+        assert!(request_progress_token(Some(&object)).is_none());
     }
 
     /// S-02 over stdio, end to end through the sink: register as the request
@@ -1208,10 +1286,10 @@ done
         let params = serde_json::json!({ "_meta": { "progressToken": "tok-live" } });
 
         let ((), drained) = crate::transport::notification_sink::collect(async {
-            let token = request_progress_token(Some(&params)).expect("token");
-            t.register_progress_token(&token);
-            t.handle_response(&progress_line("tok-live", 3)).unwrap();
-            crate::transport::notification_sink::publish(t.take_captured_notifications(&token));
+            let caller_token = request_progress_token(Some(&params)).expect("token");
+            let minted = t.register_progress_token(caller_token);
+            t.handle_response(&progress_line(&minted, 3)).unwrap();
+            crate::transport::notification_sink::publish(t.take_captured_notifications(&minted));
         })
         .await;
 
@@ -1226,9 +1304,9 @@ done
         let t = make_transport("cat");
 
         let ((), drained) = crate::transport::notification_sink::collect(async {
-            t.register_progress_token("tok-mine");
+            let mine = t.register_progress_token(serde_json::json!("tok-mine"));
             t.handle_response(&progress_line("tok-stray", 1)).unwrap();
-            crate::transport::notification_sink::publish(t.take_captured_notifications("tok-mine"));
+            crate::transport::notification_sink::publish(t.take_captured_notifications(&mine));
         })
         .await;
 
@@ -1254,7 +1332,7 @@ done
         assert!(result.is_err(), "precondition: the write must fail");
         assert!(drained.is_empty());
         assert!(
-            !t.captured_notifications.contains_key("tok-leak"),
+            t.captured_notifications.is_empty(),
             "the registration must not outlive the failed request"
         );
     }
@@ -1264,12 +1342,93 @@ done
     #[test]
     fn stdio_drops_a_progress_notification_no_caller_asked_for() {
         let t = make_transport("cat");
-        t.register_progress_token("tok-a");
+        let minted = t.register_progress_token(serde_json::json!("tok-a"));
 
         t.handle_response(&progress_line("tok-stray", 3)).unwrap();
 
-        assert!(t.take_captured_notifications("tok-a").is_empty());
+        assert!(t.take_captured_notifications(&minted).is_empty());
         assert!(t.take_captured_notifications("tok-stray").is_empty());
+    }
+
+    /// ADR-014 defect 1: keying on the caller's token stringified `7` and `"7"`
+    /// into one entry, so two calls picking each shape aliased onto whichever
+    /// registered last. A minted key separates them, and the caller that sent a
+    /// number is owed a number back.
+    #[test]
+    fn stdio_keeps_a_numeric_token_apart_from_the_string_of_the_same_digits() {
+        let t = make_transport("cat");
+        let numeric = t.register_progress_token(serde_json::json!(7));
+        let string = t.register_progress_token(serde_json::json!("7"));
+        assert_ne!(numeric, string, "two tokens, two registrations");
+
+        t.handle_response(&progress_line(&numeric, 1)).unwrap();
+
+        let captured = t.take_captured_notifications(&numeric);
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            captured[0].params.as_ref().unwrap()["progressToken"],
+            serde_json::json!(7),
+            "a numeric token must come back numeric"
+        );
+        assert!(
+            t.take_captured_notifications(&string).is_empty(),
+            "the string token names a different call"
+        );
+    }
+
+    /// ADR-014 defect 2: registration was a bare insert on the caller's token,
+    /// so the second of two in-flight calls that chose the same token
+    /// overwrote the first's owner. Nothing stops two callers choosing alike.
+    #[test]
+    fn stdio_keeps_two_calls_that_chose_the_same_token_apart() {
+        let t = make_transport("cat");
+        let first = t.register_progress_token(serde_json::json!("shared"));
+        let second = t.register_progress_token(serde_json::json!("shared"));
+        assert_ne!(first, second);
+
+        t.handle_response(&progress_line(&second, 2)).unwrap();
+
+        assert!(
+            t.take_captured_notifications(&first).is_empty(),
+            "the first call must not receive the second's notification"
+        );
+        assert_eq!(t.take_captured_notifications(&second).len(), 1);
+    }
+
+    /// ADR-014 defect 3: a caller reusing one token across sequential calls had
+    /// a late notification from the finished call delivered to the live one.
+    /// The minted token retires with its request, so the late frame is a stray.
+    #[test]
+    fn stdio_does_not_deliver_a_late_notification_to_a_call_that_reused_the_token() {
+        let t = make_transport("cat");
+        let first = t.register_progress_token(serde_json::json!("reused"));
+        let _ = t.take_captured_notifications(&first); // the first call returns
+        let second = t.register_progress_token(serde_json::json!("reused"));
+
+        t.handle_response(&progress_line(&first, 9)).unwrap();
+
+        assert!(
+            t.take_captured_notifications(&second).is_empty(),
+            "a notification for the finished call must not land in the next one"
+        );
+    }
+
+    /// The substitution is what makes the minted key reachable: the backend
+    /// only ever sees the gateway's token, so that is what comes back on
+    /// `notifications/progress`.
+    #[test]
+    fn stdio_puts_the_minted_token_on_the_wire_in_place_of_the_callers() {
+        let mut params = Some(serde_json::json!({
+            "name": "t",
+            "_meta": { "progressToken": 7, "other": "kept" }
+        }));
+
+        set_request_progress_token(params.as_mut(), "gw-test");
+
+        let params = params.unwrap();
+        assert_eq!(params["_meta"]["progressToken"], serde_json::json!("gw-test"));
+        assert_eq!(params["_meta"]["other"], serde_json::json!("kept"));
+        assert_eq!(params["name"], serde_json::json!("t"));
     }
 }
 
