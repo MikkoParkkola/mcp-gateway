@@ -897,6 +897,33 @@ async fn meta_mcp_dispatch(
 
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
+    // The same refusal, reached by a request that declared no era. The check
+    // below is inside the `Modern` arm, so a header naming a revision this
+    // build serves in neither era — `1999-01-01`, or any spelling older than
+    // the first stateless one — classified `Legacy` and took the success path
+    // with the header unexamined: the client was answered under a revision it
+    // had not named and was never told why.
+    //
+    // Only when the request is NOT modern. A modern request states its revision
+    // in the body, and the header is then evidence to compare against it, not a
+    // source to act on: pre-empting the mirrored-header check here would refuse
+    // on the header alone, which is the trust inversion that check exists to
+    // close (`protocol::headers`).
+    if !is_modern
+        && let Some(version) = declared_version
+        && crate::protocol::meta::served_revision(version).is_none()
+    {
+        return build_response(
+            unsupported_version_error(
+                id.clone(),
+                version,
+                state.live_config.running().server.modern_protocol,
+            ),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
     if let crate::protocol::meta::RequestShape::Modern(ref fields) = shape {
         // A version we cannot serve statelessly. The client is told which ones
         // we can, so it can retry on a shared revision rather than guess.

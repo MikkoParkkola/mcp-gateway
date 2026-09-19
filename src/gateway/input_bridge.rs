@@ -238,11 +238,27 @@ pub enum BridgeError {
     ///
     /// Carries the reason as text rather than the error itself: this type is
     /// `Clone + PartialEq` so tests can assert on it, and `crate::Error` is
-    /// neither.
+    /// neither. `dispatch` survives that flattening, because whether the round
+    /// reached the backend decides whether its idempotency key may be reused.
     BackendFailed {
         /// What went wrong, as reported by the invoker.
         message: String,
+        /// Whether the backend could have acted on this round.
+        dispatch: Dispatch,
     },
+}
+
+/// How far a bridged round got before it failed.
+///
+/// A refusal raised before the request left the gateway — no backend, no tool,
+/// an open circuit, a transport that never connected — proves the backend did
+/// not act. Anything else may have acted and been lost on the way back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dispatch {
+    /// The request provably never reached the backend.
+    NeverReached,
+    /// The backend may have received the request and acted on it.
+    MayHaveActed,
 }
 
 /// The bounds on what a backend can make the gateway ask a client.

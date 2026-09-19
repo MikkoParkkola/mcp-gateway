@@ -3655,6 +3655,87 @@ async fn ac_order_2_a_modern_caller_is_refused_gateway_set_profile() {
     );
 }
 
+/// A legacy `tools/list` with the version header a test chooses, and no
+/// protocol metadata in the body — the shape that classifies `Legacy`.
+///
+/// The body is deliberately metadata-free: with a `_meta` declaration the
+/// request classifies `Modern` and is answered by the refusal that already
+/// existed, so the row would pass whether or not the legacy path was fixed.
+async fn post_legacy_with_version(version: Option<&str>) -> (StatusCode, Value) {
+    let (state, _store) = test_router_app_state().await;
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json");
+    if let Some(version) = version {
+        builder = builder.header("mcp-protocol-version", version);
+    }
+    let request = builder
+        .body(axum::body::Body::from(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string(),
+        ))
+        .unwrap();
+    let response = create_router(state).oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+/// gh#540 — a revision in neither `SUPPORTED_VERSIONS` nor `MODERN_VERSIONS`
+/// is refused, whatever the body declares.
+///
+/// The refusal lived inside the `RequestShape::Modern` arm, so only a request
+/// that declared the modern era could reach it. `1999-01-01` is revision-shaped
+/// and older than the first stateless revision, so it declares no era, carries
+/// no `_meta`, classifies `Legacy`, and was served normally — a client naming a
+/// revision this gateway does not implement got a success answer shaped by a
+/// different one.
+#[tokio::test]
+async fn gh540_an_unserved_version_header_is_refused_on_the_legacy_path() {
+    let (status, body) = post_legacy_with_version(Some("1999-01-01")).await;
+
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "an unsupported protocol version must be refused: {body}"
+    );
+    // The code the modern path returns for the same fault. Asserted rather than
+    // the message, and rather than the status alone: every other refusal on
+    // this route is also a 400, so the status by itself is satisfied by an
+    // unrelated rejection.
+    assert_eq!(
+        body["error"]["code"],
+        json!(crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION),
+        "both eras must refuse an unserved revision the same way: {body}"
+    );
+}
+
+/// gh#540 — a supported legacy revision is unaffected.
+#[tokio::test]
+async fn gh540_a_supported_legacy_version_header_is_still_served() {
+    let (status, body) = post_legacy_with_version(Some("2025-11-25")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // The success is pinned, not the absence of a refusal: a 200 carrying a
+    // JSON-RPC error would satisfy a status-only assertion.
+    assert!(
+        body["result"]["tools"].is_array(),
+        "a negotiable revision must still be served: {body}"
+    );
+}
+
+/// gh#540 — absence is not an unsupported value.
+#[tokio::test]
+async fn gh540_a_missing_version_header_is_still_served() {
+    let (status, body) = post_legacy_with_version(None).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["result"]["tools"].is_array(),
+        "a request declaring no revision must still be served: {body}"
+    );
+}
+
 mod openwebui_adapter;
 
 /// C5 route parity (MIK-6746): agent-identity enforcement must not depend on

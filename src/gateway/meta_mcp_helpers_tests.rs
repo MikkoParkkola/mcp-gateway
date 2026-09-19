@@ -310,6 +310,15 @@ fn levenshtein_completely_different_strings() {
     assert_eq!(levenshtein("abc", "xyz"), 3);
 }
 
+#[test]
+fn levenshtein_non_ascii_char_vs_byte_length() {
+    // "café" has 4 chars but 5 bytes (é is 2 bytes in UTF-8). The buggy
+    // version sized and indexed the final row by `b.len()` (bytes) while
+    // the inner loop only ever wrote up to `b.chars().count()` (chars),
+    // so it returned a stale cell the algorithm never computed for `b`.
+    assert_eq!(levenshtein("cafe", "café"), 1);
+}
+
 // ── did_you_mean ────────────────────────────────────────────────────
 
 #[test]
