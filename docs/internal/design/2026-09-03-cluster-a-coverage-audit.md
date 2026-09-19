@@ -21,7 +21,7 @@ two rules agree. A first pass read `7a` and `7b` as carrying a conditional flag,
 quote an `rg` pattern containing escaped pipes (`"to_legacy_client\ | retry_params\ |
 …"`, `docs/requirements/RELEASE-4.0.0-criteria-status.md:123-124`), which shifts the
 column count by two. Both rows read `blocking = yes`, and the MRTR.7 parent row in
-`docs/requirements/audit-notes/criteria-mrtr.md:9` reads `Yes` independently. There is
+`docs/internal/requirements/audit-notes/criteria-mrtr.md:9` reads `Yes` independently. There is
 no conditional: all seventeen are unconditionally blocking.
 
 ## The matrix
@@ -192,7 +192,7 @@ at the level the plan assigns.
 
 Correction to the first version of this section, which called MRTR.9 "ABSENT
 with no mechanism anywhere". That was read off a stale
-`docs/requirements/audit-notes/criteria-mrtr.md`, and it is false in both
+`docs/internal/requirements/audit-notes/criteria-mrtr.md`, and it is false in both
 halves. `MIK-7212.MRTR.9` — the per-*type* refusal — is **MET**, closed by
 `e1713f64`, with six protocol cases and three end-to-end cases behind it. Six
 `ac_mrtr_9_*` tests exist at `tests/mik_7212_acs.rs:1555-1670`.

@@ -67,7 +67,7 @@ deletable.
 Of the 67 remaining, 44 have no pull request and carry commits absent from the
 release line, and 17 have a closed pull request and carry between one and seven
 such commits. These are unmerged work, not stale refs. Deleting them is a
-decision about content, so the next step is `docs/release/branch-criteria-survey.md`,
+decision about content, so the next step is `docs/internal/release/branch-criteria-survey.md`,
 which asks per branch whether it carries code satisfying a pending v4.0.0
 criterion. A branch is only a cleanup candidate once that question has an answer.
 

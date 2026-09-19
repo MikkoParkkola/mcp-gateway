@@ -1,6 +1,6 @@
 # PR #473 meta-mcp blockers — fix log
 
-Source report: `docs/release/verify/pr473-metamcp.md`, `## Blocking a 4.0.0 release`
+Source report: `docs/internal/release/verify/pr473-metamcp.md`, `## Blocking a 4.0.0 release`
 (BLOCK-1..BLOCK-5). Working sequentially, one commit per finding. This file is
 appended to after each finding so partial progress survives a kill.
 
@@ -561,7 +561,7 @@ Two claims recorded earlier in this file are corrected here.
 
 The section above reads the absence of `MIK-7212.WIRE.*` from
 `docs/requirements/RELEASE-4.0.0-criteria-status.md` as an untracked gap. It is
-not one. `docs/release/2026-09-08-team-lead-rulings.md` rules on these criteria
+not one. `docs/internal/release/2026-09-08-team-lead-rulings.md` rules on these criteria
 as live work owned by the `bridge-mrtr7` lane: R1 and R8 both decide `WIRE.5`
 (the fixture stands; per-round gating is taken, the criterion is not narrowed),
 R8 withdraws the four-dispatch ceiling clause on `WIRE.13`, and R22 records that

@@ -139,7 +139,7 @@ Both request-carrying rows deserialize the backend's object **whole**. An earlie
 elicitation fields, `message` and `requestedSchema`, and built the outgoing params from those alone.
 That is not a narrowing but a change of question. The revision's elicitation request carries a
 `mode`, and a `mode` of `url` sends the user to a URL the request names instead of rendering a form
-(`docs/issue-73-impl-plan.md:11`, `:77`). Copying `message` and `requestedSchema` out of such a
+(`docs/internal/issue-73-impl-plan.md:11`, `:77`). Copying `message` and `requestedSchema` out of such a
 request and dropping `mode` and `url` produces a well-formed *form* prompt asking a person to type,
 into a form, whatever the backend meant them to do at a URL. The type in the tree makes that the
 default outcome rather than a mistake someone has to make: `ElicitationCreateParams`

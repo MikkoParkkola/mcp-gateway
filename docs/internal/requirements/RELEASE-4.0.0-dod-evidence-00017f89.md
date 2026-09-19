@@ -1,7 +1,7 @@
 ## v4.0.0 DoD evidence — measured at `00017f89`
 
 CI is green on the pushed tip. This records the measurement, and which rows of
-`docs/requirements/RELEASE-4.0.0-dod-check.md` it supersedes. That document is a point-in-time
+`docs/internal/requirements/RELEASE-4.0.0-dod-check.md` it supersedes. That document is a point-in-time
 record taken at `c3083368` and is not edited retroactively.
 
 ### Suite

@@ -593,12 +593,12 @@ Disposition of every finding, in the plan's own commits (`0cdd280b`, `a0e88234`,
 - Operator config reference — **no delta.** The `idempotency:` section went with Change B.
 - Release notes — **no delta.** R4's behaviour change belongs to whichever change activates the
   cache, and that is SUB.4.
-- `docs/requirements/RELEASE-4.0.0-blocking-rollup.md:88` — cluster C names SUB.4 without the
+- `docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md:88` — cluster C names SUB.4 without the
   activation prerequisite this change hands it. **Updated by this change**: a cluster-C note
   records the caller-binding prerequisite (`:96`), with this document as provenance. That note, not the
   team-lead message, is the durable artifact — a message id resolves to a transcript, and the next
   SUB.4 implementer greps the repository.
-- `docs/requirements/RELEASE-4.0.0-execution-plan.md:206` — step 8 orders SUB.4's activation.
+- `docs/internal/requirements/RELEASE-4.0.0-execution-plan.md:206` — step 8 orders SUB.4's activation.
   **No delta.** The prerequisite constrains what step 8 must contain, not where it sits.
 - `docs/design/2026-08-30-shared-continuation-state.md:116` is cited by `route`'s doc comment and
   stays true: nothing here touches the no-affinity bargain.
@@ -665,8 +665,8 @@ will re-read.
 
 Transfer target liveness, checked rather than assumed: SUB.4 is `proposed, revision 4, no code`,
 but it is not stalled — it is a named blocker in cluster C of
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md:26` and holds a position in step 8 of
-`docs/requirements/RELEASE-4.0.0-execution-plan.md:206`. A criterion moved to an unowned document
+`docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md:26` and holds a position in step 8 of
+`docs/internal/requirements/RELEASE-4.0.0-execution-plan.md:206`. A criterion moved to an unowned document
 would be a narrowing of scope needing the requester's recorded agreement; a criterion moved to a
 release blocker with a plan position is a re-assignment. That distinction is why the check was
 run.

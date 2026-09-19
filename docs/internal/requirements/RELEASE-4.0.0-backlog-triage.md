@@ -75,7 +75,7 @@ a wrong answer there routes traffic at a gateway that cannot serve it, which
 is an availability defect rather than polish. MIK-7291 is the narrowed one: it rides along as a
 deletion only; wiring `SessionLifecycle` on a path that removes sessions would
 be new work. **That deletion clause was withdrawn on 2026-09-08**
-(`docs/release/2026-09-08-team-lead-rulings.md` §R3, ruling `8bbca3eb`): the
+(`docs/internal/release/2026-09-08-team-lead-rulings.md` §R3, ruling `8bbca3eb`): the
 2026-08-29 narrowing binds the *ticket*, not the `CONTROL.4` criterion. "Dead
 code" described the code's state — nothing calls `register`/`track`/`reap` —
 and said nothing about whether the requirement is dead. The requirement is live

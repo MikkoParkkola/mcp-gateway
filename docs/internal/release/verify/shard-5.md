@@ -42,7 +42,7 @@ No SHA in this range is unresolvable, and none points off-branch.
 `git status --porcelain` over every path cited in this range returns exactly two cited files
 dirty, both documents, neither source:
 
-- `docs/requirements/RELEASE-4.0.0-blocking-rollup.md` — cited by NFR.COMPAT.1 (`:18-47` cited
+- `docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md` — cited by NFR.COMPAT.1 (`:18-47` cited
   by a peer row) and by NFR.SEC.6. A peer session holds uncommitted edits, so any line-anchored
   citation into it is ambiguous and is reported as such below rather than as MATCH or DRIFT.
 - `docs/requirements/RELEASE-4.0.0-criteria-status.md` — the ledger itself.

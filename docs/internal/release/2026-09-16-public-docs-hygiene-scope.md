@@ -60,7 +60,7 @@ published design record.
 
 ## Three smaller findings
 
-- `docs/release/v4.0.0-burndown-tracker.md` is the only tracked doc using
+- `docs/internal/release/v4.0.0-burndown-tracker.md` is the only tracked doc using
   `ARR`/`MRR` as words.
 - `docs/evaluations/AP2_AND_GALILEO_EVALUATION.md` is the only tracked doc
   carrying money-per-year figures.

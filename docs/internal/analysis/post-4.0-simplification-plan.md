@@ -18,7 +18,7 @@ conflict that has cost this release repeatedly.
 This is a definition-of-done criterion, and it governs a **file**, not a change.
 The 4.0 DoD check read it the other way — as a ceiling on diff size — and
 recorded §2 Code Quality as `N/A at branch scope`
-(`docs/requirements/RELEASE-4.0.0-dod-check.md:356`). Under the per-file
+(`docs/internal/requirements/RELEASE-4.0.0-dod-check.md:356`). Under the per-file
 reading the tree is measurably out of compliance:
 
 | Measure | Count |

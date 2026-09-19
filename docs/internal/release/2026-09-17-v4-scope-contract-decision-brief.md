@@ -163,7 +163,7 @@ either way, which the docket already recommends accepting
 else in the row is open" is false.** Two conjuncts are absent:
 
 - **C5, current critical-path coverage.** The only artifact is
-  `docs/design/2026-09-03-cluster-a-coverage-audit.md`, which scopes itself out
+  `docs/internal/design/2026-09-03-cluster-a-coverage-audit.md`, which scopes itself out
   at `:3` ("Audit only. It writes no test, decides no gap") and pins its
   observation to `9b0643d4` at `:7`. No coverage or mutation job exists in CI.
 - **C6, mutation evidence grading the final integration revision.** Absent, and

@@ -726,7 +726,7 @@ The question was put as "does the revision join `SUPPORTED_VERSIONS`", and that 
 operator's to answer. Checked at the specification the same day: the 2026-07-28 lifecycle scopes
 `initialize` to "`2025-11-25` and earlier", so the constant stays legacy-only whatever the operator
 rules, and what the ruling settles is the `server.modern_protocol` default alone. The gate is
-defined once, in `docs/requirements/RELEASE-4.0.0-blocking-rollup.md` under "The two gates that are
+defined once, in `docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md` under "The two gates that are
 not rows".
 
 What it changes: cluster A moves onto the critical path for the whole release rather than being the

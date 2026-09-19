@@ -15,7 +15,7 @@ The standing counts are not repeated here. `docs/requirements/RELEASE-4.0.0-crit
 carries them, `scripts/release/count-release-criteria.py --check` verifies its headline against
 its own tables, and nothing checks a copy. Every earlier revision of this file carried a count
 that drifted from the ledger within days, which is the argument against carrying one at all.
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md` groups the blocking rows by the work they
+`docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md` groups the blocking rows by the work they
 share, and derives that grouping from the ledger too.
 
 ## The blocking count is a floor, and what remains unverified is named
@@ -505,7 +505,7 @@ handshake to "`2025-11-25` and earlier"), so a modern client never negotiates th
 constant must stay as it is.
 
 The gate is the `server.modern_protocol` default, defined once in
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md` under "The two gates that are not rows",
+`docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md` under "The two gates that are not rows",
 together with the specification citation that settles the constant. That paragraph is the
 definition; this one must not restate it.
 

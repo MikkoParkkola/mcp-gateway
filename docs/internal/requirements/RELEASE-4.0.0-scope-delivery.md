@@ -1,8 +1,8 @@
 # Approved scope delivery plan
 
-Read [requirements](RELEASE-4.0.0-scope-update.md),
-[decisions](RELEASE-4.0.0-scope-decisions-2026-09-06.md) and
-[tests](RELEASE-4.0.0-scope-tests.md) together. Verdicts belong only in
+Read [requirements](../../requirements/RELEASE-4.0.0-scope-update.md),
+[decisions](../../requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md) and
+[tests](../../requirements/RELEASE-4.0.0-scope-tests.md) together. Verdicts belong only in
 `RELEASE-4.0.0-scope-status.json`; do not copy a changing total into this plan.
 
 [Local validation evidence](../release/v4.0.0-scope-contract-validation.md)

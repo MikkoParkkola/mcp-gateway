@@ -639,7 +639,7 @@ the branch landed — which is after the moment the measurement is useful.
 Two rules cannot both be obeyed, so one of them was wrong. It was mine.
 
 **R14's trigger now reads: no UNREGISTERED red.** A lane landing a deliberately
-red target registers it, in the same commit, in `docs/release/expected-red.md`:
+red target registers it, in the same commit, in `docs/internal/release/expected-red.md`:
 the target name, the criterion it belongs to, whether it is compile-red or
 assert-red, and the commit that introduced it. The trigger is satisfied when every
 red in strict CI appears in that register and `MRTR.7a/7b` are MET.

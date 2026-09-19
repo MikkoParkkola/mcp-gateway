@@ -58,7 +58,7 @@ before this shard is treated as fully closed.
 - `.gap-brief.md` — instructions for a worktree-spawned gap-closing agent.
 
 `rg` across the tree confirms nothing in `src/`, build scripts, or tests
-reads any of the four — the only references are `docs/release/v4.0.0-readiness-plan.md:89-90`
+reads any of the four — the only references are `docs/internal/release/v4.0.0-readiness-plan.md:89-90`
 (which itself names this exact cleanup as "Gap 6 — file hygiene", owned by
 this shard) and `CODEX-TO-CLAUDE-COORDINATION.md:27` (a sibling scratch file,
 also untracked, referencing the fourth by name). Verdict: none of the four

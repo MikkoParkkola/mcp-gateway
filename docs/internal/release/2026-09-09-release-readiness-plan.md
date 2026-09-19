@@ -177,7 +177,7 @@ forwarder is at `src/gateway/proxy.rs:274` exactly as the row cites, and the
 module comment the row quotes -- "sessions, so *every* modern destructive call
 would take that branch" -- is at `src/gateway/destructive_confirmation.rs:96`,
 not the `:83-84` the row gives. The substance holds; only the line anchor drifted. There is a second, related defect recorded in
-`docs/release/verify/metamcp-blockers-fixes.md`: `for_modern()` selects a policy
+`docs/internal/release/verify/metamcp-blockers-fixes.md`: `for_modern()` selects a policy
 that no live branch reads, its sole consumer sits inside the `Era::Legacy` arm
 (`src/gateway/router/handlers.rs:1378-1382,1449`), and the doc comment on
 `src/gateway/destructive_confirmation.rs:31` still states modern clients are
@@ -190,7 +190,7 @@ with the criterion and they differ in what they claim about intent.
 ## What is NOT a gap
 
 `MIK-7212.WIRE.1` through `.13` do not appear in the ledger, and that is correct
-rather than an oversight. `docs/release/2026-09-08-team-lead-rulings.md` rules on
+rather than an oversight. `docs/internal/release/2026-09-08-team-lead-rulings.md` rules on
 them as live work owned by the `bridge-mrtr7` lane (R1, R8, R8a, R22), and R8
 records a design event that moves what `WIRE.5` asserts and reopens the earlier
 review phases. Criteria whose design is still moving are not promoted. The five

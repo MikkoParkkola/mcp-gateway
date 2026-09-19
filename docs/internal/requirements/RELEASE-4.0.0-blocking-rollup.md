@@ -634,7 +634,7 @@ and watching them arrive untouched. Reading it as everything the gateway *publis
 gateway must start inspecting and refusing a third party's schema, which stops a backend being
 routable — a product decision about what we refuse to carry. Reading it as what the gateway
 *authors* leaves the forwarding gap as its own row. **Answered 2026-09-08, ruling `R6`**
-(`docs/release/2026-09-08-team-lead-rulings.md:103`): **(c)**, and the meta-validity half is
+(`docs/internal/release/2026-09-08-team-lead-rulings.md:103`): **(c)**, and the meta-validity half is
 refused on purpose — a validator on the trust path of every emitted descriptor means promoting
 `jsonschema` from dev-dependency to runtime, declined under `D30`. The forwarding gap is closed
 without the product decision this paragraph feared: the gateway INSPECTS what it forwards and
@@ -1500,7 +1500,7 @@ terms; improvement 1 strengthens a test that currently leans on a sibling row.
 
 ### Reviewer availability has swapped since §12 of the dod-check
 
-`docs/requirements/RELEASE-4.0.0-dod-check.md` §12 records the grok leg as dead
+`docs/internal/requirements/RELEASE-4.0.0-dod-check.md` §12 records the grok leg as dead
 (`402`, Grok Build balance exhausted). That is **stale**. As of this date grok runs and returns
 a verdict, and `gpt-review` is the leg that is down: it exits 0 with reviewer-shaped preamble and
 no verdict, the tail reading `You've hit your usage limit … try again at Sep 15th, 2026`. Exit 0
@@ -1537,7 +1537,7 @@ costs one command. The dod-check's 14-failure row is stale in this respect too.
 
 ### Which dod-check rows are stale at this head
 
-`docs/requirements/RELEASE-4.0.0-dod-check.md` is a point-in-time record measured at `c3083368`
+`docs/internal/requirements/RELEASE-4.0.0-dod-check.md` is a point-in-time record measured at `c3083368`
 and is not edited retroactively. At this head the following rows no longer describe the tree:
 
 - **§12 (reviewer legs)** — inverted, as above: grok alive, gpt down until 2026-09-15.

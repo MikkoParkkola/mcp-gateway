@@ -48,7 +48,7 @@ Commit scope tags (`feat(mrtr)`, `test(gh475)`, `docs(design)`) are the join key
 An increment whose implementation landed under an untagged or differently tagged
 subject will under-report; those cells are marked accordingly rather than guessed.
 
-Review verdicts follow `docs/release/v4.0.0-merge-queue-state.md` §"Review verdicts
+Review verdicts follow `docs/internal/release/v4.0.0-merge-queue-state.md` §"Review verdicts
 (authority: run file + process exit status)". Verdict authority is a labelled run
 file plus its process exit status. Timestamp attribution against the review ledger
 was tried, was wrong, and has been withdrawn — see Gap 3.
@@ -74,7 +74,7 @@ All timestamps are committer dates on the audit ref.
 ### The one increment with verdicts
 
 ORDER.2 is the only increment with labelled run files
-(`docs/release/v4.0.0-merge-queue-state.md`, ORDER.2 table):
+(`docs/internal/release/v4.0.0-merge-queue-state.md`, ORDER.2 table):
 
 - `gpt-20260831T190123Z-40438.md` — exit 0, `SHIP-WITH-FIXES`
 - `grok-20260831T190327Z-50955.md` — exit 0, `SHIP`
@@ -102,7 +102,7 @@ DISCOVER has no `test(discover*)` commit on the audit ref at all: three commits
 under that tag, none of them a test.
 
 **Gap 3 — the verdict record cannot be joined to the work it reviewed.**
-`docs/release/v4.0.0-merge-queue-state.md` §"Review verdicts" is the process
+`docs/internal/release/v4.0.0-merge-queue-state.md` §"Review verdicts" is the process
 authority, and it establishes that a verdict is a labelled run file plus its exit
 status. The review ledger rows under `~/.claude/data/` carry `label: null`, so no
 ledger row can be tied to a cluster. Attribution by timestamp was attempted, was

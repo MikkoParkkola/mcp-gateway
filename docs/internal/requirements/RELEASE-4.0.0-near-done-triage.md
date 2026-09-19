@@ -34,7 +34,7 @@ one of them.
 ### MIK-7320 — golden fixture, `cargo test --all-features` — 3/3, XS remainder
 
 - FIXTURE.1 MET — `cargo test --all-features --test mik_7217_acs` run live: 22 passed, 0 failed.
-- FIXTURE.2 PARTIAL — fixtures captured (`tests/fixtures/mik_7217/initialize_3_5_0_{2025_06_18,2025_11_25}_spec_preview.json`, commit `e6e2ddd9`); rationale for why the tree qualifies is recorded but lives in `docs/requirements/RELEASE-4.0.0-dod-check.md:62-74`, not the commit body the AC's literal wording asks for — wording nit, not a substance gap.
+- FIXTURE.2 PARTIAL — fixtures captured (`tests/fixtures/mik_7217/initialize_3_5_0_{2025_06_18,2025_11_25}_spec_preview.json`, commit `e6e2ddd9`); rationale for why the tree qualifies is recorded but lives in `docs/internal/requirements/RELEASE-4.0.0-dod-check.md:62-74`, not the commit body the AC's literal wording asks for — wording nit, not a substance gap.
 - FIXTURE.3 MET — full `cargo test --all-features --no-fail-fast` run live: 0 failed across 4619+ tests plus doctests.
 - **Corrected 2026-09-11.** PR #464 is CLOSED, unmerged and `CONFLICTING` (`gh pr view 464`), and it
   is the only PR that has ever named MIK-7320. Its branch `feat/MIK-7320-golden-fixture-fix`
@@ -64,7 +64,7 @@ and `rg -n "set_var" src/` both return **zero matches** — the crate denies `un
 Replacement mechanism: `EnvOverlay` (`src/config/env_overlay.rs`), consumed by
 `Config::load_with_overlay` and `load_config_patch` (`src/config_reload/mod.rs:1252-1272`).
 
-The ticket's own scored verdict table (`docs/design/mik-7256-ac-verdicts.md`, commit `30b462a8`)
+The ticket's own scored verdict table (`docs/internal/design/mik-7256-ac-verdicts.md`, commit `30b462a8`)
 is the most honest artifact in this whole sweep — it states plainly: **"this change does not pass
 DoD §1. Of 26 acceptance criteria, 9 are verified by a test, 6 are partly verified, and 11 have no
 verifying test. None is unimplemented."** 0 FAIL means the mechanism is real everywhere; the gap
@@ -164,7 +164,7 @@ wrapper, no question-validation model, no observe-only measurement gate exists a
 ### MIK-6865 — schema hardening probe — 0/4, deliberately deferred
 
 Zero hits repo-wide for `probe/`, `nested-schema-rate.json`, `schema-shape-audit.json`,
-`test_repair.py`, or any `MCPGW.SCHEMA` string. `docs/requirements/RELEASE-4.0.0-backlog-triage.md:102`
+`test_repair.py`, or any `MCPGW.SCHEMA` string. `docs/internal/requirements/RELEASE-4.0.0-backlog-triage.md:102`
 explicitly lists this ticket under "tool surface" as **deferred backlog for this release**. This
 isn't in-flight on this branch — it's parked by the release's own triage doc, not stalled work.
 

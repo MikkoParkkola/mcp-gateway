@@ -36,7 +36,7 @@ baseline headline implies.
 in 4.0". `RELEASE-4.0.0-scope-update.md:63` lists the inclusion under Boundaries. There is
 no descope decision for it in `RELEASE-4.0.0-operator-decisions.md`.
 
-`docs/release/verify/RELEASE-4.0.0-CLOSE-PLAN.md:405` records the opposite reading — that the `codex/v4-*` PRs
+`docs/internal/release/verify/RELEASE-4.0.0-CLOSE-PLAN.md:405` records the opposite reading — that the `codex/v4-*` PRs
 map to "no blocking row or 4.0.0 ticket". That is true of the baseline ledger and false of
 the approved scope, which the publishing gate enforces. The CLOSE-PLAN line should be read
 as scoped to the baseline, not as a disposition for the scope expansion.

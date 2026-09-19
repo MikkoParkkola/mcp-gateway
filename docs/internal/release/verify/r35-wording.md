@@ -60,7 +60,7 @@ printed on startup and pasted into support threads (MIK-7221).
 
 ## R35's three clauses against the code
 
-R35 (`docs/release/2026-09-08-team-lead-rulings.md:777-780`) asserts three things.
+R35 (`docs/internal/release/2026-09-08-team-lead-rulings.md:777-780`) asserts three things.
 One is built; two are not.
 
 | clause | state | evidence |

@@ -33,17 +33,17 @@ of which each carry multiple file:line citations, not 30 independent file:line s
 
 | # | Verdict | Claim | Doc | Source check |
 |---|---|---|---|---|
-| 1 | **CONTRADICTION** | `ExtensionSet::gateway_declares()` "has zero callers" | `docs/requirements/RELEASE-4.0.0-audit-partial.md:24` | `src/gateway/meta_mcp_helpers.rs:181-182` — `discovery_extensions()` (production fn, not test-gated) calls `gateway_declares().to_extensions()`. One production call site exists. |
-| 2 | **CONTRADICTION** | Cites `resolve_idempotency_key` (`meta_mcp/support.rs:31-46`) as the function that fails to pass continuation fields | `docs/requirements/RELEASE-4.0.0-execution-plan.md:125` | `rg -n 'resolve_idempotency_key' src/ tests/` → zero matches anywhere in the tree. `meta_mcp/support.rs:31-46` is the real function `idempotency_key_for`, not `resolve_idempotency_key`. The cited function does not exist under that name. |
-| 3 | **DRIFT→CONTRADICTION** | `cacheable::result_type_of` (`protocol/cacheable.rs:78`) "has zero production callers" | `docs/requirements/RELEASE-4.0.0-execution-plan.md:351` | Line drift: current def is at `cacheable.rs:115`, not `:78`. Substantively: `result_type_of` is wrapped by `is_final` (`cacheable.rs:130-131`, same-file production call), and `is_final` itself has two production callers — `src/idempotency.rs:348` and `src/cache.rs:196` — confirming `docs/requirements/RELEASE-4.0.0-criteria-status.md:211`'s later correction of the same underlying claim. The "zero production callers" framing in execution-plan.md is false as of HEAD. |
+| 1 | **CONTRADICTION** | `ExtensionSet::gateway_declares()` "has zero callers" | `docs/internal/requirements/RELEASE-4.0.0-audit-partial.md:24` | `src/gateway/meta_mcp_helpers.rs:181-182` — `discovery_extensions()` (production fn, not test-gated) calls `gateway_declares().to_extensions()`. One production call site exists. |
+| 2 | **CONTRADICTION** | Cites `resolve_idempotency_key` (`meta_mcp/support.rs:31-46`) as the function that fails to pass continuation fields | `docs/internal/requirements/RELEASE-4.0.0-execution-plan.md:125` | `rg -n 'resolve_idempotency_key' src/ tests/` → zero matches anywhere in the tree. `meta_mcp/support.rs:31-46` is the real function `idempotency_key_for`, not `resolve_idempotency_key`. The cited function does not exist under that name. |
+| 3 | **DRIFT→CONTRADICTION** | `cacheable::result_type_of` (`protocol/cacheable.rs:78`) "has zero production callers" | `docs/internal/requirements/RELEASE-4.0.0-execution-plan.md:351` | Line drift: current def is at `cacheable.rs:115`, not `:78`. Substantively: `result_type_of` is wrapped by `is_final` (`cacheable.rs:130-131`, same-file production call), and `is_final` itself has two production callers — `src/idempotency.rs:348` and `src/cache.rs:196` — confirming `docs/requirements/RELEASE-4.0.0-criteria-status.md:211`'s later correction of the same underlying claim. The "zero production callers" framing in execution-plan.md is false as of HEAD. |
 | 4 | MATCH | `stable_tool_order()` (`prompt_cache.rs:162`) "genuinely has zero production callers" | `docs/requirements/RELEASE-4.0.0-criteria-status.md:214` (self-claimed, verified independently) | `rg -n 'stable_tool_order' src/` — only call sites outside its own definition/re-exports are inside its own `#[test]` module (`prompt_cache.rs:390-426`). No production caller found. Confirmed true. |
 | 5 | **CONTRADICTION** | `set_error_budget_config` / `set_capability_budget_config` "have no callers in `src/` or `tests/`" | `docs/design/2026-09-05-error-budget-config.md:33` | `src/gateway/server/mod.rs:615-616` calls both (`meta_mcp.set_error_budget_config(backend_budget)`, `meta_mcp.set_capability_budget_config(capability_budget)`), production code, not test-gated. Doc's unqualified present-tense claim is false against HEAD. |
 | 6 | CANNOT-VERIFY | `is_healthy()` (`:228`) "has no production caller — every hit is a test" | `docs/design/2026-09-05-error-budget-config.md:364` | Ran out of token budget before locating the specific `is_healthy` this row means (multiple `is_healthy` symbols exist in the tree; one broad grep found only a test hit but the search wasn't exhaustive enough to call it confirmed). Not resolved — do not treat as either MATCH or CONTRADICTION. |
-| 7 | NOT SAMPLED | `Bridge::to_legacy_client` (`mrtr.rs:186`), "which has no caller" | `docs/requirements/RELEASE-4.0.0-execution-plan.md:126` | Not checked — ran out of budget. |
+| 7 | NOT SAMPLED | `Bridge::to_legacy_client` (`mrtr.rs:186`), "which has no caller" | `docs/internal/requirements/RELEASE-4.0.0-execution-plan.md:126` | Not checked — ran out of budget. |
 
 ## Findings requiring attention (CONTRADICTIONS, in full)
 
-**1. `docs/requirements/RELEASE-4.0.0-audit-partial.md:24`** claims
+**1. `docs/internal/requirements/RELEASE-4.0.0-audit-partial.md:24`** claims
 `ExtensionSet::gateway_declares()` "has zero callers", cited at `src/protocol/extensions.rs:59-64`.
 Refuted by `src/gateway/meta_mcp_helpers.rs:181-182`:
 ```rust
@@ -57,7 +57,7 @@ already carries a correction for this exact row ("EXT.1 never did [fit the zero-
 but `audit-partial.md` itself was not updated and still asserts the stale claim. Two documents
 in the same PR disagree; a reader of `audit-partial.md` alone gets the wrong answer.
 
-**2. `docs/requirements/RELEASE-4.0.0-execution-plan.md:125`** cites `resolve_idempotency_key`
+**2. `docs/internal/requirements/RELEASE-4.0.0-execution-plan.md:125`** cites `resolve_idempotency_key`
 at `meta_mcp/support.rs:31-46` as the (broken) mechanism for continuation-field hashing.
 `rg -n 'resolve_idempotency_key' src/ tests/` returns zero matches in the entire tree — the
 function does not exist under that name anywhere. The function actually defined at

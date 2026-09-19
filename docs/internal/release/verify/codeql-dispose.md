@@ -4,7 +4,7 @@ Lane: codeql-dispose. Acts on the operator ruling of 2026-09-08 — fix #78, tri
 #92/#97/#100 at source and dismiss or fix each on its merits. Line numbers as of
 `fix/mrtr2-continuation-handle`; alert line numbers as recorded on their own commits.
 
-Companion read-only triage: `docs/release/verify/codeql-triage.md`.
+Companion read-only triage: `docs/internal/release/verify/codeql-triage.md`.
 
 ## #97 — `rust/cleartext-logging` — FALSE POSITIVE (test code)
 
@@ -98,7 +98,7 @@ So what the flow states is that a resolved credential reaches the request that i
 backend — which is what a capability executor is for. Under the `cleartext-logging` rule that
 is a sink misclassification. The transmission question the flow actually raises is the one
 `rust/cleartext-transmission` asks, and it is already tracked as #90/#91 against
-`require_secure_oauth_target` (`docs/release/verify/codeql-triage.md`).
+`require_secure_oauth_target` (`docs/internal/release/verify/codeql-triage.md`).
 
 ### What was fixed
 

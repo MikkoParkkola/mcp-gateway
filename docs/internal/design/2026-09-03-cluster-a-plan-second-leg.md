@@ -1,7 +1,7 @@
 # Cluster A test plan — second-leg review (MIK-7212)
 
 Target: `docs/design/2026-09-02-mrtr-test-plan.md` (the cluster-A MRTR test plan), cross-read
-against `docs/design/2026-09-03-cluster-a-coverage-audit.md` and the MRTR rows of
+against `docs/internal/design/2026-09-03-cluster-a-coverage-audit.md` and the MRTR rows of
 `docs/requirements/RELEASE-4.0.0-criteria-status.md`.
 
 ## Weight caveat — read this before the verdict
@@ -52,7 +52,7 @@ inside this change."
 | 1 | FINDING | MEDIUM | MRTR.2's still-to-write component case is specified as "not the backend's string and verifies under our key" but never requires the envelope to *contain* the backend's state — an empty, validly-signed envelope would satisfy the row as written | **VERIFIED, and FIXED in this change.** `docs/design/2026-09-02-mrtr-test-plan.md:26` read exactly that at review time; the row now requires the minted token to open to an envelope carrying the backend's state, plus prose explaining why difference-plus-validity alone is not enough (a gateway that dropped the backend's state would mint a validly-signed empty envelope and still pass the old row). Commit `2aa160ed`. |
 | 2 | FINDING | LOW | The plan's 10b self-QA claims `tests/mik_7216_mrtr_10_acs.rs` holds seven cases; the criteria ledger's MRTR.10b row claimed five for the same file — a genuine cross-document disagreement | **VERIFIED, and resolved: the plan was right, the ledger was wrong.** `awk` count of `#[test]` in `tests/mik_7216_mrtr_10_acs.rs` = **7** distinct test functions. Kimi did not claim which side was wrong (a well-calibrated non-overclaim); this review settled it. **RESOLVED** — team lead corrected the ledger row directly, commit `9209e7c5` ("Record 7 cases … not the stale 5"). No further action needed; disposal N/A, already closed. |
 | 3 | IMPROVEMENT | SMALL | MRTR.5(c)'s concurrency row ("two concurrent redemptions … yield exactly one success") does not name how simultaneity is forced, so a harness that secretly serializes the two redemptions could pass against a non-atomic ledger | **VERIFIED as an accurate reading of the row** (`docs/design/2026-09-02-mrtr-test-plan.md:29`) — the cell is a one-line description with no forcing mechanism named. Fair test-plan-honesty point per `skills/test-plan-honesty` (can the case actually fail); low cost to add one clause. |
-| 4 | IMPROVEMENT | SMALL | The plan's §P0 scope line excludes "any criterion outside `MIK-7212.MRTR.*`" generically, but cluster A's blocking rollup includes 5 non-MRTR rows (`NFR.SEC.2/3/4`, `NFR.OBS.4`, `NFR.PERF.3`) that this plan never points to | **VERIFIED.** `docs/design/2026-09-03-cluster-a-coverage-audit.md:15` states the rollup is 22 blocking rows, MRTR contributes 17 — leaving exactly 5, and those 5 IDs all appear ABSENT in `RELEASE-4.0.0-criteria-status.md:315-327`, all against the same unwired continuation envelope. |
+| 4 | IMPROVEMENT | SMALL | The plan's §P0 scope line excludes "any criterion outside `MIK-7212.MRTR.*`" generically, but cluster A's blocking rollup includes 5 non-MRTR rows (`NFR.SEC.2/3/4`, `NFR.OBS.4`, `NFR.PERF.3`) that this plan never points to | **VERIFIED.** `docs/internal/design/2026-09-03-cluster-a-coverage-audit.md:15` states the rollup is 22 blocking rows, MRTR contributes 17 — leaving exactly 5, and those 5 IDs all appear ABSENT in `RELEASE-4.0.0-criteria-status.md:315-327`, all against the same unwired continuation envelope. |
 | 5 | IMPROVEMENT | SMALL | The plan carries file:line citations but no V/I evidence grade, unlike the coverage audit sitting beside it which marks inference explicitly | **PLAUSIBLE, not independently re-verified beyond a visual scan** — true that the plan's matrix rows are unmarked V/I; grading them is a reasonable, cheap addition. Judgment call on value, not a factual claim to falsify. |
 | 6 | IMPROVEMENT | SMALL | MRTR.3's unit row pins four distinct `ContinuationError` variants without stating why distinctness is load-bearing | **VERIFIED the row text** (`docs/design/2026-09-02-mrtr-test-plan.md:27`: "each is refused with its own `ContinuationError` variant") **— the "without stating why" half is a reasonable but softer claim**; the rationale may exist implicitly in surrounding prose (lines 85, 119) without being pulled into the row itself. Low-cost, non-blocking either way. |
 
@@ -96,7 +96,7 @@ Disposal per finding (`development-process.md` §P0's four-way table — first d
   yet made — an open item for whoever next edits the plan.
 - **Finding 4** (§P0 scope line excludes 5 non-MRTR blocking rows, SMALL) — **record it as an
   observation.** The 5 rows (`NFR.SEC.2/3/4`, `NFR.OBS.4`, `NFR.PERF.3`) are already tracked in
-  `docs/design/2026-09-03-cluster-a-coverage-audit.md`, sitting beside this plan — nothing depends
+  `docs/internal/design/2026-09-03-cluster-a-coverage-audit.md`, sitting beside this plan — nothing depends
   on this plan also cross-referencing them, so there is no action for anyone to take. Worth
   remembering if the two documents ever drift apart, not worth a ticket or an edit today.
 - **Finding 5** (missing V/I evidence grades) — style-only, no disposal needed.
