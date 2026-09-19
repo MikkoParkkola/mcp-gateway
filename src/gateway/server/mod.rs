@@ -1014,6 +1014,7 @@ impl Gateway {
         .with_secret_injector(secret_injector)
         .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone())
         .with_exposed_meta_tools(&self.config.meta_mcp.exposed_meta_tools)
+        .with_expose_stats_tool(self.config.meta_mcp.expose_stats_tool)
         .with_prompts_resources_fetch_timeout(self.config.meta_mcp.prompts_resources_fetch_timeout)
         .with_trusted_identity_headers(
             self.config

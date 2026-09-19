@@ -509,32 +509,35 @@ fn routing_instructions_uses_general_for_empty_category() {
 
 // ── build_meta_tools ────────────────────────────────────────────────
 
+/// The floor of the `NFR.PERF.4` band: every gate off.
 #[test]
-fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_webhooks() {
+fn build_meta_tools_returns_only_the_ungated_surface_with_every_gate_off() {
     let tools = build_meta_tools(
         MetaToolGates {
             stats: false,
             reload: false,
             cost_report: false,
             webhook_status: false,
+            playbooks: false,
+            profiles: false,
         },
         0,
         0,
     );
-    // 4 base + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 13
-    assert_eq!(tools.len(), 13);
+    // 4 base + 2 kill-switch + 1 disabled-caps + 1 set-state + 1 reload-capabilities = 9
+    assert_eq!(tools.len(), 9);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_list_servers"));
     assert!(names.contains(&"gateway_list_tools"));
     assert!(names.contains(&"gateway_search_tools"));
     assert!(names.contains(&"gateway_invoke"));
-    assert!(names.contains(&"gateway_run_playbook"));
     assert!(names.contains(&"gateway_kill_server"));
     assert!(names.contains(&"gateway_revive_server"));
-    assert!(names.contains(&"gateway_set_profile"));
-    assert!(names.contains(&"gateway_get_profile"));
     assert!(names.contains(&"gateway_list_disabled_capabilities"));
-    assert!(names.contains(&"gateway_list_profiles"));
+    assert!(!names.contains(&"gateway_run_playbook"));
+    assert!(!names.contains(&"gateway_set_profile"));
+    assert!(!names.contains(&"gateway_get_profile"));
+    assert!(!names.contains(&"gateway_list_profiles"));
     assert!(!names.contains(&"gateway_webhook_status"));
     assert!(!names.contains(&"gateway_reload_config"));
 }
@@ -552,25 +555,23 @@ fn build_meta_tools_with_stats_enumerates_everything_but_webhook_status() {
             reload: false,
             cost_report: false,
             webhook_status: false,
+            playbooks: false,
+            profiles: false,
         },
         0,
         0,
     );
-    // 4 base + 1 stats + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 14
-    assert_eq!(tools.len(), 14);
+    // 4 base + 1 stats + 2 kill-switch + 1 disabled-caps + 1 set-state + 1 reload-capabilities = 10
+    assert_eq!(tools.len(), 10);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_get_stats"));
     assert!(
         !names.contains(&"gateway_webhook_status"),
         "webhook status must stay off the enumerated surface (NFR.PERF.4)"
     );
-    assert!(names.contains(&"gateway_run_playbook"));
     assert!(names.contains(&"gateway_kill_server"));
     assert!(names.contains(&"gateway_revive_server"));
-    assert!(names.contains(&"gateway_set_profile"));
-    assert!(names.contains(&"gateway_get_profile"));
     assert!(names.contains(&"gateway_list_disabled_capabilities"));
-    assert!(names.contains(&"gateway_list_profiles"));
 }
 
 #[test]
@@ -582,18 +583,17 @@ fn build_meta_tools_includes_reload_when_enabled() {
             reload: true,
             cost_report: false,
             webhook_status: false,
+            playbooks: false,
+            profiles: false,
         },
         0,
         0,
     );
-    // 4 base + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state + 1 reload-capabilities = 14
-    assert_eq!(tools.len(), 14);
+    // 4 base + 2 kill-switch + 1 disabled-caps + 1 reload + 1 set-state + 1 reload-capabilities = 10
+    assert_eq!(tools.len(), 10);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_reload_config"));
-    assert!(names.contains(&"gateway_set_profile"));
-    assert!(names.contains(&"gateway_get_profile"));
     assert!(names.contains(&"gateway_list_disabled_capabilities"));
-    assert!(names.contains(&"gateway_list_profiles"));
 }
 
 #[test]
@@ -605,19 +605,21 @@ fn build_meta_tools_all_enabled_includes_reload() {
             reload: true,
             cost_report: false,
             webhook_status: false,
+            playbooks: false,
+            profiles: false,
         },
         0,
         0,
     );
-    // 4 base + 1 stats + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state + 1 reload-capabilities = 15
-    assert_eq!(tools.len(), 15);
+    // 4 base + 1 stats + 2 kill-switch + 1 disabled-caps + 1 reload + 1 set-state + 1 reload-capabilities = 11
+    assert_eq!(tools.len(), 11);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_reload_config"));
     assert!(names.contains(&"gateway_get_stats"));
-    assert!(names.contains(&"gateway_set_profile"));
-    assert!(names.contains(&"gateway_get_profile"));
     assert!(names.contains(&"gateway_list_disabled_capabilities"));
-    assert!(names.contains(&"gateway_list_profiles"));
+    assert!(!names.contains(&"gateway_set_profile"));
+    assert!(!names.contains(&"gateway_get_profile"));
+    assert!(!names.contains(&"gateway_list_profiles"));
 }
 
 #[test]

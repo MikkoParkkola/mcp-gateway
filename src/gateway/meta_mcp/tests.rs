@@ -1318,8 +1318,18 @@ fn initialize_without_session_id_succeeds_without_panic() {
 
 #[test]
 fn gateway_list_profiles_tool_appears_in_tools_list() {
-    // GIVEN: a MetaMcp instance (no stats, no webhooks, no reload)
-    let mm = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    // GIVEN: a MetaMcp instance with one routing profile configured (no stats,
+    // no webhooks, no reload). The profile tools are enumerated on that gate:
+    // with none configured they describe profiles that do not exist.
+    let mut configs = std::collections::HashMap::new();
+    configs.insert(
+        "probe".to_string(),
+        crate::routing_profile::RoutingProfileConfig::default(),
+    );
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_profile_registry(crate::routing_profile::ProfileRegistry::from_config(
+            &configs, "probe",
+        ));
     // WHEN: listing tools
     let id = RequestId::Number(0);
     let resp = mm.handle_tools_list(id);
@@ -4703,20 +4713,19 @@ async fn b10_a_successful_invoke_does_not_change_the_connections_tool_list() {
 }
 
 /// The tool-name set a modern sessionless connection is shown, pinned.
+///
+/// `meta_with_backend` configures no cost registry, no playbooks and no
+/// routing profiles, so those six tools are gated off the listing here
+/// (`NFR.PERF.4`). They remain callable by name; this pins disclosure.
 #[cfg(feature = "spec-preview")]
 const B10_EXPECTED_TOOLS: &[&str] = &[
     "gateway_list_servers",
     "gateway_list_tools",
     "gateway_search_tools",
     "gateway_invoke",
-    "gateway_cost_report",
-    "gateway_run_playbook",
     "gateway_kill_server",
     "gateway_revive_server",
-    "gateway_set_profile",
-    "gateway_get_profile",
     "gateway_list_disabled_capabilities",
-    "gateway_list_profiles",
     "gateway_set_state",
     "gateway_reload_capabilities",
 ];
@@ -5397,7 +5406,6 @@ fn tools_list_set(resp: &JsonRpcResponse) -> Vec<String> {
 /// connection identically, and `set_a == set_b` also holds when both are
 /// empty and when both are identically wrong.
 const B01_EXPECTED_TOOLS: &[&str] = &[
-    "gateway_cost_report",
     "gateway_get_profile",
     "gateway_invoke",
     "gateway_kill_server",
@@ -5407,7 +5415,6 @@ const B01_EXPECTED_TOOLS: &[&str] = &[
     "gateway_list_tools",
     "gateway_reload_capabilities",
     "gateway_revive_server",
-    "gateway_run_playbook",
     "gateway_search_tools",
     "gateway_set_profile",
     "gateway_set_state",
