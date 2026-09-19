@@ -1,6 +1,8 @@
 # MIK-7272.SUB.2b — streaming a subprocess backend's progress
 
-Status: proposed, unreviewed. No code written against it yet.
+Status: **ratified**. Reviewed before any code, by two independent reviewers:
+SHIP and SHIP-WITH-FIXES. The fixes are folded in below and the review record
+is the closing section.
 
 ## The defect
 
@@ -46,11 +48,17 @@ the token and the caller's `SINK` are in scope. Clone the sender there and
 store it against the token:
 
 - `captured_notifications: DashMap<String, Vec<JsonRpcNotification>>`
-  becomes a map from token to `mpsc::Sender<JsonRpcNotification>`.
-- `register_progress_token` reads `SINK.try_with(Sender::clone).ok()`. `None`
-  means the caller has nowhere to stream to; registration still happens, so
-  the notification is still recognised as owned and dropped deliberately
-  rather than logged as a stray.
+  becomes a map from the minted token to a delivery handle carrying **both**
+  the caller's own progress token as a `Value` **and** `Option<Sender>`.
+  Carrying the token is not optional — see "the token must travel" below.
+- `register_progress_token` reads `SINK.try_with(Sender::clone).ok()` and the
+  caller's token from `TRANSLATIONS`, both on the caller's task. A `None`
+  sender means the caller has nowhere to stream to; registration still
+  happens, so the notification is still recognised as owned and dropped
+  deliberately rather than logged as a stray.
+- Insert **vacant-only**. A colliding live key must fail closed rather than
+  evict the incumbent, or one call's progress reroutes onto another's
+  channel.
 - The capture site (`:482`) sends on the stored sender. The level filter and
   `translate_back` currently applied inside `publish` move with it.
 - `ProgressRegistrationGuard::drop` deregisters the token and publishes
@@ -58,12 +66,20 @@ store it against the token:
 
 ## What this changes that is not obvious
 
-- **Where the filter runs.** `passes_level_filter` and `translate_back` read
-  the `LEVEL` and `TRANSLATIONS` task-locals. Those are the caller's, and the
-  reader task does not have them either. Both must be resolved at
-  registration alongside the sender, or moved to the receiving end. This is
-  the part most likely to be wrong, and it is the reason this is a design and
-  not a patch.
+- **The token must travel.** This is the defect the review caught, and it
+  would have shipped. `translate_back`
+  (`src/transport/notification_sink.rs:243-275`) rewrites the gateway's minted
+  `gw-<uuid>` progress token back to the token the caller actually sent,
+  and it resolves that from the `TRANSLATIONS` task-local — the caller's,
+  absent on the reader task. A handle carrying only a `Sender` therefore
+  delivers on time but with the wrong token on it, and a caller correlating on
+  its own token sees nothing. Snapshot the caller's token `Value` at
+  registration and rewrite `params.progressToken` from it at capture.
+  ADR-014 §2 already specified this shape; restoring it is not an invention.
+- **The level filter is not load-bearing here.** `passes_level_filter`
+  (`src/transport/notification_sink.rs`) returns `true` immediately for any
+  method that is not `notifications/message`, so a progress frame is never
+  filtered and `LEVEL` need not be snapshotted. Cloning it would be cargo.
 - **Backpressure.** `publish` uses `try_send` and counts drops against a
   64-deep channel (`REQUEST_NOTIFICATION_DEPTH`). Sending from the reader task
   keeps `try_send` — a blocking send there would park the only stdin reader,
@@ -80,7 +96,17 @@ store it against the token:
 ## Acceptance
 
 The two recovered rows, unmodified, both green — and the progress row proven
-red against the current tree first, which it already is.
+red against the current tree first, which it already is. Beyond them, four
+cases the review asked for, because moving delivery across a task boundary is
+where they break: two concurrent calls each see only their own progress; a
+cancelled call leaves no live sender behind; a sink filled past its 64-deep
+bound counts the drop against `DROPPED` the same way the HTTP path does; and
+a caller that sent a numeric progress token gets a numeric one back.
+
+The stdio unit rows that currently assert collect-then-emit
+(`src/transport/stdio.rs:1254` and its neighbours) must be rewritten to assert
+live, exactly-once delivery. Left as they are they would pass while the client
+receives each frame twice — a live send plus the leftover `Drop` publish.
 
 ## Rejected
 
@@ -89,3 +115,21 @@ red against the current tree first, which it already is.
   bug into a flaky one.
 - Widening the criterion to exempt subprocess backends. The transport is not
   the reason the notification matters.
+
+## Review
+
+Two independent reviewers, on the design, before any code.
+
+One returned SHIP. The other returned SHIP-WITH-FIXES on a HIGH finding: the
+proposal as first written stored only the sender, leaving the caller's
+progress token behind. That was verified at source rather than taken on the
+reviewer's word — `translate_back` does resolve the caller's token from a
+task-local the reader task does not have — and the proposal above is the
+corrected shape. The same reviewer's second point, that the level filter never
+runs on a progress frame, was likewise verified and the filter dropped from
+the design; the first reviewer had asked for it to be bundled in, which would
+have been dead weight.
+
+Both reviewers noted they did not run the failing test. That is accurate and
+does not weaken the diagnosis: it was run three times here, and the reviewers
+confirmed the mechanism by reading the code.
