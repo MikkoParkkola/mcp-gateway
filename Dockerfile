@@ -2,7 +2,12 @@
 # MCP Gateway - Multi-stage Docker Build
 # =============================================================================
 # Build:  docker build -t mcp-gateway:latest .
-# Run:    docker run -p 39400:39400 -v ./gateway.yaml:/config.yaml:ro mcp-gateway:latest --config /config.yaml
+# Run:    docker run -p 127.0.0.1:39400:39400 \
+#           -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
+#           -v ./gateway.yaml:/config.yaml:ro mcp-gateway:latest \
+#           --config /config.yaml --host 0.0.0.0
+#         The container must bind 0.0.0.0 or the published port reaches nothing;
+#         publishing to 127.0.0.1 keeps that off-host. See docs/DEPLOYMENT.md.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
