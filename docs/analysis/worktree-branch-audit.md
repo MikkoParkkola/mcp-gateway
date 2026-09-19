@@ -199,3 +199,129 @@ here so they are not silently absent from this report: `backup-a5558-work` (2),
 `gap/discover-schema` (1), `note/v4-pr-close-evidence` (2),
 `pin/adr012-amend-20260910` (1), `pin/detached-20260910-1640` (2), `rebase/499`
 (2), `review/compat4-plan` (2), `task1-caller` (1).
+
+## Supersession verdicts — four unmerged branches (2026-09-19)
+
+Verified read-only against `origin/main`. Patch-id matching (`git cherry`) is
+useless here: every commit came back unmatched because the work was rebased and
+redesigned before it landed, so each row below rests on symbol and behaviour
+comparison instead.
+
+| Branch | Verdict | Evidence | PR |
+|---|---|---|---|
+| `work/mrtr-bridge-reconcile` | SUPERSEDED except one commit | bridge + idempotency on main; EXT.1 parser fix was not | #NNN |
+| `feat/v4-stdio-production-caller` | SUPERSEDED | bridge half on main; stdio half is MIK-7387, deliberately parked | — |
+| `feat/v4-mrtr-bridge-wiring` | SUPERSEDED | wiring on main under renamed symbols | — |
+| `lane/roots-wiring` | SUPERSEDED | both ROOTS commits merged to main | — |
+
+### `feat/v4-mrtr-bridge-wiring` — SUPERSEDED
+
+The deliverable is on main under renamed symbols: the branch's `BridgeDispatch`
+and `BridgeMetrics` are `BridgeDispatcher` (`src/gateway/meta_mcp/invoke.rs:820`)
+and `TracingBridgeObserver` (`:899`), called from `invoke_tool_traced` at
+`:2051`. The branch's session-declaration store — `record_session_declaration`,
+`session_declaration`, `clear_session_declaration` — appears nowhere on main:
+main reads the declaration off `caller.input_capabilities` and the channel off
+`caller.channel` instead. That store is the design main dropped, so the branch's
+plumbing for it is not missing work, it is abandoned work.
+
+Staleness confirms it: merge base 2026-09-12, main has gained 281 commits since,
+and the two-dot diff is dominated by deletions the branch would reintroduce
+(`invoke.rs` −785, `mod.rs` −490, `streaming.rs` −375).
+
+### `lane/roots-wiring` — SUPERSEDED
+
+Both halves are on main:
+
+- ROOTS.1 (delete the unwired forward) — `e0cd61b5 fix(proxy): delete the
+  unanswerable roots/list forward`
+- ROOTS.2 (forward as an answerable request) — `05a65489 feat(roots): correlate
+  a roots/list request with the client's reply`, live at
+  `src/gateway/proxy.rs:394`
+
+The 134-file / 12,405-line diff is not this branch's content. Merge base is
+2026-09-08 and main has gained 385 commits since; the large test files in the
+diff (`mik_7215_control3b_acs.rs`, `nfr_perf3_soak.rs`,
+`mik_7272_sub4_three_routes.rs`) belong to other lanes and are swept in by the
+old base. Nothing here should be carried forward.
+
+### `feat/v4-stdio-production-caller` — SUPERSEDED
+
+The bridge half is superseded for the same reason as
+`feat/v4-mrtr-bridge-wiring`: it carries the same declaration-store design
+(`invoke.rs` −598 against main).
+
+The stdio half is genuinely absent from main, and that absence is deliberate,
+not an oversight. `stdio_caller_context` (`src/gateway/server/mod.rs:3313`) sets
+`input_capabilities: Declared::NONE` and `channel: &NoClientChannel`, and the
+bridge call site documents the refusal it produces and names what lifts it:
+
+> That is what keeps the deliberate stdio refusal documented on
+> `NoClientChannel` intact, and MIK-7387 the only thing that lifts it.
+> — `src/gateway/meta_mcp/invoke.rs:2114`
+
+So this branch is an unlanded attempt at MIK-7387 built on the design main
+replaced. Its one independently interesting piece — dispatching stdio requests
+off the reader loop behind a single writer task — is not on main (main's stdio
+loop is still sequential), but it is entangled with the dead declaration store
+and overlaps `codex/v4-stdio-account-wiring`, which a peer owns. Redo MIK-7387
+against main's caller-context design rather than rebasing this.
+
+### `work/mrtr-bridge-reconcile` — SUPERSEDED except `bbe5da15e`
+
+Superseded, with proof at three levels:
+
+- `tests/mik_7212_mrtr7_bridge_acs.rs` and `tests/mik_7212_mrtr7_stdio_acs.rs`
+  both give an **empty** `git diff origin/main work/mrtr-bridge-reconcile`.
+  The acceptance rows are byte-identical to main.
+- The four `fix(bridge):` idempotency commits are all answered on main's
+  `match bridge.run(...)` error arm (`src/gateway/meta_mcp/invoke.rs:2129-2156`),
+  at finer granularity: `BackendFailed { dispatch: MayHaveActed }` settles the
+  key with `withheld_side_effect()`, while `Deadline`,
+  `RequestBudgetExhausted`, `Refused`, `Delivery` and `RoundsExhausted` keep the
+  release-on-drop default because a backend parked on a question has not acted.
+  A round that never left the gateway is separated by `Dispatch::NeverReached`,
+  derived from `e.is_pre_dispatch()` at `:875`.
+- `src/gateway/streaming.rs` (+150) adds `declaration_owner`,
+  `set_declaration_owner` and a `session_gone` hook that calls
+  `clear_session_declaration`. Main has no declaration store to clear, so this
+  is plumbing for the abandoned design.
+
+**The exception is `bbe5da15e` — MIK-7272.EXT.1 phase 2 — which is live.** It
+fixes a defect that is still present on main. Two parsers read the same client
+declaration and disagree:
+
+- `declares_tasks_extension` (`src/gateway/router/handlers.rs:182`, gating at
+  `:1034`) ends in `.is_some_and(|ext| ext.get(TASKS_EXTENSION).is_some())` —
+  presence only.
+- `ExtensionSet::from_capabilities` (`src/protocol/extensions.rs:88-98`) filters
+  on `settings.is_object()`, its own comment reading "presence is not
+  agreement."
+
+So a client declaring `{"extensions": {"io.modelcontextprotocol/tasks": 3}}`
+passes the live tasks gate on main while the canonical parser refuses the same
+bytes, and enters task behaviour it never validly negotiated. The fix deletes
+the hand-rolled reader, has `RequestShape::Modern` carry the `ExtensionSet` the
+classifier parses once, and points the gate at `declared_extensions()`.
+
+Falsifier, observed rather than predicted: disabling the gate turns
+`ac_ext_1_e6_a_non_object_settings_value_does_not_declare_the_extension` red at
+`left: 200, right: 400`, which matches the failing-first observation recorded in
+the original commit. The row drives the real in-process router, so a parse-level
+assertion cannot pass while the gate disagrees.
+
+### Ledger rows for central update
+
+Not edited here. `docs/requirements/RELEASE-4.0.0-scope-status.json` was
+reverted out of the PR and `docs/requirements/RELEASE-4.0.0-criteria-status.md`
+was never touched.
+
+- **NFR.CONFORMANCE.1** — the EXT.1 PR empties `TRACKED_GAPS` in
+  `tests/mik_7272_conformance.rs` and takes the conformance matrix to 21 of 21
+  COVERED, 0 UNCOVERED. The ledger row still reads `pending`; it is the lead's
+  call whether that becomes `met`.
+
+### Safe to delete (lead executes behind the archive gate)
+
+All four, once the EXT.1 PR lands. `feat/v4-mrtr-bridge-wiring` also holds an
+agent worktree at `.claude/worktrees/agent-af357ba01f09a457f`.
