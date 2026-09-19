@@ -16,7 +16,8 @@ use tracing::{debug, info, warn};
 use super::AppState;
 use super::authorization::{
     CallerStanding, RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call,
-    is_admin_meta_tool, refusal_principal, require_admin_tool_access,
+    filter_routing_guide_for_client, is_admin_meta_tool, refusal_principal,
+    require_admin_tool_access,
 };
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
@@ -1220,13 +1221,23 @@ async fn meta_mcp_dispatch(
                 .meta_mcp
                 .discover_document(state.live_config.running().server.modern_protocol),
         ),
-        "initialize" => state.meta_mcp.handle_initialize(
-            id,
-            params.as_ref(),
-            Some(session_id.as_str()),
-            header_profile.as_deref(),
-            era,
-        ),
+        "initialize" => {
+            let response = state.meta_mcp.handle_initialize(
+                id,
+                params.as_ref(),
+                Some(session_id.as_str()),
+                header_profile.as_deref(),
+                era,
+            );
+            // MIK-7332 DISCOVERY.1 clause (c): the routing guide must not name
+            // capabilities the caller's own scope will refuse at invoke time.
+            // See `filter_routing_guide_for_client` doc comment.
+            filter_routing_guide_for_client(
+                response,
+                state.meta_mcp.get_capabilities().as_deref(),
+                client.as_ref(),
+            )
+        }
         "tools/list" => {
             // NFR.OBS.2. The inputs that decide this surface, and the
             // cacheScope the response will carry — recorded before the list is

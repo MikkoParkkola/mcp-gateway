@@ -14,6 +14,7 @@ use crate::gateway::oauth::{
     Action, AgentIdentity as OAuthAgentIdentity, check_agent_scope_and_audit_reason,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
+use crate::protocol::JsonRpcResponse;
 use crate::security::{validate_tool_name, validate_url_not_ssrf};
 
 pub(crate) fn backend_tool_targets_for_call(
@@ -127,6 +128,73 @@ impl CallerStanding {
     pub fn permits(self, tool_name: &str) -> bool {
         matches!(self, Self::Admin) || !is_admin_meta_tool(tool_name)
     }
+}
+
+/// Filter the `initialize` routing guide to what the caller can actually
+/// reach (MIK-7332 DISCOVERY.1 clause (c)).
+///
+/// `build_routing_instructions` lists every capability's category with no
+/// caller filter at all — an unscoped client and one restricted to, say,
+/// `fulcrum/gmail_*` are shown the identical guide, most of which
+/// `check_tool_scope` will refuse the scoped client at invoke time. This
+/// regenerates the guide from only the capabilities `can_access_backend`/
+/// `check_tool_scope` actually allow the caller, and splices it in place of
+/// the unfiltered one `handle_initialize` already built — a post-filter on
+/// the finished `instructions` string, for the same reason
+/// `filter_admin_tools_from_list` post-filters `tools/list` rather than
+/// reaching into `build_instructions`/`build_routing_instructions`: both sit
+/// on a wide upstream blast radius this fix does not need to touch.
+///
+/// A client with no backend/tool restriction filters back to the same set it
+/// started with, so this is a no-op for the unscoped case the existing
+/// two-connections invariant test (`b01_a_two_modern_connections_are_shown_
+/// the_same_tool_set`) covers. No client (auth disabled, or no capabilities
+/// configured) is also a no-op — there is nothing to scope against.
+pub(super) fn filter_routing_guide_for_client(
+    mut response: JsonRpcResponse,
+    capability_backend: Option<&crate::capability::CapabilityBackend>,
+    client: Option<&AuthenticatedClient>,
+) -> JsonRpcResponse {
+    let (Some(cap_backend), Some(client)) = (capability_backend, client) else {
+        return response;
+    };
+
+    let instructions = response
+        .result
+        .as_ref()
+        .and_then(|result| result.get("instructions"))
+        .and_then(Value::as_str);
+    let Some(marker_at) = instructions
+        .and_then(|text| text.find(crate::gateway::meta_mcp_helpers::ROUTING_GUIDE_MARKER))
+    else {
+        // Nothing to filter: no routing guide was built (no capabilities
+        // configured), so there is nothing that could disagree with scope.
+        return response;
+    };
+    let prefix = instructions.expect("marker found above")[..marker_at].to_string();
+
+    let allowed: Vec<_> = if client.can_access_backend(&cap_backend.name) {
+        cap_backend
+            .list_capabilities()
+            .into_iter()
+            .filter(|cap| {
+                client
+                    .check_tool_scope(&cap_backend.name, &cap.name)
+                    .is_ok()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let filtered_guide =
+        crate::gateway::meta_mcp_helpers::build_routing_instructions(&allowed, &cap_backend.name);
+
+    let mut spliced = prefix;
+    spliced.push_str(&filtered_guide);
+    if let Some(result) = response.result.as_mut() {
+        result["instructions"] = Value::String(spliced);
+    }
+    response
 }
 
 pub(super) fn require_admin_tool_access(

@@ -308,6 +308,14 @@ pub(crate) fn build_discovery_preamble(
     out
 }
 
+/// Marker `build_routing_instructions` opens the routing guide with.
+///
+/// Shared with `router::authorization`'s per-client guide filter (MIK-7332
+/// DISCOVERY.1 clause (c)) so both sites agree on where the guide starts
+/// inside `initialize`'s `instructions` string, instead of the splice site
+/// carrying its own copy of a literal that could drift from this one.
+pub(crate) const ROUTING_GUIDE_MARKER: &str = "\nRouting Guide (by task type):";
+
 /// Build dynamic routing instructions from capability metadata.
 ///
 /// Groups capabilities by `metadata.category` and lists representative tools.
@@ -346,7 +354,7 @@ pub(crate) fn build_routing_instructions(
         }
     }
 
-    let mut lines = vec!["\nRouting Guide (by task type):".to_string()];
+    let mut lines = vec![ROUTING_GUIDE_MARKER.to_string()];
 
     for (category, tools) in &by_category {
         let tool_sample = tools.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
