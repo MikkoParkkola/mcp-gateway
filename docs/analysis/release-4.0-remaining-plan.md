@@ -154,10 +154,54 @@ release blocker.
 
 | # | Step | State |
 |---|---|---|
-| H1 | Classify all 35: remapped, present-by-content, or genuinely missing | in flight — landing in `docs/internal/analysis/ledger-sha-remap.md` |
-| H2 | Rewrite the citations the classification repairs (lead only) | open |
-| H3 | Re-grade any criterion whose evidence turns out to be absent | open |
+| H1 | Classify all 35: remapped, present-by-content, or genuinely missing | **done** — `docs/internal/analysis/ledger-sha-remap.md`: 34 remapped, 0 present-by-content, 1 missing |
+| H2 | Rewrite the citations the classification repairs (lead only) | **done** — 56 citations repointed across 34 commits; a re-sweep reports `checked=63 unreachable=1`, the one being the missing commit itself |
+| H3 | Re-grade any criterion whose evidence turns out to be absent | **done** — `MIK-7272.SUB.2b` regraded MET (caveat) → PARTIAL and blocking; see Lane I |
 | H4 | Gate it: fail CI when the ledger cites a commit unreachable from the release line | open |
+
+The one that did not remap was `9cf1557b`, two acceptance tests and nothing
+under `src/`. Recovered from the object database with
+`git show 9cf1557b -- tests/ | git apply`, restored on
+`fix/sub2b-command-backend-progress` at `edb1c0d9`, and one of the two then
+failed three runs of three — against a defect that had been live the whole
+time. The distribution is what made it dangerous: 34 clean remaps build
+exactly the confidence that waves the 35th through.
+
+### Lane I — the command-backend progress leg (opened 2026-09-20 by Lane H)
+
+`MIK-7272.SUB.2b` is blocking. A `command:` backend's progress notification
+cannot reach the client before its call settles, by construction: the
+notification is pushed onto a `Vec` at `src/transport/stdio.rs:482` and that
+`Vec` is published only from `ProgressRegistrationGuard::drop`
+(`src/transport/stdio.rs:622-627`). This is the collect-then-emit shape
+ADR-014 §1 rejects. The accumulation is load-bearing rather than an oversight —
+`notification_sink::publish` resolves its destination from a task-local the
+reader task does not have in scope, so publishing at capture time would drop
+silently (pinned by `publish_outside_a_scope_is_dropped_not_panicked`,
+`src/transport/notification_sink.rs:302`).
+
+| # | Step | State |
+|---|---|---|
+| I1 | Design the repair: carry the caller's sender with the registered token | **done** — `docs/design/2026-09-20-sub2b-command-backend-progress.md`, ratified before code |
+| I2 | Two independent reviews of the design | **done** — gpt SHIP, grok SHIP-WITH-FIXES; grok's HIGH finding (the map must store the caller's token as well as the sender, or `translate_back` cannot restore it on the live path) verified at source and folded in |
+| I3 | Failing test on the release line | **done** — `edb1c0d9`, red as designed |
+| I4 | Implement against the ratified design | open |
+| I5 | Re-grade the row once green | open |
+
+## Housekeeping — build trees
+
+`merge/v4-integration-main` holds a half-finished merge that is **redundant**:
+the commit it is merging, `992b87c3`, is already an ancestor of `origin/main`,
+and the checkout sits 339 commits behind main, so the 45,695 deletions in its
+diff are simply the commits it lacks. It carries no commit of its own. Its
+resolution is archived at
+`.archive/v4-integration-main-stale-merge-2026-09-20.patch` (36,138 lines).
+Clearing it needs a hard reset of a dirty checkout, which is an operator
+action, not an agent one.
+
+`lane-a/surface-compaction-test-strength` was removed on 2026-09-20: its 23
+commits were already contained in the pushed `lane-a/surface-compaction`, so
+the branch carried nothing of its own (archived at `refs/archive/by-tip/6e3de6d9`).
 
 ### Lane E — the ledger, the notes, the tickets (lead only, never a subagent)
 
