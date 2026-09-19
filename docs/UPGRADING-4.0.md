@@ -4,11 +4,17 @@ From any 3.x release. Your `gateway.yaml` loads unchanged — no migration edits
 gateway makes no automatic change to your configuration on upgrade.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-the four behavioral changes below, then stamps the new version. The notice is printed rather
-than logged, so `--log-level error` and `RUST_LOG` filters cannot swallow it.
+items 1-4 below, then stamps the new version. The notice is printed rather than logged, so
+`--log-level error` and `RUST_LOG` filters cannot swallow it.
 
-The list here is the same one the binary prints, plus the license change, which is a legal
-change rather than a runtime one and therefore has no startup notice.
+The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
+changes to the license and to a removed CLI surface rather than to running behaviour. Items
+6-8 are decided per request or per backend, so there is no single moment at startup at which
+the binary could know whether a given deployment is affected.
+
+**Items 2 and 8 refuse the gateway's start. Item 7 permanently fails the backend it names,
+with one warning, and the gateway starts without it.** Read those three first if you are
+upgrading a running deployment.
 
 ## What changed
 
@@ -20,6 +26,9 @@ change rather than a runtime one and therefore has no startup notice.
 | 4 | Rate-limited responses no longer trip the breaker | None — this removes a failure mode |
 | 5 | One license across the repository | Commercial users need a commercial license |
 | 6 | Caching requires an identifiable protocol revision | Send the version header, or `initialize` the session |
+| 7 | An OAuth backend must be on TLS or loopback | Put TLS in front of it, or move it to `127.0.0.1` — no opt-out |
+| 8 | A credential-bearing backend on plain `http://` is refused at load | Use TLS, or set `allow_cleartext_credentials: true` on that backend |
+| 9 | The savings estimates are gone from stats | Drop `--price`; compute cost from `total_cached_tokens` yourself |
 
 ## 1. OAuth credentials are stored per issuer
 
