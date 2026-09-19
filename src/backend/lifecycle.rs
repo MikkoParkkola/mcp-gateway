@@ -1172,13 +1172,20 @@ impl Backend {
     /// not a fault: the transport carried a complete answer, so tearing it down
     /// would restart a working process every ten seconds.
     ///
-    /// Refusing is still not free. A peer that refuses every probe is
-    /// indistinguishable from a wedged one after long enough, so the count
-    /// bounds the patience: [`UNSERVED_ESCALATION`] consecutive refusals are
-    /// treated as the fault they have become. The count deliberately survives
-    /// an era invalidation - `server/discover` refused, then `ping` refused
-    /// twice is three refusals, not one and two - or a peer that answers
-    /// nothing would reset the escalation by changing which method it refuses.
+    /// Refusing is still not free for the codes that could also come from a
+    /// peer in trouble, so the count bounds the patience:
+    /// [`UNSERVED_ESCALATION`] consecutive such refusals are treated as the
+    /// fault they have become. The count deliberately survives an era
+    /// invalidation, or a peer that answers nothing would reset the escalation
+    /// by changing which method it refuses.
+    ///
+    /// `method not found` is exempt. `ping` is OPTIONAL in MCP, so declining
+    /// it is a stable property of the peer rather than a condition a restart
+    /// can clear, and a well-formed, id-correlated JSON-RPC answer is itself
+    /// proof the peer is alive and speaking the protocol - the opposite of
+    /// wedged. Escalating on it rebuilt a transport whose replacement declines
+    /// the same method, so the breaker tripped again on the next probes and a
+    /// conformant backend shed traffic indefinitely (GH #567).
     async fn record_unserved_probe(
         &self,
         method: &str,
@@ -1199,6 +1206,22 @@ impl Backend {
         // noticed.
         self.reprobe_if_code_contradicts(method, code, transport)
             .await;
+
+        // A peer that answers at all is not the peer this escalation exists to
+        // catch, and declining an optional method is the one refusal a restart
+        // provably cannot change. Reset rather than merely skip: a backend
+        // alternating `ping` refusals with a genuine fault must not accumulate
+        // the faults across the answers that proved it alive.
+        if code == crate::protocol::era::METHOD_NOT_FOUND_CODE {
+            self.unserved_consecutive.store(0, Ordering::SeqCst);
+            debug!(
+                backend = %self.name,
+                method,
+                code,
+                "Health probe declined an optional method; the answer is evidence of liveness"
+            );
+            return Ok(());
+        }
 
         let consecutive = self.unserved_consecutive.fetch_add(1, Ordering::SeqCst) + 1;
         if consecutive < UNSERVED_ESCALATION {

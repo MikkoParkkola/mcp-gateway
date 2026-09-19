@@ -1491,18 +1491,21 @@ async fn row_9b_positive_evidence_off_the_probe_path_reclassifies_the_peer() {
 }
 
 /// Row 9d — the escalation sequence section 3 uses to justify the bound, end to
-/// end, and the one that crosses an era invalidation: `server/discover` refused
-/// (invalidate, 1), `ping` refused (2), `ping` refused (3, trip and restart).
-/// An implementation that resets the unserved count when it invalidates the era
-/// leaves a refuse-everything backend permanently wedged and green.
+/// end, and the one that crosses an era invalidation: `server/discover` answers
+/// `-32601` (invalidate, and no count — row 10d), then three faulted answers
+/// escalate. An implementation that resets the unserved count when it
+/// invalidates the era leaves a failing backend permanently wedged and green.
 #[tokio::test]
 async fn row_9d_three_unserved_answers_across_an_invalidation_still_escalate() {
     let mock = Arc::new(
-        ProbeMock::modern_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
+        ProbeMock::modern_then(vec![ProbeAnswer::InBandError(
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        )])
+        .refusing(crate::error::rpc_codes::INTERNAL_ERROR),
     );
     let backend = probe_backend(Arc::clone(&mock), true).await;
 
-    for _ in 0..3 {
+    for _ in 0..4 {
         let _ = backend.health_probe(Duration::from_secs(5)).await;
     }
 
@@ -1521,9 +1524,8 @@ async fn row_9d_three_unserved_answers_across_an_invalidation_still_escalate() {
 /// the one that has stopped being a decline and started being a failure.
 #[tokio::test]
 async fn row_10_the_third_unserved_answer_trips_and_restarts() {
-    let mock = Arc::new(
-        ProbeMock::legacy_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
-    );
+    let mock =
+        Arc::new(ProbeMock::legacy_then(vec![]).refusing(crate::error::rpc_codes::INTERNAL_ERROR));
     let backend = probe_backend(Arc::clone(&mock), true).await;
 
     for tick in 1..=2 {
@@ -1545,6 +1547,45 @@ async fn row_10_the_third_unserved_answer_trips_and_restarts() {
     assert!(!still_wired(&backend, &mock));
 }
 
+/// Row 10d — `ping` is OPTIONAL in MCP, so a backend that answers `-32601` is
+/// conformant, not failing, and the refusal is a stable property of the peer
+/// rather than a condition a restart can clear. Escalating on it rebuilt a
+/// transport whose replacement declines the same method, tripping the breaker
+/// again ten seconds later: a conformant backend shed traffic indefinitely
+/// (GH #567, measured as 48.7% `tools/call` success against 100% at 3.5.x).
+/// A well-formed, id-correlated answer is evidence the peer is alive whatever
+/// its code, so `-32601` resets the count instead of spending it.
+#[tokio::test]
+async fn row_10d_method_not_found_is_liveness_and_never_escalates() {
+    let mock = Arc::new(
+        ProbeMock::legacy_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
+    );
+    let backend = probe_backend(Arc::clone(&mock), true).await;
+
+    // Two ticks past the escalation bound: the count may never reach it.
+    for tick in 1..=5u64 {
+        let _ = backend.health_probe(Duration::from_secs(5)).await;
+        assert!(
+            !backend.is_circuit_tripped(),
+            "answer {tick} declined an optional method and must not trip the breaker"
+        );
+        assert!(
+            still_wired(&backend, &mock),
+            "answer {tick} declined an optional method and must not restart the backend"
+        );
+    }
+
+    let (consecutive, total) = backend.unserved_counts_for_test();
+    assert_eq!(
+        consecutive, 0,
+        "a well-formed refusal proves the peer is alive, so it resets the escalation count"
+    );
+    assert_eq!(
+        total, 5,
+        "the answers are still unserved and still counted for telemetry"
+    );
+}
+
 /// Row 10c — "consecutive" counts answers, not ticks. A probe still waiting on
 /// a slow peer holds the wire, and the tick that lands while it is outstanding
 /// is skipped rather than sent: an implementation counting ticks escalates a
@@ -1554,7 +1595,7 @@ async fn row_10c_a_tick_landing_during_a_probe_is_skipped_not_counted() {
     let gate = Arc::new(tokio::sync::Notify::new());
     let mock = Arc::new(
         ProbeMock::legacy_then(vec![])
-            .refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE)
+            .refusing(crate::error::rpc_codes::INTERNAL_ERROR)
             .gated(Arc::clone(&gate)),
     );
     // The era resolve runs before the gate is armed by way of the script, so
@@ -1592,9 +1633,12 @@ async fn row_10c_a_tick_landing_during_a_probe_is_skipped_not_counted() {
     gate.notify_waiters();
     let _ = slow.await.expect("the held probe must finish");
 
+    // The lifetime total is this row's subject: one answer, however many ticks
+    // passed. The consecutive count reads zero because the single answer is the
+    // `-32601` `legacy_then` scripts, which row 10d exempts from escalation.
     assert_eq!(
         backend.unserved_counts_for_test(),
-        (1, 1),
+        (0, 1),
         "one answer is one unserved answer, however many ticks passed"
     );
 }
@@ -1605,9 +1649,8 @@ async fn row_10c_a_tick_landing_during_a_probe_is_skipped_not_counted() {
 /// also never trips.
 #[tokio::test]
 async fn row_11_a_served_result_resets_the_consecutive_count() {
-    let mock = Arc::new(
-        ProbeMock::legacy_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
-    );
+    let mock =
+        Arc::new(ProbeMock::legacy_then(vec![]).refusing(crate::error::rpc_codes::INTERNAL_ERROR));
     let backend = probe_backend(Arc::clone(&mock), true).await;
 
     for _ in 0..2 {
@@ -1616,7 +1659,7 @@ async fn row_11_a_served_result_resets_the_consecutive_count() {
     mock.set_default(ProbeAnswer::Result(json!({})));
     let _ = backend.health_probe(Duration::from_secs(5)).await;
     mock.set_default(ProbeAnswer::InBandError(
-        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        crate::error::rpc_codes::INTERNAL_ERROR,
     ));
     for _ in 0..2 {
         let _ = backend.health_probe(Duration::from_secs(5)).await;
@@ -1639,9 +1682,8 @@ async fn row_11_a_served_result_resets_the_consecutive_count() {
 /// trip.
 #[tokio::test]
 async fn row_11b_a_transport_fault_also_resets_the_consecutive_count() {
-    let mock = Arc::new(
-        ProbeMock::legacy_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
-    );
+    let mock =
+        Arc::new(ProbeMock::legacy_then(vec![]).refusing(crate::error::rpc_codes::INTERNAL_ERROR));
     let backend = probe_backend(Arc::clone(&mock), true).await;
 
     for _ in 0..2 {
@@ -1656,7 +1698,7 @@ async fn row_11b_a_transport_fault_also_resets_the_consecutive_count() {
     );
 
     mock.set_default(ProbeAnswer::InBandError(
-        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        crate::error::rpc_codes::INTERNAL_ERROR,
     ));
     backend.set_transport_for_test(Arc::clone(&mock) as Arc<dyn Transport>);
     for _ in 0..2 {
@@ -1677,9 +1719,8 @@ async fn row_11b_a_transport_fault_also_resets_the_consecutive_count() {
 /// buys is spent once and never again.
 #[tokio::test]
 async fn row_10b_an_escalation_clears_the_count_it_acted_on() {
-    let mock = Arc::new(
-        ProbeMock::legacy_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
-    );
+    let mock =
+        Arc::new(ProbeMock::legacy_then(vec![]).refusing(crate::error::rpc_codes::INTERNAL_ERROR));
     let backend = probe_backend(Arc::clone(&mock), true).await;
 
     for _ in 0..3 {
