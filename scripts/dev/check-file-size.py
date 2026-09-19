@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Enforce the 800-line ceiling on Rust source files.
 
 The ceiling governs a file, not a change. 91 files already exceed it, so the
