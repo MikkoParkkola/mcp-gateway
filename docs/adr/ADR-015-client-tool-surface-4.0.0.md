@@ -9,7 +9,7 @@
 
 Two tool surfaces exist in the tree at the 4.0.0 tip:
 
-- The **classic surface** — 17 meta-tools listed directly in `tools/list`, each with
+- The **classic surface** — 9-17 meta-tools listed directly in `tools/list`, each with
   its own schema, each individually gated.
 - **Code mode** — two tools, `gateway_search` and `gateway_execute`, where the
   client searches a registry and then names a target by string.
@@ -25,7 +25,7 @@ before any code was written.
 
 ## Decision
 
-**4.0.0 ships the classic 17-tool surface as the default. `code_mode.enabled`
+**4.0.0 ships the classic surface as the default. `code_mode.enabled`
 stays `false`. No nested meta routing is added in 4.0.0** — `gateway_execute`
 does not gain the ability to name a meta-tool as its target.
 
@@ -50,7 +50,7 @@ Three defects in the proposal, two of them confirmed against source:
    (`src/gateway/meta_mcp/search.rs:391-401`; the two collectors are at `:190`
    and `:228`). There is no meta-tool index and no meta-tool schema in the search
    result, so every management operation is invisible to an agent driving the
-   two-tool surface. Flipping the default today would hide 17 tools behind a
+   two-tool surface. Flipping the default today would hide the classic surface behind a
    search that does not know they exist.
 
 3. **Nested routing has no security design.** Reaching an admin operation through

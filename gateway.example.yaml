@@ -20,8 +20,8 @@ meta_mcp:
   surfaced_tools: []
   # Which of the gateway's own meta-tools this gateway lists and accepts.
   # Empty (the default) exposes all of them: the gateway bands its own surface at
-  # 14 to 17, listing the webhook, stats and config-reload tools only when the
-  # thing they report on is attached. A non-empty list is an allow-list, applied
+  # 9 to 17, listing the webhook, stats, cost, playbook, profile and
+  # config-reload tools only when the thing they report on is attached. A non-empty list is an allow-list, applied
   # by one predicate to
   # both `tools/list` and `tools/call`, so a hidden tool is also uncallable.
   # Backend tools reached through `gateway_invoke` are unaffected.

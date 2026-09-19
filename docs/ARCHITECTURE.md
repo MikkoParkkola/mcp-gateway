@@ -10,7 +10,7 @@
                          │                                                 │
   AI Client              │  ┌──────────────┐    ┌───────────────────┐      │
   (Claude, Cursor, etc.) │  │  HTTP Router  │───>│    Meta-MCP       │      │
-          |              │  │  (axum)       │    │  14-17 meta-tools:│      │
+          |              │  │  (axum)       │    │  9-17 meta-tools: │      │
           |              │  │               │    │  - list_servers   │      │
    POST /mcp             │  │  /mcp    ─────┼───>│  - list_tools    │      │
    ──────────────────────>  │  /mcp/{id}───┼──┐ │  - search_tools  │      │

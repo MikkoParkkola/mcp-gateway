@@ -1,8 +1,8 @@
 # mcp-gateway
 
-> Universal MCP gateway. The README schema-only first-request model keeps 17 Meta-MCP tools in context (~1700 tokens, 89% savings); completed-task results also count discovery turns and responses.
+> Universal MCP gateway. The README schema-only first-request model keeps 11 Meta-MCP tools in context (~1100 tokens, 93% savings); completed-task results also count discovery turns and responses.
 
-MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface (14 tools minimum, 17 in the README benchmark scenario) and discovers the right backend tool on demand.
+MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface (9 tools minimum, 11 in the README benchmark scenario) and discovers the right backend tool on demand.
 
 ## Install
 
@@ -38,7 +38,7 @@ Add to MCP config:
 
 ## Base Discovery Tools (4)
 
-These four discovery tools are always present. The minimum operational surface has 14 tools. The README benchmark scenario has 17.
+These four discovery tools are always present. The minimum operational surface has 9 tools. The README benchmark scenario has 11, and a deployment with every optional tool configured has 17. Counts are for an admin caller; others see four fewer.
 
 - gateway_search_tools(query) -- Semantic search across all backend tools by keyword
 - gateway_invoke(server, tool, arguments) -- Execute a tool on any backend

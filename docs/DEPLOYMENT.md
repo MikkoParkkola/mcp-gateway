@@ -945,9 +945,12 @@ Mode gateway with no tools at all. Write the list for the surface the gateway
 actually serves.
 
 Empty (the default) exposes the full surface, which the gateway itself bands at
-14 to 17 tools: the webhook, statistics and config-reload tools are listed only
-when the thing they report on is actually attached, and a webhook endpoint needs
-an HTTP listener to receive on. A non-empty list is an allow-list, and it is the same
+9 to 17 tools: the webhook, statistics, cost-report, playbook, profile and
+config-reload tools are listed only when the thing they report on is actually
+attached, and a webhook endpoint needs an HTTP listener to receive on. Nine is
+every gate off; a default HTTP deployment is served 11 and stdio 10, counted for
+an admin caller. Listing is disclosure only — a gated tool still dispatches by
+name and answers with what to configure. A non-empty list is an allow-list, and it is the same
 predicate that answers `tools/list` and admits `tools/call` — a tool withheld
 from the catalogue cannot be invoked by name, so this is a control and not a
 cosmetic filter. A call to a hidden tool is refused with the same answer a

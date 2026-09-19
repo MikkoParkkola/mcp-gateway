@@ -4,7 +4,7 @@
 
 ## System Overview
 
-The gateway sits between LLM clients (Claude Code, Cursor, etc.) and multiple MCP tool servers. Instead of loading all tool definitions into context (thousands of tokens), clients connect to the gateway and use a small set of **meta-tools** to discover and invoke tools on demand. The README's 89% figure is a schema-only first-request model; completed-task results also count discovery turns and responses.
+The gateway sits between LLM clients (Claude Code, Cursor, etc.) and multiple MCP tool servers. Instead of loading all tool definitions into context (thousands of tokens), clients connect to the gateway and use a small set of **meta-tools** to discover and invoke tools on demand. The README's 93% figure is a schema-only first-request model; completed-task results also count discovery turns and responses.
 
 ```
                             +-----------------------+
@@ -39,7 +39,11 @@ This is why `src/gateway/meta_mcp/prompt_cache.rs` exists even though the projec
 
 ## Meta-Tools
 
-The gateway advertises 14 to 17 meta-tools to connecting clients. Fourteen are unconditional — `gateway_cost_report` among them, because the served path builds it whatever the configuration says. `gateway_get_stats`, `gateway_reload_config` and `gateway_webhook_status` are the conditional additions, and they are where the ceiling of 17 comes from. The table below is the derivation: count the `yes` rows for the floor. When `code_mode.enabled` is set, this whole set is replaced by two tools, `gateway_search` and `gateway_execute`.
+The gateway advertises 9 to 17 meta-tools to connecting clients. Nine are unconditional; the other eight are each listed only where the gateway holds the thing that lets them answer, so a tool that would return "not configured" is not spent on context. A default HTTP deployment reaches 11 — the nine plus `gateway_reload_config` and `gateway_webhook_status`; stdio reaches 10, having no webhook registry. The table below is the derivation: count the `yes` rows for the floor.
+
+Every count here is what an **admin** caller is shown. `gateway_kill_server`, `gateway_revive_server`, `gateway_reload_config` and `gateway_reload_capabilities` are withheld from a caller without admin standing (`ADMIN_META_TOOLS`, `src/gateway/router/authorization.rs`), so the same deployments serve 6, 7 and 13. Gating is disclosure only: every one of the seventeen names still dispatches, and an ungated caller invoking a gated tool gets a refusal that says what to configure rather than "no such tool".
+
+When `code_mode.enabled` is set, this whole set is replaced by two tools, `gateway_search` and `gateway_execute`.
 
 | Tool | Always | Purpose |
 |------|--------|---------|
@@ -47,21 +51,21 @@ The gateway advertises 14 to 17 meta-tools to connecting clients. Fourteen are u
 | `gateway_list_tools` | yes | List tools from one backend (or all). Uses cached tool lists |
 | `gateway_search_tools` | yes | Keyword search across all backends with ranked results |
 | `gateway_invoke` | yes | Call any tool on any backend. Handles caching, idempotency, kill switch |
-| `gateway_get_stats` | if stats enabled | Usage stats: invocations, cache hits, top tools, and discovery counts |
-| `gateway_cost_report` | yes | Current session and API-key spend |
-| `gateway_webhook_status` | if a webhook registry is attached | Delivery counters for the webhook push pipeline. Listed where the registry exists (HTTP transports); callable by name everywhere, and governed either way |
-| `gateway_run_playbook` | yes | Execute a multi-step playbook as a single call |
 | `gateway_kill_server` | yes | Operator kill switch: immediately disable routing to a backend |
 | `gateway_revive_server` | yes | Re-enable a killed backend and reset its error budget |
-| `gateway_set_profile` | yes | Switch the active routing profile for this session. Refused on MCP 2026-07-28, which has no sessions |
-| `gateway_get_profile` | yes | Show the active routing profile and what it allows or denies. Refused on MCP 2026-07-28, which has no sessions |
 | `gateway_list_disabled_capabilities` | yes | List capabilities auto-disabled for a high error rate |
-| `gateway_list_profiles` | yes | List available routing profiles |
 | `gateway_set_state` | yes | Transition the session to a new workflow state |
-| `gateway_reload_config` | if reload enabled | Reload `config.yaml` from disk without restarting |
 | `gateway_reload_capabilities` | yes | Re-read capability YAML files and rebuild the registry |
+| `gateway_reload_config` | if a reload context is attached | Reload `config.yaml` from disk without restarting. Needs a config path, which both transports have when started from a file |
+| `gateway_webhook_status` | if a webhook registry is attached | Delivery counters for the webhook push pipeline. HTTP transports only; stdio has no registry |
+| `gateway_get_stats` | if `meta_mcp.expose_stats_tool` | Usage stats: invocations, cache hits, top tools, and discovery counts. Opt-in rather than collector-presence: `serve` always attaches a collector, so its presence never gated anything |
+| `gateway_cost_report` | if a cost registry is attached | Current session and API-key spend. Requires the `cost-governance` feature and `cost_governance.enabled` |
+| `gateway_run_playbook` | if at least one playbook is registered | Execute a multi-step playbook as a single call. An empty engine has nothing to name |
+| `gateway_set_profile` | if a routing profile is configured | Switch the active routing profile for this session. Refused on MCP 2026-07-28, which has no sessions |
+| `gateway_get_profile` | if a routing profile is configured | Show the active routing profile and what it allows or denies. Refused on MCP 2026-07-28, which has no sessions |
+| `gateway_list_profiles` | if a routing profile is configured | List available routing profiles |
 
-Defined in `src/gateway/meta_mcp_tool_defs.rs`, function `build_meta_tools()` (line 546).
+Defined in `src/gateway/meta_mcp_tool_defs.rs`, function `build_meta_tools()`; the gate struct beside it, `MetaToolGates`, is the machine-readable form of the Always column.
 
 ## Tool Discovery Resolution Order
 
