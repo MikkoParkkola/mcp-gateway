@@ -58,9 +58,13 @@ RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root user
+# Non-root user. `-m` is load-bearing: without it a system account gets no home
+# directory, and the gateway resolves the task store, the skill registry and the
+# chain checkpoint store under $HOME. The task store treats an uncreatable parent
+# as a fatal configuration error, so an image without this exits 1 on startup
+# before it reads any config, whatever the operator mounts.
 RUN groupadd -r -g 1001 gateway && \
-    useradd -r -u 1001 -g gateway -s /usr/sbin/nologin gateway
+    useradd -r -u 1001 -g gateway -m -d /home/gateway -s /usr/sbin/nologin gateway
 
 # Copy binary from builder
 COPY --from=builder /app/target/release/mcp-gateway /usr/local/bin/mcp-gateway

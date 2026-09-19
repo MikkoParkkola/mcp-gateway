@@ -1,0 +1,47 @@
+== NFR.DEMO.1 scenario 3: two personal accounts ==
+gateway:  mcp-gateway 4.0.0
+accounts: Alice (alice_notes) and Bob (bob_notes), two API keys on one gateway
+run dir:  $RUN_DIR/s3b
+gateway up (pid 64765, port 53362)
+
+-- each account reaches its own backend --
+alice -> {"jsonrpc":"2.0","id":1,"result":{"content":[{"text":"{\n  \"content\": [\n    {\n      \"text\": \"alice_notes answered: private\",\n      \"type\": \"text\"\n
+bob   -> {"jsonrpc":"2.0","id":1,"result":{"content":[{"text":"{\n  \"content\": [\n    {\n      \"text\": \"bob_notes answered: private\",\n      \"type\": \"text\"\n  
+[PASS] S3.ALICE_REACHES_HER_OWN
+        expected: alice_notes answered: private present
+        actual:   alice_notes answered: private present
+[PASS] S3.BOB_REACHES_HIS_OWN
+        expected: bob_notes answered: private present
+        actual:   bob_notes answered: private present
+
+-- neither reaches the other's --
+alice -> bob_notes: {"jsonrpc":"2.0","id":1,"error":{"code":-32003,"message":"Client 'Alice' not authorized for backend 'bob_notes'"}}
+bob   -> alice_notes: {"jsonrpc":"2.0","id":1,"error":{"code":-32003,"message":"Client 'Bob' not authorized for backend 'alice_notes'"}}
+[PASS] S3.ALICE_CANNOT_REACH_BOBS
+        expected: absent
+        actual:   absent
+[PASS] S3.BOB_CANNOT_REACH_ALICES
+        expected: absent
+        actual:   absent
+
+-- neither SEES the other's in the catalogue --
+alice catalogue: alice_notes,bob_notes,gateway,personal_inbox
+bob   catalogue: alice_notes,bob_notes,gateway,personal_inbox
+[PASS] S3.CATALOGUE_IS_NOT_ACCOUNT_SCOPED
+        expected: alice_notes,bob_notes,gateway,personal_inbox
+        actual:   alice_notes,bob_notes,gateway,personal_inbox
+[PASS] S3.CATALOGUE_LISTS_THE_UNINVOKABLE_BACKEND
+        expected: personal_inbox present
+        actual:   personal_inbox present
+
+-- the personally-bound backend is refused, not silently served --
+alice -> personal_inbox: {"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"JSON-RPC error -32001: Backend 'personal_inbox' uses a gateway-held OAuth login that is not isolated per user. On a multi-user gateway this call is refused so one user's token is never served to another. Fix: supply a per-user credential (enable identity propagation for this backend), or set `oauth.shared_account = true` if this is a genuin
+[PASS] S3.PERSONAL_BACKEND_REFUSED
+        expected: one user's token is never served to another present
+        actual:   one user's token is never served to another present
+[PASS] S3.PERSONAL_BACKEND_DID_NOT_ANSWER
+        expected: absent
+        actual:   absent
+
+results: $RUN_DIR/s3b/results.json
+transcript: $RUN_DIR/s3b/transcript.txt

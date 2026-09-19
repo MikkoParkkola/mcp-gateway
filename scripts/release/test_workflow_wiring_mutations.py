@@ -41,9 +41,11 @@ CASES = [
     (
         "verify-step-deleted",
         "ci.yml",
-        '          cosign verify \\\n            --certificate-identity "${IDENTITY}" \\\n'
-        "            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \\\n"
-        '            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        '            cosign verify \\\n'
+        '              --certificate-identity "${IDENTITY}" \\\n'
+        "              --certificate-oidc-issuer "
+        "'https://token.actions.githubusercontent.com' \\\n"
+        '              "${IMAGE}@${d}"\n',
         "",
         CAUGHT,
     ),
@@ -70,32 +72,44 @@ CASES = [
         CAUGHT,
     ),
     (
+        # Any signer whose certificate identity is a URL satisfies `.*`, so the
+        # check passes for a signature this workflow did not produce.
         "identity-relaxed-to-a-regexp",
-        "docker.yml",
-        'cosign verify \\\n            --certificate-identity "${IDENTITY}"',
-        'cosign verify \\\n            --certificate-identity-regexp ".*"',
+        "ci.yml",
+        '            cosign verify \\\n              --certificate-identity "${IDENTITY}"',
+        '            cosign verify \\\n              --certificate-identity-regexp ".*"',
         CAUGHT,
     ),
     (
         "sign-step-loses-its-digest-binding",
         "ci.yml",
-        "      - name: Cosign keyless-sign the released image by digest\n"
-        "        env:\n          DIGEST: ${{ steps.build.outputs.digest }}\n",
-        "      - name: Cosign keyless-sign the released image by digest\n",
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        env:\n"
+        "          LIST: ${{ steps.list.outputs.list }}\n"
+        "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
+        "          ARM64: ${{ steps.list.outputs.arm64 }}\n",
+        "      - name: Cosign keyless-sign the list and both children\n",
         CAUGHT,
     ),
     (
+        # The name still resolves an expression, and the expression still
+        # reads a step output. It reads the version, so the signature would
+        # cover a tag that moves rather than the bytes that were published.
         "digest-rebound-to-a-tag",
         "ci.yml",
-        "          DIGEST: ${{ steps.build.outputs.digest }}\n        run: cosign sign",
-        "          DIGEST: ${{ steps.meta.outputs.version }}\n        run: cosign sign",
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        env:\n          LIST: ${{ steps.list.outputs.list }}\n",
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        env:\n          LIST: ${{ steps.meta.outputs.version }}\n",
         CAUGHT,
     ),
     (
+        # The identity names a workflow that no longer signs anything, so the
+        # verification can only pass against a signature nothing produces.
         "identity-points-at-the-other-publisher",
-        "docker.yml",
-        "/.github/workflows/docker.yml@${{ github.ref }}",
+        "ci.yml",
         "/.github/workflows/ci.yml@${{ github.ref }}",
+        "/.github/workflows/docker.yml@${{ github.ref }}",
         CAUGHT,
     ),
     (
@@ -129,31 +143,34 @@ CASES = [
     (
         "step-without-a-name-borrows-its-neighbours-digest",
         "ci.yml",
-        "      - name: Generate + attest an SBOM (SPDX JSON) for the released image\n"
-        "        env:\n          DIGEST: ${{ steps.build.outputs.digest }}\n",
+        "      - name: Generate + attest an SBOM (SPDX JSON) per published digest\n"
+        "        env:\n"
+        "          LIST: ${{ steps.list.outputs.list }}\n"
+        "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
+        "          ARM64: ${{ steps.list.outputs.arm64 }}\n",
         "      - id: attest\n"
-        "        name: Generate + attest an SBOM (SPDX JSON) for the released image\n",
+        "        name: Generate + attest an SBOM (SPDX JSON) per published digest\n",
         CAUGHT,
     ),
     (
         "gate-invocation-echoed",
         "ci.yml",
-        "        run: python3 scripts/release/check_tag_manifest.py",
-        "        run: echo python3 scripts/release/check_tag_manifest.py",
+        '        id: meta\n        run: python3 scripts/release/check_tag_manifest.py',
+        '        id: meta\n        run: echo python3 scripts/release/check_tag_manifest.py',
         CAUGHT,
     ),
     (
         "gate-invocation-inside-an-echoed-string",
         "ci.yml",
-        "        run: python3 scripts/release/check_tag_manifest.py",
-        '        run: echo "skipped; python3 scripts/release/check_tag_manifest.py"',
+        '        id: meta\n        run: python3 scripts/release/check_tag_manifest.py',
+        '        id: meta\n        run: echo "skipped; python3 scripts/release/check_tag_manifest.py"',
         CAUGHT,
     ),
     (
         "gate-invocation-commented-out-in-ci",
         "ci.yml",
-        "        run: python3 scripts/release/check_tag_manifest.py",
-        "        run: |\n          # python3 scripts/release/check_tag_manifest.py\n          true",
+        '        id: meta\n        run: python3 scripts/release/check_tag_manifest.py',
+        '        id: meta\n        run: |\n          # python3 scripts/release/check_tag_manifest.py\n          true',
         CAUGHT,
     ),
     (
@@ -186,10 +203,9 @@ CASES = [
     (
         "digest-reassigned-in-the-shell",
         "ci.yml",
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        "        run: |\n"
-        '          DIGEST="${{ steps.meta.outputs.version }}"\n'
-        '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        '            cosign sign --yes "${IMAGE}@${d}"\n',
+        '            LIST="${{ steps.meta.outputs.version }}"\n'
+        '            cosign sign --yes "${IMAGE}@${d}"\n',
         CAUGHT,
     ),
     (
@@ -216,18 +232,42 @@ CASES = [
         CAUGHT,
     ),
     (
-        "digest-reassigned-inline-in-the-shell",
+        # The loop variable is what cosign expands, so rebinding `d` redirects
+        # every signature in the loop while the three digest bindings above it
+        # stay untouched.
+        "loop-variable-reassigned-in-the-shell",
         "ci.yml",
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        '        run: DIGEST="${{ steps.meta.outputs.version }}"; '
-        'cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        '            cosign sign --yes "${IMAGE}@${d}"\n',
+        '            d="${{ steps.meta.outputs.version }}"\n'
+        '            cosign sign --yes "${IMAGE}@${d}"\n',
         CAUGHT,
     ),
     (
+        # Binding a digest is not signing it: a `for` list that lost its
+        # platform children signs the index alone, and the job's own verify
+        # loop stays green because it checks what was signed.
+        "sign-loop-drops-the-platform-children",
+        "ci.yml",
+        '          for d in "${LIST}" "${AMD64}" "${ARM64}"; do\n'
+        '            cosign sign',
+        '          for d in "${LIST}"; do\n            cosign sign',
+        CAUGHT,
+    ),
+    (
+        "digest-reassigned-inline-in-the-shell",
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"\n',
+        '            LIST="${{ steps.meta.outputs.version }}"; '
+        'cosign sign --yes "${IMAGE}@${d}"\n',
+        CAUGHT,
+    ),
+    (
+        # Single quotes are the shell's: `${d}` never expands and cosign is
+        # handed a literal reference no registry resolves.
         "digest-reference-single-quoted",
-        "docker.yml",
-        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        "run: cosign sign --yes 'ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}'",
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"',
+        "            cosign sign --yes '${IMAGE}@${d}'",
         CAUGHT,
     ),
     (
@@ -247,19 +287,21 @@ CASES = [
     (
         "heredoc-steps-line-hides-a-lost-digest-binding",
         "ci.yml",
-        "      - name: Cosign keyless-sign the released image by digest\n"
-        "        env:\n          DIGEST: ${{ steps.build.outputs.digest }}\n"
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
-        "      - name: Cosign keyless-sign the released image by digest\n"
-        "        run: |\n          cat <<'YAML'\n          steps:\n          YAML\n"
-        '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        env:\n"
+        "          LIST: ${{ steps.list.outputs.list }}\n"
+        "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
+        "          ARM64: ${{ steps.list.outputs.arm64 }}\n"
+        "        run: |\n",
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        run: |\n          cat <<'YAML'\n          steps:\n          YAML\n",
         CAUGHT,
     ),
     (
         "signing-step-allowed-to-fail-at-its-name-key",
         "ci.yml",
-        "      - name: Cosign keyless-sign the released image by digest\n",
-        "      - name: Cosign keyless-sign the released image by digest\n"
+        "      - name: Cosign keyless-sign the list and both children\n",
+        "      - name: Cosign keyless-sign the list and both children\n"
         "        continue-on-error: true\n",
         CAUGHT,
     ),
@@ -274,14 +316,17 @@ CASES = [
     (
         "steps-key-in-a-heredoc-hides-the-signing-step",
         "ci.yml",
-        "      - name: Cosign keyless-sign the released image by digest\n"
-        "        env:\n          DIGEST: ${{ steps.build.outputs.digest }}\n",
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        env:\n"
+        "          LIST: ${{ steps.list.outputs.list }}\n"
+        "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
+        "          ARM64: ${{ steps.list.outputs.arm64 }}\n",
         "      - name: Describe the job\n"
         "        run: |\n"
         "          cat <<'EOF'\n"
         "          steps:\n"
         "          EOF\n"
-        "      - name: Cosign keyless-sign the released image by digest\n",
+        "      - name: Cosign keyless-sign the list and both children\n",
         CAUGHT,
     ),
     # The classification itself. Every guard above reads it from another job;
@@ -327,17 +372,18 @@ CASES = [
     (
         "digest-value-quoted",
         "ci.yml",
-        "          DIGEST: ${{ steps.build.outputs.digest }}\n"
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        '          DIGEST: "${{ steps.build.outputs.digest }}"\n'
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        env:\n          LIST: ${{ steps.list.outputs.list }}\n",
+        "      - name: Cosign keyless-sign the list and both children\n"
+        '        env:\n          LIST: "${{ steps.list.outputs.list }}"\n',
         TOLERATED,
     ),
     (
+        # A comment after the command is a comment.
         "trailing-comment-on-the-sign-command",
-        "docker.yml",
-        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}" # keyless, OIDC',
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"',
+        '            cosign sign --yes "${IMAGE}@${d}" # keyless, OIDC',
         TOLERATED,
     ),
     (
@@ -364,17 +410,19 @@ CASES = [
     (
         "digest-expression-without-inner-spaces",
         "ci.yml",
-        "          DIGEST: ${{ steps.build.outputs.digest }}\n"
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        "          DIGEST: ${{steps.build.outputs.digest}}\n"
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        env:\n          LIST: ${{ steps.list.outputs.list }}\n",
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        env:\n          LIST: ${{steps.list.outputs.list}}\n",
         TOLERATED,
     ),
     (
+        # A digest has no shell metacharacters, so dropping the quotes changes
+        # nothing about what is signed.
         "digest-reference-unquoted",
-        "docker.yml",
-        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        "run: cosign sign --yes ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}",
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"',
+        '            cosign sign --yes ${IMAGE}@${d}',
         TOLERATED,
     ),
     (
@@ -443,9 +491,9 @@ CASES = [
     (
         # `echo cosign sign` prints a command line. Nothing is signed.
         "cosign-sign-echoed-instead-of-run",
-        "docker.yml",
-        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        'run: echo cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"',
+        '            echo cosign sign --yes "${IMAGE}@${d}"',
         CAUGHT,
     ),
     (
@@ -461,9 +509,9 @@ CASES = [
         # The step's status is its last command's, so `|| true` reports a
         # successful signature over a failed one.
         "cosign-sign-failure-swallowed",
-        "docker.yml",
-        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"' + " || true",
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"',
+        '            cosign sign --yes "${IMAGE}@${d}"' + " || true",
         CAUGHT,
     ),
     (
@@ -478,11 +526,11 @@ CASES = [
     (
         # Single quotes bash keeps: the trailing space inside them makes the
         # whole thing one literal argument the registry cannot resolve, and
-        # `${DIGEST}` never expands.
+        # `${d}` never expands.
         "digest-reference-single-quoted-with-trailing-space",
-        "docker.yml",
-        'run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        "run: cosign sign --yes 'ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST} '",
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"',
+        "            cosign sign --yes '${IMAGE}@${d} '",
         CAUGHT,
     ),
     (
@@ -532,16 +580,18 @@ CASES = [
     ),
     (
         # A step may open with any key. Written `- env:`, the mapping sits two
-        # columns right of the item — and a `DIGEST:` line printed by the run
+        # columns right of the item — and a `LIST:` line printed by the run
         # body is not a binding however much it reads like one.
         "digest-binding-printed-by-a-step-opening-with-env",
         "ci.yml",
-        "      - name: Cosign keyless-sign the released image by digest\n"
-        "        env:\n          DIGEST: ${{ steps.build.outputs.digest }}\n"
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "      - name: Cosign keyless-sign the list and both children\n"
+        "        env:\n"
+        "          LIST: ${{ steps.list.outputs.list }}\n"
+        "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
+        "          ARM64: ${{ steps.list.outputs.arm64 }}\n"
+        "        run: |\n",
         "      - env:\n          NOTE: none\n        run: |\n"
-        "          DIGEST: ${{ steps.build.outputs.digest }}\n"
-        '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "          LIST: ${{ steps.list.outputs.list }}\n",
         CAUGHT,
     ),
     # Disarmament in place. The step, its name and its text all survive the
@@ -585,29 +635,29 @@ CASES = [
         # conditional exists to withhold from prereleases.
         "latest-fallback-made-unconditional",
         "ci.yml",
-        "            ${{ steps.meta.outputs.is_prerelease != 'true' "
-        "&& 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}\n",
-        "            ghcr.io/mikkoparkkola/mcp-gateway:latest\n",
+        "          LATEST_TAG: ${{ steps.meta.outputs.is_prerelease != 'true'"
+        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}\n",
+        "          LATEST_TAG: ghcr.io/mikkoparkkola/mcp-gateway:latest\n",
         CAUGHT,
     ),
     (
         # Signing a mutable tag signs whatever it points at later; echoing the
         # digest leaves the binding visible to any search for it.
         "sign-the-tag-then-echo-the-digest",
-        "docker.yml",
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
-        "        run: |\n"
-        '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway:latest"\n'
-        '          echo "${DIGEST}"\n',
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"\n',
+        '            cosign sign --yes "${IMAGE}:latest"\n'
+        '            echo "${d}"\n',
         CAUGHT,
     ),
     (
+        # `declare` is an assignment the command-position read has to see: the
+        # loop variable still expands, to a tag rather than a published digest.
         "digest-rebound-by-declare",
-        "docker.yml",
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
-        "        run: |\n"
-        '          declare DIGEST="latest"\n'
-        '          cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"\n',
+        '            declare LIST="latest"\n'
+        '            cosign sign --yes "${IMAGE}@${d}"\n',
         CAUGHT,
     ),
     # Disarmament that survives a search AND a command-position read. Each
@@ -646,13 +696,12 @@ CASES = [
         CAUGHT,
     ),
     (
-        # cosign runs, cosign fails, the step stays green and an unsigned
-        # image is already pushed.
+        # cosign runs, cosign fails, the step stays green and a tag that
+        # resolves to unsigned children is already published.
         "signature-failure-swallowed",
-        "docker.yml",
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
-        '        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"'
-        " || echo ignored",
+        "ci.yml",
+        '            cosign sign --yes "${IMAGE}@${d}"',
+        '            cosign sign --yes "${IMAGE}@${d}"' + " || echo ignored",
         CAUGHT,
     ),
     (
@@ -678,27 +727,24 @@ CASES = [
         CAUGHT,
     ),
     (
-        # ci.yml reads its classification from a step in its own job rather
-        # than from a job output. Point it at a step that does not exist and
-        # Actions yields the empty string, not an error.
+        # The guard still reads a step output. It reads one no step produces,
+        # so the expression is empty on every run and decides nothing.
         "latest-guard-reading-a-missing-step",
         "ci.yml",
-        "            ${{ steps.meta.outputs.is_prerelease != 'true'"
-        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}",
-        "            ${{ steps.missing.outputs.is_prerelease != 'true'"
-        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}",
+        "          LATEST_TAG: ${{ steps.meta.outputs.is_prerelease != 'true'"
+        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}\n",
+        "          LATEST_TAG: ${{ steps.missing.outputs.is_prerelease != 'true'"
+        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}\n",
         CAUGHT,
     ),
     (
-        # The guarded entry is untouched; a second, unguarded one is added
-        # below it. Every assertion that reads the guard still finds it.
+        # The guarded tag is untouched; a second, unguarded one joins it in
+        # the argument array. Every assertion that reads the guard still
+        # finds it, and :latest moves on a release candidate anyway.
         "latest-tagged-again-unconditionally",
         "ci.yml",
-        "            ${{ steps.meta.outputs.is_prerelease != 'true'"
-        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}",
-        "            ${{ steps.meta.outputs.is_prerelease != 'true'"
-        " && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}\n"
-        "            ghcr.io/mikkoparkkola/mcp-gateway:latest",
+        '          TAGS=(--tag "${IMAGE}:${VERSION}")\n',
+        '          TAGS=(--tag "${IMAGE}:${VERSION}" --tag "${IMAGE}:latest")\n',
         CAUGHT,
     ),
     (
@@ -723,6 +769,101 @@ CASES = [
         "          python3 scripts/release/check_tag_manifest.py",
         TOLERATED,
     ),
+    (
+        # The shape this PR was reviewed for: the release tag created by the
+        # first `imagetools create`, before anything is signed. The tag is
+        # then pullable and unsigned for the whole signing span, and the
+        # verify-by-digest below passes anyway.
+        "release-tag-created-before-signing",
+        "ci.yml",
+        '          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}" \\\n',
+        '          docker buildx imagetools create --tag "${IMAGE}:${VERSION}" \\\n',
+        CAUGHT,
+    ),
+    (
+        # The release copy ALSO run before signing, with the late one left in
+        # place: every string the suite looks for is still where it was, and
+        # only the step order says the tag existed unsigned first.
+        "release-tag-copied-before-signing-as-well",
+        "ci.yml",
+        '          echo "published platforms: ${PLATFORMS}"\n',
+        '          echo "published platforms: ${PLATFORMS}"\n'
+        '          docker buildx imagetools create "${TAGS[@]}" "${IMAGE}@${LIST}"\n',
+        CAUGHT,
+    ),
+    (
+        # The stable major.minor pointer dropped, as the first draft of this
+        # job dropped it: consumers pinned to :4.0 stop receiving releases.
+        "major-minor-pointer-dropped",
+        "ci.yml",
+        '            MAJOR_MINOR="$(printf \'%s\' "${VERSION}" | cut -d. -f1,2)"\n'
+        '            TAGS+=(--tag "${IMAGE}:${MAJOR_MINOR}")\n',
+        "",
+        CAUGHT,
+    ),
+    (
+        # The pointer kept but moved out of the stable guard, so a release
+        # candidate moves :4.0 for every consumer pinned to it.
+        "major-minor-pointer-outside-the-stable-guard",
+        "ci.yml",
+        '          TAGS=(--tag "${IMAGE}:${VERSION}")\n'
+        '          if [ -n "${LATEST_TAG}" ]; then\n'
+        '            TAGS+=(--tag "${LATEST_TAG}")\n',
+        '          TAGS=(--tag "${IMAGE}:${VERSION}")\n'
+        '          MAJOR_MINOR_ALWAYS="$(printf \'%s\' "${VERSION}" | cut -d. -f1,2)"\n'
+        '          TAGS+=(--tag "${IMAGE}:${MAJOR_MINOR_ALWAYS}")\n'
+        '          if [ -n "${LATEST_TAG}" ]; then\n'
+        '            TAGS+=(--tag "${LATEST_TAG}")\n',
+        CAUGHT,
+    ),
+    (
+        # The unpinned fetch restored: the binary handed a publish token is
+        # whatever the upstream repository shipped most recently.
+        "mcp-publisher-back-on-releases-latest",
+        "ci.yml",
+        '"https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/${ASSET}"',
+        '"https://github.com/modelcontextprotocol/registry/releases/latest/download/${ASSET}"',
+        CAUGHT,
+    ),
+    (
+        # Pinned but unverified -- a release asset replaced in place still
+        # reaches the token, so the pin alone is not the control.
+        "mcp-publisher-pinned-but-not-verified",
+        "ci.yml",
+        "          printf '%s  %s\\n' \"${SHA256}\" \"${ASSET}\" | sha256sum --check --strict -",
+        "          # checksum check removed",
+        CAUGHT,
+    ),
+    (
+        # Tolerated by design: `--strict` hardens the check but the assertion
+        # is about a checksum running at all, and pinning the exact flag set
+        # would fail the next time the line is reasonably reworded.
+        "mcp-publisher-checksum-without-strict",
+        "ci.yml",
+        "| sha256sum --check --strict -",
+        "| sha256sum --check -",
+        TOLERATED,
+    ),
+    (
+        # The second publisher back on the same name from the same commit.
+        "docker-yml-pushing-on-a-tag-again",
+        "docker.yml",
+        "        push: ${{ github.event_name != 'pull_request'"
+        " && !startsWith(github.ref, 'refs/tags/v') }}",
+        "        push: ${{ github.event_name != 'pull_request' }}",
+        CAUGHT,
+    ),
+    (
+        # Equivalent spelling: the guard written with the negation outside.
+        # A workflow nobody can reformat is a workflow whose checks get
+        # deleted instead.
+        "release-tag-copy-with-the-image-spelled-inline",
+        "ci.yml",
+        '          docker buildx imagetools create "${TAGS[@]}" "${IMAGE}@${LIST}"',
+        '          docker buildx imagetools create "${TAGS[@]}" '
+        '"ghcr.io/mikkoparkkola/mcp-gateway@${LIST}"',
+        TOLERATED,
+    ),
 ]
 
 
@@ -739,7 +880,11 @@ def verdict(directory, workflow, before, after):
     path.write_text(original.replace(before, after, 1), encoding="utf-8")
     try:
         done = subprocess.run(
-            [sys.executable, str(SUITE), "WorkflowWiring"],
+            # SupplyChain reads the same workflow copies and is one-sided in the
+            # same way, so it is mutated by the same corpus. Classes that read
+            # the working tree rather than the copy are left out: a mutation
+            # cannot reach them, so they would report tolerated for every case.
+            [sys.executable, str(SUITE), "WorkflowWiring", "SupplyChain"],
             capture_output=True,
             text=True,
             env={**os.environ, "MCPGW_WORKFLOWS_DIR": str(directory)},

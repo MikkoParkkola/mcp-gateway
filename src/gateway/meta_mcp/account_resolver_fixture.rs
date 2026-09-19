@@ -114,6 +114,12 @@ pub(super) const AUTHORIZATION_EPOCH: u64 = 1;
 /// The revision a seeded grant starts at; a refresh commits revision 2.
 pub(super) const SEEDED_REVISION: u64 = 1;
 pub(super) const REFRESHED_REVISION: u64 = 2;
+/// A generation distinct from [`GENERATION`], published only by
+/// [`revoke_and_reconnect`]. A real re-consent mints a NEW generation; a token
+/// rotation under the same consent (`reconnect_from`) does not, so a fixture
+/// that reused [`GENERATION`] here would be unable to tell the two boundaries
+/// apart.
+pub(super) const RECONNECT_GENERATION: &str = "0123456789abcdef0123456789abcdef";
 
 /// Display fields are IDENTICAL for every principal. `email`/`name` are mutable
 /// labels and must not enter the account key; making them equal means a binding
@@ -235,6 +241,44 @@ pub(super) fn reconnect_from(
     let mut next = grant(access_token, current.expires_at);
     next.token_revision = REFRESHED_REVISION;
     (expectation, next)
+}
+
+/// Revoke `current` through the REAL custody handle, then publish a successor
+/// under [`RECONNECT_GENERATION`] — a distinct generation, modelling an actual
+/// re-consent boundary rather than the same-generation token bump
+/// [`reconnect_from`] models. Both the revoke and the successor commit go
+/// through the live `CustodyHandle`, so this is the real publication path and
+/// not a store a test reopened behind custody's back.
+///
+/// The CAS expectation named here is `Revoked`, matching the state
+/// `invalidate` just committed: a `Connected` expectation would be asking the
+/// store to compare against a state that no longer exists, and the commit
+/// would be fenced.
+pub(super) async fn revoke_and_reconnect(
+    custody: &Custody,
+    account: &AccountKey,
+    current: &GrantRecord,
+    access_token: &str,
+) -> GrantRecord {
+    custody
+        .handle
+        .invalidate(account)
+        .await
+        .expect("the seeded grant must revoke through real custody");
+    let expectation = ConsentExpectation::Revoked(GrantVersion {
+        generation: current.generation.clone(),
+        token_revision: current.token_revision,
+        authorization_epoch: current.authorization_epoch,
+        descriptor_revision: current.descriptor_revision.clone(),
+    });
+    let mut next = grant(access_token, current.expires_at);
+    next.generation = RECONNECT_GENERATION.to_string();
+    custody
+        .handle
+        .commit_grant_if(account, &expectation, &next)
+        .await
+        .expect("the reconnected grant must be published through live custody");
+    next
 }
 
 fn store_config(root: &std::path::Path) -> StoreConfig {

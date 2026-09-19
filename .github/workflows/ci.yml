@@ -329,6 +329,10 @@ jobs:
         run: python3 scripts/release/test_scope_acceptance.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
+      - name: Test the NFR.DEMO.1 recording gate
+        run: python3 scripts/release/test_check_nfr_demo_1_recordings.py
+      - name: Check the NFR.DEMO.1 recording manifest against its transcripts
+        run: python3 scripts/release/check_nfr_demo_1_recordings.py
       # Proves the workflow-wiring assertions still discriminate: each case
       # breaks one rule, or restates it in an equivalent spelling, and the
       # suite has to return the stated verdict. Runs against a copy of the
@@ -382,6 +386,18 @@ jobs:
       - name: Run CWE-532 leak lint
         run: python3 scripts/dev/cwe532-leak-lint.py src crates
 
+  file-size-ceiling:
+    name: File-size ceiling (800 lines)
+    # The ceiling governs a file, not a change. 91 files already exceed it, so
+    # the gate ratchets off a recorded baseline: a listed file may shrink,
+    # never grow, and no file may newly cross 800 lines. Splitting the existing
+    # offenders is sequenced after the release to avoid mass merge conflicts.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the 800-line ceiling
+        run: python3 scripts/dev/check-file-size.py
+
   control-drift-probes:
     name: Control-drift probes (NFR.SEC.7)
     # CI cannot detect drift — there is no listening install here, and by
@@ -396,10 +412,30 @@ jobs:
       - name: Test the drift probes (fail when a probe stops discriminating)
         run: python3 scripts/dev/test_check_control_drift.py
 
-  docker:
-    name: Docker
-    runs-on: ubuntu-latest
+  docker-build:
+    name: Docker (${{ matrix.arch }})
+    # `matrix.os`, not a name of this job's own choosing: the hosted-runner
+    # guard resolves that one expression against the matrix entries below and
+    # checks each image on its own (scripts/ci/check-hosted-runners.sh).
+    runs-on: ${{ matrix.os }}
     if: startsWith(github.ref, 'refs/tags/v')
+    # Each leg builds natively and starts its own image on its own architecture,
+    # which is the only way an arm64 startup break is observable -- an amd64
+    # runner starting an amd64 image says nothing about arm64 (NFR.PKG.1).
+    # release.yml:176 already builds aarch64 on this runner label.
+    strategy:
+      # A half-finished matrix must not reach docker-manifest: the tag is
+      # created there from both digests, and one leg alone is not the list this
+      # criterion asks for.
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            os: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            os: ubuntu-24.04-arm
     # secrets-scan + secret-leak-lint added so the container image release
     # path can't ship on a tag whose push already failed a security check —
     # previously this job's needs: covered clippy/test/fmt/audit but not the
@@ -409,15 +445,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write # keyless cosign signing (OIDC)
-    env:
-      # Busts the runtime stage's apt layer once per run. The scan build and the
-      # push build below both read this, so the layers trivy clears are the
-      # layers that ship. Defined here rather than inline in each step for the
-      # same reason docker.yml defines it at workflow level: two inline copies
-      # can drift, and the drift is silent — the scan would still pass, just on
-      # an image nobody publishes.
-      APT_CACHE_BUST: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -441,60 +468,169 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build once and load locally so trivy inspects the artifact BEFORE any
-      # layer reaches ghcr.io. docker.yml gates its own push this way, but a
-      # workflow cannot read another workflow's job result, so the publisher of
-      # the tags users actually pull needs its own gate rather than inheriting
-      # one. The push build below restores these layers from the gha cache, so
-      # on a cache hit it publishes the bytes trivy just cleared. That identity
-      # is cache-dependent, not structural: a partial miss rebuilds a layer the
-      # scan never saw. Making it structural means pushing the loaded artifact
-      # by digest instead of rebuilding — the same change #529 needs, tracked
-      # there rather than duplicated here.
-      - name: Build image for vulnerability scan (load locally, no push)
+      # Build once, push by digest with no tag, then pull that digest back and
+      # test it. The alternative -- build-and-load, smoke, build-and-push --
+      # makes "the bytes that reached healthy are the bytes published" depend on
+      # a build-cache hit across two invocations, and this image runs
+      # `apt-get upgrade`, whose output is not a function of the Dockerfile.
+      # Here the published blob is the tested blob by construction, and nothing
+      # is resolvable by name until docker-manifest creates the tag.
+      #
+      # provenance/sbom are off deliberately: build-push-action v7 attaches a
+      # provenance attestation by default on Actions, which makes the pushed
+      # artifact an index rather than a single-platform manifest, and an index
+      # cannot be a child of `imagetools create`. The release SBOM is generated
+      # by syft in docker-manifest, against the published digest.
+      - name: Build and push by digest (no tag)
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          load: true
-          # Ephemeral local tag; never pushed. Lowercase because Docker requires
-          # it and `github.repository` carries the original-case owner.
-          tags: ghcr.io/mikkoparkkola/mcp-gateway:scan
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          sbom: false
+          outputs: type=image,name=ghcr.io/mikkoparkkola/mcp-gateway,push-by-digest=true,name-canonical=true,push=true
+          # Same reason as docker.yml: without a per-build value the runtime
+          # stage's `apt-get upgrade` is restored from the shared gha cache, and
+          # a release image ships whatever packages were current when that layer
+          # was first built.
           build-args: |
-            APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            APT_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+          # Scoped per arch: an unscoped scope has both legs writing one cache
+          # entry, so each run thrashes the other's layers.
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
 
-      - name: Trivy image scan (block push on fixable HIGH/CRITICAL CVEs)
+      - name: Pull the pushed digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: docker pull "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+
+      # The image CVE gate lived only in docker.yml, so the release publisher
+      # pushed without one (#536). It runs here, per leg, against the digest
+      # that will be tagged -- the arm64 image has its own base-image layers
+      # and so its own CVEs.
+      - name: Trivy image scan (block the tag on fixable HIGH/CRITICAL CVEs)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/mikkoparkkola/mcp-gateway:scan
+          image-ref: ghcr.io/mikkoparkkola/mcp-gateway@${{ steps.build.outputs.digest }}
           format: table
           exit-code: "1"
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           trivyignores: .trivyignore
 
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      - name: Smoke test the image (it must start and report healthy)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: scripts/ci/smoke-image.sh "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+
+      - name: Record the digest for the manifest job
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p digests
+          printf '%s' "${DIGEST}" > "digests/${{ matrix.arch }}"
+          test -s "digests/${{ matrix.arch }}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          context: .
-          push: true
-          # The version tag is always pushed; :latest moves only for a stable
-          # release, so `docker pull` with no tag cannot land on a candidate.
-          # Signing and SBOM attestation below run against the digest, so an rc
-          # adopter gets the same supply-chain guarantees either way.
-          tags: |
-            ghcr.io/mikkoparkkola/mcp-gateway:${{ steps.meta.outputs.version }}
-            ${{ steps.meta.outputs.is_prerelease != 'true' && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}
-          # Same reason as docker.yml: without a per-build value the runtime
-          # stage's `apt-get upgrade` is restored from the shared gha cache, and
-          # a release image ships whatever packages were current when that layer
-          # was first built.
-          build-args: |
-            APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          name: image-digest-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}
+          retention-days: 1
+          if-no-files-found: error
+
+  docker-manifest:
+    name: Docker manifest list
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: docker-build
+    # Read by publish-mcp-registry, which must not list a release candidate.
+    outputs:
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # keyless cosign signing (OIDC)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Extract tag
+        id: meta
+        run: python3 scripts/release/check_tag_manifest.py
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download the leg digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: image-digest-*
+          merge-multiple: true
+          path: digests
+
+      # The index is built under a provenance-only name, never a release tag.
+      # A release tag created here would be pullable and unsigned for the whole
+      # signing span, and `cosign verify` by digest passes afterwards either
+      # way — it never reads a tag (#529). The release tags are put on this
+      # same digest below, once the signature over it verifies.
+      #
+      # The MCP Registry validator reads io.modelcontextprotocol.server.name
+      # off what the tag resolves to. Dockerfile:42 sets it as a LABEL, which
+      # lives in each child's image config and is not carried onto an index
+      # by `imagetools create`, so it is annotated onto the index here as
+      # well. A validator that resolves a platform child and one that reads
+      # the index both find it.
+      #
+      # Annotated exactly once. Annotating rewrites the index, which changes
+      # its digest; repeating it on the release copy below would publish bytes
+      # no signature covers.
+      - name: Create the manifest list under a provenance tag
+        id: list
+        run: |
+          set -euo pipefail
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          AMD64="$(cat digests/amd64)"
+          ARM64="$(cat digests/arm64)"
+          # Both legs are required. An absent file here means a leg was skipped
+          # rather than failed, and a one-platform "list" published under the
+          # release tag is the defect this job exists to prevent.
+          test -n "${AMD64}" && test -n "${ARM64}"
+          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}" \
+            --annotation "index:io.modelcontextprotocol.server.name=io.github.MikkoParkkola/mcp-gateway" \
+            "${IMAGE}@${AMD64}" "${IMAGE}@${ARM64}"
+          LIST="$(docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}" \
+            --format '{{.Manifest.Digest}}')"
+          docker buildx imagetools inspect "${IMAGE}@${LIST}"
+          {
+            printf 'list=%s\n' "${LIST}"
+            printf 'amd64=%s\n' "${AMD64}"
+            printf 'arm64=%s\n' "${ARM64}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Assert the list carries both platforms
+        env:
+          LIST: ${{ steps.list.outputs.list }}
+        run: |
+          set -euo pipefail
+          PLATFORMS="$(docker buildx imagetools inspect \
+            "ghcr.io/mikkoparkkola/mcp-gateway@${LIST}" \
+            --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')"
+          echo "published platforms: ${PLATFORMS}"
+          for want in linux/amd64 linux/arm64; do
+            case " ${PLATFORMS} " in
+              *" ${want} "*) ;;
+              *) echo "::error::${want} missing from the published manifest list"; exit 1 ;;
+            esac
+          done
 
       - name: Install cosign
         # cosign-release is pinned so flag behavior can't drift under a v3 default.
@@ -505,34 +641,180 @@ jobs:
       - name: Install syft (SBOM)
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
 
-      - name: Cosign keyless-sign the released image by digest
+      # The list and both children are signed. A client on arm64 resolves the
+      # arm64 child, so signing only the list would leave what that client
+      # actually runs unverifiable under a platform-specific reference.
+      - name: Cosign keyless-sign the list and both children
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
-
-      - name: Generate + attest an SBOM (SPDX JSON) for the released image
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          LIST: ${{ steps.list.outputs.list }}
+          AMD64: ${{ steps.list.outputs.amd64 }}
+          ARM64: ${{ steps.list.outputs.arm64 }}
         run: |
           set -euo pipefail
-          syft "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}" -o spdx-json > sbom.spdx.json
-          test -s sbom.spdx.json
-          cosign attest --yes --predicate sbom.spdx.json --type spdxjson \
-            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          for d in "${LIST}" "${AMD64}" "${ARM64}"; do
+            cosign sign --yes "${IMAGE}@${d}"
+          done
+
+      - name: Generate + attest an SBOM (SPDX JSON) per published digest
+        env:
+          LIST: ${{ steps.list.outputs.list }}
+          AMD64: ${{ steps.list.outputs.amd64 }}
+          ARM64: ${{ steps.list.outputs.arm64 }}
+        run: |
+          set -euo pipefail
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          for d in "${LIST}" "${AMD64}" "${ARM64}"; do
+            syft "${IMAGE}@${d}" -o spdx-json > sbom.spdx.json
+            test -s sbom.spdx.json
+            cosign attest --yes --predicate sbom.spdx.json --type spdxjson "${IMAGE}@${d}"
+          done
 
       - name: Verify the release signature + SBOM attestation
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          LIST: ${{ steps.list.outputs.list }}
+          AMD64: ${{ steps.list.outputs.amd64 }}
+          ARM64: ${{ steps.list.outputs.arm64 }}
           # Exact signer identity: THIS workflow file at the pushed tag ref, so a
           # different workflow with OIDC cannot satisfy the check.
           IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml@${{ github.ref }}
         run: |
           set -euo pipefail
-          cosign verify \
-            --certificate-identity "${IDENTITY}" \
-            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
-          cosign verify-attestation --type spdxjson \
-            --certificate-identity "${IDENTITY}" \
-            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          for d in "${LIST}" "${AMD64}" "${ARM64}"; do
+            cosign verify \
+              --certificate-identity "${IDENTITY}" \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "${IMAGE}@${d}"
+            cosign verify-attestation --type spdxjson \
+              --certificate-identity "${IDENTITY}" \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "${IMAGE}@${d}"
+          done
+
+      # Only now does a release name exist. Copying an index by digest is a
+      # byte-identical put — the digest is unchanged, so the signature and the
+      # SBOM attestation verified above cover exactly what these tags serve.
+      #
+      # An index as the source is not the case the build step's comment rules
+      # out: composing several sources into a new index cannot take an index as
+      # a child, but a single source with no annotations is copied rather than
+      # composed. The step below is the runtime check on that distinction.
+      - name: Publish the release tags (copy the verified index by digest)
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          LIST: ${{ steps.list.outputs.list }}
+          # The version tag is always created; :latest and the major.minor
+          # pointer move only for a stable release, so `docker pull` with no
+          # tag — or pinned to :4.0 — cannot land on a candidate. Kept as one
+          # expression rather than a shell branch so the release guard can
+          # read which way round it is, and the major.minor tag hangs off the
+          # same guard so a candidate cannot move one pointer without the
+          # other.
+          LATEST_TAG: ${{ steps.meta.outputs.is_prerelease != 'true' && 'ghcr.io/mikkoparkkola/mcp-gateway:latest' || '' }}
+        run: |
+          set -euo pipefail
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          TAGS=(--tag "${IMAGE}:${VERSION}")
+          if [ -n "${LATEST_TAG}" ]; then
+            TAGS+=(--tag "${LATEST_TAG}")
+            # Derived, never spelled: a literal stops following the release
+            # the first time the minor moves. `cut`, not `${VERSION%.*}`,
+            # which yields 4.0.0-rc on a candidate if this guard ever leaks.
+            MAJOR_MINOR="$(printf '%s' "${VERSION}" | cut -d. -f1,2)"
+            TAGS+=(--tag "${IMAGE}:${MAJOR_MINOR}")
+          fi
+          docker buildx imagetools create "${TAGS[@]}" "${IMAGE}@${LIST}"
+
+      # The falsifier for the invariant above. A copy that rewrote the index —
+      # an added annotation, a buildx that normalises — lands on a different
+      # digest, and the release tag would then serve bytes no signature covers.
+      - name: Assert the release tag resolves to the signed digest
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          LIST: ${{ steps.list.outputs.list }}
+        run: |
+          set -euo pipefail
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          PUBLISHED="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+            --format '{{.Manifest.Digest}}')"
+          if [ "${PUBLISHED}" != "${LIST}" ]; then
+            echo "::error::${IMAGE}:${VERSION} resolves to ${PUBLISHED}, not the signed ${LIST}"
+            exit 1
+          fi
+
+  # Moved here from docker.yml with the tag push it depends on: this job rewrites
+  # server.json to name ghcr.io/mikkoparkkola/mcp-gateway:VERSION and the MCP
+  # Registry resolves that exact reference (registry
+  # internal/validators/registries/oci.go), so it can only run after the job
+  # that creates the tag. Running it here also means a version reaches a public
+  # discovery surface only once the suite that qualifies it has passed.
+  publish-mcp-registry:
+    name: Publish to the MCP Registry
+    # Skipped on a prerelease. The MCP Registry is a discovery surface where
+    # nobody opts in to a version, so listing a release candidate there exposes
+    # it to every client that browses the registry.
+    if: startsWith(github.ref, 'refs/tags/v') && needs.docker-manifest.outputs.is_prerelease != 'true'
+    needs: docker-manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # This binary is handed an OIDC token with publish rights to the public
+      # MCP Registry under this project's name, so it is pinned and verified.
+      # `releases/latest` resolved at run time: the token went to whatever the
+      # upstream repository had published most recently, which nobody here had
+      # reviewed. A pin alone is not enough either -- a release asset can be
+      # replaced in place -- so the checksum is what actually binds the bytes.
+      # Bumping the version means replacing the digest in the same commit,
+      # which is the review this step was missing.
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+          ASSET="mcp-publisher_${OS}_${ARCH}.tar.gz"
+          # Both linux legs are pinned so a runner-label change fails loudly
+          # here rather than silently reintroducing an unverified download.
+          case "${OS}_${ARCH}" in
+            linux_amd64) SHA256=a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc ;;
+            linux_arm64) SHA256=8dd75a6cf6845688b5d4e46df58d3ca26d5c8d233bb0626606e1db82c5e883e4 ;;
+            *) echo "::error::no pinned mcp-publisher checksum for ${OS}_${ARCH}"; exit 1 ;;
+          esac
+          # v1.8.1 -- the digests above are of that release's assets.
+          curl -fsSL -o "${ASSET}" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/${ASSET}"
+          printf '%s  %s\n' "${SHA256}" "${ASSET}" | sha256sum --check --strict -
+          tar xzf "${ASSET}" mcp-publisher
+          chmod +x mcp-publisher
+
+      - name: Set release metadata
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${VERSION}"
+          jq --arg version "$VERSION" --arg image "$IMAGE" \
+            '.version = $version
+             | del(.packages[0].version)
+             | .packages[0].identifier = $image
+             | (.packages[] | select(.registryType == "cargo") | .version) = $version' \
+            server.json > server.tmp
+          mv server.tmp server.json
+
+      - name: Confirm the published reference resolves before listing it
+        # The registry resolves packages[0].identifier itself; a 404 there is a
+        # broken public listing, so fail here instead.
+        run: |
+          set -euo pipefail
+          IMAGE="$(jq -r '.packages[0].identifier' server.json)"
+          docker buildx imagetools inspect "${IMAGE}" > /dev/null
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish

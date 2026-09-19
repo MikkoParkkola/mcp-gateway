@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-09-19
+
+> Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). A 3.x `gateway.yaml`
+> loads unchanged and no migration edits it; the strict `env_files` parsing is the one change that
+> refuses a start rather than warning. The first start from a 3.x install prints the changes that
+> need an operator action.
+
 ### Added
 
 - **The kill-switch error budgets are tunable from the config file** (GH #475).
@@ -23,6 +30,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown key at either level is refused too, so a typo is not read as a
   default. The section is read when the meta-MCP server is built, so an edit to
   it is reported as restart-required rather than appearing to take effect.
+
+- **`meta_mcp.exposed_meta_tools` restricts the meta-tool surface** (GH issue 449):
+  an allow-list of meta-tools to expose, enforced on both `tools/list` and
+  `tools/call` for every meta-tool built-in, including the two Code Mode tools
+  (`gateway_search`, `gateway_execute`). The field is new in 4.0.0 and defaults to
+  empty, which exposes everything as before, so no existing configuration changes
+  behaviour on upgrade. An allow-list that omits `gateway_invoke` is honoured and
+  logged as a warning, since it leaves backend tools unreachable through the
+  gateway. `meta_mcp.surfaced_tools` is a separate list and is unaffected.
+
+- **First start after upgrading to 4.0.0 prints what changed underneath it.**
+  The release re-keys OAuth credentials, refuses a malformed `env_files` line at
+  startup instead of ignoring it, stops advertising protocol revision
+  2024-10-07 and stops counting rate limiting against error budgets. Each is
+  announced once, on the first start from a 3.x install; the notice reads no
+  configuration and writes none.
+
+- **MCP protocol revision 2026-07-28, behind `server.modern_protocol`.** The
+  revision removes the `initialize` handshake, protocol sessions and the
+  `Mcp-Session-Id` header, `ping`, `logging/setLevel` and server-initiated
+  requests; it adds `server/discover`, per-request metadata, multi-round-trip
+  requests, required result and cacheability fields, and the standard request
+  headers.
+
+  **The switch is on by default in 4.0.0.** A stock gateway serves 2026-07-28 to
+  a client that asks for it, and downgrades to the highest revision the client
+  supports otherwise. Set `server.modern_protocol: false` to serve the legacy
+  generation only. With it off, a client asking for 2026-07-28 is refused with
+  `UnsupportedProtocolVersion` — an answer it can act on — rather than served
+  half a revision, where the half that works hides the half that does not.
+  Clients on 2025-11-25 and earlier are unaffected either way, and the gateway
+  serves both generations on one endpoint.
+
+  `server/discover` is answered regardless of the switch, on stdio and
+  Streamable HTTP. It is additive, and it is the only probe that works in both
+  directions once the handshake is gone.
+
+  **With the switch on, a retry reaches one replica.** The consumed-continuation
+  ledger and the mint counter are process-local, and so is the continuation key
+  each process generates at startup: an envelope opens only on the replica that
+  minted it, which is what makes a continuation single-use across replicas
+  without a shared store. The cost is that a retry landing on any other replica
+  is refused, and a restart invalidates the continuations outstanding against
+  the process it replaced. This binds only when `server.modern_protocol` is on;
+  with it off, scale as before.
+
+  **The tasks extension is not implemented.** `io.modelcontextprotocol/tasks` is
+  never advertised, so no client negotiates it. The types in the tree are short
+  of the specification — three statuses of five, two required fields missing, a
+  string where a JSON-RPC error object belongs — and turning the advertisement
+  on before that is fixed would break a client that trusted the identifier.
+  MIK-7311 owns the conformant implementation.
 
 ### Changed
 
@@ -43,81 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the finding, and 4.0.0 is the release allowed to break this. Backends without
   OAuth are unaffected and may still use plaintext `http://`.
 
-### Removed
-
-- Removed the ungrounded savings estimates from gateway statistics: the
-  `stats --price` flag, the `gateway_get_stats.price_per_million` argument,
-  the `tokens_saved` and `estimated_savings_usd` response fields, and the public
-  `StatsSnapshot::tokens_saved`, `StatsSnapshot::estimated_savings_usd`, and
-  `UsageStats::cost_savings` fields.
-
-### Fixed
-
-- **A backend whose SSE response opens with a retry priming frame is no longer
-  a transport error** (GH #563). Servers built on `rmcp` with its default
-  `sse_retry` prepend such a frame -- a `data:` line with nothing after it,
-  plus `id:` and `retry:` -- to every POST response stream. 3.5.x took the
-  first `data:` line verbatim and failed the whole call with
-  `Failed to parse SSE data: EOF while parsing a value at line 1 column 0`, so
-  no such backend could be used at all. The response stream is now decoded
-  frame by frame: a block whose joined `data` is empty carries no event, and
-  fields that are neither `data` nor `event` are ignored, so the exchange
-  resolves on the frame that actually holds the JSON-RPC response.
-
-- **Competitive shadow-scan exports now stay portable and loadable.** The
-  generated grep rules use the system `grep -E` on macOS and Linux, while the
-  Nginx example preserves quoted and escaped log values.
-
-## [3.5.1] - 2026-09-04
-
-### Changed
-
 - **A backend that would send credentials in cleartext is refused at config load** (code-scanning alerts #90, #91): an enabled backend whose `http_url` or `a2a_url` is `http://` against a host off this machine, and whose configuration is credential-bearing — an `oauth` section (including one with `enabled: false`), identity propagation, secret injection, any static header whatever its name, or userinfo or a query string in the URL — no longer starts the gateway. The predicate is deliberately blunt: a header named `X-Trace-Id` and a query of `?page=2` trip it too, because whether a given header or query carries a secret is not decidable at config load, and a name list would only catch the operators who guessed the same names we did. Such a credential is readable by every host on the path and replayable for as long as it is valid, and a config typo should not be what decides that. Loopback is exempt, decided by the same classifier the Origin gate uses. **Breaking for operators pointing any of that configuration at a plain-`http` internal host**: use TLS, or set `allow_cleartext_credentials: true` on that backend to accept the exposure. The refusal names the backend and never echoes the URL, which is the credential-bearing string.
+
 - **Destructive meta-tools are refused over stdio** (MIK-7246): `gateway_kill_server` carries `destructiveHint: true`, and the gateway asks the operator to confirm such a call before running it. That ask travels over the elicitation channel, which only the HTTP transport has — stdio speaks to one process over two pipes and can reach nobody. A destructive tool called over stdio is now refused with `-32001` and a message naming the action, rather than executed with a warning. **Breaking for stdio operators who kill backends through the gateway**: reach the management tools over the HTTP listener with a client that answers `elicitation/create`, or change the backend's configuration directly. Neither an unobtainable confirmation nor an operator decline counts against the caller's failure budget — the gate working is not the client misbehaving.
-- **`gateway_search` returns L0 by default** (MIK-7084): tool name, one-line purpose, and score. `detail=l1` adds signature, when-to-use, and required params; `detail=l2` returns the full `input_schema`. `include_schema=true` still maps to L2 and is deprecated, not removed. Ranking diagnostics (`ranking` reasons and signals) are omitted unless `explain=true`. `gateway_search_tools` also omits `ranking` unless `explain=true`.
-- **`meta_mcp.exposed_meta_tools` is now enforced** (GH issue 449): this config field was documented as an allow-list of meta-tools to expose but had no effect outside tests. It now restricts both `tools/list` and `tools/call` for every meta-tool built-in, including the two Code Mode tools (`gateway_search`, `gateway_execute`), which were an unlisted escape hatch — reaching every backend tool regardless of the allow-list. **Breaking for operators who already set this field**: a name that was accepted but ignored now actually removes that tool from the surface. An allow-list that omits `gateway_invoke` is logged as a warning, since it leaves backend tools unreachable through the gateway. `meta_mcp.surfaced_tools` (individually surfaced backend tools) is unaffected.
-
-### Fixed
-
-- **`prompts/list` and `resources/list` no longer stall on a slow or hung
-  backend.** Both handlers aggregated every backend sequentially, so a single
-  backend that was slow to answer held the whole request for its full transport
-  timeout (often 120s). On a gateway with 50+ backends this blew past client
-  connect timeouts on every (re)connect, and the gateway's late response
-  surfaced as an "unknown message ID" error. Backends are now fetched in
-  parallel and each fetch is bounded by a short timeout, so a slow or hung
-  backend is skipped instead of blocking the list. Reported and fixed by
-  [@terafin](https://github.com/terafin) from a 56-backend deployment, in
-  [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465).
-- **The aggregation timeout is configurable** via
-  `meta_mcp.prompts_resources_fetch_timeout` (default `10s`). Operators with
-  unusually slow backends can raise it without a code change.
-  ([@terafin](https://github.com/terafin), [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465))
-- **A cancelled transport request no longer strands its `pending` entry.**
-  When an outer timeout drops an in-flight stdio or WebSocket request before
-  the transport's own request timeout fires, a RAII guard removes the entry
-  from the transport's `pending` map on drop, so a late response finds no
-  dangling sender and the map does not grow across reconnect loops.
-  ([@terafin](https://github.com/terafin), [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465))
-- **Unreadable gateway config now reports a diagnosis** instead of a generic
-  failure, so a permissions or parse problem is visible at startup.
-  ([#461](https://github.com/MikkoParkkola/mcp-gateway/pull/461))
-- **Sampling POST-backs are bound to the prompted session**, so a late
-  sampling response cannot land on a different client.
-- **Glob L0 ranking drops disabled tools** and still assigns a score, so
-  search results do not advertise tools the operator turned off.
-  ([#470](https://github.com/MikkoParkkola/mcp-gateway/pull/470))
-
-## [4.0.0] - unreleased
-
-> Not yet tagged. The latest release is 3.5.1 (2026-09-04), which was tagged after this
-> section was started and therefore appears above it.
->
-> Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). `gateway.yaml` loads
-> unchanged; the strict `env_files` parsing is the one change that refuses a start rather than
-> warns.
-
-### Changed
 
 - **OAuth credentials are keyed by the authorization server that granted
   them.** MCP 2026-07-28 requires a client to key persisted credentials by the
@@ -133,6 +120,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they are not served to any. Reading them under the old key would defeat the
   separation this change exists to enforce, so the gateway re-registers and
   re-authorizes instead. No configuration change is needed.
+
+- **BREAKING: a malformed line in an `env_files` file now refuses the start.**
+  Earlier versions skipped an unparseable line silently, so a typo cost one
+  missing variable and surfaced later as an unauthenticated backend. The loader
+  now fails startup and names the file, the line number and the category of
+  fault; the offending line is never echoed, because the offending line is the
+  secret. **Migration**: start once before rolling out and fix what it names — a
+  file that parsed by luck under 3.x now has to parse by grammar. Assigning
+  `HOME` in a reloaded env file reports `restart required` rather than moving
+  where a later `~` points.
+
+- **`2024-10-07` is no longer advertised as a supported protocol version.** It
+  is not a revision the specification has ever defined; it was introduced with
+  the first version-negotiation commit in January and has been offered to every
+  client since. It was inert for negotiation — no conforming client can request
+  a revision that does not exist — but `server/discover` publishes this list as
+  the gateway's own statement of what it speaks, which turns an unused constant
+  into a claim.
 
 - **A response is cached only under a protocol revision the gateway can
   identify.** The response cache is keyed by the revision a request was served
@@ -155,7 +160,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reuse the session; either restores caching and neither needs a configuration
   change.
 
+- **BREAKING: one license covers the whole repository — PolyForm Noncommercial
+  1.0.0.** 4.0.0 retires the MIT core and the per-file allowlist that enumerated
+  it, so every first-party file in the tree is Noncommercial from this release
+  onward ([ADR-013](docs/adr/ADR-013-single-noncommercial-license.md),
+  [LICENSES.md](LICENSES.md)). **Migration**: commercial use that relied on the
+  MIT-headered core needs a commercial license — see
+  [COMMERCIAL.md](COMMERCIAL.md). Releases already published under MIT keep the
+  terms they shipped under; this is not retroactive.
+
+- **`gateway_search` no longer emits ranking signals that never vary.** Thirteen
+  of sixteen were the constant `1.0` in every response. The per-tool ranking
+  block falls from 534 to 304 bytes.
+
+### Removed
+
+- Removed the ungrounded savings estimates from gateway statistics: the
+  `stats --price` flag, the `gateway_get_stats.price_per_million` argument,
+  the `tokens_saved` and `estimated_savings_usd` response fields, and the public
+  `StatsSnapshot::tokens_saved`, `StatsSnapshot::estimated_savings_usd`, and
+  `UsageStats::cost_savings` fields.
+
+- Removed `.mit-core-allowlist`, the per-file manifest that enumerated which
+  sources carried an MIT header. A single repository-wide license leaves it
+  nothing to enumerate ([ADR-013](docs/adr/ADR-013-single-noncommercial-license.md)).
+
 ### Fixed
+
+- **A backend whose SSE response opens with a retry priming frame is no longer
+  a transport error** (GH #563). Servers built on `rmcp` with its default
+  `sse_retry` prepend such a frame -- a `data:` line with nothing after it,
+  plus `id:` and `retry:` -- to every POST response stream. 3.5.x took the
+  first `data:` line verbatim and failed the whole call with
+  `Failed to parse SSE data: EOF while parsing a value at line 1 column 0`, so
+  no such backend could be used at all. The response stream is now decoded
+  frame by frame: a block whose joined `data` is empty carries no event, and
+  fields that are neither `data` nor `event` are ignored, so the exchange
+  resolves on the frame that actually holds the JSON-RPC response.
 
 - **Windows stdio backends start with a usable environment, and quoted
   commands parse by host rules.** `APPDATA` and `LOCALAPPDATA` were never
@@ -252,78 +293,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and comments, single-quoted values and escaped `\$` are inert as they always
   were. Scanning is per logical line, as the parser reads them.
 
-### Added
-
-- **`meta_mcp.exposed_meta_tools` restricts the meta-tool surface** (GH issue 449):
-  an allow-list of meta-tools to expose, enforced on both `tools/list` and
-  `tools/call` for every meta-tool built-in, including the two Code Mode tools
-  (`gateway_search`, `gateway_execute`). The field is new in 4.0.0 and defaults to
-  empty, which exposes everything as before, so no existing configuration changes
-  behaviour on upgrade. An allow-list that omits `gateway_invoke` is honoured and
-  logged as a warning, since it leaves backend tools unreachable through the
-  gateway. `meta_mcp.surfaced_tools` is a separate list and is unaffected.
-
-- **First start after upgrading to 4.0.0 prints what changed underneath it.**
-  The release re-keys OAuth credentials, refuses a malformed `env_files` line at
-  startup instead of ignoring it, stops advertising protocol revision
-  2024-10-07 and stops counting rate limiting against error budgets. Each is
-  announced once, on the first start from a 3.x install; the notice reads no
-  configuration and writes none.
-
-- **MCP protocol revision 2026-07-28, behind `server.modern_protocol`.** The
-  revision removes the `initialize` handshake, protocol sessions and the
-  `Mcp-Session-Id` header, `ping`, `logging/setLevel` and server-initiated
-  requests; it adds `server/discover`, per-request metadata, multi-round-trip
-  requests, required result and cacheability fields, and the standard request
-  headers.
-
-  **The switch is on by default in 4.0.0.** A stock gateway serves 2026-07-28 to
-  a client that asks for it, and downgrades to the highest revision the client
-  supports otherwise. Set `server.modern_protocol: false` to serve the legacy
-  generation only. With it off, a client asking for 2026-07-28 is refused with
-  `UnsupportedProtocolVersion` — an answer it can act on — rather than served
-  half a revision, where the half that works hides the half that does not.
-  Clients on 2025-11-25 and earlier are unaffected either way, and the gateway
-  serves both generations on one endpoint.
-
-  `server/discover` is answered regardless of the switch, on stdio and
-  Streamable HTTP. It is additive, and it is the only probe that works in both
-  directions once the handshake is gone.
-
-  **With the switch on, a retry reaches one replica.** The consumed-continuation
-  ledger and the mint counter are process-local, and so is the continuation key
-  each process generates at startup: an envelope opens only on the replica that
-  minted it, which is what makes a continuation single-use across replicas
-  without a shared store. The cost is that a retry landing on any other replica
-  is refused, and a restart invalidates the continuations outstanding against
-  the process it replaced. This binds only when `server.modern_protocol` is on;
-  with it off, scale as before.
-
-  **The tasks extension is advertised, and its model is deliberately short.**
-  `server/discover` advertises `io.modelcontextprotocol/tasks`; the `initialize`
-  result does not, because the 2026-07-28 lifecycle scopes that handshake to
-  clients the extension is not for. The types in the tree remain short of the
-  specification — three statuses of five, two required fields missing, a string
-  where a JSON-RPC error object belongs — and closing that gap is MIK-7311.
-  Advertising while the model is short is the intended 4.0.0 state: discovery
-  states which extension the gateway speaks. A request reaching the extension
-  must declare it in that same request's `_meta`, and a declaration whose
-  settings value is not an object is refused rather than honoured.
-  MIK-7311 owns the conformant implementation.
-
-### Changed
-
-- **`2024-10-07` is no longer advertised as a supported protocol version.** It
-  is not a revision the specification has ever defined; it was introduced with
-  the first version-negotiation commit in January and has been offered to every
-  client since. It was inert for negotiation — no conforming client can request
-  a revision that does not exist — but `server/discover` publishes this list as
-  the gateway's own statement of what it speaks, which turns an unused constant
-  into a claim.
-
-- **`gateway_search` no longer emits ranking signals that never vary.** Thirteen
-  of sixteen were the constant `1.0` in every response. The per-tool ranking
-  block falls from 534 to 304 bytes.
+- **Competitive shadow-scan exports now stay portable and loadable.** The
+  generated grep rules use the system `grep -E` on macOS and Linux, while the
+  Nginx example preserves quoted and escaped log values.
 
 ### Security
 
@@ -365,6 +337,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `iss` is validated before an authorization code is redeemed** (RFC 9207).
   Persisted credentials gain an issuer-keyed storage key, since a credential is
   not valid with an authorization server that never issued it.
+
+## [3.5.1] - 2026-09-04
+
+### Changed
+
+- **`gateway_search` returns L0 by default** (MIK-7084): tool name, one-line purpose, and score. `detail=l1` adds signature, when-to-use, and required params; `detail=l2` returns the full `input_schema`. `include_schema=true` still maps to L2 and is deprecated, not removed. Ranking diagnostics (`ranking` reasons and signals) are omitted unless `explain=true`. `gateway_search_tools` also omits `ranking` unless `explain=true`.
+
+### Fixed
+
+- **`prompts/list` and `resources/list` no longer stall on a slow or hung
+  backend.** Both handlers aggregated every backend sequentially, so a single
+  backend that was slow to answer held the whole request for its full transport
+  timeout (often 120s). On a gateway with 50+ backends this blew past client
+  connect timeouts on every (re)connect, and the gateway's late response
+  surfaced as an "unknown message ID" error. Backends are now fetched in
+  parallel and each fetch is bounded by a short timeout, so a slow or hung
+  backend is skipped instead of blocking the list. Reported and fixed by
+  [@terafin](https://github.com/terafin) from a 56-backend deployment, in
+  [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465).
+
+- **The aggregation timeout is configurable** via
+  `meta_mcp.prompts_resources_fetch_timeout` (default `10s`). Operators with
+  unusually slow backends can raise it without a code change.
+  ([@terafin](https://github.com/terafin), [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465))
+
+- **A cancelled transport request no longer strands its `pending` entry.**
+  When an outer timeout drops an in-flight stdio or WebSocket request before
+  the transport's own request timeout fires, a RAII guard removes the entry
+  from the transport's `pending` map on drop, so a late response finds no
+  dangling sender and the map does not grow across reconnect loops.
+  ([@terafin](https://github.com/terafin), [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465))
+
+- **Unreadable gateway config now reports a diagnosis** instead of a generic
+  failure, so a permissions or parse problem is visible at startup.
+  ([#461](https://github.com/MikkoParkkola/mcp-gateway/pull/461))
+
+- **Sampling POST-backs are bound to the prompted session**, so a late
+  sampling response cannot land on a different client.
+
+- **Glob L0 ranking drops disabled tools** and still assigns a score, so
+  search results do not advertise tools the operator turned off.
+  ([#470](https://github.com/MikkoParkkola/mcp-gateway/pull/470))
 
 ## [3.5.0] - 2026-08-28
 
@@ -1690,6 +1704,7 @@ credential path.
 - systemd/launchd service templates
 
 [Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...HEAD
+[4.0.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0
 [3.5.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.4.0...v3.5.0
 [2.10.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.1...v2.10.0

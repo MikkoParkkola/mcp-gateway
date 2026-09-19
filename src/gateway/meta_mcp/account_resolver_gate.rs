@@ -1,30 +1,40 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! One deterministic barrier for the revocation race, and nothing else.
+//! Two deterministic barriers over `AccountCustody`, and nothing else.
 //!
-//! The question the barrier answers is "does the RELEASE-time recheck refuse a
+//! `ReleaseBarrier`/`GatedCustody`: does the RELEASE-time recheck refuse a
 //! credential whose grant was revoked after the lease was taken?". Revoking
 //! before the whole lookup cannot answer it: the resolve would refuse first and
 //! the recheck would never run. So this wrapper stops the resolution exactly at
 //! the entry to `release`, after the lease is held, hands control to the test,
 //! and only resumes when the test says so.
 //!
+//! `rendezvous`/`RendezvousCustody`: are two "concurrent" dispatches ever
+//! actually in flight together, or does a fast scheduler just run one `join!`
+//! arm to completion before starting the other? A positional or count-based
+//! assertion cannot tell the difference. This wrapper makes every `release`
+//! wait for every party before any of them proceeds, so overlap is guaranteed
+//! by construction rather than hoped for from scheduling.
+//!
 //! IT IS A DELEGATING WRAPPER, NOT A SERVICE. Both trait methods —
 //! `refresh_if_expired` and `release`, which are the whole of `AccountCustody` —
-//! forward to the real production `CustodyHandle`. It stores nothing, decides
-//! nothing, and re-implements no recheck. Release stays MANDATORY: after the
-//! barrier the real `release` runs and its result — success or refusal — is
-//! returned verbatim. Invalidation is NOT wrapped: the test performs the real
-//! revocation directly on the `CustodyHandle` it started.
+//! forward to the real production `CustodyHandle`. Neither wrapper stores
+//! credential state, decides anything, or re-implements the recheck. Release
+//! stays MANDATORY in both: after the barrier the real `release` runs and its
+//! result — success or refusal — is returned verbatim. Invalidation is NOT
+//! wrapped: a test performs the real revocation directly on the `CustodyHandle`
+//! it started.
 //!
-//! NO SILENT AUTO-RELEASE. There is no timer here and no drop-triggered pass.
-//! If the resume channel is dropped without an explicit resume, that is a test
-//! defect and it panics loudly rather than quietly delegating. The bounded wait
-//! belongs to the TEST (`tokio::time::timeout`), which is where a stall must be
-//! reported as a failure.
+//! NO SILENT AUTO-RELEASE. Neither wrapper has a timer or a drop-triggered
+//! pass. `GatedCustody`'s resume channel panics loudly if dropped without an
+//! explicit resume, rather than quietly delegating; `RendezvousCustody`'s
+//! barrier simply never completes if a party never arrives, and the bounded
+//! wait belongs to the TEST (`tokio::time::timeout`), which is where a stall
+//! must be reported as a failure.
 //!
-//! Only the FIRST release is gated. A test that drives one resolution through
-//! the barrier and then continues gets ordinary custody behavior afterwards.
+//! `GatedCustody` gates only the FIRST release; ordinary custody behavior
+//! follows. `RendezvousCustody` gates every `release`, for exactly the number
+//! of parties it was built with.
 
 use std::sync::Arc;
 
@@ -98,6 +108,41 @@ impl AccountCustody for GatedCustody {
         }
         // Release is MANDATORY and unmodified: whatever the real recheck decides
         // is the answer the consumer sees.
+        self.inner.release(lease).await
+    }
+}
+
+/// Delegating custody whose `release` is a rendezvous for `parties` callers.
+pub(super) struct RendezvousCustody {
+    inner: Arc<dyn AccountCustody>,
+    barrier: tokio::sync::Barrier,
+}
+
+/// Wrap real custody so that `parties` concurrent `release` calls all arrive
+/// before any of them proceeds. The returned custody is what gets installed on
+/// the gateway, so the resolutions under test still run through the production
+/// consumer with the production custody underneath it.
+pub(super) fn rendezvous(inner: Arc<dyn AccountCustody>, parties: usize) -> Arc<RendezvousCustody> {
+    Arc::new(RendezvousCustody {
+        inner,
+        barrier: tokio::sync::Barrier::new(parties),
+    })
+}
+
+#[async_trait::async_trait]
+impl AccountCustody for RendezvousCustody {
+    async fn refresh_if_expired(
+        &self,
+        account: &AccountKey,
+    ) -> Result<CredentialLease, CustodyError> {
+        self.inner.refresh_if_expired(account).await
+    }
+
+    async fn release(&self, lease: &CredentialLease) -> Result<ReleasedCredentials, CustodyError> {
+        // Every party waits here; the last arrival releases them all in the
+        // same instant, so none of the `parties` releases can complete before
+        // every one of them has started.
+        self.barrier.wait().await;
         self.inner.release(lease).await
     }
 }
