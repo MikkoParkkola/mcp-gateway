@@ -182,6 +182,17 @@ authority that cannot be parsed is `FAIL`, never zero rows silently satisfied.
 is never read as a coverage claim it has not earned. `--coverage-only` runs the
 gate with no listening install, which is what makes it usable in CI.
 
+Section 3's admission rule sorts controls in two, probed and unobservable, and
+the manifest needs a third: **observable on the wire, probe unwritten.** Five
+rows are in it — `request-body-ceiling` and the four modern-protocol gates —
+and their `reason` says so rather than borrowing the unobservable label they do
+not qualify for. Their wire signatures are known (`-32022`, `-32021`, `-32020`,
+`-32601`, and a 400 from the 10 MiB `to_bytes`); what is not known is whether a
+probe would attribute the refusal to the gate it names, and confirming that
+needs a live build. `-32601` is the clearest case: it also answers a method the
+build never had, so a refusal does not by itself implicate the revision gate.
+Calling these unobservable would be the cheaper sort, and it would be false.
+
 **What this still does not reach**, stated rather than left to be discovered: a
 control merged into a file that is neither under `src/security/` nor named by
 the inventory is invisible to both authorities. The origin guard itself is such
