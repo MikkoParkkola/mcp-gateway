@@ -94,11 +94,31 @@ and transports are in the source of truth rather than copied here, because a
 copy drifts and the original is checked by CI: `tests/mik_7272_conformance.rs`,
 `MAJOR` at `:52` and `MINOR` at `:175`.
 
-### Statements without evidence — UNCOVERED (1 of 21)
+### Statements without evidence — UNCOVERED (0 of 21)
 
-| # | Statement | Why it is uncovered | The test that closes it |
-|---|---|---|---|
-| Minor 1 | `extensions` field on client and server capabilities | Tracked gap; the work is scoped and unstarted | E1-E5 of `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md` |
+None. `TRACKED_GAPS` in `tests/mik_7272_conformance.rs` is empty, which is the
+enforced form of this sentence: an entry there whose row has regained evidence
+fails `a_tracked_gap_is_still_a_gap`, so the list above cannot be emptied in
+prose alone.
+
+Minor 1 was the last entry, and it closed on 2026-09-15 with MIK-7272.EXT.1
+phase 2. Its stated cause was wrong in the same way minor 11's was. The matrix
+said the client half could not be asserted because
+`ExtensionSet::from_capabilities` had no production caller — true of that
+function, false of the obligation. `declares_tasks_extension` in
+`src/gateway/router/handlers.rs` read the same `_meta` field through its own
+hand-rolled `pointer()` parse and gated dispatch on it. So the client half was
+not unreachable; it was reachable through a *second* parser that disagreed with
+the first — it asked only whether the extension identifier was present, so
+`{"io.modelcontextprotocol/tasks": 3}` negotiated the extension at the gate
+while `from_capabilities` refused the same bytes. That second parser is now
+deleted and the gate consumes `RequestShape::declared_extensions()`. One parser,
+one answer. See `docs/design/MIK-7272-ext-1-client-extension-recovery.md`.
+
+The lesson repeats minor 11's: a gap whose reason is "nothing reads this" is
+a claim about a *symbol*, and the obligation is about a *field*. Searching for
+readers of the field, not callers of the helper, is what found it — an external
+reviewer did, after the reason had stood in two documents.
 
 Minor 11 is the cell `NFR.CONFORMANCE.1` names as "modern URL-elicitation
 completion removal", and minor 10's second clause was the one it names as
@@ -223,18 +243,18 @@ written.
 
 | Disposition | Count |
 |---|---|
-| COVERED | 19 |
-| UNCOVERED | 2 |
+| COVERED | 21 |
+| UNCOVERED | 0 |
 | **Population (statements)** | **21** |
 
-The two UNCOVERED statements are the two entries of `TRACKED_GAPS` in
-`tests/mik_7272_conformance.rs`, and that is enforced rather than asserted
-here: `matrix_has_no_empty_cells` fails on an untracked empty row, and
+UNCOVERED is empty, and so is `TRACKED_GAPS` in
+`tests/mik_7272_conformance.rs`. That correspondence is enforced rather than
+asserted here: `matrix_has_no_empty_cells` fails on an untracked empty row, and
 `a_tracked_gap_is_still_a_gap` fails on an exemption whose row has since gained
 evidence or disappeared. This document and the executable matrix cannot drift
 apart on the count without one of those two tests going red.
 
-19 + 2 = 21, and only changelog statements are counted. The four N/A rows above
+21 + 0 = 21, and only changelog statements are counted. The four N/A rows above
 are axis cells, not statements: they record why a role/transport combination
 raises no obligation, so they neither add to the population nor absorb any
 statement from it. Clause-level gaps (minor 11 has two) are recorded as
@@ -244,10 +264,15 @@ and mixing units is how a tally stops being checkable.
 
 ## Grade
 
-**PARTIAL.** Rule 4 makes this mechanical: UNCOVERED is not empty, so the
-criterion is not met. The remaining work is minor 1 alone — Cluster B's
-E1-E5. What this revision delivered is the matrix, its population
-rule, the missing statement, the count assertion that would have caught it, the
-N/A reasons, the one N/A that turned out to be a gap, and minor 10's row closed
-by four mutation-tested tests — which is the bulk of the criterion and the
-part that makes the remainder checkable.
+**MET.** Rule 4 makes this mechanical: UNCOVERED is empty, so the criterion is
+met. It is met on the rule this document fixed *before* the last cell closed,
+which is the only reason the grade means anything.
+
+What the revisions delivered: the matrix, its population rule, the statement
+that was missing from it, the count assertion that would have caught that, the
+N/A reasons, the one N/A that turned out to be a gap, minor 10's row closed by
+four mutation-tested tests, minor 11's three, and minor 1's client half — whose
+closing found that the two remaining tracked gaps both had the wrong cause
+recorded against them. The grade is about coverage of the changelog's
+statements; it is not a claim that every extension behaves per-extension
+correctly, which is MIK-7311's scope.
