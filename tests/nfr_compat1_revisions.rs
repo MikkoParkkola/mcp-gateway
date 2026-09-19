@@ -203,3 +203,116 @@ async fn compat_2026_07_28_is_refused_when_the_stateless_path_is_off() {
         "body: {body}"
     );
 }
+
+// ============================================================================
+// GH #540 — an inbound `MCP-Protocol-Version` header naming a revision this
+// build does not serve.
+//
+// The refusal lived inside the modern branch of the classifier, and a revision
+// older than the first stateless one is not a modern-era declaration: with no
+// `_meta` in the body such a request classified `Legacy` and was served
+// normally, header unexamined. The header is evidence an intermediary routes
+// on, so it is checked on both paths or on neither.
+// ============================================================================
+
+/// A legacy handshake frame carrying an explicit `MCP-Protocol-Version`.
+///
+/// Separate from [`post_legacy`] rather than a parameter on it: the cases above
+/// prove what happens with no header at all, and a helper that always sends one
+/// would quietly change what they assert.
+async fn post_legacy_with_version(
+    state: &Arc<AppState>,
+    version: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", version)
+        .body(Body::from(serde_json::to_vec(&body).expect("body")))
+        .expect("request");
+    let response = create_router(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .expect("router must answer");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body must read");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// A legacy `initialize` frame: no `_meta`, so nothing in the body declares an
+/// era and the header is the only thing naming a revision.
+fn legacy_initialize() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": { "name": "LegacyClient", "version": "1.0.0" }
+        }
+    })
+}
+
+/// GH #540. `1999-01-01` is in neither revision set, and it is older than the
+/// first stateless revision, so it declares no era for the classifier to catch.
+/// The assertion is on the version refusal specifically (-32022) rather than on
+/// any 400 the route can produce: the mirrored-header and malformed-metadata
+/// checks also answer 400, and a bare status assertion would pass on either.
+#[tokio::test]
+async fn compat_an_unsupported_version_header_is_refused_on_the_legacy_path() {
+    // GIVEN: a gateway with the shipped supported-version set
+    let (state, _store_dir) = state(Fixture::default()).await;
+
+    // WHEN: a client names a revision no release speaks, with a legacy body
+    let (status, body) = post_legacy_with_version(&state, "1999-01-01", legacy_initialize()).await;
+
+    // THEN: it is refused, not served under a revision it never named
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert_eq!(
+        body["error"]["code"],
+        json!(mcp_gateway::protocol::era::UNSUPPORTED_PROTOCOL_VERSION),
+        "body: {body}"
+    );
+}
+
+/// GH #540's positive control, and the reason the refusal was confined to the
+/// modern branch in the first place. A 2025 client echoing its own negotiated
+/// revision must still be served; a check that refuses it has traded one defect
+/// for a worse one. `2025-06-18` rather than `PROTOCOL_VERSION` so the case
+/// cannot pass by naming the value the fallback would answer anyway.
+#[tokio::test]
+async fn compat_a_supported_legacy_version_header_is_still_served() {
+    // GIVEN: a gateway with the shipped supported-version set
+    let (state, _store_dir) = state(Fixture::default()).await;
+
+    // WHEN: a 2025 client echoes a revision this build serves
+    let (status, body) = post_legacy_with_version(&state, "2025-06-18", legacy_initialize()).await;
+
+    // THEN: the handshake is answered, not refused for its header
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.get("result").is_some(), "body: {body}");
+}
+
+/// GH #540. Absence is not an unsupported value. A client that sends no version
+/// header has named no revision, and a header check that refuses it would break
+/// every pre-2025-03-26 client — the header was not required then.
+#[tokio::test]
+async fn compat_no_version_header_is_still_served() {
+    // GIVEN: a gateway with the shipped supported-version set
+    let (state, _store_dir) = state(Fixture::default()).await;
+
+    // WHEN: a client sends no version header at all
+    let (status, body) = post_legacy(&state, legacy_initialize()).await;
+
+    // THEN: the handshake is answered
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.get("result").is_some(), "body: {body}");
+}

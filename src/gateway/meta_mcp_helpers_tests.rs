@@ -310,6 +310,14 @@ fn levenshtein_completely_different_strings() {
     assert_eq!(levenshtein("abc", "xyz"), 3);
 }
 
+#[test]
+fn levenshtein_non_ascii_byte_char_length_mismatch() {
+    // "café" is 4 chars but 5 bytes (é is 2 bytes in UTF-8); rows sized by
+    // bytes but filled by chars must not change the answer.
+    assert_eq!(levenshtein("café", "cafe"), 1);
+    assert_eq!(levenshtein("cafe", "café"), 1);
+}
+
 // ── did_you_mean ────────────────────────────────────────────────────
 
 #[test]

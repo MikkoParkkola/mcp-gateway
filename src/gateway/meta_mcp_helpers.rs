@@ -45,12 +45,13 @@ pub(crate) use super::meta_mcp_tool_defs::{
 /// assert_eq!(levenshtein("gatway_invoke", "gateway_invoke"), 1);
 /// ```
 pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
-    let b_len = b.len();
+    let b_chars: Vec<char> = b.chars().collect();
+    let b_len = b_chars.len();
     let mut prev: Vec<usize> = (0..=b_len).collect();
     let mut curr = vec![0; b_len + 1];
     for (i, ca) in a.chars().enumerate() {
         curr[0] = i + 1;
-        for (j, cb) in b.chars().enumerate() {
+        for (j, cb) in b_chars.iter().copied().enumerate() {
             let cost = usize::from(ca != cb);
             curr[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(curr[j] + 1);
         }

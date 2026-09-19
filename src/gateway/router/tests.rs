@@ -32,6 +32,8 @@ use tower::ServiceExt;
 
 use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targets_for_call};
 
+/// Issue #555: the listed set must be the invocable set.
+mod issue_555_listing_scope;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
 mod meta_firewall_verdict;

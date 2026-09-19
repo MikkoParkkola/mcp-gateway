@@ -827,6 +827,30 @@ async fn meta_mcp_dispatch(
     // request to interpret; it is one to refuse, and the mirrored-header check
     // below refuses it. The value is read once, above the session decision, so
     // the two readings cannot disagree.
+    // A revision this build serves, or no revision named at all. Checked here,
+    // above the classification, because classification cannot answer it: a
+    // revision older than the first stateless one declares no era, so a request
+    // naming one with no `_meta` classified `Legacy` and never reached the
+    // refusal inside the modern branch below (#540).
+    //
+    // `served_revision` is the union of both revision sets, which keeps this
+    // from becoming a second version table to drift against the first. An empty
+    // value is absence, not an unsupported revision — the same reading
+    // `cache_protocol_revision` already takes — and a request naming nothing is
+    // not a request naming something wrong.
+    if let Some(version) = declared_version.filter(|value| !value.is_empty())
+        && crate::protocol::meta::served_revision(version).is_none()
+    {
+        return build_response(
+            unsupported_version_error(
+                id,
+                version,
+                state.live_config.running().server.modern_protocol,
+            ),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        );
+    }
     // NFR.OBS.1 is recorded by the classifier itself, so the HTTP and stdio
     // dispatchers cannot drift apart on what a request declared.
     let shape = crate::protocol::meta::classify_and_observe(

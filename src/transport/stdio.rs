@@ -1388,4 +1388,73 @@ mod spawn_classification_tests {
             "a missing command must be permanent, got {err:?}"
         );
     }
+
+    /// MIK/#526: a child that dies before it can answer `initialize` must say
+    /// why. Before this, every such cause arrived as the same bare timeout.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_that_dies_before_initialize_reports_its_stderr() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        std::fs::write(
+            workspace.path().join("server.sh"),
+            "echo 'ModuleNotFoundError: No module named httpx' >&2\nexit 3\n",
+        )
+        .expect("write server");
+
+        let transport = StdioTransport::new(
+            "sh server.sh",
+            HashMap::new(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+            std::time::Duration::from_secs(2),
+            None,
+        );
+
+        let error = transport
+            .start()
+            .await
+            .expect_err("a child that exits at startup must fail the start");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("ModuleNotFoundError: No module named httpx"),
+            "the child's own diagnosis must reach the caller, got: {message}"
+        );
+    }
+
+    /// The excerpt is child-controlled text, and a child that fails at startup
+    /// commonly echoes its own argv. Arguments stay out, as they do everywhere
+    /// else a stdio command is quoted.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dying_child_does_not_echo_its_command_arguments() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        std::fs::write(
+            workspace.path().join("server.sh"),
+            "printf 'usage: server %s\\n' \"$*\" >&2\nexit 2\n",
+        )
+        .expect("write server");
+
+        let transport = StdioTransport::new(
+            "sh server.sh --api-key sk-canary-must-not-leak",
+            HashMap::new(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+            std::time::Duration::from_secs(2),
+            None,
+        );
+
+        let error = transport
+            .start()
+            .await
+            .expect_err("a child that exits at startup must fail the start");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("usage: server"),
+            "precondition: the child's stderr reached the error, got: {message}"
+        );
+        assert!(
+            !message.contains("sk-canary-must-not-leak"),
+            "a command-line credential echoed by the child must not reach the error"
+        );
+    }
 }
