@@ -28,15 +28,18 @@ The duplication that exists is concentrated in **test harness setup**, and the
 largest single item is a **half-finished migration**: a shared fixture builder
 already exists and fifteen integration tests have not moved to it.
 
-Total removable lines across all confirmed findings: **~700**, of which ~525 is
-one finding. Against 250K lines that is 0.3%. Anyone planning a simplification
-pass should spend their budget on the top-down section, not this one.
+Total removable lines across the confirmed cleanups: **~708** (B1 510 + B2 90 +
+B3 12 + B5 96), of which B1 alone is 72%. B4's ~380 lines are **excluded from
+that total** — collapsing them is a change to a secret-redaction boundary, not a
+line-count cleanup, and it should be budgeted as security work. Against 250K
+lines the cleanup total is 0.3%. Anyone planning a simplification pass should
+spend their budget on the top-down section, not this one.
 
 ## Sweep 1 — mechanical duplication
 
 Ranked by (sites x lines saved).
 
-### B1. Fifteen integration tests hand-build `AppState` past an existing builder — **V**, ~525 lines
+### B1. Fifteen integration tests hand-build `AppState` past an existing builder — **V**, ~510 lines
 
 `tests/common/mod.rs:91` already exposes the shared form:
 
@@ -45,8 +48,12 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir)
 ```
 
 Only five files under `tests/` declare `mod common`. Fifteen others open an
-`AppState { .. }` literal and set the same ~30 fields by hand. Each literal runs
-roughly 20-40 lines; the shared fields (`gateway_key_pair`, `capability_dirs`,
+`AppState { .. }` literal and set the same ~30 fields by hand. Brace-matched
+spans, measured at five of the fifteen sites, run 34-38 lines
+(`tests/gh452_session_owner.rs:87-120`, `tests/mik_7213_acs.rs:171-204`,
+`tests/mik_7272_task_1_acs.rs:595-628`, `tests/nfr_obs5_flag.rs:111-144` all 34;
+`tests/mik_7217_acs.rs:360-397` is 38). The ~510 total takes the floor of that
+range across all fifteen. The shared fields (`gateway_key_pair`, `capability_dirs`,
 `config_path`, `firewall`, `agent_identity_config`, `control_plane_store`,
 `live_config`, `export_status`, `transparency_log`, `dashboard_bootstrap`,
 `auth_config`, `key_server`, `tool_policy`, `mtls_policy`, `sanitize_input`,
@@ -174,13 +181,17 @@ compiler will not catch that. If this is done, the macro must default to
 redacting and require an explicit opt-in per visible field. Rank it below B1-B3
 and treat it as a security change, not a cleanup.
 
-### B5. Router test setup repeated nine times — **V**, ~96 lines
+### B5. Router test setup repeated at nine sites — **V**, ~96 lines
 
-A 12-line harness block at `src/gateway/router/tests.rs:104`, `:120`, `:178`,
-`:217`, `:218`, `:234`, `:296`, `:297`, `:313`, `:385`, `:386`, `:402`, `:444`,
-`:445`, `:461`, `:534`, `:602` and `src/gateway/router/tests/meta_firewall_verdict.rs:160`,
-`:161`, `:177`. The block collides exactly (no masking needed) at 9 sites for
-the longest variant.
+One 12-line harness block, colliding exactly (no masking needed) at **9 distinct
+sites**: `src/gateway/router/tests.rs:120`, `:178`, `:234`, `:313`, `:402`,
+`:461`, `:534`, `:602` and
+`src/gateway/router/tests/meta_firewall_verdict.rs:177`.
+
+A shorter 8-line prefix of the same block appears at six further offsets
+(`src/gateway/router/tests.rs:104`, `:217`, `:296`, `:385`, `:444` and
+`meta_firewall_verdict.rs:160`); those are the same setup detected one line
+earlier, not extra sites, and they are not counted in the 96.
 
 **Collapse.** One `fn router_under_test(..)` in the module. Lower value than B1
 because it is contained in one module pair, so drift is visible in review.
