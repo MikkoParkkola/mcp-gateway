@@ -142,3 +142,63 @@ deployment.
 It does not gate merges on a live endpoint. CI has no listening install, and a
 job that depends on one would fail for reasons that have nothing to do with the
 change under review.
+
+## 7. Amendment, 2026-09-19 — the coverage gate
+
+Section 4 above says the checker reports "one line per control". Section 3 says
+the manifest "states its own coverage". Neither says where the set of controls
+comes from, and the seed of two (section 5) was explicitly a seed. That left the
+first half of `NFR.SEC.7` open for a reason no probe can close: a control merged
+and never written into `security-controls.toml` is invisible to the check, so
+the check passes while "the listening build carries **every** merged security
+control" is unproven. A manifest that defines its own population cannot be
+incomplete, and a check that cannot be incomplete proves nothing when it passes.
+
+**The population is derived from authorities, not from the manifest.** Two, in
+`[coverage]`, because neither alone is the set this criterion asks about:
+
+1. `docs/requirements/nfr-sec1-control-inventory.md`. It enumerates the gates a
+   POST to `/mcp` traverses under a derivation rule a reviewer can re-run, which
+   is the property that makes it an authority rather than a second manifest.
+   Both of its tables are read: the numbered set (14 rows) **and** its own
+   exclusion table of controls 4.0.0 added (4 rows). `NFR.SEC.1` needs only the
+   first. Taking only the first here would have been the defect this amendment
+   exists to fix: that document's scope rule excludes everything merged after
+   3.5.0, which is the class `5d25f104` belongs to — the control that motivated
+   this whole check would have been outside its own population.
+2. The `src/security/` module inventory, one level deep, directories counted as
+   one module. This one is code. A markdown table goes stale when a control is
+   merged and nobody updates it; a directory listing does not. This is the half
+   that fails without anyone remembering anything.
+
+`check_coverage()` fails when an authority row has no control, when a control
+claims a row the authority dropped, when a swept module is named by no control
+and not recorded under `[[coverage.not_a_control]]` with a reason, and when a
+control's `source` path no longer exists — a gate that moved and left the row
+pointing at nothing reads as covered otherwise. It also fails closed: an
+authority that cannot be parsed is `FAIL`, never zero rows silently satisfied.
+
+`main()` runs coverage before probing and ORs the exit codes, so a probe report
+is never read as a coverage claim it has not earned. `--coverage-only` runs the
+gate with no listening install, which is what makes it usable in CI.
+
+**What this still does not reach**, stated rather than left to be discovered: a
+control merged into a file that is neither under `src/security/` nor named by
+the inventory is invisible to both authorities. The origin guard itself is such
+a file (`src/gateway/router/origin_guard.rs`); it is in the set only because
+inventory row 1 happens to name an origin gate. Closing that needs a third
+authority nobody has written, and inventing one here would publish a coverage
+claim no one has tested — the same mistake section 5 refused to make.
+
+### Fail-first rows, second set
+
+| row | asserts | fails before this amendment because |
+| --- | --- | --- |
+| 6 | the shipped manifest covers both authorities with zero gaps | there is no coverage function |
+| 7 | an authority row no control claims is a gap | same |
+| 8 | a control claiming a row the authority dropped is a gap | same |
+| 9 | a security module no control names is a gap | this is the row that makes a merge fail without a document edit |
+| 10 | a control whose `source` no longer exists is a gap | a moved gate reads as covered |
+| 11 | an unparseable or missing authority is `FAIL`, not zero rows | a reformat would turn every row above green at once |
+| 12 | the real inventory parses to exactly rows 1-14 plus 4 excluded | the parser could silently stop reading the real document |
+

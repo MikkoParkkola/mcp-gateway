@@ -9,10 +9,47 @@
 # from outside cannot drift detectably; it is still listed, with
 # `probe = "none"` and the reason, so this file states its own coverage
 # instead of implying completeness by omission.
+#
+# Coverage rule (the half that keeps the admission rule honest): this file may
+# not define its own population. `[coverage]` below names the authorities the
+# population is derived from, and the checker fails when an authority names a
+# control this file does not. Two authorities, because neither alone is the
+# population the criterion asks about:
+#
+#   * `docs/requirements/nfr-sec1-control-inventory.md` enumerates the gates a
+#     POST to `/mcp` traverses, under a stated derivation rule a reviewer can
+#     re-run. Its own scope boundary excludes anything merged after 3.5.0 --
+#     which is the class `5d25f104` belongs to, and the whole reason NFR.SEC.7
+#     exists. A spine, not the set.
+#   * the `src/security/` module inventory is code. A security module merged
+#     without a row here fails the check without anyone remembering to update a
+#     table, which a markdown authority cannot do.
+#
+# Residual, stated rather than discovered: a control merged into a file that is
+# neither under `src/security/` nor named by the inventory is still invisible
+# to both authorities. Closing that needs a third authority nobody has written.
+
+[coverage]
+inventory = "docs/requirements/nfr-sec1-control-inventory.md"
+module_roots = ["src/security"]
+
+# Modules under a swept root that refuse nothing. Listed with the reason, so
+# the exclusion is reviewable; a module that is neither listed here nor named
+# by a control's `source` fails the check.
+[[coverage.not_a_control]]
+module = "src/security/data_flow.rs"
+reason = "argument-flow tracing emits an audit record; it classifies and hashes, it never refuses a request"
+
+[[coverage.not_a_control]]
+module = "src/security/response_policy.rs"
+reason = "server-owned correlation shared by the response path and the transport adapters; a helper, not a gate"
+
+# --- request-path gates, NFR.SEC.1 inventory rows 1-14 ---
 
 [[control]]
 id = "origin-guard"
 description = "a cross-origin browser request is refused before dispatch"
+authority = "nfr-sec1:1"
 introduced_in = "5d25f104"
 source = "src/gateway/router/origin_guard.rs"
 probe = "foreign-origin"
@@ -20,9 +57,259 @@ probe = "foreign-origin"
 [[control]]
 id = "host-guard"
 description = "a request carrying a foreign Host header is refused"
+authority = "nfr-sec1:1"
 introduced_in = "5d25f104"
 source = "src/gateway/router/origin_guard.rs"
 probe = "foreign-host"
+
+[[control]]
+id = "agent-jwt-validity"
+description = "a bearer JWT that does not validate against the agent registry is refused"
+authority = "nfr-sec1:2"
+source = "src/gateway/oauth/mod.rs"
+probe = "none"
+reason = "config-gated on an agent registry; an install that configures none has no refusal to observe, so a 200 here is a configuration fact and not drift"
+
+[[control]]
+id = "authentication"
+description = "a request without a bearer token or API key is refused"
+authority = "nfr-sec1:3"
+source = "src/gateway/auth.rs"
+probe = "none"
+reason = "the positive half of every probe must already carry the operator's credentials, so a refusal of the credential-less negative half cannot be told apart from the probe's own auth posture"
+
+[[control]]
+id = "per-client-rate-limit"
+description = "a client over its window budget is refused"
+authority = "nfr-sec1:4"
+source = "src/gateway/auth.rs"
+probe = "none"
+reason = "the negative half is exhausting a real caller's budget on a live install; the probe would be the outage it is looking for"
+
+[[control]]
+id = "client-circuit-breaker"
+description = "a client whose circuit is open is refused with -32003"
+authority = "nfr-sec1:5"
+source = "src/gateway/auth.rs"
+probe = "none"
+reason = "tripping the breaker means driving repeated backend failures against a live install"
+
+[[control]]
+id = "agent-identity-allowlist"
+description = "an absent or unknown X-Agent-ID is refused"
+authority = "nfr-sec1:6"
+source = "src/security/agent_identity.rs"
+probe = "none"
+reason = "config-gated on `agent_identity.require_id` / `known_agents`; enforcement is off by default, so absence on the wire is not drift"
+
+[[control]]
+id = "request-body-ceiling"
+description = "a body over 10 MiB is refused"
+authority = "nfr-sec1:7"
+source = "src/gateway/router/handlers.rs"
+probe = "none"
+reason = "the 11 MiB negative half races the server's early close -- a broken pipe mid-write reads as unreachable, not as a refusal -- and a fronting proxy answers 413 before the gateway's 400 ever runs. Best next candidate once a live build can be stood up to confirm which status arrives"
+
+[[control]]
+id = "json-well-formedness"
+description = "a body that is not parseable JSON is refused 400 with -32700"
+authority = "nfr-sec1:8"
+introduced_in = "v3.5.0"
+source = "src/gateway/router/handlers.rs"
+probe = "malformed-json"
+refusal_status = 400
+
+[[control]]
+id = "meta-mcp-surface-enabled"
+description = "a request is refused when the Meta-MCP surface is disabled"
+authority = "nfr-sec1:9"
+source = "src/gateway/router/handlers.rs"
+probe = "none"
+reason = "inverted: the refusal exists only on an install that serves nothing, so the probe's positive half cannot succeed on any endpoint where the negative half could fail"
+
+[[control]]
+id = "jsonrpc-envelope-shape"
+description = "a JSON-RPC frame missing `method` is refused 400"
+authority = "nfr-sec1:10"
+introduced_in = "v3.5.0"
+source = "src/gateway/router/handlers.rs"
+probe = "malformed-envelope"
+refusal_status = 400
+
+[[control]]
+id = "input-sanitization"
+description = "a string carrying a null byte is refused 400 with -32600"
+authority = "nfr-sec1:11"
+introduced_in = "v3.5.0"
+source = "src/security/sanitize.rs"
+probe = "null-byte"
+refusal_status = 400
+note = "gated on `security.sanitize_input`, which `SecurityConfig::default()` sets true (src/config/features/security.rs). An install that sets it false answers the negative half 200 and this row reports drift -- read a failure here against that key before reading it as a missing control"
+
+[[control]]
+id = "admin-tool-gate"
+description = "a non-admin client is refused the management meta-tools"
+authority = "nfr-sec1:12"
+source = "src/gateway/router/authorization.rs"
+probe = "none"
+reason = "the negative half needs an authenticated non-admin client; the credentials the probe is given are the operator's and may be admin, in which case a 200 is correct and not drift"
+
+[[control]]
+id = "tool-scope-authorization"
+description = "an API key whose allowed_tools does not cover the target is refused"
+authority = "nfr-sec1:13"
+source = "src/gateway/router/authorization.rs"
+probe = "none"
+reason = "needs a key scoped to exclude the target tool; with the operator's own key either answer is attributable to the key rather than to the gate"
+
+[[control]]
+id = "destructive-action-confirmation"
+description = "a destructive tool call without confirmation is refused"
+authority = "nfr-sec1:14"
+source = "src/gateway/router/handlers.rs"
+probe = "none"
+reason = "the negative half is an unconfirmed destructive call against a live install; a probe that has to attempt the damage to prove the guard is not one this check will ship"
+
+# --- controls new in 4.0.0, NFR.SEC.1 inventory's own exclusion table ---
+#
+# All four fire only inside the modern-protocol branch, which needs a frame
+# carrying a revision in per-request `_meta`. Building that frame correctly is
+# what the probe would have to get right, and a probe whose discrimination has
+# not been confirmed against a live build is the ornamental row the design
+# names as its own failure mode. Uncovered, with the reason, until one can be.
+
+[[control]]
+id = "unsupported-protocol-version"
+description = "a frame naming a revision the build does not serve is refused with -32022"
+authority = "nfr-sec1-new:unsupported protocol version"
+source = "src/protocol/era.rs"
+probe = "none"
+reason = "requires a modern-protocol frame; discrimination unverified without a live build"
+
+[[control]]
+id = "undeclared-capability"
+description = "a method needing a capability the client never declared is refused with -32021"
+authority = "nfr-sec1-new:undeclared capability"
+source = "src/gateway/router/handlers.rs"
+probe = "none"
+reason = "requires a modern-protocol frame that declares capabilities; discrimination unverified without a live build"
+
+[[control]]
+id = "mirrored-version-header"
+description = "an mcp-* header disagreeing with the body, or repeated, is refused with -32020"
+authority = "nfr-sec1-new:missing / mismatched HTTP version header"
+source = "src/protocol/headers.rs"
+probe = "none"
+reason = "requires a modern-protocol frame whose headers mirror the body; discrimination unverified without a live build"
+
+[[control]]
+id = "revision-scoped-methods"
+description = "a method the negotiated revision removed is refused with -32601"
+authority = "nfr-sec1-new:method removed or added by the revision"
+source = "src/gateway/router/handlers.rs"
+probe = "none"
+reason = "requires a modern-protocol frame; -32601 also answers a method the build never had, so the negative half cannot attribute the refusal to the revision gate"
+
+# --- `src/security/` modules the inventory does not reach ---
+#
+# The code authority. Rows 6 (agent_identity) and 11 (sanitize) above already
+# claim their modules; these are the rest. None is probeable: each needs either
+# a backend response to inspect, a tool call to make, or a configuration the
+# probe cannot assume, and a probe that cannot tell a disabled control from an
+# absent one proves nothing about either.
+
+[[control]]
+id = "request-firewall"
+description = "shell, traversal and anomaly payloads are blocked before dispatch (-32002)"
+source = "src/security/firewall"
+probe = "none"
+reason = "the negative half is an attack payload aimed at a real tool on a live install, and the `firewall` feature plus its config decide whether a clean answer means absent or disabled"
+
+[[control]]
+id = "credential-safe-diagnostics"
+description = "HTTP transport errors are rendered without echoing credentials"
+source = "src/security/http_diagnostics.rs"
+probe = "none"
+reason = "no refusal to observe; its failure mode is a credential appearing inside an error body, which needs a provoked transport error carrying real credentials"
+
+[[control]]
+id = "message-signing"
+description = "HMAC-SHA256 response integrity with nonce replay protection (ADR-001)"
+source = "src/security/message_signing.rs"
+probe = "none"
+reason = "config-gated on signing being enabled; an unsigned answer from an install that never enabled it is not drift"
+
+[[control]]
+id = "response-mac-binding"
+description = "RFC 8785 MAC binding on the final JSON-RPC delivery envelope"
+source = "src/security/message_signing_v2.rs"
+probe = "none"
+reason = "config-gated with message signing; the absence of a MAC cannot be told from signing being off"
+
+[[control]]
+id = "tool-policy"
+description = "default-deny patterns block destructive and dynamic-execution tools"
+source = "src/security/policy.rs"
+probe = "none"
+reason = "the negative half is a call to a denied tool; which tools are denied is the operator's config, so a refusal is not attributable to the shipped defaults"
+
+[[control]]
+id = "remote-provenance"
+description = "remote MCP backend signatures and provenance are verified"
+source = "src/security/remote_provenance.rs"
+probe = "none"
+reason = "acts on the backend leg, not the caller leg; nothing a client sends can exercise it"
+
+[[control]]
+id = "response-contract"
+description = "a per-tool response contract violation fails closed"
+source = "src/security/response_contract.rs"
+probe = "none"
+reason = "needs a backend that violates its own contract; the probe cannot make one do that"
+
+[[control]]
+id = "response-inspection"
+description = "backend responses are scanned for secrets and injected instructions"
+source = "src/security/response_inspect.rs"
+probe = "none"
+reason = "needs a backend response carrying the payload; the caller leg has no way to plant one"
+
+[[control]]
+id = "response-injection-scanner"
+description = "prompt-injection patterns in upstream responses are detected"
+source = "src/security/response_scanner.rs"
+probe = "none"
+reason = "needs a backend response carrying the payload; the caller leg has no way to plant one"
+
+[[control]]
+id = "scope-collision"
+description = "conflicting tool-name grants across backends are detected"
+source = "src/security/scope_collision.rs"
+probe = "none"
+reason = "resolved when backends register, not when a caller requests; needs two colliding backends on the install"
+
+[[control]]
+id = "ssrf-guard"
+description = "special-use IP ranges are blocked and DNS rebinding is prevented by resolve-and-pin"
+source = "src/security/ssrf"
+probe = "none"
+reason = "fires on the outbound leg of a tool that fetches a URL; the negative half would be asking a live install to attack its own network"
+
+[[control]]
+id = "tool-integrity"
+description = "a backend mutating its tool definitions after the first list is detected"
+source = "src/security/tool_integrity.rs"
+probe = "none"
+reason = "needs a backend that changes its `tools/list` between calls"
+
+[[control]]
+id = "transparency-log"
+description = "completed tool invocations are committed to a hash-chain append-only log"
+source = "src/security/transparency_log.rs"
+probe = "none"
+reason = "an audit record, not a refusal; its absence leaves no signal in any response"
+
+# --- build-time ---
 
 [[control]]
 id = "unsafe-code-denied"
