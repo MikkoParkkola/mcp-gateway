@@ -168,7 +168,7 @@ stays the authority on *how* each split is done.
 
 Settles the reading dispute: the 4.0 definition-of-done check recorded §2 Code
 Quality as `N/A at branch scope`
-(`docs/requirements/RELEASE-4.0.0-dod-check.md:356`) on the reading that the
+(`docs/internal/requirements/RELEASE-4.0.0-dod-check.md:356`) on the reading that the
 ceiling governs a *change*. It governs a *file*. Under the operator's ruling
 the criterion is not met, and Lane G is what meets it.
 
