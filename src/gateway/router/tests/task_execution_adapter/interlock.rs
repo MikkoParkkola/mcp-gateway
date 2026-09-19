@@ -97,20 +97,19 @@ impl InterlockHandle {
     ///
     /// `reached` is invoked only after that write; this is not an entry probe.
     async fn wait(&mut self) {
-        for _ in 0..20_000 {
-            match self.arrived.try_recv() {
-                Ok(()) => return,
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                    tokio::task::yield_now().await;
-                }
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    panic!(
-                        "the executor was dropped before it completed the observed durable write"
-                    )
-                }
-            }
-        }
-        panic!("the worker never completed the observed durable write");
+        // A yield budget is a scheduler-turn count, not a deadline: on a loaded
+        // runner it drains while the worker is still off-CPU, so the spin form
+        // of this wait failed under CI contention and passed when idle. Bound
+        // it in wall-clock time instead, and park rather than spin.
+        let Ok(arrived) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), self.arrived.recv()).await
+        else {
+            panic!("the worker never completed the observed durable write")
+        };
+        assert!(
+            arrived.is_some(),
+            "the executor was dropped before it completed the observed durable write"
+        );
     }
 
     fn release(&self) {
