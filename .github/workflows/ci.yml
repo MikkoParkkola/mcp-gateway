@@ -660,6 +660,11 @@ jobs:
       # Only now does a release name exist. Copying an index by digest is a
       # byte-identical put — the digest is unchanged, so the signature and the
       # SBOM attestation verified above cover exactly what these tags serve.
+      #
+      # An index as the source is not the case the build step's comment rules
+      # out: composing several sources into a new index cannot take an index as
+      # a child, but a single source with no annotations is copied rather than
+      # composed. The step below is the runtime check on that distinction.
       - name: Publish the release tags (copy the verified index by digest)
         env:
           VERSION: ${{ steps.meta.outputs.version }}

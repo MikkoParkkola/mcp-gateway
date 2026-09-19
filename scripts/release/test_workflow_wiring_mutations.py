@@ -781,6 +781,17 @@ CASES = [
         CAUGHT,
     ),
     (
+        # The release copy ALSO run before signing, with the late one left in
+        # place: every string the suite looks for is still where it was, and
+        # only the step order says the tag existed unsigned first.
+        "release-tag-copied-before-signing-as-well",
+        "ci.yml",
+        '          echo "published platforms: ${PLATFORMS}"\n',
+        '          echo "published platforms: ${PLATFORMS}"\n'
+        '          docker buildx imagetools create "${TAGS[@]}" "${IMAGE}@${LIST}"\n',
+        CAUGHT,
+    ),
+    (
         # The stable major.minor pointer dropped, as the first draft of this
         # job dropped it: consumers pinned to :4.0 stop receiving releases.
         "major-minor-pointer-dropped",

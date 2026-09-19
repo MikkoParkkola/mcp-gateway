@@ -139,6 +139,15 @@ resulting list on this arm64 Mac with `--platform linux/arm64` and no emulation 
 it. If the arm64 child does not run natively there, the design has not met the criterion it was
 written for, whatever CI says.
 
+The publish-by-copy step rests on one property: `imagetools create` with a single index source and
+no annotations copies the descriptor rather than composing a new index, so the digest is
+unchanged. Checked locally against a throwaway `registry:2` with buildx 0.30 / Docker 29.5.2 — two
+single-platform digests, an annotated index under `:sha-deadbeef`, then that index copied by
+digest onto `:4.0.0`, `:latest` and `:4.0`: all three resolve to the source digest
+(`sha256:0862671115cf…`). CI does not take this on trust either; the step after the copy asserts
+it, so a buildx that ever starts rewriting on copy fails the release job instead of publishing a
+tag no signature covers.
+
 ## Out of scope, stated
 
 - `main`-branch and PR images stay amd64-only. They are built for the scan and the startup gate and
