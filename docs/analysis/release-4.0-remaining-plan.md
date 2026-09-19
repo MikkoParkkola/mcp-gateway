@@ -82,12 +82,29 @@ Fully parallel with everything. Runs as subagents.
 |---|---|---|
 | D1 | Multi-user gap list at source: what many-users/one-gateway/per-user-credentials needs that the tree lacks (ruling 72) | open |
 | D2 | Size that gap and bring the operator the real number | open |
-| D3 | Enumerate the untested conformance cells (operator decision 19) | open |
-| D4 | Write those tests | open |
-| D5 | Merge the tests | open |
-| D6 | Relocate the 201 internal process docs out of the public tree | open |
+| D3 | Enumerate the untested conformance cells | **done** — see below |
+| D4 | Assert `tools/list` order determinism (`MIK-7272.ORDER.1`) instead of arguing it structurally | open |
+| D5 | Repair the stale `HEADER.5` evidence citation in the conformance matrix | open |
+| D6 | Relocate the internal process docs out of the public tree | open |
 | D7 | Fix the public-repo hygiene gate | open |
 | D8 | Merge the docs change | open |
+
+**D3 result.** The executable authority is `tests/mik_7272_conformance.rs` — a 21-row
+table, green at 8 passed 0 failed — and `RELEASE-4.0.0-conformance-matrix.md` is its
+prose reading. Every one of the 21 statements is COVERED; none is marked untested.
+The enumeration this step asked for returns an empty list, so D4 and D5 replace it
+with what the cross-check against the per-clause ledger actually found:
+
+| Cell | What the label hides | Size |
+|---|---|---|
+| `MIK-7272.ORDER.1` | MET *(structural)*: determinism comes from straight-line `Vec` construction, and no test calls `tools/list` twice and compares. A switch to a hashed container stays green. (`RELEASE-4.0.0-criteria-status.md:217`) | one unit test |
+| `MIK-7214.HEADER.5` | Covered, but by `tests/mik_7214_header5_mirroring.rs`, not by the test the matrix cites | citation repair |
+| `MIK-7272.EXT.1`, client half | Cannot discriminate an end-to-end name-list implementation without a request-scoped observation seam, which does not exist | new test seam — out of 4.0.0 scope, recorded as a known limit |
+
+The step was recorded here as "operator decision 19". There is no such row:
+`RELEASE-4.0.0-operator-decisions.md` holds 18, and no release document contains the
+phrase. The work is still worth doing on its merits, but its provenance is corrected
+rather than carried.
 
 ### Lane E — the ledger, the notes, the tickets (lead only, never a subagent)
 
