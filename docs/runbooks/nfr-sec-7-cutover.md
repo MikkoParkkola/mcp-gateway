@@ -41,8 +41,18 @@ No macOS build carrying `5d25f104` exists on disk: no `target/` in the main chec
 Option B has a loop in it: NFR.SEC.7 blocks the 4.0.0 release, and the release is what
 produces the 4.0.0 darwin artifact. Option A breaks that loop and lands the install on
 exactly the version the 3.5.1 → 4.0.0 upgrade was rehearsed from (17/17 PASS,
-`docs/release/nfr-upgrade-1-rehearsal-results.md`). Which to deploy is the operator's
-call; the procedure below is identical either way.
+`docs/release/nfr-upgrade-1-rehearsal-results.md`).
+
+**What option A does not close.** The manifest's three controls all come from
+`5d25f104`, so a v3.5.1 install makes the checker exit 0 — but
+`git log v3.5.1..origin/main -- src/security/ src/gateway/router/` is **113 commits**,
+among them `782e5ac8` (refuse an unserved protocol-version header) and `992b87c3`
+(request-scoped notification and outbound refusal gaps). Those are refusal behaviours the
+manifest does not probe. Option A therefore satisfies the instrument, not the criterion's
+wording — "every merged security control" is only true of a build from `main`. Treat A as
+a stopgap that shrinks the gap from "predates the guard entirely" to "behind on the
+security path", and B as the close. Which to deploy is the operator's call; the procedure
+below is identical either way.
 
 ## Procedure
 
@@ -53,8 +63,9 @@ NEW=3.5.1                                     # or 4.0.0-<sha> for a self-built 
 
 # 1. Fetch and verify the artifact (option A; skip for B/C, keep the checksum step)
 gh release download v3.5.1 -R MikkoParkkola/mcp-gateway \
-  -p mcp-gateway-darwin-arm64 -p SHA256SUMS.txt -D /tmp/gw
-(cd /tmp/gw && shasum -a 256 -c SHA256SUMS.txt --ignore-missing)
+  -p mcp-gateway-darwin-arm64 -D /tmp/gw
+shasum -a 256 /tmp/gw/mcp-gateway-darwin-arm64
+# expect 78fc2fdb5a56539a35b9204e704374303f140ed91f933492f92f49acdece77b1
 
 # 2. Install ALONGSIDE the running build; never write into $OLD
 mkdir -p ~/.local/libexec/mcp-gateway/$NEW
@@ -65,12 +76,11 @@ sed "s|$OLD|$NEW|g" ~/.local/libexec/mcp-gateway/$OLD/start-mcp-gateway \
   > ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway
 chmod 700 ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway
 
-# 3. Smoke the new binary on a spare port, with its own data dir, before touching anything
-MCP_GATEWAY_CONFIG_DIR=$(mktemp -d) \
-  ~/.local/libexec/mcp-gateway/$NEW/mcp-gateway \
-  --config ~/.local/libexec/mcp-gateway/$NEW/servers.yaml --port 39412 serve &
+# 3. Smoke it on a spare port, through the launcher, with its own data dir
+MCP_GATEWAY_CONFIG_DIR=$(mktemp -d) MCP_GATEWAY_PORT=39412 \
+  ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway & SMOKE=$!
 python3 scripts/dev/check-control-drift.py http://127.0.0.1:39412/mcp   # must exit 0
-kill %1
+kill $SMOKE
 
 # 4. Flip the pointer (NOT $EDITOR on the symlink — that rewrites $OLD and destroys rollback)
 ln -sfn ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway ~/.local/bin/start-mcp-gateway
@@ -88,6 +98,13 @@ curl -s http://127.0.0.1:39401/health           # version = $NEW, all_healthy tr
 
 Optionally repoint the stale sibling symlink `~/.local/bin/mcp-gateway` (still
 `3.4.0-851cc03f`) so a bare CLI `--version` stops disagreeing with what is serving.
+
+Step 3 goes through the launcher because the launcher is what `launchd` runs: it sources
+`~/.secrets.env` and `~/.claude/secrets.env` first, so a bare binary invocation starts
+every backend credential-less and its failures mean nothing. What the smoke proves is
+that the binary runs on this machine, that the 3.4.0 config still parses, and that the
+guard fires on the wire. What it does not prove is backend health under the real data
+directory — step 7 covers that.
 
 ## Pass output
 
