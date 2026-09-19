@@ -111,6 +111,23 @@ The step was recorded here as "operator decision 19". There is no such row:
 phrase. The work is still worth doing on its merits, but its provenance is corrected
 rather than carried.
 
+### Lane H — unverifiable evidence citations (found 2026-09-20)
+
+The ledger cites 99 commit SHAs as proof that criteria are met. **35 of them are
+reachable from no release-line branch.** The first one examined, `935d31d8` on
+two rows, turned out to be a pre-squash SHA: the code did land, under
+`fafc943a` through #561, and only the citation was dead. That repair is done.
+Whether the other 35 are the same benign case or a criterion marked MET against
+code that never shipped is the open question, and the second case would be a
+release blocker.
+
+| # | Step | State |
+|---|---|---|
+| H1 | Classify all 35: remapped, present-by-content, or genuinely missing | in flight — landing in `docs/internal/analysis/ledger-sha-remap.md` |
+| H2 | Rewrite the citations the classification repairs (lead only) | open |
+| H3 | Re-grade any criterion whose evidence turns out to be absent | open |
+| H4 | Gate it: fail CI when the ledger cites a commit unreachable from the release line | open |
+
 ### Lane E — the ledger, the notes, the tickets (lead only, never a subagent)
 
 | # | Step | State |
