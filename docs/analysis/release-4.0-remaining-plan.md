@@ -9,7 +9,7 @@ and how far along it is.
 
 Three numbers, reported every tick. Nothing else is progress.
 
-- **Operator steps: 12 / 37 done** (2 of the 37 are operator-gated, see below)
+- **Operator steps: 16 / 37 done** (2 of the 37 are operator-gated, see below)
 - **Blocking release criteria: 2** — `NFR.SEC.7` and `NFR.PKG.1`, both
   operator-gated. Nothing in the tree closes either one.
 - **Rows open but not blocking: 1** — `NFR.PERF.1`, where ruling 69 accepted
@@ -47,15 +47,19 @@ while it runs.
 
 ### Lane B — interim-round defect, both halves (ruling 68)
 
-MRTR.12 (chain stop) is built, green and reviewed (`fb0890ed`). The other two
-halves are open.
+**This lane is closed.** All three halves are built and on the release line.
+MRTR.12 (chain stop) is `fb0890ed`; MRTR.11a and MRTR.11b both landed in
+`fafc943a`, merged through #561. The ledger credited them to `935d31d8`, a
+commit that reached no release-line branch — the code arrived by a different
+route and the citation has been repaired to the commit that actually carries
+it.
 
 | # | Step | State |
 |---|---|---|
-| B1 | MRTR.11a presentation — failing tests | open |
-| B2 | MRTR.11a implementation | open |
-| B3 | MRTR.11b validation — failing tests, then implementation | open |
-| B4 | Review both seats, merge | open |
+| B1 | MRTR.11a presentation — failing tests | **done** — `interim_promotion_tests.rs` |
+| B2 | MRTR.11a implementation | **done** — `promote_interim`, `src/gateway/meta_mcp/interim_promotion.rs:54` |
+| B3 | MRTR.11b validation — failing tests, then implementation | **done** — an unvalidated claim is answered `-32603`, never wrapped |
+| B4 | Review both seats, merge | **done** — merged through #561 |
 
 Runs in its own worktree against `invoke.rs` and the interim modules. Rebases
 onto Lane A before merging, never the other way round.
