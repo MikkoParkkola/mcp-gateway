@@ -33,32 +33,14 @@ better closed.
 
 ## The recipe
 
-Nothing here is discovery work — each step is mechanical and reversible, and the old
-versioned directory stays in place as the rollback.
+`docs/runbooks/nfr-sec-7-cutover.md` — artifact options, the paste-ready commands, the
+exact pass output and the rollback. The recipe that used to sit here is gone rather than
+kept beside it: it edited the launcher through a symlink into the running version
+directory, which destroys the rollback target, and it built from a worktree that no
+longer exists.
 
-```sh
-# 1. Build the shipping line
-cd ~/github/.worktrees/v4-chore-tip
-cargo build --release
-
-# 2. Install alongside, never over, the running build
-V=4.0.0-$(git rev-parse --short HEAD)
-mkdir -p ~/.local/libexec/mcp-gateway/$V
-cp target/release/mcp-gateway ~/.local/libexec/mcp-gateway/$V/
-cp ~/.local/libexec/mcp-gateway/3.4.0-f30539af/servers.yaml ~/.local/libexec/mcp-gateway/$V/
-
-# 3. Point the launcher at it (lines 4 and 5 of the script)
-$EDITOR ~/.local/bin/start-mcp-gateway
-
-# 4. Restart under launchd
-launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway
-
-# 5. The criterion closes only if this exits 0
-python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp
-```
-
-Step 5 is the grading evidence. A passing run is what moves the row from PARTIAL to MET;
-until then the row stays blocking and honest. Rollback is step 3 in reverse plus step 4.
+The last step there is the grading evidence. A passing run is what moves the row from
+PARTIAL to MET; until then the row stays blocking and honest.
 
 Upgrading from a 3.x data directory is separately rehearsed — see
 `docs/release/nfr-upgrade-1-rehearsal-results.md`, which drives config, credentials,
