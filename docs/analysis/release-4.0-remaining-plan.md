@@ -79,14 +79,21 @@ an unrelated backend-name helper. The gate is in the stdio serve loop:
 - `src/gateway/server/mod.rs:2563` — the admission call site, `try_send` and
   `continue` on refusal
 
-All of that is already on `main`, with its rationale in the doc comments. The
-design was made and the code shipped, so the design and implementation rows
-close on that evidence and the lane reduces to the proof nobody wrote.
+All of that is already on `main`. The design it implements is
+`docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md`, whose §5 and §6
+the doc comments cite by number, and the non-blocking admission gate is its
+addendum of 2026-09-16 (line 250). That design was reviewed **before** any code
+existed — two independent reviews, both SHIP-WITH-FIXES, with the revision
+folded in and each finding named at the section it changed (line 8); the
+addendum carries its own two reviews (line 252) and a third review pass is
+recorded at line 456. A merge would not have established this; the design
+document does. So the design and implementation rows close on that evidence and
+the lane reduces to the proof nobody wrote.
 
 | # | Step | State |
 |---|---|---|
 | C1 | Design the seam | **done** — recorded in the doc comments cited above |
-| C2 | Review the design before any code | **done** — shipped through the merge that landed the gate |
+| C2 | Review the design before any code | **done** — two independent pre-implementation reviews, design doc line 8; addendum reviewed at line 252 |
 | C3 | End-to-end test past the 1024-permit boundary | in flight |
 | C4 | Implement | **done** — on `main`, cited above |
 | C5 | Review, merge | open — gated on C3 |
