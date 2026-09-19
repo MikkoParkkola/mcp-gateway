@@ -22,6 +22,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
+use crate::transport::notification_sink::DeliveryHandle;
+
 use super::{PendingRequestGuard, Transport};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
@@ -98,12 +100,17 @@ pub struct StdioTransport {
     writer: Mutex<Option<tokio::process::ChildStdin>>,
     /// Negotiated protocol version (config override or auto-negotiated)
     protocol_version: RwLock<Option<String>>,
-    /// Notifications captured for a call that supplied a progress token.
+    /// Where to deliver a notification for each call that supplied a progress
+    /// token.
     ///
     /// Keyed by the token itself, because stdout is one multiplexed stream:
     /// "which stream it arrived on" cannot separate two calls in flight here,
     /// so the token the caller supplied is the whole correlation.
-    captured_notifications: dashmap::DashMap<String, Vec<JsonRpcNotification>>,
+    ///
+    /// The map holds the destination, not the payload. Accumulating frames and
+    /// flushing them when the call ends is collect-then-emit, which ADR-014 §1
+    /// rejects: a progress update that arrives with the result is not progress.
+    progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
 }
 
 impl StdioTransport {
@@ -131,7 +138,7 @@ impl StdioTransport {
             request_timeout,
             writer: Mutex::new(None),
             protocol_version: RwLock::new(protocol_version),
-            captured_notifications: dashmap::DashMap::new(),
+            progress_destinations: dashmap::DashMap::new(),
         })
     }
 
@@ -448,20 +455,37 @@ impl StdioTransport {
     // Registered from `Transport::request` below, before the request is
     // written: the reader task can route a notification back before the write
     // returns, and an unregistered token is dropped.
+    ///
+    /// The handle is snapshotted here rather than at capture time because this
+    /// is the one point where the caller's sink and token translation are both
+    /// in scope. The reader task has neither.
     pub(crate) fn register_progress_token(&self, token: &str) {
-        self.captured_notifications
-            .insert(token.to_string(), Vec::new());
+        // Vacant-only. A colliding live key must fail closed: overwriting the
+        // incumbent reroutes one call's progress onto another call's channel,
+        // which is worse than losing it. The third defect ADR-014 §2 names.
+        match self.progress_destinations.entry(token.to_string()) {
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                slot.insert(DeliveryHandle::capture(token));
+            }
+            dashmap::mapref::entry::Entry::Occupied(_) => {
+                // ci-allow-secret-log: a minted progress token is a correlation id, not a credential
+                warn!(
+                    token = %token,
+                    "progress token is already registered to a live call; refusing to reroute it"
+                );
+            }
+        }
     }
 
-    /// Take everything captured for a token, ending its registration.
-    pub(crate) fn take_captured_notifications(&self, token: &str) -> Vec<JsonRpcNotification> {
-        self.captured_notifications
-            .remove(token)
-            .map(|(_, v)| v)
-            .unwrap_or_default()
+    /// End a token's registration, dropping the sender it held.
+    ///
+    /// A sender outliving its request is a leak with a live channel on the end
+    /// of it, so this runs from the guard's `Drop` on every exit path.
+    pub(crate) fn deregister_progress_token(&self, token: &str) {
+        self.progress_destinations.remove(token);
     }
 
-    /// Keep a peer notification for the call that supplied its progress token.
+    /// Deliver a peer notification to the call that supplied its progress token.
     ///
     /// A notification with no token, or one whose token no caller supplied, is
     /// dropped exactly as before — on a multiplexed stdout there is nothing else
@@ -479,10 +503,13 @@ impl StdioTransport {
             .and_then(|p| p.get("progressToken"))
             .and_then(progress_token_string);
 
-        match token.and_then(|t| self.captured_notifications.get_mut(&t)) {
-            Some(mut entry) => {
-                debug!(method = %notification.method, "Capturing peer notification for its caller");
-                entry.push(notification);
+        match token.and_then(|t| self.progress_destinations.get(&t)) {
+            Some(destination) => {
+                debug!(method = %notification.method, "Delivering peer notification to its caller");
+                // Sent, not queued, and from the reader task: `deliver` uses
+                // `try_send`, because a blocking send here would park the only
+                // reader of this backend's stdout.
+                destination.deliver(notification);
             }
             None => {
                 debug!(method = %notification.method, "Ignoring peer notification");
@@ -621,9 +648,7 @@ impl<'a> ProgressRegistrationGuard<'a> {
 
 impl Drop for ProgressRegistrationGuard<'_> {
     fn drop(&mut self) {
-        crate::transport::notification_sink::publish(
-            self.transport.take_captured_notifications(&self.token),
-        );
+        self.transport.deregister_progress_token(&self.token);
     }
 }
 
@@ -1194,36 +1219,118 @@ done
         )
     }
 
-    /// S-02 over stdio: a backend's progress notification during a call is kept
-    /// for the caller that supplied its token, not discarded.
-    #[test]
-    fn stdio_captures_a_progress_notification_for_the_call_that_supplied_its_token() {
-        let t = make_transport("cat");
-        t.register_progress_token("tok-a");
+    /// S-02 over stdio: a backend's progress notification reaches the caller
+    /// *while its call is still running*, not when the call ends.
+    ///
+    /// The reader runs on a spawned task with none of the caller's
+    /// task-locals, which is what the production read loop is and what makes
+    /// the registered handle the only route to the sink. The caller is held
+    /// open on a oneshot so the receive below cannot be satisfied by a flush
+    /// on the way out -- the collect-then-emit shape would deadlock here
+    /// rather than pass, which is the point.
+    #[tokio::test]
+    async fn stdio_streams_a_progress_notification_while_its_call_is_still_running() {
+        let transport = std::sync::Arc::new(make_transport("cat"));
+        let reader = std::sync::Arc::clone(&transport);
+        let (release, held) = tokio::sync::oneshot::channel::<()>();
 
-        t.handle_response(&progress_line("tok-a", 1))
-            .expect("a notification must not fail the read loop");
+        let (call, mut rx) = crate::transport::notification_sink::scope(async move {
+            transport.register_progress_token("tok-a");
+            tokio::spawn(async move {
+                reader
+                    .handle_response(&progress_line("tok-a", 1))
+                    .expect("a notification must not fail the read loop");
+            })
+            .await
+            .expect("the reader task must not panic");
+            held.await.expect("the caller is released by the assertion");
+        });
+        let call = tokio::spawn(call);
 
-        let captured = t.take_captured_notifications("tok-a");
-        assert_eq!(captured.len(), 1, "the notification must be kept");
-        assert_eq!(captured[0].method, "notifications/progress");
+        let got = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the notification must arrive before the call is released")
+            .expect("the sink must not be closed while the call is in flight");
+        assert_eq!(got.method, "notifications/progress");
+
+        release.send(()).expect("the call is still in flight");
+        call.await.expect("the call must not panic");
     }
 
     /// S-03 over stdio: two calls in flight on the one stdout. The notification
     /// reaches the call that provoked it and no other.
-    #[test]
-    fn stdio_routes_a_progress_notification_to_only_the_call_that_supplied_the_token() {
-        let t = make_transport("cat");
-        t.register_progress_token("tok-a");
-        t.register_progress_token("tok-b");
+    ///
+    /// Routing is now a property of which destination the token resolves to,
+    /// so the unregistered side is asserted by a sink that stays empty rather
+    /// than by an empty accumulation.
+    #[tokio::test]
+    async fn stdio_routes_a_progress_notification_to_only_the_call_that_supplied_the_token() {
+        let transport = std::sync::Arc::new(make_transport("cat"));
+        let reader = std::sync::Arc::clone(&transport);
 
-        t.handle_response(&progress_line("tok-b", 7)).unwrap();
+        let (call, mut rx) = crate::transport::notification_sink::scope(async move {
+            transport.register_progress_token("tok-a");
+            transport.register_progress_token("tok-b");
+            tokio::spawn(async move {
+                reader.handle_response(&progress_line("tok-b", 7)).unwrap();
+            })
+            .await
+            .expect("the reader task must not panic");
+        });
+        call.await;
 
+        let first = rx.recv().await.expect("tok-b's caller must be reached");
+        assert_eq!(
+            first.params.as_ref().and_then(|p| p.get("progress")),
+            Some(&serde_json::json!(7)),
+            "the frame delivered must be the one tok-b provoked"
+        );
         assert!(
-            t.take_captured_notifications("tok-a").is_empty(),
+            rx.try_recv().is_err(),
             "the other call in flight must see nothing"
         );
-        assert_eq!(t.take_captured_notifications("tok-b").len(), 1);
+    }
+
+    /// A second registration of a live token is refused, not honoured.
+    ///
+    /// Overwriting would point the incumbent's token at the newcomer's
+    /// channel, so one call's progress would surface inside another call's
+    /// response stream -- a cross-caller leak, and worse than losing the
+    /// frame. ADR-014 §2 names it as one of the three defects that sank
+    /// registering the caller's own token.
+    #[tokio::test]
+    async fn stdio_refuses_to_reroute_a_progress_token_that_is_already_live() {
+        let transport = std::sync::Arc::new(make_transport("cat"));
+        let reader = std::sync::Arc::clone(&transport);
+
+        let (call, mut rx) = crate::transport::notification_sink::scope(async move {
+            transport.register_progress_token("tok-a");
+            // The second registration would capture this same scope's sink, so
+            // a test that only counts arrivals cannot tell the two apart. What
+            // it can tell is that the incumbent entry survived.
+            transport.register_progress_token("tok-a");
+            tokio::spawn(async move {
+                reader.handle_response(&progress_line("tok-a", 3)).unwrap();
+            })
+            .await
+            .expect("the reader task must not panic");
+            transport.deregister_progress_token("tok-a");
+            // One registration, so one deregistration empties the map. A
+            // refused insert that had instead overwritten would leave the same
+            // count, which is why the delivered frame is asserted too.
+            transport.progress_destinations.len()
+        });
+        let remaining = call.await;
+
+        assert_eq!(remaining, 0, "deregistration must clear the only entry");
+        let got = rx
+            .recv()
+            .await
+            .expect("the incumbent must still be reached");
+        assert_eq!(
+            got.params.as_ref().and_then(|p| p.get("progress")),
+            Some(&serde_json::json!(3))
+        );
     }
 
     /// The production request path reads the token from `params._meta`, which
@@ -1248,10 +1355,10 @@ done
     }
 
     /// S-02 over stdio, end to end through the sink: register as the request
-    /// path does, capture as the reader task does, drain as the request path
-    /// does -- and the caller's sink holds the notification.
+    /// path does, deliver as the reader task does -- and the caller's sink
+    /// holds the notification with no flush of any kind in between.
     #[tokio::test]
-    async fn stdio_drains_a_captured_notification_into_the_callers_sink() {
+    async fn stdio_delivers_a_notification_into_the_callers_sink() {
         let t = make_transport("cat");
         let params = serde_json::json!({ "_meta": { "progressToken": "tok-live" } });
 
@@ -1259,7 +1366,6 @@ done
             let token = request_progress_token(Some(&params)).expect("token");
             t.register_progress_token(&token);
             t.handle_response(&progress_line("tok-live", 3)).unwrap();
-            crate::transport::notification_sink::publish(t.take_captured_notifications(&token));
         })
         .await;
 
@@ -1276,7 +1382,6 @@ done
         let ((), drained) = crate::transport::notification_sink::collect(async {
             t.register_progress_token("tok-mine");
             t.handle_response(&progress_line("tok-stray", 1)).unwrap();
-            crate::transport::notification_sink::publish(t.take_captured_notifications("tok-mine"));
         })
         .await;
 
@@ -1290,7 +1395,7 @@ done
     /// error return that skipped the drain would strand the entry for the
     /// transport's lifetime. The request path drains on every exit.
     #[tokio::test]
-    async fn stdio_request_drains_its_registration_even_when_the_write_fails() {
+    async fn stdio_request_retires_its_registration_even_when_the_write_fails() {
         let t = make_transport("cat"); // never connected: the write fails
         let params = serde_json::json!({ "_meta": { "progressToken": "tok-leak" } });
 
@@ -1302,7 +1407,7 @@ done
         assert!(result.is_err(), "precondition: the write must fail");
         assert!(drained.is_empty());
         assert!(
-            !t.captured_notifications.contains_key("tok-leak"),
+            !t.progress_destinations.contains_key("tok-leak"),
             "the registration must not outlive the failed request"
         );
     }
@@ -1316,10 +1421,10 @@ done
     /// `request()`: reaching a parked await needs a live child that completes
     /// `start()`'s handshake, and `cat` cannot. What ties the guard to the
     /// request path is that it is now the ONLY drain there —
-    /// `stdio_request_drains_its_registration_even_when_the_write_fails` goes
+    /// `stdio_request_retires_its_registration_even_when_the_write_fails` goes
     /// red the moment `request` stops holding one.
     #[tokio::test]
-    async fn a_dropped_progress_registration_publishes_and_retires() {
+    async fn a_dropped_progress_registration_retires_its_destination() {
         // GIVEN a registration holding one captured notification.
         let t = make_transport("cat");
         let ((), drained) = crate::transport::notification_sink::collect(async {
@@ -1339,22 +1444,31 @@ done
             "a cancelled request's captured notifications must still be published"
         );
         assert!(
-            !t.captured_notifications.contains_key("tok-cancel"),
+            !t.progress_destinations.contains_key("tok-cancel"),
             "a cancelled request must not strand its registration for the transport's lifetime"
         );
     }
 
     /// Condition 2 of the correlation rule: an unregistered token is never
     /// forwarded. A backend's token is passed through only on a match.
-    #[test]
-    fn stdio_drops_a_progress_notification_no_caller_asked_for() {
+    #[tokio::test]
+    async fn stdio_drops_a_progress_notification_no_caller_asked_for() {
         let t = make_transport("cat");
-        t.register_progress_token("tok-a");
 
-        t.handle_response(&progress_line("tok-stray", 3)).unwrap();
+        let ((), drained) = crate::transport::notification_sink::collect(async {
+            t.register_progress_token("tok-a");
+            t.handle_response(&progress_line("tok-stray", 3)).unwrap();
+        })
+        .await;
 
-        assert!(t.take_captured_notifications("tok-a").is_empty());
-        assert!(t.take_captured_notifications("tok-stray").is_empty());
+        assert!(
+            drained.is_empty(),
+            "an unregistered token reaches no caller, registered neighbour or not"
+        );
+        assert!(
+            !t.progress_destinations.contains_key("tok-stray"),
+            "and it must not register itself on the way through"
+        );
     }
 }
 
