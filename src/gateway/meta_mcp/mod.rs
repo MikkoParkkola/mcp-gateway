@@ -441,6 +441,12 @@ pub struct MetaMcp {
     /// Consulted on both `tools/list` and `tools/call`. The default exposes every
     /// meta-tool, so an existing deployment is unaffected.
     pub(super) meta_tool_exposure: MetaToolExposure,
+    /// List `gateway_get_stats`, from `MetaMcpConfig::expose_stats_tool`.
+    ///
+    /// Enumeration only: the handler answers whoever calls it by name either
+    /// way. Separate from `meta_tool_exposure` because that is an allow-list
+    /// over the whole surface, while this is one tool's own gate.
+    pub(super) expose_stats_tool: bool,
     /// Per-backend bound for `prompts/list` and `resources/list`
     /// aggregation. Configurable via `meta_mcp.prompts_resources_fetch_timeout`
     /// (default 10s); overridable per-instance for tests.
@@ -624,6 +630,7 @@ impl MetaMcp {
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
             meta_tool_exposure: MetaToolExposure::expose_all(),
+            expose_stats_tool: false,
             prompts_resources_fetch_timeout: std::time::Duration::from_secs(10),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
@@ -757,6 +764,16 @@ impl MetaMcp {
     #[must_use]
     pub fn with_exposed_meta_tools(mut self, names: &[String]) -> Self {
         self.meta_tool_exposure = MetaToolExposure::from_names(names);
+        self
+    }
+
+    /// List `gateway_get_stats` in `tools/list` (consuming builder).
+    ///
+    /// Off by default. The tool stays callable by name regardless; this
+    /// governs enumeration only.
+    #[must_use]
+    pub fn with_expose_stats_tool(mut self, enabled: bool) -> Self {
+        self.expose_stats_tool = enabled;
         self
     }
 
@@ -1643,14 +1660,23 @@ impl MetaMcp {
             let (tool_count, server_count) = self.backend_counts();
             build_meta_tools_filtered(
                 MetaToolGates {
-                    stats: self.stats.is_some(),
+                    // The collector is always attached, so its presence was
+                    // never a gate. The operator opt-in is.
+                    stats: self.expose_stats_tool,
                     reload: self.get_reload_context().is_some(),
-                    // The tracker is always present, so this gate is always on.
-                    cost_report: true,
+                    // Follows `cost_governance.enabled`, which is what decides
+                    // whether a registry is attached at all. Without the
+                    // feature there is nothing to report.
+                    #[cfg(feature = "cost-governance")]
+                    cost_report: self.cost_registry.is_some(),
+                    #[cfg(not(feature = "cost-governance"))]
+                    cost_report: false,
                     // Attachment, not configuration: the registry is set after
                     // construction and never over stdio, so this is read here
                     // rather than passed in.
                     webhook_status: self.get_webhook_registry().is_some(),
+                    playbooks: !self.playbook_engine.read().is_empty(),
+                    profiles: self.profile_registry.has_configured_profiles(),
                 },
                 tool_count,
                 server_count,
