@@ -59,8 +59,8 @@ store it against the token:
 - Insert **vacant-only**. A colliding live key must fail closed rather than
   evict the incumbent, or one call's progress reroutes onto another's
   channel.
-- The capture site (`:482`) sends on the stored sender. The level filter and
-  `translate_back` currently applied inside `publish` move with it.
+- The capture site (`:482`) rewrites the token from the snapshot, then sends
+  on the stored sender. The level filter does not move with it — see below.
 - `ProgressRegistrationGuard::drop` deregisters the token and publishes
   nothing.
 
