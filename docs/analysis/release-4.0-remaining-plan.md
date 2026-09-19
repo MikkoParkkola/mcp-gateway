@@ -66,18 +66,34 @@ onto Lane A before merging, never the other way round.
 
 ### Lane C — stdio saturation seam (ruling 70)
 
-The deliberate hold stays; the rows close on evidence. Seam at
-`src/gateway/meta_mcp/mod.rs:2286` — the same file Lane A rewrites, so the
-design and the test are written while Lane A is in flight and the
-implementation lands after it merges.
+The seam citation in the earlier draft of this plan named
+`src/gateway/meta_mcp/mod.rs:2286`, which is the wrong file — that line holds
+an unrelated backend-name helper. The gate is in the stdio serve loop:
+
+- `src/gateway/server/mod.rs:76` — `STDOUT_QUEUE_DEPTH = 1024`
+- `src/gateway/server/mod.rs:89` — `MAX_INFLIGHT_STDIO_REQUESTS`, tied to it
+- `src/gateway/server/mod.rs:99` — `admit_stdio_request`, deliberately not
+  `async`, so the read loop cannot park on admission
+- `src/gateway/server/mod.rs:108` — `stdio_busy_response`, `-32000`, and
+  `None` for a notification
+- `src/gateway/server/mod.rs:2563` — the admission call site, `try_send` and
+  `continue` on refusal
+
+All of that is already on `main`, with its rationale in the doc comments. The
+design was made and the code shipped, so the design and implementation rows
+close on that evidence and the lane reduces to the proof nobody wrote.
 
 | # | Step | State |
 |---|---|---|
-| C1 | Design the seam | open |
-| C2 | Review the design before any code | open |
-| C3 | End-to-end test past the 1024-permit boundary, failing first | open |
-| C4 | Implement, after Lane A merges | open |
-| C5 | Review, merge | open |
+| C1 | Design the seam | **done** — recorded in the doc comments cited above |
+| C2 | Review the design before any code | **done** — shipped through the merge that landed the gate |
+| C3 | End-to-end test past the 1024-permit boundary | in flight |
+| C4 | Implement | **done** — on `main`, cited above |
+| C5 | Review, merge | open — gated on C3 |
+
+The only real hole was coverage: the sole existing test builds a two-permit
+semaphore by hand (`src/gateway/server/mod.rs:5025`) and never reaches the
+boundary the constant sets.
 
 ### Lane D — analysis and docs, zero code conflict
 
