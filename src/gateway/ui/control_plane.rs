@@ -1509,10 +1509,10 @@ mod role_wiring_tests {
 mod read_reflect_tests {
     use super::merge_store_into_snapshot;
     use crate::control_plane::{
-        AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent,
-        ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlanePolicy, ControlPlaneRole,
-        ControlPlaneRollbackPlan, ControlPlaneSnapshot, ControlPlaneStore,
-        InMemoryControlPlaneStore, StoreError, StoreResult,
+        AuditCursor, AuditFilter, AuditPage, AuditPageEnd, AuditScanStats, ControlPlaneAction,
+        ControlPlaneActor, ControlPlaneAuditEvent, ControlPlaneGrant, ControlPlaneGrantStatus,
+        ControlPlanePolicy, ControlPlaneRole, ControlPlaneRollbackPlan, ControlPlaneSnapshot,
+        ControlPlaneStore, InMemoryControlPlaneStore, StoreError, StoreResult,
     };
 
     fn auditor() -> ControlPlaneActor {
@@ -1706,6 +1706,77 @@ mod read_reflect_tests {
         let mut snapshot = ControlPlaneSnapshot::default();
         let degraded = merge_store_into_snapshot(&FailingStore, &mut snapshot);
         assert!(degraded, "a failing store read must report degraded");
+    }
+
+    /// A store whose audit read succeeds but ends however the test says. Only
+    /// `read_audit` is interesting; the rest are empty stubs.
+    struct PagedStore(AuditPageEnd);
+    impl ControlPlaneStore for PagedStore {
+        fn list_grants(&self) -> StoreResult<Vec<ControlPlaneGrant>> {
+            Ok(Vec::new())
+        }
+        fn get_grant(&self, _id: &str) -> StoreResult<Option<ControlPlaneGrant>> {
+            Ok(None)
+        }
+        fn put_grant(&self, _grant: ControlPlaneGrant) -> StoreResult<()> {
+            Ok(())
+        }
+        fn delete_grant(&self, _id: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        fn list_policies(&self) -> StoreResult<Vec<ControlPlanePolicy>> {
+            Ok(Vec::new())
+        }
+        fn get_policy(&self, _id: &str) -> StoreResult<Option<ControlPlanePolicy>> {
+            Ok(None)
+        }
+        fn put_policy(&self, _policy: ControlPlanePolicy) -> StoreResult<()> {
+            Ok(())
+        }
+        fn delete_policy(&self, _id: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        fn append_audit(&self, _event: &ControlPlaneAuditEvent) -> StoreResult<()> {
+            Ok(())
+        }
+        fn read_audit(&self, _filter: &AuditFilter) -> StoreResult<AuditPage> {
+            Ok(AuditPage {
+                events: Vec::new(),
+                end: self.0.clone(),
+                stats: AuditScanStats {
+                    records_examined: 0,
+                    bytes_examined: None,
+                },
+            })
+        }
+    }
+
+    // MIK-6710.UI.1 — a page that ran out of scan budget is an incomplete view.
+    // It must degrade the snapshot exactly like a failed read: a truncated audit
+    // list is not an authoritative one.
+    #[test]
+    fn budget_exhausted_page_degrades_snapshot() {
+        // GIVEN: a store whose audit read stops on its budget.
+        let store = PagedStore(AuditPageEnd::BudgetExhausted(AuditCursor::for_tests()));
+        let mut snapshot = ControlPlaneSnapshot::default();
+
+        // WHEN/THEN: the merge reports degraded.
+        assert!(
+            merge_store_into_snapshot(&store, &mut snapshot),
+            "a budget-exhausted audit page must mark the view degraded"
+        );
+    }
+
+    // MIK-6710.UI.2 — positive control: a page that merely hit its limit is a
+    // complete answer to the question asked, and must NOT degrade the snapshot.
+    #[test]
+    fn limit_reached_page_does_not_degrade() {
+        let store = PagedStore(AuditPageEnd::LimitReached(AuditCursor::for_tests()));
+        let mut snapshot = ControlPlaneSnapshot::default();
+        assert!(
+            !merge_store_into_snapshot(&store, &mut snapshot),
+            "a full page is not a degraded read"
+        );
     }
 
     // MIK-6701.CP.READ.3 — feature entitlements report GovernanceMutation as

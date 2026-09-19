@@ -868,6 +868,12 @@ fn force_owner_only(_f: &std::fs::File) -> std::io::Result<()> {
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
 
+/// MIK-6710 bounded/cursor-paged read tests, kept in their own file so the
+/// fixtures that build multi-megabyte logs do not swamp this module.
+#[cfg(test)]
+#[path = "store/audit_reads_tests.rs"]
+mod audit_reads_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -998,9 +1004,11 @@ mod tests {
         );
     }
 
-    // MIK-6685.STORE.6 — read_audit chain order + limit/offset + filters.
+    // MIK-6710 — read_audit newest-first order + cursor paging + filters.
+    // (Supersedes the MIK-6685.STORE.6 offset-paging case: offset is gone.)
     #[test]
-    fn read_audit_honors_offset_limit_and_filters() {
+    fn read_audit_honors_cursor_limit_and_filters() {
+        // GIVEN: five events, alternating actors, appended oldest first.
         let store = InMemoryControlPlaneStore::new();
         for i in 0..5 {
             let actor = if i % 2 == 0 { "alice" } else { "bob" };
@@ -1012,29 +1020,50 @@ mod tests {
                 ))
                 .unwrap();
         }
-        let page = store
+
+        // WHEN: a 2-event page is taken, then resumed from its cursor.
+        let first = store.read_audit(&AuditFilter::new(2)).unwrap();
+        assert_eq!(
+            first
+                .events
+                .iter()
+                .map(|e| e.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a4", "a3"],
+            "pages run newest first"
+        );
+        let cursor = first.end.cursor().cloned().expect("a partial page resumes");
+        let second = store
             .read_audit(&AuditFilter {
-                limit: 2,
-                offset: 1,
-                actor_id: None,
-                action: None,
+                cursor: Some(cursor),
+                ..AuditFilter::new(2)
             })
             .unwrap();
+
+        // THEN: the next page continues without repeating or skipping …
         assert_eq!(
-            page.iter().map(|e| e.event_id.as_str()).collect::<Vec<_>>(),
-            ["a1", "a2"]
+            second
+                .events
+                .iter()
+                .map(|e| e.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a2", "a1"]
         );
+
+        // … and predicates apply to the same newest-first order.
         let f = AuditFilter {
-            limit: 10,
-            offset: 0,
             actor_id: Some("bob".to_string()),
-            action: None,
+            ..AuditFilter::new(10)
         };
         let bobs = store.read_audit(&f).unwrap();
         assert_eq!(
-            bobs.iter().map(|e| e.event_id.as_str()).collect::<Vec<_>>(),
-            ["a1", "a3"]
+            bobs.events
+                .iter()
+                .map(|e| e.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a3", "a1"]
         );
+        assert!(matches!(bobs.end, AuditPageEnd::Complete));
     }
 
     // MIK-6685.STORE.6 — an invalid filter errors, never silently returns all.
