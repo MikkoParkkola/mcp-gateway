@@ -2,73 +2,194 @@
 
 Live working plan. Supersedes nothing in the criteria ledger — that file
 (`docs/requirements/RELEASE-4.0.0-criteria-status.md`) stays the authority on
-what "met" means. This records the *order* the remaining work happens in and
-why.
+what "met" means. This records the *order* the remaining work happens in, why,
+and how far along it is.
 
-## Where the release stands
+## Progress metric
 
-`python3 scripts/release/count-release-criteria.py --check`:
+Three numbers, reported every tick. Nothing else is progress.
 
-```
-Coverage: 149 criteria, 190 rows, 188 met or non-blocking, 2 blocking.
-Core open: 3 rows neither MET nor N/A (NFR.SEC.7, NFR.PERF.1, NFR.PKG.1).
-```
+- **Operator steps: 1 / 37 done** (2 of the 37 are operator-gated, see below)
+- **Blocking release criteria: 2** — `NFR.SEC.7` and `NFR.PKG.1`, both
+  operator-gated. Nothing in the tree closes either one.
+- **Rows open but not blocking: 1** — `NFR.PERF.1`, where ruling 69 accepted
+  the residual and the blocking cell already reads `no`. Open and blocking are
+  different columns; the counter warns about exactly this conflation.
+- **Files over the 800-line ceiling: 92**, 67,080 lines of excess (Lane G)
 
-## Phase 1 — clear the release blockers
+`python3 scripts/release/count-release-criteria.py --check` is the authority on
+the second number: 149 criteria, 193 rows, 191 met or non-blocking.
+`python3 scripts/dev/check-file-size.py` is the authority on the third.
 
-| # | Item | State |
+## What is actually left
+
+Twelve operator asks, decomposed into 37 steps. Grouped by lane, because the
+lanes are what can run at the same time.
+
+### Lane A — meta-tool surface compaction, 17 → ~11 (the critical path)
+
+Ruled by the operator 2026-09-16: before tagging. "Ship 17, defer to 4.1.0" and
+"compact with deprecations" were both offered and declined. Design is committed
+(`3c80e533`, 615 lines) and both review seats are answered (`9f601ae1`,
+`3f64c7ca`). No code exists.
+
+| # | Step | State |
 |---|---|---|
-| 1 | **NFR.SEC.7** — merged-vs-listening drift. Second half done (`scripts/dev/check-control-drift.py`, verified against a release build: `2 probed, 1 uncovered, 0 failing`). First half — "the listening build carries every merged security control" — still open. | Blocking |
-| 2 | **NFR.PERF.1** | Open |
-| 3 | **NFR.PKG.1** | Open |
-| 4 | **PR #561** — the only conflicting PR. Its conflict resolution is in-flight in the `v4-stage-tracker` worktree (unresolved merge markers in `ci.yml`, `CHANGELOG.md`, `invoke.rs`, and three ledger docs). | Conflicting |
-| 5 | **PRs #585, #586, #587** — mergeable, CI running. | Queued |
+| A1 | Failing tests: surface count, and every cut tool's function reachable at its new home | open |
+| A2 | Implement the cut in `src/gateway/meta_mcp/` | open |
+| A3 | README + every badge + `benchmarks/public_claims.json` + docs, in the same change | open |
+| A4 | Two independent review seats | open |
+| A5 | Merge | open |
 
-Rule that keeps this cheap: **subagents never edit the criteria ledger.** Every
-branch that touches it conflicts with every other. Workers report the rows they
-affect; the lead writes them centrally.
+This lane owns `src/gateway/meta_mcp/mod.rs`. Nothing else may touch that file
+while it runs.
 
-## Phase 2 — merge everything, then empty the branch list
+### Lane B — interim-round defect, both halves (ruling 68)
 
-Land every open PR, then drive local branches and worktrees to zero. Branch
-deletion goes through `bin/safe-delete-branch` — never a bare `git branch -D`.
+MRTR.12 (chain stop) is built, green and reviewed (`fb0890ed`). The other two
+halves are open.
 
-Known gate defect, worked around but not fixed: that script's forge query
-exceeds GitHub's 500,000-node ceiling and refuses branches for a reason that
-carries no evidence about the branch. Upstream fix is to drop `commits` from
-the `--json` list and fetch per PR.
+| # | Step | State |
+|---|---|---|
+| B1 | MRTR.11a presentation — failing tests | open |
+| B2 | MRTR.11a implementation | open |
+| B3 | MRTR.11b validation — failing tests, then implementation | open |
+| B4 | Review both seats, merge | open |
 
-Before removing any worktree: `git -C <tree> status --porcelain | rg -v target`.
-Non-empty means the tree is the only copy of that work — six worktrees measured
-zero commits ahead of main and every one held work that existed nowhere else.
-Commit and push first, then remove.
+Runs in its own worktree against `invoke.rs` and the interim modules. Rebases
+onto Lane A before merging, never the other way round.
 
-## Phase 3 — simplification, only once phase 2 is empty
+### Lane C — stdio saturation seam (ruling 70)
 
-Full plan: [`post-4.0-simplification-plan.md`](post-4.0-simplification-plan.md).
+The deliberate hold stays; the rows close on evidence. Seam at
+`src/gateway/meta_mcp/mod.rs:2286` — the same file Lane A rewrites, so the
+design and the test are written while Lane A is in flight and the
+implementation lands after it merges.
 
-The order is forced by merge cost, not by value:
+| # | Step | State |
+|---|---|---|
+| C1 | Design the seam | open |
+| C2 | Review the design before any code | open |
+| C3 | End-to-end test past the 1024-permit boundary, failing first | open |
+| C4 | Implement, after Lane A merges | open |
+| C5 | Review, merge | open |
 
-1. **Bottom-up first** (~708 lines, mechanical). B1 alone is 72% of it and is a
-   half-finished test-fixture migration, not a new abstraction.
-2. **Retry-loop consolidation** (T1) — four loops become two.
-3. **File splits last** (T2a/b/c). A split moves thousands of lines between
-   files and conflicts with every branch touching the same code. It runs
-   against a quiet tree or not at all.
+### Lane D — analysis and docs, zero code conflict
 
-The target the splits serve is the **800-line-per-file ceiling**, a
-definition-of-done criterion. Measured today: **91 files over, 64,284 lines of
-excess** (76 in `src/`, 15 in `tests/`). `scripts/dev/check-file-size.py` gates
-it in CI and ratchets off a baseline, so the number can only go down.
+Fully parallel with everything. Runs as subagents.
 
-Note the reinterpretation: the 4.0 DoD check recorded §2 Code Quality as
-`N/A at branch scope` on the reading that the ceiling governs a *change*
-(`docs/requirements/RELEASE-4.0.0-dod-check.md:356`). It governs a file. Under
-that reading the criterion is not met, and phase 3 is what meets it.
+| # | Step | State |
+|---|---|---|
+| D1 | Multi-user gap list at source: what many-users/one-gateway/per-user-credentials needs that the tree lacks (ruling 72) | open |
+| D2 | Size that gap and bring the operator the real number | open |
+| D3 | Enumerate the untested conformance cells | **done** — see below |
+| D4 | Assert `tools/list` order determinism (`MIK-7272.ORDER.1`) instead of arguing it structurally | **done** — `ac_order_1_one_unchanged_gateway_repeats_the_same_tool_sequence`, ledger row off *(structural)* |
+| D5 | Repair the stale `HEADER.5` evidence citation in the conformance matrix | **done** — the row cites the two mirroring tests, renamed to the `ac_` convention the self-check enforces |
+| D6 | Relocate the internal process docs out of the public tree | ready to merge — 107 docs moved on a worker branch, 110 references rewritten |
+| D7 | Fix the public-repo hygiene gate | ready to merge — 27 heading markers plus 5 path markers, 5 fixtures, 0 false positives over 361 tracked docs |
+| D8 | Merge the docs change | open |
 
-## Housekeeping, continuous
+**D3 result.** The executable authority is `tests/mik_7272_conformance.rs` — a 21-row
+table, green at 8 passed 0 failed — and `RELEASE-4.0.0-conformance-matrix.md` is its
+prose reading. Every one of the 21 statements is COVERED; none is marked untested.
+The enumeration this step asked for returns an empty list, so D4 and D5 replace it
+with what the cross-check against the per-clause ledger actually found:
 
-Disk is the recurring hard stop — the root filesystem hit 4.8 GB free during
-this work. Reclaim is almost entirely `target/` directories inside worktrees,
-so merging and removing worktrees *is* the disk fix. Removing two finished
-trees returned 15 GB.
+| Cell | What the label hides | Size |
+|---|---|---|
+| `MIK-7272.ORDER.1` | MET *(structural)*: determinism comes from straight-line `Vec` construction, and no test calls `tools/list` twice and compares. A switch to a hashed container stays green. (`RELEASE-4.0.0-criteria-status.md:217`) | one unit test |
+| `MIK-7214.HEADER.5` | Covered, but by `tests/mik_7214_header5_mirroring.rs`, not by the test the matrix cites | citation repair |
+| `MIK-7272.EXT.1`, client half | Cannot discriminate an end-to-end name-list implementation without a request-scoped observation seam, which does not exist | new test seam — out of 4.0.0 scope, recorded as a known limit |
+
+The step was recorded here as "operator decision 19". There is no such row:
+`RELEASE-4.0.0-operator-decisions.md` holds 18, and no release document contains the
+phrase. The work is still worth doing on its merits, but its provenance is corrected
+rather than carried.
+
+### Lane E — the ledger, the notes, the tickets (lead only, never a subagent)
+
+| # | Step | State |
+|---|---|---|
+| E1 | Apply ruling 69 to the `NFR.PERF.1` row: residual accepted, carrier named, row non-blocking | **done** — verified at source, blocking cell reads `no` |
+| E2 | Release-note sentence stating the performance claim is not end-to-end | open |
+| E3 | Sync every Linear ticket to this plan, content and status | open |
+| E4 | `NFR.PKG.1` — operator-gated, see decisions | open |
+| E5 | `NFR.SEC.7` — operator-gated, see decisions | open |
+
+### Lane F — quality sweep and the final gate
+
+Runs last — after Lane G, because a definition-of-done check against a tree
+that is still moving is a check of nothing.
+
+| # | Step | State |
+|---|---|---|
+| F1 | Run the `/!:improve` cycle over the landed 4.0.0 code | open |
+| F2 | Land what it finds | open |
+| F3 | Resolve the stalled `v4-merge` worktree (7 conflicted files, branch `merge/v4-integration-main`) | open |
+| F4 | Home the rescued sole-copy patches, then prune worktrees to zero | open |
+| F5 | Final definition-of-done check: section verdicts plus the acceptance-criteria table | open |
+
+## Two decisions that are the operator's, not mine
+
+1. **`NFR.PKG.1`** — the multi-architecture image publish path is written
+   (`c8803f06`, #568) and has never executed, because only a version tag fires
+   it. It can be proven before 4.0.0 by cutting a release-candidate tag
+   (`v4.0.0-rc.1`), which publishes real images to the container registry. That
+   is an outward-facing publish, so it waits for a yes.
+2. **`NFR.SEC.7`** — the listening install is `3.4.0-f30539af`, which predates
+   the origin guard `5d25f104`. The first half of the criterion closes on a
+   deployment of a build carrying the guard. Nothing in the tree can close it.
+
+## Invariants that keep this cheap
+
+- **Subagents never edit the criteria ledger.** Every branch touching it
+  conflicts with every other. Workers report the rows they affect; the lead
+  writes them centrally. Same rule for README and the badges.
+- **One file, one lane.** `mod.rs` belongs to Lane A until Lane A merges.
+- Branch deletion goes through `bin/safe-delete-branch`, never a bare
+  `git branch -D`. Known defect, worked around: that script's forge query
+  exceeds GitHub's 500,000-node ceiling; the fix is to drop `commits` from the
+  `--json` list and fetch per pull request.
+- Before removing any worktree: `git -C <tree> status --porcelain | rg -v target`.
+  Non-empty means that tree is the only copy of the work. Six worktrees measured
+  zero commits ahead of main and every one held work that existed nowhere else.
+- Disk is the recurring hard stop — the root filesystem hit 4.8 GB free during
+  this work, and the reclaim is almost entirely `target/` directories inside
+  worktrees. Merging and removing worktrees *is* the disk fix.
+
+## Lane G — the 800-line ceiling, before the tag
+
+**Operator ruling 2026-09-19: the large-file refactor happens before the tag.**
+It is a definition-of-done criterion, so it is release scope, not post-release
+cleanup. This supersedes the earlier "phase 3, after the tag" ordering in
+[`post-4.0-simplification-plan.md`](post-4.0-simplification-plan.md), which
+stays the authority on *how* each split is done.
+
+Settles the reading dispute: the 4.0 definition-of-done check recorded §2 Code
+Quality as `N/A at branch scope`
+(`docs/requirements/RELEASE-4.0.0-dod-check.md:356`) on the reading that the
+ceiling governs a *change*. It governs a *file*. Under the operator's ruling
+the criterion is not met, and Lane G is what meets it.
+
+Measured now by `scripts/dev/check-file-size.py`: **92 files over, 67,080 lines
+of excess**. That is the largest single item in the release — larger than the
+surface compaction.
+
+| # | Step | State |
+|---|---|---|
+| G1 | Order the 92 files by excess and by how many open branches touch each | open |
+| G2 | Bottom-up mechanical work first (~708 lines; B1 alone is 72% of it and is a half-finished test-fixture migration, not a new abstraction) | open |
+| G3 | Retry-loop consolidation — four loops become two | open |
+| G4 | The splits themselves, fanned out one file per agent | open |
+| G5 | Ceiling reaches zero and the ratcheting baseline file is deleted | open |
+
+Sequencing is forced, not chosen. A split moves thousands of lines between
+files and conflicts with every branch touching the same code, so Lane G runs
+against a quiet tree: after Lanes A, B and C have merged. The compaction in
+Lane A shrinks `meta_mcp` first, which is the right order anyway — splitting a
+file and then deleting half its contents is wasted work twice.
+
+Once the tree is quiet, this lane parallelises harder than anything else in the
+release: one agent per file, each owning exactly one file, the lead committing
+centrally. The gate ratchets, so the number can only go down.
+

@@ -26,10 +26,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Validate public repo hygiene scripts
-        run: bash -n scripts/dev/check-public-repo-hygiene.sh tests/public_repo_hygiene.sh
+        run: bash -n scripts/dev/check-public-repo-hygiene.sh tests/public_repo_hygiene.sh scripts/dev/check-commit-message-hygiene.sh tests/commit_message_hygiene.sh
       - name: Validate public repo hygiene fixtures
         run: tests/public_repo_hygiene.sh
+      - name: Validate commit message hygiene fixtures
+        run: tests/commit_message_hygiene.sh
+      - name: Validate the commit messages this branch adds
+        if: github.event_name == 'pull_request'
+        run: scripts/dev/check-commit-message-hygiene.sh "origin/${{ github.base_ref }}..HEAD"
       - name: Validate tracked public docs boundary
         run: scripts/dev/check-public-repo-hygiene.sh
       - name: Enforce the Noncommercial license header on every source file

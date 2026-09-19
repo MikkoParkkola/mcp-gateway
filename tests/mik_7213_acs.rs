@@ -205,7 +205,16 @@ mod http {
         (state, store_dir)
     }
 
-    async fn post(body: Value, headers: &[(&str, &str)]) -> (StatusCode, Value) {
+    /// Drive one request against a gateway the caller already built.
+    ///
+    /// Separate from `post` because `post` builds a fresh gateway per call,
+    /// which is what the cross-caller row below wants and the opposite of what
+    /// a same-gateway repeat needs.
+    async fn post_to(
+        app: Arc<AppState>,
+        body: Value,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, Value) {
         let mut builder = Request::builder()
             .method("POST")
             .uri("/mcp")
@@ -213,9 +222,6 @@ mod http {
         for (name, value) in headers {
             builder = builder.header(*name, *value);
         }
-        // `_store_dir` stays bound until this helper returns, which is after the
-        // response body has been read: the store's directory outlives the request.
-        let (app, _store_dir) = state().await;
         let response = create_router(app)
             .oneshot(
                 builder
@@ -232,6 +238,23 @@ mod http {
             status,
             serde_json::from_slice(&bytes).unwrap_or(Value::Null),
         )
+    }
+
+    async fn post(body: Value, headers: &[(&str, &str)]) -> (StatusCode, Value) {
+        // `_store_dir` stays bound until this helper returns, which is after the
+        // response body has been read: the store's directory outlives the request.
+        let (app, _store_dir) = state().await;
+        post_to(app, body, headers).await
+    }
+
+    /// The `tools/list` names, in the order the wire carried them.
+    fn tool_names(body: &Value) -> Vec<String> {
+        body["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tools array: {body}"))
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_string))
+            .collect()
     }
 
     fn modern(method: &str, id: i64) -> Value {
@@ -369,19 +392,58 @@ mod http {
         let (_, first) = post_modern("tools/list", 5).await;
         let (_, second) = post_modern("tools/list", 6).await;
 
-        let names = |body: &Value| -> Vec<String> {
-            body["result"]["tools"]
-                .as_array()
-                .expect("tools array")
-                .iter()
-                .filter_map(|t| t["name"].as_str().map(str::to_string))
-                .collect()
-        };
-        assert!(!names(&first).is_empty(), "{first}");
+        assert!(!tool_names(&first).is_empty(), "{first}");
         assert_eq!(
-            names(&first),
-            names(&second),
+            tool_names(&first),
+            tool_names(&second),
             "the order must not depend on who asked or when"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_order_1_one_unchanged_gateway_repeats_the_same_tool_sequence() {
+        // MIK-7272.ORDER.1 word for word: `tools/list` twice, same gateway, no
+        // change to the tool set in between. The row above answers a different
+        // question, and the difference is narrower than it looks. A stateless
+        // per-request permutation reddens both rows, so that is not the gap.
+        // What only this row can see is ordering that depends on state the
+        // gateway accumulated from an earlier request -- a usage-adaptive
+        // surface, an LRU reorder, anything that mutates the list as it is
+        // served. `post` builds a fresh `AppState` per call (`:243`), so every
+        // request the row above makes arrives at a gateway that has served
+        // none.
+        //
+        // Sequence equality is the whole assertion. Sorting either side, or
+        // comparing `HashSet`s, passes under exactly the regression this
+        // guards: the same names in a different order.
+        //
+        // Scope: this fixture surfaces eleven meta-tools, fewer than
+        // `build_meta_tools` pushes -- `gateway_kill_server`,
+        // `gateway_revive_server` and `gateway_reload_capabilities` are
+        // filtered out before the wire. The order pinned here is the order of
+        // what is served, not of everything that is built.
+        //
+        // `_store_dir` stays bound for the whole body -- the task store holds
+        // that directory for as long as the service lives, and here the service
+        // outlives two requests rather than one.
+        let (app, _store_dir) = state().await;
+        let owned = modern_headers("tools/list");
+        let headers: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
+
+        let (_, first) = post_to(Arc::clone(&app), modern("tools/list", 7), &headers).await;
+        let (_, second) = post_to(Arc::clone(&app), modern("tools/list", 8), &headers).await;
+
+        let first_names = tool_names(&first);
+        // Two, not one: a single-element list is sequence-equal and set-equal
+        // at once, so a shrinking surface would quietly make this vacuous.
+        assert!(
+            first_names.len() >= 2,
+            "a one-tool surface cannot witness an order at all: {first}"
+        );
+        assert_eq!(
+            first_names,
+            tool_names(&second),
+            "the second listing reordered a tool set that did not change"
         );
     }
 }
