@@ -59,12 +59,20 @@ install -m 600 gateway.yaml gateway.container.yaml
 sudo chown 1001:1001 gateway.container.yaml
 
 docker run -d --name mcp-gateway \
-  -p 39400:39400 \
+  -p 127.0.0.1:39400:39400 \
+  -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -v ./gateway.container.yaml:/config.yaml:ro \
   -v ./capabilities:/capabilities:ro \
   -e TAVILY_API_KEY=tvly-xxx \
-  mcp-gateway:latest
+  mcp-gateway:latest \
+  --config /config.yaml --host 0.0.0.0 --port 39400
 ```
+
+The container must bind `0.0.0.0` or the published port reaches nothing, and
+the config `init` writes keeps `/mcp` public — a pairing the gateway refuses
+unless `allow_unauthenticated_network_bind` is set. The boundary is the publish
+address: `127.0.0.1:39400` means only this host reaches the port. Publishing on
+`0.0.0.0` instead requires configuring authentication first.
 
 On Linux, the image runs as UID/GID 1001. Bind-mount an owner-only deployment
 copy that this identity can read; do not change ownership on your working
@@ -81,13 +89,15 @@ services:
   mcp-gateway:
     image: ghcr.io/mikkoparkkola/mcp-gateway:latest
     restart: unless-stopped
-    ports: ["39400:39400"]
+    command: ["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]
+    ports: ["127.0.0.1:39400:39400"]
     volumes:
       - ./gateway.yaml:/config.yaml:ro
       - ./capabilities:/capabilities:ro
     environment:
       MCP_GATEWAY_LOG_LEVEL: info
       MCP_GATEWAY_LOG_FORMAT: json
+      MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND: "true"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:39400/health"]
       interval: 30s
