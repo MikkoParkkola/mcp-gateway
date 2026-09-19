@@ -24,11 +24,15 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 use super::*;
+use crate::identity_propagation::PropagationError;
+use crate::personal_accounts::identity::AccountDescriptor;
 use crate::personal_accounts::service::{ProviderRefreshError, TokenRefresh};
 use crate::personal_accounts::store_probe::{self, StoreOp};
 // `AccountServiceError`, `ConsentExpectation` and `GrantRecord` arrive through
 // the parent glob above, which is where `worker.rs` already imports them.
-use crate::personal_accounts::{AccountLookup, PersonalAccountStore};
+use crate::personal_accounts::{
+    AccountCustody, AccountLookup, GrantVersion, PersonalAccountStore, VaultStrategy,
+};
 
 const KEY: [u8; 32] = [0x51; 32];
 const DEADLOCK: Duration = Duration::from_secs(5);
@@ -836,5 +840,146 @@ fn single_flight_survives_the_handle_for_one_account() {
             1,
             "the wrapper must not add a second single-flight, nor defeat the existing one"
         );
+    });
+}
+
+/// The configuration a `VaultStrategy` is installed with.
+///
+/// `recheck` never reads the descriptor — it is a construction obligation, not
+/// a comparison input — so these values only have to be the ones a gateway
+/// bound to [`alice`] would have been configured with. Anything else here would
+/// read as a claim this test does not make.
+fn descriptor() -> AccountDescriptor {
+    let account = alice();
+    AccountDescriptor {
+        descriptor_id: account.backend_id,
+        provider: "google".into(),
+        resource: account.resource,
+        issuer: account.oauth_issuer,
+    }
+}
+
+/// The durable state a lease was minted against, as a consent journey would
+/// have captured it before talking to a provider.
+///
+/// Built from the LEASE, not from a second store lookup: the lease already
+/// carries the four version fields, and reading the store again to describe the
+/// state the store just described would make the guarded commit's fence
+/// vacuous.
+fn connected(lease: &CredentialLease) -> ConsentExpectation {
+    ConsentExpectation::Connected(GrantVersion {
+        generation: lease.generation.clone(),
+        token_revision: lease.token_revision,
+        authorization_epoch: lease.authorization_epoch,
+        descriptor_revision: lease.descriptor_revision.clone(),
+    })
+}
+
+/// A lease minted before a re-consent must not release after it, and the
+/// refusal must reach the dispatch as `PropagationError::Refuse`.
+///
+/// This is the recheck the REST account registry performs between resolving a
+/// credential and selecting a cache entry, so this test is the only place the
+/// caller-visible half of that boundary is pinned: the service tests own the
+/// `AccountServiceError::LeaseRetired` comparison, and a lease/store
+/// disagreement there is the same `!=` seen from the other side.
+/// `VaultStrategy::recheck` holds no version state of its own — it delegates to
+/// the real custody release — so a recheck that stopped delegating, or that
+/// answered from the lease it was handed, is what must fail here.
+///
+/// Only the GENERATION moves. Keeping the token revision, the authorization
+/// epoch and the descriptor revision means a comparison that reads only the
+/// token revision still passes the assertion, and a re-consented account would
+/// have its previous credentials released.
+#[test]
+fn recheck_refuses_a_lease_minted_before_the_account_was_reconsented() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    let record = unexpired();
+    seed(tmp.path(), &[(&alice(), record.clone())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 4);
+        // The erasure happens AFTER the clone: `Arc::clone(&fx.handle)` would
+        // resolve `Arc::<dyn AccountCustody>::clone` against the annotation and
+        // fail to find a `&Arc<dyn AccountCustody>` to borrow from.
+        let custody: Arc<dyn AccountCustody> = fx.handle.clone();
+        let vault = VaultStrategy::new(custody, descriptor());
+
+        let stale = refuse_scaffold(
+            fx.handle.refresh_if_expired(&alice()).await,
+            "lease under the first grant",
+        )
+        .expect("an unexpired grant leases without a provider round trip");
+
+        // The re-consent lands through the REAL guarded commit, fenced on the
+        // state the lease was minted against. A commit that lost that race
+        // would leave the store unchanged and this test green for the wrong
+        // reason, so `Committed` is asserted rather than assumed.
+        let reconsented = GrantRecord {
+            generation: "0123456789abcdef0123456789abcdef".into(),
+            ..record.clone()
+        };
+        refuse_scaffold(
+            fx.handle
+                .commit_grant_if(&alice(), &connected(&stale), &reconsented)
+                .await,
+            "re-consent",
+        )
+        .expect("the guarded commit wins against the state it captured");
+
+        let refusal = vault
+            .recheck(&stale)
+            .await
+            .expect_err("a lease from the superseded generation must not recheck");
+        let PropagationError::Refuse(message) = &refusal else {
+            panic!("a custody refusal must reach the dispatch as Refuse, got {refusal:?}")
+        };
+        // Refuse is also what a busy, shutting-down or unimplemented custody
+        // produces, and each of those would pass a bare `is_err`. The retired
+        // lease is named, so only the durable comparison satisfies this.
+        assert!(
+            message.contains("credential lease is no longer valid"),
+            "the refusal must name the retired lease, not some other custody refusal: {message}"
+        );
+        assert!(
+            !message.contains(record.access_token.as_str())
+                && !record
+                    .refresh_token
+                    .as_deref()
+                    .is_some_and(|token| message.contains(token)),
+            "a refusal names account state, never token bytes"
+        );
+        assert_eq!(
+            fx.observer_calls.load(Ordering::SeqCst),
+            0,
+            "a refused recheck publishes no credential"
+        );
+
+        // The control. Without it a `recheck` that refuses everything — or one
+        // whose custody is broken for an unrelated reason — passes every
+        // assertion above.
+        let current = refuse_scaffold(
+            fx.handle.refresh_if_expired(&alice()).await,
+            "lease under the new grant",
+        )
+        .expect("the re-consented account still leases");
+        assert_eq!(current.generation, reconsented.generation);
+        assert_eq!(
+            vault.recheck(&current).await,
+            Ok(()),
+            "the lease the store issued under the current grant still rechecks"
+        );
+        assert_eq!(
+            fx.observer_calls.load(Ordering::SeqCst),
+            1,
+            "the control released exactly one credential"
+        );
+        assert_eq!(
+            fx.provider.call_count(&alice()),
+            0,
+            "neither grant was expired, so no provider round trip was owed"
+        );
+        refuse_scaffold(fx.handle.shutdown().await, "shutdown").expect("shutdown completes");
     });
 }
