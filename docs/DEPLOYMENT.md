@@ -65,7 +65,7 @@ docker run -d --name mcp-gateway \
   -v ./capabilities:/capabilities:ro \
   -e TAVILY_API_KEY=tvly-xxx \
   mcp-gateway:latest \
-  --config /config.yaml --host 0.0.0.0
+  --config /config.yaml --host 0.0.0.0 --port 39400
 ```
 
 The container must bind `0.0.0.0` or the published port reaches nothing, and
@@ -89,13 +89,15 @@ services:
   mcp-gateway:
     image: ghcr.io/mikkoparkkola/mcp-gateway:latest
     restart: unless-stopped
-    ports: ["39400:39400"]
+    command: ["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]
+    ports: ["127.0.0.1:39400:39400"]
     volumes:
       - ./gateway.yaml:/config.yaml:ro
       - ./capabilities:/capabilities:ro
     environment:
       MCP_GATEWAY_LOG_LEVEL: info
       MCP_GATEWAY_LOG_FORMAT: json
+      MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND: "true"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:39400/health"]
       interval: 30s

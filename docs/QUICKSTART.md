@@ -269,7 +269,7 @@ docker run --rm -p 127.0.0.1:39400:39400 \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -v "$PWD/gateway.container.yaml:/config.yaml:ro" \
   -v "$PWD/capabilities:/capabilities:ro" \
-  ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0
+  ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400
 scripts/dev/docker-smoke.sh  # repo checkout: container health + routed tool call
 
 # Native service templates
