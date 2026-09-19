@@ -2125,12 +2125,16 @@ impl MetaMcp {
                 }) => {}
                 Err(error) => {
                     // A round that reached the backend may have acted, so its
-                    // key must not be readmitted. `BackendFailed` is the one
-                    // variant that fails past dispatch; the rest fail in the
-                    // client-facing half, before the backend is asked again, so
-                    // their release-on-drop default still stands. Settling with
-                    // the withheld-side-effect marker matches the `Ok` arm
-                    // above: a retry of the same key is told the effect ran.
+                    // key must not be readmitted. `BackendFailed` is the only
+                    // variant raised from the backend call itself; `Deadline`,
+                    // `RequestBudgetExhausted`, `Refused`, `Delivery` and
+                    // `RoundsExhausted` all leave the backend parked on a
+                    // question that was never answered, and a backend that
+                    // stopped to ask has not acted yet — the premise the `Ok`
+                    // arm below rests on too. So their release-on-drop default
+                    // still stands, and this one settles with the
+                    // withheld-side-effect marker: a retry of the same key is
+                    // told the effect ran.
                     if matches!(
                         error,
                         crate::gateway::input_bridge::BridgeError::BackendFailed { .. }
@@ -5049,13 +5053,20 @@ mod identity_propagation_enforcement_tests {
         let dispatched = calls.lock().len();
         assert_eq!(dispatched, 2, "the backend was not retried: {dispatched}");
 
-        let _second = m
+        let second = m
             .invoke_tool_traced(&args, Some("session-1"), &caller, "trace-2")
             .await;
         assert_eq!(
             calls.lock().len(),
             dispatched,
             "the key was freed after a round that may have acted, so the duplicate re-executed"
+        );
+        let served = second
+            .expect("the duplicate is served from the cache")
+            .into_inner();
+        assert!(
+            served.to_string().contains("Side effect executed"),
+            "the duplicate was served something other than the withheld marker: {served}"
         );
     }
 
