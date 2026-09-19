@@ -9,14 +9,16 @@
 //! validates each one against the JSON Schema 2020-12 meta-schema using the
 //! `jsonschema` crate (a real validator, not a hand-rolled key check).
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use mcp_gateway::{
     backend::BackendRegistry,
     config::{Config, FailsafeConfig, WebhookConfig},
     config_reload::{LiveConfig, ReloadContext},
     gateway::{WebhookRegistry, test_helpers::MetaMcp},
+    playbook::{PlaybookDefinition, PlaybookEngine},
     protocol::{JsonRpcResponse, RequestId, ToolsListResult},
+    routing_profile::{ProfileRegistry, RoutingProfileConfig},
     stats::UsageStats,
 };
 
@@ -39,19 +41,61 @@ fn make_reload_context(backends: Arc<BackendRegistry>) -> Arc<ReloadContext> {
     ))
 }
 
-/// Traditional-mode `MetaMcp` with every optional meta-tool switched on
-/// (stats, cost report, webhooks, reload) so its `tools/list` response
-/// includes the maximum schema surface — the same construction
-/// `public_claims_validation.rs` uses for its "operational" scenario.
-fn operational_meta_mcp() -> MetaMcp {
+/// A one-step playbook, enough to make the engine non-empty.
+fn one_playbook() -> PlaybookEngine {
+    let definition: PlaybookDefinition =
+        serde_yaml::from_str("name: probe\ndescription: makes the engine non-empty\nsteps: []\n")
+            .expect("playbook fixture must parse");
+    let mut engine = PlaybookEngine::new();
+    engine.register(definition);
+    engine
+}
+
+/// One configured routing profile, enough to publish the profile tools.
+fn one_profile() -> ProfileRegistry {
+    let mut configs = HashMap::new();
+    configs.insert("probe".to_string(), RoutingProfileConfig::default());
+    ProfileRegistry::from_config(&configs, "probe")
+}
+
+/// Traditional-mode `MetaMcp` at the surface ceiling: every gate the served
+/// path reads is switched on, so `tools/list` publishes the maximum schema
+/// surface this build can produce.
+///
+/// Each optional tool is gated on the configuration that makes it answerable
+/// (`meta_tools_for`), so attaching a collector is not enough — the operator
+/// opt-in, the registries and a non-empty playbook engine all have to be
+/// present, exactly as `tests/nfr_perf_4_meta_tool_band.rs` sets them for the
+/// top of the `NFR.PERF.4` band. A fixture that leaves one off silently stops
+/// validating that tool's schema.
+fn ceiling_meta_mcp() -> MetaMcp {
     let backends = Arc::new(BackendRegistry::new());
-    let meta_mcp = MetaMcp::with_features(
+    #[allow(unused_mut)]
+    let mut meta_mcp = MetaMcp::with_features(
         Arc::clone(&backends),
         None,
         Some(Arc::new(UsageStats::new())),
         None,
         Duration::from_secs(60),
-    );
+    )
+    .with_expose_stats_tool(true)
+    .with_profile_registry(one_profile());
+    #[cfg(feature = "cost-governance")]
+    {
+        let cfg = mcp_gateway::cost_accounting::config::CostGovernanceConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let registry = Arc::new(mcp_gateway::cost_accounting::registry::CostRegistry::new(
+            &cfg,
+        ));
+        let enforcer = Arc::new(mcp_gateway::cost_accounting::enforcer::BudgetEnforcer::new(
+            cfg,
+            Arc::clone(&registry),
+        ));
+        meta_mcp = meta_mcp.with_cost_governance(enforcer, registry);
+    }
+    meta_mcp.set_playbook_engine(one_playbook());
     meta_mcp.set_reload_context(make_reload_context(Arc::clone(&backends)));
     meta_mcp.set_webhook_registry(Arc::new(parking_lot::RwLock::new(WebhookRegistry::new(
         WebhookConfig::default(),
@@ -69,7 +113,7 @@ fn all_meta_tool_schemas() -> Vec<(String, serde_json::Value)> {
     let mut schemas = Vec::new();
     let mut names = Vec::new();
     for (mode, meta_mcp) in [
-        ("traditional", operational_meta_mcp()),
+        ("traditional", ceiling_meta_mcp()),
         ("code_mode", code_mode_meta_mcp()),
     ] {
         let tools = decode_tools_list(meta_mcp.handle_tools_list(RequestId::Number(1))).tools;
@@ -91,35 +135,38 @@ fn all_meta_tool_schemas() -> Vec<(String, serde_json::Value)> {
         }
     }
 
-    // Enumerate all 19 published names across both modes, including webhook
-    // status when the operational fixture attaches its registry. Equality
-    // prevents a newly published schema from silently escaping validation.
+    // Enumerate every published name across both modes. Equality prevents a
+    // newly published schema from silently escaping validation. `cost_report`
+    // is only publishable where the feature that attaches a cost registry is
+    // compiled in, so a build without it publishes one fewer.
     let mut published: Vec<&str> = names.iter().map(String::as_str).collect();
     published.sort_unstable();
+    let mut expected = vec![
+        "code_mode/gateway_execute",
+        "code_mode/gateway_search",
+        "traditional/gateway_get_profile",
+        "traditional/gateway_get_stats",
+        "traditional/gateway_invoke",
+        "traditional/gateway_kill_server",
+        "traditional/gateway_list_disabled_capabilities",
+        "traditional/gateway_list_profiles",
+        "traditional/gateway_list_servers",
+        "traditional/gateway_list_tools",
+        "traditional/gateway_reload_capabilities",
+        "traditional/gateway_reload_config",
+        "traditional/gateway_revive_server",
+        "traditional/gateway_run_playbook",
+        "traditional/gateway_search_tools",
+        "traditional/gateway_set_profile",
+        "traditional/gateway_set_state",
+        "traditional/gateway_webhook_status",
+    ];
+    #[cfg(feature = "cost-governance")]
+    expected.push("traditional/gateway_cost_report");
+    expected.sort_unstable();
     assert_eq!(
-        published,
-        [
-            "code_mode/gateway_execute",
-            "code_mode/gateway_search",
-            "traditional/gateway_cost_report",
-            "traditional/gateway_get_profile",
-            "traditional/gateway_get_stats",
-            "traditional/gateway_invoke",
-            "traditional/gateway_kill_server",
-            "traditional/gateway_list_disabled_capabilities",
-            "traditional/gateway_list_profiles",
-            "traditional/gateway_list_servers",
-            "traditional/gateway_list_tools",
-            "traditional/gateway_reload_capabilities",
-            "traditional/gateway_reload_config",
-            "traditional/gateway_revive_server",
-            "traditional/gateway_run_playbook",
-            "traditional/gateway_search_tools",
-            "traditional/gateway_set_profile",
-            "traditional/gateway_set_state",
-            "traditional/gateway_webhook_status",
-        ],
-        "the enumerated surface is not the 19 published `gateway_*` \
+        published, expected,
+        "the enumerated surface is not the published `gateway_*` \
          definitions: either the fixture stopped enabling the real surface, or \
          a published definition was added or retired without updating this list"
     );
