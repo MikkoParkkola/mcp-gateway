@@ -94,13 +94,21 @@ the lane reduces to the proof nobody wrote.
 |---|---|---|
 | C1 | Design the seam | **done** — recorded in the doc comments cited above |
 | C2 | Review the design before any code | **done** — two independent pre-implementation reviews, design doc line 8; addendum reviewed at line 252 |
-| C3 | End-to-end test past the 1024-permit boundary | in flight |
+| C3 | End-to-end test past the 1024-permit boundary | **done** — `tests/mik_7212_mrtr7_stdio_acs.rs:978` and `:1131` |
 | C4 | Implement | **done** — on `main`, cited above |
-| C5 | Review, merge | open — gated on C3 |
+| C5 | Review, merge | **done** — merged through #561 |
 
-The only real hole was coverage: the sole existing test builds a two-permit
-semaphore by hand (`src/gateway/server/mod.rs:5025`) and never reaches the
-boundary the constant sets.
+**Lane C is closed.** The coverage was already there and an earlier draft of
+this plan missed it. `ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap`
+(`:978`) and `ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued`
+(`:1131`) drive the real binary past the cap, and both were mutation-checked
+before they landed: halving `MAX_INFLIGHT_STDIO_REQUESTS` reddens 7b, and
+restoring the inline `acquire_owned().await` in the read loop reddens both.
+That is the red/green proof, recorded at the time rather than reconstructed.
+
+The unit test at `src/gateway/server/mod.rs:5025` is the narrow companion to
+those two, not the whole of the coverage — reading it alone is what made this
+lane look open.
 
 ### Lane D — analysis and docs, zero code conflict
 
