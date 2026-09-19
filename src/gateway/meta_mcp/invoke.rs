@@ -125,10 +125,13 @@ use super::super::recovery::{ErrorCategory, RecoveryContext, attach_recovery, re
 use super::super::trace;
 use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
+mod side_effect_markers;
+
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
     idempotency_key_for, response_cache_key_for, retry_identity_suffix, strip_backend_provenance,
 };
+use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 
 async fn call_capability_tool_with_identity(
     cap: &crate::capability::CapabilityBackend,
@@ -829,25 +832,6 @@ fn undeclared_input_request(
         message,
         data,
     }
-}
-
-/// The terminal state a dropped reservation stores once the backend has acted.
-///
-/// Committed rather than completed: the call may still fail a post-dispatch
-/// gate, and a retry of the same key must be told the side effect ran rather
-/// than be readmitted to run it again or served a success the caller's own
-/// request never produced.
-fn withheld_side_effect() -> Value {
-    json!({
-        "resultType": "complete",
-        "isError": true,
-        "content": [{
-            "type": "text",
-            "text": "Side effect executed; the response was withheld by a \
-                     post-dispatch gate. Retrying with the same idempotency \
-                     key will not re-execute it."
-        }],
-    })
 }
 
 /// Re-dispatches the original call with the answers collected so far.
@@ -2325,8 +2309,8 @@ impl MetaMcp {
                     // defers to the error type's own pre-dispatch allowlist; it
                     // is provably unexecuted, so it keeps the default too. Only
                     // a round that may have acted settles with the
-                    // withheld-side-effect marker, which tells a retry of the
-                    // same key that the effect ran.
+                    // uncertain-side-effect marker, which tells a retry of the
+                    // same key that the effect is unknown — not that it ran.
                     if matches!(
                         error,
                         crate::gateway::input_bridge::BridgeError::BackendFailed {
@@ -2335,7 +2319,7 @@ impl MetaMcp {
                         }
                     ) && let Some(reservation) = idem_reservation.as_mut()
                     {
-                        reservation.commit(&withheld_side_effect());
+                        reservation.commit(&uncertain_side_effect());
                     }
                     warn!(
                         server,
@@ -5392,8 +5376,13 @@ mod identity_propagation_enforcement_tests {
             .expect("the duplicate is served from the cache")
             .into_inner();
         assert!(
-            served.to_string().contains("Side effect executed"),
-            "the duplicate was served something other than the withheld marker: {served}"
+            served.to_string().contains("outcome is unknown"),
+            "the duplicate was served something other than the uncertainty marker: {served}"
+        );
+        assert_eq!(
+            served.get("isError").and_then(Value::as_bool),
+            Some(true),
+            "a round that may have acted must replay as a failure, not a success: {served}"
         );
     }
 
