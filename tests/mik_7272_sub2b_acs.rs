@@ -1842,7 +1842,7 @@ async fn s02_progress_from_a_command_backend_reaches_the_client_before_the_resul
     let mut session = stdio_session(home.path()).await;
 
     // WHEN
-    let client_token = "client-token-command";
+    let client_token = json!("client-token-command");
     session
         .send(&invoke(
             2,
@@ -1867,8 +1867,58 @@ async fn s02_progress_from_a_command_backend_reaches_the_client_before_the_resul
     );
     assert_eq!(
         progress_token_of(notification.as_ref().expect("notification")),
-        Some(&json!(client_token)),
+        Some(&client_token),
         "the client must see its own token back, not the gateway's minted one"
+    );
+
+    std::fs::write(&release, b"go").expect("release the peer");
+    let (_, response) = session.read_until(|frame| has_id(frame, 2)).await;
+    assert!(response.is_some(), "the released call must still answer");
+    session.shutdown().await;
+}
+
+/// The same row with a **numeric** progress token, through the real subprocess.
+///
+/// Separate from the string row because the failure it catches is a different
+/// one: the registry is keyed by string, so a design that registered the
+/// caller's own token would collapse `7` and `"7"` onto one key -- the first
+/// of the three defects ADR-014 §2 names. The minting indirection is what
+/// keeps them apart, and only an end-to-end row proves the caller's *type*
+/// survives the round trip; the unit row asserts restoration in isolation and
+/// cannot see the keyspace.
+#[tokio::test]
+async fn s02_a_numeric_progress_token_comes_back_numeric_from_a_command_backend() {
+    // GIVEN
+    let home = tempfile::tempdir().expect("temp home");
+    let release = write_command_config(home.path());
+    let mut session = stdio_session(home.path()).await;
+
+    // WHEN
+    let client_token = json!(7);
+    session
+        .send(&invoke(
+            2,
+            SLOW_TOOL,
+            &json!({}),
+            &json!({"progressToken": client_token}),
+        ))
+        .await;
+    let (_, notification) = session
+        .read_until(|frame| is_method(frame, "notifications/progress"))
+        .await;
+
+    // THEN
+    let frames = frames_logged(home.path());
+    assert!(
+        notification.is_some(),
+        "a numeric progress token must route like any other; nothing arrived \
+         before the read bound. The peer logged: {frames:?}"
+    );
+    assert_eq!(
+        progress_token_of(notification.as_ref().expect("notification")),
+        Some(&client_token),
+        "the token must come back as the number the client sent, not the \
+         string the registry keyed it under"
     );
 
     std::fs::write(&release, b"go").expect("release the peer");
