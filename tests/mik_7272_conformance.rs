@@ -178,40 +178,40 @@ const MINOR: &[Row] = &[
         requirement: "MIK-7272.EXT.1",
         role: Role::Both,
         transport: Transport::Any,
-        // Both halves, and the client half is the one that was open. The
-        // server half was always covered: E1-E3 of
+        // Role::Both, and both halves are carried here.
+        //
+        // The server half is E1-E3 of
         // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`
-        // live in `src/gateway/meta_mcp_helpers_tests.rs`, and
+        // in `src/gateway/meta_mcp_helpers_tests.rs`;
         // `ac_ext_1_a_the_builder_serializes_the_map_it_was_given` is the one
-        // that pins identity: it injects a probe identifier the production
-        // source can never emit, so it is red both when the builder drops its
-        // argument and when the builder ignores the argument and reads
-        // `discovery_extensions()` directly. The other two each survive one of
-        // those two mutations.
+        // that pins identity, because it injects a probe identifier the
+        // production source can never emit, so it is red both when the builder
+        // drops its argument and when the builder ignores the argument and
+        // reads `discovery_extensions()` directly. The other two each survive
+        // one of those two mutations.
         //
-        // The client half was a PRODUCT gap, not a missing test:
-        // `ExtensionSet::from_capabilities` had no production caller, so E4 and
-        // E5 had nothing to assert against and rewriting them as direct
-        // `from_capabilities` calls would have passed while the function stayed
-        // unreachable. It has a caller now — `handlers.rs` recovers the set
-        // from the classified request shape on the `tools/call` funnel and
-        // feeds it to the adoption counter — so the two rows assert against
-        // production code. E4 drives the real router and requires the counter
-        // to move; E5 drives the production classifier and requires a non-object
-        // settings value to recover nothing, which a capability name list
-        // cannot do, since that path filters only nulls. Neither row bounds a
-        // handler that counted extension keys itself while the classifier
-        // stayed correct — E4 cannot carry a negative against a process-wide
-        // counter — and the module doc on those rows records that limit.
+        // The client half was tracked as a PRODUCT gap until 2026-09-15, on the
+        // stated ground that `ExtensionSet::from_capabilities` had no
+        // production caller so nothing recovered client extensions. That reason
+        // was wrong, and wrong in the way minor 11's was: it is a claim about a
+        // SYMBOL where the obligation is about a FIELD.
+        // `declares_tasks_extension` read the same
+        // `_meta`/`clientCapabilities`/`extensions` field through its own
+        // hand-rolled `pointer()` parse and gated tasks dispatch on it. Two
+        // parsers, and they disagreed: the gate asked only whether the
+        // identifier was present, so `{"…/tasks": 3}` negotiated the extension
+        // at the gate while `from_capabilities` refused the same bytes.
         //
-        // This statement is `Role::Both`, so it cites both halves. Citing
-        // E1-E3 alone would claim the client half on server-side evidence. Only
-        // the `ac_`-prefixed rows are citable here; E2 and E3 are
-        // `extensions_reach_the_wire_when_the_gateway_implements_one` and
-        // `empty_extensions_are_omitted_so_discovery_stays_additive`, in the
-        // same file, and each survives one of the two mutations E1 catches.
+        // MIK-7272.EXT.1 phase 2 deleted the hand-rolled parser. The classifier
+        // parses once into `RequestShape::Modern`, and the gate consumes
+        // `declared_extensions()`. The route-level rows below are cited rather
+        // than the parse-level ones alone, because a `classify_request`
+        // assertion stays green while the live gate runs a second parser --
+        // which is exactly how this cell came to claim a cause it did not have.
         evidence: &[
-            "gateway::meta_mcp_helpers_tests::ac_ext_1_a_the_builder_serializes_the_map_it_was_given",
+            "mik_7272_task_1_acs::wire::ac_ext_1_e6_a_non_object_settings_value_does_not_declare_the_extension",
+            "mik_7272_task_1_acs::wire::ac_ext_1_e7_a_valid_settings_object_still_declares_the_extension",
+            "meta_mcp_helpers_tests::ac_ext_1_a_the_builder_serializes_the_map_it_was_given",
             "gateway::router::tests::task_execution_adapter::client_extensions::ac_ext_1_d_a_declared_extension_is_recovered_on_the_tools_call_path",
             "gateway::router::tests::task_execution_adapter::client_extensions::ac_ext_1_e_a_non_object_settings_value_is_not_a_declaration",
         ],
@@ -359,13 +359,13 @@ fn all_rows() -> Vec<&'static Row> {
 /// of those states can be reached by leaving the file alone, which is the
 /// point: a permanently red suite teaches everyone to ignore red, and a silent
 /// exemption teaches nobody anything.
-/// Empty, and that is the state this criterion closes in. The single entry
-/// here until 2026-09-17 named the client half of minor 1, and it named a
-/// PRODUCT gap rather than a missing test: `ExtensionSet::from_capabilities`
-/// had no production caller, so no test could assert against production code.
-/// It has one now — `classify_request` recovers the set and the `tools/call`
-/// funnel records it — so the gap is closed by the implementation, not by
-/// exempting the row.
+/// Empty since 2026-09-15, when minor 1 — the last entry — closed.
+///
+/// Kept as an empty slice rather than deleted: the two tests below are the
+/// mechanism, and an empty list of exemptions is a stronger statement than no
+/// list at all. Both remaining entries turned out to have the WRONG CAUSE
+/// recorded against them, each discovered only when someone tried to close the
+/// gap, so an entry here is a hypothesis awaiting falsification, not a fact.
 const TRACKED_GAPS: &[(&str, &str)] = &[];
 
 #[test]

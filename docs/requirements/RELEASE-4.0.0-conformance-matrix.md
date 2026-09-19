@@ -96,27 +96,47 @@ copy drifts and the original is checked by CI: `tests/mik_7272_conformance.rs`,
 
 ### Statements without evidence — UNCOVERED (0 of 21)
 
-None. Minor 1 was the last one, and it closed on 2026-09-17 by implementation
-rather than by exemption. The client half was a product gap, not a missing
-test: `ExtensionSet::from_capabilities` had no production caller, so the two
-rows that assert recovery had nothing to assert against. `handlers.rs` now
-recovers the declared set from the classified request shape on the `tools/call`
-funnel and feeds it to the adoption counter, and the rows assert against that:
-`ac_ext_1_d_...` drives the real router and requires the counter to move,
-`ac_ext_1_e_...` drives the production classifier and requires a non-object
-settings value to recover nothing, which is what a capability name list — the
-path that filters only nulls, and `3` is not null — cannot do. Both live in
-`src/gateway/router/tests/task_execution_adapter/client_extensions.rs`. The
-server half (E1-E3) was already green at
-`src/gateway/meta_mcp_helpers_tests.rs:866`, `:889` and `:908`.
+None. `TRACKED_GAPS` in `tests/mik_7272_conformance.rs` is empty, which is the
+enforced form of this sentence: an entry there whose row has regained evidence
+fails `a_tracked_gap_is_still_a_gap`, so the list above cannot be emptied in
+prose alone.
 
-Recorded limit, found by independent review of the closing commit and not closed by it: the pair does not discriminate an end-to-end name-list implementation. A handler that counted extension-key presence while the classifier stayed correct would pass both rows, because the strict-increase oracle cannot distinguish this request's contribution from a concurrent sibling's. Closing that needs a request-scoped observation seam, which does not exist; the process-wide counter cannot carry the claim. What the rows do prove is that production recovers and counts client extensions on the live request funnel, and that the classifier feeding that counter one line above rejects a non-object settings value. The observation also runs before method dispatch, so the counter covers every request carrying declared capabilities, not tools/call alone -- a superset of the obligation.
+Minor 1 was the last entry, and it closed on 2026-09-15 with MIK-7272.EXT.1
+phase 2. Its stated cause was wrong in the same way minor 11's was. The matrix
+said the client half could not be asserted because
+`ExtensionSet::from_capabilities` had no production caller — true of that
+function, false of the obligation. `declares_tasks_extension` in
+`src/gateway/router/handlers.rs` read the same `_meta` field through its own
+hand-rolled `pointer()` parse and gated dispatch on it. So the client half was
+not unreachable; it was reachable through a *second* parser that disagreed with
+the first — it asked only whether the extension identifier was present, so
+`{"io.modelcontextprotocol/tasks": 3}` negotiated the extension at the gate
+while `from_capabilities` refused the same bytes. That second parser is now
+deleted and the gate consumes `RequestShape::declared_extensions()`. One parser,
+one answer. See `docs/design/MIK-7272-ext-1-client-extension-recovery.md`.
 
-One assumption in the E4/E5 test plan did not survive contact: it proposed
-exact deltas on the adoption counter on the premise that nothing else in the
-tree declares this extension with a valid settings object. `support.rs:169`
-declares it with `{}` on every task-adapter request, so the counter is moved by
-every sibling test in the process. The rows assert a strict increase and a
+The lesson repeats minor 11's: a gap whose reason is "nothing reads this" is
+a claim about a *symbol*, and the obligation is about a *field*. Searching for
+readers of the field, not callers of the helper, is what found it — an external
+reviewer did, after the reason had stood in two documents.
+
+Recorded limit on the rows that close it, found by independent review of the
+closing commit and not closed by it: `ac_ext_1_d_...` and `ac_ext_1_e_...`
+(`src/gateway/router/tests/task_execution_adapter/client_extensions.rs`) do not
+discriminate an end-to-end name-list implementation. A handler that counted
+extension-key presence while the classifier stayed correct would pass both,
+because the strict-increase oracle cannot separate this request's contribution
+from a concurrent sibling's. Closing that needs a request-scoped observation
+seam, which does not exist; the process-wide counter cannot carry the claim.
+What the rows do prove is that production recovers and counts client extensions
+on the live request funnel, and that the classifier feeding that counter rejects
+a non-object settings value.
+
+One assumption in the E4/E5 test plan did not survive contact: it proposed exact
+deltas on the adoption counter on the premise that nothing else in the tree
+declares this extension with a valid settings object. `support.rs:169` declares
+it with `{}` on every task-adapter request, so the counter is moved by every
+sibling test in the process. The rows assert a strict increase and a
 classifier-level negative instead, which is why neither is an arithmetic race.
 
 Minor 11 is the cell `NFR.CONFORMANCE.1` names as "modern URL-elicitation
@@ -246,9 +266,9 @@ written.
 | UNCOVERED | 0 |
 | **Population (statements)** | **21** |
 
-`TRACKED_GAPS` in `tests/mik_7272_conformance.rs` is empty, which is the
-state this criterion closes in, and that is enforced rather than asserted
-here: `matrix_has_no_empty_cells` fails on an untracked empty row, and
+UNCOVERED is empty, and so is `TRACKED_GAPS` in
+`tests/mik_7272_conformance.rs`. That correspondence is enforced rather than
+asserted here: `matrix_has_no_empty_cells` fails on an untracked empty row, and
 `a_tracked_gap_is_still_a_gap` fails on an exemption whose row has since gained
 evidence or disappeared. This document and the executable matrix cannot drift
 apart on the count without one of those two tests going red.

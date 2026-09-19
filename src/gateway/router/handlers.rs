@@ -34,7 +34,6 @@ use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
-use crate::protocol::extensions::{Extension, ExtensionSet};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
 use crate::security::{extract_agent_identity, sanitize_json_value, validate_agent_identity};
@@ -173,30 +172,6 @@ fn reaches_tasks_extension(method: &str, params: Option<&Value>) -> bool {
         "subscriptions/listen" => params.is_some_and(|p| p.get("taskIds").is_some()),
         _ => false,
     }
-}
-
-/// Whether THIS request declared the extension.
-///
-/// Per request, never remembered: a declaration is a statement about the
-/// message carrying it, and a client that declared once is not thereby a client
-/// that can handle a task handle on every later call.
-///
-/// The read is delegated to [`ExtensionSet::from_capabilities`] rather than
-/// spelled out here, because the two must not diverge and they had: this gate
-/// tested the key with `.is_some()`, so a settings value of `3` opened it while
-/// the typed reader rejected the same declaration as malformed. That reader
-/// owns the rule -- settings must be an object, presence is not agreement --
-/// and the refusal below already advertises that shape.
-fn declares_tasks_extension(params: Option<&Value>) -> bool {
-    params
-        .and_then(|p| {
-            p.pointer("/_meta/io.modelcontextprotocol~1clientCapabilities")
-                .or_else(|| {
-                    p.get("_meta")?
-                        .get("io.modelcontextprotocol/clientCapabilities")
-                })
-        })
-        .is_some_and(|caps| ExtensionSet::from_capabilities(caps).contains(Extension::Tasks))
 }
 
 /// The task ids a `subscriptions/listen` names, if it names any.
@@ -865,12 +840,12 @@ async fn meta_mcp_dispatch(
     // moved by the per-method check below, ~100 lines before the caller context
     // is built.
     let declared_capabilities = shape.declared_capabilities();
-    // The other half of the extension exchange. `server/discover` states what
-    // this gateway speaks; this reads back what the client declared, so
-    // adoption is measured on the live path rather than assumed. Recovered
-    // from the capability value rather than `declared_capabilities`, which is
-    // a name list and cannot tell a valid settings object from a bare number.
-    crate::protocol_revision_telemetry::observe_client_extensions(&shape.client_extensions());
+    // Same reason, and the same parser the classifier used: the gate below once
+    // ran its own `pointer()` read that asked only whether the identifier was
+    // *present*, so `{"…/tasks": 3}` passed a gate that
+    // `ExtensionSet::from_capabilities` would have refused. One parser, one
+    // answer.
+    let declared_extensions = shape.declared_extensions();
     // Owned: `shape` is moved ~100 lines before the caller is built. Classifier
     // output, never the duplicate-header sentinel.
     //
@@ -1071,7 +1046,7 @@ async fn meta_mcp_dispatch(
     // Handing a task handle to a client that never said it could hold one
     // strands the work: the client reads a handle it will never redeem.
     if reaches_tasks_extension(method.as_str(), params.as_ref())
-        && !declares_tasks_extension(params.as_ref())
+        && !declared_extensions.contains(crate::protocol::extensions::Extension::Tasks)
     {
         return build_error_response_with_data(
             Some(id.clone()),
