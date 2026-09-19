@@ -1228,10 +1228,29 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
         .expect("an elicitation/create the gateway wrote carries an id");
     session.send(&elicitation_answer(&answered)).await;
 
-    let after_lines = session.collect_lines(COLLECT_WINDOW).await;
+    // A fixed window assumes the answered call's terminal frame lands inside
+    // it. Under load the reader can settle it before this window even opens
+    // -- it is already sitting in `frames` from the first collection -- or
+    // after a fixed window has closed, which reddens the row for a scheduling
+    // delay rather than for the drop it exists to catch. Collect until the
+    // terminal frame arrives instead, same as `ac_mrtr_7a_the_reader_keeps_\
+    // reading_past_the_admission_cap`'s equivalent wait, and check both
+    // collections: a terminal frame already present in `frames` when this
+    // wait starts never gets re-emitted, so `after` alone can be empty on a
+    // perfectly correct run.
+    let after_lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+            frames_lenient(seen).iter().any(|frame| {
+                frame.get("method").is_none()
+                    && frame.get("result").is_some()
+                    && matches!(frame.get("id").and_then(Value::as_i64),
+                        Some(id) if (FIRST_CALL_ID..=last_below_cap).contains(&id))
+            })
+        })
+        .await;
     let after = frames_lenient(&after_lines);
     assert!(
-        after.iter().any(|frame| {
+        frames.iter().chain(after.iter()).any(|frame| {
             frame.get("method").is_none()
                 && frame.get("result").is_some()
                 && matches!(frame.get("id").and_then(Value::as_i64),

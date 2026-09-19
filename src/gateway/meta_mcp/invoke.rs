@@ -984,6 +984,9 @@ pub(super) fn classify_bridged_dispatch_error(
     if error.is_pre_dispatch() {
         crate::gateway::input_bridge::BridgeError::NotAdmitted { message }
     } else {
+        // Always `MayHaveActed`: `is_pre_dispatch()` already diverted every
+        // provably-unexecuted case to `NotAdmitted` above, so anything
+        // reaching here may have run.
         crate::gateway::input_bridge::BridgeError::BackendFailed {
             message,
             dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
@@ -2308,7 +2311,8 @@ impl MetaMcp {
                 Err(error) => {
                     // A round that reached the backend may have acted, so its
                     // key must not be readmitted. `BackendFailed` is the only
-                    // variant raised from the backend call itself; `Deadline`,
+                    // variant raised from the backend call itself; `NotAdmitted`
+                    // was refused above the dispatch, and `Deadline`,
                     // `RequestBudgetExhausted`, `Refused`, `Delivery` and
                     // `RoundsExhausted` all leave the backend parked on a
                     // question that was never answered, and a backend that

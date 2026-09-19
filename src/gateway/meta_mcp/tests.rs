@@ -6398,11 +6398,10 @@ async fn a_failed_bridged_round_settles_the_idempotency_key() {
             &ctx,
         )
         .await
-        .expect_err("the stored failure is terminal, not a readmission");
-    assert_eq!(
-        second.to_rpc_code(),
-        -32003,
-        "the retry must be served the stored error"
+        .expect("the stored failure is terminal, not a readmission");
+    assert!(
+        second.to_string().contains("Side effect executed"),
+        "the retry must be served the withheld-side-effect marker, not re-dispatch: {second}"
     );
     assert_eq!(
         script.calls().len(),
