@@ -83,10 +83,10 @@ Fully parallel with everything. Runs as subagents.
 | D1 | Multi-user gap list at source: what many-users/one-gateway/per-user-credentials needs that the tree lacks (ruling 72) | open |
 | D2 | Size that gap and bring the operator the real number | open |
 | D3 | Enumerate the untested conformance cells | **done** — see below |
-| D4 | Assert `tools/list` order determinism (`MIK-7272.ORDER.1`) instead of arguing it structurally | open |
-| D5 | Repair the stale `HEADER.5` evidence citation in the conformance matrix | open |
-| D6 | Relocate the internal process docs out of the public tree | open |
-| D7 | Fix the public-repo hygiene gate | open |
+| D4 | Assert `tools/list` order determinism (`MIK-7272.ORDER.1`) instead of arguing it structurally | **done** — `ac_order_1_one_unchanged_gateway_repeats_the_same_tool_sequence`, ledger row off *(structural)* |
+| D5 | Repair the stale `HEADER.5` evidence citation in the conformance matrix | **done** — the row cites the two mirroring tests, renamed to the `ac_` convention the self-check enforces |
+| D6 | Relocate the internal process docs out of the public tree | ready to merge — 107 docs moved on a worker branch, 110 references rewritten |
+| D7 | Fix the public-repo hygiene gate | ready to merge — 27 heading markers plus 5 path markers, 5 fixtures, 0 false positives over 361 tracked docs |
 | D8 | Merge the docs change | open |
 
 **D3 result.** The executable authority is `tests/mik_7272_conformance.rs` — a 21-row

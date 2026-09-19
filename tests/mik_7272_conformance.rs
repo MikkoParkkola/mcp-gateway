@@ -259,6 +259,10 @@ const MINOR: &[Row] = &[
             "mik_7214_acs::ac_header_4_the_specifications_encoding_table_decodes",
             "mik_7214_acs::http::ac_header_3_a_disagreeing_method_header_is_refused_over_http",
             "mik_7214_acs::http::ac_header_2_a_legacy_request_needs_no_headers",
+            // HEADER.5 is the mirroring half, and it is proved in its own file,
+            // not by the four header-negotiation tests above.
+            "mik_7214_header5_mirroring::ac_header_5_annotated_argument_is_mirrored_onto_mcp_param_header",
+            "mik_7214_header5_mirroring::ac_header_5_caller_supplied_param_header_cannot_forge_a_declaration",
         ],
     },
     Row {
