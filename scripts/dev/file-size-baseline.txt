@@ -1,7 +1,9 @@
 # Rust files over the 800-line ceiling, with the count when recorded.
 # The gate ratchets: a listed file may shrink, never grow, and nothing new
 # may cross. Delete a row once the file drops under the ceiling.
-# 91 files, 64284 lines of excess.
+# 91 files, 64353 lines of excess.
+# Raised once: search_ranking_authz_tests.rs 1108 -> 1199 for the revocation
+# regression tests in #588, which merged while this gate was in review.
 5996 src/gateway/meta_mcp/invoke.rs
 5986 src/gateway/meta_mcp/tests.rs
 5002 src/gateway/server/mod.rs
@@ -52,7 +54,7 @@
 1141 src/gateway/task_service/store.rs
 1138 tests/mik_7214_header_9_acs.rs
 1113 tests/mik_7215_acs.rs
-1108 src/gateway/meta_mcp/search_ranking_authz_tests.rs
+1199 src/gateway/meta_mcp/search_ranking_authz_tests.rs
 1090 src/control_plane/mod.rs
 1086 src/gateway/server/warmstart.rs
 1086 src/oauth/client/tests.rs
