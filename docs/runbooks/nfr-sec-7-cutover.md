@@ -36,7 +36,11 @@ No macOS build carrying `5d25f104` exists on disk: no `target/` in the main chec
 |---|---|---|
 | **A — published asset** | `mcp-gateway-darwin-arm64` from the **v3.5.1** release, `sha256 78fc2fdb5a56539a35b9204e704374303f140ed91f933492f92f49acdece77b1`. `git tag --contains 5d25f104` → `v3.5.0`, `v3.5.1`. | download only |
 | **B — release-aligned** | the same asset name from the **v4.0.0** release; `.github/workflows/release.yml` builds it on `macos-latest` for `aarch64-apple-darwin` on tag push or `workflow_dispatch`. | requires the tag |
-| **C — local build** | `cargo build --release` on this Mac. | cold build, no `target/`, 8.8 GB free on a 98.1%-full disk |
+| **C — local build** | `cargo build --release` on this Mac. | cold build, no `target/`, under 10 GB free and falling while peers build |
+
+No candidate is staged waiting to be selected: the three versioned directories report
+`3.3.2`, `3.4.0`, `3.4.0` to `--version`, and none of the three binaries contains the
+host-guard refusal string. Every route starts with fetching or building something.
 
 Option B has a loop in it: NFR.SEC.7 blocks the 4.0.0 release, and the release is what
 produces the 4.0.0 darwin artifact. Option A breaks that loop and lands the install on
@@ -66,6 +70,8 @@ gh release download v3.5.1 -R MikkoParkkola/mcp-gateway \
   -p mcp-gateway-darwin-arm64 -D /tmp/gw
 shasum -a 256 /tmp/gw/mcp-gateway-darwin-arm64
 # expect 78fc2fdb5a56539a35b9204e704374303f140ed91f933492f92f49acdece77b1
+rg -a -q 'Request blocked: Host does not name this gateway' /tmp/gw/mcp-gateway-darwin-arm64 \
+  && echo "guard compiled in"   # the refusal string from src/gateway/router/origin_guard.rs:398
 
 # 2. Install ALONGSIDE the running build; never write into $OLD
 mkdir -p ~/.local/libexec/mcp-gateway/$NEW
