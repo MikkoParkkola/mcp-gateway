@@ -4820,10 +4820,15 @@ mod identity_propagation_enforcement_tests {
     /// Stateful on purpose: a stub returning the same interim twice makes the
     /// bridge spin to `RoundsExhausted`, which would pass for "the bridge ran"
     /// without proving the retry carried the answer anywhere.
+    /// How `AskOnceTransport` answers the round that follows the question.
+    enum RetryRound {
+        Completes,
+        Fails,
+    }
+
     struct AskOnceTransport {
         calls: Arc<parking_lot::Mutex<Vec<Value>>>,
-        /// Fail the retry round instead of completing it.
-        fail_retry: bool,
+        retry_round: RetryRound,
     }
 
     #[async_trait::async_trait]
@@ -4838,7 +4843,7 @@ mod identity_propagation_enforcement_tests {
                 calls.push(params.unwrap_or(Value::Null));
                 calls.len()
             };
-            if round > 1 && self.fail_retry {
+            if round > 1 && matches!(self.retry_round, RetryRound::Fails) {
                 return Err(crate::Error::JsonRpc {
                     code: -32000,
                     message: "the backend failed the bridged retry".to_string(),
@@ -4902,7 +4907,9 @@ mod identity_propagation_enforcement_tests {
     }
 
     /// A `MetaMcp` with one plain backend that asks once and then completes.
-    fn meta_that_asks_once(fail_retry: bool) -> (MetaMcp, Arc<parking_lot::Mutex<Vec<Value>>>) {
+    fn meta_that_asks_once(
+        retry_round: RetryRound,
+    ) -> (MetaMcp, Arc<parking_lot::Mutex<Vec<Value>>>) {
         use crate::backend::Backend;
         use crate::config::{BackendConfig, TransportConfig};
 
@@ -4924,7 +4931,7 @@ mod identity_propagation_enforcement_tests {
         let calls = Arc::new(parking_lot::Mutex::new(Vec::new()));
         backend.set_transport_for_test(Arc::new(AskOnceTransport {
             calls: Arc::clone(&calls),
-            fail_retry,
+            retry_round,
         }));
         let _ = registry.register(backend);
         (MetaMcp::new(registry), calls)
@@ -4937,7 +4944,7 @@ mod identity_propagation_enforcement_tests {
     // legacy caller is handed a continuation envelope and the backend is called once.
     #[tokio::test]
     async fn legacy_caller_is_asked_in_band_and_the_backend_is_retried() {
-        let (m, calls) = meta_that_asks_once(false);
+        let (m, calls) = meta_that_asks_once(RetryRound::Completes);
         let asked = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let channel = AnsweringClient {
             asked: Arc::clone(&asked),
@@ -5001,7 +5008,7 @@ mod identity_propagation_enforcement_tests {
     // submission by running the side effect a second time.
     #[tokio::test]
     async fn a_failed_bridged_retry_does_not_free_the_idempotency_key() {
-        let (mut m, calls) = meta_that_asks_once(true);
+        let (mut m, calls) = meta_that_asks_once(RetryRound::Fails);
         m.enable_idempotency(
             Arc::new(crate::idempotency::IdempotencyCache::new()),
             std::time::Duration::from_secs(60),
