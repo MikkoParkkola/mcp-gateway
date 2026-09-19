@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // `S-02` over HTTP: the per-event flush rows and their discriminator.
 //
 // Included into `mik_7272_sub2b_acs.rs`, not compiled as a test binary of its

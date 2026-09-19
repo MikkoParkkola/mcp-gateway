@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Unit tests for the stdio transport.
 //!
 //! Split out of `stdio.rs` so the transport stays under the file-size
