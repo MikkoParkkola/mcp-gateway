@@ -10,6 +10,7 @@ use crate::gateway::auth::AuthenticatedClient;
 pub(super) use crate::gateway::authz::{AuthorizationError, OwnedToolTarget, ToolTarget};
 use crate::gateway::authz::{ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp_tool_defs::is_governed_meta_tool;
 use crate::gateway::oauth::{
     Action, AgentIdentity as OAuthAgentIdentity, check_agent_scope_and_audit_reason,
 };
@@ -21,6 +22,19 @@ pub(super) fn backend_tool_targets_for_call(
     tool_name: &str,
     arguments: &Value,
 ) -> Vec<OwnedToolTarget> {
+    // A governed meta-tool the caller cannot see is refused as unrecognised by
+    // the dispatcher, and nothing before it may answer differently. Reading its
+    // arguments here hands the pre-dispatch checks a shape only an existing
+    // tool gives meaning to, and every answer they can give — an invalid tool
+    // name, a backend-scope denial, a policy refusal — confirms the tool to
+    // exactly the caller the allow-list hides it from. Declining to extract
+    // targets we will not dispatch leaves the dispatcher the single owner of
+    // that refusal, the same reasoning as the admin pre-check in
+    // `meta_mcp_handler`.
+    if is_governed_meta_tool(tool_name) && !meta_mcp.exposes_meta_tool(tool_name) {
+        return Vec::new();
+    }
+
     if let Some(server) = meta_mcp.surfaced_tool_server(tool_name) {
         return vec![OwnedToolTarget {
             server: server.to_string(),

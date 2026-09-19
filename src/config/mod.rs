@@ -672,6 +672,16 @@ impl Config {
         if let Some(token) = self.key_server.admin_token.as_mut() {
             subst(token);
         }
+        // Signing secrets resolve here with the rest, not at their holder's
+        // construction. `Gateway::new` re-validates an already-loaded config
+        // through `Config::validate`, whose overlay is `none()`; a secret still
+        // spelled `env:NAME` there would be looked up in the process
+        // environment alone and an env-file-only value would refuse to boot.
+        // Substituting once, at evaluation, also enrols both names in
+        // `secret_refs`, so a reload whose file revises them says so — the
+        // bytes inside the `MessageSigner` were captured at startup.
+        // REDPROOF         subst(&mut self.security.message_signing.shared_secret);
+        // REDPROOF         subst(&mut self.security.message_signing.previous_secret);
         seen
     }
 
@@ -732,6 +742,7 @@ impl Config {
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
         self.validate_agent_key_material(overlay)?;
+        self.validate_message_signing(overlay)?;
         self.key_server.validate()?;
         self.error_budget.validate()?;
         Ok(())
@@ -812,6 +823,57 @@ impl Config {
                     resolved.len()
                 )));
             }
+        }
+        Ok(())
+    }
+
+    /// Refuse to start when enabled response signing cannot authenticate
+    /// anybody (MIK-7406 / MIK-7377.SIGNING.2).
+    ///
+    /// `MessageSigner` MACs with whatever secret it is handed and HMAC-SHA256
+    /// accepts any key length, zero included, so an empty or short
+    /// `shared_secret` produces a `_signature` block any caller can forge. The
+    /// config reads as having response signing on while it proves nothing.
+    /// [`message_signing::validate_secret`] already states the 32-byte floor;
+    /// calling it from here is what makes the floor binding rather than advice.
+    ///
+    /// Checked on the RESOLVED value, as with agent key material above: the
+    /// literal `env:MCP_GATEWAY_SIGNING_SECRET` is 34 bytes while the value
+    /// behind it may be three.
+    ///
+    /// `previous_secret` is held to the same floor when configured. Rotation
+    /// keeps the previous key live for verification, so a weak previous key is
+    /// exactly as forgeable as a weak current one. Left empty it means "no
+    /// rotation in flight", which is not a weak key.
+    fn validate_message_signing(&self, overlay: &EnvOverlay) -> Result<()> {
+        let signing = &self.security.message_signing;
+        // SIGNING.6: signing off means an unused placeholder must not block
+        // startup, so nothing here is examined until it is switched on.
+        if !signing.enabled {
+            return Ok(());
+        }
+        resolve_signing_secret("shared_secret", &signing.shared_secret, overlay)?;
+        // Left empty, `previous_secret` means "no rotation in flight", which is
+        // not a weak key. Configured, it stays live for verification and is
+        // exactly as forgeable as a weak current one.
+        if !signing.previous_secret.is_empty() {
+            resolve_signing_secret("previous_secret", &signing.previous_secret, overlay)?;
+        }
+        if signing.key_id.trim().is_empty() {
+            return Err(Error::ConfigValidation(
+                "security.message_signing.key_id is blank; a verifier reads \
+                 key_id to choose which key to check a signature against, and \
+                 cannot resolve an empty one."
+                    .to_string(),
+            ));
+        }
+        if signing.replay_window == 0 {
+            return Err(Error::ConfigValidation(
+                "security.message_signing.replay_window is 0 seconds, which \
+                 expires every nonce the instant it is registered and leaves \
+                 replay protection off while it reads as on."
+                    .to_string(),
+            ));
         }
         Ok(())
     }
@@ -1767,6 +1829,50 @@ pub mod humantime_serde {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+/// Resolve one `message_signing` secret through `overlay` and hold it to the
+/// signer's own 32-byte floor (MIK-7406 / MIK-7377.SIGNING.2).
+///
+/// Shared by [`Config::validate_with_env`] and the boot path in
+/// `gateway::server`, so the bytes startup validates are the bytes that end up
+/// inside the `MessageSigner`. Two resolvers would let a config pass validation
+/// and then sign with something else.
+///
+/// Resolved, never literal: `env:MCP_GATEWAY_SIGNING_SECRET` is 34 bytes while
+/// the value behind it may be three, and HMAC-SHA256 accepts a key of any
+/// length — including empty, whose signatures anyone can compute.
+///
+/// # Errors
+///
+/// Returns [`Error::ConfigValidation`] when the reference is missing or the
+/// resolved secret is shorter than the floor. Neither message quotes the
+/// secret; validation errors reach logs and operator terminals.
+pub(crate) fn resolve_signing_secret(
+    field: &str,
+    raw: &str,
+    overlay: &EnvOverlay,
+) -> Result<Vec<u8>> {
+    use crate::security::message_signing::{MIN_SECRET_BYTES, validate_secret};
+
+    let resolved = match raw.strip_prefix("env:") {
+        Some(var) => overlay.resolve(var).ok_or_else(|| {
+            Error::ConfigValidation(format!(
+                "security.message_signing.{field} references missing environment \
+                 variable '{var}'"
+            ))
+        })?,
+        None => raw.to_string(),
+    };
+    if validate_secret(resolved.as_bytes()).is_err() {
+        return Err(Error::ConfigValidation(format!(
+            "security.message_signing.{field} resolves to {} bytes; at least \
+             {MIN_SECRET_BYTES} are required. HMAC accepts a key of any length, \
+             so a short or empty secret signs responses that anybody can forge.",
+            resolved.len()
+        )));
+    }
+    Ok(resolved.into_bytes())
+}
 
 #[cfg(test)]
 mod tests;

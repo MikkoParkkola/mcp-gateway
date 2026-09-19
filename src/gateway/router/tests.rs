@@ -3383,3 +3383,73 @@ async fn ac_order_2_a_modern_caller_is_refused_gateway_set_profile() {
          cannot help: {message}"
     );
 }
+
+/// DISC.3 — a hidden meta-tool must be refused exactly like an absent one, at
+/// the wire, however far the pre-dispatch checks get.
+///
+/// The dispatcher and the admin pre-check both consult exposure first, so the
+/// two routes the ticket names are closed. This asserts the property those
+/// fixes were for, rather than the two instances of it: the pre-dispatch
+/// authorization of a meta-tool's backend targets runs on `gateway_invoke`
+/// arguments before the dispatcher ever sees the name, and it does not know
+/// the name is hidden. An invalid `tool` argument is refused there — which is
+/// an answer only a tool that EXISTS could have produced, from exactly the
+/// caller the allow-list hides it from.
+async fn tools_call_over_http(state: &Arc<AppState>, name: &str, arguments: Value) -> Value {
+    let router = create_router(Arc::clone(state));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": arguments }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test]
+async fn disc_3_a_hidden_meta_tool_answers_a_call_exactly_as_an_absent_one_does() {
+    let mut state = test_router_app_state();
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
+        state_mut.meta_mcp = Arc::new(
+            MetaMcp::new(Arc::clone(&state_mut.backends))
+                .with_exposed_meta_tools(&["gateway_list_tools".to_string()]),
+        );
+    }
+
+    // An argument shape only `gateway_invoke` gives meaning to. For an absent
+    // name it is inert, so any difference in the two answers is disclosure.
+    let arguments = json!({ "server": "alpha", "tool": "bad/name" });
+
+    let hidden = tools_call_over_http(&state, "gateway_invoke", arguments.clone()).await;
+    let absent = tools_call_over_http(&state, "gateway_nosuchtool", arguments).await;
+
+    let normalize = |response: &Value, name: &str| -> String {
+        response["error"]["message"]
+            .as_str()
+            .unwrap_or_else(|| panic!("expected a JSON-RPC error for {name}: {response}"))
+            .replace(name, "<tool>")
+    };
+
+    assert_eq!(
+        hidden["error"]["code"], absent["error"]["code"],
+        "a hidden tool and an absent one must be refused with the same code: \
+         hidden={hidden}, absent={absent}"
+    );
+    assert_eq!(
+        normalize(&hidden, "gateway_invoke"),
+        normalize(&absent, "gateway_nosuchtool"),
+        "the two refusals must differ only in the name the caller supplied"
+    );
+}

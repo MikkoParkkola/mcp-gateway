@@ -446,6 +446,22 @@ pub struct ContextIntegrityEvaluation {
 }
 
 impl ContextIntegrityEvaluation {
+    /// The `_context_integrity` audit record attached to a guarded result.
+    ///
+    /// Every path that returns backend content carries the same record, so an
+    /// auditor comparing two paths compares like with like.
+    #[must_use]
+    pub fn audit_metadata(&self) -> Value {
+        serde_json::json!({
+            "schema_version": &self.schema_version,
+            "content_sha256": &self.content_sha256,
+            "provenance": &self.provenance,
+            "classification": &self.classification,
+            "policy": &self.policy,
+            "audit": &self.audit,
+        })
+    }
+
     /// Build a human-readable explanation for this policy decision.
     #[must_use]
     pub fn explain(&self) -> ContextIntegrityDecisionExplanation {

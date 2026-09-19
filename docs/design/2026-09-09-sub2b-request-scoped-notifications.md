@@ -585,3 +585,59 @@ whose correctness depends on uncommitted files is not a commit anyone else can b
 touched: verified byte-identical before and after, and no peer commit had landed on any reverted
 path (`git log cba1ea8b..HEAD^ --name-only`, no overlap). The edits are their author's uncommitted
 work again, which is what they were.
+
+# Session record — 2026-09-10 — the outbound leg, and the coverage gap it leaves standing
+
+Appended, not a new document: a second doc forks the lane. This records what was built and the
+one gap the build deliberately does not close.
+
+## Stated coverage gap (§S-02) — `notifications/message` is HTTP-only
+
+Over stdio a single stdout multiplexes every call, so the progress-token match **is** the whole
+correlation. `notifications/progress` carries `params.progressToken` and works on both transports.
+`notifications/message` carries no token, so it stays dropped over stdio, exactly as before.
+Attributing it to whichever call happens to be in flight would invent an owner, which S-03 forbids.
+
+So the shipped coverage is: **progress on both transports, message on HTTP only.** Closing it needs
+per-request framing that stdio does not have — a wire change, hence an operator/spec question and
+explicitly out of the scope of this leg. It is a stated gap, not an oversight.
+
+## What was built
+
+A task-local sink, not a registry keyed by progress token. Two facts forced it: `Transport::request`
+returns a bare `JsonRpcResponse` and the funnel between the router and the transport could not be
+widened here, and no channel exists from `AppState` down to a live transport — the `attach_era`
+collaborator is constructed per backend inside the lifecycle, not threaded from the gateway. The
+task-local also *is* the request scoping S-03 asks for: two concurrent POSTs are two tasks, so a
+notification can only ever be appended to the call that provoked it. Isolation is structural rather
+than key-based, and nothing in the path between the router and the per-call transport code spawns.
+
+- `src/transport/notification_sink.rs` — `collect(fut)` installs a sink and returns
+  `(output, notifications)`; `publish(..)` is a no-op outside a scope, which covers every backend
+  call that did not arrive on `POST /mcp` (health probes, warm-up handshakes, the reaper).
+- `src/transport/http/mod.rs` — the labelled drop site now publishes the capture instead of
+  discarding it. **Unfiltered by token, deliberately**: per-request framing IS the correlation on
+  this transport, so every frame on that stream belongs to the request just sent.
+- `src/transport/stdio.rs` — the production registration the inbound leg never had. The outgoing
+  request's token is read from `params._meta.progressToken` (note the asymmetry: an incoming
+  `notifications/progress` carries it as a direct member of `params`), registered before the write
+  because the reader task can route a notification back before the write returns, and drained on
+  every exit path — `register` inserts and only the drain removes, so an error return that skipped
+  it would strand the entry for the transport's lifetime. Never minted (§II.6 option (i)).
+- `src/gateway/streaming.rs` — `request_scoped_event_stream`, a third pipe on purpose. Neither
+  `subscription_stream` (request-scoped traffic there is forbidden by SUB.2a) nor
+  `create_sse_response` (session-scoped standalone stream) is reused. The result frame is the bytes
+  the JSON path already produced, so an SSE client and a JSON client see byte-identical results and
+  there is no second producer of the decorated result to drift from the first.
+- `src/gateway/router/handlers.rs` — `meta_mcp_handler` is now a thin wrapper that negotiates on
+  `Accept` and runs the dispatch inside the sink; the former body is `meta_mcp_dispatch`. `Accept`
+  alone decides the body shape: a stream carrying only the result frame is a conforming answer, so
+  branching on whether a notification happened to arrive would give one `Accept` two body types.
+  An answer that is already a stream (`subscriptions/listen`) is passed through untouched.
+
+## Not touched
+
+`pub log_level` (`src/gateway/meta_mcp/meta.rs:80`) gains **no** reader here. Forwarding
+`notifications/message` on HTTP is the first thing that *could* read it, but the per-request
+severity filter is row S-06, not S-02/S-03. It is still dead, and that is stated rather than left
+to be discovered.

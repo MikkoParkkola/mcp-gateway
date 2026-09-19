@@ -90,16 +90,35 @@ pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
     }
     let _ = SINK.try_with(|tx| {
         for notification in notifications {
-            if tx.try_send(notification).is_err() {
-                let total = DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
-                tracing::warn!(
-                    dropped_total = total,
-                    capacity = REQUEST_NOTIFICATION_DEPTH,
-                    "request notification sink full; dropping notification"
-                );
-            }
+            send(tx, notification);
         }
     });
+}
+
+/// Clone the in-flight request's sending end, if there is one.
+///
+/// For the transport that captures notifications *outside* the requesting
+/// task: the stdio reader is one detached task shared by every call on that
+/// backend, so it can never read this task-local itself. A caller that owns a
+/// scope takes the sender here, while it still has one, and leaves it
+/// somewhere the reader can find it -- keying by progress token is how stdio
+/// does it. The clone keeps the channel open, so it must not outlive the
+/// request's registration.
+pub(crate) fn current_sender() -> Option<mpsc::Sender<JsonRpcNotification>> {
+    SINK.try_with(Clone::clone).ok()
+}
+
+/// Send one notification under the overflow policy, wherever the sender came
+/// from. The single place a drop is decided and counted (ADR-014 §5).
+pub(crate) fn send(tx: &mpsc::Sender<JsonRpcNotification>, notification: JsonRpcNotification) {
+    if tx.try_send(notification).is_err() {
+        let total = DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::warn!(
+            dropped_total = total,
+            capacity = REQUEST_NOTIFICATION_DEPTH,
+            "request notification sink full; dropping notification"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -11,7 +11,8 @@
 //!    `SHA-256(tool_name || canonical_json(arguments))`.
 //! 3. Before dispatch the key is looked up:
 //!    - Not found → mark `InFlight`, execute, store `Completed`.
-//!    - `InFlight` and not timed-out → return `Err(Error::DuplicateRequest)`.
+//!    - `InFlight` with a live owner → return `Err(Error::DuplicateRequest)`,
+//!      however long it has been running (ADR-012 consequence 3).
 //!    - `Completed` → return cached result immediately (no re-execution).
 //! 4. A background task periodically evicts stale entries to bound memory usage.
 
@@ -43,10 +44,13 @@ use crate::{Error, Result};
 /// from entries held this long.
 pub const COMPLETED_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Timeout for in-flight markers (5 minutes).
+/// Age after which an *ownerless* in-flight marker is reclaimable (5 minutes).
 ///
-/// If a tool call does not complete within this window the in-flight marker
-/// is treated as stale and a new execution is allowed.
+/// Not a deadline on the call. Under ADR-012 consequence 3 an in-flight entry
+/// is stale only once its liveness token is dead **and** this window has
+/// passed; a call still running at five minutes keeps its entry and its
+/// admission. The timeout does what it was introduced for — reclaiming entries
+/// whose owner is gone — and nothing else.
 pub const IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Maximum number of tracked entries.
@@ -59,10 +63,13 @@ pub const MAX_ENTRIES: usize = 10_000;
 
 /// How often the background sweep evicts stale entries (1 minute).
 ///
-/// Not a correctness bound — [`IN_FLIGHT_TIMEOUT`] and [`COMPLETED_TTL`] decide
-/// what an entry means, and a lookup honours both whether or not the sweep has
-/// run. This only decides how long a dead entry keeps occupying one of the
-/// [`MAX_ENTRIES`] slots.
+/// [`COMPLETED_TTL`] is honoured by a lookup whether or not the sweep has run,
+/// so for terminals this only bounds how long a dead entry occupies one of the
+/// [`MAX_ENTRIES`] slots. For in-flight entries it is load-bearing: since
+/// ADR-012 consequence 3 admission no longer reclaims an aged entry in place,
+/// the sweep is the only path by which an abandoned reservation's key returns
+/// to service, and this interval bounds that wait. [`spawn_cleanup_task`] runs
+/// unconditionally from the boot path (`gateway/server/mod.rs:750`).
 pub const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 
 // ── State machine ─────────────────────────────────────────────────────────────
@@ -427,8 +434,12 @@ impl IdempotencyCache {
                     }
                     CheckPlan::Proceed => {
                         debug_assert!(evict, "an occupied entry only proceeds after eviction");
-                        // Replacing in place keeps the entry count flat, so a
-                        // stale entry never costs a caller its admission.
+                        // Reached only for an expired terminal now: an aged
+                        // in-flight entry classifies `Proceed` only once its
+                        // owner is dead, and reclaiming that one is
+                        // `evict_expired`'s job (ADR-012 consequence 3).
+                        // Replacing in place keeps the entry count flat, so an
+                        // expired terminal never costs a caller its admission.
                         occupied.insert(Entry::in_flight(fingerprint, owner));
                         debug!(key, "Replaced stale idempotency entry");
                         AdmitOutcome::Proceed
@@ -446,6 +457,14 @@ impl IdempotencyCache {
     }
 
     /// Register `key` as in-flight.  Overwrites any stale entry.
+    ///
+    /// Ownerless by construction: the entry it stores holds no liveness token,
+    /// so it ages into `StaleInFlight` and the sweep reclaims it. Never call it
+    /// on a key an [`IdempotencyReservation`] already owns — it would replace
+    /// that entry with one the sweep can take out from under a running call,
+    /// which is the defect ADR-012 consequence 3 exists to close. Admission
+    /// goes through [`enforce`]; this entry point is for callers that have no
+    /// reservation to lose.
     pub fn mark_in_flight(&self, key: &str) {
         self.entries.insert(
             key.to_string(),
@@ -1044,6 +1063,30 @@ mod tests {
 
         cache.evict_expired();
         assert_eq!(cache.len(), 0, "the sweep reclaims an ownerless entry");
+    }
+
+    #[test]
+    fn check_evicts_expired_completed_and_returns_proceed() {
+        // GIVEN: a completed entry whose TTL has elapsed
+        // WHEN: checking the key
+        // THEN: Proceed (expired entry evicted)
+        let cache = IdempotencyCache::new();
+        cache.entries.insert(
+            "old".to_string(),
+            Entry::new(
+                IdempotencyState::Completed(
+                    json!(null),
+                    Instant::now()
+                        .checked_sub(COMPLETED_TTL)
+                        .unwrap()
+                        .checked_sub(Duration::from_secs(1))
+                        .unwrap(),
+                ),
+                "",
+            ),
+        );
+        assert!(matches!(cache.check("old"), CheckOutcome::Proceed));
+        assert_eq!(cache.len(), 0, "expired entry must be removed");
     }
 
     // ── ADR-012 amendment A2: liveness, not the clock ─────────────────────────

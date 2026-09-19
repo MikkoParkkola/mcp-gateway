@@ -31,6 +31,7 @@ use crate::security::sanitize_resource_metadata;
 
 use super::super::meta_mcp_helpers::{extract_nested_optional_str, missing_parameter_response};
 use super::MetaMcp;
+use super::content_guard::GuardedEnvelope;
 
 /// JSON-RPC 2.0 standard "Invalid params" code.
 const INVALID_PARAMS: i32 = -32602;
@@ -326,7 +327,18 @@ impl MetaMcp {
                 if let Some(error) = resp.error {
                     JsonRpcResponse::error(Some(id), error.code, error.message)
                 } else {
-                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({"contents": []})))
+                    // A resource read returns a backend-authored document, the
+                    // same untrusted class as a tool result — so it goes
+                    // through the same kernel (MIK-7116.MIN.5).
+                    let guarded = self.guard_backend_content(
+                        &backend.name,
+                        "resources/read",
+                        &id.to_string(),
+                        None,
+                        &GuardedEnvelope::Resource { uri },
+                        resp.result.unwrap_or(json!({"contents": []})),
+                    );
+                    JsonRpcResponse::success(id, guarded)
                 }
             }
             Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),

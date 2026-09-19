@@ -264,3 +264,22 @@ by default, and here a wrong `true` means a retry re-executes a side effect.
 The failure direction as it stands is the safe one — a retry is refused for work
 that never ran, which costs availability, not correctness. Closing it needs a
 signal narrower than the variant, which is a separate change with its own design.
+
+**Correction, verified at source after a peer challenged the framing.** The
+availability cost claimed above is not reachable. `tokio::sync::Semaphore::acquire`
+errors only when the semaphore has been closed; the gateway's is built at
+`src/backend/lifecycle.rs:142` (`Semaphore::new(100)`) and never closed — every
+`.close()` in the tree is on a transport, none on a semaphore. Both acquire
+sites (`src/backend/ops.rs:231` and `:410`, constructing at `:233` and `:412`)
+therefore cannot produce the error whose settlement this section describes.
+
+The taxonomy point stands and the reasoning for keeping `BackendUnavailable`
+off the allowlist is unchanged. What changes is the priority: this is hygiene
+and a message that would mislead an operator if it ever fired, not a live
+availability defect. It was written as the latter, and a reader deciding what to
+fix next would have been misdirected by it.
+
+The connect-failure case is the one with real impact, and it is closed by
+`Error::TransportConnect` — see
+`docs/design/MIK-7272-connect-failure-is-pre-dispatch.md`, which is the "signal
+narrower than the variant" this section anticipated.

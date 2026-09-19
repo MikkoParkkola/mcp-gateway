@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 
@@ -57,6 +57,14 @@ use support::{log_startup_banner, serve_tls, shutdown_signal};
 
 /// State owner for the single client on a long-lived stdio connection.
 const STDIO_SESSION_ID: &str = "stdio-session";
+
+/// Requests one stdio session may have in flight at once (ADR-014 §2).
+///
+/// A stdio peer is a single process, so this is far past what any real client
+/// pipelines; it exists so a client that never reads cannot make the serve
+/// loop spawn without bound. Reached, the loop stops reading stdin until a
+/// task finishes, which is the backpressure the transport already has.
+const STDIO_MAX_IN_FLIGHT_REQUESTS: usize = 64;
 
 fn expand_home_path(path: &str) -> PathBuf {
     if path == "~" {
@@ -649,6 +657,54 @@ impl Gateway {
             }
         }
 
+        // ── Response signing (ADR-001, MIK-7406) ──────────────────────────────
+        // Off by default. When enabled, HMAC every delivered `gateway_invoke`
+        // result and enforce nonce replay rejection. `enable_message_signing`
+        // and the `sign_response` delivery call both already existed; nothing
+        // connected them to configuration, so the setting read as on and signed
+        // nothing.
+        //
+        // Secrets resolve through the evaluated environment via the same
+        // helper configuration validation used, so the bytes that passed
+        // startup validation are the bytes that sign. `?` rather than a warn:
+        // signing that is configured on and silently absent is the bug this
+        // closes, so a secret that cannot be resolved refuses to boot.
+        if self.config.security.message_signing.enabled {
+            let signing = &self.config.security.message_signing;
+            let env = self.env.get();
+            let secret = crate::config::resolve_signing_secret(
+                "shared_secret",
+                &signing.shared_secret,
+                &env,
+            )?;
+            let previous = if signing.previous_secret.is_empty() {
+                None
+            } else {
+                Some(crate::config::resolve_signing_secret(
+                    "previous_secret",
+                    &signing.previous_secret,
+                    &env,
+                )?)
+            };
+            Arc::get_mut(&mut meta_mcp)
+                .expect("no other Arc references at this point")
+                .enable_message_signing(
+                    crate::security::message_signing::MessageSigner::new(
+                        secret,
+                        previous,
+                        signing.key_id.clone(),
+                    ),
+                    std::time::Duration::from_secs(signing.replay_window),
+                    signing.require_nonce,
+                );
+            info!(
+                key_id = %signing.key_id,
+                require_nonce = signing.require_nonce,
+                replay_window_secs = signing.replay_window,
+                "Response signing enabled — HMAC-SHA256 _signature on delivered results"
+            );
+        }
+
         // ── Runtime provenance stamping (MIK-6905) ────────────────────────────
         // Off by default. When enabled, sign a facts-only receipt into
         // `_meta.provenance` on every aggregated tool result, reusing the
@@ -738,7 +794,7 @@ impl Gateway {
         // `run` and `run_stdio` reach it, so the cache is `Some` on every boot.
         // All three of the criterion's routes reach a guard from here: generic
         // `tools/call` through `meta_mcp/invoke.rs`, stdio through the real
-        // `RetryFields` `dispatch_single_with_sink` builds (`:1886`), and the
+        // `RetryFields` `dispatch_single` builds, and the
         // direct `POST /mcp/{name}` bypass through its own local re-enforcement
         // (`meta_mcp/direct_route.rs`, called at `backend_handlers.rs:781`).
         // Reaching a guard is not the whole criterion: the direct route still
@@ -1636,73 +1692,19 @@ impl Gateway {
 
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
-        // ── Read → dispatch → write loop ────────────────────────────────────
-        let stdin = tokio::io::stdin();
-        let stdout = tokio::io::stdout();
-        let mut reader = BufReader::new(stdin).lines();
-        let mut stdout = stdout;
+        Self::serve_stdio_requests(
+            tokio::io::stdin(),
+            // Shared, and an *async* mutex: a writer task holds the guard across
+            // the `write_all`/`flush` awaits that keep one JSON-RPC line intact.
+            &Arc::new(tokio::sync::Mutex::new(tokio::io::stdout())),
+            &meta_mcp,
+            &tool_policy,
+            &mtls_policy,
+            &mut protocol_telemetry_sink,
+            self.config.server.shutdown_timeout,
+        )
+        .await;
 
-        // Use a fixed session ID for stdio sessions (single client, long-lived)
-        let session_id = STDIO_SESSION_ID;
-
-        while let Ok(Some(line)) = reader.next_line().await {
-            let line = line.trim().to_string();
-            if line.is_empty() {
-                continue;
-            }
-
-            debug!(line_len = line.len(), "stdio: received line");
-
-            let request: serde_json::Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(e) => {
-                    let err_resp = serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": null,
-                        "error": {"code": -32700, "message": format!("Parse error: {e}")}
-                    });
-                    Self::write_response(&mut stdout, &err_resp).await;
-                    continue;
-                }
-            };
-
-            // Handle batch requests (array of JSON-RPC calls)
-            if request.is_array() {
-                let responses = Self::dispatch_batch_with_sink(
-                    &meta_mcp,
-                    &tool_policy,
-                    &mtls_policy,
-                    request,
-                    session_id,
-                    &mut protocol_telemetry_sink,
-                )
-                .await;
-                Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
-                if !responses.is_empty() {
-                    let batch_resp = serde_json::Value::Array(responses);
-                    Self::write_response(&mut stdout, &batch_resp).await;
-                }
-                continue;
-            }
-
-            // Single request
-            let response_opt = Self::dispatch_single_with_sink(
-                &meta_mcp,
-                &tool_policy,
-                &mtls_policy,
-                &request,
-                session_id,
-                protocol_telemetry_sink.as_mut(),
-            )
-            .await;
-            Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
-
-            if let Some(response) = response_opt {
-                Self::write_response(&mut stdout, &response).await;
-            }
-        }
-
-        info!("stdio: EOF reached, shutting down");
         Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
@@ -1721,6 +1723,155 @@ impl Gateway {
         Ok(())
     }
 
+    /// Read newline-delimited JSON-RPC from `reader`, answer each line on
+    /// `stdout`, and drain what is still running when the peer closes.
+    ///
+    /// Generic over both ends so the loop's two live properties — a
+    /// notification reaching the wire before its own response, and a second
+    /// request starting while the first is still parked — are testable without
+    /// a process, a pipe or a real backend.
+    #[allow(clippy::too_many_lines)]
+    async fn serve_stdio_requests<R, W>(
+        reader: R,
+        stdout: &Arc<tokio::sync::Mutex<W>>,
+        meta_mcp: &Arc<MetaMcp>,
+        tool_policy: &Arc<crate::security::ToolPolicy>,
+        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
+        protocol_telemetry_sink: &mut Option<
+            crate::protocol_revision_telemetry::DurableTelemetrySink,
+        >,
+        drain_timeout: std::time::Duration,
+    ) where
+        R: tokio::io::AsyncRead + Unpin,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        let mut reader = BufReader::new(reader).lines();
+
+        // Use a fixed session ID for stdio sessions (single client, long-lived)
+        let session_id = STDIO_SESSION_ID;
+
+        // Requests run concurrently: a slow tool call must not stop the loop
+        // from reading, dispatching and answering the next line.
+        let mut in_flight = tokio::task::JoinSet::new();
+
+        while let Ok(Some(line)) = reader.next_line().await {
+            // Reaped every pass rather than at EOF, so a long session does not
+            // retain every finished task's join handle for its whole life.
+            while let Some(finished) = in_flight.try_join_next() {
+                if let Err(error) = finished {
+                    warn!(%error, "stdio: request task did not finish cleanly");
+                }
+            }
+            while in_flight.len() >= STDIO_MAX_IN_FLIGHT_REQUESTS {
+                if let Some(Err(error)) = in_flight.join_next().await {
+                    warn!(%error, "stdio: request task did not finish cleanly");
+                }
+            }
+
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                continue;
+            }
+
+            debug!(line_len = line.len(), "stdio: received line");
+
+            let request: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(e) => {
+                    let err_resp = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": null,
+                        "error": {"code": -32700, "message": format!("Parse error: {e}")}
+                    });
+                    Self::write_response(&stdout, &err_resp).await;
+                    continue;
+                }
+            };
+
+            // Observed before the spawn, not inside dispatch: the durable sink
+            // is `&mut` and cannot cross a task boundary, and holding it across
+            // dispatch would re-serialise the very concurrency below.
+            if let Some(entries) = request.as_array() {
+                for entry in entries {
+                    Self::observe_stdio_inbound(entry, session_id, protocol_telemetry_sink);
+                }
+            } else {
+                Self::observe_stdio_inbound(&request, session_id, protocol_telemetry_sink);
+            }
+
+            // Three `Arc::clone`s and the line itself: what a spawn costs here.
+            let meta_mcp = Arc::clone(meta_mcp);
+            let tool_policy = Arc::clone(tool_policy);
+            let mtls_policy = Arc::clone(mtls_policy);
+            let stdout = Arc::clone(stdout);
+            in_flight.spawn(async move {
+                // Handle batch requests (array of JSON-RPC calls)
+                if request.is_array() {
+                    let responses = Self::dispatch_with_notifications(
+                        Self::dispatch_batch(
+                            &meta_mcp,
+                            &tool_policy,
+                            &mtls_policy,
+                            request,
+                            session_id,
+                        ),
+                        &stdout,
+                    )
+                    .await;
+                    if !responses.is_empty() {
+                        let batch_resp = serde_json::Value::Array(responses);
+                        Self::write_response(&stdout, &batch_resp).await;
+                    }
+                    return;
+                }
+
+                // Single request
+                let response_opt = Self::dispatch_with_notifications(
+                    Self::dispatch_single(
+                        &meta_mcp,
+                        &tool_policy,
+                        &mtls_policy,
+                        &request,
+                        session_id,
+                    ),
+                    &stdout,
+                )
+                .await;
+
+                if let Some(response) = response_opt {
+                    Self::write_response(&stdout, &response).await;
+                }
+            });
+        }
+
+        info!("stdio: EOF reached, shutting down");
+
+        // Drain under the same bound the HTTP path uses, and abort past it: a
+        // wedged tool call must not hold the process open indefinitely, and an
+        // aborted task's response was never going to reach a peer that has
+        // already closed stdin.
+        info!(
+            timeout = ?drain_timeout,
+            in_flight = in_flight.len(),
+            "stdio: draining in-flight requests"
+        );
+        let drained = tokio::time::timeout(drain_timeout, async {
+            while let Some(finished) = in_flight.join_next().await {
+                if let Err(error) = finished {
+                    warn!(%error, "stdio: request task did not finish cleanly");
+                }
+            }
+        })
+        .await;
+        if drained.is_err() {
+            warn!(
+                remaining_requests = in_flight.len(),
+                "stdio: drain timeout reached, aborting in-flight requests"
+            );
+            in_flight.shutdown().await;
+        }
+    }
+
     fn persist_stdio_protocol_telemetry(
         sink: &mut Option<crate::protocol_revision_telemetry::DurableTelemetrySink>,
     ) {
@@ -1734,8 +1885,55 @@ impl Gateway {
         }
     }
 
-    /// Write a JSON-RPC response to stdout followed by a newline.
-    async fn write_response(stdout: &mut tokio::io::Stdout, value: &serde_json::Value) {
+    /// Record the inbound protocol-revision observation for one stdio request
+    /// (NFR.OBS.1) and persist it.
+    ///
+    /// Taken in the serve loop, before the request is spawned, for two
+    /// reasons: the durable sink is `&mut` and does not survive a spawn, and
+    /// the record must land before any handler can await, fail, or terminate
+    /// the process. A request the shared parser rejects is not observed, which
+    /// is what the in-dispatch call did too — it sat below the parse.
+    fn observe_stdio_inbound(
+        request: &serde_json::Value,
+        session_id: &str,
+        sink: &mut Option<crate::protocol_revision_telemetry::DurableTelemetrySink>,
+    ) {
+        let Ok((_, method, params)) = super::router::helpers::parse_request(request) else {
+            return;
+        };
+        // Recorded for its side effect; the shape itself is re-derived inside
+        // dispatch from the same pure classifier. Stdio carries no header, so
+        // the revision this session negotiated at `initialize` is the only
+        // thing a later legacy request can be sourced to. `None` until the
+        // handshake happens, which is what keeps the pre-handshake record at
+        // `absent`/`none`.
+        let _ = crate::protocol::meta::classify_and_observe(
+            &method,
+            params.as_ref(),
+            None,
+            crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
+        );
+        crate::protocol_revision_telemetry::observe_inbound_request(
+            request,
+            params.as_ref(),
+            &method,
+            None,
+            Some(session_id),
+            crate::protocol_revision_telemetry::Transport::Stdio,
+        );
+        Self::persist_stdio_protocol_telemetry(sink);
+    }
+
+    /// Write one JSON-RPC value to stdout followed by a newline.
+    ///
+    /// Serialisation, newline and flush happen under a *single* acquisition of
+    /// the shared lock: over stdio a message is a line, so a writer that
+    /// released the lock between the payload and its terminator would let a
+    /// concurrent call splice its own bytes into the middle of this one.
+    async fn write_response<W: AsyncWrite + Unpin>(
+        stdout: &tokio::sync::Mutex<W>,
+        value: &serde_json::Value,
+    ) {
         let serialized = match serde_json::to_string(value) {
             Ok(s) => s,
             Err(e) => {
@@ -1744,6 +1942,7 @@ impl Gateway {
             }
         };
         debug!(response_len = serialized.len(), "stdio: writing response");
+        let mut stdout = stdout.lock().await;
         if let Err(e) = stdout.write_all(serialized.as_bytes()).await {
             warn!(error = %e, "Failed to write to stdout");
             return;
@@ -1757,39 +1956,60 @@ impl Gateway {
         }
     }
 
+    /// Run `fut` under a request-scoped notification sink whose drain writes to
+    /// `stdout` concurrently, and return the future's output once every
+    /// notification it published is already on the wire.
+    ///
+    /// The ordering is the point (ADR-014 §2). Dispatch never awaits the
+    /// client: it publishes into a bounded channel and a separate task moves
+    /// lines out. Only after dispatch returns is the sender dropped and the
+    /// writer joined, so a notification can never trail the result line that
+    /// answers the call which raised it. A client that has stopped reading
+    /// stalls its own response — which it was not reading anyway — and no
+    /// other call.
+    async fn dispatch_with_notifications<F, W>(
+        fut: F,
+        stdout: &Arc<tokio::sync::Mutex<W>>,
+    ) -> F::Output
+    where
+        F: Future,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        let (scoped, mut notifications) = crate::transport::notification_sink::scope(fut);
+        let writer_stdout = Arc::clone(stdout);
+        let writer = tokio::spawn(async move {
+            while let Some(notification) = notifications.recv().await {
+                let Ok(value) = serde_json::to_value(&notification) else {
+                    warn!(method = %notification.method, "stdio: unserialisable notification");
+                    continue;
+                };
+                Self::write_response(&writer_stdout, &value).await;
+            }
+        });
+        let output = scoped.await;
+        // Dropping the scope closes the sender, which is what ends the writer's
+        // recv loop; joining it is the barrier the caller relies on.
+        if let Err(error) = writer.await {
+            warn!(%error, "stdio: notification writer task failed");
+        }
+        output
+    }
+
     /// Dispatch a single JSON-RPC request through `MetaMcp`.
     ///
     /// Returns `None` for notifications (no response expected per JSON-RPC spec).
-    #[cfg(test)]
+    ///
+    /// The inbound protocol-revision observation is *not* taken here: it is
+    /// recorded by the caller before the request is spawned. The durable sink
+    /// is `&mut`, so keeping it on this path would mean holding a lock across
+    /// dispatch and re-serialising exactly the concurrency the serve loop
+    /// exists to allow.
     async fn dispatch_single(
-        meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
-        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
-        request: &serde_json::Value,
-        session_id: &str,
-    ) -> Option<serde_json::Value> {
-        Self::dispatch_single_with_sink(
-            meta_mcp,
-            tool_policy,
-            mtls_policy,
-            request,
-            session_id,
-            None,
-        )
-        .await
-    }
-
-    /// Dispatch one stdio request, durably recording its inbound observation
-    /// before any handler can await, fail, or terminate the process.
-    async fn dispatch_single_with_sink(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         request: &serde_json::Value,
         session_id: &str,
-        protocol_telemetry_sink: Option<
-            &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
-        >,
     ) -> Option<serde_json::Value> {
         use super::router::helpers::{extract_tools_call_params, merge_client_meta, parse_request};
         use crate::protocol::JsonRpcResponse;
@@ -1799,41 +2019,13 @@ impl Gateway {
             Err(response) => return Some(response.to_value_lossy()),
         };
 
-        // NFR.OBS.1. Recorded here, above every early return below, so a
-        // stdio session is observed on the same terms an HTTP one is. Stdio
-        // carries no headers, so the transport declares no revision and a
-        // modern request can only have sourced its own from `_meta`.
-        //
         // Bound rather than discarded: `initialize` advertises its extension
         // set against the declared era, and stdio must answer that question the
-        // same way HTTP does. The rest of stdio's method dispatch still
-        // predates the revision split and this change does not move it.
-        let shape = crate::protocol::meta::classify_and_observe(
-            &method,
-            params.as_ref(),
-            None,
-            // Stdio carries no header, so the revision this session negotiated
-            // at `initialize` is the only thing a later legacy request can be
-            // sourced to. `None` until the handshake happens, which is what
-            // keeps the pre-handshake record at `absent`/`none`.
-            crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
-        );
-        crate::protocol_revision_telemetry::observe_inbound_request(
-            request,
-            params.as_ref(),
-            &method,
-            None,
-            Some(session_id),
-            crate::protocol_revision_telemetry::Transport::Stdio,
-        );
-        if let Some(sink) = protocol_telemetry_sink
-            && let Err(error) = sink.persist_global()
-        {
-            warn!(
-                %error,
-                "failed to persist inbound stdio protocol-revision observation; measurement window is incomplete"
-            );
-        }
+        // same way HTTP does. Stdio carries no headers, so the transport
+        // declares no revision and a modern request can only have sourced its
+        // own from `_meta`. The matching NFR.OBS.1 record is taken by
+        // `observe_stdio_inbound` before this request was spawned.
+        let shape = crate::protocol::meta::classify_request(params.as_ref(), None);
 
         // Notifications have no id — send no response
         if method.starts_with("notifications/") {
@@ -1935,35 +2127,17 @@ impl Gateway {
     }
 
     /// Dispatch a JSON-RPC batch request.
-    #[cfg(test)]
+    ///
+    /// Entries stay inline and ordered. A batch is one line in and one line
+    /// out, so fanning its entries across tasks would change the response
+    /// contract for no gain the serve loop cannot get by running whole batches
+    /// concurrently with each other.
     async fn dispatch_batch(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
         session_id: &str,
-    ) -> Vec<serde_json::Value> {
-        let mut sink = None;
-        Self::dispatch_batch_with_sink(
-            meta_mcp,
-            tool_policy,
-            mtls_policy,
-            batch,
-            session_id,
-            &mut sink,
-        )
-        .await
-    }
-
-    async fn dispatch_batch_with_sink(
-        meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
-        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
-        batch: serde_json::Value,
-        session_id: &str,
-        protocol_telemetry_sink: &mut Option<
-            crate::protocol_revision_telemetry::DurableTelemetrySink,
-        >,
     ) -> Vec<serde_json::Value> {
         let Some(requests) = batch.as_array() else {
             return vec![
@@ -1981,15 +2155,8 @@ impl Gateway {
 
         let mut responses = Vec::new();
         for req in requests {
-            if let Some(resp) = Self::dispatch_single_with_sink(
-                meta_mcp,
-                tool_policy,
-                mtls_policy,
-                req,
-                session_id,
-                protocol_telemetry_sink.as_mut(),
-            )
-            .await
+            if let Some(resp) =
+                Self::dispatch_single(meta_mcp, tool_policy, mtls_policy, req, session_id).await
             {
                 responses.push(resp);
             }
@@ -2209,7 +2376,7 @@ fn spawn_idle_reaper(
 
 /// The caller context every stdio `tools/call` runs under.
 ///
-/// Extracted from `dispatch_single_with_sink` so the transport-specific
+/// Extracted from `dispatch_single` so the transport-specific
 /// reasoning below -- why stdio is admin, why it has no channel and no
 /// asker -- sits in one named place instead of forty lines inside a match
 /// arm. `era` is the caller's because the `initialize` arm advertises
@@ -2660,21 +2827,22 @@ mod tests {
         );
         Gateway::persist_stdio_protocol_telemetry(&mut sink);
 
-        Gateway::dispatch_single_with_sink(
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 7219,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "clientInfo": {"name": "Codex"}
+            }
+        });
+        Gateway::observe_stdio_inbound(&request, "stdio-durable-window-test", &mut sink);
+        Gateway::dispatch_single(
             &test_meta_mcp(),
             &test_tool_policy(),
             &test_mtls_policy(),
-            &json!({
-                "jsonrpc": "2.0",
-                "id": 7219,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-11-25",
-                    "clientInfo": {"name": "Codex"}
-                }
-            }),
+            &request,
             "stdio-durable-window-test",
-            sink.as_mut(),
         )
         .await
         .expect("initialize returns a response");
@@ -3210,6 +3378,51 @@ mod tests {
     /// `idempotency_key_for` short-circuits and the guard in `invoke_tool` is
     /// skipped, so a retried side-effecting call executes a second time with no
     /// refusal and no warning.
+    /// MIK-7406 / MIK-7377.SIGNING.1: enabled signing has to reach the
+    /// production builder.
+    ///
+    /// The delivery site already calls `sign_response` and the builder method
+    /// already exists, but nothing between configuration and boot connected
+    /// them: `enable_message_signing` had exactly one caller and it was a test.
+    /// `security.message_signing.enabled = true` therefore served every
+    /// response unsigned and enforced no nonce — a security setting that reads
+    /// as on and does nothing.
+    #[tokio::test]
+    async fn enabled_message_signing_reaches_the_production_builder() {
+        let mut config = Config::default();
+        config.security.message_signing.enabled = true;
+        config.security.message_signing.shared_secret = "k".repeat(32);
+        config.security.message_signing.require_nonce = true;
+
+        let gateway = Gateway::new(config).await.unwrap();
+        let built = gateway.build_meta_mcp().await.unwrap();
+
+        assert!(
+            built.meta_mcp.message_signer.is_some(),
+            "enabled signing must install a signer at boot; without one every \
+             delivered response is unsigned while the config reads as signing"
+        );
+        assert!(
+            built.meta_mcp.nonce_store.is_some(),
+            "enabled signing must install the nonce store that backs replay \
+             rejection"
+        );
+    }
+
+    /// SIGNING.6: signing off stays byte-compatible — no signer, no nonce
+    /// enforcement, and an unused placeholder secret does not block boot.
+    #[tokio::test]
+    async fn disabled_message_signing_installs_no_signer() {
+        let mut config = Config::default();
+        config.security.message_signing.shared_secret = "env:NOT_SET_ANYWHERE".to_string();
+
+        let gateway = Gateway::new(config).await.unwrap();
+        let built = gateway.build_meta_mcp().await.unwrap();
+
+        assert!(built.meta_mcp.message_signer.is_none());
+        assert!(built.meta_mcp.nonce_store.is_none());
+    }
+
     #[tokio::test]
     async fn sub4_boot_populates_the_idempotency_cache() {
         let gateway = Gateway::new(Config::default()).await.unwrap();
@@ -3859,5 +4072,163 @@ mod tests {
         );
         assert_eq!(capability.min_samples, 2);
         assert_eq!(capability.cooldown, std::time::Duration::from_secs(45));
+    }
+
+    // ── MIK-7272.SUB.2b (b)+(c): the two live properties of the stdio loop ──
+    //
+    // Both drive a backend this test owns, not the SSE fixture, so neither
+    // depends on the backend-facing incremental read (component (d)). And both
+    // supply the progress token themselves: nothing in the gateway mints one
+    // today (ADR-014 Acceptance row 6), so a green row here is the serve loop
+    // working, not the leg working end to end.
+
+    fn stdio_test_notification(method: &str) -> crate::protocol::JsonRpcNotification {
+        crate::protocol::JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params: Some(serde_json::json!({"progressToken": "tok-1", "progress": 1})),
+        }
+    }
+
+    /// (b) A notification published mid-dispatch is on the wire *before* the
+    /// dispatch that raised it resolves — so it cannot be a buffer drained
+    /// after the fact. The gate keeps the call pending while we look.
+    #[tokio::test]
+    async fn a_notification_reaches_stdout_before_its_own_dispatch_resolves() {
+        let stdout = Arc::new(tokio::sync::Mutex::new(Vec::<u8>::new()));
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let backend_gate = Arc::clone(&gate);
+
+        let dispatch = async move {
+            crate::transport::notification_sink::publish(vec![stdio_test_notification(
+                "notifications/progress",
+            )]);
+            let _permit = backend_gate.acquire().await.unwrap();
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {}})
+        };
+        let combined = Gateway::dispatch_with_notifications(dispatch, &stdout);
+        tokio::pin!(combined);
+
+        let early = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    _ = &mut combined => panic!("dispatch resolved before the gate was released"),
+                    () = tokio::time::sleep(std::time::Duration::from_millis(5)) => {
+                        let seen = stdout.lock().await.clone();
+                        if !seen.is_empty() {
+                            break String::from_utf8(seen).unwrap();
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("the notification never reached stdout while its dispatch was pending");
+
+        assert!(
+            early.contains("notifications/progress"),
+            "expected the progress notification on the wire, got {early:?}"
+        );
+        assert!(
+            !early.contains("\"result\""),
+            "the response must not precede the notification, got {early:?}"
+        );
+
+        gate.add_permits(1);
+        let response = combined.await;
+        Gateway::write_response(&stdout, &response).await;
+
+        let wire = String::from_utf8(stdout.lock().await.clone()).unwrap();
+        let lines: Vec<&str> = wire.lines().collect();
+        assert_eq!(lines.len(), 2, "one line per message, got {wire:?}");
+        assert!(lines[0].contains("notifications/progress"));
+        assert!(lines[1].contains("\"result\""));
+    }
+
+    /// One whole line per `poll_read`, counted. Reaching two means the serve
+    /// loop read the second request, which it does synchronously before
+    /// spawning it — so the counter is a proxy for "request 2 has started".
+    struct CountingLineReader {
+        lines: std::vec::IntoIter<String>,
+        delivered: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl tokio::io::AsyncRead for CountingLineReader {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if let Some(line) = self.lines.next() {
+                buf.put_slice(line.as_bytes());
+                self.delivered
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            // Nothing written is EOF, which is what ends the loop.
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// (c) Two requests are genuinely in flight at once: the first is parked
+    /// mid-write (the test holds the stdout lock it needs) while the loop goes
+    /// on to read and start the second. A loop that awaited dispatch inline
+    /// could not reach the second line at all, so this times out on it.
+    #[tokio::test]
+    async fn a_second_request_starts_while_the_first_is_still_parked() {
+        let delivered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reader = CountingLineReader {
+            lines: vec![
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n".to_string(),
+                "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n".to_string(),
+            ]
+            .into_iter(),
+            delivered: Arc::clone(&delivered),
+        };
+        let stdout = Arc::new(tokio::sync::Mutex::new(Vec::<u8>::new()));
+        let meta_mcp = test_meta_mcp();
+        let tool_policy = test_tool_policy();
+        let mtls_policy = test_mtls_policy();
+        let mut sink = None;
+
+        // Taken before the loop runs: request 1 dispatches fine and then parks
+        // here, on the write it cannot complete.
+        let guard = Arc::clone(&stdout).lock_owned().await;
+
+        let serve = Gateway::serve_stdio_requests(
+            reader,
+            &stdout,
+            &meta_mcp,
+            &tool_policy,
+            &mtls_policy,
+            &mut sink,
+            std::time::Duration::from_secs(5),
+        );
+        tokio::pin!(serve);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    () = &mut serve => panic!("the loop finished while a response was still parked"),
+                    () = tokio::time::sleep(std::time::Duration::from_millis(5)) => {
+                        if delivered.load(std::sync::atomic::Ordering::SeqCst) >= 2 {
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("the loop never read the second request while the first was parked");
+
+        drop(guard);
+        serve.await;
+
+        let wire = String::from_utf8(stdout.lock().await.clone()).unwrap();
+        let lines: Vec<&str> = wire.lines().collect();
+        assert_eq!(lines.len(), 2, "one response line per request, got {wire:?}");
+        assert!(
+            wire.contains("\"id\":1") && wire.contains("\"id\":2"),
+            "both requests must be answered, got {wire:?}"
+        );
     }
 }

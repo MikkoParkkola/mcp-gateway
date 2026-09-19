@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Backend and cost API request handlers.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::{
@@ -158,21 +159,27 @@ fn backend_security_error_with_status(
 
 /// Fill missing MCP tool annotation hints on direct backend `tools/list`
 /// responses before returning them to clients.
-fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcResponse) {
+///
+/// Returns the tools whose backend-declared annotations grant resend permission
+/// explicitly (ADR-012 A1), for the caller to hand to
+/// [`crate::backend::Backend::set_resend_permitted`]. `None` means this response
+/// carried no readable tool list and says nothing about permissions — the caller
+/// must leave the stored set alone, because discovery may already have populated
+/// it and an empty overwrite would silently deny retries to every tool.
+fn normalize_tools_list_response(
+    backend_name: &str,
+    response: &mut JsonRpcResponse,
+) -> Option<HashSet<String>> {
     if response.error.is_some() {
-        return;
+        return None;
     }
 
-    let Some(result) = response.result.as_mut() else {
-        return;
-    };
-    let Some(tools_value) = result.get_mut("tools") else {
-        return;
-    };
+    let result = response.result.as_mut()?;
+    let tools_value = result.get_mut("tools")?;
 
     let Some(items) = tools_value.as_array() else {
         warn!(backend = %backend_name, "Backend tools/list result is not an array");
-        return;
+        return None;
     };
 
     // Parsed element by element on purpose. A single descriptor the `Tool`
@@ -193,7 +200,11 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
         }
     }
 
-    prepare_tool_metadata(backend_name, &mut tools);
+    // Captured before the tools are handed on: `prepare_tool_metadata` runs
+    // `normalize_tool_annotations`, which fills omitted hints with inferences,
+    // so its return value is the only place the backend's EXPLICIT grants are
+    // still distinguishable from the gateway's guesses.
+    let resend_permitted = prepare_tool_metadata(backend_name, &mut tools);
 
     let server_id = format!("backend:{backend_name}");
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
@@ -208,6 +219,10 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
             warn!(backend = %backend_name, error = %e, "Failed to serialize normalized tools/list");
         }
     }
+
+    // A failed re-serialization loses the normalized descriptors, not the
+    // permission reading, so the set is returned on that path too.
+    Some(resend_permitted)
 }
 
 /// Stable, collision-safe upstream-session bucket key for a passthrough caller
@@ -908,7 +923,19 @@ pub(super) async fn backend_handler(
                 // computed before it can say `within` about a document the
                 // client never receives.
                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
-                normalize_tools_list_response(&name, &mut response);
+                if let Some(permitted) = normalize_tools_list_response(&name, &mut response) {
+                    // Second writer for the same set. A client that only ever
+                    // speaks to `/mcp/{name}` never reaches
+                    // `Backend::get_tools_shared`, so without this the set stays
+                    // empty and `resend_policy` denies retries to a tool the
+                    // backend declared retry-safe (ADR-012 consequence 1).
+                    // ponytail: `resend_permitted` is one set per backend, not
+                    // per caller, and this route computes it from the
+                    // post-redaction list. A caller whose credentials hide a
+                    // tool therefore narrows the set every caller sees. Make it
+                    // per-identity in `Backend` if that ever bites.
+                    backend.set_resend_permitted(permitted);
+                }
             } else if method == "tools/call" {
                 scan_direct_backend_response(
                     &state,
@@ -1083,6 +1110,18 @@ fn scan_direct_backend_response(
             "Firewall: direct backend response warning"
         );
     }
+    // Replaced in place rather than returned as a refusal envelope: `result`
+    // borrows `response.result` for the rest of this body, and the replacement
+    // carries `isError: true` so a caller forwarding it still reports failure.
+    if verdict.blocks_response() {
+        warn!(
+            backend = %backend_name,
+            tool = %tool_name,
+            findings = verdict.findings.len(),
+            "Firewall: direct backend response blocked"
+        );
+        *result = crate::security::firewall::blocked_response_value(&verdict);
+    }
 }
 
 #[cfg(not(feature = "firewall"))]
@@ -1128,6 +1167,14 @@ fn scan_direct_tools_list_response(
             findings = verdict.findings.len(),
             "Firewall: direct tools/list response warning"
         );
+    }
+    if verdict.blocks_response() {
+        warn!(
+            backend = %backend_name,
+            findings = verdict.findings.len(),
+            "Firewall: direct tools/list response blocked"
+        );
+        *result = crate::security::firewall::blocked_response_value(&verdict);
     }
 }
 
@@ -1303,5 +1350,141 @@ mod idempotency_settlement_tests {
         // THEN no `data` key is invented.
         let error = response.error.expect("a stored error replays as an error");
         assert_eq!(error.data, None);
+    }
+}
+
+#[cfg(test)]
+mod resend_permission_tests {
+    use super::*;
+
+    fn tools_list_response(tools: &Value) -> JsonRpcResponse {
+        JsonRpcResponse::success(RequestId::Number(1), json!({ "tools": tools }))
+    }
+
+    #[test]
+    fn explicit_annotation_is_permitted_and_omitted_one_is_not() {
+        // GIVEN: a direct-route tools/list with one explicitly read-only tool
+        // whose NAME would infer nothing, and one unannotated tool whose name
+        // would infer read-only. Chosen that way so the assertion below fails
+        // if the permitted set is ever captured after annotation inference.
+        let mut response = tools_list_response(&json!([
+            {
+                "name": "send_email",
+                "inputSchema": { "type": "object" },
+                "annotations": { "readOnlyHint": true }
+            },
+            {
+                "name": "list_messages",
+                "inputSchema": { "type": "object" }
+            }
+        ]));
+
+        // WHEN: the response is normalized on its way back to the client.
+        let permitted = normalize_tools_list_response("backend", &mut response)
+            .expect("a readable tools/list is authoritative about permissions");
+
+        // THEN: only the explicitly annotated tool may be resent; the inferred
+        // hint `list_messages` receives grants nothing.
+        assert_eq!(
+            permitted,
+            HashSet::from(["send_email".to_string()]),
+            "only backend-declared grants may permit a resend"
+        );
+        let normalized = response.result.as_ref().expect("result survives")["tools"][1].clone();
+        assert_eq!(
+            normalized["annotations"]["readOnlyHint"],
+            json!(true),
+            "inference did run on the unannotated tool, so the set above is \
+             provably pre-inference"
+        );
+    }
+
+    #[test]
+    fn idempotent_annotation_is_permitted() {
+        // GIVEN: a tool whose backend declares it idempotent, not read-only.
+        let mut response = tools_list_response(&json!([{
+            "name": "upsert_record",
+            "inputSchema": { "type": "object" },
+            "annotations": { "idempotentHint": true }
+        }]));
+
+        // WHEN/THEN: an explicit idempotent hint grants permission too.
+        let permitted = normalize_tools_list_response("backend", &mut response)
+            .expect("a readable tools/list is authoritative about permissions");
+        assert_eq!(permitted, HashSet::from(["upsert_record".to_string()]));
+    }
+
+    #[test]
+    fn error_response_yields_no_authority_over_the_stored_set() {
+        // GIVEN: a backend that answered tools/list with a JSON-RPC error.
+        let mut response =
+            JsonRpcResponse::error(Some(RequestId::Number(1)), -32603, "backend exploded");
+
+        // WHEN/THEN: `None` keeps the caller from clobbering a set that
+        // discovery may already have populated.
+        assert!(normalize_tools_list_response("backend", &mut response).is_none());
+    }
+
+    #[test]
+    fn result_without_a_tools_key_yields_no_authority() {
+        // GIVEN: a success response that carries no tool list.
+        let mut response = JsonRpcResponse::success(RequestId::Number(1), json!({}));
+
+        // WHEN/THEN: nothing was readable, so nothing is claimed.
+        assert!(normalize_tools_list_response("backend", &mut response).is_none());
+    }
+
+    #[test]
+    fn empty_tool_list_is_an_authoritative_empty_set() {
+        // GIVEN: a backend that genuinely exposes no tools.
+        let mut response = tools_list_response(&json!([]));
+
+        // WHEN/THEN: the reading is valid and empty, unlike the `None` cases.
+        assert_eq!(
+            normalize_tools_list_response("backend", &mut response),
+            Some(HashSet::new())
+        );
+    }
+
+    #[test]
+    fn the_route_stores_the_permitted_set_on_the_backend() {
+        // GIVEN: a backend whose permitted set has never been written, because
+        // no client has reached `get_tools_shared` on it.
+        let backend = crate::backend::Backend::new(
+            "stored",
+            crate::config::BackendConfig {
+                enabled: true,
+                ..crate::config::BackendConfig::default()
+            },
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        );
+        assert!(
+            backend.resend_permitted_snapshot().is_empty(),
+            "a fresh backend permits no resend"
+        );
+        let mut response = tools_list_response(&json!([
+            {
+                "name": "upsert_record",
+                "inputSchema": { "type": "object" },
+                "annotations": { "idempotentHint": true }
+            }
+        ]));
+
+        // WHEN: the direct `/mcp/{name}` route normalizes the forwarded
+        // `tools/list` and hands the reading to the backend, exactly as the
+        // call site does.
+        if let Some(permitted) = normalize_tools_list_response("stored", &mut response) {
+            backend.set_resend_permitted(permitted);
+        }
+
+        // THEN: the stored set is what `resend_decision` will read on the next
+        // `tools/call`. Deleting the store call above makes this fail, which the
+        // return-value tests above cannot detect.
+        assert_eq!(
+            backend.resend_permitted_snapshot(),
+            HashSet::from(["upsert_record".to_string()]),
+            "the direct route must be a writer of the permitted set"
+        );
     }
 }

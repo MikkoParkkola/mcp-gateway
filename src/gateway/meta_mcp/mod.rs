@@ -61,6 +61,7 @@ use super::meta_mcp_helpers::{
 use super::meta_mcp_tool_defs::{MetaToolExposure, MetaToolGates, build_meta_tools_filtered};
 use super::webhooks::WebhookRegistry;
 
+mod content_guard;
 mod direct_route;
 mod invoke;
 #[cfg(test)]
@@ -832,6 +833,15 @@ impl MetaMcp {
                 findings = verdict.findings.len(),
                 "Firewall: meta tools/list response warning"
             );
+        }
+        // A blocked discovery response is replaced, not forwarded: there is no
+        // JSON-RPC envelope here to turn into an error, only the value itself.
+        if verdict.blocks_response() {
+            tracing::warn!(
+                findings = verdict.findings.len(),
+                "Firewall: meta tools/list response blocked"
+            );
+            *value = crate::security::firewall::blocked_response_value(&verdict);
         }
     }
 
@@ -1967,6 +1977,10 @@ mod search_disclosure_e2e;
 #[cfg(test)]
 #[path = "trace_correlation_tests.rs"]
 mod trace_correlation_tests;
+
+#[cfg(test)]
+#[path = "mik_7116_tests.rs"]
+mod mik_7116_tests;
 
 /// Destructive-action confirmation. NOT the control -- the admin
 /// requirement is, and `gateway_kill_server`, the only tool carrying

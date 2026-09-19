@@ -20,6 +20,7 @@ use crate::protocol::{
 
 use super::super::meta_mcp_helpers::{extract_nested_optional_str, missing_parameter_response};
 use super::MetaMcp;
+use super::content_guard::GuardedEnvelope;
 
 // ============================================================================
 // Gateway-owned meta-prompts (served inline — no backend required)
@@ -256,7 +257,18 @@ impl MetaMcp {
                 if let Some(error) = resp.error {
                     JsonRpcResponse::error(Some(id), error.code, error.message)
                 } else {
-                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({"messages": []})))
+                    // A fetched prompt is backend-authored content that lands
+                    // in the agent's context verbatim — the same kernel that
+                    // guards a tool result guards it (MIK-7116.MIN.5).
+                    let guarded = self.guard_backend_content(
+                        backend_name,
+                        "prompts/get",
+                        &id.to_string(),
+                        None,
+                        &GuardedEnvelope::Prompt,
+                        resp.result.unwrap_or(json!({"messages": []})),
+                    );
+                    JsonRpcResponse::success(id, guarded)
                 }
             }
             Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
