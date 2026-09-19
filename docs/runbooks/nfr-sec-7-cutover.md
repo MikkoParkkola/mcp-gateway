@@ -29,23 +29,60 @@ a binary swap plus a symlink flip.
 
 ## The artifact
 
-No macOS build carrying `5d25f104` exists on disk: no `target/` in the main checkout, and
-**spark cannot produce one** — spark is `Linux … aarch64`, the install is Mach-O arm64.
+No macOS build carrying `5d25f104` exists on disk. Swept 2026-09-19 across every
+mcp-gateway checkout and worktree: three `target/` trees exist, two of them debug builds
+in other agents' worktrees and one with no binary at all, and **no `release/` binary
+anywhere**. Spark cannot produce one either — spark is `Linux … aarch64`, the install is
+Mach-O arm64.
 
 | Option | Artifact | Cost |
 |---|---|---|
 | **A — published asset** | `mcp-gateway-darwin-arm64` from the **v3.5.1** release, `sha256 78fc2fdb5a56539a35b9204e704374303f140ed91f933492f92f49acdece77b1`. `git tag --contains 5d25f104` → `v3.5.0`, `v3.5.1`. | download only |
-| **B — release-aligned** | the same asset name from the **v4.0.0** release; `.github/workflows/release.yml` builds it on `macos-latest` for `aarch64-apple-darwin` on tag push or `workflow_dispatch`. | requires the tag |
-| **C — local build** | `cargo build --release` on this Mac. | cold build, no `target/`, under 10 GB free and falling while peers build |
+| **B — the 4.0.0 release itself** | the same asset name from a **v4.0.0** release. Not a build step — see below. | is the release, and currently unreachable |
+| **C — local build** | `cargo build --release --target aarch64-apple-darwin` on this Mac, matching the recipe in `release.yml`. | cold build of 431 crates; **5.9 GB free 2026-09-19 and falling**, against a 5 GB floor a hook enforces on every build command |
 
 No candidate is staged waiting to be selected: the three versioned directories report
 `3.3.2`, `3.4.0`, `3.4.0` to `--version`, and none of the three binaries contains the
 host-guard refusal string. Every route starts with fetching or building something.
 
-Option B has a loop in it: NFR.SEC.7 blocks the 4.0.0 release, and the release is what
-produces the 4.0.0 darwin artifact. Option A breaks that loop and lands the install on
-exactly the version the 3.5.1 → 4.0.0 upgrade was rehearsed from (17/17 PASS,
-`docs/release/nfr-upgrade-1-rehearsal-results.md`).
+**Option C has a precondition that is not met today.** No `target/` directory exists in
+any mcp-gateway checkout or worktree on this Mac, so the build is cold: 431 crates from
+`Cargo.lock`, and the only two build trees on the machine — both debug, both belonging to
+other agents' worktrees — are 5.4 GB and 8.2 GB. Free space was 6.6 GB at 14:0x and
+5.9 GB minutes later while those builds ran. A hook refuses every build command below
+5 GB, so the build would be cut off part-way and leave a partial tree behind. Route C
+becomes cheap the moment those two debug trees (13.6 GB between them) are released by
+their owners; it is not a disk question the runbook can settle by itself.
+
+Option B has a loop in it, and the loop is closed at both ends. `release.yml` has no
+build-only entry point: `workflow_dispatch` takes a **required `tag`**, and `release`,
+`publish`, `npm-publish` and `homebrew-update` all hang off `needs: [release, verify]`
+with no `if:` restricting them to a tag push. Dispatching it is not a way to obtain a
+binary; it is the 4.0.0 release to GitHub, crates.io, npm and Homebrew.
+
+The artifact would not arrive even so. `build` needs `verify`, `verify` needs
+`release-criteria`, and that job's last step is
+`check_scope_acceptance.py --publish-check`, which in a publishing context with a 4.0.0
+tag exits 1 while any criterion is pending or blocking. Reproduced 2026-09-19:
+
+```
+$ GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main INPUT_TAG=v4.0.0 \
+    python3 scripts/release/check_scope_acceptance.py --publish-check ; echo $?
+Release acceptance incomplete:
+  MIK-7334.CATALOGUE.1
+  ...
+1
+```
+
+So the open criterion gates the job that would build the artifact that would close the
+criterion. **No other workflow can substitute.** `ci.yml`, `docker.yml`,
+`task-sdk-recovery.yml` and `dependabot-auto-merge.yml` run only `ubuntu-*` and
+`windows-2025` runners, and `actions/upload-artifact` appears exactly once in the
+repository — in `release.yml`'s `build` job. There is no non-publishing macOS artifact
+job to borrow.
+
+Option A breaks the loop and lands the install on exactly the version the 3.5.1 → 4.0.0
+upgrade was rehearsed from (17/17 PASS, `docs/release/nfr-upgrade-1-rehearsal-results.md`).
 
 **What option A does not close.** The manifest's three controls all come from
 `5d25f104`, so a v3.5.1 install makes the checker exit 0 — but
@@ -87,17 +124,27 @@ cd ~/github/mcp-gateway                       # any checkout carrying scripts/de
 OLD=3.4.0-f30539af
 NEW=3.5.1                                     # or 4.0.0-<sha> for a self-built binary
 
-# 1. Fetch and verify the artifact (option A; skip for B/C, keep the checksum step)
+# 1a. Option A — fetch the published asset
 gh release download v3.5.1 -R MikkoParkkola/mcp-gateway \
   -p mcp-gateway-darwin-arm64 -D /tmp/gw
 shasum -a 256 /tmp/gw/mcp-gateway-darwin-arm64
 # expect 78fc2fdb5a56539a35b9204e704374303f140ed91f933492f92f49acdece77b1
-rg -a -q 'Request blocked: Host does not name this gateway' /tmp/gw/mcp-gateway-darwin-arm64 \
+GW=/tmp/gw/mcp-gateway-darwin-arm64
+
+# 1b. Option C — build from origin/main instead, in a checkout at that commit.
+#     Same recipe release.yml uses for the darwin-arm64 asset. Needs headroom:
+#     cold, 431 crates, and a hook refuses to build under 5 GB free.
+# cargo build --release --target aarch64-apple-darwin
+# GW=target/aarch64-apple-darwin/release/mcp-gateway
+# shasum -a 256 "$GW"    # record the digest here; there is no published one to compare against
+
+# 1c. Either way, prove the guard is compiled in before installing anything
+rg -a -q 'Request blocked: Host does not name this gateway' "$GW" \
   && echo "guard compiled in"   # the refusal string from src/gateway/router/origin_guard.rs:398
 
 # 2. Install ALONGSIDE the running build; never write into $OLD
 mkdir -p ~/.local/libexec/mcp-gateway/$NEW
-cp /tmp/gw/mcp-gateway-darwin-arm64 ~/.local/libexec/mcp-gateway/$NEW/mcp-gateway
+cp "$GW" ~/.local/libexec/mcp-gateway/$NEW/mcp-gateway
 chmod +x ~/.local/libexec/mcp-gateway/$NEW/mcp-gateway
 cp ~/.local/libexec/mcp-gateway/$OLD/servers.yaml ~/.local/libexec/mcp-gateway/$NEW/
 sed "s|$OLD|$NEW|g" ~/.local/libexec/mcp-gateway/$OLD/start-mcp-gateway \
