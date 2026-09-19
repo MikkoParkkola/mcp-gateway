@@ -6400,8 +6400,8 @@ async fn a_failed_bridged_round_settles_the_idempotency_key() {
         .await
         .expect("the stored failure is terminal, not a readmission");
     assert!(
-        second.to_string().contains("Side effect executed"),
-        "the retry must be served the withheld-side-effect marker, not re-dispatch: {second}"
+        second.to_string().contains("outcome is unknown"),
+        "the retry must be served the uncertainty marker, not re-dispatch: {second}"
     );
     assert_eq!(
         script.calls().len(),

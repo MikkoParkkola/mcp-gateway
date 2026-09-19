@@ -850,6 +850,31 @@ fn withheld_side_effect() -> Value {
     })
 }
 
+/// The terminal state a dropped reservation stores when the backend *may* have
+/// acted and nothing can establish whether it did.
+///
+/// Distinct from [`withheld_side_effect`], which is written only where the
+/// round demonstrably completed. A round lost after dispatch — the request left
+/// the gateway, the answer never came back — leaves the effect genuinely
+/// unknown, and telling the caller it executed is a claim the gateway cannot
+/// make. It reads as certainty, so a client that would otherwise reconcile at
+/// the backend stops looking. The key stays settled either way: an effect that
+/// might have run must not be run a second time.
+fn uncertain_side_effect() -> Value {
+    json!({
+        "resultType": "complete",
+        "isError": true,
+        "content": [{
+            "type": "text",
+            "text": "The call reached the backend and its outcome is unknown: \
+                     it may have executed. Retrying with the same idempotency \
+                     key will not re-execute it and will return this same \
+                     notice. Reconcile at the backend before assuming the \
+                     effect either ran or did not."
+        }],
+    })
+}
+
 /// Re-dispatches the original call with the answers collected so far.
 ///
 /// Holds the dispatch arguments rather than a closure because
@@ -2325,8 +2350,8 @@ impl MetaMcp {
                     // defers to the error type's own pre-dispatch allowlist; it
                     // is provably unexecuted, so it keeps the default too. Only
                     // a round that may have acted settles with the
-                    // withheld-side-effect marker, which tells a retry of the
-                    // same key that the effect ran.
+                    // uncertain-side-effect marker, which tells a retry of the
+                    // same key that the effect is unknown — not that it ran.
                     if matches!(
                         error,
                         crate::gateway::input_bridge::BridgeError::BackendFailed {
@@ -2335,7 +2360,7 @@ impl MetaMcp {
                         }
                     ) && let Some(reservation) = idem_reservation.as_mut()
                     {
-                        reservation.commit(&withheld_side_effect());
+                        reservation.commit(&uncertain_side_effect());
                     }
                     warn!(
                         server,
@@ -5392,8 +5417,13 @@ mod identity_propagation_enforcement_tests {
             .expect("the duplicate is served from the cache")
             .into_inner();
         assert!(
-            served.to_string().contains("Side effect executed"),
-            "the duplicate was served something other than the withheld marker: {served}"
+            served.to_string().contains("outcome is unknown"),
+            "the duplicate was served something other than the uncertainty marker: {served}"
+        );
+        assert_eq!(
+            served.get("isError").and_then(Value::as_bool),
+            Some(true),
+            "a round that may have acted must replay as a failure, not a success: {served}"
         );
     }
 
