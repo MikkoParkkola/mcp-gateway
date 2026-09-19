@@ -9,8 +9,12 @@ and how far along it is.
 
 Three numbers, reported every tick. Nothing else is progress.
 
-- **Operator steps: 0 / 37 done** (2 of the 37 are operator-gated, see below)
-- **Blocking release criteria: 3** — `NFR.SEC.7`, `NFR.PERF.1`, `NFR.PKG.1`
+- **Operator steps: 1 / 37 done** (2 of the 37 are operator-gated, see below)
+- **Blocking release criteria: 2** — `NFR.SEC.7` and `NFR.PKG.1`, both
+  operator-gated. Nothing in the tree closes either one.
+- **Rows open but not blocking: 1** — `NFR.PERF.1`, where ruling 69 accepted
+  the residual and the blocking cell already reads `no`. Open and blocking are
+  different columns; the counter warns about exactly this conflation.
 - **Files over the 800-line ceiling: 92**, 67,080 lines of excess (Lane G)
 
 `python3 scripts/release/count-release-criteria.py --check` is the authority on
@@ -89,7 +93,7 @@ Fully parallel with everything. Runs as subagents.
 
 | # | Step | State |
 |---|---|---|
-| E1 | Apply ruling 69 to the `NFR.PERF.1` row: residual accepted, carrier named, row non-blocking | open |
+| E1 | Apply ruling 69 to the `NFR.PERF.1` row: residual accepted, carrier named, row non-blocking | **done** — verified at source, blocking cell reads `no` |
 | E2 | Release-note sentence stating the performance claim is not end-to-end | open |
 | E3 | Sync every Linear ticket to this plan, content and status | open |
 | E4 | `NFR.PKG.1` — operator-gated, see decisions | open |
