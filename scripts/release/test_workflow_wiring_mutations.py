@@ -34,6 +34,34 @@ SUITE = HERE.with_name("test_check_tag_manifest.py")
 
 CAUGHT, TOLERATED, BROKEN = "caught", "tolerated", "broken"
 
+# docker.yml's smoke step and the push step it guards, verbatim. Held apart so
+# the reordering case can swap them whole: deleting the gate and moving it
+# below the push are different regressions, and only the second one leaves a
+# workflow that still names the gate, still blocks on it, and still proves the
+# image starts -- about bytes already pushed.
+SMOKE_STEP = (
+    "      - name: Smoke test the image (it must start and report healthy)\n"
+    "        run: scripts/ci/smoke-image.sh"
+    ' "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"\n'
+)
+PUSH_STEP = (
+    "      - name: Build and push\n"
+    "        id: build\n"
+    "        uses: docker/build-push-action"
+    "@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0\n"
+    "        with:\n"
+    "          context: .\n"
+    "          # Never on a tag: ci.yml publishes the release manifest list.\n"
+    "          push: ${{ github.event_name != 'pull_request'"
+    " && !startsWith(github.ref, 'refs/tags/v') }}\n"
+    "          tags: ${{ steps.meta.outputs.tags }}\n"
+    "          labels: ${{ steps.meta.outputs.labels }}\n"
+    "          build-args: |\n"
+    "            APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}\n"
+    "          cache-from: type=gha\n"
+    "          cache-to: type=gha,mode=max\n"
+)
+
 # (label, workflow, before, after, expected) — `before` must occur verbatim.
 CASES = [
     # Regressions. Each is a rewiring that publishes wrongly or verifies
@@ -863,6 +891,82 @@ CASES = [
         '          docker buildx imagetools create "${TAGS[@]}" '
         '"ghcr.io/mikkoparkkola/mcp-gateway@${LIST}"',
         TOLERATED,
+    ),
+    # NFR.PKG.1's gate. Both publishers fire on the same tag and neither can
+    # block the other, so the step has to survive in each of them separately.
+    (
+        "smoke-gate-deleted-from-the-branch-publisher",
+        "docker.yml",
+        '        run: scripts/ci/smoke-image.sh'
+        ' "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"\n',
+        "",
+        CAUGHT,
+    ),
+    (
+        "smoke-gate-deleted-from-the-release-publisher",
+        "ci.yml",
+        '        run: scripts/ci/smoke-image.sh'
+        ' "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "",
+        CAUGHT,
+    ),
+    (
+        # Report-only: the image still fails to start, the job still goes green.
+        "smoke-gate-turned-into-a-log-line",
+        "docker.yml",
+        "      - name: Smoke test the image (it must start and report healthy)\n",
+        "      - name: Smoke test the image (it must start and report healthy)\n"
+        "        continue-on-error: true\n",
+        CAUGHT,
+    ),
+    (
+        "smoke-gate-failure-swallowed",
+        "ci.yml",
+        '        run: scripts/ci/smoke-image.sh'
+        ' "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        '        run: scripts/ci/smoke-image.sh'
+        ' "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}" || true',
+        CAUGHT,
+    ),
+    (
+        # No argument is a usage error today, so this is red either way -- but
+        # a gate that is only red by accident is one `|| true` from green with
+        # no container ever started.
+        "smoke-gate-handed-no-image",
+        "ci.yml",
+        '        run: scripts/ci/smoke-image.sh'
+        ' "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        "        run: scripts/ci/smoke-image.sh",
+        CAUGHT,
+    ),
+    (
+        # Equivalent spelling: the same script under an explicit interpreter.
+        "smoke-gate-spelled-with-an-interpreter",
+        "ci.yml",
+        '        run: scripts/ci/smoke-image.sh'
+        ' "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        '        run: bash scripts/ci/smoke-image.sh'
+        ' "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"',
+        TOLERATED,
+    ),
+    (
+        # A push added upstream of the gate. The step is untouched and still
+        # green; what it proves is now about an image already pullable.
+        "scan-build-pushing-before-the-image-is-started",
+        "docker.yml",
+        "          load: true\n",
+        "          load: true\n"
+        "          push: ${{ github.event_name != 'pull_request' }}\n",
+        CAUGHT,
+    ),
+    (
+        # The case deletion does not cover: the gate is still there, still
+        # blocking, still reading the right image -- and runs after the push.
+        "smoke-gate-moved-below-the-push",
+        "docker.yml",
+        SMOKE_STEP + "\n" + PUSH_STEP,
+        PUSH_STEP + "\n" + SMOKE_STEP,
+        CAUGHT,
     ),
 ]
 
