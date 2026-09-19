@@ -46,6 +46,8 @@ class ContractInterfaceTests(unittest.TestCase):
                 {
                     "id": "GH462.CONFIG.1",
                     "status": "met",
+                    "stage": "met",
+                    "blocked_on": "none",
                     "evidence": ["proof.md"],
                     "note": "Reviewed.",
                 }
@@ -80,12 +82,16 @@ class ContractInterfaceTests(unittest.TestCase):
                 {
                     "id": "GH462.CONFIG.1",
                     "status": "met",
+                    "stage": "met",
+                    "blocked_on": "none",
                     "evidence": ["proof.md"],
                     "note": "Reviewed config.",
                 },
                 {
                     "id": "GH452.SESSION.1",
                     "status": "met",
+                    "stage": "met",
+                    "blocked_on": "none",
                     "evidence": ["proof.md"],
                     "note": "Reviewed session.",
                 },
@@ -145,7 +151,7 @@ class ContractInterfaceTests(unittest.TestCase):
         release = self.cli("--release")
         self.assertEqual(release.returncode, 0, release.stderr)
         self.assertIn("Release acceptance complete.", release.stdout)
-        self.data["criteria"][0].update(status="pending", evidence=[])
+        self.data["criteria"][0].update(status="pending", stage="proven", evidence=[])
         self.write_data()
         refused = self.cli("--release")
         self.assertEqual(refused.returncode, 1)
@@ -261,7 +267,7 @@ class ContractInterfaceTests(unittest.TestCase):
                     manifest.rmdir()
 
     def test_publish_context_requires_an_actual_publish_signal(self):
-        self.data["criteria"][0].update(status="pending", evidence=[])
+        self.data["criteria"][0].update(status="pending", stage="proven", evidence=[])
         self.write_data()
         (self.root / "Cargo.toml").write_text(
             '[package]\nname = "x"\nversion = "4.0.0"\n'
@@ -349,7 +355,10 @@ class ContractInterfaceTests(unittest.TestCase):
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assert_exact_diagnostic(
-            result.stderr, "each criterion needs id, status, evidence and note"
+            result.stderr, (
+                "GH462.CONFIG.1: each criterion needs id, status, stage, "
+                "blocked_on, evidence and note"
+            )
         )
         self.assertNotIn("GH452.SESSION.1", result.stderr)
 

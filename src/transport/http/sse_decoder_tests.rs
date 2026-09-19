@@ -357,3 +357,28 @@ fn a_single_long_line_delivered_one_byte_at_a_time_still_frames() {
     got.extend(decoder.finish().expect("finish"));
     assert_eq!(got, vec![event(None, &payload)]);
 }
+
+/// GH #563: a backend built on `rmcp` with the default `sse_retry` prepends a
+/// priming frame -- `data:` with nothing after it, plus `id:` and `retry:` --
+/// to every POST response stream. v3.5.1 took the first `data:` line verbatim
+/// and failed the whole call with `EOF while parsing a value at line 1
+/// column 0`. The fields that frame carries are not `data` or `event`, and its
+/// joined data is empty, so it yields no event and the exchange resolves on
+/// the frame that actually holds the response.
+#[tokio::test]
+async fn a_retry_priming_frame_ahead_of_the_result_does_not_fail_the_exchange() {
+    let body = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(
+        b"data: \nid: 0\nretry: 3000\n\n\
+          data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-03-26\"}}\n\n",
+    ))]);
+    let response = decode_sse_exchange(body)
+        .await
+        .expect("the priming frame is skipped, not parsed as the response");
+    let result = response
+        .result
+        .expect("the frame after the priming frame carries the result");
+    assert_eq!(
+        result["protocolVersion"], "2025-03-26",
+        "the exchange resolves on the frame holding the response, not the priming frame"
+    );
+}

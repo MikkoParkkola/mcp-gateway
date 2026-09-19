@@ -548,3 +548,32 @@ fn model_02_non_object_completion_is_rejected_without_settling() {
         .changed
     );
 }
+
+/// A round that names the same key twice is refused whole.
+///
+/// The cross-round guard (`issued_input_keys`) is pinned elsewhere; this is the
+/// within-round collision, where the second entry would otherwise overwrite the
+/// first in the map. Two schemas would have collapsed to one question, and the
+/// backend that asked twice would be handed a single answer for both — silently,
+/// with the task still advancing to `InputRequired`.
+#[test]
+fn model_11_a_duplicate_key_inside_one_round_is_refused_whole() {
+    let mut task = task();
+    let before = snapshot(&task);
+
+    assert_eq!(
+        task.transition(
+            TaskTransition::RequireInput(requests(&["r1-a", "r1-a"])),
+            at(1)
+        )
+        .expect_err("a round naming one key twice asks two questions under one answer slot"),
+        TaskModelError::InvalidInput
+    );
+    assert_eq!(
+        snapshot(&task),
+        before,
+        "a refused round must leave no trace: a partially applied request map would expose the \
+         first entry as if the round had been accepted"
+    );
+    assert_ne!(task.status(), TaskStatus::InputRequired);
+}

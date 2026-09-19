@@ -855,6 +855,18 @@ pub fn enforce(
     }
 }
 
+/// Marks a stored error as the gateway's own firewall refusal.
+///
+/// [`cached_error_parts`] reads `code` and `message` alone, so this member
+/// rides along in the stored body and lets the replay restore the typed
+/// `ResponseFirewallRefused` the first attempt returned instead of serving a
+/// generic JSON-RPC error. A refusal replayed untyped loses the
+/// delivery-refusal projection and is accounted against the client, which is
+/// the opposite of what it is: the gateway refused, the client did nothing
+/// wrong. The member cannot be forged from outside — the only other writer
+/// serializes a `JsonRpcError`, whose fields are `code`, `message` and `data`.
+pub const FIREWALL_REFUSAL_MARKER: &str = "_gatewayFirewallRefusal";
+
 /// Split the payload of a [`GuardOutcome::CachedError`] into its JSON-RPC code
 /// and message.
 ///
@@ -902,6 +914,27 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::thread;
+
+    /// The marker is the gateway's own word, so nothing a backend sends may
+    /// mint it. The other writer of a cached error body serializes a
+    /// `JsonRpcError`, and this pins that that serialization has no field
+    /// which could land on the marker's name — including when the backend
+    /// fills `data` with the marker itself, because the replay reads the top
+    /// level only.
+    #[test]
+    fn a_serialized_backend_error_cannot_carry_the_refusal_marker() {
+        let hostile = crate::protocol::JsonRpcError {
+            code: -32600,
+            message: format!("{FIREWALL_REFUSAL_MARKER} is mine now"),
+            data: Some(json!({FIREWALL_REFUSAL_MARKER: true})),
+        };
+        let body = serde_json::to_value(&hostile).expect("a JsonRpcError serializes");
+
+        assert!(
+            body.get(FIREWALL_REFUSAL_MARKER).is_none(),
+            "a backend-authored error must never present as a gateway refusal: {body}"
+        );
+    }
 
     // ── derive_key ────────────────────────────────────────────────────────────
 

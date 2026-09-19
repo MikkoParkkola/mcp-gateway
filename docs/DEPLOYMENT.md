@@ -915,6 +915,51 @@ follows a credential.
 
 For multi-client setups with per-client tool scoping, see the [README auth section](../README.md#authentication).
 
+### Narrowing the meta-tool surface
+
+Admin standing decides which management tools a *caller* sees. `meta_mcp.exposed_meta_tools`
+decides which ones the *gateway* offers at all, to anybody:
+
+```yaml
+meta_mcp:
+  exposed_meta_tools:
+    - gateway_list_servers
+    - gateway_search_tools
+    - gateway_invoke
+```
+
+Those are the names of the classic surface. A gateway running Code Mode offers a
+different pair, `gateway_search` and `gateway_execute`, and the allow-list filters
+that pair by the same rule — so a list naming only classic tools leaves a Code
+Mode gateway with no tools at all. Write the list for the surface the gateway
+actually serves.
+
+Empty (the default) exposes the full surface, which the gateway itself bands at
+14 to 17 tools: the webhook, statistics and config-reload tools are listed only
+when the thing they report on is actually attached, and a webhook endpoint needs
+an HTTP listener to receive on. A non-empty list is an allow-list, and it is the same
+predicate that answers `tools/list` and admits `tools/call` — a tool withheld
+from the catalogue cannot be invoked by name, so this is a control and not a
+cosmetic filter. A call to a hidden tool is refused with the same answer a
+misspelled tool name gets, so the refusal does not confirm that the tool exists
+and was deliberately withheld. Backend tools reached through `gateway_invoke` are outside its
+scope; it governs the gateway's own tools only.
+
+Two things worth knowing before you shrink it:
+
+- **Omitting `gateway_invoke` cuts off the route to backend tools that are not
+  pinned.** Anything listed in `surfaced_tools` still appears and still answers,
+  and Code Mode's `gateway_execute` is its own route; everything reachable only
+  by name through `gateway_invoke` becomes uncallable. The gateway warns at
+  startup rather than refusing, because a surface built purely from
+  `surfaced_tools` is a legitimate deployment.
+- **The saving is smaller than the tool count suggests.** The full 17 schemas
+  measure about 14K characters, roughly 3.5K tokens; the four routing tools are
+  a third of that, so cutting all the way to the minimal example above recovers
+  around 2.3K tokens per request that carries the catalogue. Against a 100-tool
+  backend estimated at some 15K tokens, the meta-surface was never the expensive
+  part. Narrow it to limit what a client can do, not to chase context.
+
 ## Backup and Recovery
 
 | Item | Location |

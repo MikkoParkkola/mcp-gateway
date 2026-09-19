@@ -196,15 +196,17 @@ Use ignored local paths for private strategy work: `docs/strategy/`, `docs/compe
 
 Look for [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/labels/good%20first%20issue) or [`help wanted`](https://github.com/MikkoParkkola/mcp-gateway/labels/help%20wanted). Good starters: adding a zero-config capability, improving error messages, adding edge-case tests, documentation.
 
-## Contributor License Agreement (required)
+## Contributor License Agreement
 
-Before your first contribution can be merged, you must agree to the
-**[Contributor License Agreement](CLA.md)**. It lets the maintainer offer
+Contributing to this repository is acceptance of the
+**[Contributor License Agreement](CLA.md)** — it binds on submission, so
+there is nothing to sign and nothing is requested before a merge. It lets the maintainer offer
 commercial licenses for the Noncommercial-licensed code (which a bare
 inbound=outbound or DCO cannot do): you keep your copyright, and you grant a
 broad, sublicensable, **relicensable** copyright and patent license, plus
-represent that you have the right to contribute the work. Signing is a one-line
-statement in your first PR — see `CLA.md` for the exact wording and how to sign.
+represent that you have the right to contribute the work. To record the
+acceptance explicitly, `CLA.md` gives a one-line statement you can add to your
+first PR; it is optional.
 
 ## License
 

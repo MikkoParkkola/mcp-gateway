@@ -914,6 +914,24 @@ impl Config {
                     agent.client_id
                 )));
             }
+            // Audience must be checked BEFORE the RSA early exit below, or an
+            // audience-less RS256 agent would load and the startup refusal
+            // would cover only HS256. Without a configured audience the
+            // verifier cannot tell a token minted for this gateway from one
+            // minted for any other relying party that shares the signing key.
+            if agent
+                .audience
+                .as_deref()
+                .is_none_or(|a| a.trim().is_empty())
+            {
+                return Err(Error::ConfigValidation(format!(
+                    "agent_auth.agents['{}'] sets no audience. The signing key \
+                     may be shared with other relying parties, so without an \
+                     expected `aud` this agent accepts tokens minted for them. \
+                     Set audience to the identifier this gateway is known by.",
+                    agent.client_id
+                )));
+            }
             if has_rsa {
                 continue;
             }
@@ -1539,10 +1557,14 @@ pub struct BackendConfig {
     /// Secret injection rules.
     #[serde(default)]
     pub secrets: Vec<crate::secret_injection::CredentialRule>,
-    /// Pass-through mode: skip gateway tool policy and input sanitization.
+    /// Pass-through mode: skip input sanitization on this backend's
+    /// `tools/call` requests.
     ///
-    /// **Security warning**: enabling this bypasses `tool_policy.check()`,
-    /// `validate_tool_name()`, and `sanitize_json_value()`. Only set this for
+    /// **Security warning**: enabling this forwards caller-supplied arguments
+    /// to the backend without `sanitize_json_value()`. It is narrower than the
+    /// name suggests — `apply_backend_tool_call_security` gates only
+    /// sanitization on this flag, so tool-name validation, the tool-policy
+    /// authorization check and the firewall still run. Only set this for
     /// fully-trusted internal backends. Default: `false`.
     #[serde(default)]
     pub passthrough: bool,

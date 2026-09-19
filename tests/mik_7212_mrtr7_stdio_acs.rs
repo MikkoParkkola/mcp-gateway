@@ -41,6 +41,7 @@
 //! half of row 308 is uncovered, and closing it needs a row of its own here
 //! rather than a wider assertion on an existing one.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -195,7 +196,9 @@ fn write_config(home: &Path, backend_url: &str) {
 /// The shipped binary, spawned the way a stdio client spawns it.
 struct StdioSession {
     child: Child,
-    stdin: ChildStdin,
+    /// Taken by [`Self::close_stdin`]: EOF is the stimulus of the drain row,
+    /// and the session has to outlive it to read what the drain writes.
+    stdin: Option<ChildStdin>,
     stdout: Lines<BufReader<ChildStdout>>,
 }
 
@@ -229,17 +232,24 @@ impl StdioSession {
         let stdout = BufReader::new(child.stdout.take().expect("child stdout")).lines();
         Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout,
         }
     }
 
     async fn send(&mut self, message: &Value) {
-        self.stdin
+        let stdin = self.stdin.as_mut().expect("child stdin still open");
+        stdin
             .write_all(format!("{message}\n").as_bytes())
             .await
             .expect("write to child stdin");
-        self.stdin.flush().await.expect("flush child stdin");
+        stdin.flush().await.expect("flush child stdin");
+    }
+
+    /// Send EOF and keep the session: the child's reader loop leaves its
+    /// `while let Ok(Some(line))` and enters the drain.
+    fn close_stdin(&mut self) {
+        drop(self.stdin.take());
     }
 
     /// Read lines until one carries `id`, or the bound expires.
@@ -278,8 +288,54 @@ impl StdioSession {
         lines
     }
 
+    /// Collect until `enough` holds, then keep reading for `settle`.
+    ///
+    /// A fixed window asserts a timing coincidence: every admitted request has
+    /// to have written its question before the window closes, which a loaded CI
+    /// runner does not guarantee. Waiting for the count removes that race
+    /// without weakening the row -- `budget` still bounds a parked reader into a
+    /// failure, and `settle` still lets an over-admitted extra arrive and redden
+    /// the assertion.
+    async fn collect_lines_until(
+        &mut self,
+        budget: Duration,
+        settle: Duration,
+        enough: impl Fn(&[String]) -> bool,
+    ) -> Vec<String> {
+        let mut lines = Vec::new();
+        let ended = timeout(budget, async {
+            while let Ok(Some(line)) = self.stdout.next_line().await {
+                lines.push(line);
+                if enough(&lines) {
+                    break;
+                }
+            }
+        })
+        .await;
+        // Which of the three ways collection ended is what separates a budget cut
+        // too fine from a question that never arrived, and the count alone does
+        // not say which. Printed rather than returned: cargo surfaces it for the
+        // run that failed and swallows it for the runs that did not.
+        eprintln!(
+            "collect_lines_until: {} after {} lines",
+            match ended {
+                Err(_) => "the budget expired",
+                Ok(()) if enough(&lines) => "the expected count arrived",
+                Ok(()) => "stdout ended",
+            },
+            lines.len()
+        );
+        let _ = timeout(settle, async {
+            while let Ok(Some(line)) = self.stdout.next_line().await {
+                lines.push(line);
+            }
+        })
+        .await;
+        lines
+    }
+
     async fn shutdown(mut self) {
-        drop(self.stdin);
+        drop(self.stdin.take());
         let _ = self.child.kill().await;
     }
 }
@@ -291,9 +347,10 @@ fn initialize_request(id: i64) -> Value {
         "method": "initialize",
         "params": {
             "protocolVersion": CLIENT_PROTOCOL_VERSION,
-            // Declared per request, under the `_meta` key MRTR.9 reads. Sent on
-            // the handshake as well so a client that reads either place is
-            // covered.
+            // The only place a legacy-shaped client can declare
+            // `elicitation`: MRTR.9 reads per-request `_meta` for a modern
+            // call, and a legacy call has none. See [`asking_call`] for why
+            // these rows must be legacy-shaped.
             "capabilities": {"elicitation": {}},
             "clientInfo": {"name": "mrtr7-stdio-acs", "version": "0"},
         },
@@ -304,6 +361,14 @@ fn initialize_request(id: i64) -> Value {
 ///
 /// Backend tools are not on `tools/call` by their own name unless an operator
 /// pins them, so the invoke meta tool is the route a real client takes.
+///
+/// Deliberately carries no `params._meta`. The rows here assert an outbound
+/// `elicitation/create` frame on the client's own channel, and that frame is
+/// written only by the in-band bridge, which serves the legacy request shape;
+/// a `_meta` carrying the modern fields classifies the call Modern and takes
+/// the continuation route instead, which answers with an envelope and asks
+/// nobody. The elicitation capability therefore has to come from the
+/// `initialize` handshake -- see [`initialize_request`].
 fn asking_call(id: i64) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -316,10 +381,6 @@ fn asking_call(id: i64) -> Value {
                 "tool": ASKING_TOOL,
                 "arguments": {},
             },
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": CLIENT_PROTOCOL_VERSION,
-                "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
-            },
         },
     })
 }
@@ -330,6 +391,103 @@ fn frames_lenient(lines: &[String]) -> Vec<Value> {
         .iter()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .collect()
+}
+
+/// What the collected stream actually contained, for a shortfall's failure text.
+///
+/// [`frames_lenient`] drops an unparsable line with `.ok()`, so a mangled line
+/// does not fail a row, it just lowers the count -- indistinguishable from a
+/// question that was never asked. The saturation rows fail with a count a few
+/// short of the cap and no way to tell those apart, so they report the census
+/// alongside the count: a line the parser refused is a different defect from a
+/// call that answered instead of asking, and both are different from a call
+/// that produced nothing at all.
+fn census_of(lines: &[String]) -> String {
+    let mut unparsable: Vec<&str> = Vec::new();
+    let mut methods: BTreeMap<String, usize> = BTreeMap::new();
+    let mut results = 0usize;
+    // A minted continuation is a `result` frame too, distinguished only by the
+    // `requestState` the gateway writes into it (`meta_mcp/invoke.rs`). Counting
+    // both as "results" collapses a fabricated plain answer and a re-emitted
+    // question into one number, which is the discrimination this census exists
+    // to make.
+    let mut continuations = 0usize;
+    // The bodies of the plain results, not just how many. Three hypotheses about
+    // what fabricates them have now been eliminated by counting alone, and the
+    // frame itself is the only authority left: it names the shape directly
+    // instead of inviting a fourth guess.
+    let mut plain_samples: Vec<String> = Vec::new();
+    // MCP carries a tool-level failure INSIDE a successful response, as
+    // `isError: true` beside the text (`meta_mcp/invoke.rs`). A census that
+    // buckets by frame shape alone therefore files every refusal the gateway
+    // answered correctly under `results`, which is the bucket that means "a
+    // call answered instead of asking". Nine circuit-breaker trips were read
+    // as nine fabricated successes that way. Histogrammed by message because
+    // the shape is shared by every tool-level refusal and only the text names
+    // which one happened.
+    let mut refusals: BTreeMap<String, usize> = BTreeMap::new();
+    let mut errors: BTreeMap<i64, usize> = BTreeMap::new();
+    // `-32003` carries at least four distinct meanings in this codebase
+    // (budget exhaustion, a missing client capability, forbidden, and service
+    // unavailable), so the code alone does not name the defect. The child's
+    // stderr is not captured under `cargo test`, so the text has to come back
+    // through the frame or not at all.
+    let mut messages: BTreeMap<String, usize> = BTreeMap::new();
+    for line in lines {
+        match serde_json::from_str::<Value>(line) {
+            Err(_) => unparsable.push(line.as_str()),
+            Ok(frame) => {
+                if let Some(method) = frame.get("method").and_then(Value::as_str) {
+                    *methods.entry(method.to_owned()).or_default() += 1;
+                } else if let Some(code) = frame.pointer("/error/code").and_then(Value::as_i64) {
+                    *errors.entry(code).or_default() += 1;
+                    if let Some(message) = frame.pointer("/error/message").and_then(Value::as_str) {
+                        *messages.entry(message.to_owned()).or_default() += 1;
+                    }
+                } else if let Some(result) = frame.get("result") {
+                    if result.get("requestState").is_some() {
+                        continuations += 1;
+                    } else if let Some(text) = tool_refusal_text(result) {
+                        *refusals.entry(text).or_default() += 1;
+                    } else {
+                        results += 1;
+                        if plain_samples.len() < 3 {
+                            let body: String = result.to_string().chars().take(240).collect();
+                            plain_samples.push(format!("\n      {body:?}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let samples: Vec<String> = unparsable
+        .iter()
+        .take(3)
+        .map(|line| {
+            let head: String = line.chars().take(160).collect();
+            format!("\n      {head:?}")
+        })
+        .collect();
+    format!(
+        "census of {} collected lines: {} unparsable, methods {:?}, {} plain results, \
+         {} continuation results, tool-level refusals {:?}, errors {:?}, \
+         error messages {:?}{}{}{}",
+        lines.len(),
+        unparsable.len(),
+        methods,
+        results,
+        continuations,
+        refusals,
+        errors,
+        messages,
+        samples.concat(),
+        if plain_samples.is_empty() {
+            ""
+        } else {
+            "\n    plain result samples:"
+        },
+        plain_samples.concat(),
+    )
 }
 
 /// Index of the first line that is a server-to-client request for `method`.
@@ -353,7 +511,6 @@ fn position_of_outbound(frames: &[Value], method: &str) -> Option<usize> {
 /// a test asserting only that the call returned passes against a gateway that
 /// never asked anything at all, which is exactly today's behaviour.
 #[tokio::test]
-#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec"]
 async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -397,10 +554,18 @@ async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
         .await;
     let (tail, answer) = session.read_until_id(2).await;
     let answer = answer.expect("row 312: no result for the bridged call after the answer");
+    // `gateway_invoke` hands the backend's own result back inside an envelope
+    // that also carries the trace id, so the answered-branch text is one parse
+    // further down. Asserted through the envelope rather than on a substring:
+    // the interim result's text would match a `contains`, which is the exact
+    // outcome this row exists to rule out.
+    let envelope = answer
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .unwrap_or_else(|| panic!("row 312: no invoke envelope in the result: {tail:?}"));
     assert_eq!(
-        answer
-            .pointer("/result/content/0/text")
-            .and_then(Value::as_str),
+        envelope.pointer("/content/0/text").and_then(Value::as_str),
         Some("answered"),
         "row 312: the answered retry never reached the backend: {tail:?}"
     );
@@ -418,7 +583,6 @@ async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
 /// weaker version — initialize, wait, then call — proves nothing, because the
 /// interleaving it is meant to rule out cannot occur in it.
 #[tokio::test]
-#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec"]
 async fn ac_mrtr_7a_bridged_request_follows_the_initialize_response() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -468,7 +632,6 @@ async fn ac_mrtr_7a_bridged_request_follows_the_initialize_response() {
 /// wrote nothing — the count is what makes the row load-bearing, and the
 /// parse is what the row actually specifies once frames exist.
 #[tokio::test]
-#[ignore = "MIK-7387: stdio concurrent dispatch is a separate work package; this row is its spec"]
 async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
@@ -504,6 +667,606 @@ async fn ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames() {
              JSON: {line:?}"
         );
     }
+
+    session.shutdown().await;
+}
+
+/// Design §6 — a request the loop accepted still gets its response when stdin
+/// closes under it.
+///
+/// EOF drains, it does not abort. The row stages the hardest case the drain
+/// has: a dispatch that is not merely slow but *waiting on the client*, its
+/// question already written to the pipe that then closes. Nothing can answer
+/// it, so `channel.close()` has to fail the prompt and the dispatch has to
+/// carry a response back out — and the writer has to still be there to write
+/// it, which is why `run_stdio` joins the writer task only after the drain.
+///
+/// Asserted on arrival and on being a response, not on a particular error: the
+/// pin is that the caller is not left without an answer, and whether the
+/// refusal reads as an error object or an error result is the bridge's to
+/// decide. A row asserting the text would fail the next time that wording
+/// improves, for no defect.
+///
+/// The failure this catches is silence: abort the `JoinSet` at EOF, or drop the
+/// writer before the drain, and the id-2 frame never arrives.
+#[tokio::test]
+async fn ac_mrtr_7a_request_in_flight_when_stdin_closes_still_gets_its_response() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    session.send(&initialize_request(1)).await;
+    let (_, initialized) = session.read_until_id(1).await;
+    assert!(initialized.is_some(), "the child never answered initialize");
+
+    session.send(&asking_call(2)).await;
+    let staged = session.collect_lines(COLLECT_WINDOW).await;
+
+    // Control: with no question outstanding there is no in-flight dispatch for
+    // EOF to interrupt, and the row would pass against a gateway that had
+    // already answered id 2 before stdin ever closed.
+    assert!(
+        saw_method(&received, "initialize"),
+        "the fixture backend was never reached: {staged:?}"
+    );
+    assert!(
+        position_of_outbound(&frames_lenient(&staged), "elicitation/create").is_some(),
+        "nothing was in flight: the call never reached the bridge, so this row \
+         would not be measuring the drain. Frames: {staged:?}"
+    );
+    assert!(
+        !frames_lenient(&staged)
+            .iter()
+            .any(|frame| frame.get("id").and_then(Value::as_i64) == Some(2)),
+        "id 2 was answered before stdin closed, so the drain is untested: {staged:?}"
+    );
+
+    session.close_stdin();
+
+    let (tail, answer) = session.read_until_id(2).await;
+    let answer = answer.unwrap_or_else(|| {
+        panic!("the in-flight call got no response across EOF; the drain dropped it: {tail:?}")
+    });
+    assert!(
+        answer.get("result").is_some() || answer.get("error").is_some(),
+        "the frame for id 2 is neither a result nor an error: {answer}"
+    );
+
+    session.shutdown().await;
+}
+
+/// The reply a client sends to one `elicitation/create`.
+///
+/// `action` is mandatory for elicitation: `InputBridge::project`
+/// (`src/gateway/input_bridge.rs:647`) treats a reply without it as malformed
+/// rather than filing it, so a row that answers with a bare object would leave
+/// the dispatch to fail instead of complete.
+fn elicitation_answer(id: &Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        // Echoed verbatim: the bridge mints its own ids and they are strings,
+        // not the numbers a client uses for its own calls.
+        "id": id.clone(),
+        "result": {"action": "accept", "content": {}},
+    })
+}
+
+/// The burst bound. `StdioSession::send` has no timeout of its own, so a
+/// gateway that stops reading fills the stdin pipe and parks the test forever;
+/// under this bound it fails the row instead of hanging CI.
+const BURST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a saturation row waits for the questions it expects.
+///
+/// Thirty seconds was once read as too tight: four CI runs failed with 57, 58,
+/// 59 and 63 of the expected 64 questions, a spread just under the cap. Raising
+/// this to 180s tested that reading and refuted it. The row then ran for its
+/// full budget -- 187.60s wall clock for the binary -- and still collected 58,
+/// while the sibling inflight row collected 60. Six times the budget moved the
+/// count by nothing, so the missing questions are not late, they do not arrive.
+///
+/// The value is back at its original 30s because the extra 150s buys no
+/// evidence and costs every green run. What separates a parked reader from a
+/// child that stopped emitting is the end-cause line `collect_lines_until`
+/// prints on failure, not a larger number here.
+const COLLECT_BUDGET: Duration = Duration::from_secs(30);
+
+/// Kept reading after the expected count arrives, so one question too many is
+/// still observed rather than cut off by an early return.
+const SETTLE_WINDOW: Duration = Duration::from_secs(2);
+
+/// `MAX_CONCURRENT_STDIO_DISPATCHES` (`src/gateway/server/mod.rs:83`). Not
+/// importable from an integration test, so it is repeated here and the row
+/// fails loudly if it ever moves.
+const ADMISSION_CAP: i64 = 64;
+
+/// The first id of a burst. `1` is the `initialize` handshake.
+const FIRST_CALL_ID: i64 = 2;
+
+/// Every outbound `elicitation/create` in `frames`.
+fn prompts_in(frames: &[Value]) -> Vec<&Value> {
+    frames
+        .iter()
+        .filter(|frame| frame.get("method").and_then(Value::as_str) == Some("elicitation/create"))
+        .collect()
+}
+
+/// Every id carrying a `-32000 server busy` refusal.
+fn refused_ids(frames: &[Value]) -> Vec<i64> {
+    frames
+        .iter()
+        .filter(|frame| frame.pointer("/error/code").and_then(Value::as_i64) == Some(-32000))
+        .filter_map(|frame| frame.get("id").and_then(Value::as_i64))
+        .collect()
+}
+
+/// Every id whose answer was a tool-level refusal rather than a question.
+///
+/// A dispatch the gateway declined once it was already admitted -- a tripped
+/// circuit breaker is the one observed in CI -- answers the MCP way, as a
+/// `result` carrying `isError: true`, not as a JSON-RPC error. It is a terminal
+/// answer to an admitted call, so it belongs with the questions when counting
+/// what admission let run, and nowhere near the plain-result count.
+fn tool_refused_ids(frames: &[Value]) -> Vec<i64> {
+    frames
+        .iter()
+        .filter(|frame| frame.get("result").and_then(tool_refusal_text).is_some())
+        .filter_map(|frame| frame.get("id").and_then(Value::as_i64))
+        .collect()
+}
+
+/// The message of a tool-level refusal carried in a successful `result`, or
+/// `None` when the result is an ordinary answer.
+///
+/// The flag is not always where a reader reaches for it first. A backend's own
+/// result carries `isError: true` beside its content, but the meta surface
+/// wraps that result once more before it reaches the wire: `result.content[0]
+/// .text` is then the backend's JSON *as a string*, and the flag sits one
+/// level below `/result/isError`. Reading only the outer pointer files every
+/// wrapped refusal as a plain success -- the exact miscount that made a
+/// tripped circuit breaker look like fabricated work.
+fn tool_refusal_text(result: &Value) -> Option<String> {
+    let text = result.pointer("/content/0/text").and_then(Value::as_str);
+    if result.get("isError").and_then(Value::as_bool) == Some(true) {
+        return Some(text.unwrap_or("<no text>").to_owned());
+    }
+    let inner: Value = serde_json::from_str(text?).ok()?;
+    // The full MCP refusal shape, not the flag alone: an ordinary answer whose
+    // text happens to be JSON carrying `isError` would otherwise be re-filed as
+    // a refusal and could hide one missing outcome in the admission sum.
+    if inner.get("isError").and_then(Value::as_bool) != Some(true)
+        || !inner.get("content").is_some_and(Value::is_array)
+    {
+        return None;
+    }
+    Some(
+        inner
+            .pointer("/content/0/text")
+            .and_then(Value::as_str)
+            .unwrap_or("<no text>")
+            .to_owned(),
+    )
+}
+
+/// The frame shape that made a tripped circuit breaker read as fabricated work.
+///
+/// A contended runner trips the fixture backend's breaker; a fast machine never
+/// does, so no number of local reruns exercises this path and only CI ever sees
+/// it. Pinning the body here is what keeps the reader honest between those
+/// runs: without it the nesting can regress silently and the two rows above go
+/// red again on a loaded machine, months later, for a reason already diagnosed.
+#[test]
+fn a_wrapped_tool_refusal_reads_as_a_refusal() {
+    const TRIPPED: &str = "Circuit breaker open for backend 'fixture'";
+    let inner = serde_json::json!({
+        "content": [{ "text": TRIPPED, "type": "text" }],
+        "isError": true,
+    });
+    let wrapped = serde_json::json!({
+        "id": 7,
+        "result": {
+            "content": [{
+                "text": serde_json::to_string_pretty(&inner).expect("the fixture body serialises"),
+            }],
+        },
+    });
+
+    assert_eq!(
+        tool_refusal_text(&wrapped["result"]).as_deref(),
+        Some(TRIPPED),
+        "the meta surface wraps the backend result, so the flag sits one level \
+         below /result/isError; reading only the outer pointer files this \
+         refusal as a plain success"
+    );
+    assert_eq!(tool_refused_ids(std::slice::from_ref(&wrapped)), vec![7]);
+
+    // An unwrapped refusal is the same answer one layer up, and must still read.
+    assert_eq!(tool_refusal_text(&inner).as_deref(), Some(TRIPPED));
+
+    // An ordinary answer is not a refusal, whether or not its text is JSON.
+    assert_eq!(
+        tool_refusal_text(&serde_json::json!({ "content": [{ "text": "ok" }] })),
+        None
+    );
+    assert_eq!(
+        tool_refusal_text(&serde_json::json!({
+            "content": [{ "text": serde_json::json!({ "content": [] }).to_string() }],
+        })),
+        None
+    );
+
+    // The flag alone is not the refusal shape: a plain answer whose text is
+    // JSON carrying `isError` is still an answer, and counting it as a refusal
+    // would let one missing outcome pass the admission sum.
+    assert_eq!(
+        tool_refusal_text(&serde_json::json!({
+            "content": [{ "text": serde_json::json!({ "isError": true }).to_string() }],
+        })),
+        None
+    );
+}
+
+/// The two bounds that keep row 7a's teeth once a decline can buy an extra
+/// question: admission may never let more than `ADMISSION_CAP` questions stand
+/// at once, and at least that many calls must reach a terminal outcome.
+/// Returns the questions, so the row can answer one it actually received.
+fn assert_admission_bounded<'a>(frames: &'a [Value], lines: &[String]) -> Vec<&'a Value> {
+    let prompts = prompts_in(frames);
+    // Asking is only one terminal outcome of an admitted call. A dispatch the
+    // gateway declines after admission -- in CI, a tripped circuit breaker on
+    // the fixture backend, which a fast local run never reaches -- consumed a
+    // slot and answered, so it counts toward what admission let run. The row
+    // still discriminates: a gateway that dropped an admitted call silently
+    // produces neither a question nor a refusal and the sum falls short.
+    let declined = tool_refused_ids(frames);
+    // Admission bounds CONCURRENCY, not the lifetime count of terminal
+    // outcomes, so the sum is not an equality under contention: a dispatch the
+    // gateway declines after admission -- in CI, a tripped circuit breaker on
+    // the fixture backend, which a fast local run never reaches -- releases its
+    // permit, and the call behind it is admitted and asks. One decline can
+    // therefore buy one extra question, and the sum runs past the cap without
+    // anything being wrong. Two bounds keep the row's teeth where the equality
+    // only looked like it did:
+    //   * no more than ADMISSION_CAP questions may be outstanding at once, or
+    //     admission is not bounding anything;
+    //   * at least ADMISSION_CAP calls must have reached a terminal outcome, or an
+    //     admitted call was dropped on the floor -- neither asked nor refused.
+    let cap = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
+    assert!(
+        prompts.len() <= cap,
+        "admission must bound what may run at once; {} questions are outstanding against a cap of {cap}. {}",
+        prompts.len(),
+        census_of(lines)
+    );
+    assert!(
+        prompts.len() + declined.len() >= cap,
+        "the reader must keep reading past the cap; {} questions plus {} declined after admission is short of \
+         {cap}, so an admitted call produced no answer at all. {}",
+        prompts.len(),
+        declined.len(),
+        census_of(lines)
+    );
+    assert!(
+        refused_ids(frames).is_empty(),
+        "65 calls is one past admission but far short of the inflight cap, so \
+         none of them may be refused; refused: {:?}",
+        refused_ids(frames)
+    );
+    prompts
+}
+
+/// MIK-7212.MRTR.7a — the single stdin reader keeps reading past the admission
+/// cap, so a client that pipelines more bridged calls than may run at once is
+/// still served.
+///
+/// This is the regression pin for `d0c68e15`, where the read loop awaited an
+/// admission permit inline: the 65th pipelined call parked the only reader, and
+/// the answers that would have released the 64 running dispatches could only
+/// arrive through that parked reader. Until now the defect was pinned only by a
+/// unit row on the non-async helper, which cannot see the loop it was a defect
+/// in.
+///
+/// The load-bearing assertion is the last one. Counting 64 prompts and no
+/// refusal says only that the gateway did not refuse the 65th; a gateway that
+/// read the 65th line and dropped it on the floor passes that much. What
+/// separates accepted-and-parked from silently discarded is a frame carrying
+/// the 65th call's own id once admission frees -- any terminal outcome, since
+/// an admitted call that the gateway then declines still answers under its id,
+/// while a dropped one answers nothing.
+#[tokio::test]
+async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    // Synchronised deliberately: a burst sent before the handshake is answered
+    // races initialization, and the errors that produces have nothing to do
+    // with the cap this row is about.
+    session.send(&initialize_request(1)).await;
+    let (_, initialized) = session.read_until_id(1).await;
+    assert!(initialized.is_some(), "the child never answered initialize");
+
+    let last_call_id = FIRST_CALL_ID + ADMISSION_CAP;
+    timeout(BURST_TIMEOUT, async {
+        for id in FIRST_CALL_ID..=last_call_id {
+            session.send(&asking_call(id)).await;
+        }
+    })
+    .await
+    .expect("the child stopped reading stdin mid-burst: the reader parked");
+
+    let wanted = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
+    let lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+            let seen = frames_lenient(seen);
+            prompts_in(&seen).len() + tool_refused_ids(&seen).len() >= wanted
+        })
+        .await;
+    let frames = frames_lenient(&lines);
+    assert!(
+        saw_method(&received, "initialize"),
+        "the fixture backend was never reached, so nothing could have asked"
+    );
+
+    let prompts = assert_admission_bounded(&frames, &lines);
+
+    // Answer a question the test has actually received. A predetermined id
+    // assumes dispatches start in stdin order, which 9b0caa1e withdrew, and
+    // would hang whenever the chosen call is the one still parked.
+    let answered = prompts
+        .first()
+        .expect("the count above admits a run of pure refusals; one question must remain to answer")
+        .get("id")
+        .cloned()
+        .expect("an elicitation/create the gateway wrote carries an id");
+    session.send(&elicitation_answer(&answered)).await;
+
+    // A fixed window assumes the parked call's question lands inside it. Under
+    // CI load the answer above arrives first and the window can close before
+    // the parked dispatch is scheduled, which reddens the row for a delay
+    // rather than for the drop it exists to catch. Collect until the question
+    // arrives instead: a call read and dropped never produces one, so the
+    // budget expires and both assertions below still fail.
+    let after_lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+            !prompts_in(&frames_lenient(seen)).is_empty()
+        })
+        .await;
+    let after = frames_lenient(&after_lines);
+
+    // Every one of the 64 admitted calls already asked in the first window, so
+    // a question arriving after the answer can only be the 65th's. Answering
+    // it is what makes this row cheap: the 65th's own terminal frame is
+    // otherwise its own `per_prompt` timeout (30s, `gateway/input_bridge.rs`),
+    // which a 30s collection window is racing rather than waiting for. Nothing
+    // here is asserted -- a run where the question never came has the defect
+    // this row exists to catch, and the assertion below reports it with a
+    // census instead of unwrapping into a bare panic.
+    if let Some(question) = prompts_in(&after)
+        .first()
+        .and_then(|frame| frame.get("id"))
+        .cloned()
+    {
+        session.send(&elicitation_answer(&question)).await;
+    }
+    // Same filters as `terminal_for_last` below, deliberately. A predicate that
+    // stops on any frame carrying the id would let a late busy refusal close the
+    // window on a frame the assertion then rejects, reddening the row for a
+    // refusal rather than for the drop it exists to catch.
+    let settled_lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+            frames_lenient(seen)
+                .iter()
+                .filter(|frame| frame.get("method").is_none())
+                .filter(|frame| {
+                    frame.pointer("/error/code").and_then(Value::as_i64) != Some(-32000)
+                })
+                .any(|frame| frame.get("id").and_then(Value::as_i64) == Some(last_call_id))
+        })
+        .await;
+    let settled = frames_lenient(&settled_lines);
+    assert!(
+        after.iter().any(|frame| {
+            frame.get("method").is_none()
+                && frame.get("result").is_some()
+                && matches!(frame.get("id").and_then(Value::as_i64),
+                    Some(id) if (FIRST_CALL_ID..=last_call_id).contains(&id))
+        }),
+        "the answered call never completed, so the reader never consumed the \
+         answer: {after:?}"
+    );
+    // The 65th call's OWN id, not "some question appeared". An
+    // `elicitation/create` carries the gateway's `elic-<uuid>` id and
+    // attributes to no call, so a question from any of the 64 already-admitted
+    // calls satisfied the earlier form of this assertion while the 65th sat
+    // dropped -- and, inversely, a backend that stopped serving before
+    // admission freed reddened the row for the backend's state rather than for
+    // the drop. A frame naming `last_call_id` discriminates both ways: every
+    // terminal outcome answers under the call's own id, and a call read and
+    // dropped produces no frame with that id at all.
+    let terminal_for_last = frames
+        .iter()
+        .chain(after.iter())
+        .chain(settled.iter())
+        .filter(|frame| frame.get("method").is_none())
+        .filter(|frame| frame.pointer("/error/code").and_then(Value::as_i64) != Some(-32000))
+        .any(|frame| frame.get("id").and_then(Value::as_i64) == Some(last_call_id));
+    assert!(
+        terminal_for_last,
+        "call {last_call_id} is one past admission and was accepted without a \
+         busy refusal, so it must be parked and answered once admission frees. \
+         No frame carries its id, so it was read and dropped. Before the \
+         answer: {}. After: {}. Once settled: {}",
+        census_of(&lines),
+        census_of(&after_lines),
+        census_of(&settled_lines)
+    );
+
+    session.shutdown().await;
+}
+
+/// `MAX_INFLIGHT_STDIO_REQUESTS` = `STDOUT_QUEUE_DEPTH`
+/// (`src/gateway/server/mod.rs:76,89`). Repeated here for the same reason as
+/// [`ADMISSION_CAP`].
+const INFLIGHT_CAP: i64 = 1024;
+
+/// MIK-7212.MRTR.7b — past the inflight cap the excess is refused, not queued
+/// behind the reader.
+///
+/// The read loop consults `inflight` through a deliberately non-async
+/// `try_acquire_owned` and answers `-32000 server busy` with `try_send`, so
+/// saturation costs the client a refusal and never costs it the reader. Nothing
+/// in this row is answered, so no permit is released mid-burst and the ids the
+/// loop accepts are the ids it read first.
+///
+/// The boundary is asserted as a window rather than a point, and that is not
+/// slack for its own sake: `initialize`'s own dispatch takes an inflight permit
+/// and releases it at `drop(slot)`, which is not ordered against the response
+/// this row waits for, so the cap is observable to within one slot. The window
+/// still fails any regressed cap — halve the constant and the first group draws
+/// refusals — which "at least one refusal somewhere in 1025 calls" would not.
+#[tokio::test]
+async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let (backend_url, received) = spawn_fixture_backend().await;
+    write_config(home.path(), &backend_url);
+    let mut session = StdioSession::spawn(home.path());
+
+    session.send(&initialize_request(1)).await;
+    let (_, initialized) = session.read_until_id(1).await;
+    assert!(initialized.is_some(), "the child never answered initialize");
+
+    // One short of the cap, so the handshake's own permit cannot push this
+    // group over it whether or not it has been released yet.
+    let last_below_cap = FIRST_CALL_ID + INFLIGHT_CAP - 2;
+    let last_over_cap = last_below_cap + 3;
+    timeout(BURST_TIMEOUT, async {
+        for id in FIRST_CALL_ID..=last_over_cap {
+            session.send(&asking_call(id)).await;
+        }
+    })
+    .await
+    .expect("the child stopped reading stdin mid-burst: the reader parked");
+
+    let wanted = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
+    let lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+            prompts_in(&frames_lenient(seen)).len() >= wanted
+        })
+        .await;
+    let frames = frames_lenient(&lines);
+    assert!(
+        saw_method(&received, "initialize"),
+        "the fixture backend was never reached, so nothing could have asked"
+    );
+
+    let refused = refused_ids(&frames);
+    let below: Vec<i64> = refused
+        .iter()
+        .copied()
+        .filter(|id| *id <= last_below_cap)
+        .collect();
+    assert!(
+        below.is_empty(),
+        "ids up to {last_below_cap} are within the inflight cap and must all be \
+         accepted; {} of them were refused, so the cap has regressed below \
+         1024. First: {:?}",
+        below.len(),
+        &below[..below.len().min(5)]
+    );
+    assert!(
+        !refused.is_empty(),
+        "{} calls is past the inflight cap, so the excess must be refused with \
+         -32000 rather than queued; nothing was refused at all",
+        last_over_cap - FIRST_CALL_ID + 1
+    );
+
+    // The refusal is not the whole invariant: a gateway that refuses everything
+    // once saturated would satisfy the assertions above. Work accepted before
+    // the cap must still complete when its answer arrives.
+    let prompts = prompts_in(&frames);
+    // Every admitted call must reach a terminal outcome, and asking is only one
+    // of them: a dispatch the gateway declines after admission -- in CI, a
+    // tripped circuit breaker on the fixture backend, which a fast local run
+    // never reaches -- answers with `isError: true` inside a result. That
+    // consumed an admission slot and produced an answer, so it counts toward
+    // what admission let run. Counting questions alone read those refusals as
+    // missing work and failed the row for a defect that was not there.
+    let declined = tool_refused_ids(&frames);
+    // Admission bounds CONCURRENCY, not the lifetime count of terminal
+    // outcomes, so the sum is not an equality under contention: a dispatch the
+    // gateway declines after admission -- in CI, a tripped circuit breaker on
+    // the fixture backend, which a fast local run never reaches -- releases its
+    // permit, and the call behind it is admitted and asks. One decline can
+    // therefore buy one extra question, and the sum runs past the cap without
+    // anything being wrong. Two bounds keep the row's teeth where the equality
+    // only looked like it did:
+    //   * no more than ADMISSION_CAP questions may be outstanding at once, or
+    //     admission is not bounding anything;
+    //   * at least ADMISSION_CAP calls must have reached a terminal outcome, or an
+    //     admitted call was dropped on the floor -- neither asked nor refused.
+    let cap = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
+    assert!(
+        prompts.len() <= cap,
+        "saturating inflight must not raise what admission lets run at once; {} questions are outstanding against a cap of {cap}. {}",
+        prompts.len(),
+        census_of(&lines)
+    );
+    assert!(
+        prompts.len() + declined.len() >= cap,
+        "saturating inflight must not cost an admitted call its answer; {} questions plus {} declined after admission is short of \
+         {cap}, so an admitted call produced no answer at all. {}",
+        prompts.len(),
+        declined.len(),
+        census_of(&lines)
+    );
+    let answered = prompts[0]
+        .get("id")
+        .cloned()
+        .expect("an elicitation/create the gateway wrote carries an id");
+    session.send(&elicitation_answer(&answered)).await;
+
+    // A fixed window assumes the answered call's terminal frame lands inside
+    // it. Under load the reader can settle it before this window even opens
+    // -- it is already sitting in `frames` from the first collection -- or
+    // after a fixed window has closed, which reddens the row for a scheduling
+    // delay rather than for the drop it exists to catch. Collect until the
+    // terminal frame arrives instead, same as `ac_mrtr_7a_the_reader_keeps_\
+    // reading_past_the_admission_cap`'s equivalent wait, and check both
+    // collections: a terminal frame already present in `frames` when this
+    // wait starts never gets re-emitted, so `after` alone can be empty on a
+    // perfectly correct run.
+    let after_lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
+            frames_lenient(seen).iter().any(|frame| {
+                frame.get("method").is_none()
+                    && frame.get("result").is_some()
+                    && matches!(frame.get("id").and_then(Value::as_i64),
+                        Some(id) if (FIRST_CALL_ID..=last_below_cap).contains(&id))
+            })
+        })
+        .await;
+    let after = frames_lenient(&after_lines);
+    assert!(
+        frames.iter().chain(after.iter()).any(|frame| {
+            frame.get("method").is_none()
+                && frame.get("result").is_some()
+                && matches!(frame.get("id").and_then(Value::as_i64),
+                    Some(id) if (FIRST_CALL_ID..=last_below_cap).contains(&id))
+        }),
+        // This row went red once and green on the next run with the same code,
+        // so the message has to separate a stale answer from a dropped call.
+        // The id answered is an `elic-<uuid>` while the assertion matches
+        // numeric call ids, so a raw dump never says whether the call that was
+        // answered is among the errors; and `meta_mcp/invoke.rs` collapses every
+        // bridge error into one -32003, so the census histogram is the only
+        // thing that tells the bounds apart.
+        "a call accepted before the cap never completed after its answer was \
+         sent, so saturation cost the client its reader. Answered {answered}. {}",
+        census_of(&after_lines)
+    );
 
     session.shutdown().await;
 }

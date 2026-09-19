@@ -506,6 +506,13 @@ fn firewall_delivery_empty_targets_refuse_without_scan_or_malformed_audit() {
 }
 
 /// MIK-7407.RESPONSE.3/.4; FWR-20 trusted kind survives ordinary content wrap.
+///
+/// MRTR.11a narrowed who can produce this payload, not whether the firewall
+/// must still classify it: `dispatch_below_gate_shaped` now promotes a
+/// validated round natively and faults an invalid one, so a wrapped question no
+/// longer reaches here from that path. This row is the layer's own defence —
+/// the firewall classifies a wrapped question by reading it, never by trusting
+/// that an upstream stage already refused to mint one.
 #[test]
 fn firewall_delivery_wrapped_question_uses_trusted_immutable_mode() {
     let fixture = Fixture::new(FirewallAction::Allow, true, true, true);

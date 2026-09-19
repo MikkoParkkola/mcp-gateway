@@ -57,6 +57,7 @@
 mod support;
 
 mod capacity;
+mod client_extensions;
 mod confirmation;
 mod dedupe;
 mod drain;

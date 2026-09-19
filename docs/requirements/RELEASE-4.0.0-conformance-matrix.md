@@ -86,10 +86,10 @@ instrument that can see it.
 
 ## Matrix
 
-### Statements with evidence — COVERED (20 of 21)
+### Statements with evidence — COVERED (21 of 21)
 
-All nine major statements and minor 2-12 carry at least one evidence
-reference, and every cited name resolves to a defined test. The cells, roles
+All nine major statements and all twelve minor statements carry at least one
+evidence reference, and every cited name resolves to a defined test. The cells, roles
 and transports are in the source of truth rather than copied here, because a
 copy drifts and the original is checked by CI: `tests/mik_7272_conformance.rs`,
 `MAJOR` at `:52` and `MINOR` at `:175`.
@@ -119,6 +119,25 @@ The lesson repeats minor 11's: a gap whose reason is "nothing reads this" is
 a claim about a *symbol*, and the obligation is about a *field*. Searching for
 readers of the field, not callers of the helper, is what found it — an external
 reviewer did, after the reason had stood in two documents.
+
+Recorded limit on the rows that close it, found by independent review of the
+closing commit and not closed by it: `ac_ext_1_d_...` and `ac_ext_1_e_...`
+(`src/gateway/router/tests/task_execution_adapter/client_extensions.rs`) do not
+discriminate an end-to-end name-list implementation. A handler that counted
+extension-key presence while the classifier stayed correct would pass both,
+because the strict-increase oracle cannot separate this request's contribution
+from a concurrent sibling's. Closing that needs a request-scoped observation
+seam, which does not exist; the process-wide counter cannot carry the claim.
+What the rows do prove is that production recovers and counts client extensions
+on the live request funnel, and that the classifier feeding that counter rejects
+a non-object settings value.
+
+One assumption in the E4/E5 test plan did not survive contact: it proposed exact
+deltas on the adoption counter on the premise that nothing else in the tree
+declares this extension with a valid settings object. `support.rs:169` declares
+it with `{}` on every task-adapter request, so the counter is moved by every
+sibling test in the process. The rows assert a strict increase and a
+classifier-level negative instead, which is why neither is an arithmetic race.
 
 Minor 11 is the cell `NFR.CONFORMANCE.1` names as "modern URL-elicitation
 completion removal", and minor 10's second clause was the one it names as
@@ -264,15 +283,14 @@ and mixing units is how a tally stops being checkable.
 
 ## Grade
 
-**MET.** Rule 4 makes this mechanical: UNCOVERED is empty, so the criterion is
-met. It is met on the rule this document fixed *before* the last cell closed,
-which is the only reason the grade means anything.
+**MET.** Rule 4 makes this mechanical: UNCOVERED is empty and COVERED equals
+the 21-statement population, so the criterion is met. The four N/A cells are
+axis cells and are unchanged.
 
-What the revisions delivered: the matrix, its population rule, the statement
-that was missing from it, the count assertion that would have caught that, the
-N/A reasons, the one N/A that turned out to be a gap, minor 10's row closed by
-four mutation-tested tests, minor 11's three, and minor 1's client half — whose
-closing found that the two remaining tracked gaps both had the wrong cause
-recorded against them. The grade is about coverage of the changelog's
-statements; it is not a claim that every extension behaves per-extension
-correctly, which is MIK-7311's scope.
+The grade is worth reading with its history attached. This document graded
+PARTIAL from the revision that built it until 2026-09-17, and the gap it named
+was always the same one: minor 1's client half. It did not close by writing a
+test — two attempts to write one would have passed against an unreachable
+function — it closed by giving `ExtensionSet::from_capabilities` a production
+caller. A matrix that could be satisfied by more tests would have graded MET
+months earlier and been wrong.

@@ -228,13 +228,13 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
 //
-// v4.0.0 carries four changes an operator can be surprised by, none of which a
+// v4.0.0 carries five changes an operator can be surprised by, none of which a
 // config edit can pre-empt: two need an action (re-authenticate, fix an env
 // file), one removes an advertised protocol version, and one changes what the
 // error budgets count. A 3.x `gateway.yaml` loads unchanged, so this migration
 // never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The four 4.0.0 changes, in the order they are printed.
+/// The five 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -242,7 +242,10 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 const NOTICE_4_0_0_ITEMS: &[&str] = &[
     "OAuth credentials are now stored per issuer. Stored tokens from 3.x are not \
 migrated: each OAuth backend re-authenticates once, on its next use. Expect one \
-authorization prompt per backend; no config change is needed.",
+authorization prompt per backend; no config change is needed. Your 3.x token \
+files are left untouched in `~/.mcp-gateway/oauth/` and are no longer read; \
+they still hold usable refresh tokens at mode 0600, so delete them once every \
+backend has re-authorized.",
     "A malformed line in an `env_files` file now FAILS STARTUP instead of being \
 skipped silently. A typo that used to cost one missing variable now costs a \
 refused start, and says which line.",
@@ -251,12 +254,19 @@ speak it must upgrade; 2025-03-26 and later are unaffected.",
     "Rate-limited backend responses (HTTP 429 and equivalents) no longer count \
 against the error budgets or the circuit breaker (GH #475). A throttled backend \
 is no longer auto-killed for being busy.",
+    "A response is cached only under a protocol revision the gateway can \
+identify. A stateless POST that sends no `MCP-Protocol-Version` header and \
+never completes `initialize` is no longer served from cache, so that traffic \
+reaches your backends and the gateway's own rate limits now apply to calls that \
+previously never got that far. Nothing errors: the symptom is throughput and \
+backend load. Send the header on stateless requests, or complete `initialize` \
+and reuse the session.",
 ];
 
 /// Emit the one-time 4.0.0 notice.
 ///
 /// Takes the data directory for signature parity with the other migrations; it
-/// reads nothing, because none of the four items depends on what the config
+/// reads nothing, because none of the five items depends on what the config
 /// says.
 ///
 /// The `Result` is dictated by `Migration::apply`, not by anything this can fail at.
@@ -272,8 +282,11 @@ fn migrate_4_0_0_release_notice(_data_dir: &Path) -> std::io::Result<()> {
     // would swallow a warn event while the version stamp advances, and the
     // notice fires exactly once. stderr so `--quiet` can suppress progress
     // chatter on stdout without suppressing the warning itself.
+    // Count read from the list, never spelled out: a hand-written number drifts
+    // the moment an item is appended, and the header then contradicts the body.
     eprintln!(
-        "v4.0.0: four changes need your attention. No config was changed automatically.\n{body}"
+        "v4.0.0: {} changes need your attention. No config was changed automatically.\n{body}",
+        NOTICE_4_0_0_ITEMS.len()
     );
     Ok(())
 }
@@ -1140,17 +1153,44 @@ mod tests {
         assert_eq!(content_after_second, original);
     }
 
-    /// GH475.MIG.4 — the notice carries all four items, each named by the
+    /// GH475.MIG.4 — the notice carries all five items, each named by the
     /// action or removal it announces. Pinned so a later edit cannot quietly
     /// drop one: an operator reads this once.
     #[test]
-    fn notice_4_0_0_carries_all_four_items() {
-        assert_eq!(NOTICE_4_0_0_ITEMS.len(), 4);
+    fn notice_4_0_0_carries_all_five_items() {
+        assert_eq!(NOTICE_4_0_0_ITEMS.len(), 5);
         let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
-        for expected in ["re-authenticate", "fails startup", "2024-10-07", "429"] {
+        for expected in [
+            "re-authenticate",
+            "fails startup",
+            "2024-10-07",
+            "429",
+            "mcp-protocol-version",
+        ] {
             assert!(
                 all.contains(expected),
                 "the 4.0.0 notice no longer mentions {expected}: {all}"
+            );
+        }
+    }
+
+    /// MIK-6744.STORE.1 — item 1 must also tell the operator what the upgrade
+    /// LEAVES BEHIND, not only what it stops reading.
+    ///
+    /// Not migrating 3.x tokens strands them: the files stay in the oauth
+    /// directory holding live refresh tokens, unreferenced, for as long as the
+    /// install lives. Their survival is asserted at source by
+    /// `legacy_single_user_record_is_not_reachable_under_the_4_0_0_issuer_key`
+    /// (`src/oauth/upgrade_path_tests.rs`). An operator told only "you will
+    /// re-authenticate" has no reason to go delete them, so the notice says so
+    /// and this pins that it keeps saying so.
+    #[test]
+    fn notice_4_0_0_discloses_the_stranded_3_x_token_files() {
+        let item_1 = NOTICE_4_0_0_ITEMS[0].to_ascii_lowercase();
+        for expected in ["~/.mcp-gateway/oauth/", "0600", "delete them"] {
+            assert!(
+                item_1.contains(expected),
+                "notice item 1 no longer tells the operator about {expected}: {item_1}"
             );
         }
     }

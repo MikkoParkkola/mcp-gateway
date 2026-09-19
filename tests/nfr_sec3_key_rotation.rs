@@ -37,6 +37,8 @@ fn payload(now: u64) -> Payload {
         expires_at: now + LIFETIME_SECS,
         jti: "jti".to_string(),
         hold_key: "hold".to_string(),
+        next_step: None,
+        rounds_used: 0,
     }
 }
 

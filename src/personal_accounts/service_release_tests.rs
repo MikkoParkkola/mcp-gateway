@@ -198,3 +198,85 @@ fn a_lookup_storage_failure_is_never_reported_as_a_disconnected_account() {
     );
     fx.assert_quiet("missing record");
 }
+
+/// A holder that was live when the grant was revoked cannot restore it.
+///
+/// This is the third conjunct of `MIK-6744.STORE.2`, and it is the one the
+/// store-boundary suites cannot reach. `fence_tests` says so in its own module
+/// doc: it proves a stale snapshot cannot land, but explicitly not "that no new
+/// lease is issued, that transport is barred, that caches and connections are
+/// retired". The nearest crash-suite row, `s13`, proves restored *ciphertext*
+/// is refused — a fact about bytes at rest, not about a live holder still
+/// carrying a valid-looking lease.
+///
+/// A `CredentialLease` is what a task, a warm cache or an open connection
+/// holds. The criterion's question is whether holding one across a revocation
+/// is worth anything, so the test holds one across a revocation.
+///
+/// The pre-revoke release is the control, and it is what makes the refusal
+/// attributable. Without it, a lease that was malformed from the start would
+/// produce the same `LeaseRetired` and the row would prove nothing about
+/// revocation. Releasing first pins the lease as genuinely live, so the only
+/// thing that changed between the two calls is the revoke.
+///
+/// The two refusals are deliberately different errors and the test pins both.
+/// `release` answers `LeaseRetired` because a caller holding a lease is not
+/// asking to connect one, so absence must not read as an offer
+/// (`service.rs:296-299`); `resolve` answers `Revoked`, which is the honest
+/// state of the account. Collapsing them would turn a revoked account into a
+/// re-consent prompt that cannot help.
+///
+/// Both halves of `invalidate`'s contract are checked, because they fail
+/// independently: barring *release* leaves an existing holder able to keep
+/// using credentials, and barring *new leases* is what stops the holder from
+/// simply asking for a fresh one. A gate that did only the first would let a
+/// cache re-resolve its way back in.
+#[test]
+fn a_lease_held_across_a_revoke_is_retired_and_cannot_be_reacquired() {
+    let fx = Fixture::connected_alice();
+    let record = grant();
+
+    let lease = refuse_scaffold(fx.service.resolve(&alice()), "pre-revoke lease")
+        .expect("a connected principal resolves");
+    assert_eq!(lease, expected_lease(alice(), &record));
+
+    // The control: this exact lease works, so the refusal below belongs to the
+    // revoke and not to the lease.
+    assert_eq!(
+        refuse_scaffold(fx.service.release(&lease), "pre-revoke release")
+            .expect("the lease releases while the grant is live"),
+        expected_credentials(&record)
+    );
+    assert_eq!(fx.observer_calls.load(Ordering::SeqCst), 1);
+
+    fx.service.invalidate(&alice()).expect("durable revoke");
+
+    assert_eq!(
+        domain_err(fx.service.release(&lease), "post-revoke release"),
+        AccountServiceError::LeaseRetired,
+        "a holder that survived the revoke must not still be released"
+    );
+    assert_eq!(
+        domain_err(fx.service.resolve(&alice()), "post-revoke resolve"),
+        AccountServiceError::Revoked,
+        "and it must not be able to acquire a replacement lease either"
+    );
+    assert_eq!(
+        fx.observer_calls.load(Ordering::SeqCst),
+        1,
+        "the pre-revoke release is the only publish that may ever happen"
+    );
+    assert_eq!(fx.provider_calls.load(Ordering::SeqCst), 0);
+
+    // The revoke has to outlive the process, or a restart is the restore path.
+    let Fixture { tmp, service, .. } = fx;
+    drop(service);
+    let store = PersonalAccountStore::open(config(tmp.path())).expect("reopen after revoke");
+    let reopened = Fixture::wrap(tmp, store);
+    assert_eq!(
+        domain_err(reopened.service.release(&lease), "release after restart"),
+        AccountServiceError::LeaseRetired,
+        "a restart must not resurrect the grant for the holder"
+    );
+    reopened.assert_quiet("release after restart");
+}

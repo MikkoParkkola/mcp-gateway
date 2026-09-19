@@ -157,8 +157,21 @@ pub(super) fn enforce_output_schema(
         return result;
     }
 
-    let validation_target =
-        extract_output_validation_target(&result).unwrap_or_else(|| result.clone());
+    // No inner payload, no validation. The schema describes the tool's output,
+    // not the MCP envelope carrying it, so falling back to the envelope
+    // validates the wrong document and then republishes it under
+    // `structuredContent` — carrying the backend's own `requestState` past the
+    // mint that exists to replace it (MIK-7212.MRTR.2a), and overwriting a
+    // single plain-text item with a dump of its own wrapper.
+    // `apply_capability_projection` refuses this same case as bug #167; the
+    // schema path refuses it here.
+    let validation_target = match extract_output_validation_target(&result) {
+        Some(target) => target,
+        // A bare payload is its own validation target: no envelope to unwrap,
+        // and `apply_validated_output` returns the coerced value directly.
+        None if !is_mcp_envelope(&result) => result.clone(),
+        None => return result,
+    };
     let validation = validate_output(&validation_target, schema);
     if validation.is_valid() {
         apply_validated_output(&result, validation.coerced)
@@ -209,13 +222,31 @@ fn extract_output_validation_target(result: &Value) -> Option<Value> {
     serde_json::from_str::<Value>(text).ok()
 }
 
+/// Whether a value is an MCP tool-result envelope rather than a bare payload.
+///
+/// The two are validated differently: an envelope's schema describes what it
+/// CARRIES, so an envelope with nothing extractable has nothing to validate,
+/// while a bare payload is its own target. [`apply_validated_output`] keys its
+/// re-wrap on the same two fields, so the answer stays consistent across both.
+fn is_mcp_envelope(result: &Value) -> bool {
+    result.as_object().is_some_and(|obj| {
+        // `content` must be an ARRAY, which is the shape
+        // `extract_output_validation_target` consumes and the specification
+        // requires. Keying on the bare presence of the name would classify a
+        // payload that merely has a `content` field as an envelope and return
+        // it unvalidated — failing the schema gate open on exactly the values
+        // it exists to check.
+        obj.get("content").is_some_and(Value::is_array) || obj.contains_key("structuredContent")
+    })
+}
+
 fn apply_validated_output(result: &Value, validated: Value) -> Value {
+    if !is_mcp_envelope(result) {
+        return validated;
+    }
     let Some(obj) = result.as_object() else {
         return validated;
     };
-    if !(obj.contains_key("content") || obj.contains_key("structuredContent")) {
-        return validated;
-    }
 
     let mut obj = obj.clone();
     obj.insert("structuredContent".to_owned(), validated.clone());
@@ -571,7 +602,18 @@ pub(super) fn retry_origin_backend(
     // means "nothing to route", which is exactly true here — routing it would
     // hand the answer to a backend named after a meta-tool, and the gate that
     // must see it would never run.
-    if payload.purpose == crate::protocol::continuation::ContinuationPurpose::DestructiveConfirm {
+    //
+    // A chain resume is the same shape for the same reason: the envelope
+    // licenses the chain driver to run `chain[next_step..]`, and the step it
+    // resumes is named by the sealed `next_step`, not by the tool the client
+    // called. Routing it by `backend_id` would dispatch the pending step's
+    // backend with the whole chain array as its arguments and skip every
+    // binding `plan_chain_resume` exists to check.
+    if matches!(
+        payload.purpose,
+        crate::protocol::continuation::ContinuationPurpose::DestructiveConfirm
+            | crate::protocol::continuation::ContinuationPurpose::ChainResume
+    ) {
         return None;
     }
     Some(Ok(payload.backend_id))
@@ -838,12 +880,59 @@ struct BridgeDispatcher<'a> {
     routing_profile: &'a str,
 }
 
+impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
+    /// Scans the batch as the backend composed it, against the backend's own
+    /// target, and refuses the exchange rather than rewriting the question:
+    /// `enforce_firewall_challenge` runs `Immutable`, so a redaction is not
+    /// one of the outcomes available here.
+    fn admit(
+        &self,
+        challenge: &Value,
+    ) -> std::result::Result<(), crate::gateway::input_bridge::BridgeError> {
+        let targets = [crate::security::response_policy::ResponsePolicyTarget {
+            server: self.server.to_owned(),
+            tool: self.tool.to_owned(),
+        }];
+        let correlation = crate::security::response_policy::ResponseCorrelation {
+            session_id: self.session_id.unwrap_or_default(),
+            caller: self.api_key_name.unwrap_or("anonymous"),
+            external_server: "gateway",
+            external_tool: "gateway_invoke",
+        };
+        self.meta
+            .enforce_firewall_challenge(challenge, &targets, &correlation)
+            .map_err(
+                |_| crate::gateway::input_bridge::BridgeError::ChallengeRefused {
+                    dispatched: false,
+                },
+            )
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
     async fn invoke(
         &self,
         retry_params: Value,
     ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
+        // Admitted here as well as at the first dispatch, because the spend
+        // check is per backend call and `invoke_tool` ran it once, before the
+        // backend asked anything. A bridged exchange adds a call per round, so
+        // a budget enforced only at the top is a budget a backend can walk past
+        // by asking. The warnings are dropped: the ones that ride the envelope
+        // are the first call's, and a bridged round has nowhere to put its own.
+        //
+        // `NotAdmitted`, not `BackendFailed`: the round is refused before the
+        // dispatch, so there is no side effect for the settlement arm to
+        // protect and burning the idempotency key here would deny the caller a
+        // retry of work that never ran.
+        #[cfg(feature = "cost-governance")]
+        self.meta
+            .admit_spend(self.tool, self.api_key_name)
+            .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
+                message: e.to_string(),
+            })?;
+
         // Through `accounted_dispatch`, not `dispatch_to_backend`: a bridged
         // round is a real backend call and is accounted and gated exactly like
         // the first one. A round that skipped the accounting would let a
@@ -877,18 +966,62 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.routing_profile,
             )
             .await
-            .map_err(|e| {
-                let dispatch = if e.is_pre_dispatch() {
-                    crate::gateway::input_bridge::Dispatch::NeverReached
-                } else {
-                    crate::gateway::input_bridge::Dispatch::MayHaveActed
-                };
-                crate::gateway::input_bridge::BridgeError::BackendFailed {
-                    message: e.to_string(),
-                    dispatch,
-                }
-            })
+            .map_err(|e| classify_bridged_dispatch_error(&e))
     }
+}
+
+/// Decides whether a failed bridged dispatch releases the idempotency key.
+///
+/// The error type already carries a tight, deliberate allowlist of failures that
+/// provably happened above the backend. A bridged round that hit one of those ran
+/// nothing, so it releases the key on the same terms as a pre-dispatch refusal;
+/// everything else stays dispatched and settles, because a round the backend may
+/// have executed must not readmit a retry of a side effect (ADR-012 consequence 1).
+pub(super) fn classify_bridged_dispatch_error(
+    error: &crate::Error,
+) -> crate::gateway::input_bridge::BridgeError {
+    let message = error.to_string();
+    if error.is_pre_dispatch() {
+        crate::gateway::input_bridge::BridgeError::NotAdmitted { message }
+    } else {
+        // Always `MayHaveActed`: `is_pre_dispatch()` already diverted every
+        // provably-unexecuted case to `NotAdmitted` above, so anything
+        // reaching here may have run.
+        crate::gateway::input_bridge::BridgeError::BackendFailed {
+            message,
+            dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
+        }
+    }
+}
+
+/// Runs one bridged exchange in a frame of its own.
+///
+/// A free function taking the dispatcher and the pending round BY VALUE rather
+/// than an inline `async` block: everything the exchange needs then lives in
+/// this future instead of in `invoke`'s state machine, which is what keeps
+/// `invoke` under clippy's `large_futures` threshold at every call site in the
+/// tree.
+async fn run_input_bridge(
+    dispatcher: BridgeDispatcher<'_>,
+    channel: &dyn crate::gateway::input_bridge::ClientChannel,
+    session: &str,
+    declared: crate::protocol::meta::Declared,
+    pending: crate::protocol::mrtr::InputRequired,
+    trace_id: &str,
+) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
+    let observer = TracingBridgeObserver { trace_id };
+    let bridge = crate::gateway::input_bridge::InputBridge {
+        channel,
+        backend: &dispatcher,
+        gate: &dispatcher,
+        observer: &observer,
+        bounds: crate::gateway::input_bridge::BridgeBounds::DEFAULT,
+    };
+    // `None` slice: the per-request capability slice narrows a *modern*
+    // caller's declaration, and this call is the legacy one — there is no
+    // per-request `_meta` to narrow by, so the session store's value stands
+    // alone.
+    bridge.run(session, declared, None, &pending).await
 }
 
 /// Emits the bridge's counters as structured trace events.
@@ -1650,6 +1783,23 @@ impl MetaMcp {
                 // error is what stops the retry re-running a side effect that
                 // may already have committed (ADR-012 consequence 1).
                 GuardOutcome::CachedError(error) => {
+                    // A refusal keeps its provenance across the replay as well
+                    // as across the bridge boundary. Served as a generic error
+                    // it would skip the delivery-refusal projection and count
+                    // as a client failure — a retry could then open the circuit
+                    // breaker on a client whose only fault was retrying a call
+                    // the gateway itself refused.
+                    if error
+                        .get(crate::idempotency::FIREWALL_REFUSAL_MARKER)
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                    {
+                        debug!(
+                            server,
+                            tool, key, trace_id, "Idempotency cache hit (firewall refusal)"
+                        );
+                        return Err(Error::ResponseFirewallRefused);
+                    }
                     let (code, message) = crate::idempotency::cached_error_parts(&error);
                     debug!(
                         server,
@@ -1791,20 +1941,7 @@ impl MetaMcp {
         // Returns the warnings to inject post-dispatch and blocks when the
         // budget is exceeded (returns JSON-RPC -32003 error).
         #[cfg(feature = "cost-governance")]
-        let cost_warnings: Vec<String> = if let Some(ref enforcer) = self.budget_enforcer {
-            let result = enforcer.check(tool, api_key_name);
-            if !result.allowed {
-                return Err(Error::json_rpc(
-                    -32003,
-                    result
-                        .block_reason
-                        .unwrap_or_else(|| "Budget exceeded".to_string()),
-                ));
-            }
-            result.warnings
-        } else {
-            Vec::new()
-        };
+        let cost_warnings: Vec<String> = self.admit_spend(tool, api_key_name)?;
 
         // Derive a prompt_cache_key for OpenAI-compatible backends.
         // Priority: explicit _meta.prompt_cache_key from caller > session hash.
@@ -2048,51 +2185,62 @@ impl MetaMcp {
             && !pending.requests.is_empty()
             && let Some(session) = session_id
         {
-            let dispatcher = BridgeDispatcher {
-                meta: self,
-                server,
-                tool,
-                arguments: &arguments,
-                prompt_cache_key: prompt_cache_key.as_deref(),
-                inbound_meta: args.get("_meta"),
-                want_full,
-                session_id,
-                caller_identity,
-                verified_identity,
-                headers: &caller_credential.headers,
-                cache_binding: dispatch_binding.as_deref(),
-                account_credential: bridge_account_credential,
-                api_key_name,
+            // Boxed: the exchange runs in `run_input_bridge`'s frame, and one
+            // allocation on the branch a legacy client with a pending question
+            // takes is cheaper than a wider `invoke` frame on every dispatch.
+            let bridged = Box::pin(run_input_bridge(
+                BridgeDispatcher {
+                    meta: self,
+                    server,
+                    tool,
+                    arguments: &arguments,
+                    prompt_cache_key: prompt_cache_key.as_deref(),
+                    inbound_meta: args.get("_meta"),
+                    want_full,
+                    session_id,
+                    caller_identity,
+                    verified_identity,
+                    headers: &caller_credential.headers,
+                    cache_binding: dispatch_binding.as_deref(),
+                    account_credential: bridge_account_credential,
+                    api_key_name,
+                    trace_id,
+                    policy_epoch,
+                    protocol_revision,
+                    routing_profile: &profile.name,
+                },
+                caller.channel,
+                session,
+                caller.input_capabilities,
+                pending,
                 trace_id,
-                policy_epoch,
-                protocol_revision,
-                routing_profile: &profile.name,
-            };
-            let observer = TracingBridgeObserver { trace_id };
-            let bridge = crate::gateway::input_bridge::InputBridge {
-                channel: caller.channel,
-                backend: &dispatcher,
-                observer: &observer,
-                bounds: crate::gateway::input_bridge::BridgeBounds::DEFAULT,
-            };
-            // `None` slice: the per-request capability slice narrows a *modern*
-            // caller's declaration, and this branch is the legacy one — there is
-            // no per-request `_meta` to narrow by, so the session store's value
-            // stands alone.
-            match bridge
-                .run(session, caller.input_capabilities, None, &pending)
-                .await
-            {
+            ))
+            .await;
+            match bridged {
                 Ok(completed) => {
                     // The exchange finished, so the backend has now acted and
                     // the key may be settled. The commit above declined this
                     // reservation precisely because the backend had stopped to
                     // ask; that is no longer true.
+                    //
+                    // The withheld marker rather than `completed`, for the
+                    // reason the commit above uses it: the gates between here
+                    // and `complete` may yet block this body, and committing it
+                    // would hand a retry under the same key the response the
+                    // gate refused.
                     if let Some(reservation) = idem_reservation.as_mut() {
                         reservation.commit(&withheld_side_effect());
                     }
                     result = completed;
                     interim = None;
+                    // `stopped_to_ask` stays true, and that is the point: it
+                    // gates the response cache below, and a bridged body is
+                    // derived from answers this caller gave in-band. The cache
+                    // key covers `arguments`, not the answers, so caching one
+                    // would serve the next identical call somebody else's
+                    // reply instead of asking. Recomputing the flag from
+                    // `result` here would look tidier and cache exactly the
+                    // bodies that must not be cached.
                 }
                 // No client session to reach is not a failed exchange: it is
                 // the absence of one. A legacy caller can arrive with a
@@ -2129,20 +2277,54 @@ impl MetaMcp {
                     error: crate::gateway::input_bridge::DeliveryError::NoSession,
                     ..
                 }) => {}
+                // A policy refusal keeps its type across the bridge boundary.
+                // `error_response_preserving_status` carries a dedicated
+                // `ResponseFirewallRefused` arm that builds the delivery-refusal
+                // projection; flattening it into the -32003 below would report
+                // the gateway's own refusal as a client-attributable error and
+                // never reach that arm. The type survives either way; what the
+                // refusal decides is the key. A refusal on round one ends a
+                // call that never dispatched, so falling through releases it.
+                // From round two on the tool has already run, and a released
+                // key would readmit a retry of a side effect that may have
+                // taken effect (ADR-012 consequence 1), so the key settles.
+                Err(crate::gateway::input_bridge::BridgeError::ChallengeRefused { dispatched }) => {
+                    if dispatched && let Some(reservation) = idem_reservation.as_mut() {
+                        // Built from the variant rather than spelled out, so the
+                        // replayed refusal cannot drift from the live one.
+                        let mut body = json!({
+                            "code": Error::ResponseFirewallRefused.to_rpc_code(),
+                            "message": Error::ResponseFirewallRefused.to_string(),
+                        });
+                        body[crate::idempotency::FIREWALL_REFUSAL_MARKER] = json!(true);
+                        reservation.fail(&body);
+                    }
+                    warn!(
+                        server,
+                        tool,
+                        trace_id,
+                        dispatched,
+                        "Bridged challenge refused by the response firewall"
+                    );
+                    return Err(Error::ResponseFirewallRefused);
+                }
                 Err(error) => {
                     // A round that reached the backend may have acted, so its
                     // key must not be readmitted. `BackendFailed` is the only
-                    // variant raised from the backend call itself; `Deadline`,
+                    // variant raised from the backend call itself; `NotAdmitted`
+                    // was refused above the dispatch, and `Deadline`,
                     // `RequestBudgetExhausted`, `Refused`, `Delivery` and
                     // `RoundsExhausted` all leave the backend parked on a
                     // question that was never answered, and a backend that
                     // stopped to ask has not acted yet — the premise the `Ok`
                     // arm below rests on too. So their release-on-drop default
-                    // still stands. `BackendFailed` also covers the round that
-                    // never left the gateway — no such backend, no such tool,
-                    // an open circuit, a transport that never connected — and
-                    // that one is provably unexecuted, so it keeps the default
-                    // too. Only a round that may have acted settles with the
+                    // still stands. A round that never left the gateway — no
+                    // such backend, no such tool, an open circuit, a transport
+                    // that never connected — is `NotAdmitted` rather than
+                    // `BackendFailed`, because `classify_bridged_dispatch_error`
+                    // defers to the error type's own pre-dispatch allowlist; it
+                    // is provably unexecuted, so it keeps the default too. Only
+                    // a round that may have acted settles with the
                     // withheld-side-effect marker, which tells a retry of the
                     // same key that the effect ran.
                     if matches!(
@@ -3011,6 +3193,31 @@ impl MetaMcp {
         }
     }
 
+    /// Admits one backend call against the configured spend budget.
+    ///
+    /// Per dispatch, not per `gateway_invoke`: a bridged exchange makes one
+    /// backend call per round, and a budget checked only at the first would let
+    /// a backend that keeps asking spend past the operator's limit.
+    ///
+    /// Returns the warnings to inject post-dispatch; blocks with JSON-RPC
+    /// -32003 carrying the enforcer's own reason.
+    #[cfg(feature = "cost-governance")]
+    fn admit_spend(&self, tool: &str, api_key_name: Option<&str>) -> Result<Vec<String>> {
+        let Some(ref enforcer) = self.budget_enforcer else {
+            return Ok(Vec::new());
+        };
+        let result = enforcer.check(tool, api_key_name);
+        if !result.allowed {
+            return Err(Error::json_rpc(
+                -32003,
+                result
+                    .block_reason
+                    .unwrap_or_else(|| "Budget exceeded".to_string()),
+            ));
+        }
+        Ok(result.warnings)
+    }
+
     /// Dispatch one round to the backend and meter it.
     ///
     /// Holds every emission that must fire once per backend call: the
@@ -3021,9 +3228,11 @@ impl MetaMcp {
     /// so metering left behind at a single call site would make every round
     /// after the first invisible.
     ///
-    /// The pre-invoke budget gate is deliberately NOT here. It runs once, and
-    /// above the point where a retry handle is redeemed; moving it below that
-    /// redemption would burn a continuation on a call the budget refuses.
+    /// The spend gate is deliberately NOT here either, though it is also per
+    /// call. It runs in `admit_spend`, above the point where a retry handle is
+    /// redeemed; moving it below that redemption would burn a continuation on
+    /// a call the budget refuses. Each caller of this function admits its own
+    /// round first.
     #[allow(clippy::too_many_arguments)]
     async fn accounted_dispatch(
         &self,
@@ -4303,6 +4512,93 @@ mod response_transform_tests {
         });
         let out = apply_capability_projection(envelope.clone(), &spec, false);
         assert_eq!(out, envelope, "error envelopes must not be projected");
+    }
+
+    // MIK-7212.MRTR.2a: a backend's own `requestState` must not reach the
+    // client verbatim. The mint that replaces it (`invoke.rs:1909-1937`)
+    // rewrites the top-level field only, and it runs *after* the dispatch path
+    // that calls `enforce_output_schema`. So if schema enforcement republishes
+    // the whole envelope under `structuredContent`, the backend's string
+    // survives the mint in a second location.
+    #[test]
+    fn mrtr_2a_enforce_output_schema_does_not_republish_backend_request_state() {
+        // An interim envelope as a backend sends it: a human-readable prompt in
+        // `content` (not JSON, so there is no validation target to extract) and
+        // the backend's own opaque `requestState` alongside it.
+        let envelope = json!({
+            "content": [{"type": "text", "text": "Which account should I use?"}],
+            "requestState": "backend-opaque-state-abc123"
+        });
+        let schema = json!({"type": "object"});
+
+        let result = enforce_output_schema("demo", "ask", envelope, Some(&schema));
+
+        let republished = result
+            .get("structuredContent")
+            .and_then(|s| s.get("requestState"))
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            republished, None,
+            "backend requestState republished under structuredContent: {result:#}"
+        );
+
+        // The second channel: `apply_validated_output` also rewrites a single
+        // text item with a dump of whatever it validated, so an envelope
+        // republished into `content[0].text` leaks the same string in prose.
+        let rendered = result.pointer("/content/0/text").and_then(|v| v.as_str());
+        assert_eq!(
+            rendered,
+            Some("Which account should I use?"),
+            "backend requestState republished into content[0].text: {result:#}"
+        );
+
+        // Returning the envelope UNCHANGED is the contract the guard rests on,
+        // not merely the absence of the two leaks above.
+        assert_eq!(
+            result,
+            json!({
+                "content": [{"type": "text", "text": "Which account should I use?"}],
+                "requestState": "backend-opaque-state-abc123"
+            }),
+            "an envelope with no extractable payload was not returned unchanged"
+        );
+
+        // The other way to have nothing extractable: more than one content
+        // item. `extract_output_validation_target` requires exactly one, so a
+        // multi-item envelope takes the same arm and must be equally untouched.
+        let multi = json!({
+            "content": [
+                {"type": "text", "text": "Which account should I use?"},
+                {"type": "text", "text": "personal or work"}
+            ],
+            "requestState": "backend-opaque-state-abc123"
+        });
+
+        assert_eq!(
+            enforce_output_schema("demo", "ask", multi.clone(), Some(&schema)),
+            multi,
+            "a multi-item envelope was not returned unchanged"
+        );
+    }
+
+    // The other half of the predicate: a BARE payload is not an envelope just
+    // because it carries a field called `content`, and it must still be
+    // validated against the tool's schema rather than passed through.
+    #[test]
+    fn enforce_output_schema_validates_a_bare_payload_with_a_content_field() {
+        let payload = json!({"content": "a string, not an array of content items"});
+        let schema = json!({
+            "type": "object",
+            "properties": {"content": {"type": "string"}},
+            "required": ["content"]
+        });
+
+        let result = enforce_output_schema("demo", "describe", payload.clone(), Some(&schema));
+
+        assert_eq!(
+            result, payload,
+            "a bare payload is its own validation target and coerces to itself"
+        );
     }
 
     #[test]

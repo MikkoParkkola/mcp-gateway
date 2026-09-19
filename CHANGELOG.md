@@ -187,6 +187,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A backend whose SSE response opens with a retry priming frame is no longer
+  a transport error** (GH #563). Servers built on `rmcp` with its default
+  `sse_retry` prepend such a frame -- a `data:` line with nothing after it,
+  plus `id:` and `retry:` -- to every POST response stream. 3.5.x took the
+  first `data:` line verbatim and failed the whole call with
+  `Failed to parse SSE data: EOF while parsing a value at line 1 column 0`, so
+  no such backend could be used at all. The response stream is now decoded
+  frame by frame: a block whose joined `data` is empty carries no event, and
+  fields that are neither `data` nor `event` are ignored, so the exchange
+  resolves on the frame that actually holds the JSON-RPC response.
+
+- **Windows stdio backends start with a usable environment, and quoted
+  commands parse by host rules.** `APPDATA` and `LOCALAPPDATA` were never
+  passed to stdio child processes, so a backend resolving its own
+  configuration under those paths started degraded on Windows. Configured
+  stdio commands now go through a single parser, `transport::split_command`,
+  which follows `CommandLineToArgvW` on Windows so the backslashes in a path
+  survive; spawn, lifecycle, diagnostics, the UI summary and `doctor` all
+  read that one parser, and `doctor` fails on invalid quoting instead of
+  reporting a false `PASS`.
+  ([@yfcyfc123234](https://github.com/yfcyfc123234), [#522](https://github.com/MikkoParkkola/mcp-gateway/pull/522),
+  [#564](https://github.com/MikkoParkkola/mcp-gateway/pull/564))
+
+- **A backend that rejects the gateway's protocol version is negotiated down
+  rather than failed.** A Streamable HTTP backend supporting 2025-06-18 or
+  earlier answered `initialize` with a `400`, and the gateway gave up instead
+  of offering a revision that backend could accept. The gateway now adopts
+  the server-selected version for post-handshake headers, negotiates when a
+  version is rejected by HTTP status, and fails the backend by name only when
+  the selection is genuinely unsupported.
+  (reported by [@luochen1990](https://github.com/luochen1990),
+  [#517](https://github.com/MikkoParkkola/mcp-gateway/issues/517))
+
 - **A throttled backend no longer looks like a failing one.** A rate-limited
   response counted against the backend error budget, the per-capability budget
   and the circuit breaker exactly as a `500` did, so a caller fast enough to be
@@ -196,6 +229,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   neither success nor failure, because a throttle says nothing about health.
   Every exclusion increments `mcp_error_budget_suppressed_total`, so the
   suppression is visible rather than inferred.
+  (requested by [@crepererum](https://github.com/crepererum),
+  [#475](https://github.com/MikkoParkkola/mcp-gateway/issues/475))
 
 - **A failed config load no longer leaks its env files into the process.**
   Reading a config file used to apply every `env_files` entry it named to the

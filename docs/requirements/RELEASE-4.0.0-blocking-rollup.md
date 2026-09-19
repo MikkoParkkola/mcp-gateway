@@ -183,8 +183,7 @@ raised them, judged all four closed, and raised nothing new.
 How far each cluster has actually got — design, test plan, review, code, owner —
 is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
 
-Clusters A, C, D, F, G, H, I, J, L, M and N have cleared — N last, on 2026-09-19, when the `cache_key/schema_fingerprint/50` breach that had re-raised `NFR.PERF.1` was diagnosed as a harness artefact: the dependency the regression was attributed to is not on the measured path, and the null A/C experiment that proves it swings ±30% run to run on the same host, so the instrument cannot resolve the 12pp it was asked to detect. The 2026-09-05 non-blocking ruling stands again and the no-public-P50/P99 residual is unchanged. Before that, M on 2026-09-19, when the bridge wiring was restored on the production invoke path at `a1c12b2f` and both `MIK-7212.MRTR.7a` and `7b` went MET and non-blocking in the ledger; before that, C on 2026-09-11, when `SUB.2b` went non-blocking in the ledger on its own `MET (caveat)` status — and the residue emptied on 2026-09-10: every row they named is met or non-blocking in the ledger, so they no longer appear here. What each of them was, and how it closed, is kept in the ownership table and the notes below. This table names only what still blocks. Cluster J closed on 2026-09-11 by ruling rather than by code: the clause it carried was amended to the behaviour the predicate implements, because the clause had no source in the issue it is named after and satisfying it literally would have restored the behaviour that issue was opened to remove. The ruling, its residual and its reversion trigger are in the ledger cell. Cluster L closed on 2026-09-11 by code, the day it was opened: the probe now chooses its method from the peer's era, a refusal is scored as unserved by either carriage, and the client-chosen method on `POST /mcp/{name}` -- a fifth call site the sweep had not found -- gates on the same mechanism as the three it did. Both rows are MET and non-blocking in the ledger, with the pinning tests cited there.
-
+Clusters A, C, D, F, G, H, I, J, L, M and N have cleared — N last, on 2026-09-19, when the `cache_key/schema_fingerprint/50` breach that had re-raised `NFR.PERF.1` was found on 2026-09-19 to be a real build-shape effect, not a harness artefact -- twelve counterbalanced rounds with a same-source control show the difference survives per-run, so the earlier four- and eight-round noise verdict does not hold (corrected in `RELEASE-4.0.0-criteria-status.md`'s NFR.PERF.1 row). The 2026-09-05 non-blocking ruling rests on the shared-case headroom in `RELEASE-4.0.0-performance.md`, not on this bench, and stands untouched by the correction; the no-public-P50/P99 residual is unchanged. Before that, M on 2026-09-19, when the bridge wiring was restored on the production invoke path at `a1c12b2f` and both `MIK-7212.MRTR.7a` and `7b` went MET and non-blocking in the ledger; before that, C on 2026-09-11, when `SUB.2b` went non-blocking in the ledger on its own `MET (caveat)` status — and the residue emptied on 2026-09-10: every row they named is met or non-blocking in the ledger, so they no longer appear here. What each of them was, and how it closed, is kept in the ownership table and the notes below. This table names only what still blocks. Cluster J closed on 2026-09-11 by ruling rather than by code: the clause it carried was amended to the behaviour the predicate implements, because the clause had no source in the issue it is named after and satisfying it literally would have restored the behaviour that issue was opened to remove. The ruling, its residual and its reversion trigger are in the ledger cell. Cluster L closed on 2026-09-11 by code, the day it was opened: the probe now chooses its method from the peer's era, a refusal is scored as unserved by either carriage, and the client-chosen method on `POST /mcp/{name}` -- a fifth call site the sweep had not found -- gates on the same mechanism as the three it did. Both rows are MET and non-blocking in the ledger, with the pinning tests cited there.
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
 | K | deployed-build control drift | `NFR.SEC.7` | 1 | both halves of a new row, added 2026-09-11 for MIK-7265, which had no requirement governing it. The origin guard `src/gateway/router/origin_guard.rs` is merged (added by `5d25f104`, 2026-08-28; `55970c2b` two days earlier only adds a tunnel-hostname unit test to it) and wired at `src/gateway/router/mod.rs:313`, with the policy built from live config at `:216`, so this is not unbuilt protocol work; a drift check cannot ask the process what it runs: there is no `build.rs` in the crate and no git sha is compiled in - `env!("CARGO_PKG_VERSION")` is the only provenance the binary carries (`src/gateway/server/support.rs`), so `3.4.0` is all it can report, and the commit is knowable only from the install artefact's path (`~/.local/libexec/mcp-gateway/3.4.0-f30539af`). Built 2026-09-11: `scripts/dev/check-control-drift.py` with the manifest `security-controls.toml`, the probe rows in `scripts/dev/test_check_control_drift.py` and the reviewed design at `docs/design/2026-09-11-merged-versus-listening-drift-check.md`. The checker therefore probes behaviour on the wire and uses the reported version only to corroborate, via `git merge-base --is-ancestor <control commit> v<version>`. Verified both ways the same day: a gateway built from this tree refuses the foreign `Origin` and the foreign `Host` and answers the legitimate request, exit 0; the listening install answers all three with 200, exit 1, noting `5d25f104 is NOT in v3.4.0`. What remains is the first half only — an install of a build that carries the guard. That is a deployment, and it is the operator's call; the row stays blocking until the live endpoint passes the check. |
@@ -319,6 +318,17 @@ reads later as a question nobody asked.
    lifted. The grade stays PARTIAL; only the release-gating question moved. See cluster E's
    removal note above and the `NFR.PERF.1` row itself for the ruling in full.
 
+**Correction, 2026-09-15.** The lift recorded above did not survive. `0a33b683`
+marked the 2026-09-05 headroom ruling superseded after the regression was
+re-measured against the branch rather than `origin/main`, and `b329ad9b` set the
+`NFR.PERF.1` blocking cell back to `yes` in
+`docs/requirements/RELEASE-4.0.0-criteria-status.md`; the cell reads `no` again
+today. The paragraph above is kept as the record of what was ruled on 2026-09-06,
+not as the current gate. The live count comes from
+`scripts/release/count-release-criteria.py`, which reports one blocking row,
+`NFR.SEC.7` — `MIK-7212.MRTR.7a` and `MIK-7212.MRTR.7b` went non-blocking on
+2026-09-17, when the saturation rows they were held for landed.
+
 Two decisions surfaced from the residue rows remain genuinely open, and they are set out under
 *Two more operator decisions* below.
 
@@ -380,7 +390,7 @@ who owns the work.
 | B era detection | `era-r4-repair` owns `src/protocol/era.rs`; `era-probe` owns `tests/mik_7217_era_probe_acs.rs`, held |
 | C MIK-7272 revision surface | `surface-c`, design first |
 | D response-cache keying | `cache-34` |
-| E performance vs 3.5.0 | run on `spark` 2026-09-03; `NFR.PERF.2` closed, `NFR.PERF.1` needs an end-to-end harness that does not exist. **2026-09-06**: the operator's 2026-09-05 ruling lifted `NFR.PERF.1`'s blocking flag on the headroom argument (worst shared case +6.07% against a 10% P99 bound); the row stays PARTIAL but no longer gates the release, and the cluster is closed — see its removal note above |
+| E performance vs 3.5.0 | run on `spark` 2026-09-03; `NFR.PERF.2` closed, `NFR.PERF.1` needs an end-to-end harness that does not exist. **2026-09-06**: the operator's 2026-09-05 ruling lifted `NFR.PERF.1`'s blocking flag on the headroom argument (worst shared case +6.07% against a 10% P99 bound); the row stays PARTIAL but no longer gates the release, and the cluster is closed — see its removal note above. **2026-09-15 — that lift is SUPERSEDED**: `0a33b683` marked the headroom ruling superseded once the regression was re-measured against the branch, and `b329ad9b` set the blocking cell back to `yes`. `NFR.PERF.1` gates the release again and now waits on a fresh release-owner decision, which the criteria row states in its own last sentence **2026-09-16 — closed again, and this time not on a headroom argument.** The operator ruled the residual accepted with the carrier named: the claim rests on the 56 criterion micro-benchmarks measured on `spark` 2026-09-03, the release notes must say so, and the end-to-end harness was offered and declined as 4.1.0 work. `NFR.PERF.1` is non-blocking and cluster N is removed from the table above. |
 | F compat and surface facts | the operator settled the surface questions on 2026-09-02: `NFR.COMPAT.1` became a code change and `NFR.COMPAT.3` was waived on the record. What is left is work, not a decision — the default flip and the dual-role matrix. **2026-09-06**: the default flip is done and `NFR.OBS.5` is met; the dual-role matrix and `NFR.COMPAT.1` are what remain, plus a new hard release gate on the `MIK-7212.MRTR.7a`/`7b` bridge, which the flip landed ahead of |
 | G stdio dispatch path | unowned. `NFR.OBS.1` and `NFR.OBS.2` have both closed and left the cluster; what remains is `MIK-7246.CONFIRM.1a`, whose code is in the tree and which waits on the dual-vendor review verdict, not on an agent |
 | K deployed-build control drift | unowned. Neither half is protocol work: one is a deployment, the other a drift-check script that exists nowhere in the tree |
@@ -1067,6 +1077,17 @@ a release-owner choice, and it is the only gate here with a date attached to it.
 2026-09-05 ruling: 4.0.0 ships on the headroom argument, worst shared case +6.07% against a
 10% P99 bound. The grade stays PARTIAL because the wording genuinely is not met. Its residual
 binds: no P50 or P99 may be quoted publicly until an end-to-end harness produces one.
+
+**Correction, 2026-09-15.** The lift recorded above did not survive. `0a33b683`
+marked the 2026-09-05 headroom ruling superseded after the regression was
+re-measured against the branch rather than `origin/main`, and `b329ad9b` set the
+`NFR.PERF.1` blocking cell back to `yes` in
+`docs/requirements/RELEASE-4.0.0-criteria-status.md`; the cell reads `no` again
+today. The paragraph above is kept as the record of what was ruled on 2026-09-06,
+not as the current gate. The live count comes from
+`scripts/release/count-release-criteria.py`, which reports one blocking row,
+`NFR.SEC.7` — `MIK-7212.MRTR.7a` and `MIK-7212.MRTR.7b` went non-blocking on
+2026-09-17, when the saturation rows they were held for landed.
 
 `MIK-6865`'s nested-key defect is **ungoverned by any v4.0.0 criterion** and is not release
 work. `SCHEMA.1a/1b/1c` govern schemas the gateway EMITS and are MET on evidence at HEAD

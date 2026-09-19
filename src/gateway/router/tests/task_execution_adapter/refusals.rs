@@ -367,3 +367,122 @@ async fn fixture_control_an_allowed_eligible_call_dispatches_and_settles() {
          target could not pass this row on the counter alone: {settled}"
     );
 }
+
+/// The pair-mate of E5: same funnel, same identifier, an object settings
+/// value, and the declaration is admitted.
+///
+/// This row does **not** evidence EXT.1.c/E4, and is deliberately not named
+/// for it. That row asks for an assertion on the recovered `ExtensionSet` at
+/// the invoke funnel; the funnel keeps only the bool
+/// `declares_tasks_extension` returns (`gateway/router/handlers.rs:190-200`),
+/// so no router-level request can observe the set without production code
+/// carrying it out for a test to read. E4 stays an open cell until the funnel
+/// holds the set or the row is amended.
+///
+/// E5 alone cannot say whether its refusal came from the settings value or
+/// from the fixture; a request that would have been refused anyway proves
+/// nothing about `is_object()`. This row holds everything but that one value
+/// fixed, so the two together are a controlled contrast.
+///
+/// The identifier is the recognised one on purpose.
+/// `ExtensionSet::from_capabilities` (`protocol/extensions.rs:82-101`) filters
+/// through `Extension::from_id`, so a synthetic identifier is discarded by a
+/// *correct* implementation and a row asserting its recovery could never go
+/// green.
+///
+/// What the task handle witnesses, and what it does not: the gate hands one
+/// out only to a caller whose declaration it recovered, so the handle proves
+/// the funnel admitted this declaration. It does not prove the funnel reached
+/// that answer through `ExtensionSet` — the hand-rolled `.is_some()` check
+/// this row replaced admitted `{}` too, and no input exists that the typed
+/// path admits and the hand-rolled one refuses (`Extension::from_id` is an
+/// exact match on one identifier, `protocol/extensions.rs:36-41`). The typed
+/// path is pinned by E5, which goes red on any revert to presence-testing.
+/// Read the two as one row: E4 says the fixture is admissible, E5 says why
+/// the refusal it earns is the settings value.
+#[tokio::test]
+async fn an_object_settings_value_is_admitted_so_e5s_refusal_is_attributable() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+
+    let mut declared = modern(
+        152,
+        "tools/call",
+        json!({
+            "name": "gateway_invoke",
+            "arguments": { "server": BACKEND, "tool": TOOL, "arguments": {} },
+            "task": {}
+        }),
+        false,
+    );
+    declared["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+        json!({ "extensions": { TASKS_EXTENSION: {} } });
+
+    let created = post(&state, "key-a", keyed(declared, "pair-attribution-key")).await;
+
+    std::assert_ne!(
+        created.pointer("/error/code").and_then(Value::as_i64),
+        Some(i64::from(
+            crate::protocol::era::MISSING_REQUIRED_CLIENT_CAPABILITY
+        )),
+        "an object settings value is a declaration of the tasks extension, so \
+         the gate that refuses `3` must not refuse `{{}}`: {created}"
+    );
+    assert!(
+        !task_id(&created).is_empty(),
+        "and the caller must be handed the handle its declaration earned: \
+         {created}"
+    );
+}
+
+/// E5 — presence is not agreement: a non-object settings value is not a
+/// declaration.
+///
+/// `ExtensionSet::from_capabilities` (`protocol/extensions.rs:82-101`) keeps
+/// only extensions whose settings value is an object, and states the reason:
+/// accepting a null, a number or a string "let a malformed declaration switch
+/// on behaviour the peer never validly negotiated". The refusal this row
+/// expects already advertises that shape — the gate answers with
+/// `{"extensions": {TASKS_EXTENSION: {}}}`, an object, so a gate that then
+/// accepts `3` contradicts its own error payload.
+///
+/// The request declares the modern era properly (`modern` supplies
+/// `protocolVersion`), so a refusal here is the extension gate, not the shape
+/// gate above it — the distinction §3.2 of the Cluster B test plan insists on.
+#[tokio::test]
+async fn e5_a_non_object_settings_value_is_not_a_tasks_declaration() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+
+    for (id, settings) in [(150, json!(3)), (151, json!(null))] {
+        let mut malformed = modern(
+            id,
+            "tools/call",
+            json!({
+                "name": "gateway_invoke",
+                "arguments": { "server": BACKEND, "tool": TOOL, "arguments": {} },
+                "task": {}
+            }),
+            false,
+        );
+        malformed["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+            json!({ "extensions": { TASKS_EXTENSION: settings } });
+
+        let refused = post(&state, "key-a", malformed).await;
+
+        std::assert_eq!(
+            refused.pointer("/error/code").and_then(Value::as_i64),
+            Some(i64::from(
+                crate::protocol::era::MISSING_REQUIRED_CLIENT_CAPABILITY
+            )),
+            "a settings value of `{settings}` is not a declaration of the tasks \
+             extension, so the gate must refuse with the missing-capability \
+             code: {refused}"
+        );
+        assert!(
+            refused.pointer("/result/taskId").is_none(),
+            "and it must not be handed a task handle it never said it could \
+             hold: {refused}"
+        );
+    }
+}

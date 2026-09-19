@@ -68,6 +68,12 @@ pub enum ContinuationPurpose {
     BackendInput,
     /// Confirms a destructive outer tool call before task admission.
     DestructiveConfirm,
+    /// Resumes a `gateway_execute` chain stopped at an interim round.
+    ///
+    /// Its own domain so that neither of the other two can stand in for it: a
+    /// confirmation grant must not restart a chain's tail, and a chain resume
+    /// must not stand in for the confirmation the gated step still owes.
+    ChainResume,
 }
 
 /// What the envelope carries. None of it is visible to the client.
@@ -119,6 +125,22 @@ pub struct Payload {
     /// [`ContinuationPurpose::DestructiveConfirm`] explicitly at mint.
     #[serde(default)]
     pub purpose: ContinuationPurpose,
+    /// Index of the chain step that asked. Steps `0..next_step` have run.
+    ///
+    /// Sealed like everything else here: a caller that could move it could make
+    /// the gateway skip a step that never ran. Absent on every envelope that is
+    /// not a [`ContinuationPurpose::ChainResume`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<usize>,
+    /// How many rounds this exchange has already spent.
+    ///
+    /// Copied forward on every re-seal, never re-initialised. A native chain
+    /// resume never enters the legacy bridge, so it inherits none of the
+    /// bridge's per-exchange bound; without a count carried in the envelope a
+    /// backend that asks one question forever sustains an unbounded
+    /// continuation sequence at a single step.
+    #[serde(default)]
+    pub rounds_used: u32,
 }
 
 impl std::fmt::Debug for Payload {
@@ -136,6 +158,10 @@ impl std::fmt::Debug for Payload {
             .field("jti", &self.jti)
             .field("hold_key", &self.hold_key)
             .field("purpose", &self.purpose)
+            // An index and a counter: neither identifies a caller nor redeems
+            // anything, and both are what a stalled chain is traced by.
+            .field("next_step", &self.next_step)
+            .field("rounds_used", &self.rounds_used)
             .finish()
     }
 }
@@ -228,6 +254,8 @@ impl Payload {
             expires_at: expiry_for(now),
             jti: uuid::Uuid::new_v4().to_string(),
             hold_key,
+            next_step: None,
+            rounds_used: 0,
         }
     }
 

@@ -605,18 +605,50 @@ mod tests {
         assert_eq!(reg.metrics.avg_latency_ns(), 0.0);
     }
 
+    /// A hit records one latency sample.
+    ///
+    /// Asserted on the sample count, never on how long the machine took. The
+    /// wall-clock bound this test used to carry — `avg < 1ms`, "sub-millisecond
+    /// for in-memory lookup" — fails on a loaded box, where a scheduler
+    /// preemption between `Instant::now` and `elapsed` inflates the reading
+    /// without anything in `get` behaving differently. It was the last red test
+    /// in the release gate and it measured the runner, not the registry.
     #[test]
     fn metrics_records_latency_on_hit() {
         let reg = ToolRegistry::default();
         reg.insert("s", make_tool("t"));
+        // Before the lookup the averaged value is the no-data zero rather than
+        // a measurement, which is what makes the sample count below meaningful.
+        assert_eq!(reg.metrics.latency_samples.load(Ordering::Relaxed), 0);
+
         let _ = reg.get("s:t");
-        // latency should be a very small positive number (sub-millisecond)
-        let avg = reg.metrics.avg_latency_ns();
-        assert!(avg >= 0.0, "avg_latency_ns must be non-negative");
-        assert!(
-            avg < 1_000_000.0,
-            "avg_latency_ns should be sub-millisecond for in-memory lookup"
+
+        assert_eq!(
+            reg.metrics.latency_samples.load(Ordering::Relaxed),
+            1,
+            "a registry hit must record exactly one latency sample"
         );
+        let avg = reg.metrics.avg_latency_ns();
+        assert!(
+            avg.is_finite() && avg >= 0.0,
+            "avg_latency_ns must be a finite non-negative measurement, got {avg}"
+        );
+    }
+
+    /// The averaging itself, pinned deterministically.
+    ///
+    /// Separate from the test above on purpose: that one proves `get` is wired
+    /// to the metric, this one proves the metric computes a mean, and neither
+    /// can be satisfied by the other. Feeding known samples is the only way to
+    /// assert the arithmetic without asserting a duration the test cannot
+    /// control.
+    #[test]
+    fn metrics_average_latency_is_the_mean_of_its_samples() {
+        let reg = ToolRegistry::default();
+        reg.metrics.record_hit(100);
+        reg.metrics.record_hit(300);
+        assert_eq!(reg.metrics.latency_samples.load(Ordering::Relaxed), 2);
+        assert!((reg.metrics.avg_latency_ns() - 200.0).abs() < 1e-9);
     }
 
     // ── metrics: snapshot ────────────────────────────────────────────────────

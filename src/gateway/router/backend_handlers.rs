@@ -500,6 +500,32 @@ pub(super) async fn backend_handler(
     // credential from the operator-named header.
     let inbound_headers = request.headers().clone();
 
+    // === C5 route parity (MIK-6746) ===
+    //
+    // `require_id` and the `known_agents` allowlist are enforced in
+    // `meta_mcp_dispatch` for /mcp. This route reaches the same backends, so
+    // the same check has to run here: without it the allowlist is bypassable
+    // by choosing the /mcp/{name} URL. Checked before the body is read, which
+    // is where the meta route checks it too.
+    let bearer_token = inbound_headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        });
+    let agent_identity = crate::security::extract_agent_identity(
+        &inbound_headers,
+        request.uri().query(),
+        bearer_token,
+    );
+    if let Err(reason) = crate::security::validate_agent_identity(
+        agent_identity.as_ref(),
+        &state.agent_identity_config,
+    ) {
+        return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN);
+    }
+
     // Check backend access if auth is enabled
     if let Some(ref client) = client
         && !client.can_access_backend(&name)

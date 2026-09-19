@@ -114,6 +114,8 @@ fn payload(jti: &str, origin: &str, expires_at: u64) -> Payload {
         expires_at,
         jti: jti.to_string(),
         hold_key: format!("exchange-{jti}"),
+        next_step: None,
+        rounds_used: 0,
         // A backend `input_required` continuation, which is the domain every
         // case in this file redeems through.
         purpose: ContinuationPurpose::BackendInput,
