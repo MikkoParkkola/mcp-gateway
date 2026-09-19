@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Six meta-tools are now listed only where they can answer.** `gateway_get_stats`,
+  `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`,
+  `gateway_get_profile` and `gateway_list_profiles` were listed in `tools/list`
+  unconditionally, so a default deployment spent context on six tools whose only
+  possible reply was "not configured". Each is now gated on the thing that lets it
+  answer: a cost registry, a non-empty playbook engine, a configured routing
+  profile, and for statistics a new `meta_mcp.expose_stats_tool` opt-in (the usage
+  collector is always attached, so its presence never gated anything). The default
+  HTTP surface drops from 17 tools to 11, stdio from 16 to 10, and the
+  `NFR.PERF.4` band from `14..=17` to `9..=17`, all at admin standing.
+
+  **This is a disclosure change, not a capability removal.** All seventeen names
+  still dispatch by name on every deployment. A caller that invokes a tool it was
+  not shown gets the tool's own answer — for a gated one, a refusal naming the
+  configuration to add — never "no such tool". An operator who wants a tool back
+  in the listing configures the feature it reports on; `meta_mcp.expose_stats_tool:
+  true` restores `gateway_get_stats`. Operator-visible consequence: a client that
+  enumerates `tools/list` and refuses to call anything absent from it will stop
+  reaching these six until the corresponding feature is configured. See
+  `docs/design/2026-09-16-meta-tool-surface-compaction.md`.
+
 ## [4.0.0] - 2026-09-19
 
 > Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). A 3.x `gateway.yaml`

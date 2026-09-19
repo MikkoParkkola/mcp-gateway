@@ -6,7 +6,10 @@ use mcp_gateway::{
     backend::BackendRegistry,
     config::{Config, FailsafeConfig, WebhookConfig},
     config_reload::{LiveConfig, ReloadContext},
-    gateway::{WebhookRegistry, test_helpers::MetaMcp},
+    gateway::{
+        WebhookRegistry,
+        test_helpers::{CallerStanding, MetaMcp},
+    },
     honest_task_tokens::{
         DIRECT_TOKENS_PER_TOOL, META_TOKENS_PER_TOOL, README_META_TOOLS,
         representative_discovery_response_tokens,
@@ -27,6 +30,13 @@ struct PublicClaims {
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct MetaToolClaims {
+    /// Which caller the counts below are quantified over. Both are what an
+    /// **admin** caller is served; a Standard caller is served four fewer
+    /// (`ADMIN_META_TOOLS`), which
+    /// `readme_benchmark_surface_shrinks_by_the_admin_set_for_a_standard_caller`
+    /// pins. Published rather than left implicit because a reader who assumes
+    /// the wrong standing reads every number here off by four.
+    standing: String,
     minimum: usize,
     readme_benchmark: usize,
 }
@@ -103,6 +113,11 @@ fn operational_meta_mcp() -> MetaMcp {
 
 fn live_meta_tool_counts() -> MetaToolClaims {
     MetaToolClaims {
+        // `handle_tools_list` lists at admin standing, so that is the standing
+        // both counts are measured at, and the string the claims file has to
+        // carry. Editing the file to say "standard" without moving the
+        // derivation off this entry point fails here.
+        standing: "admin".to_string(),
         minimum: meta_tool_count(&MetaMcp::new(Arc::new(BackendRegistry::new()))),
         readme_benchmark: meta_tool_count(&operational_meta_mcp()),
     }
@@ -332,6 +347,42 @@ fn canonical_meta_tool_counts_match_live_runtime() {
     );
 }
 
+/// The published pair is admin-standing, and this is what the other standing
+/// costs. Recorded as a test rather than a published claim because no prose
+/// quotes it: its job is to keep `meta_tools.standing` from becoming a label
+/// nobody can check, and to fail if the admin set is ever disclosed to a
+/// caller that cannot dispatch it.
+#[test]
+fn readme_benchmark_surface_shrinks_by_the_admin_set_for_a_standard_caller() {
+    let claims = load_claims();
+    let served = decode_tools_list(operational_meta_mcp().handle_tools_list_for_session(
+        RequestId::Number(1),
+        None,
+        CallerStanding::Standard,
+    ))
+    .tools;
+    let names: Vec<&str> = served.iter().map(|t| t.name.as_str()).collect();
+
+    for admin_only in [
+        "gateway_kill_server",
+        "gateway_revive_server",
+        "gateway_reload_config",
+        "gateway_reload_capabilities",
+    ] {
+        assert!(
+            !names.contains(&admin_only),
+            "a Standard caller must not be shown {admin_only}, served {names:?}"
+        );
+    }
+    assert_eq!(
+        served.len(),
+        claims.meta_tools.readme_benchmark - 4,
+        "the Standard-standing surface is the published admin benchmark of {} \
+         minus the four admin meta-tools, served {names:?}",
+        claims.meta_tools.readme_benchmark
+    );
+}
+
 #[test]
 #[allow(
     clippy::cast_precision_loss,
@@ -378,9 +429,17 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
         readme.contains("no completed-task token saving"),
         "README should lead with the checked-in live benchmark result"
     );
+    // Derived, not spelled: the figure moved from 89% to 93% when the meta
+    // surface was compacted, and a guard naming the old string would have gone
+    // on passing while checking a percentage the README no longer prints.
+    let schema_only_figure = format!("{:.0}%", readme_savings_metrics(&claims).1.round());
     assert!(
-        !readme.chars().take(900).collect::<String>().contains("89%"),
-        "README lede must not lead with the schema-only 89% figure"
+        !readme
+            .chars()
+            .take(900)
+            .collect::<String>()
+            .contains(&schema_only_figure),
+        "README lede must not lead with the schema-only {schema_only_figure} figure"
     );
     assert!(
         readme.contains(&format!(
@@ -479,7 +538,7 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     );
     assert!(
         benchmarks.contains("schema-only"),
-        "benchmark docs must label 89% as schema-only first-request math"
+        "benchmark docs must label the first-request percentage as schema-only math"
     );
     assert!(
         benchmarks.contains(&format!("~{gateway_tokens} gateway tokens")),

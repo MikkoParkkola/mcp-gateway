@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Task-token comparison that is allowed to lose (MIK-6977).
 //!
-//! The README 89% figure is a *schema-only first-request* model: 100 tools ×
-//! 150 tokens versus 16 meta-tools × 100 tokens, with extra discovery turns
-//! counted as zero. This module counts those turns, the caller-supplied host
+//! The README 93% figure is a *schema-only first-request* model: 100 tools ×
+//! 150 tokens versus the README meta-surface × 100 tokens, with extra
+//! discovery turns counted as zero. This module counts those turns, the caller-supplied host
 //! context carried by every request, and accumulated discovery responses.
 //! Each extra turn reloads both the host context and the meta-surface, so a
 //! search-then-invoke path can cost more than loading every tool definition.
@@ -16,10 +16,12 @@
 pub const DIRECT_TOKENS_PER_TOOL: u64 = 150;
 /// Meta-tool definition size used by `benchmarks/public_claims.json`.
 pub const META_TOKENS_PER_TOOL: u64 = 100;
-/// README benchmark meta-surface. Seventeen, not sixteen: `webhooks.enabled`
+/// README benchmark meta-surface. Eleven, not nine: `webhooks.enabled`
 /// defaults to true, so a default HTTP deployment is served
-/// `gateway_webhook_status` as well.
-pub const README_META_TOOLS: u64 = 17;
+/// `gateway_webhook_status`, and it has a reload context, so it is served
+/// `gateway_reload_config` too. Quantified at admin standing, matching
+/// `meta_tools.standing` in `benchmarks/public_claims.json`.
+pub const README_META_TOOLS: u64 = 11;
 /// Tool counts the ticket asked for.
 pub const TOOL_COUNTS: [u64; 4] = [50, 100, 200, 500];
 /// Default discovery path: `gateway_search_tools` then `gateway_invoke`.
@@ -145,8 +147,8 @@ mod tests {
     fn schema_only_100_tools_matches_readme_model() {
         let row = schema_only_first_request(100);
         assert_eq!(row.eager_tokens, 15_000);
-        assert_eq!(row.meta_tokens, 1_700);
-        assert!((row.savings_percent - 88.667).abs() < 0.01);
+        assert_eq!(row.meta_tokens, 1_100);
+        assert!((row.savings_percent - 92.667).abs() < 0.01);
         assert!(row.meta_wins());
     }
 
