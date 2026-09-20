@@ -411,13 +411,35 @@ taking `RequestId`, `Option<&str>`, `CallerStanding`) all exist. Two
 registries rather than one, because `with_expose_stats_tool` consumes the
 handler and `closed` is still needed for the negative half.
 
-Result on an unchanged tree: **assumption.** Whether the routing guide's text
-names `gateway_get_stats` when the gate is open depends on `routing_content()`
-(`src/gateway/meta_mcp/resources.rs`), which was not read for this plan. If
-the guide's prose never mentions the tool under any gate setting, the positive
-half fails and the right fix is to pick a tool the guide does name, or to drop
-this test and record that §3's guide claim is structural rather than
-observable. **A reviewer should settle this one before an implementer starts.**
+Result on an unchanged tree: **settled by review — the test above fails, and
+the fix is to change the tool, not the guide.** `routing_content()`
+(`src/gateway/meta_mcp/resources.rs:135-181`) never names `gateway_get_stats`.
+The only guide that does is `quickstart_content()`, at `:123`. So the positive
+half asserts something the routing guide cannot say under any gate setting.
+
+The tool is wrong; the guide is right. `routing_content()` names six
+meta-tools, and three of them — `gateway_set_profile`, `gateway_get_profile`,
+`gateway_list_profiles` — sit behind the `profiles` gate
+(`profiles: self.profile_registry.has_configured_profiles()`,
+`meta_mcp_tool_defs.rs:1682`). Opening that gate through `with_profile_registry`
+(`mod.rs:749`) moves exactly the tools the routing guide already documents.
+
+**Revised assertion:** keep the shape above; open `profiles` rather than the
+stats opt-in, and assert on `gateway_set_profile`. The negative half still
+starts from `MetaMcp::new`, where the gate is off because the registry is
+empty.
+
+Two things this resolution also establishes, both checked at source rather
+than assumed:
+
+* §3's projection claim holds for **both** guides, not just the routing one:
+  `try_serve_guide` (`resources.rs:226-240`) runs `retain_served_sections`
+  over `quickstart_content()` and `routing_content()` alike. A guide test on
+  either is a test of the same mechanism.
+* The test remains worth writing. It was never the tool name that made it
+  load-bearing — it is the gate axis, which
+  `mik_7332_discovery_1_routing_guide_agrees_with_served_list` cannot reach.
+  That gap is unchanged by this correction.
 
 ### 4.5 The discovery preamble, as a cheap green guard
 
@@ -461,6 +483,33 @@ is the one `config_default_exposes_every_meta_tool`
 Result on an unchanged tree: **GREEN**, trivially. Listed because a future
 author extending the preamble to name a fifth tool has no other warning.
 
+#### 4.6a The allow-list above is corrected, and the walker root is a defect
+
+The three-entry allow-list this plan first carried was wrong in both
+directions, and the error is recorded here rather than silently patched
+because it is the kind a reader will otherwise reintroduce.
+
+| Entry | Status | Evidence |
+|---|---|---|
+| `benchmarks/token_savings.py` | **Stale — removed.** Names no cut tool. It uses `gateway_cost` and `gateway_cost_usd`, which are not `gateway_cost_report`. | `rg -c` over the six names exits 1 |
+| `examples/playbook-morning-briefing.yaml` | Real hit, kept | scan |
+| `scripts/release/extract-operator-decisions.py` | Real hit, kept | scan |
+| `scripts/release/demo/5-error-budget.sh` | **Was missing — added.** Not Rust, not Markdown, so the exclusions never covered it. | `:9`, `:105`, `:106` |
+| `docs/release/demo/5-error-budget-transcript.txt` | **Was missing — added.** Same reason. | `:28` |
+
+So the test as first written failed on an unchanged tree for two shipped
+artifacts, while carrying a dead entry that would have silently permitted a
+future cut-tool reference in the benchmark script.
+
+**The walker root is the more serious of the two.** `WalkDir::new(repo_file("."))`
+descends into `.claude/worktrees/`, which holds agent checkouts of this same
+repository — four of them at the time of writing, each a full copy carrying its
+own hits — and into `.archive/`, which holds a `.patch`. A test whose verdict
+depends on which checkouts happen to exist on the machine running it is green
+in CI and red on a developer's box, which is the failure mode least likely to
+be believed when it appears. Scope the walk to tracked files, or exclude both
+directories explicitly.
+
 ### 4.6 R3 has no standing check
 
 R3's falsifier is an `rg` the design ran once. Nothing re-runs it. A capability
@@ -486,14 +535,20 @@ fn no_shipped_artifact_invokes_a_cut_meta_tool_by_name() {
         "gateway_get_profile",
         "gateway_list_profiles",
     ];
-    // Benchmark definitions, a playbook *definition* (whose deployment turns
-    // the playbook gate on), and a text scanner over release documents.
-    const ALLOWED: [&str; 3] = [
-        "benchmarks/token_savings.py",
+    // A playbook *definition* (whose deployment turns the playbook gate on), a
+    // text scanner over release documents, and the error-budget demo, which
+    // calls the stats tool as the subject of the demo rather than as a
+    // dependency. Corrected against the tree: see the note below.
+    const ALLOWED: [&str; 4] = [
         "examples/playbook-morning-briefing.yaml",
         "scripts/release/extract-operator-decisions.py",
+        "scripts/release/demo/5-error-budget.sh",
+        "docs/release/demo/5-error-budget-transcript.txt",
     ];
 
+    // Walk the tracked tree only. Rooting at the repo directory descends into
+    // agent checkouts under `.claude/worktrees/` and into `.archive/`, which
+    // would make the result depend on what happens to be checked out locally.
     let root = repo_file(".");
     for entry in WalkDir::new(&root)
         .into_iter()
