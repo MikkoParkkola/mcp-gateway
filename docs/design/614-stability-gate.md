@@ -43,20 +43,62 @@ Restated as testable properties. **P1 alone is not an acceptance criterion** —
 established that it admits degenerate statistics, since a constant 0 or `1/N` is also
 non-increasing in N while measuring nothing. All three properties are required:
 
-> **P1 (monotone in evidence).** Holding the distribution fixed, the statistic must be
-> non-increasing *in expectation over repeated samples* at each N. This is a statement about
-> the sampling distribution, not about any single run: a new repetition that reveals genuine
-> spread may legitimately widen the interval, and must be allowed to.
+> **P1 (monotone in evidence).** ~~Holding the distribution fixed, the statistic must be
+> non-increasing *in expectation over repeated samples* at each N.~~ **WITHDRAWN — see
+> "P1 is false for this statistic" below.** The replacement property is stated there.
 >
 > **P2 (calibrated coverage).** The interval must attain its stated coverage under explicit
 > assumptions, verified by simulation against a known population — not assumed from an
 > asymptotic formula.
 >
 > **P3 (resolving power).** The interval must be narrow enough to discriminate a difference
-> of `margin`, otherwise a well-calibrated but useless gate passes P1 and P2.
+> of `margin`, otherwise a well-calibrated but useless gate passes P1 and P2. Note this is
+> stated about a *comparison between two cells*, while the gate evaluates *one cell's
+> precision*; two cells each at half-width 0.049 feed a ratio carrying roughly twice that
+> uncertainty. Resolved by narrowing P3 to per-cell precision and tracking the comparison
+> question separately — the gate's job is to refuse to grade an imprecise run, not to
+> perform the comparison.
 
-`spread` violates P1. The first draft of this design satisfied P1 but failed P2, which is
-what review caught.
+`spread` violates monotonicity pathwise. The first draft of this design satisfied it in
+expectation but failed P2, which is what the first review caught. The order-statistic form
+satisfies P2 exactly — and, as recorded below, does **not** satisfy monotonicity either.
+
+### P1 is false for this statistic, and the design does not hide it
+
+The interval's rank `k` is an **integer**, and it is constant across runs of `n`. Largest `k`
+whose coverage still clears 95%:
+
+| n | k | coverage |
+|---|---|---|
+| 3–5 | — | insufficient |
+| 6, 7, 8 | 1 | 0.969, 0.984, 0.992 |
+| 9, 10, 11 | 2 | 0.961, 0.979, 0.988 |
+| 12, 13 | 3 | 0.961, 0.978 |
+
+Inside a plateau `k` is pinned, so the interval **is the range**, and its expected width grows
+with `n` exactly as `spread` does. Measured mean relative half-width, `Gauss(1, 0.02)`,
+20,000 trials, seed 614:
+
+| n | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
+|---|---|---|---|---|---|---|---|---|
+| mean | 0.02538 | 0.02705 ↑ | 0.02855 ↑ | **0.01866** | 0.02001 ↑ | 0.02125 ↑ | **0.01590** | 0.01703 ↑ |
+
+The statistic is a **sawtooth**: rising within each plateau, dropping only when `k`
+increments. So P1 as originally written is false, and the honest replacement is narrower:
+
+> **P1' (evidence eventually helps).** The statistic must be non-increasing in expectation
+> **along the subsequence of `k`-increments** — n = 6 → 9 → 12 — and the gate's documented
+> guidance must direct reruns to those n, not to intermediate values.
+
+This is weaker than what the design first claimed, and it is a genuine limitation rather than
+a restatement: at n = 6, 7, 8 the pathwise-non-decreasing defect that motivated this whole
+change **survives**. What n ≥ 6 buys is *exact coverage*, not shrinkage. The first `n` at
+which more evidence can actually narrow the interval is **n = 9**.
+
+An alternative that would restore true monotonicity is to interpolate between order
+statistics (Hettmansperger–Sheather) rather than snapping `k` to an integer. That trades
+exact coverage for approximate coverage and is not taken here; it is recorded as the option
+to revisit if the sawtooth proves operationally confusing.
 
 ## Proposal
 
@@ -102,6 +144,12 @@ full-range interval clears 95% is:
 | 4 | 0.875 |
 | 5 | 0.9375 |
 | **6** | **0.96875** ✅ |
+
+**n ≥ 6 buys exact coverage, not shrinkage.** Because the interval rank `k` stays at 1 for
+n = 6, 7 and 8, the interval there *is* `[min, max]` and still widens with every added
+repetition. The first n at which more evidence can narrow it is **n = 9** (`k` = 2). A rerun
+commissioned at 6 would pay double the benchmark cost for an honestly-calibrated statistic
+that is no more resolvable than today's. See "P1 is false for this statistic" above.
 
 So `REPS >= 6` is a **hard floor** for the gate to be able to return anything but
 "insufficient", and a floor is not a target: clearing it only makes the interval *exist*,
