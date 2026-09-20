@@ -14,8 +14,8 @@
 
 set -Eeuo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
+HERE="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(CDPATH= cd -- "$HERE/../.." && pwd)"
 
 # --- pins -------------------------------------------------------------------
 # The k6 image is pinned by digest. A tag would let the load generator change
@@ -107,7 +107,7 @@ build_arm() {
   rm -rf "$dir"
   git -C "$REPO" worktree prune
   git -C "$REPO" worktree add --detach "$dir" "$sha" >/dev/null
-  ( cd "$dir" && cargo build --release --locked --features "$FEATURES" )
+  ( CDPATH= cd -- "$dir" && cargo build --release --locked --features "$FEATURES" )
   echo "$sha" > "$dir/.checkout_sha"
 }
 
@@ -253,7 +253,10 @@ PY
 # directory, so a run dir given relative to the checkout silently becomes an
 # empty anonymous mount and k6 dies before it measures anything. Every run dir
 # is made absolute here, once, before anything mounts or writes to it.
-abs_run_dir() { mkdir -p "$1"; (cd "$1" && pwd); }
+# `CDPATH=` is load-bearing: an inherited CDPATH makes `cd` echo the directory
+# it picked, so the substitution would capture two lines and the mount source
+# would be garbage. `--` keeps a leading-dash path from parsing as an option.
+abs_run_dir() { mkdir -p "$1"; (CDPATH= cd -- "$1" && pwd); }
 
 do_measure() {
   local run="$1"
