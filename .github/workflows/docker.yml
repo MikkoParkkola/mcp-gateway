@@ -246,6 +246,34 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # Branch protection requires a status check literally named `build`, which the
+  # single-runner job used to emit as its own id. Splitting it per architecture
+  # renames both legs, so nothing emits that name any more and every pull
+  # request stays BLOCKED on a context that can never arrive. This aggregate
+  # restores the name. Listing the two leg names in the protection rule instead
+  # would break again the next time the matrix changes.
+  #
+  # `always()` so a skipped or cancelled matrix reports red here rather than
+  # leaving the required check pending forever; `needs.build.result` is the
+  # aggregate across legs, success only when every leg succeeded.
+  build-gate:
+    name: build
+    needs: [build]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Assert every architecture built
+        env:
+          RESULT: ${{ needs.build.result }}
+        run: |
+          set -euo pipefail
+          if [ "${RESULT}" != "success" ]; then
+            echo "::error::build matrix result: ${RESULT}"
+            exit 1
+          fi
+
   # Publishes the multi-arch list and refuses to leave a single-platform image
   # answering to `main` or a sha. The assertion is the gate: `docker manifest
   # inspect` listing only linux/amd64 is what NFR.PKG.1 calls a defect, and it
