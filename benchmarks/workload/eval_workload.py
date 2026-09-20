@@ -187,6 +187,19 @@ def rel_half_width(values):
     return (interval[1] - interval[0]) / 2 / centre
 
 
+def spread(values):
+    """Min-to-max range over the smallest rep. Reported, never gating.
+
+    This is the statistic #614 removed from the gate, kept as a diagnostic
+    because it is what makes a dirty Spark run legible: a cell whose range
+    blows out while its interval stays tight is a machine-conditions story,
+    not a code story. It is a range, so it widens with every added rep -- the
+    reason it cannot decide anything, and the reason it is still worth seeing.
+    """
+    lo, hi = min(values), max(values)
+    return (hi - lo) / lo if lo > 0 else float("inf")
+
+
 def jsonable(value):
     """Map the inf sentinel to null on the way out of the process.
 
@@ -217,6 +230,16 @@ def evaluate(run: Path) -> int:
     # sample. Runs recorded before the pin existed fall back to MEASURED_REPS.
     measured = pins.get("reps") or list(MEASURED_REPS)
 
+    # A repeated rep id reads the same summary file twice. Six copies of one
+    # measurement clear the n>=6 insufficiency floor and, being identical,
+    # collapse the interval to zero width -- a single sample would report as a
+    # resolved 95% interval. The pin declares the sample, so the pin is where
+    # that has to be caught.
+    if any(not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in measured):
+        raise Void(f"pins.reps {measured} must all be positive integers")
+    if len(set(measured)) != len(measured):
+        raise Void(f"pins.reps {measured} repeats a rep id; reps must be distinct")
+
     cells: dict[str, list[dict]] = {}
     for cell in LEGACY_CELLS + REPORT_ONLY_CELLS:
         cells[cell] = [check_rep(run, f"{cell}{n}", pins) for n in measured]
@@ -228,6 +251,8 @@ def evaluate(run: Path) -> int:
             "p99": pooled([r["p99"] for r in reps]),
             "p50_rel_half_width": rel_half_width([r["p50"] for r in reps]),
             "p99_rel_half_width": rel_half_width([r["p99"] for r in reps]),
+            "p50_spread": spread([r["p50"] for r in reps]),
+            "p99_spread": spread([r["p99"] for r in reps]),
         }
 
     a, b, c = (report["cells"][k] for k in LEGACY_CELLS)

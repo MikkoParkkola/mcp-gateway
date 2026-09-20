@@ -540,6 +540,79 @@ def test_archived_run_regrades_as_insufficiency():
         )
 
 
+def test_duplicate_reps_void():
+    """A repeated rep id is a VOID, not a six-rep sample.
+
+    Found by external review of the #614 implementation. pins.json declares
+    the sample, and nothing re-read the declaration: six copies of rep 1 name
+    one summary file six times, which clears the n>=6 insufficiency floor and,
+    being six identical values, collapses the interval to zero width. The run
+    graded PASS on a single measurement -- the exact failure the interval was
+    introduced to make impossible.
+
+    A too-short rep list is already VOID by the missing-file path; a repeated
+    one has every file it needs, so it has to be caught at the pin.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp)
+        build(run, FLAT, reps=6)
+        pins = json.loads((run / "pins.json").read_text())
+        pins["reps"] = [1, 1, 1, 1, 1, 1]
+        (run / "pins.json").write_text(json.dumps(pins))
+        status = run_eval(run)
+        assert status == ev.EXIT_VOID, (
+            f"six copies of one rep must VOID, got exit {status}"
+        )
+
+    for bad in ([1, 2, 3, 4, 5, 0], [1, 2, 3, 4, 5, -6], [1, 2, 3, 4, 5, "6"]):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            build(run, FLAT, reps=6)
+            pins = json.loads((run / "pins.json").read_text())
+            pins["reps"] = bad
+            (run / "pins.json").write_text(json.dumps(pins))
+            status = run_eval(run)
+            assert status == ev.EXIT_VOID, (
+                f"pins.reps {bad} must VOID, got exit {status}"
+            )
+
+
+def test_spread_is_reported_but_never_gates():
+    """spread survives as a diagnostic and decides nothing.
+
+    The design keeps it deliberately: a cell whose range blows out while its
+    interval stays tight is a machine-conditions story, not a code story, and
+    that is only visible if both numbers are in the report. The first
+    implementation dropped the fields silently, which is why this asserts
+    their presence as well as their irrelevance to the verdict.
+
+    The fixture gives cell A one outlier rep at nine reps, where the maximal
+    rank is k=2 and the interval is (x_(2), x_(8)) -- so the outlier sits
+    outside it. Six reps would not show this: at n=6 the maximal rank is k=1
+    and the interval IS the min-to-max range, which is why the two statistics
+    only visibly diverge once n clears the first k-increment.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp)
+        build(run, FLAT, reps=9, jitter={"A1": (40.0, 20.0)})
+        status = run_eval(run)
+        report = json.loads((run / "verdict.json").read_text())
+        cell = report["cells"]["A"]
+        assert "p50_spread" in cell and "p99_spread" in cell, (
+            f"spread must stay in the report as a diagnostic: {sorted(cell)}"
+        )
+        assert cell["p50_spread"] > 2.0, (
+            f"fixture must produce a wide range, got {cell['p50_spread']}"
+        )
+        assert cell["p50_rel_half_width"] == 0.0, (
+            "one outlier must not move the k=1 interval, got "
+            f"{cell['p50_rel_half_width']}"
+        )
+        assert status == ev.EXIT_PASS, (
+            f"a wide spread must not decide the verdict, got exit {status}"
+        )
+
+
 def check(name, fn):
     """Run one gate check, record the failure, keep going.
 
@@ -656,6 +729,8 @@ def main() -> None:
     check("gate/insufficiency floor", test_insufficiency_floor)
     check("gate/degenerate input", test_degenerate_input)
     check("gate/archived run wiring", test_archived_run_regrades_as_insufficiency)
+    check("gate/duplicate reps VOID", test_duplicate_reps_void)
+    check("gate/spread reported, never gating", test_spread_is_reported_but_never_gates)
 
     if FAILURES:
         print(f"\nFAILED: {len(FAILURES)} stability-gate check(s): {', '.join(FAILURES)}")
