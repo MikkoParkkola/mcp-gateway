@@ -190,10 +190,13 @@ rather than a reference to whatever the harness happened to produce.
    populations — including the bimodal `0.49·U(0.99,1.01) + 0.51·U(1.99,2.01)` that refuted
    the first draft — asserting empirical coverage ≥ 0.95 minus Monte-Carlo error. This test
    fails against the t-form at 85.5% and is the reason the design changed.
-2. **Expected monotonicity (P1).** Draw many independent samples at each N and assert the
-   **mean** relative half-width is non-increasing in N. Explicitly *not* a per-sample
-   assertion: appending `2` to `[1,1,1]` legitimately raises the half-width from 0 while the
-   median is unmoved, and a test forbidding that would be asserting a false property.
+2. **Observed k-plateau sawtooth — explicitly NOT P1.** P1 is withdrawn above, so this test
+   pins what the statistic actually does instead of a property it lacks: the `n → k` table
+   with its exact closed-form coverage, the mean half-width *rising* inside each k-plateau
+   (6→7, 7→8, 9→10, 10→11, 12→13), and *dropping* at each k increment (6→9, 9→12). Choosing
+   an n-grid that makes a monotonicity assertion pass would hide the defect — that grid was
+   written once and removed, and this note exists so it is not written again. The narrower
+   P1' is covered by the k-increment drops.
 3. **Resolving power (P3).** Two synthetic populations with known dispersion: one tight
    enough that the margin is resolvable at the tested N — assert **stable**; one too wide —
    assert **unstable**. This is the pair that a degenerate always-INCONCLUSIVE gate fails.
