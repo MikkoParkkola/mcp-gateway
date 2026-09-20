@@ -3,28 +3,28 @@
   "tool_inventory_size": 119,
   "corpus_size": 114,
   "candidate_pool_size": 119,
-  "overall_top1_hit_rate": 0.7368421052631579,
-  "overall_top3_hit_rate": 0.8596491228070176,
+  "overall_top1_hit_rate": 0.7456140350877193,
+  "overall_top3_hit_rate": 0.868421052631579,
   "overall_top5_hit_rate": 0.9035087719298246,
-  "overall_mean_reciprocal_rank": 0.8071325869622403,
+  "overall_mean_reciprocal_rank": 0.8172169567401698,
   "by_derivation": {
     "abbreviation": {
       "n": 15,
       "top1_hit_rate": 0.8,
-      "top3_hit_rate": 0.8666666666666667,
-      "mean_reciprocal_rank": 0.8282186948853616
+      "top3_hit_rate": 0.8,
+      "mean_reciprocal_rank": 0.8226455026455025
     },
     "description_lead": {
       "n": 24,
-      "top1_hit_rate": 0.9583333333333334,
+      "top1_hit_rate": 0.9166666666666666,
       "top3_hit_rate": 1.0,
-      "mean_reciprocal_rank": 0.9791666666666666
+      "mean_reciprocal_rank": 0.9583333333333334
     },
     "name_phrase": {
       "n": 30,
-      "top1_hit_rate": 0.7,
+      "top1_hit_rate": 0.6666666666666666,
       "top3_hit_rate": 0.9666666666666667,
-      "mean_reciprocal_rank": 0.8288888888888889
+      "mean_reciprocal_rank": 0.8122222222222223
     },
     "shared_prefix_ambiguous": {
       "n": 13,
@@ -34,15 +34,15 @@
     },
     "tag_query": {
       "n": 20,
-      "top1_hit_rate": 0.6,
-      "top3_hit_rate": 0.6,
-      "mean_reciprocal_rank": 0.6329018122400476
+      "top1_hit_rate": 0.65,
+      "top3_hit_rate": 0.65,
+      "mean_reciprocal_rank": 0.671961349964252
     },
     "typo": {
       "n": 12,
-      "top1_hit_rate": 0.3333333333333333,
-      "top3_hit_rate": 0.5833333333333334,
-      "mean_reciprocal_rank": 0.5054276315789473
+      "top1_hit_rate": 0.5,
+      "top3_hit_rate": 0.6666666666666666,
+      "mean_reciprocal_rank": 0.6264297385620915
     }
   },
   "cases": [
@@ -391,11 +391,11 @@
       "gold_tools": [
         "video_create"
       ],
-      "best_gold_rank": 1,
-      "top1_hit": true,
+      "best_gold_rank": 2,
+      "top1_hit": false,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 1.0
+      "reciprocal_rank": 0.5
     },
     {
       "id": "name_phrase::wayback_availability",
@@ -586,11 +586,11 @@
       "gold_tools": [
         "hackernews_show"
       ],
-      "best_gold_rank": 1,
-      "top1_hit": true,
+      "best_gold_rank": 2,
+      "top1_hit": false,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 1.0
+      "reciprocal_rank": 0.5
     },
     {
       "id": "description_lead::internet_archive_metadata",
@@ -768,11 +768,11 @@
       "gold_tools": [
         "contacts_list"
       ],
-      "best_gold_rank": 11,
+      "best_gold_rank": 17,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.09090909090909091
+      "reciprocal_rank": 0.058823529411764705
     },
     {
       "id": "tag_query::albums",
@@ -811,11 +811,11 @@
         "confluence_search",
         "jira_search"
       ],
-      "best_gold_rank": 85,
+      "best_gold_rank": 16,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.011764705882352941
+      "reciprocal_rank": 0.0625
     },
     {
       "id": "tag_query::audit",
@@ -853,11 +853,11 @@
         "stripe_charges",
         "stripe_create_payment_intent"
       ],
-      "best_gold_rank": 68,
+      "best_gold_rank": 97,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.014705882352941176
+      "reciprocal_rank": 0.010309278350515464
     },
     {
       "id": "tag_query::bus",
@@ -883,11 +883,11 @@
       "gold_tools": [
         "screenshot_url"
       ],
-      "best_gold_rank": 4,
-      "top1_hit": false,
-      "top3_hit": false,
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 0.25
+      "reciprocal_rank": 1.0
     },
     {
       "id": "tag_query::cdp",
@@ -935,11 +935,11 @@
       "gold_tools": [
         "stripe_create_payment_intent"
       ],
-      "best_gold_rank": 72,
+      "best_gold_rank": 98,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.013888888888888888
+      "reciprocal_rank": 0.01020408163265306
     },
     {
       "id": "tag_query::climate",
@@ -948,11 +948,11 @@
       "gold_tools": [
         "weather"
       ],
-      "best_gold_rank": 60,
+      "best_gold_rank": 112,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.016666666666666666
+      "reciprocal_rank": 0.008928571428571428
     },
     {
       "id": "tag_query::code-review",
@@ -961,11 +961,11 @@
       "gold_tools": [
         "github_create_pr"
       ],
-      "best_gold_rank": 99,
+      "best_gold_rank": 26,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.010101010101010102
+      "reciprocal_rank": 0.038461538461538464
     },
     {
       "id": "tag_query::comments",
@@ -1125,11 +1125,11 @@
       "gold_tools": [
         "github_search_repos"
       ],
-      "best_gold_rank": 54,
+      "best_gold_rank": 35,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.018518518518518517
+      "reciprocal_rank": 0.02857142857142857
     },
     {
       "id": "abbreviation::crm",
@@ -1152,11 +1152,11 @@
         "gws_sheets_append",
         "gws_sheets_read"
       ],
-      "best_gold_rank": 14,
+      "best_gold_rank": 9,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.07142857142857142
+      "reciprocal_rank": 0.1111111111111111
     },
     {
       "id": "abbreviation::dns",
@@ -1205,11 +1205,11 @@
       "gold_tools": [
         "linear_update_issue"
       ],
-      "best_gold_rank": 3,
+      "best_gold_rank": 5,
       "top1_hit": false,
-      "top3_hit": true,
+      "top3_hit": false,
       "top5_hit": true,
-      "reciprocal_rank": 0.3333333333333333
+      "reciprocal_rank": 0.2
     },
     {
       "id": "abbreviation::feed",
@@ -1234,11 +1234,11 @@
         "bus_pull",
         "bus_subscribe"
       ],
-      "best_gold_rank": 1,
-      "top1_hit": true,
+      "best_gold_rank": 2,
+      "top1_hit": false,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 1.0
+      "reciprocal_rank": 0.5
     },
     {
       "id": "shared_prefix_ambiguous::calendar",
@@ -1420,11 +1420,11 @@
         "video_download",
         "video_get"
       ],
-      "best_gold_rank": 2,
-      "top1_hit": false,
+      "best_gold_rank": 1,
+      "top1_hit": true,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 0.5
+      "reciprocal_rank": 1.0
     },
     {
       "id": "shared_prefix_ambiguous::wayback",
@@ -1464,11 +1464,11 @@
       "gold_tools": [
         "agent_search"
       ],
-      "best_gold_rank": 2,
-      "top1_hit": false,
+      "best_gold_rank": 1,
+      "top1_hit": true,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 0.5
+      "reciprocal_rank": 1.0
     },
     {
       "id": "typo::contacts_list",
@@ -1477,11 +1477,11 @@
       "gold_tools": [
         "contacts_list"
       ],
-      "best_gold_rank": 3,
+      "best_gold_rank": 4,
       "top1_hit": false,
-      "top3_hit": true,
+      "top3_hit": false,
       "top5_hit": true,
-      "reciprocal_rank": 0.3333333333333333
+      "reciprocal_rank": 0.25
     },
     {
       "id": "typo::github_create_issue",
@@ -1490,11 +1490,11 @@
       "gold_tools": [
         "github_create_issue"
       ],
-      "best_gold_rank": 4,
-      "top1_hit": false,
-      "top3_hit": false,
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 0.25
+      "reciprocal_rank": 1.0
     },
     {
       "id": "typo::gmail_labels",
@@ -1503,11 +1503,11 @@
       "gold_tools": [
         "gmail_labels"
       ],
-      "best_gold_rank": 2,
-      "top1_hit": false,
+      "best_gold_rank": 1,
+      "top1_hit": true,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 0.5
+      "reciprocal_rank": 1.0
     },
     {
       "id": "typo::hackernews_get_item",
@@ -1516,11 +1516,11 @@
       "gold_tools": [
         "hackernews_get_item"
       ],
-      "best_gold_rank": 5,
+      "best_gold_rank": 2,
       "top1_hit": false,
-      "top3_hit": false,
+      "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 0.2
+      "reciprocal_rank": 0.5
     },
     {
       "id": "typo::jira_search",
@@ -1529,11 +1529,11 @@
       "gold_tools": [
         "jira_search"
       ],
-      "best_gold_rank": 19,
+      "best_gold_rank": 12,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.05263157894736842
+      "reciprocal_rank": 0.08333333333333333
     },
     {
       "id": "typo::linear_get_teams",
@@ -1542,11 +1542,11 @@
       "gold_tools": [
         "linear_get_teams"
       ],
-      "best_gold_rank": 1,
-      "top1_hit": true,
+      "best_gold_rank": 2,
+      "top1_hit": false,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 1.0
+      "reciprocal_rank": 0.5
     },
     {
       "id": "typo::notion_create_page",
@@ -1594,11 +1594,11 @@
       "gold_tools": [
         "video_create"
       ],
-      "best_gold_rank": 16,
+      "best_gold_rank": 17,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.0625
+      "reciprocal_rank": 0.058823529411764705
     },
     {
       "id": "typo::weather_current",
@@ -1607,11 +1607,11 @@
       "gold_tools": [
         "weather_current"
       ],
-      "best_gold_rank": 6,
+      "best_gold_rank": 8,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.16666666666666666
+      "reciprocal_rank": 0.125
     }
   ]
 }

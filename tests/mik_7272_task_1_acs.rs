@@ -643,16 +643,31 @@ mod http {
     /// point of `.4` and `.13` is that a declaration on an earlier request
     /// carries nothing forward.
     pub(super) fn modern(id: i64, method: &str, params: Value, declares_tasks: bool) -> Value {
+        let capabilities = if declares_tasks {
+            json!({ "extensions": { TASKS: {} } })
+        } else {
+            json!({})
+        };
+        modern_declaring(id, method, params, capabilities)
+    }
+
+    /// A modern request carrying a verbatim client-capabilities object.
+    ///
+    /// [`modern`] covers the two declarations every other row needs; this one
+    /// exists for the rows that put something the specification does not allow
+    /// under the extension identifier, which a `bool` cannot express.
+    pub(super) fn modern_declaring(
+        id: i64,
+        method: &str,
+        params: Value,
+        capabilities: Value,
+    ) -> Value {
         let mut params = params;
         params["_meta"] = json!({
             "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-            "io.modelcontextprotocol/clientCapabilities": if declares_tasks {
-                json!({ "extensions": { TASKS: {} } })
-            } else {
-                json!({})
-            },
             "io.modelcontextprotocol/clientInfo": { "name": "ExampleClient", "version": "1.0.0" }
         });
+        params["_meta"]["io.modelcontextprotocol/clientCapabilities"] = capabilities;
         json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
     }
 
@@ -940,7 +955,7 @@ mod wire {
     use axum::http::StatusCode;
     use serde_json::json;
 
-    use super::http::{TASKS, modern, post};
+    use super::http::{TASKS, modern, modern_declaring, post};
 
     const TASK_ID: &str = "task-2a4c1e60-0b1f-4a0e-9a1a-1f2b3c4d5e6f";
 
@@ -1002,6 +1017,68 @@ mod wire {
             )),
             Some(&json!({})),
             "the refusal must name the extension the client failed to declare: {body}"
+        );
+    }
+
+    // =======================================================================
+    // MIK-7272.EXT.1 — the gate reads the declaration through ONE parser.
+    // =======================================================================
+
+    /// The route-level half of E5b. A parse-level assertion on
+    /// `RequestShape::declared_extensions` stays green while the live gate runs
+    /// its own hand-rolled `is_some()` check, so the two parsers can disagree
+    /// with every unit test passing. This case fails unless the gate and
+    /// `ExtensionSet::from_capabilities` answer the same bytes the same way.
+    #[tokio::test]
+    async fn ac_ext_1_e6_a_non_object_settings_value_does_not_declare_the_extension() {
+        for malformed in [json!(3), json!(null), json!("yes"), json!([]), json!(true)] {
+            // GIVEN a request that names the extension identifier but puts
+            // something other than a settings object behind it
+            let (status, body) = post(
+                "key-a",
+                modern_declaring(
+                    1,
+                    "tools/call",
+                    json!({ "name": "gateway_list_servers", "task": {} }),
+                    json!({ "extensions": { TASKS: malformed } }),
+                ),
+            )
+            .await;
+
+            // THEN presence is not agreement: the request is refused exactly as
+            // if the identifier had been absent.
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "settings value {malformed}: {body}"
+            );
+            assert_eq!(
+                body["error"]["code"], -32021,
+                "settings value {malformed}: {body}"
+            );
+        }
+    }
+
+    /// The companion to the row above: the valid declaration still passes.
+    /// Without it, a gate that refuses every request would satisfy E6.
+    #[tokio::test]
+    async fn ac_ext_1_e7_a_valid_settings_object_still_declares_the_extension() {
+        // GIVEN the shape the specification requires
+        let (_, body) = post(
+            "key-a",
+            modern_declaring(
+                1,
+                "tools/call",
+                json!({ "name": "gateway_list_servers", "task": {} }),
+                json!({ "extensions": { TASKS: {} } }),
+            ),
+        )
+        .await;
+
+        // THEN the gate lets it through
+        assert!(
+            body.get("error").is_none(),
+            "a validly declared extension must still be served: {body}"
         );
     }
 

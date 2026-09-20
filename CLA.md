@@ -6,8 +6,9 @@
 > licenses** for the Noncommercial-licensed code. A plain inbound=outbound clause
 > or a DCO certifies provenance but does **not** grant the relicensing authority
 > required to sell commercial licenses on contributed code — hence this CLA.
-> This document is pending confirmation by the project's legal counsel; the
-> operative text may be adjusted before it is relied upon.
+> The Licensor approved this text on 2026-09-16; it is operative from that
+> date and applies to every Contribution submitted while it has been in the
+> repository.
 
 By contributing to mcp-gateway (a "Contribution": any original work of
 authorship you submit — code, docs, configuration — via pull request, patch, or
@@ -78,10 +79,13 @@ that entity, and the person accepting this CLA represents that they are
 authorized to bind it. An entity may also sign a single corporate CLA covering
 its employees by emailing the contact below.
 
-## How to sign
+## Recording your acceptance
 
-Add the following line to the description of your **first** pull request (one
-time; it then covers your future Contributions):
+You accept this CLA by contributing, as stated above — no signature is
+required and none is requested before a merge. If you would like the
+acceptance recorded explicitly, add the following line to the description of
+your **first** pull request (one time; it then covers your future
+Contributions):
 
 ```
 I have read and agree to the mcp-gateway Contributor License Agreement (CLA.md).

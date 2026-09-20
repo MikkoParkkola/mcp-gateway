@@ -702,7 +702,7 @@ describes — per-slot entries could not contend at all — so the accepted cost
 and would disappear under the other one. And if the operator later says per slot, the change is the
 cache key alone: one field, one lookup, and A3 is deleted rather than repaired. Not a redesign.
 The plan carries the same provisional status beside its other unconfirmed full-scope reading
-(`docs/requirements/RELEASE-4.0.0-plan.md:115`, landed by the team-lead at `fb994c43`). That file is
+(`docs/internal/requirements/RELEASE-4.0.0-plan.md:115`, landed by the team-lead at `fb994c43`). That file is
 team-lead-owned; this design does not edit it.
 
 - *Does a pre-`initialize` probe reach an SSE peer?* — read `src/transport/http/mod.rs:200,:327,:434-435,:815-821` and `src/config/mod.rs:1532,:1546` — no: `message_url` is unset until the handshake, and `streamable_http` defaults false — killed the revision-1 placement, which is the whole of revision 2.

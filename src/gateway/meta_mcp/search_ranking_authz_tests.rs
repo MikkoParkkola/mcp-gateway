@@ -693,7 +693,8 @@ async fn a_zero_relevance_candidate_cannot_be_lifted_by_usage() {
 // guard the *capability* backend. The MCP-backend collectors are separate code
 // with their own copies of the guard, so everything above leaves them unpinned.
 //
-// The arrange never touches `CachedMetadata::store_shared` (`pub(super)`).
+// The arrange never seeds the cache directly; `CachedMetadata` has no setter
+// outside its own fill path.
 // `collect_search_backend_matches` reads the cache through
 // `backend_tools_for_discovery(&backend, false)` — `allow_empty_cache_fetch` is
 // false, so an empty cache yields nothing and the search would pass vacuously.
@@ -1126,4 +1127,94 @@ async fn glob_fixture_meta() -> (MetaMcp, Vec<TempDir>) {
     .with_profile_registry(registry_with_default("open", poisoned_profile(false)));
     meta.set_capabilities(cap_backend);
     (meta, dirs)
+}
+
+// ── MIK-7334.CATALOGUE.1 — a `per_user` backend must still be discoverable ──
+//
+// `Backend::get_cached_list_shared` short-circuits for `session_mode =
+// per_user`, so the four metadata caches (tools, resources, resource
+// templates, prompts) are never populated for such a backend. Discovery reads
+// those caches — `search.rs:155` (`has_cached_tools`), `spec_preview.rs:1039`
+// (`get_cached_tools_snapshot`), `surfaced.rs:111/150` (`get_cached_tool`) —
+// so every meta discovery entry point answers with zero tools while the direct
+// route (`router/backend_handlers.rs:649`) forwards the very same
+// static-credential `tools/list` live to every caller.
+
+/// A `session_mode = per_user` MCP backend serving [`MCP_TOOLS`].
+///
+/// Identical to [`mcp_backend`] but for the propagation config, and it does not
+/// assert the cache warmed: whether it warms is what the test asks.
+async fn per_user_mcp_backend(name: &str) -> Arc<crate::backend::Backend> {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+    };
+
+    let backend = Arc::new(Backend::new(
+        name,
+        BackendConfig {
+            identity_propagation: Some(IdentityPropagationConfig {
+                strategy: PropagationStrategyKind::SignedAssertion,
+                audience: "aud".to_string(),
+                required: true,
+                session_mode: SessionMode::PerUser,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
+            }),
+            ..Default::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let payload: Vec<Value> = MCP_TOOLS
+        .iter()
+        .map(|(n, d)| json!({ "name": n, "description": d, "inputSchema": { "type": "object" } }))
+        .collect();
+    backend.set_transport_for_test(Arc::new(ToolsListTestTransport {
+        tools: json!(payload),
+    }));
+    let _ = backend.get_tools_shared().await;
+    backend
+}
+
+/// GIVEN a `session_mode = per_user` backend whose upstream serves two tools
+/// WHEN a caller searches with a permissive profile
+/// THEN both tools are discoverable, exactly as on the non-`per_user` control
+/// [`permissive_profile_sees_the_mcp_backend_tools`].
+#[tokio::test]
+async fn per_user_backend_tools_are_discoverable() {
+    let backends = Arc::new(BackendRegistry::new());
+    assert!(
+        backends.register(per_user_mcp_backend(MCP_BACKEND).await),
+        "fixture backend failed to register"
+    );
+    let meta = MetaMcp::with_features(
+        backends,
+        None,
+        None,
+        Some(Arc::new(SearchRanker::new())),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(false)
+    .with_profile_registry(registry_with_default(
+        "open",
+        RoutingProfileConfig {
+            description: "no backend or tool restrictions".to_string(),
+            ..Default::default()
+        },
+    ));
+
+    let response = meta
+        .search_tools(&json!({ "query": QUERY }), None)
+        .await
+        .unwrap();
+
+    let mut names = tool_names(&response);
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["weak_match".to_string(), QUERY.to_string()],
+        "a per_user backend's tools must be discoverable, not blanked"
+    );
 }

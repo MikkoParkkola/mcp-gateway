@@ -2,14 +2,14 @@
 
 Date: 2026-09-08 · Release: 4.0.0 · Author: lane `confirm-gate` · Owner of the work described: lane `bridge-mrtr7`
 
-Written under ruling R4 (`docs/release/2026-09-08-team-lead-rulings.md:116`): `MIK-7246.CONFIRM.2`
+Written under ruling R4 (`docs/internal/release/2026-09-08-team-lead-rulings.md:116`): `MIK-7246.CONFIRM.2`
 stays with the bridge lane because the row is reachable-through-the-MRTR-path and that path is the
 bridge lane's file. This note is the gate side of that seam, written by the lane that holds the gate
 and handed over. **Nothing here is implemented against it.** No gate code changed for this note.
 
 Mechanism is not re-opened here. The branch was taken on 2026-09-06 (Option I in
 `docs/design/2026-09-06-confirm-2-destructive-confirmation.md`; the criterion text it must satisfy is quoted at
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md:606`): a gateway-originated, in-band `InputRequired` result
+`docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md:606`): a gateway-originated, in-band `InputRequired` result
 carried over the MRTR continuation envelope and redeemed by the client's next call. The test plan
 beside it (`...-test-plan.md`) already names the cases. This note only says what the gate looks like
 from inside, so the bridge lane does not have to rediscover it.

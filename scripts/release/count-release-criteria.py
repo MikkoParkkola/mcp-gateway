@@ -18,9 +18,9 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 STATUS = ROOT / "docs/requirements/RELEASE-4.0.0-criteria-status.md"
 REQUIREMENTS = ROOT / "docs/requirements/RELEASE-4.0.0-requirements.md"
-PLAN = ROOT / "docs/requirements/RELEASE-4.0.0-plan.md"
-ROLLUP = ROOT / "docs/requirements/RELEASE-4.0.0-blocking-rollup.md"
-BOARD = ROOT / "docs/requirements/RELEASE-4.0.0-readiness-board.md"
+PLAN = ROOT / "docs/internal/requirements/RELEASE-4.0.0-plan.md"
+ROLLUP = ROOT / "docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md"
+BOARD = ROOT / "docs/internal/requirements/RELEASE-4.0.0-readiness-board.md"
 # Three identifier families: Linear tickets, non-functional requirements, and
 # GitHub issues. `GH<n>` is admitted because a criterion set can be published
 # on an issue before it has a Linear ticket, and the identifier the reporter

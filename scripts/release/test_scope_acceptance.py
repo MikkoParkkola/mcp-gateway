@@ -68,6 +68,8 @@ class AcceptanceTests(unittest.TestCase):
                 {
                     "id": "GH462.CONFIG.1",
                     "status": "met",
+                    "stage": "met",
+                    "blocked_on": "none",
                     "evidence": ["proof.md"],
                     "note": "Reviewed byte-preservation result.",
                 }
@@ -96,8 +98,9 @@ class AcceptanceTests(unittest.TestCase):
             path.write_text(content)
         # The baseline counter has its own regression suite. Isolate its exit
         # here while exercising real CLI reads, parsing and release-mode exit.
+        self.stdout = io.StringIO()
         with (
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(self.stdout),
             contextlib.redirect_stderr(io.StringIO()),
             mock.patch.object(gate, "ROOT", self.root),
             mock.patch.object(
@@ -113,7 +116,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(self.cli("--release"), 0)
 
     def test_consistent_pending_work_is_not_release_acceptance(self):
-        self.data["criteria"][0].update(status="pending", evidence=[])
+        self.data["criteria"][0].update(status="pending", stage="proven", evidence=[])
         self.assertEqual(self.cli("--check"), 0)
         self.assertEqual(self.cli("--release"), 1)
 
@@ -199,11 +202,84 @@ class AcceptanceTests(unittest.TestCase):
                 self.data["criteria"][0]["status"] = status
                 self.assertTrue(self.inspect()[0])
 
+    def test_stage_cannot_disagree_with_status_or_leave_the_ladder(self):
+        stages = ", ".join(gate.STAGES)
+        blockers = ", ".join(gate.BLOCKED_ON)
+        disagree = "stage 'met' and status 'met' must agree"
+        for patch, expected in (
+            ({"stage": "shipped"}, f"stage must be one of {stages}"),
+            ({"stage": "proven"}, disagree),
+            ({"stage": "met", "status": "pending"}, disagree),
+            ({"blocked_on": "someone"}, f"blocked_on must be one of {blockers}"),
+            ({"blocked_on": "operator"}, "a met criterion cannot still be blocked"),
+        ):
+            with self.subTest(**patch):
+                self.setUp()
+                self.data["criteria"][0].update(patch)
+                # Match the exact diagnostic. Every input here also trips a
+                # neighbouring rule, so asserting "some error" would stay green
+                # with the rule under test deleted or widened.
+                self.assertIn(f"GH462.CONFIG.1: {expected}", self.inspect()[0])
+                self.assertEqual(self.cli("--check"), 2)
+
+    def test_a_held_criterion_is_accepted_and_named_in_the_burnup(self):
+        self.data["criteria"][0].update(
+            status="pending", stage="proven", blocked_on="external", evidence=[]
+        )
+        self.assertEqual(self.cli("--check"), 0)
+        self.assertIn(
+            "Stage burnup: 0/1 met; ungraded 0 | graded 0 | built 0"
+            " | on-line 0 | proven 1 | met 0; held: GH462.CONFIG.1 (external)",
+            self.stdout.getvalue(),
+        )
+
     def test_resolved_decision_needs_selection_and_evidence(self):
         self.data["decisions"][0]["selection"] = ""
         self.assertTrue(self.inspect()[0])
         self.data["decisions"][0].update(selection="Selected", evidence=[])
         self.assertTrue(self.inspect()[0])
+
+    def test_evidence_may_cite_a_line_or_a_range(self):
+        (self.root / "proof.md").write_text("one\ntwo\nthree\n")
+        self.data["criteria"][0]["evidence"] = ["proof.md:2", "proof.md:1-3"]
+        self.assertEqual(self.inspect(), ([], [], []))
+
+    def test_evidence_line_beyond_the_last_line_is_invalid(self):
+        self.data["criteria"][0]["evidence"] = ["proof.md:99"]
+        errors, _, _ = self.inspect()
+        self.assertTrue(any("line 99" in error for error in errors), errors)
+
+    def test_evidence_line_citation_requires_an_existing_path(self):
+        self.data["criteria"][0]["evidence"] = ["absent.md:1"]
+        errors, _, _ = self.inspect()
+        self.assertTrue(any("absent.md:1" in error for error in errors), errors)
+
+    def test_evidence_range_must_be_ordered(self):
+        (self.root / "proof.md").write_text("one\ntwo\nthree\n")
+        self.data["criteria"][0]["evidence"] = ["proof.md:3-1"]
+        errors, _, _ = self.inspect()
+        self.assertTrue(any("range" in error for error in errors), errors)
+
+    def test_decision_may_carry_a_documented_rationale(self):
+        # A ruling records why it was taken and who took it. The four required
+        # keys stay mandatory; the optional ones must not be an escape hatch.
+        self.data["decisions"][0].update(
+            resolved="2026-09-17",
+            authority="release owner ruling recorded in this ledger",
+            rationale="A narrower published claim would be the dishonest one.",
+            consequence="The parent criterion stays pending on its other checks.",
+        )
+        self.assertEqual(self.inspect(), ([], [], []))
+
+    def test_decision_rejects_an_undocumented_key(self):
+        self.data["decisions"][0]["freeform"] = "smuggled"
+        errors, _, _ = self.inspect()
+        self.assertTrue(any("freeform" in error for error in errors), errors)
+
+    def test_optional_decision_field_must_carry_text(self):
+        self.data["decisions"][0]["rationale"] = "   "
+        errors, _, _ = self.inspect()
+        self.assertTrue(any("rationale" in error for error in errors), errors)
 
     def test_pending_decision_cannot_claim_a_selection(self):
         self.data["decisions"][0]["status"] = "pending"
@@ -286,6 +362,8 @@ class PublishCheckTests(unittest.TestCase):
         criterion = {
             "id": "GH462.CONFIG.1",
             "status": "pending",
+            "stage": "proven",
+            "blocked_on": "none",
             "evidence": [],
             "note": "Awaiting release acceptance evidence.",
         }
@@ -293,6 +371,8 @@ class PublishCheckTests(unittest.TestCase):
             criterion = {
                 "id": "GH462.CONFIG.1",
                 "status": "met",
+                "stage": "met",
+                "blocked_on": "none",
                 "evidence": ["proof.md"],
                 "note": "Reviewed byte-preservation result.",
             }

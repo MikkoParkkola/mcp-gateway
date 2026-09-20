@@ -22,29 +22,18 @@ use crate::gateway::input_bridge::{ClientChannel, DeliveryError};
 use crate::transport::PendingRequestGuard;
 
 /// A [`ClientChannel`] over the stdio pipes.
-//
-// Constructed only by this module's tests until the stdio read loop spawns its
-// dispatches and a single writer owns stdout — sections 1 and 2 of
-// `docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md`, which this
-// type (section 4) is built for. `allow` rather than `expect`, and uncfg'd:
-// the three builds disagree about whether the type is dead. The test build
-// constructs it, and CI showed the Kani job reporting it dead in one pass and
-// reachable in another, so every `expect` spelling is unfulfilled in one of
-// them. `allow` is silent either way; it comes out when the consumer lands.
-#[allow(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")]
 pub(crate) struct StdioClientChannel {
     /// Outbound requests awaiting a reply, keyed by the id we minted.
     pending: DashMap<String, oneshot::Sender<Value>>,
     /// The only handle to stdout. Frames are queued, never written here.
-    writer: mpsc::UnboundedSender<Value>,
+    writer: mpsc::Sender<Value>,
     /// Set once the client is gone, and never cleared.
     closed: AtomicBool,
 }
 
-#[allow(dead_code, reason = "MIK-7387 concurrent dispatch is the consumer")]
 impl StdioClientChannel {
     /// Build a channel that queues its frames on `writer`.
-    pub(crate) fn new(writer: mpsc::UnboundedSender<Value>) -> Self {
+    pub(crate) fn new(writer: mpsc::Sender<Value>) -> Self {
         Self {
             pending: DashMap::new(),
             writer,
@@ -132,11 +121,23 @@ impl ClientChannel for StdioClientChannel {
             frame["params"] = params;
         }
 
-        if self.writer.send(frame).is_err() {
+        // Capacity first, commit second. The queue is bounded, so `send`
+        // parks when it is full, and `close` runs inside that park: the flag
+        // goes up and the map is cleared, and a plain `send` would then
+        // commit the frame to a channel that is already terminal — a prompt
+        // nothing can answer, reported to the caller as a timeout. Reserving
+        // moves the park ahead of the commit, so the flag below is read with
+        // capacity already in hand and the permit is dropped unused when the
+        // session went away while we waited.
+        let Ok(permit) = self.writer.reserve().await else {
             // The writer task is gone, so stdout is closed and nothing we
             // queue can reach anyone.
             return Err(DeliveryError::NoSession);
+        };
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(DeliveryError::NoSession);
         }
+        permit.send(frame);
         debug!(%id, %method, "stdio: sent bridged request to the client");
 
         // A dropped sender means the entry went away without an answer, which
@@ -169,7 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_reply_reaches_the_request_that_is_waiting_for_it() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(16);
         let channel = std::sync::Arc::new(StdioClientChannel::new(tx));
 
         let asking = tokio::spawn({
@@ -203,11 +204,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_send_parked_on_a_full_queue_refuses_once_close_wins_the_race() {
+        // The queue is bounded, so a producer can park inside `send`. `close`
+        // runs in that gap: it raises the flag and clears the map, and the
+        // frame would otherwise still be committed to a channel that is
+        // already terminal — a prompt the client can never answer, reported
+        // to the caller as a timeout rather than a dead session.
+        let (tx, mut rx) = mpsc::channel(1);
+        let channel = std::sync::Arc::new(StdioClientChannel::new(tx.clone()));
+        tx.send(json!({"filler": true}))
+            .await
+            .expect("the empty queue took the filler");
+
+        let asking = tokio::spawn({
+            let channel = std::sync::Arc::clone(&channel);
+            async move {
+                channel
+                    .send_request("stdio", "elicit-1", "elicitation/create", None)
+                    .await
+            }
+        });
+        // Let the task register its entry and reach the park on the full queue.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        channel.close();
+        let filler = rx.recv().await.expect("the filler was queued");
+        assert!(
+            filler.get("filler").is_some(),
+            "the filler is what freed the capacity the parked send was waiting for"
+        );
+
+        let outcome = asking.await.expect("task panicked");
+        assert!(
+            matches!(outcome, Err(DeliveryError::NoSession)),
+            "close won the race, so the caller is told the session is gone, not that it timed out: {outcome:?}"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no frame may be written after close: the client can never answer it"
+        );
+    }
+
+    #[tokio::test]
     async fn an_abandoned_request_strands_no_entry() {
         // The cancellation contract on `ClientChannel::send_request`: an outer
         // timeout drops the future, and neither the success nor the error path
         // runs. Without the guard the entry outlives the prompt.
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(16);
         let channel = StdioClientChannel::new(tx);
 
         let outcome = tokio::time::timeout(
@@ -225,7 +270,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_wakes_every_outstanding_prompt() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(16);
         let channel = std::sync::Arc::new(StdioClientChannel::new(tx));
 
         let asking = tokio::spawn({
@@ -253,7 +298,7 @@ mod tests {
         // reaches its bridged question inside that window must not register an
         // entry nothing can resolve and then wait out the bridge's timeout —
         // that spends the drain and loses the response it was drained for.
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(16);
         let channel = StdioClientChannel::new(tx);
         channel.close();
 

@@ -678,7 +678,7 @@ superseded sentence is gone, not footnoted.
 
    Asked of: the release owner, directly, relayed through the team lead. The
    ruling confirms the criteria-row ruling of 2026-09-07 and is recorded as
-   `BRIDGE.4` in `docs/release/2026-09-08-team-lead-rulings.md`.
+   `BRIDGE.4` in `docs/internal/release/2026-09-08-team-lead-rulings.md`.
 
    The answer: **the call fails, naming the unanswered entry.** Two
    alternatives were put and both rejected — re-invoking the backend with what
@@ -1246,7 +1246,7 @@ decides whether the caller sees the first round's or the last's.
 
 The governance gate is called **before every dispatch the exchange makes**, not
 only the first. Ruled at `R8 — bridge-mrtr7: WIRE.5 takes per-round gating; the
-criterion is not narrowed` (`docs/release/2026-09-08-team-lead-rulings.md`),
+criterion is not narrowed` (`docs/internal/release/2026-09-08-team-lead-rulings.md`),
 which took exit (A) of the escalation below on the elimination test: after (B)
 an exchange that overspends an operator's limit stays describable and merely
 untested; after (A) it cannot be stated at all. Eliminating a mechanism is this
@@ -1321,7 +1321,7 @@ acceptance criterion asserts, so §P0 reopened where Scope is stated — one add
 line, above — and §P2 reopens at the `WIRE.5` and `WIRE.13` rows of
 `docs/design/2026-09-05-mrtr7-test-plan.md`. The round count does NOT reset: the
 spec moves, the history does not — `R8` and `R22` of
-`docs/release/2026-09-08-team-lead-rulings.md` (2026-09-08) both rule so. The repair
+`docs/internal/release/2026-09-08-team-lead-rulings.md` (2026-09-08) both rule so. The repair
 takes no new `BridgeError` variant and no wire change — a call moved inside a
 loop, the propagation the widening already owed, and the documentation delta.
 
@@ -1358,7 +1358,7 @@ ruling that cannot be read against the text it ruled on is unauditable.
   set stays describable, merely untested. After (A) it cannot be stated at all.
   Eliminating a mechanism is always this lane's to do; eliminating a criterion
   is not.
-- **RULED (A), 2026-09-08.** `R8` in `docs/release/2026-09-08-team-lead-rulings.md`
+- **RULED (A), 2026-09-08.** `R8` in `docs/internal/release/2026-09-08-team-lead-rulings.md`
   takes per-round gating and refuses the narrowing, on the recommendation's own
   test. The freeze lifts: the Policy section above is amended to the ruled shape,
   and `WIRE.5` and `WIRE.13` are repaired in
@@ -1602,7 +1602,7 @@ prompt the clamp cut short?
 - asked of: the release owner, via team-lead
 - the answer: `BridgeError::Deadline`, ruled at `R21 — BRIDGE.4: aggregate
   expiry is Deadline, and the reason is attribution`
-  (`docs/release/2026-09-08-team-lead-rulings.md`). The tie-break above stands
+  (`docs/internal/release/2026-09-08-team-lead-rulings.md`). The tie-break above stands
   as written: `left <= per_prompt` resolves to `Deadline`
 - what it changed: nothing in this document's recommendation, and one thing in
   its REASON, which is the half worth keeping. The ruling does not rest on
@@ -1627,7 +1627,7 @@ acceptance criterion. The plan correction sits beside row 320's inversion in
 `2026-09-05-mrtr7-test-plan.md`, and that inversion is now unblocked.
 
 One open item is not this lane's to close: R8a at
-`docs/release/2026-09-08-team-lead-rulings.md:169` still spells the
+`docs/internal/release/2026-09-08-team-lead-rulings.md:169` still spells the
 silent-client shape `DeliveryError::Unanswered { key }`, and no such variant
 exists — `enum DeliveryError` at `src/gateway/input_bridge.rs:158-186` carries
 no `Unanswered`, and no inner variant carries `key` (it sits on the outer

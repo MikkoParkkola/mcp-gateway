@@ -1,6 +1,6 @@
 # CONTROL.4 — wiring `SessionLifecycle` on the 2026 path (design v2, §P1)
 
-Rulings: `docs/release/2026-09-08-team-lead-rulings.md` §R3 (`8bbca3eb`, wire it, do not delete
+Rulings: `docs/internal/release/2026-09-08-team-lead-rulings.md` §R3 (`8bbca3eb`, wire it, do not delete
 it) and §R3a (`a445cf92`, which names the host, the key and the precondition). v1 of this
 document predates R3a and is superseded in four places; the deltas are recorded inline, not
 silently reinterpreted. NO CODE EXISTS YET.

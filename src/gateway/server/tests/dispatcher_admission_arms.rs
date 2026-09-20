@@ -30,8 +30,12 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
         &fixture.tool_policy,
         &fixture.mtls_policy,
         request,
-        SESSION,
-        None,
+        super::super::StdioClient {
+            session_id: SESSION,
+            channel: &crate::gateway::input_bridge::NoClientChannel,
+            handshake_capabilities: crate::protocol::meta::Declared::NONE,
+        },
+        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request carrying an id must produce a response")

@@ -4,13 +4,22 @@ Owner: this ticket's baseline-and-freeze half only. Ordering/live-agent
 half (discovery turns, invalid invocations, total completed-task tokens)
 is out of scope here; see "Not measurable from the corpus alone" below.
 
-Frozen at commit `b121451e959ee99b34945cd0fece1379ddaff37a`, 2026-09-14,
-on branch `docs/mik-3274-ranking-3-baseline`.
+Frozen at commit `f241b464acf6007a88ebc2b576c0825350b018a1`, 2026-09-14.
+
+The measurement was originally taken on branch
+`docs/mik-3274-ranking-3-baseline` at `b121451e959ee99b34945cd0fece1379ddaff37a`
+and this record cited that commit. That branch was never merged: `b121451e` is
+not an ancestor of the release line, so the pin named a commit no release build
+contains. `f241b464` is its rebased copy on the release line (an ancestor of
+`origin/main`), and `git diff b121451e f241b464 -- benchmarks/ranking-baseline/
+tests/mik_3274_ranking_3_baseline.rs src/ranking/` is empty -- same corpus, same
+harness, same ranker. Re-pinning corrects the citation; it does not re-measure.
 
 ## 1. Absence claim re-verification (step 1)
 
 Commands run against this commit, `src/ranking/` on this branch (identical
-to `main` at `8ab4bc5d` -- `src/ranking/` has not changed there):
+to `main` at `8ab4bc5d` -- `src/ranking/` has not changed there, and is still
+byte-identical at `f241b464` and at the current release-line HEAD):
 
 ```
 $ rg -ni "levenshtein|damerau|jaro|edit_distance|trigram|ngram|fuzzy" src/ranking/
@@ -82,6 +91,15 @@ relevance alone), calls the unmodified `SearchRanker::rank()` for every
 corpus query, and records where the best-ranked gold tool landed. Full
 per-case output is in `benchmarks/ranking-baseline/results.json`.
 
+**Determinism correction, 2026-09-18.** The pool is now sorted by capability
+name before ranking. `fs::read_dir` yields entries in filesystem order and the
+ranker breaks ties by pool position, so the harness scored a different sequence
+on APFS than on ext4: the section 4 floors reproduced on the machine that
+measured them and went red in CI on the same commit (overall top-1 0.692982
+against a 0.736 floor, run 35330982796). No floor is edited -- the sorted pool
+measures 0.7456 top-1, 0.8684 top-3 and 0.8172 MRR, clearing every frozen
+threshold. The floors stand as written and are now reproducible anywhere.
+
 ### Selection quality -- MEASURED
 
 | metric | value |
@@ -141,6 +159,26 @@ What a real measurement needs, concretely:
 - Running it costs live LLM API calls and wall-clock time per trial x
   114 queries x however many repeats are needed for stable statistics --
   explicitly out of scope for the baseline-and-freeze half of this ticket.
+- A *different kind of gate* from the section 4 floors, which is the part
+  that cannot be reached by simply running something. Every floor in
+  section 4 was trusted only after a falsifier: perturb the measurement,
+  watch the named floor go red, revert, confirm the run regenerates
+  byte-identically. A live-agent measurement has no byte-identical
+  regeneration. It is stochastic, and its model version (`gpt-5.6-luna`
+  for the MIK-6977 run) is external to this repository and cannot be
+  pinned by a commit the way `f241b464` pins the ranker -- so the same
+  three numbers re-measured later are not comparable to these by equality.
+  Flooring these families therefore needs a gate built on repeats and a
+  stated tolerance band, which no one has designed. That is a design
+  decision, not a measurement someone can go take.
+
+Simulating the agent instead -- assume it picks rank 1, searches again
+when rank 1 is wrong, and sum the tokens that pattern would imply -- would
+produce deterministic, falsifiable-looking numbers for all three families
+from the corpus already in this directory. It is rejected. Simulated agent
+behaviour recorded as measurement is the fabrication this section exists
+to prevent, and the tidiness of the resulting numbers is what makes it
+dangerous rather than what makes it acceptable.
 
 No number is given for these three. Do not treat their absence as zero.
 
@@ -178,11 +216,18 @@ ticket's deliverable.
 
 This corpus (`corpus.json`), harness (`../../tests/mik_3274_ranking_3_baseline.rs`),
 and selection-quality baseline (`results.json`, reproduced in section 3
-above) are frozen as of commit `b121451e959ee99b34945cd0fece1379ddaff37a`
+above) are frozen as of commit `f241b464acf6007a88ebc2b576c0825350b018a1`
 (2026-09-14), before any fuzzy-ranking implementation exists in
-`src/ranking/` (verified in section 1). Landing `RANKING.1` closes this
+`src/ranking/` (verified in section 1). All three are present in that
+commit's tree; this record itself landed afterwards, since it records the
+freeze rather than being frozen by it. Landing `RANKING.1` closes this
 ordering window permanently -- any post-hoc corpus or threshold set after
 that point no longer satisfies MIK-3274.RANKING.3 as written.
+
+The section 4 floors are enforced by the harness: it asserts every frozen
+floor after writing `results.json`, so a selection-quality regression turns
+`cargo test --test mik_3274_ranking_3_baseline` red. The three unmeasured
+families in section 3 have no floor and are asserted on by nothing.
 
 Editing `corpus.json`, `gen_corpus.py`, or the floor thresholds above after
 this freeze date requires the same justification bar as unfreezing any

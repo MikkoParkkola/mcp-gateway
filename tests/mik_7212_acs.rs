@@ -35,6 +35,8 @@ fn payload() -> Payload {
         expires_at: 1_600,
         jti: "jti-1".to_string(),
         hold_key: "exchange-1".to_string(),
+        next_step: None,
+        rounds_used: 0,
         // A backend `input_required` continuation: this file's envelopes are
         // the ones a backend retry redeems, not confirmation grants.
         purpose: ContinuationPurpose::BackendInput,
@@ -838,6 +840,8 @@ mod hardening {
             expires_at: 1_600,
             jti: "jti-1".into(),
             hold_key: "exchange-1".into(),
+            next_step: None,
+            rounds_used: 0,
             // A backend `input_required` continuation, the domain every case
             // in this module mints and redeems in.
             purpose: ContinuationPurpose::BackendInput,
@@ -1060,6 +1064,8 @@ mod mint_budget {
             expires_at: 1_600,
             jti: "jti-1".into(),
             hold_key: "exchange-1".into(),
+            next_step: None,
+            rounds_used: 0,
             // A backend `input_required` continuation, the domain every case
             // in this module mints and redeems in.
             purpose: ContinuationPurpose::BackendInput,
@@ -1152,6 +1158,8 @@ mod envelope_size {
             expires_at: 1_600,
             jti: "jti-1".into(),
             hold_key: "exchange-1".into(),
+            next_step: None,
+            rounds_used: 0,
             // A backend `input_required` continuation, the domain every case
             // in this module mints and redeems in.
             purpose: ContinuationPurpose::BackendInput,

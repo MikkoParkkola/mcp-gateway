@@ -27,7 +27,7 @@ standing ruling, recorded in the next section.
 
 ## Fork closed — Option I is the branch (2026-09-06)
 
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md:18-47` carries a standing ruling for the whole
+`docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md:18-47` carries a standing ruling for the whole
 release: where a row offers *build the mechanism* or *rewrite the criterion so what exists already
 satisfies it*, the recorded operator agreement is to build. It answers Q1 in the negative — a
 refusal does not count as the modern-path answer — and it answers it without a third asking,
@@ -483,7 +483,7 @@ the recommendation while skipping the question the recommendation depends on. Co
 2026-09-06 after a review finding.
 
 **Q1 — Does CONFIRM.2 accept a *refusal* as the modern-path answer for 4.0.0?** — **ANSWERED: no**
-(standing ruling, `docs/requirements/RELEASE-4.0.0-blocking-rollup.md:18-47`, 2026-09-06). Reading
+(standing ruling, `docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md:18-47`, 2026-09-06). Reading
 B holds; Option I is the branch. The two readings are kept below as the record of what was
 weighed, and the recommendation below is preserved unedited — a recommendation the requester
 overruled is evidence about this design's judgment, and rewriting it to agree with the answer

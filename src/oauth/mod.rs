@@ -16,6 +16,8 @@ mod callback;
 pub mod client;
 mod metadata;
 mod storage;
+#[cfg(test)]
+mod upgrade_path_tests;
 
 pub use client::{OAuthClient, OAuthClientConfig};
 pub use metadata::{AuthorizationServerMetadata, IssuerSource, ProtectedResourceMetadata};

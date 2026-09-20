@@ -46,7 +46,7 @@ source-verified proof that its existing coverage is incomplete, which is the
 
 Two design documents target this one criterion:
 
-- `docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity.md` — **the one this plan tests.** Cited by `docs/requirements/RELEASE-4.0.0-gap-plan.md:566` (at `:47,247`). Carries the 2026-08-31 scope receipt withdrawing the backend-schema exclusion (`:353`), which is the owner ruling P5–P7 depend on.
+- `docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity.md` — **the one this plan tests.** Cited by `docs/internal/requirements/RELEASE-4.0.0-gap-plan.md:566` (at `:47,247`). Carries the 2026-08-31 scope receipt withdrawing the backend-schema exclusion (`:353`), which is the owner ruling P5–P7 depend on.
 - `docs/design/2026-08-31-cluster-g-schema-validity.md` — a second design for the same criterion, with its own G-table and zero inbound references repo-wide. **Deleted 2026-09-01**, its load-bearing content merged into the design above; see that document's closing section, `One design for SCHEMA.1, not two`.
 
 `git log --follow` shows two separate histories; neither is a rename of the other,
@@ -408,7 +408,7 @@ recursive `$ref` is permitted, and whether composition depth has a ceiling, are
 questions about intent, not about the tree.
 
 **U9 — RESOLVED 2026-09-08 as (c), by ruling `R6`**
-(`docs/release/2026-09-08-team-lead-rulings.md:103`). The row closes on `$ref`
+(`docs/internal/release/2026-09-08-team-lead-rulings.md:103`). The row closes on `$ref`
 resolution; 2020-12 meta-validity of a FORWARDED schema is refused on purpose,
 because a validator on the emit path means promoting `jsonschema` from
 dev-dependency to runtime (declined under `D30`), and composition stays an

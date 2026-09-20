@@ -378,6 +378,17 @@ impl ProfileRegistry {
         self.profiles.contains_key(name)
     }
 
+    /// Return `true` if the operator configured any profile at all.
+    ///
+    /// Distinct from `contains`: `get` answers every name with an allow-all
+    /// fallback, so "this name resolves" is true even for an empty registry.
+    /// The profile meta-tools have something to describe only when this is
+    /// true.
+    #[must_use]
+    pub fn has_configured_profiles(&self) -> bool {
+        !self.profiles.is_empty()
+    }
+
     /// Return the names of all configured profiles.
     #[must_use]
     pub fn profile_names(&self) -> Vec<&str> {

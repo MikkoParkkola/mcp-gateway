@@ -193,7 +193,7 @@ its deliberately red suite belong to another agent and are untouched here.
 
 ## §P4a — documents this change makes untrue
 
-- `docs/requirements/RELEASE-4.0.0-readiness-board.md:48` — cluster F's row records test plan:
+- `docs/internal/requirements/RELEASE-4.0.0-readiness-board.md:48` — cluster F's row records test plan:
   no. Peer-owned; the change carries the update, the lead rules on who applies it.
 - `docs/requirements/RELEASE-4.0.0-criteria-status.md:343` — the ledger row states that no
   role/transport verification matrix exists. True until the renderer lands, false after.

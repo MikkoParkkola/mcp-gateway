@@ -40,9 +40,34 @@ fn upgrade_from_2_x(extra_args: &[&str]) -> (String, String) {
 fn a_quiet_upgrade_still_delivers_the_breaking_change_notices() {
     let (stdout, stderr) = upgrade_from_2_x(&["--quiet"]);
 
+    let header = stderr
+        .lines()
+        .find(|line| line.contains("changes need your attention"))
+        .unwrap_or_else(|| {
+            panic!("the 4.0.0 notice never reached a quiet operator; stderr was:\n{stderr}")
+        });
     assert!(
-        stderr.contains("v4.0.0: four changes need your attention"),
-        "the 4.0.0 notice never reached a quiet operator; stderr was:\n{stderr}"
+        header.starts_with("v4.0.0: "),
+        "the notice must name the release it is about; header was:\n{header}"
+    );
+    // The header count is the defect this pins: it was a hand-written word, so
+    // appending an item left the header claiming one fewer than it listed.
+    let claimed: usize = header
+        .split_whitespace()
+        .nth(1)
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| {
+            panic!("the notice header does not name a count; header was:\n{header}")
+        });
+    let listed = stderr
+        .lines()
+        .filter(|line| {
+            line.trim_start().starts_with(|c: char| c.is_ascii_digit()) && line.starts_with("    ")
+        })
+        .count();
+    assert_eq!(
+        claimed, listed,
+        "the notice header claims {claimed} changes and lists {listed}; stderr was:\n{stderr}"
     );
     assert!(
         stderr.contains("auth is disabled on this gateway"),
@@ -63,7 +88,7 @@ fn a_dry_run_promises_the_notices_without_delivering_them() {
         "a dry run must say what it would do; stdout was:\n{stdout}"
     );
     assert!(
-        !stderr.contains("v4.0.0: four changes need your attention"),
+        !stderr.contains("changes need your attention"),
         "a dry run must not fire the one-time notice; stderr was:\n{stderr}"
     );
 }

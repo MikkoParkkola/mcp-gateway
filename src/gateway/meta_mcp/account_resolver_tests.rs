@@ -45,7 +45,7 @@ use super::account_resolver_fixture::{
     custody_with, custody_with_rotation, execute, expected_identity_key, external_cfg, gateway,
     grant, identity, slots,
 };
-use super::account_resolver_gate::gated;
+use super::account_resolver_gate::{gated, rendezvous};
 
 /// Never-expiring, so no test takes the refresh path by accident.
 const FRESH: u64 = u64::MAX;
@@ -459,19 +459,24 @@ async fn mixed_external_and_managed_backends_select_their_own_strategy() {
 
 /// JOURNEY.2 C2: TWO PRINCIPALS CONCURRENTLY, NOT SEQUENTIALLY. The sequential
 /// sibling above proves the credentials are keyed per principal; it cannot
-/// distinguish "keyed correctly" from "only ever one resolution in flight".
-/// Here both dispatches are driven by one `join!` on a multi-thread runtime, so
-/// the lease/release recheck, the custody single-flight and the strategy cache
-/// are entered by both principals at once. Dispatch ORDER is then a race, so
-/// the oracle is the SET of (Authorization, identity key) pairs that reached the
-/// transport — a positional assertion here would be a flake, not a proof.
+/// distinguish "keyed correctly" from "only ever one resolution in flight" —
+/// a `join!` on a fast scheduler can run one arm to completion before the
+/// other ever starts, which would make this "concurrent" test pass for the
+/// same reason the sequential one does. `rendezvous` closes that gap: both
+/// dispatches' `release` calls block on the SAME two-party barrier, so
+/// neither can finish before the other has reached the identical recheck
+/// point, and overlap is guaranteed rather than hoped for from scheduling.
+/// Dispatch ORDER past that point is still a race, so the oracle is the SET
+/// of (Authorization, identity key) pairs that reached the transport — a
+/// positional assertion here would be a flake, not a proof.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn alice_and_bob_dispatch_concurrently_only_their_own_token() {
     let custody = custody_with(&[
         (account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH)),
         (account_key("bob", WORK), grant(BOB_WORK_TOKEN, FRESH)),
     ]);
-    let installed = custody.installed();
+    let installed =
+        rendezvous(custody.installed(), 2) as Arc<dyn crate::personal_accounts::AccountCustody>;
     let (meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
@@ -480,10 +485,17 @@ async fn alice_and_bob_dispatch_concurrently_only_their_own_token() {
     );
 
     let (alice_identity, bob_identity) = (identity("alice"), identity("bob"));
-    let (alice, bob) = tokio::join!(
-        execute(&meta, "mail", Some(&alice_identity)),
-        execute(&meta, "mail", Some(&bob_identity)),
-    );
+    let (alice, bob) = tokio::time::timeout(
+        BARRIER_TIMEOUT,
+        Box::pin(async {
+            tokio::join!(
+                execute(&meta, "mail", Some(&alice_identity)),
+                execute(&meta, "mail", Some(&bob_identity)),
+            )
+        }),
+    )
+    .await
+    .expect("both concurrent dispatches must reach the rendezvous barrier");
     alice.expect("alice's concurrent dispatch must succeed");
     bob.expect("bob's concurrent dispatch must succeed");
 

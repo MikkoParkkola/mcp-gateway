@@ -59,12 +59,20 @@ install -m 600 gateway.yaml gateway.container.yaml
 sudo chown 1001:1001 gateway.container.yaml
 
 docker run -d --name mcp-gateway \
-  -p 39400:39400 \
+  -p 127.0.0.1:39400:39400 \
+  -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -v ./gateway.container.yaml:/config.yaml:ro \
   -v ./capabilities:/capabilities:ro \
   -e TAVILY_API_KEY=tvly-xxx \
-  mcp-gateway:latest
+  mcp-gateway:latest \
+  --config /config.yaml --host 0.0.0.0 --port 39400
 ```
+
+The container must bind `0.0.0.0` or the published port reaches nothing, and
+the config `init` writes keeps `/mcp` public — a pairing the gateway refuses
+unless `allow_unauthenticated_network_bind` is set. The boundary is the publish
+address: `127.0.0.1:39400` means only this host reaches the port. Publishing on
+`0.0.0.0` instead requires configuring authentication first.
 
 On Linux, the image runs as UID/GID 1001. Bind-mount an owner-only deployment
 copy that this identity can read; do not change ownership on your working
@@ -81,13 +89,15 @@ services:
   mcp-gateway:
     image: ghcr.io/mikkoparkkola/mcp-gateway:latest
     restart: unless-stopped
-    ports: ["39400:39400"]
+    command: ["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]
+    ports: ["127.0.0.1:39400:39400"]
     volumes:
       - ./gateway.yaml:/config.yaml:ro
       - ./capabilities:/capabilities:ro
     environment:
       MCP_GATEWAY_LOG_LEVEL: info
       MCP_GATEWAY_LOG_FORMAT: json
+      MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND: "true"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:39400/health"]
       interval: 30s
@@ -914,6 +924,54 @@ or from any other process running as the same user, so admin is a grant that
 follows a credential.
 
 For multi-client setups with per-client tool scoping, see the [README auth section](../README.md#authentication).
+
+### Narrowing the meta-tool surface
+
+Admin standing decides which management tools a *caller* sees. `meta_mcp.exposed_meta_tools`
+decides which ones the *gateway* offers at all, to anybody:
+
+```yaml
+meta_mcp:
+  exposed_meta_tools:
+    - gateway_list_servers
+    - gateway_search_tools
+    - gateway_invoke
+```
+
+Those are the names of the classic surface. A gateway running Code Mode offers a
+different pair, `gateway_search` and `gateway_execute`, and the allow-list filters
+that pair by the same rule — so a list naming only classic tools leaves a Code
+Mode gateway with no tools at all. Write the list for the surface the gateway
+actually serves.
+
+Empty (the default) exposes the full surface, which the gateway itself bands at
+9 to 17 tools: the webhook, statistics, cost-report, playbook, profile and
+config-reload tools are listed only when the thing they report on is actually
+attached, and a webhook endpoint needs an HTTP listener to receive on. Nine is
+every gate off; a default HTTP deployment is served 11 and stdio 10, counted for
+an admin caller. Listing is disclosure only — a gated tool still dispatches by
+name and answers with what to configure. A non-empty list is an allow-list, and it is the same
+predicate that answers `tools/list` and admits `tools/call` — a tool withheld
+from the catalogue cannot be invoked by name, so this is a control and not a
+cosmetic filter. A call to a hidden tool is refused with the same answer a
+misspelled tool name gets, so the refusal does not confirm that the tool exists
+and was deliberately withheld. Backend tools reached through `gateway_invoke` are outside its
+scope; it governs the gateway's own tools only.
+
+Two things worth knowing before you shrink it:
+
+- **Omitting `gateway_invoke` cuts off the route to backend tools that are not
+  pinned.** Anything listed in `surfaced_tools` still appears and still answers,
+  and Code Mode's `gateway_execute` is its own route; everything reachable only
+  by name through `gateway_invoke` becomes uncallable. The gateway warns at
+  startup rather than refusing, because a surface built purely from
+  `surfaced_tools` is a legitimate deployment.
+- **The saving is smaller than the tool count suggests.** The full 17 schemas
+  measure about 14K characters, roughly 3.5K tokens; the four routing tools are
+  a third of that, so cutting all the way to the minimal example above recovers
+  around 2.3K tokens per request that carries the catalogue. Against a 100-tool
+  backend estimated at some 15K tokens, the meta-surface was never the expensive
+  part. Narrow it to limit what a client can do, not to chase context.
 
 ## Backup and Recovery
 

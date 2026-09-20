@@ -35,18 +35,31 @@ fn mik6977_bench_1_matrix_exists_and_can_lose() {
     assert!(schema.meta_wins());
 }
 
+/// The schema-only figure is derived, not spelled: it moved from 89% to 93%
+/// when the meta surface was compacted, and a guard hard-coding the old string
+/// would have gone on passing while checking a percentage the README no longer
+/// prints.
 #[test]
-fn mik6977_claim_1_readme_does_not_lead_with_unqualified_89() {
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn mik6977_claim_1_readme_does_not_lead_with_the_unqualified_schema_only_figure() {
     let text = readme();
+    let figure = format!(
+        "{:.0}%",
+        schema_only_first_request(100).savings_percent.round()
+    );
     let lede = text.chars().take(900).collect::<String>();
     assert!(
-        !lede.contains("89%"),
-        "lede must not lead with the schema-only 89% figure: {lede}"
+        !lede.contains(&figure),
+        "lede must not lead with the schema-only {figure} figure: {lede}"
     );
-    if text.contains("89%") {
+    if text.contains(&figure) {
         assert!(
             text.contains("schema-only") || text.contains("first-request model"),
-            "README must label any 89% math as schema-only / first-request"
+            "README must label any {figure} math as schema-only / first-request"
         );
     }
     assert!(
@@ -174,13 +187,15 @@ fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
     let scenario_tools = claims["readme_token_savings"]["gateway_tools"]
         .as_u64()
         .expect("readme_token_savings.gateway_tools");
+    let minimum_tools = claims["meta_tools"]["minimum"]
+        .as_u64()
+        .expect("meta_tools.minimum");
 
     let library_docs = read("src/lib.rs");
-    assert!(library_docs.contains("14 tools minimum"));
+    assert!(library_docs.contains(&format!("{minimum_tools} tools minimum")));
     assert!(library_docs.contains(&format!(
         "{scenario_tools} in the README benchmark scenario"
     )));
-    assert!(!library_docs.contains("12 tools minimum"));
 
     assert!(llms.contains(&format!("{scenario_tools} Meta-MCP tools in context")));
     assert!(llms.contains(&format!(

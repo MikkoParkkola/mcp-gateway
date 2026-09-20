@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::fs_lock::ExclusiveFileLock;
+use crate::protocol::extensions::{Extension, ExtensionSet};
 
 /// Wire key for 2026 per-request protocol revision.
 pub const META_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
@@ -166,6 +167,17 @@ pub struct Registry {
     by_transport: BTreeMap<String, u64>,
     unattributed: u64,
     total: u64,
+    /// Per-identifier count of extensions clients negotiated on `tools/call`.
+    ///
+    /// Deliberately outside [`Snapshot`]: that structure is the pre-registered
+    /// RFC-0060 aggregate written to an operator-readable file under a schema
+    /// identifier, and extension adoption is a different question asked of the
+    /// same stream. Adding a key there would change a durable schema to carry a
+    /// series it was not registered for.
+    ///
+    /// Bounded by construction — the keys are [`Extension`] identifiers, never
+    /// what a peer wrote.
+    by_extension: BTreeMap<String, u64>,
     shadow_counts: [u64; 16],
     session_attributions: BTreeMap<u64, SessionAttribution>,
     session_order: VecDeque<u64>,
@@ -349,6 +361,20 @@ impl Registry {
     /// Empty counters.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Count one negotiated extension identifier.
+    pub fn observe_extension(&mut self, extension: Extension) {
+        *self
+            .by_extension
+            .entry(extension.id().to_string())
+            .or_insert(0) += 1;
+    }
+
+    /// Extension adoption observed so far, by identifier.
+    #[must_use]
+    pub fn extension_adoption(&self) -> BTreeMap<String, u64> {
+        self.by_extension.clone()
     }
 
     /// Record one inbound request observation.
@@ -1057,6 +1083,41 @@ pub fn observe_inbound_request(
         transport = transport.as_str(),
         "mcp728.u1 inbound request observation"
     );
+}
+
+/// Record the extensions a client negotiated for one `tools/call`.
+///
+/// The gateway advertises its own set through `server/discover`; this is the
+/// other half of that exchange — what clients actually declare back. Without
+/// it the adoption question behind MIK-7311 has no production measurement, and
+/// `ExtensionSet::from_capabilities` has no production caller at all.
+///
+/// Measurement only. It gates nothing: the 4.0.0 task model is knowingly short
+/// of the extension specification, so refusing or diverting a call on the
+/// strength of this set would enforce a contract the gateway does not yet keep.
+pub fn observe_client_extensions(extensions: &ExtensionSet) {
+    if extensions.is_empty() {
+        return;
+    }
+    let mut reg = global()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for extension in extensions.iter() {
+        reg.observe_extension(extension);
+        tracing::debug!(
+            extension = extension.id(),
+            "mcp728.u1 client extension negotiated"
+        );
+    }
+}
+
+/// Extension adoption observed by this process, by identifier.
+#[must_use]
+pub fn extension_adoption() -> BTreeMap<String, u64> {
+    global()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extension_adoption()
 }
 
 /// Shadow-log one `tools/list` on the process registry.

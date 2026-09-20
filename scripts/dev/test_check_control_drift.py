@@ -40,6 +40,29 @@ def _load_checker():
 drift = _load_checker()
 
 
+def _has_nul(value):
+    if isinstance(value, str):
+        return chr(0) in value
+    if isinstance(value, dict):
+        return any(_has_nul(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_nul(item) for item in value)
+    return False
+
+
+def _body_defect(body):
+    """Name the gate this body should meet, or None if it is legitimate."""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return "json-well-formedness"
+    if _has_nul(parsed):
+        return "input-sanitization"
+    if not isinstance(parsed, dict) or "method" not in parsed:
+        return "jsonrpc-envelope-shape"
+    return None
+
+
 class _Stub(BaseHTTPRequestHandler):
     """Behaviour is set per-server by `mode` on the server object."""
 
@@ -50,7 +73,7 @@ class _Stub(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler naming
         length = int(self.headers.get("Content-Length", "0"))
-        self.rfile.read(length)
+        body = self.rfile.read(length)
         mode = self.server.mode
         if mode == "refuses-everything":
             return self._send(403, {"error": "no"})
@@ -66,7 +89,15 @@ class _Stub(BaseHTTPRequestHandler):
         elif host != allowed_host:
             reason = "host"
         else:
-            return self._send(200, {"result": {"tools": []}})
+            # Body-shaped controls, in the order the gateway meets them: the
+            # JSON parse, then the sanitizer, then the envelope check.
+            reason = _body_defect(body)
+            if reason is None:
+                return self._send(200, {"result": {"tools": []}})
+            # A fronting proxy answering the oversized or malformed body with a
+            # status of its own is still a 4xx, and is still not this gate.
+            status = 413 if mode == "wrong-refusal-status" else 400
+            return self._send(status, {"error": reason})
         if mode == "errors-on-foreign":
             return self._send(500, {"error": reason})
         return self._send(403, {"error": reason})
@@ -164,6 +195,96 @@ probe = "none"
 reason = "a compile-time lint leaves no signal on the wire"
 """
 
+BODY_PROBES = """
+[[control]]
+id = "json-well-formedness"
+description = "a body that is not parseable JSON is refused 400"
+introduced_in = "v3.5.0"
+source = "src/gateway/router/handlers.rs"
+probe = "malformed-json"
+refusal_status = 400
+
+[[control]]
+id = "jsonrpc-envelope-shape"
+description = "a JSON-RPC frame missing `method` is refused 400"
+introduced_in = "v3.5.0"
+source = "src/gateway/router/handlers.rs"
+probe = "malformed-envelope"
+refusal_status = 400
+
+[[control]]
+id = "input-sanitization"
+description = "a string carrying a null byte is refused 400"
+introduced_in = "v3.5.0"
+source = "src/security/sanitize.rs"
+probe = "null-byte"
+refusal_status = 400
+"""
+
+INVENTORY = """
+## The set — 2 controls
+
+| # | control | source symbol | refusal test |
+|---|---|---|---|
+| 1 | first gate | `a` | `t` |
+| 2 | second gate | `b` | `t` |
+
+## Controls that are NOT in the set (new in 4.0.0)
+
+| control | refusal test | code |
+|---|---|---|
+| a later gate | `t` | `-32099` |
+
+## Verdict
+
+Nothing here is a table row.
+"""
+
+SCRATCH_MANIFEST = """
+[coverage]
+inventory = "docs/inventory.md"
+module_roots = ["src/security"]
+
+[[coverage.not_a_control]]
+module = "src/security/helper.rs"
+reason = "a helper, not a gate"
+
+[[control]]
+id = "first"
+authority = "nfr-sec1:1"
+source = "src/security/first.rs"
+probe = "none"
+reason = "scratch"
+
+[[control]]
+id = "second"
+authority = "nfr-sec1:2"
+source = "src/security/second"
+probe = "none"
+reason = "scratch"
+
+[[control]]
+id = "later"
+authority = "nfr-sec1-new:a later gate"
+source = "src/security/later.rs"
+probe = "none"
+reason = "scratch"
+"""
+
+
+def _scratch_repo(inventory=INVENTORY, manifest=SCRATCH_MANIFEST, extra_modules=()):
+    """A repo-shaped tree: an authority document and a swept module root."""
+    root = Path(tempfile.mkdtemp())
+    (root / "docs").mkdir()
+    (root / "docs" / "inventory.md").write_text(inventory)
+    modules = root / "src" / "security"
+    modules.mkdir(parents=True)
+    for name in ("first.rs", "later.rs", "helper.rs", "mod.rs", "first_tests.rs", *extra_modules):
+        (modules / name).write_text("// scratch\n")
+    (modules / "second").mkdir()
+    (modules / "second" / "mod.rs").write_text("// scratch\n")
+    return root, _manifest(manifest)
+
 
 class TestControlDrift(unittest.TestCase):
     # Row 1: a server carrying the controls passes, and says what it probed.
@@ -257,6 +378,125 @@ class TestControlDrift(unittest.TestCase):
         probes = {control["id"]: control["probe"] for control in controls}
         self.assertEqual(probes.get("origin-guard"), "foreign-origin")
         self.assertEqual(probes.get("host-guard"), "foreign-host")
+        self.assertEqual(probes.get("json-well-formedness"), "malformed-json")
+        self.assertEqual(probes.get("jsonrpc-envelope-shape"), "malformed-envelope")
+        self.assertEqual(probes.get("input-sanitization"), "null-byte")
+
+
+class TestBodyProbes(unittest.TestCase):
+    """The three gates a body shape reaches: parse, sanitize, envelope."""
+
+    def test_body_controls_present_pass(self):
+        with _StubServer("control-present") as stub:
+            code, report = drift.run(_manifest(BODY_PROBES), stub.endpoint)
+        self.assertEqual(code, 0, report)
+        for name in ("json-well-formedness", "jsonrpc-envelope-shape", "input-sanitization"):
+            self.assertIn(f"{name}: refused 400", report)
+
+    def test_body_controls_absent_fail_per_row(self):
+        with _StubServer("refuses-nothing") as stub:
+            code, report = drift.run(_manifest(BODY_PROBES), stub.endpoint)
+        self.assertNotEqual(code, 0)
+        for name in ("json-well-formedness", "jsonrpc-envelope-shape", "input-sanitization"):
+            line = next(l for l in report.splitlines() if l.startswith(f"{name}:"))
+            self.assertIn("FAIL", line)
+
+    # 4xx is a refusal by someone. A row that names its own status says which
+    # someone, so a proxy answering 413 ahead of the gateway's 400 does not
+    # read as the gate firing.
+    def test_wrong_refusal_status_is_not_the_control(self):
+        with _StubServer("wrong-refusal-status") as stub:
+            code, report = drift.run(_manifest(BODY_PROBES), stub.endpoint)
+        self.assertNotEqual(code, 0)
+        self.assertIn("refused 413, but this control refuses 400", report)
+
+    # The bodies must differ where the gates differ: a null-byte probe whose
+    # body is merely unparseable would pass against a server that only has the
+    # JSON parse, and the sanitizer would go unprobed.
+    def test_each_probe_body_reaches_its_own_gate(self):
+        self.assertEqual(drift_defect(drift.MALFORMED_JSON_BODY), "json-well-formedness")
+        self.assertEqual(drift_defect(drift.MALFORMED_ENVELOPE_BODY), "jsonrpc-envelope-shape")
+        self.assertEqual(drift_defect(drift.NULL_BYTE_BODY), "input-sanitization")
+        self.assertIsNone(drift_defect(drift.REQUEST_BODY))
+
+
+drift_defect = _body_defect
+
+
+class TestCoverage(unittest.TestCase):
+    """The manifest may not define its own population."""
+
+    # The shipped manifest against the real authorities. This is the row that
+    # holds the first half of NFR.SEC.7: a merged control absent from the
+    # manifest is a failure here, not a silent pass in the probe report.
+    def test_shipped_manifest_covers_its_authorities(self):
+        code, report = drift.check_coverage()
+        self.assertEqual(code, 0, report)
+        self.assertIn("0 coverage gaps", report)
+
+    def test_scratch_manifest_covers_its_authorities(self):
+        root, manifest = _scratch_repo()
+        code, report = drift.check_coverage(manifest, root)
+        self.assertEqual(code, 0, report)
+
+    def test_authority_row_with_no_control_is_a_gap(self):
+        dropped = SCRATCH_MANIFEST.replace('authority = "nfr-sec1:2"', 'authority = "nfr-sec1:1"')
+        root, manifest = _scratch_repo(manifest=dropped)
+        code, report = drift.check_coverage(manifest, root)
+        self.assertNotEqual(code, 0)
+        self.assertIn("the authority lists nfr-sec1:2", report)
+
+    # Renumbering the authority must not leave a manifest row pointing at a
+    # question nobody asked any more.
+    def test_control_claiming_a_row_the_authority_dropped_is_a_gap(self):
+        root, manifest = _scratch_repo(
+            manifest=SCRATCH_MANIFEST.replace('"nfr-sec1:2"', '"nfr-sec1:9"')
+        )
+        code, report = drift.check_coverage(manifest, root)
+        self.assertNotEqual(code, 0)
+        self.assertIn("claims nfr-sec1:9, which the authority does not list", report)
+
+    # The code half: a security module merged without a manifest row fails
+    # without anyone remembering to update a document.
+    def test_unnamed_security_module_is_a_gap(self):
+        root, manifest = _scratch_repo(extra_modules=("brand_new_guard.rs",))
+        code, report = drift.check_coverage(manifest, root)
+        self.assertNotEqual(code, 0)
+        self.assertIn("src/security/brand_new_guard.rs is a security module no control names", report)
+
+    def test_moved_source_is_a_gap(self):
+        root, manifest = _scratch_repo(
+            manifest=SCRATCH_MANIFEST.replace("src/security/first.rs", "src/security/gone.rs")
+        )
+        code, report = drift.check_coverage(manifest, root)
+        self.assertNotEqual(code, 0)
+        self.assertIn("which does not exist", report)
+
+    # Fail closed. A parser that reads zero rows out of a reformatted authority
+    # would turn every coverage assertion green at once.
+    def test_unreadable_authority_fails_closed(self):
+        root, manifest = _scratch_repo(inventory="# no tables here\n")
+        code, report = drift.check_coverage(manifest, root)
+        self.assertNotEqual(code, 0)
+        self.assertIn("the authority could not be read", report)
+
+    def test_missing_authority_document_fails_closed(self):
+        root, manifest = _scratch_repo()
+        (root / "docs" / "inventory.md").unlink()
+        code, report = drift.check_coverage(manifest, root)
+        self.assertNotEqual(code, 0)
+        self.assertIn("the authority could not be read", report)
+
+    # The real authority must still parse into the rows the manifest claims. A
+    # reformat that breaks the parser is caught here rather than by a coverage
+    # report that has quietly stopped reading anything.
+    def test_real_inventory_parses_to_the_expected_rows(self):
+        inventory = drift.read_inventory(
+            REPO_ROOT / "docs" / "requirements" / "nfr-sec1-control-inventory.md"
+        )
+        numbered = {key for key in inventory if key.startswith("nfr-sec1:")}
+        self.assertEqual(numbered, {f"nfr-sec1:{n}" for n in range(1, 15)})
+        self.assertEqual(len(inventory) - len(numbered), 4)
 
 
 if __name__ == "__main__":
