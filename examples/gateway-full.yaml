@@ -46,7 +46,7 @@ auth:
 # --- Meta-MCP ---
 
 meta_mcp:
-  enabled: true                   # Enable Meta-MCP mode (14 tools minimum / 17 in the README benchmark scenario)
+  enabled: true                   # Enable Meta-MCP mode (9 tools minimum / 11 in the README benchmark scenario)
   cache_tools: true               # Cache tool lists from backends
   cache_ttl: 5m                   # Tool cache TTL
   # Backends to pre-connect and cache on startup.

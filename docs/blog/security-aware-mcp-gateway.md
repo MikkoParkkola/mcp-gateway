@@ -6,7 +6,7 @@ Status: Draft for launch
 
 ## TL;DR
 
-I built mcp-gateway. It replaces N direct MCP server connections with a compact Meta-MCP surface: 14 tools minimum and 16 in the README scenario. Pins are optional. Every tool description passes through a validator for the Invariant Labs tool-poisoning patterns. The binary is Rust. Its default license is PolyForm Noncommercial, while the core is separately MIT-licensed. At publication, 2888 tests passed.
+I built mcp-gateway. It replaces N direct MCP server connections with a compact Meta-MCP surface: 9 tools minimum and 11 in the README scenario. Pins are optional. Every tool description passes through a validator for the Invariant Labs tool-poisoning patterns. The binary is Rust. Its default license is PolyForm Noncommercial, while the core is separately MIT-licensed. At publication, 2888 tests passed.
 
 This post walks through why that architecture exists, what attacks it defeats today, and what it still does not solve.
 
@@ -80,7 +80,7 @@ mcp-gateway sits between the agent and the backends:
   server    server    server
 ```
 
-The agent only ever sees the compact Meta-MCP surface (14 tools minimum, 16 in the README benchmark). Backend tool definitions are fetched on demand through `gateway_search_tools` / `gateway_list_tools`, they flow through the validator first, and `gateway_invoke` is the only way to actually call one.
+The agent only ever sees the compact Meta-MCP surface (9 tools minimum, 11 in the README benchmark). Backend tool definitions are fetched on demand through `gateway_search_tools` / `gateway_list_tools`, they flow through the validator first, and `gateway_invoke` is the only way to actually call one.
 
 The immediate wins:
 

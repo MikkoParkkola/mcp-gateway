@@ -103,7 +103,7 @@ status row is not evidence about what ran:
 
 | Probe | What it actually was | Evidence |
 |---|---|---|
-| 2026-09-13, port 39411 | a release binary of `bd1adbb4` **on spark** — a Linux aarch64 host — left over from the performance benchmark run, started on a free loopback port in the spark worktree | `docs/release/verify/sec7-drift-probe-2026-09-13.md`; `docs/release/v4.0.0-burndown-tracker.md:190-202` |
+| 2026-09-13, port 39411 | a release binary of `bd1adbb4` **on spark** — a Linux aarch64 host — left over from the performance benchmark run, started on a free loopback port in the spark worktree | `docs/internal/release/verify/sec7-drift-probe-2026-09-13.md`; `docs/internal/release/v4.0.0-burndown-tracker.md:190-202` |
 | 2026-09-11, port 39466 | "a gateway built from the release tree", machine unstated | **no preserved transcript.** `docs/release/verify/` holds no 2026-09-11 file, the commit that landed the checker (`9a3d9cbe`) records no run, and the design doc records none. Ledger prose only |
 
 So: no artifact has ever been installed into `~/.local/libexec/mcp-gateway/<version>/`,

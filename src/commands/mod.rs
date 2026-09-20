@@ -182,7 +182,7 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
             "    - \"/mcp\"\n",
             "\n",
             "# Meta-MCP mode - exposes a compact gateway tool surface\n",
-            "# Common deployment: 14 tools (12 minimum, 15 with webhooks)\n",
+            "# Common deployment: 11 tools (9 minimum, 17 with every optional tool configured)\n",
             "# Keeps prompt overhead low by discovering backend tools on demand\n",
             "meta_mcp:\n",
             "  enabled: true\n",

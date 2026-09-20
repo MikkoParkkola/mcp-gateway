@@ -12,7 +12,7 @@
 //! meta-validity of the schema document is NOT checked here, because checking it
 //! would put a validator on the trust path of every emitted descriptor — a
 //! runtime dependency the release team lead declined on 2026-09-08 (ruling R6,
-//! `docs/release/2026-09-08-team-lead-rulings.md`). First-party schemas are
+//! `docs/internal/release/2026-09-08-team-lead-rulings.md`). First-party schemas are
 //! meta-validated in `tests/schema_2020_12_validity.rs`; forwarded ones are not.
 //!
 //! Composition (`allOf`/`anyOf`/`oneOf`/`not`/`if`) is legal 2020-12 and is not

@@ -9,7 +9,7 @@ legacy stdio bridging or tasks. It does not invalidate completed implementation
 increments or silently turn their OUT lists into completed release work.
 
 Decision provenance is in [the decision record](RELEASE-4.0.0-scope-decisions-2026-09-06.md).
-[The delivery plan](RELEASE-4.0.0-scope-delivery.md) assigns work packages rather
+[The delivery plan](../internal/requirements/RELEASE-4.0.0-scope-delivery.md) assigns work packages rather
 than competing with an active agent for files. [The test plan](RELEASE-4.0.0-scope-tests.md)
 defines acceptance; [the JSON ledger](RELEASE-4.0.0-scope-status.json) records
 verdicts. A pending verdict means unverified against this contract, not a claim

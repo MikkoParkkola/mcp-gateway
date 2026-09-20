@@ -1500,6 +1500,14 @@ pub struct MetaMcpConfig {
     /// rather than on `gateway_reload_config` (same as `surfaced_tools`).
     #[serde(default)]
     pub exposed_meta_tools: Vec<String>,
+    /// List `gateway_get_stats` in `tools/list` (`NFR.PERF.4`).
+    ///
+    /// Off by default. The usage-stats collector is always attached, so its
+    /// presence was never a gate; an HTTP operator reads the same numbers from
+    /// `/metrics`, and a stdio client that wants the handler can still call it
+    /// by name. The flag governs enumeration only — dispatch is unchanged.
+    #[serde(default)]
+    pub expose_stats_tool: bool,
 }
 
 impl Default for MetaMcpConfig {
@@ -1513,6 +1521,7 @@ impl Default for MetaMcpConfig {
             surfaced_tools: Vec::new(),
             projection_mode: crate::projection::ProjectionMode::default(),
             exposed_meta_tools: Vec::new(),
+            expose_stats_tool: false,
         }
     }
 }

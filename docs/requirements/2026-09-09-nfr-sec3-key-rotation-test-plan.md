@@ -1,7 +1,7 @@
 # Test plan — NFR.SEC.3 continuation key rotation
 
 Design: `docs/design/2026-09-06-nfr-sec3-key-rotation.md` (ruled by R24 in
-`docs/release/2026-09-08-team-lead-rulings.md`).
+`docs/internal/release/2026-09-08-team-lead-rulings.md`).
 Implementation: `src/protocol/continuation.rs`.
 Tests: `tests/nfr_sec3_key_rotation.rs`.
 

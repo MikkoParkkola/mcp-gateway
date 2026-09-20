@@ -69,3 +69,6 @@ scratchpad_*/
 # `git add -A` sweeps whatever happens to be lying about into someone else's
 # commit.
 .review-*
+
+# Local archive of superseded work; never part of the release artifact
+.archive/

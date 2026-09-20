@@ -13,12 +13,14 @@ number of tools across all backends.
 
 Meta-MCP approach: The discovery quartet stays fixed
 (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`,
-`gateway_invoke`). The canonical README benchmark adds stats, cost reporting,
-playbooks, profiles, kill/revive, disabled-capability visibility, workflow
-state control, config reload, capability reload, and webhook status for a
-17-tool surface. Webhook status is served wherever a webhook registry is
-attached, which the README's HTTP deployment has and stdio never does, so a
-stdio deployment sees 16 and the minimum stripped surface is 14.
+`gateway_invoke`). The canonical README benchmark adds kill/revive,
+disabled-capability visibility, workflow state control, config reload,
+capability reload, and webhook status for an 11-tool surface at admin
+standing. Webhook status is served wherever a webhook registry is attached,
+which the README's HTTP deployment has and stdio never does, so a stdio
+deployment sees 10 and the minimum stripped surface is 9. Stats, cost
+reporting, playbooks and profiles are not in that surface: each is gated on
+configuration the default deployment does not have.
 
 Usage:
     python3 benchmarks/token_savings.py
@@ -30,6 +32,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import decimal
 import json
 from pathlib import Path
 
@@ -209,43 +212,6 @@ GATEWAY_TOOLS = [
         required=["server", "tool"],
     ),
     make_gateway_tool_definition(
-        "gateway_get_stats",
-        "Get observed usage statistics including invocations and cache hits, plus top tools.",
-    ),
-    make_gateway_tool_definition(
-        "gateway_cost_report",
-        "Return current session and API-key spend with totals and per-tool breakdowns.",
-        properties={
-            "session_id": {
-                "type": "string",
-                "description": "Specific session ID to report on.",
-            },
-            "include_all_sessions": {
-                "type": "boolean",
-                "description": "Return all active sessions (admin view).",
-            },
-            "include_all_keys": {
-                "type": "boolean",
-                "description": "Return all API key accumulators (admin view).",
-            },
-        },
-    ),
-    make_gateway_tool_definition(
-        "gateway_run_playbook",
-        "Execute a multi-step playbook and collapse multiple tool calls into one invocation.",
-        properties={
-            "name": {
-                "type": "string",
-                "description": "Playbook name to execute.",
-            },
-            "arguments": {
-                "type": "object",
-                "description": "Playbook input arguments.",
-            },
-        },
-        required=["name"],
-    ),
-    make_gateway_tool_definition(
         "gateway_kill_server",
         "Immediately disable routing to a backend server while leaving its tools visible in search/list.",
         properties={
@@ -268,27 +234,8 @@ GATEWAY_TOOLS = [
         required=["server"],
     ),
     make_gateway_tool_definition(
-        "gateway_set_profile",
-        "Switch the active routing profile for this session.",
-        properties={
-            "profile": {
-                "type": "string",
-                "description": "Name of the routing profile to activate.",
-            }
-        },
-        required=["profile"],
-    ),
-    make_gateway_tool_definition(
-        "gateway_get_profile",
-        "Show the active routing profile for this session and what it allows or denies.",
-    ),
-    make_gateway_tool_definition(
         "gateway_list_disabled_capabilities",
         "List capabilities automatically disabled due to high error rate and when they recover.",
-    ),
-    make_gateway_tool_definition(
-        "gateway_list_profiles",
-        "List all available routing profiles with their descriptions.",
     ),
     make_gateway_tool_definition(
         "gateway_set_state",
@@ -311,8 +258,12 @@ GATEWAY_TOOLS = [
     ),
     # Served only where a webhook registry is attached, which an HTTP
     # deployment with `webhooks.enabled` (default true) has and stdio never
-    # does. The README scenario is an HTTP deployment, so the seventeenth tool
-    # is part of the surface it models.
+    # does. The README scenario is an HTTP deployment, so the eleventh tool
+    # is part of the surface it models. The stats, cost, playbook and profile
+    # tools are absent for the same reason in reverse: each is gated on
+    # configuration the default deployment does not have, so listing them
+    # here would model a surface nobody is served
+    # (`docs/design/2026-09-16-meta-tool-surface-compaction.md`).
     make_gateway_tool_definition(
         "gateway_webhook_status",
         "List registered webhook endpoints and their delivery statistics (received, delivered, failures, last event)",
@@ -513,9 +464,16 @@ def print_readme_results(results: dict) -> None:
     print(f"Direct tokens:   {results['direct_tokens']:,}")
     print(f"Gateway tokens:  {results['gateway_tokens']:,}")
     print(f"Token savings:   {results['savings_percent']:.1f}%")
-    print(f"Direct cost:     ${results['direct_cost_usd']:.0f} / 1K requests")
-    print(f"Gateway cost:    ${results['gateway_cost_usd']:.0f} / 1K requests")
-    print(f"Savings:         ${results['savings_usd']:.0f} / 1K requests")
+    # Half away from zero, matching the Rust claim check that asserts these
+    # same figures appear in docs/BENCHMARKS.md. Python's default `.0f` rounds
+    # half to even, and the README saving lands exactly on $208.50, so the two
+    # renderings of one number would disagree by a dollar.
+    def dollars(value: float) -> str:
+        return f"{decimal.Decimal(value).quantize(0, rounding=decimal.ROUND_HALF_UP)}"
+
+    print(f"Direct cost:     ${dollars(results['direct_cost_usd'])} / 1K requests")
+    print(f"Gateway cost:    ${dollars(results['gateway_cost_usd'])} / 1K requests")
+    print(f"Savings:         ${dollars(results['savings_usd'])} / 1K requests")
     print()
 
 

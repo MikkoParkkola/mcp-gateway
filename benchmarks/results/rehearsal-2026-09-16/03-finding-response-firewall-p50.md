@@ -278,7 +278,7 @@ That is the shape the ladder saw: `tools/list` (16 kB, one new scan) pays
 ### 2.5 The two scans are not interchangeable, and only one of them is new
 
 Raised by the release-line review of this finding (`work/v4-audit-adjudication`,
-`docs/release/2026-09-16-double-response-scan.md`, commit `7bfff9d9`), which
+`docs/internal/release/2026-09-16-double-response-scan.md`, commit `7bfff9d9`), which
 reproduced the double scan on the shipping line and pointed out that
 `shape_modern_response` runs *between* the two call sites — making the second
 scan a legitimate re-check after a mutation, and the **first** the removal

@@ -4,7 +4,7 @@
 //! MRTR.12: the ten behaviours a chain stop owes, pinned before the fix.
 //!
 //! Design: `docs/design/2026-09-16-mrtr-12-chain-interim-stop.md`.
-//! Ratified rules: `docs/release/2026-09-16-declaration-adjudication.md`.
+//! Ratified rules: `docs/internal/release/2026-09-16-declaration-adjudication.md`.
 
 use serde_json::{Value, json};
 

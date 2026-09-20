@@ -8,7 +8,7 @@
 > | NFR.OBS.3 | Era detection per backend MUST be observable — which era, by what evidence, and when re-probed. | T |
 
 That row is the last of the five in readiness-board group B and the only one no design document
-covers (`docs/requirements/RELEASE-4.0.0-readiness-board.md:21`). This document covers it.
+covers (`docs/internal/requirements/RELEASE-4.0.0-readiness-board.md:21`). This document covers it.
 
 ## §P0 SCOPE
 

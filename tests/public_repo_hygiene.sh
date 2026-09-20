@@ -160,4 +160,59 @@ EOF
   assert_pass "$repo"
 done
 
+repo="$(make_repo internal-doc-in-public-tree)"
+mkdir -p "$repo/docs/release"
+cat >"$repo/docs/release/v4.0.0-burndown-tracker.md" <<'EOF'
+# v4.0.0 release-criteria burndown
+
+| criterion | status |
+|---|---|
+| NFR.PERF.1 | MET |
+EOF
+git -C "$repo" add .gitignore docs/release/v4.0.0-burndown-tracker.md scripts/dev/check-public-repo-hygiene.sh
+assert_fail_contains "$repo" "reads as an internal working document"
+
+repo="$(make_repo internal-doc-named-by-path)"
+mkdir -p "$repo/docs/design"
+cat >"$repo/docs/design/pr473-gateway.md" <<'EOF'
+# Routing notes
+
+Findings recorded while reading the shard.
+EOF
+git -C "$repo" add .gitignore docs/design/pr473-gateway.md scripts/dev/check-public-repo-hygiene.sh
+assert_fail_contains "$repo" "path marker"
+
+repo="$(make_repo internal-doc-relocated)"
+mkdir -p "$repo/docs/internal/release"
+cat >"$repo/docs/internal/release/v4.0.0-burndown-tracker.md" <<'EOF'
+# v4.0.0 release-criteria burndown
+
+| criterion | status |
+|---|---|
+| NFR.PERF.1 | MET |
+EOF
+git -C "$repo" add .gitignore docs/internal/release/v4.0.0-burndown-tracker.md scripts/dev/check-public-repo-hygiene.sh
+assert_pass "$repo"
+
+# A product page may cite a ruling or a review in its prose. The marker set
+# reads headings, so citing one is not the same as being one.
+repo="$(make_repo public-doc-citing-internal-material)"
+mkdir -p "$repo/docs/design"
+cat >"$repo/docs/design/continuation-envelope.md" <<'EOF'
+# Continuation envelope
+
+The team-lead ruling recorded in `docs/internal/release/rulings.md` fixed the
+wording. This page describes the envelope the gateway emits, its version field
+and the review findings that shaped the retry path.
+EOF
+git -C "$repo" add .gitignore docs/design/continuation-envelope.md scripts/dev/check-public-repo-hygiene.sh
+assert_pass "$repo"
+
+repo="$(make_repo internal-dir-ignored)"
+printf 'docs/internal/\n' >>"$repo/.gitignore"
+mkdir -p "$repo/docs/internal"
+printf '# v4.0.0 burndown\n' >"$repo/docs/internal/notes.md"
+git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
+assert_fail_contains "$repo" "docs/internal is ignored"
+
 echo "public repo hygiene fixtures OK"

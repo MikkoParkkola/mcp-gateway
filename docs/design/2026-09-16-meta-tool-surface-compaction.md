@@ -447,10 +447,10 @@ stop — give it one or delete the number.
   band itself.
 - `docs/requirements/RELEASE-4.0.0-criteria-status.md:418` — the `NFR.PERF.4`
   evidence row, which quotes the 14/16/17 spread and the test that pins it.
-- `docs/requirements/RELEASE-4.0.0-plan.md:64`, `:71`, `:288`, `:430` — the
+- `docs/internal/requirements/RELEASE-4.0.0-plan.md:64`, `:71`, `:288`, `:430` — the
   band and the 2026-09-08 webhook ruling that set it.
-- `docs/requirements/RELEASE-4.0.0-blocking-rollup.md:270` — the rollup line.
-- `docs/requirements/RELEASE-4.0.0-gap-plan.md:833` — "1-3 tools off a 14-17
+- `docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md:270` — the rollup line.
+- `docs/internal/requirements/RELEASE-4.0.0-gap-plan.md:833` — "1-3 tools off a 14-17
   tool surface".
 - `docs/release/v4.0.0-release-notes-DRAFT.md:213` — the carried-forward band
   evidence row.

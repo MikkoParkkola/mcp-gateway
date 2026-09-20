@@ -98,7 +98,7 @@ substitutes:
    `false`. Deleting it is the whole change; no `default = "..."` function is needed. Without
    this, (1) is invisible to every deployment that has a `server:` section, which is all of them.
 
-**Both are gated on something outside this criterion.** `docs/requirements/RELEASE-4.0.0-blocking-rollup.md:30`
+**Both are gated on something outside this criterion.** `docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md:30`
 and `criteria-status.md:320` record that the flip "cannot land before cluster A wires the
 continuation path, since default-on turns every gap there into a first-run defect", and that the
 operator accepted that consequence on 2026-09-02. So the flip is sequenced behind cluster A, not
@@ -122,16 +122,16 @@ another agent, red before this work began and unrelated to it. Everything else g
 Six operator-facing documents state modern is off by default. Every one is falsified the moment
 the flip lands, and §P4a puts them inside the change rather than after it:
 
-`README.md:355` · `docs/DEPLOYMENT.md:135` · `docs/requirements/RELEASE-4.0.0-pr-body.md:6` ·
-`docs/requirements/RELEASE-4.0.0-execution-plan.md:39` · `docs/requirements/RELEASE-4.0.0-dod-check.md:950` ·
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md:285`
+`README.md:355` · `docs/DEPLOYMENT.md:135` · `docs/internal/requirements/RELEASE-4.0.0-pr-body.md:6` ·
+`docs/internal/requirements/RELEASE-4.0.0-execution-plan.md:39` · `docs/internal/requirements/RELEASE-4.0.0-dod-check.md:950` ·
+`docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md:285`
 
 These are peer-owned release documents. Named here so the obligation is visible and assignable;
 not edited without the lead's ruling on who owns them.
 
 ## Out-of-scope observation (§P0 disposal: record, do not act)
 
-`docs/requirements/RELEASE-4.0.0-gap-plan.md` (~920-945) states that `2026-07-28`'s absence from
+`docs/internal/requirements/RELEASE-4.0.0-gap-plan.md` (~920-945) states that `2026-07-28`'s absence from
 `SUPPORTED_VERSIONS` is "the precondition for the ruling". The pinned test at
 `src/protocol/mod.rs:66-88` says adding it is a *recurring misreading* and that the gate is the
 default "and only that". Both cannot be right, and someone acting on the gap-plan sentence will
