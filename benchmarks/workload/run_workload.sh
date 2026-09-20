@@ -14,8 +14,8 @@
 
 set -Eeuo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
+HERE="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(CDPATH= cd -- "$HERE/../.." && pwd)"
 
 # --- pins -------------------------------------------------------------------
 # The k6 image is pinned by digest. A tag would let the load generator change
@@ -107,7 +107,7 @@ build_arm() {
   rm -rf "$dir"
   git -C "$REPO" worktree prune
   git -C "$REPO" worktree add --detach "$dir" "$sha" >/dev/null
-  ( cd "$dir" && cargo build --release --locked --features "$FEATURES" )
+  ( CDPATH= cd -- "$dir" && cargo build --release --locked --features "$FEATURES" )
   echo "$sha" > "$dir/.checkout_sha"
 }
 
@@ -248,9 +248,18 @@ PY
 }
 
 # --- schedule ---------------------------------------------------------------
+
+# `docker -v` reads a relative source as a NAMED VOLUME, never as a host
+# directory, so a run dir given relative to the checkout silently becomes an
+# empty anonymous mount and k6 dies before it measures anything. Every run dir
+# is made absolute here, once, before anything mounts or writes to it.
+# `CDPATH=` is load-bearing: an inherited CDPATH makes `cd` echo the directory
+# it picked, so the substitution would capture two lines and the mount source
+# would be garbage. `--` keeps a leading-dash path from parsing as an option.
+abs_run_dir() { mkdir -p -- "$1" && (CDPATH= cd -- "$1" && pwd -P); }
+
 do_measure() {
   local run="$1"
-  mkdir -p "$run"
   render_configs "$run"
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \
@@ -295,16 +304,21 @@ PY
 # the same thing. Its output is never scored.
 do_smoke() {
   local run="$1" cell="${2:-C}"
-  mkdir -p "$run"
   render_configs "$run"
   run_rep "$cell" "smoke-$cell" "$run" warmup
   echo "[smoke] ok: cell $cell plumbing clean; see $run/smoke-$cell.health.json"
 }
 
+# The run dir is resolved HERE, at the one place a caller's argument enters the
+# script, so no command can reach a docker mount with a relative path. The
+# result lands in a variable first: a command substitution spliced straight into
+# an argument list hides its own exit status from `set -e`, so a failed mkdir or
+# cd would hand the caller an empty string and send every write to the
+# filesystem root. A bare assignment fails loudly instead.
 case "${1:-}" in
   build)   do_build ;;
-  smoke)   do_smoke "${2:?run dir required}" "${3:-C}" ;;
-  measure) do_measure "${2:?run dir required}" ;;
-  all)     do_build; do_measure "${2:?run dir required}" ;;
+  smoke)   run="$(abs_run_dir "${2:?run dir required}")"; do_smoke "$run" "${3:-C}" ;;
+  measure) run="$(abs_run_dir "${2:?run dir required}")"; do_measure "$run" ;;
+  all)     do_build; run="$(abs_run_dir "${2:?run dir required}")"; do_measure "$run" ;;
   *) echo "usage: $0 {build|smoke|measure|all} <run-dir> [cell]" >&2; exit 2 ;;
 esac
