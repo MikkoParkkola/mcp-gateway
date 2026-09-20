@@ -100,15 +100,30 @@ module and outside this scope. Conjunct 3 is therefore closed at the module boun
 and the external-consumer obligation stays open against an integration test. A grade that
 reads T1 as closing conjunct 3 outright would overstate it.
 
+The revoke these tests drive is itself off the production call graph. `AccountService::
+invalidate` carries `#[cfg_attr(all(not(test), not(kani)), expect(dead_code, …))]`
+(`service.rs:318-327`), and an `expect` that compiles without firing is the compiler
+certifying no non-test caller reaches it. So T1 and T3 prove the store refuses correctly
+when revoked; they do not prove a shipped code path ever calls revoke. That is the same
+deferral the attribute already names (MIK-6744/6745/6746) rather than a new gap, but the
+grade must state it, because "revocation works" and "revocation is reachable" are
+different claims and only the first is under test here.
+
 ## The three tests
 
-**T1 — live holders across a revoke and a re-consent** (new, service layer). Start an
-in-flight refresh through `RefreshProvider` (`service.rs:64`) and take a lease from
-`prepare` (`vault.rs:113`), which returns the credential binding alongside it, both
-against the connected generation. Revoke durably. Assert: the in-flight refresh resolves
-to a rejection and commits nothing; `recheck` on the retained pre-revoke lease refuses.
-Re-consent. Assert: a fresh lease rechecks successfully, its `cache_binding` differs from
-the pre-revoke one, and the pre-revoke lease is still refused.
+**T1 — live holders across a revoke and a re-consent** (new, service layer). Call
+`prepare` (`vault.rs:113`) twice against the connected generation, keeping the lease and
+the returned `cache_binding` from the first. Assert the two bindings are **equal** — a
+binding that varies per call is a nonce, and a nonce would satisfy the change-across-
+re-consent assertion below without isolating anything. Revoke durably. Assert `recheck`
+on the retained pre-revoke lease refuses. Re-consent. Assert: a fresh `prepare` succeeds,
+its `cache_binding` differs from the pre-revoke one, and the pre-revoke lease is still
+refused.
+No in-flight refresh is held across the revoke. `prepare` calls `refresh_if_expired` and
+then `release` inline (`vault.rs:138-150`), and refreshes serialize on the per-account
+single-flight lock (`service.rs:220,378-382`), so a suspended refresh and a *completed*
+`prepare` lease cannot coexist on one account — the composition is unwritable, not merely
+awkward. That conjunct is already covered at `service_refresh_tests.rs:102` and `:277`.
 *Falsifier:* return `Ok` from `recheck` after a revoke and confirm T1's refusal assertion
 goes red.
 *Positive control:* every refusal above is asserted to succeed before the revoke, and the
@@ -136,6 +151,9 @@ the current oracle accepts and a prior-generation-only oracle must reject.
 boundary, drive the child to die there, assert it announced that checkpoint before dying
 (the existing `Outcome::Died { checkpoint }` evidence, so a process that merely ended does
 not count), restart, and apply the band oracle above. Includes the healthy no-abort row.
+The generation is named by **record equality** against the expected `GrantRecord`, not by
+a fieldless `GrantRecord { .. }` pattern match (`crash_tests.rs:49`) — a fieldless match
+admits any connected record, so band 2 and the healthy row would pass on the wrong one.
 *Falsifiers, one per band because no single mutation reaches every row:*
 - rows 4-8 — make recovery prefer the newest candidate over the manifest-named record;
   the candidate is only in `store_dir` from boundary 4 onward, so this is the range where
@@ -144,8 +162,12 @@ not count), restart, and apply the band oracle above. Includes the healthy no-ab
   the corrected band-2 oracle exists to catch, and the old "either generation" oracle
   would have passed it;
 - rows 1-3 — no mutation of recovery can distinguish these, because nothing durable has
-  moved and the disk is byte-identical to a commit that never started. Their evidence is
-  the announcement assertion: a child that dies without naming its boundary fails the row.
+  moved: no candidate is selectable, so recovery has no wrong answer available to it.
+  The disk is not byte-identical to a commit that never started — `process::abort()`
+  skips `persist_record`'s cleanup, so temporary debris survives — but debris the
+  manifest does not name is unreadable by recovery, which is why no mutation reaches
+  these rows. Their evidence is therefore the band-1 prior-generation oracle plus the
+  announcement assertion: a child that dies without naming its boundary fails the row.
   Stated here rather than discovered later, because a row whose oracle cannot fail is
   worth knowing about before it is written.
 
@@ -182,3 +204,28 @@ and the recovery read path at source, and three of its findings changed the desi
 Two smaller findings are folded in: T1 is specified against the existing lease interfaces
 rather than a binding string, and the external cache and connection consumers are recorded
 as an obligation this test-only change does not discharge.
+
+A second review, run against the corrected text rather than the draft, found T1 itself
+unbuildable and three sharper oracles:
+
+- **T1 could not hold an in-flight refresh and a completed lease at once.** `prepare`
+  calls `refresh_if_expired` and then `release` inline (`vault.rs:138-150`), and refreshes
+  serialize on the per-account single-flight lock (`service.rs:220,378-382`), so the two
+  states are mutually exclusive on one account. T1 drops the refresh — already covered at
+  `service_refresh_tests.rs:102` and `:277` — and is driven from `prepare` / `recheck` /
+  binding / re-consent alone.
+- **A changing binding was not enough.** Asserting only that `cache_binding` differs after
+  re-consent would be satisfied by a per-call nonce, which isolates nothing. T1 now
+  asserts the binding is *stable* across two pre-revoke `prepare` calls first.
+- **T3 named the generation too loosely.** A fieldless `GrantRecord { .. }` match
+  (`crash_tests.rs:49`) admits any connected record; band 2 and the healthy row require
+  record equality against the expected generation.
+
+The claim that boundaries 1-3 leave the disk byte-identical to a commit that never started
+is withdrawn: `process::abort()` skips `persist_record`'s cleanup and temporary debris
+survives. The conclusion is unchanged — debris the manifest does not name is unreadable by
+recovery — but the reason is now the right one.
+
+A separate seam audit established that the revoke path these tests drive is dead code
+outside test and kani builds (`service.rs:318-327`), verified at source. That limitation
+is recorded in D2 and belongs in the grade.
