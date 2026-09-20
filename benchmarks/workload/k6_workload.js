@@ -19,6 +19,7 @@
  */
 
 import http from "k6/http";
+import exec from "k6/execution";
 import { check, group, sleep } from "k6";
 import { Counter, Rate, Trend } from "k6/metrics";
 
@@ -98,6 +99,13 @@ export const options = {
 // handling at all.
 const IS_MODERN_ERA = PROTOCOL_VERSION.startsWith("2026-");
 
+// Same key the gateway parses (src/protocol/mrtr.rs:33). A non-read-only
+// `tools/call` in the modern era is refused with -32602 unless this is
+// present (src/gateway/meta_mcp/admission.rs:151-159); accepted, not
+// required, on the legacy era, so sending it unconditionally keeps A/B/C
+// and D/E on one code path.
+const IDEMPOTENCY_KEY_META = "io.mcp-gateway/idempotency-key";
+
 // `Mcp-Name` mirrors `params.name` -- the meta-surface tool the request
 // executes (`gateway_invoke`), never the pinned backend tool nested inside
 // `arguments` (`mcp_name_body_field`, src/protocol/headers.rs:63-70).
@@ -119,17 +127,37 @@ function headers(method, name) {
 // rehearsed. A plain counter is defined everywhere the script runs.
 let rpcSeq = 0;
 
+// One key per request, never reused: the gateway treats a repeated key as a
+// replay and returns the first response instead of executing again
+// (src/gateway/meta_mcp/admission.rs:177-192), which would make the load
+// phase measure cache hits, not the backend. `exec.vu`/`exec.scenario` are
+// unset outside a scheduled VU iteration -- true during setup(), which runs
+// before any VU is scheduled -- so that path falls back to a fixed scope and
+// still gets uniqueness from `rpcSeq`, which is per-VU in k6 and therefore
+// not unique across VUs on its own.
+function idempotencyKey() {
+  let scope = "setup";
+  try {
+    scope = `vu${exec.vu.idInInstance}-iter${exec.scenario.iterationInTest}`;
+  } catch (e) {
+    // no VU context yet (setup()/teardown()); rpcSeq still disambiguates.
+  }
+  return `nfr-workload-1-${scope}-${rpcSeq}`;
+}
+
 function rpc(method, params, trend) {
   rpcSeq += 1;
   // `_meta` belongs to `params`, not to the JSON-RPC envelope -- that is where
   // the gateway reads it (src/protocol/meta.rs:150-217). `{}` is the spec's
-  // own "no client options" form for clientCapabilities.
+  // own "no client options" form for clientCapabilities. The inner
+  // `Object.assign` preserves a caller-supplied `_meta` (the idempotency key)
+  // instead of replacing it wholesale.
   const sent = IS_MODERN_ERA
     ? Object.assign({}, params, {
-        _meta: {
+        _meta: Object.assign({}, params && params._meta, {
           "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
           "io.modelcontextprotocol/clientCapabilities": {},
-        },
+        }),
       })
     : params;
   const body = JSON.stringify({
@@ -172,6 +200,7 @@ function invokePinnedTool(trend) {
         tool: TOOL_NAME,
         arguments: { case_reference: "042" },
       },
+      _meta: { [IDEMPOTENCY_KEY_META]: idempotencyKey() },
     },
     trend,
   );
