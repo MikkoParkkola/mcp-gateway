@@ -171,10 +171,12 @@ jobs:
           tags: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan
           build-args: |
             APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}
-          # Scoped per arch: an unscoped scope has both legs writing one cache
-          # entry, so each run thrashes the other's layers.
-          cache-from: type=gha,scope=docker-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+          # Scoped per arch and per workflow: an unscoped scope has both legs
+          # writing one cache entry, so each run thrashes the other's layers,
+          # and sharing ci.yml's `docker-` scope reproduces that thrash across
+          # the two workflows on a tag that fires both.
+          cache-from: type=gha,scope=docker-yml-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-yml-${{ matrix.arch }}
 
       - name: Trivy image scan (block push on fixable HIGH/CRITICAL CVEs)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -320,16 +322,25 @@ jobs:
           # resolving a tag a second time: a concurrent push to main can move
           # `main` between the two commands, and the assertion below would then
           # pass on a list this run did not build.
-          LIST="$(jq -re '."containerimage.digest"' create.json)"
-          printf 'list=%s\n' "${LIST}" >> "${GITHUB_OUTPUT}"
+          LIST="$(jq -r '."containerimage.digest" // empty' create.json)"
+          if [ -n "${LIST}" ]; then
+            REF="${IMAGE}@${LIST}"
+          else
+            # A buildx that spells the create result differently would otherwise
+            # fail this step on a correctly published list. Asserting by tag
+            # reopens the concurrent-push window described above, so it is said
+            # out loud rather than substituted silently.
+            echo "::warning::no digest in the create result; asserting by tag"
+            REF="${TAG_ARGS[1]}"
+          fi
+          printf 'ref=%s\n' "${REF}" >> "${GITHUB_OUTPUT}"
 
       - name: Assert the list carries both platforms
         env:
-          LIST: ${{ steps.list.outputs.list }}
+          REF: ${{ steps.list.outputs.ref }}
         run: |
           set -euo pipefail
-          PLATFORMS="$(docker buildx imagetools inspect \
-            "ghcr.io/mikkoparkkola/mcp-gateway@${LIST}" \
+          PLATFORMS="$(docker buildx imagetools inspect "${REF}" \
             --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')"
           echo "published platforms: ${PLATFORMS}"
           for want in linux/amd64 linux/arm64; do
