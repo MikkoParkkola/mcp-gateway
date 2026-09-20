@@ -116,16 +116,90 @@ pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
                 continue;
             }
             translate_back(&mut notification);
-            if tx.try_send(notification).is_err() {
-                let total = DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
-                tracing::warn!(
-                    dropped_total = total,
-                    capacity = REQUEST_NOTIFICATION_DEPTH,
-                    "request notification sink full; dropping notification"
-                );
-            }
+            send_or_count(tx, notification);
         }
     });
+}
+
+/// Hand one notification to a sink, counting it against the overflow total if
+/// the sink is full.
+///
+/// Both delivery paths route through here -- the batched `publish` and the
+/// streaming `DeliveryHandle` -- so a drop is counted the same way whichever
+/// one shed it. Two copies of this accounting is how one path's overflow
+/// becomes invisible in the number the other path maintains.
+fn send_or_count(tx: &mpsc::Sender<JsonRpcNotification>, notification: JsonRpcNotification) {
+    if tx.try_send(notification).is_err() {
+        let total = DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::warn!(
+            dropped_total = total,
+            capacity = REQUEST_NOTIFICATION_DEPTH,
+            "request notification sink full; dropping notification"
+        );
+    }
+}
+
+/// Where one in-flight request's notifications go, in a form that survives
+/// leaving the task that owns them.
+///
+/// `publish` reaches the caller through task-locals, which is enough when the
+/// payload is carried back to the caller's own task. It is not enough when the
+/// frame must be delivered the moment it is read -- the reader task of a
+/// subprocess backend has neither task-local in scope, so publishing there
+/// silently drops. Capturing both halves on the caller's task and carrying
+/// them to the reader is what makes a mid-call notification reachable.
+///
+/// Both halves are load-bearing. The sender is where the frame goes; the
+/// caller's own progress token is what the frame must carry, because
+/// `translate_back` resolves that from `TRANSLATIONS` -- the very task-local
+/// this handle exists to escape. A handle carrying only a sender arrives on
+/// time with the wrong token on it, and a caller correlating on its own token
+/// sees nothing (ADR-014 §2).
+#[derive(Clone)]
+pub(crate) struct DeliveryHandle {
+    sink: Option<mpsc::Sender<JsonRpcNotification>>,
+    client_token: Option<Value>,
+}
+
+impl DeliveryHandle {
+    /// Snapshot this task's sink and the caller token `minted` maps to.
+    ///
+    /// Call it on the caller's task. Anywhere else both halves come back
+    /// `None`, and the handle still registers: the notification is then
+    /// recognised as owned and dropped deliberately rather than logged as a
+    /// stray from nowhere.
+    pub(crate) fn capture(minted: &str) -> Self {
+        Self {
+            sink: SINK.try_with(Clone::clone).ok(),
+            client_token: TRANSLATIONS
+                .try_with(|cell| {
+                    cell.borrow()
+                        .iter()
+                        .find(|(m, _)| m == minted)
+                        .map(|(_, client)| client.clone())
+                })
+                .ok()
+                .flatten(),
+        }
+    }
+
+    /// Deliver one notification now, restoring the caller's token first.
+    ///
+    /// No level filter: `passes_level_filter` admits every method that is not
+    /// `notifications/message`, so a progress frame never meets it and
+    /// snapshotting `LEVEL` alongside the sender would be dead weight.
+    pub(crate) fn deliver(&self, mut notification: JsonRpcNotification) {
+        let Some(sink) = self.sink.as_ref() else {
+            return;
+        };
+        if let Some(client) = self.client_token.clone()
+            && notification.method == "notifications/progress"
+            && let Some(Value::Object(params)) = notification.params.as_mut()
+        {
+            params.insert("progressToken".to_string(), client);
+        }
+        send_or_count(sink, notification);
+    }
 }
 
 /// Record the minimum severity this request declared (ADR-014 §4).
