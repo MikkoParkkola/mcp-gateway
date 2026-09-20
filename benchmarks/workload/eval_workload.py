@@ -228,7 +228,14 @@ def evaluate(run: Path) -> int:
     # the directory: a run that died mid-arm leaves fewer files, and that must
     # stay VOID rather than silently regrade as a smaller, insufficient
     # sample. Runs recorded before the pin existed fall back to MEASURED_REPS.
-    measured = pins.get("reps") or list(MEASURED_REPS)
+    # The fallback is keyed on the key being ABSENT, not on the value being
+    # falsy: `pins.get("reps") or MEASURED_REPS` reads a declared-but-empty
+    # sample as "this run predates the pin" and grades it against the default
+    # three reps, which is a sample nobody declared. A non-list pin has to be
+    # caught here too, or a scalar reaches the loop below as a TypeError.
+    measured = pins["reps"] if "reps" in pins else list(MEASURED_REPS)
+    if not isinstance(measured, list) or not measured:
+        raise Void(f"pins.reps {measured!r} must be a non-empty list of rep ids")
 
     # A repeated rep id reads the same summary file twice. Six copies of one
     # measurement clear the n>=6 insufficiency floor and, being identical,

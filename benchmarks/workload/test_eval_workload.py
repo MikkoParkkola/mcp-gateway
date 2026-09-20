@@ -577,6 +577,29 @@ def test_duplicate_reps_void():
             )
 
 
+def test_malformed_reps_pin_voids_rather_than_falling_back():
+    """A declared-but-unusable reps pin is VOID, never the default sample.
+
+    The absent-key fallback exists for runs recorded before the pin did. A
+    pin that is present and empty is a different thing: grading it against
+    MEASURED_REPS reports on three reps the run never declared, and does it
+    silently. A scalar pin is the same defect one step further along -- it
+    reached the rep loop and raised an uncaught TypeError, which exits 1 and
+    reads as FAIL rather than VOID.
+    """
+    for bad in ([], 0, 5, "1,2,3", {"1": 1}):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            build(run, FLAT, reps=6)
+            pins = json.loads((run / "pins.json").read_text())
+            pins["reps"] = bad
+            (run / "pins.json").write_text(json.dumps(pins))
+            status = run_eval(run)
+            assert status == ev.EXIT_VOID, (
+                f"malformed pins.reps {bad!r} must VOID, got exit {status}"
+            )
+
+
 def test_spread_is_reported_but_never_gates():
     """spread survives as a diagnostic and decides nothing.
 
@@ -730,6 +753,10 @@ def main() -> None:
     check("gate/degenerate input", test_degenerate_input)
     check("gate/archived run wiring", test_archived_run_regrades_as_insufficiency)
     check("gate/duplicate reps VOID", test_duplicate_reps_void)
+    check(
+        "gate/malformed reps pin VOID",
+        test_malformed_reps_pin_voids_rather_than_falling_back,
+    )
     check("gate/spread reported, never gating", test_spread_is_reported_but_never_gates)
 
     if FAILURES:
