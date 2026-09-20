@@ -269,8 +269,8 @@
     },
     {
       "id": "MIK-3274.RANKING.1",
-      "status": "pending",
-      "stage": "built",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
       "evidence": [
         "docs/design/2026-09-12-mik-3274-ranking-abbreviations.md",
@@ -281,7 +281,7 @@
         "src/ranking/scoring.rs",
         "src/ranking/tests.rs"
       ],
-      "note": "ON THE RELEASE LINE, NOT YET GRADED, 2026-09-20: the abbreviation ranking work merged as a76a17a5 (#607), so the 2026-09-20 'not on the release line' position is superseded. expand_abbreviations and name_is_boundary_aligned resolve at HEAD in src/ranking/mod.rs, src/ranking/rank_key.rs, src/ranking/scoring.rs and src/gateway/meta_mcp_helpers_text.rs, and the acceptance suite src/gateway/meta_mcp_helpers_tests/abbreviations.rs maps one test per conjunct of the scope-tests row. The row stays pending for one reason: that suite has been read, never executed, so no conjunct is met as evidence. Test-first ordering is verified by ancestry -- 9a047a41 added the suite with no reference to expand_abbreviations, name_is_boundary_aligned or char_prefix, so it compiled against the pre-implementation API. Edit distance is neither used nor required: the frozen corpus src/ranking/fixtures/abbreviation-corpus.tsv holds 16 abbreviation and numeronym rows and zero typo rows, so the 2026-09-17 pointer at meta_mcp_helpers.rs:47 guessed at an implementation the design ruled out. One named risk is open: the implementation commit retargeted two potency controls in search_ranking_authority, and that retargeting needs a disposition before the row can be graded met."
+      "note": "GRADED MET 2026-09-20. Both blockers that held this row are cleared. (1) EXECUTED, not merely read: `cargo test --lib abbreviation` at 07b850b76 on the release line -> ok. 10 passed; 0 failed; 0 ignored. The suite src/gateway/meta_mcp_helpers_tests/abbreviations.rs holds exactly 10 test functions and every conjunct of the scope-tests row maps to one that ran green: held-out abbreviations (held_out_abbreviations_resolve_to_their_intended_tool), word boundaries (boundary_aligned_match_outranks_a_mid_token_one_at_equal_score, multi_word_boundary_requires_every_matched_word_to_align), exact identifier (exact_identifier_outranks_a_highly_used_competing_sibling), unsupported match (unsupported_abbreviations_return_no_new_result), Unicode (non_ascii_queries_rank_without_panicking, build_suggestions_does_not_panic_on_a_multi_byte_query_word, a_multi_byte_query_word_still_earns_a_prefix_suggestion), and the Code Mode glob control (glob_queries_are_byte_identical_across_the_ranking_change). Realistic conflicting siblings come from src/ranking/fixtures/abbreviation-catalogue.tsv, so no case resolves by being the only candidate. (2) The named risk -- the implementation commit retargeted two potency controls in search_ranking_authz_tests.rs -- is DISPOSED by falsification, not by reading the commit message that claimed it. Redirecting the usage boost to a name outside the fixture set (ranker_with_heavy_usage, 4 sites) turns both controls red with their own distinct messages and zebracorn_tool at rank 1 in place of weak_match: heavy_usage_outranks_the_exact_match_when_nothing_is_denied at :558 and its Code Mode sibling at :1030. 18 passed; 2 failed, exactly the two named. Restored clean. Both controls are therefore still load-bearing on the retargeted fixture pair, so the retargeting does not weaken MIK-3274.RANKING.2 either. Held-out integrity is intact: 9 of 16 frozen corpus cases resolve, a perfect score would have been reported as leakage."
     },
     {
       "id": "MIK-3274.RANKING.2",
