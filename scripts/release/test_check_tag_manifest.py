@@ -1298,15 +1298,17 @@ class WorkflowWiring(unittest.TestCase):
         #
         # Order is half the claim. A smoke step after the handoff still proves
         # the image boots, but about bytes that are already reachable, which is
-        # a report, not a gate. The handoff differs per publisher and neither
-        # substitutes for the other -- both fire on the same tag and cannot
-        # block each other. docker.yml pushes its own tags from this job.
-        # ci.yml's build has already pushed by digest under no name at all, so
-        # nothing is reachable yet; what makes a name resolve is
-        # docker-manifest, whose only input is the uploaded digest -- so that
-        # upload is this job's point of no return.
+        # a report, not a gate. Both publishers now push by digest under no
+        # name at all, so nothing is reachable when the build job ends; what
+        # makes a name resolve is the manifest job, whose only input is the
+        # uploaded digest -- so that upload is each job's point of no return.
         for workflow, job, handoff, marker in (
-            ("docker.yml", "build", "its push", re.compile(r"^\s*push:\s*\$\{\{")),
+            (
+                "docker.yml",
+                "build",
+                "the digest upload the branch tags are built from",
+                re.compile(r"^\s*uses:\s*actions/upload-artifact@"),
+            ),
             (
                 "ci.yml",
                 "docker-build",
@@ -1367,21 +1369,53 @@ class WorkflowWiring(unittest.TestCase):
 
     def test_the_branch_builder_still_refuses_to_push_on_a_tag(self):
         # A regression lock, green today: docker.yml handed :VERSION over, and
-        # its push condition is the only thing keeping the second publisher
-        # from coming back on the same name from the same commit.
-        pushes = [
-            line
-            for block in steps("docker.yml")
+        # this condition is the only thing keeping the second publisher from
+        # coming back on the same name from the same commit.
+        #
+        # It used to live on one step-level `push:`. It no longer can: the
+        # build job pushes by digest under no name and a `manifest` job creates
+        # the branch tags, so the condition sits on the publishing steps' `if:`
+        # and on that job's own `if:`. A job-level `if:` cannot read a step
+        # output or an env alias, so the sites carry the literal expression --
+        # and the lock is that they agree. One site left off skips a step the
+        # others still run: an ungated record step reads an empty digest on a
+        # pull request, and an ungated manifest job tags a tag build.
+        publishers = [
+            block
+            for block in steps("docker.yml", "build")
             for line in block
-            if re.match(r"^\s*push:", line.strip())
+            if re.search(r"\bpush\s*=\s*true\b", line)
+            or re.match(r"^\s*push:\s*\$\{\{", line)
+            or re.match(r"^\s*uses:\s*actions/upload-artifact@", line)
+            or re.search(r"\bdigests/", line)
         ]
-        self.assertTrue(pushes, "docker.yml: no build step declares push:")
-        for line in pushes:
-            self.assertRegex(
-                line,
-                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)",
-                f"docker.yml pushes on a tag again: {line.strip()}",
+        # Asserted before it is read. An empty list here IS the regression --
+        # a build job that publishes through some step this no longer finds.
+        self.assertTrue(
+            publishers, "docker.yml: build declares no publishing step"
+        )
+        conditions = []
+        for block in publishers:
+            guard = [line for line in block if re.match(r"^\s*if:", line)]
+            self.assertTrue(
+                guard,
+                "docker.yml: a publishing step carries no condition: "
+                f"{block[0].strip()}",
             )
+            conditions.extend(line.split(":", 1)[1].strip() for line in guard)
+        conditions.append(job_if("docker.yml", "manifest"))
+        for condition in conditions:
+            self.assertRegex(
+                condition,
+                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)",
+                f"docker.yml pushes on a tag again: {condition}",
+            )
+        self.assertEqual(
+            len(set(conditions)),
+            1,
+            "docker.yml: the publish sites no longer agree, so one of them "
+            f"runs where the others skip: {sorted(set(conditions))}",
+        )
 
     def test_a_comment_is_stripped_and_a_quoted_hash_is_not(self):
         # Every assertion here reads uncommented text, so both directions are

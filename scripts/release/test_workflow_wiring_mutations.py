@@ -45,21 +45,16 @@ SMOKE_STEP = (
     ' "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"\n'
 )
 PUSH_STEP = (
-    "      - name: Build and push\n"
-    "        id: build\n"
-    "        uses: docker/build-push-action"
-    "@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0\n"
+    "      - name: Upload the digest\n"
+    "        if: github.event_name != 'pull_request'"
+    " && !startsWith(github.ref, 'refs/tags/v')\n"
+    "        uses: actions/upload-artifact"
+    "@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n"
     "        with:\n"
-    "          context: .\n"
-    "          # Never on a tag: ci.yml publishes the release manifest list.\n"
-    "          push: ${{ github.event_name != 'pull_request'"
-    " && !startsWith(github.ref, 'refs/tags/v') }}\n"
-    "          tags: ${{ steps.meta.outputs.tags }}\n"
-    "          labels: ${{ steps.meta.outputs.labels }}\n"
-    "          build-args: |\n"
-    "            APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}\n"
-    "          cache-from: type=gha\n"
-    "          cache-to: type=gha,mode=max\n"
+    "          name: image-digest-${{ matrix.arch }}\n"
+    "          path: digests/${{ matrix.arch }}\n"
+    "          retention-days: 1\n"
+    "          if-no-files-found: error\n"
 )
 
 # (label, workflow, before, after, expected) — `before` must occur verbatim.
@@ -874,11 +869,17 @@ CASES = [
     ),
     (
         # The second publisher back on the same name from the same commit.
+        # It no longer has a step-level `push:` to reopen -- the build pushes
+        # by digest under no name -- so the way back in is the condition that
+        # decides whether the manifest job runs at all. Anchored to the line
+        # above it: the job-level condition is a prefix of the step-level ones,
+        # so on its own it matches four times and mutates the wrong copy.
         "docker-yml-pushing-on-a-tag-again",
         "docker.yml",
-        "        push: ${{ github.event_name != 'pull_request'"
-        " && !startsWith(github.ref, 'refs/tags/v') }}",
-        "        push: ${{ github.event_name != 'pull_request' }}",
+        "    needs: build\n"
+        "    if: github.event_name != 'pull_request'"
+        " && !startsWith(github.ref, 'refs/tags/v')",
+        "    needs: build\n    if: github.event_name != 'pull_request'",
         CAUGHT,
     ),
     (
@@ -961,10 +962,12 @@ CASES = [
     ),
     (
         # The case deletion does not cover: the gate is still there, still
-        # blocking, still reading the right image -- and runs after the push.
-        "smoke-gate-moved-below-the-push",
+        # blocking, still reading the right image -- and the handoff that
+        # makes those bytes reachable now runs first. Hoisting a second copy
+        # of the upload above it is the smallest edit that reorders the two.
+        "smoke-gate-moved-below-the-handoff",
         "docker.yml",
-        SMOKE_STEP + "\n" + PUSH_STEP,
+        SMOKE_STEP,
         PUSH_STEP + "\n" + SMOKE_STEP,
         CAUGHT,
     ),

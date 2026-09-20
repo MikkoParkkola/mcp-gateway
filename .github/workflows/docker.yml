@@ -64,8 +64,28 @@ jobs:
         run: python3 scripts/release/check_scope_acceptance.py --publish-check
 
   build:
+    name: Build (${{ matrix.arch }})
     needs: [security-gate, release-criteria]
-    runs-on: ubuntu-latest
+    # `matrix.os`, not a literal: the hosted-runner guard resolves that one
+    # expression against the matrix entries below and checks each image on its
+    # own (scripts/ci/check-hosted-runners.sh).
+    runs-on: ${{ matrix.os }}
+    # Native runners, never QEMU: this image compiles the whole Rust tree, and
+    # emulating that on every push to main costs more than the arm64 leg is
+    # worth. Each leg also starts its own image on its own architecture, which
+    # is the only way an arm64 startup break is observable (NFR.PKG.1).
+    strategy:
+      # A half-finished matrix must not reach `manifest`: the branch tags are
+      # created there from both digests, and one leg alone is not the list.
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            os: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            os: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
@@ -143,6 +163,7 @@ jobs:
         with:
           context: .
           load: true
+          platforms: ${{ matrix.platform }}
           # IMAGE_NAME = github.repository carries the original-case owner
           # (MikkoParkkola); Docker tags must be lowercase, so use a lowercase
           # literal for the ephemeral local scan tag (the pushed image uses the
@@ -150,8 +171,10 @@ jobs:
           tags: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan
           build-args: |
             APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Scoped per arch: an unscoped scope has both legs writing one cache
+          # entry, so each run thrashes the other's layers.
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
 
       - name: Trivy image scan (block push on fixable HIGH/CRITICAL CVEs)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -172,21 +195,151 @@ jobs:
       - name: Smoke test the image (it must start and report healthy)
         run: scripts/ci/smoke-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
 
-      - name: Build and push
+      # Push by digest with no tag; `manifest` below creates the branch and sha
+      # tags over both legs' digests. Nothing is resolvable by name until it
+      # does, so a single-arch image can never answer a `docker pull`.
+      #
+      # The publish condition is unchanged from when this was one tagged push:
+      # main yes, tags no (ci.yml publishes the release manifest list), PRs no.
+      # It is repeated on the digest steps below and on `manifest`'s job-level
+      # `if:`; a job-level `if:` cannot read a step or an env alias, so the four
+      # sites carry the literal expression and must agree.
+      #
+      # provenance/sbom off: build-push-action v7 attaches a provenance
+      # attestation by default on Actions, which makes the pushed artifact an
+      # index rather than a single-platform manifest, and an index cannot be a
+      # child of `imagetools create`.
+      - name: Build and push by digest (no tag)
         id: build
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/v')
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          # Never on a tag: ci.yml publishes the release manifest list.
-          push: ${{ github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/v') }}
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          sbom: false
+          outputs: type=image,name=ghcr.io/mikkoparkkola/mcp-gateway,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             APT_CACHE_BUST=${{ env.APT_CACHE_BUST }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
 
-      # This job no longer pushes a release tag: ci.yml's docker-build matrix and
+      - name: Record the digest for the manifest job
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/v')
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p digests
+          printf '%s' "${DIGEST}" > "digests/${{ matrix.arch }}"
+          test -s "digests/${{ matrix.arch }}"
+
+      - name: Upload the digest
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}
+          retention-days: 1
+          if-no-files-found: error
+
+  # Publishes the multi-arch list and refuses to leave a single-platform image
+  # answering to `main` or a sha. The assertion is the gate: `docker manifest
+  # inspect` listing only linux/amd64 is what NFR.PKG.1 calls a defect, and it
+  # cannot be reintroduced silently while this step runs.
+  manifest:
+    name: Manifest list (assert both platforms)
+    needs: build
+    if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Recomputed rather than passed through: the tag names belong to the same
+      # action and inputs the build job used, so the two cannot name different
+      # things, and a matrix job's outputs are whichever leg finished last.
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=
+
+      - name: Download the leg digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: image-digest-*
+          merge-multiple: true
+          path: digests
+
+      - name: Create the manifest list
+        id: list
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
+          AMD64="$(cat digests/amd64)"
+          ARM64="$(cat digests/arm64)"
+          # Both legs are required. An absent file here means a leg was skipped
+          # rather than failed, and a one-platform "list" published under a tag
+          # a user pulls is the defect this job exists to prevent.
+          test -n "${AMD64}" && test -n "${ARM64}"
+          # metadata-action emits one tag per line; buildx takes one --tag each.
+          TAG_ARGS=()
+          while IFS= read -r tag; do
+            [ -n "${tag}" ] || continue
+            TAG_ARGS+=(--tag "${tag}")
+          done <<< "${TAGS}"
+          test "${#TAG_ARGS[@]}" -gt 0
+          docker buildx imagetools create "${TAG_ARGS[@]}" \
+            --metadata-file create.json \
+            "${IMAGE}@${AMD64}" "${IMAGE}@${ARM64}"
+          # Read this run's index digest out of the create result rather than
+          # resolving a tag a second time: a concurrent push to main can move
+          # `main` between the two commands, and the assertion below would then
+          # pass on a list this run did not build.
+          LIST="$(jq -re '."containerimage.digest"' create.json)"
+          printf 'list=%s\n' "${LIST}" >> "${GITHUB_OUTPUT}"
+
+      - name: Assert the list carries both platforms
+        env:
+          LIST: ${{ steps.list.outputs.list }}
+        run: |
+          set -euo pipefail
+          PLATFORMS="$(docker buildx imagetools inspect \
+            "ghcr.io/mikkoparkkola/mcp-gateway@${LIST}" \
+            --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')"
+          echo "published platforms: ${PLATFORMS}"
+          for want in linux/amd64 linux/arm64; do
+            case " ${PLATFORMS} " in
+              *" ${want} "*) ;;
+              *) echo "::error::${want} missing from the published manifest list"; exit 1 ;;
+            esac
+          done
+
+      # This workflow no longer pushes a release tag: ci.yml's docker-build matrix and
       # docker-manifest own ghcr.io/mikkoparkkola/mcp-gateway:VERSION, which
       # removes the two-publisher race (one manifest list, one creator) and the
       # push-before-sign window (#529). There the index is built under a
