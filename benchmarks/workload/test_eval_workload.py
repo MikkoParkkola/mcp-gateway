@@ -160,10 +160,14 @@ K_PLATEAUS = (
     (12, 3, 0.96142578125),
     (13, 3, 0.9775390625),
     # Past n=13 on purpose. A table that stops at 13 only ever pins k in
-    # {1,2,3}, so an implementation that caps the rank at 3 reads as correct --
-    # and the harness's own rep count is 15, where the true k is 4. The table
-    # must reach past the largest rank any plausible cap would take AND past
-    # the largest n the gate will actually be run at.
+    # {1,2,3}, so an implementation that caps the rank at 3 reads as correct
+    # everywhere the table can see. n=15 is the first n whose rank is 4, so
+    # the table has to reach it -- and past it, because the next cap anyone
+    # would plausibly write is the largest rank the table happens to show.
+    # The gate's own rep count is a moving target (3 per cell as of
+    # gating-2026-09-20c, and it must rise to at least 6 before the gate can
+    # ever pass), which is exactly why the reach is chosen from the ranks
+    # rather than from today's configuration.
     (14, 3, 0.987060546875),
     (15, 4, 0.96484375),
     (16, 4, 0.978729248046875),
