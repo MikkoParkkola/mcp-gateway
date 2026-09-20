@@ -506,11 +506,27 @@ def test_archived_run_regrades_as_insufficiency():
         assert ev.interval_insufficient(len(ev.MEASURED_REPS)), (
             f"MEASURED_REPS n={len(ev.MEASURED_REPS)} should be insufficient"
         )
+        # In memory the insufficient width is the inf sentinel; ON DISK it must
+        # be null. json.dumps writes float("inf") as the bare token Infinity,
+        # which RFC 8259 does not admit -- jq or any non-Python reader rejects
+        # the whole document. Reading the file back with a parser that refuses
+        # the constant is the check that a round trip through Python cannot
+        # make, because json.loads accepts Infinity by default.
+        def strict(_const):
+            raise AssertionError("verdict.json contains a non-JSON constant")
+
+        report = json.loads((run / "verdict.json").read_text(), parse_constant=strict)
+        assert ev.rel_half_width([1.0, 2.0, 3.0]) == float("inf"), (
+            "the in-memory sentinel for an insufficient sample must stay inf"
+        )
         for cell in ev.LEGACY_CELLS:
             for stat in ("p50", "p99"):
                 key = f"{stat}_rel_half_width"
                 got = report["cells"][cell][key]
-                assert got == float("inf"), f"{cell}.{key} = {got}, expected inf"
+                assert got is None, (
+                    f"{cell}.{key} = {got!r}, expected null -- an insufficient "
+                    f"width must serialize as null, never as Infinity"
+                )
 
         reasons = report["unstable"]
         assert reasons, "an insufficient run must record why it is inconclusive"

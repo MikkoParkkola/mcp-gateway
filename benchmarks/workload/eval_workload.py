@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 import sys
 from pathlib import Path
@@ -127,9 +128,80 @@ def pooled(values):
     return statistics.median(values)
 
 
-def spread(values):
-    lo, hi = min(values), max(values)
-    return (hi - lo) / lo if lo > 0 else float("inf")
+CONF = 0.95
+
+
+def _max_rank(n):
+    """Largest k with P(x_(k) <= median <= x_(n-k+1)) >= CONF, else None.
+
+    Coverage is monotone DECREASING in k, so the loop can stop at the first
+    rank that breaches the floor. Maximality is the point, not admissibility:
+    any smaller k also clears CONF but gives a WIDER interval, and a gate
+    built on a too-wide interval reports more coverage than asked for while
+    resolving less. For CONF = 0.95 no rank exists below n = 6.
+    """
+    best = None
+    for k in range(1, n // 2 + 1):
+        if 1 - 2 * sum(math.comb(n, i) for i in range(k)) / 2**n >= CONF:
+            best = k
+        else:
+            break
+    return best
+
+
+def interval_insufficient(n):
+    """True when n reps cannot support a CONF interval at any rank."""
+    return _max_rank(n) is None
+
+
+def median_interval(values):
+    """Distribution-free CONF interval for the population median, or None.
+
+    Returns the order-statistic pair (x_(k), x_(n-k+1)), which is
+    (sorted[k-1], sorted[n-k]) zero-indexed. Distribution-free because the
+    coverage is a binomial tail that does not depend on the population -- the
+    t-based first draft measured 85.5% on a bimodal sample.
+    """
+    n = len(values)
+    k = _max_rank(n)
+    if k is None:
+        return None
+    ordered = sorted(values)
+    return (ordered[k - 1], ordered[n - k])
+
+
+def rel_half_width(values):
+    """Half the interval width relative to the pooled median.
+
+    Replaces spread(), whose min-to-max range widens with every extra rep and
+    so punished the runs that measured hardest. Returns float("inf") when the
+    sample cannot support an interval or the centre is non-positive, so an
+    unmeasurable cell can never read as stable.
+    """
+    interval = median_interval(values)
+    if interval is None:
+        return float("inf")
+    centre = pooled(values)
+    if centre <= 0:
+        return float("inf")
+    return (interval[1] - interval[0]) / 2 / centre
+
+
+def jsonable(value):
+    """Map the inf sentinel to null on the way out of the process.
+
+    json.dumps writes float("inf") as the bare token Infinity, which RFC 8259
+    does not admit; jq, a Go or Rust reader, or a browser JSON.parse rejects
+    the whole document, not just the field. The sentinel stays inf in memory
+    so every comparison is unchanged -- only the artifact says null.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [jsonable(v) for v in value]
+    return value
 
 
 def evaluate(run: Path) -> int:
@@ -139,19 +211,23 @@ def evaluate(run: Path) -> int:
         if value in (None, "", {}):
             raise Void(f"pins.{field} is empty; an empty pin voids the run")
 
+    # The rep numbers are DECLARED in pins.json, never discovered by globbing
+    # the directory: a run that died mid-arm leaves fewer files, and that must
+    # stay VOID rather than silently regrade as a smaller, insufficient
+    # sample. Runs recorded before the pin existed fall back to MEASURED_REPS.
+    measured = pins.get("reps") or list(MEASURED_REPS)
+
     cells: dict[str, list[dict]] = {}
     for cell in LEGACY_CELLS + REPORT_ONLY_CELLS:
-        cells[cell] = [
-            check_rep(run, f"{cell}{n}", pins) for n in MEASURED_REPS
-        ]
+        cells[cell] = [check_rep(run, f"{cell}{n}", pins) for n in measured]
 
     report = {"per_rep": cells, "cells": {}}
     for cell, reps in cells.items():
         report["cells"][cell] = {
             "p50": pooled([r["p50"] for r in reps]),
             "p99": pooled([r["p99"] for r in reps]),
-            "p50_spread": spread([r["p50"] for r in reps]),
-            "p99_spread": spread([r["p99"] for r in reps]),
+            "p50_rel_half_width": rel_half_width([r["p50"] for r in reps]),
+            "p99_rel_half_width": rel_half_width([r["p99"] for r in reps]),
         }
 
     a, b, c = (report["cells"][k] for k in LEGACY_CELLS)
@@ -170,20 +246,29 @@ def evaluate(run: Path) -> int:
 
     passes = c["p50"] <= limit_p50 and c["p99"] <= limit_p99
 
-    # A per-rep spread wider than the margin it is being judged against means
+    # An interval half-width wider than the margin it is judged against means
     # the run cannot resolve the question, whichever side the pooled number
-    # happens to land on.
+    # happens to land on. Too few reps is the same conclusion reached earlier:
+    # the interval does not exist, so the cell is unstable by insufficiency
+    # and says so, rather than reporting a width nobody can interpret.
     margin_p50 = P50_BUDGET - 1.0
     margin_p99 = P99_BUDGET - 1.0
-    unstable = [
-        f"{cell}.p50 spread {report['cells'][cell]['p50_spread']:.3f} > {margin_p50:.3f}"
-        for cell in LEGACY_CELLS
-        if report["cells"][cell]["p50_spread"] > margin_p50
-    ] + [
-        f"{cell}.p99 spread {report['cells'][cell]['p99_spread']:.3f} > {margin_p99:.3f}"
-        for cell in LEGACY_CELLS
-        if report["cells"][cell]["p99_spread"] > margin_p99
-    ]
+    unstable = []
+    for cell in LEGACY_CELLS:
+        n = len(cells[cell])
+        if interval_insufficient(n):
+            unstable.append(
+                f"{cell} insufficient: {n} reps cannot support a "
+                f"{CONF:.0%} median interval at any rank"
+            )
+            continue
+        for metric, margin in (("p50", margin_p50), ("p99", margin_p99)):
+            width = report["cells"][cell][f"{metric}_rel_half_width"]
+            if width > margin:
+                unstable.append(
+                    f"{cell}.{metric} interval half-width "
+                    f"{width:.3f} > {margin:.3f}"
+                )
 
     if unstable:
         verdict, status = "INCONCLUSIVE", EXIT_INCONCLUSIVE
@@ -198,13 +283,15 @@ def evaluate(run: Path) -> int:
         cell: report["cells"][cell] for cell in REPORT_ONLY_CELLS
     }
 
-    (run / "verdict.json").write_text(json.dumps(report, indent=2, sort_keys=True))
-    print(json.dumps(report, indent=2, sort_keys=True))
+    payload = json.dumps(jsonable(report), indent=2, sort_keys=True)
+    (run / "verdict.json").write_text(payload)
+    print(payload)
     print(f"\nVERDICT: {verdict}  (exit {status})", file=sys.stderr)
     if unstable:
         print(
-            "INCONCLUSIVE: per-rep spread exceeds the budget it is judged "
-            "against. This is not a pass and must not be graded as one.",
+            "INCONCLUSIVE: the median interval is too wide for the margin it "
+            "is judged against, or too few reps to build one at all. This is "
+            "not a pass and must not be graded as one.",
             file=sys.stderr,
         )
     return status
