@@ -112,6 +112,7 @@ resolving anything at this rep count. D and E are report-only and do not enter t
 
 `pins.json` records the k6 image digest and the per-cell checkout SHAs. D and E carry C's
 SHA `5e557e08` and health version 4.0.0 — they are symlinks to C's build, so the C→D
-comparison isolates protocol era against a byte-identical binary. Raw per-rep
-`*.summary.json`, `*.meta.json`, gateway stdout/stderr and k6 output remain on Spark at
-`~/github/mcp-gateway-wt-workload611/benchmarks/results/gating-2026-09-20c/`.
+comparison isolates protocol era against a byte-identical binary. The 145 raw artifacts —
+per-rep `*.summary.json`, `*.meta.json`, `*.health.json`, gateway stdout/stderr and k6
+output — are archived on Spark at `~/perf-workload/results/gating-2026-09-20c/`, outside
+any checkout so they survive branch and worktree cleanup.
