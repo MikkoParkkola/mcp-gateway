@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Tests for ranked_results_to_json, the search-result JSON projection.
+//! Tests for `ranked_results_to_json`, the search-result JSON projection.
 use super::*;
 use crate::ranking::SearchResult;
 
