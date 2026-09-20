@@ -17,7 +17,10 @@ set -uo pipefail
 LINE="${1:-origin/main}"
 LEDGER="${2:-docs/requirements/RELEASE-4.0.0-criteria-status.md}"
 
-cited=$(rg -o '`[0-9a-f]{8,40}`' "$LEDGER" | tr -d '`' | sort -u)
+# grep, not rg: this runs on a release runner where ripgrep is not installed
+# (verified against the ubuntu-24.04 image manifest), and the pattern needs
+# nothing ripgrep has that POSIX ERE lacks.
+cited=$(grep -oE '`[0-9a-f]{8,40}`' "$LEDGER" | tr -d '`' | sort -u)
 printf 'line=%s  ledger=%s  cited=%s\n\n' \
   "$LINE" "$LEDGER" "$(printf '%s\n' "$cited" | grep -c .)"
 
