@@ -404,6 +404,17 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
         )),
         "README should advertise the canonical Meta-MCP tool-count range"
     );
+    // The quickstart prints the same count a second time, in a sentence the
+    // assertion above does not reach. It drifted to `~15` and stayed there,
+    // for exactly that reason, so pin the figure where a new reader meets it
+    // first. Derived from the claims file, never spelled.
+    assert!(
+        readme.contains(&format!(
+            "at a flat `{} tools` instead of",
+            claims.meta_tools.readme_benchmark
+        )),
+        "README quickstart should advertise the canonical benchmark tool count"
+    );
     assert!(
         readme.contains(&format!(
             "capabilities-{}%2B-",
