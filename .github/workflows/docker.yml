@@ -322,7 +322,13 @@ jobs:
           # resolving a tag a second time: a concurrent push to main can move
           # `main` between the two commands, and the assertion below would then
           # pass on a list this run did not build.
-          LIST="$(jq -r '."containerimage.digest" // empty' create.json)"
+          #
+          # `imagetools create` nests the digest under `containerimage.descriptor`;
+          # only `buildx build` writes a top-level `containerimage.digest`. Reading
+          # the build spelling first made the fallback below the permanent path.
+          LIST="$(jq -r '."containerimage.descriptor".digest
+                         // ."containerimage.digest"
+                         // empty' create.json)"
           if [ -n "${LIST}" ]; then
             REF="${IMAGE}@${LIST}"
           else
