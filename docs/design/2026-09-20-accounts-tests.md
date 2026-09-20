@@ -590,11 +590,18 @@ assertion that never met the type it asserts on.
 (`mod.rs:476`), and `open` (`mod.rs:436`) reopens a closed store. So the
 isolation check reads the store directly rather than asking custody:
 
+There is no accessor to add, because there is nothing to return. `Custody`
+holds four fields — `handle`, `refresh_calls`, `observer`, and
+`_root: tempfile::TempDir` (`account_resolver_fixture.rs:363-368`) — and the
+`StoreConfig` is built inside `custody_with_rotation` from `store_config(root.path())`
+(`:284`, `:396`) and then dropped. So Stage 1 must either **store** the config
+on `Custody`, or expose `_root.path()` and rebuild it. Storing it is the
+smaller change and the one that cannot drift from what custody actually opened:
+
 ```rust
-// The fixture builds its StoreConfig privately inside `custody_with_rotation`
-// and keeps the TempDir in a private `_root`. Stage 1 must widen exactly one
-// of those — an accessor returning the config — and nothing else.
-let after = PersonalAccountStore::open(custody.config()).expect("reopen");
+// Add `config: StoreConfig` to the fixture's `Custody` and a `config()`
+// borrow. One field, one accessor, both `#[cfg(test)]`.
+let after = PersonalAccountStore::open(custody.config().clone()).expect("reopen");
 assert!(
     matches!(after.lookup(&bob), Ok(AccountLookup::Connected(_))),
     "bob shares the descriptor but not the principal; his grant must survive"
@@ -607,8 +614,13 @@ changed state*, not the record's contents. Asserting the payload as well would
 couple the isolation test to token rotation and make it fail for reasons that
 have nothing to do with isolation.
 
-**This is the one fixture change Stage 1 needs.** It is a test-only accessor
-on a `#[cfg(test)]` fixture, so it widens nothing that ships.
+**This is the one fixture change Stage 1 needs**, and it is confined to a
+`#[cfg(test)]` fixture, so it widens nothing that ships.
+
+Worth naming why this correction is here at all: §6.1 first prescribed
+"an accessor returning the config" without opening the struct, which is the
+same defect §6.1 exists to report — a symbol named from plausibility rather
+than from the definition. The struct head is four lines and settles it.
 
 ### 6.2 The four refinements, accepted
 
