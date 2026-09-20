@@ -314,6 +314,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - name: Validate README benchmark scenario script
         run: python3 benchmarks/token_savings.py --scenario readme --json
+      # Plain-assert script, not a pytest module: invoked directly rather than
+      # collected. Without this step the #614 stability gate is documentation —
+      # no job runs it, so it can never fail a pull request.
+      - name: Validate the workload stability gate
+        run: python3 benchmarks/workload/test_eval_workload.py
       - name: Validate public claim consistency
         run: cargo test --test public_claims_validation
 
