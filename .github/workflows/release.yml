@@ -242,6 +242,13 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}${{ matrix.suffix }}
+          # These binaries are a handoff to the `release` job below, which
+          # downloads them and attaches them to the GitHub release; once that
+          # has happened the artifact copy is a duplicate of a release asset
+          # that is kept indefinitely. Without this the default 90 days applies
+          # and every build target's binary is stored twice for three months.
+          # ci.yml and docker.yml already set the same ceiling.
+          retention-days: 1
 
   release:
     needs: [build, verify]
