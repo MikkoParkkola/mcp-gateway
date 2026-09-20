@@ -9,8 +9,8 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 · **Operator ruling**: 2026-09-20, build the full surface for 4.0.0
 · **Supersedes**: `docs/design/2026-09-20-store2-self-revoke.md`
 · **Status**: design reviewed by two external reviewers, both SHIP-WITH-FIXES;
-fixes applied (§15). This revision re-reviewed: reviewer A SHIP-WITH-FIXES, its
-one NOW finding fixed in §3.4; reviewer B outstanding (§15.5). No code written.
+fixes applied (§15). This revision re-reviewed by both, both SHIP-WITH-FIXES;
+each found one NOW defect, both fixed (§15.5). No code written.
 
 The per-user OAuth machinery — storage, custody, fencing, cache binding — is
 built and unit-tested. Nothing is reachable from outside the process. This
@@ -475,11 +475,25 @@ Per §0.4 this is unowned. The proposed rule:
 
 | Field | First grant | Re-consent over a tombstone |
 |---|---|---|
-| `generation` | fresh 128-bit random, hex | fresh 128-bit random, hex — **never** reused |
-| `token_revision` | `0` | `0` |
-| `authorization_epoch` | `0` | `0` |
-| `descriptor_revision` | the descriptor's current revision | same |
+| `generation` | fresh 128-bit random, **32 lowercase hex** | same — **never** reused |
+| `token_revision` | `1` | `1` |
+| `authorization_epoch` | `1` | `1` |
+| `descriptor_revision` | the descriptor's current revision, **64 lowercase hex** | same |
 | `client_id` | the descriptor's resolved `client_id` | same |
+
+Scopes are **sorted and deduplicated** before the record is built.
+
+These are not stylistic choices; they are what the existing validator already
+requires, and an earlier draft of this table started both counters at `0`, which
+`validate_record` rejects outright (`src/personal_accounts/storage.rs:136-137`).
+A first grant written that way could never commit, so connect as specified could
+not have worked. The same function fixes the widths — `lower_hex(&record.
+generation, 32)` and `lower_hex(&record.descriptor_revision, 64)` at `:134-135`
+— and rejects unsorted *or* duplicated scopes with
+`record.scopes.windows(2).any(|pair| pair[0] >= pair[1])` at `:138`, where the
+`>=` is what makes a repeated scope fatal rather than merely untidy. Refresh
+already satisfies this contract; connect must meet the same one, because it
+writes through the same validator.
 
 The reasoning, and why the epoch may restart:
 `fence_tests.rs:139-140` records that "re-consent mints a new generation over the
@@ -1449,6 +1463,9 @@ existing `tests/oauth_cancellation.rs`:
   not trade a local grant for a live credential at the provider)
 * `a_revoke_after_the_commit_resolves_removes_the_grant` (§3.4 — the other side
   of the interleaving, proving the fence is a fence and not a lock-out)
+* `a_first_grant_record_passes_the_store_validator` (§2.4 — builds the first-
+  grant record from the table and runs it through `validate_record`; this is the
+  test whose absence let the table specify `0` counters that could never commit)
 * `a_callback_route_rejects_a_principal_supplied_in_the_query_string` (§2.1)
 * `the_callback_route_is_public_and_no_other_route_became_public` (§2.1 —
   guards the third `public_paths` entry; pairs with the existing bucket test at
@@ -2040,10 +2057,29 @@ interleaving tests were added to §10. `ConsentExpectation` and the guarded-
 commit contract are still unchanged, so the §15.3 ruling against widening them
 survives the fix.
 
-**Reviewer B (`grok-review`) — round-two verdict not yet recorded.** The run was
-launched against the same revision and had not returned when this section was
-written. It is named here so its absence is visible rather than implied: this
-row is the receipt for a review that is outstanding, not one that passed.
+**Reviewer B (`grok-review`, run `grok-20260920T023738Z-67746`) — verdict
+SHIP-WITH-FIXES.** One finding at gate NOW, accepted in full: *the §2.4
+first-grant table is unstorable.* It specified `token_revision` and
+`authorization_epoch` of `0` and left the hex widths unsaid, and
+`validate_record` rejects exactly that (`src/personal_accounts/storage.rs:
+134-138`, read to confirm rather than taken on the reviewer's word). Connect as
+specified could not have committed a single grant. §2.4 now starts both counters
+at `1`, pins `generation` to 32 and `descriptor_revision` to 64 lowercase hex,
+and sorts and deduplicates scopes — with a test, since the gap existed because
+nothing ran the first-grant record through the validator.
+
+**Both reviewers found the in-flight callback independently.** Reviewer B was
+running against the pre-fix text and recorded the same resurrection as a
+residual risk: *"an in-flight callback that has already consumed the pending
+handle can still commit after a concurrent revoke of an Absent account."* Two
+reviewers reaching one defect from different directions is why it is treated
+above as a demonstrated race rather than a speculative one.
+
+**Carried as a residual, not fixed here.** Reviewer B also notes that a browser
+which sends `Origin` on the provider redirect still meets the origin check the
+§2.6 exemption does not cover. That is a live question about real browser
+behaviour rather than a reasoning error in the design, so it is recorded for the
+browser journey in §10 to answer with evidence, not closed by argument now.
 
 ## §16 — Prior art in this repository: what is already shipped, and where this design agrees or departs
 
