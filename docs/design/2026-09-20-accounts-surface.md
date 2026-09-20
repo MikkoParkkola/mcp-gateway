@@ -982,7 +982,7 @@ resolved.** The resolution is an operator decision with real options:
 | Reuse control-plane role mapping | `ControlPlaneRole` already resolves from a `VerifiedIdentity` (`src/control_plane/role_mapping.rs:153`) | Closest to existing machinery; needs a decision on whether a control-plane role grants meta-tool admin standing |
 | Admin revoke moves to the control plane | Not a meta-tool at all; an authenticated control-plane mutation beside `commit_grant_audited` (`src/control_plane/store.rs:292`) | Loses meta-tool parity; gains an actor and an audit log that already exist |
 
-**Recommendation: the third.** The control plane already has the actor, the
+**Ruled: the third.** The control plane already has the actor, the
 audit path and the admin-mutation test (`src/gateway/ui/control_plane.rs:1159-1161`);
 the meta-tool surface has none of them and is also the surface CLAUDE.md says to
 keep compact. A reviewer who prefers the meta-tool shape should pick option one
@@ -1521,10 +1521,12 @@ read carefully.
 What must not happen either way: a sweep for the shared reason string that
 removes all twenty-five.
 
-### 10.6 STORE.1 migration — FLAGGED, not settled by this design
+### 10.6 STORE.1 migration — RULED: migrate nothing, require re-consent
 
-**This design does not settle the migration conjunct, and a reviewer should not
-read it as doing so.**
+**Settled by operator ruling on 2026-09-20, recorded on MIK-6744.** The
+migration conjunct is answered: a 3.x credential is not migrated, and a 4.0.0
+deployment re-consents each account once. The rest of this section is the
+reasoning that led there and is kept because it names what the ruling rejected.
 
 What this design changes: STORE.1's *production-caller* gap closes, because
 connect and revoke give the keyed store real callers outside the module
@@ -1553,8 +1555,9 @@ with a different risk:
 
 **Recommendation: the third.** With §1 in place, re-consent is a working
 user-facing action for the first time, which is precisely what made migration
-look necessary before. But this is an operator ruling, not a design conclusion,
-and it needs its own decision record. §11 does not schedule it.
+look necessary before. The operator ruled for it on 2026-09-20;
+the decision record is the MIK-6744 comment of that date. §11 schedules no
+migration work, which is now the intended outcome rather than a gap.
 
 ---
 
