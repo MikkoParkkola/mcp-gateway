@@ -256,11 +256,10 @@ PY
 # `CDPATH=` is load-bearing: an inherited CDPATH makes `cd` echo the directory
 # it picked, so the substitution would capture two lines and the mount source
 # would be garbage. `--` keeps a leading-dash path from parsing as an option.
-abs_run_dir() { mkdir -p "$1"; (CDPATH= cd -- "$1" && pwd); }
+abs_run_dir() { mkdir -p "$1"; (CDPATH= cd -- "$1" && pwd -P); }
 
 do_measure() {
   local run="$1"
-  run="$(abs_run_dir "$run")"
   render_configs "$run"
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \
@@ -305,16 +304,17 @@ PY
 # the same thing. Its output is never scored.
 do_smoke() {
   local run="$1" cell="${2:-C}"
-  run="$(abs_run_dir "$run")"
   render_configs "$run"
   run_rep "$cell" "smoke-$cell" "$run" warmup
   echo "[smoke] ok: cell $cell plumbing clean; see $run/smoke-$cell.health.json"
 }
 
+# The run dir is resolved HERE, at the one place a caller's argument enters the
+# script, so no command can reach a docker mount with a relative path.
 case "${1:-}" in
   build)   do_build ;;
-  smoke)   do_smoke "${2:?run dir required}" "${3:-C}" ;;
-  measure) do_measure "${2:?run dir required}" ;;
-  all)     do_build; do_measure "${2:?run dir required}" ;;
+  smoke)   do_smoke "$(abs_run_dir "${2:?run dir required}")" "${3:-C}" ;;
+  measure) do_measure "$(abs_run_dir "${2:?run dir required}")" ;;
+  all)     do_build; do_measure "$(abs_run_dir "${2:?run dir required}")" ;;
   *) echo "usage: $0 {build|smoke|measure|all} <run-dir> [cell]" >&2; exit 2 ;;
 esac
