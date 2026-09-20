@@ -43,25 +43,31 @@ cannot miss a boundary by forgetting to list it" (`faults.rs:64-65`). An equival
 argument is an assertion about the commit path; iterating the array is a proof of it, at
 the cost of nine child processes instead of one in a test that already spawns them.
 
-The equivalence class is not even uniform, which is the substantive reason. Each
+The equivalence class is not uniform, which is the substantive reason. Each
 `boundary!(X)` fires *before* step X (`commit.rs:216-223`), so an abort at `ManifestRename`
 means the rename has not happened. `ParentSync` is the exception: it fires *after*
 `fs::rename` returned and *before* `sync_directory` (`commit.rs:231-241`). That single
-boundary is the only one where the new manifest is on disk but unsynced, and it is the
-only one where both generations are legitimately admissible after restart. Folding it into
-one class with the other eight would hide exactly the window the review asked about.
+boundary is the only one where the post-restart state must be the **new** generation, and
+folding it into a class with the other eight would hide exactly the window the review
+asked about.
 
 ### The oracle, by band
 
-| Band | Boundaries | Admissible after restart | Never |
-|---|---|---|---|
-| Pre-replacement | 1-8 (`RecordWrite`..`ManifestRename`) | prior generation, or the typed recovery failure | the uncommitted candidate |
-| Unsynced replacement | 9 (`ParentSync`) | prior **or** new generation | the uncommitted candidate |
-| Healthy | no abort | new generation only | anything else |
+The harness kills a process, not a machine: `reached` calls `std::process::abort()`
+(`faults.rs:134`). The kernel's page cache survives that, so a `fs::rename` that already
+returned is visible to every later process whether or not the parent directory was
+synced. Both bands are therefore deterministic, and neither oracle is a disjunction.
 
-Band 2 is one boundary wide and is named as ambiguous on purpose. A disjunction that is
-stated and justified is evidence; the same disjunction left implicit is what made `s10`'s
-oracle weak.
+| Band | Boundaries | Required after restart | Never |
+|---|---|---|---|
+| Pre-replacement | 1-8 (`RecordWrite`..`ManifestRename`) | the prior generation | the uncommitted candidate, an unexplained failure |
+| Replacement returned | 9 (`ParentSync`) | the new generation | the prior generation |
+| Healthy | no abort | the new generation | anything else |
+
+The unsynced rename at boundary 9 *could* be lost to a power cut, and under that model
+either generation would be admissible. This harness does not simulate power loss, so
+importing its ambiguity here would only buy a rollback regression a free pass. If a
+power-loss model is ever wanted it is a separate harness, not a looser oracle in this one.
 
 ## D2 — conjunct 3 names three holders; this module owns one and guards the others
 
@@ -87,31 +93,61 @@ stale entry go unused, but that it cannot be revived under the new grant. A bind
 changes across re-consent is what makes that structural rather than incidental, so the
 test asserts the binding changed, not merely that a lookup missed.
 
+**What this does not establish, and the grade must say so.** T1 proves the guard refuses.
+It does not prove that the REST account registry actually calls the guard before selecting
+a cache entry, or that an open connection re-enters it — those consumers live outside this
+module and outside this scope. Conjunct 3 is therefore closed at the module boundary only,
+and the external-consumer obligation stays open against an integration test. A grade that
+reads T1 as closing conjunct 3 outright would overstate it.
+
 ## The three tests
 
 **T1 — live holders across a revoke and a re-consent** (new, service layer). Start an
-in-flight refresh and take a `CredentialLease`, both against the connected generation.
-Revoke durably. Assert: the in-flight refresh resolves to a rejection and does not commit;
-`custody.release` on the held lease refuses; `recheck` on the pre-revoke binding refuses.
-Re-consent. Assert: a fresh lease releases successfully, the new `cache_binding` differs
-from the pre-revoke one, and the pre-revoke lease and binding are still refused.
-*Falsifier:* make the post-revoke refusal in `recheck` a no-op and confirm T1 goes red.
-*Positive control:* every refusal above is asserted to succeed before the revoke, so a
-uniformly refusing store cannot pass.
+in-flight refresh through `RefreshProvider` (`service.rs:64`) and take a lease from
+`prepare` (`vault.rs:113`), which returns the credential binding alongside it, both
+against the connected generation. Revoke durably. Assert: the in-flight refresh resolves
+to a rejection and commits nothing; `recheck` on the retained pre-revoke lease refuses.
+Re-consent. Assert: a fresh lease rechecks successfully, its `cache_binding` differs from
+the pre-revoke one, and the pre-revoke lease is still refused.
+*Falsifier:* return `Ok` from `recheck` after a revoke and confirm T1's refusal assertion
+goes red.
+*Positive control:* every refusal above is asserted to succeed before the revoke, and the
+fresh lease is asserted to recheck *successfully* after re-consent, so a permanently
+refusing store cannot pass. Release-observer counts
+(`CredentialReleaseObserver`, `service.rs:99`) are asserted unchanged across every
+refusal, so a credential that is published and only then errored cannot pass either.
+*Existing coverage not duplicated:* `service_release_tests.rs:235` already covers lease
+retirement and `service_refresh_tests.rs:277` a held refresh completing after a newer
+grant. T1's new evidence is the vault binding and the recheck across re-consent.
 
 **T2 — tighten `s10`'s oracle** (in place, `crash_tests.rs:144`). Replace
-`explicit_failure(&observed)` with the specific typed recovery failure for an uncommitted
-candidate. Keep the disjunction — isolation, not availability, is what the criterion
-demands — but pin the failure arm so an unrelated startup fault can no longer satisfy it.
-*Falsifier:* inject an unrelated startup failure and confirm the tightened oracle rejects
-it where the current one accepts.
+`observed == answered("connected") || explicit_failure(&observed)` with a requirement for
+the prior generation, full stop. The failure arm is not tightened, it is deleted: there is
+no candidate-specific recovery error to pin it to — `AccountError` carries six broad
+variants and none of them means "an uncommitted candidate was found" (`mod.rs:84-102`) —
+and recovery never looks at candidates at all, reading only the record the manifest entry
+names (`storage.rs:594-600`). Inventing such an error would be a production change, which
+this scope excludes. Under process-abort the outcome is deterministic anyway, so the
+disjunction was buying nothing.
+*Falsifier:* remove the authority file so startup fails with `StorageUnavailable`, which
+the current oracle accepts and a prior-generation-only oracle must reject.
 
 **T3 — every boundary, banded** (new, `crash_tests.rs`). Iterate `faults::ALL`; for each
 boundary, drive the child to die there, assert it announced that checkpoint before dying
 (the existing `Outcome::Died { checkpoint }` evidence, so a process that merely ended does
 not count), restart, and apply the band oracle above. Includes the healthy no-abort row.
-*Falsifier:* make recovery prefer the newest candidate over the manifest and confirm every
-pre-replacement row goes red.
+*Falsifiers, one per band because no single mutation reaches every row:*
+- rows 4-8 — make recovery prefer the newest candidate over the manifest-named record;
+  the candidate is only in `store_dir` from boundary 4 onward, so this is the range where
+  a selectable wrong answer exists at all;
+- row 9 — make recovery fall back to the prior manifest; this is the rollback regression
+  the corrected band-2 oracle exists to catch, and the old "either generation" oracle
+  would have passed it;
+- rows 1-3 — no mutation of recovery can distinguish these, because nothing durable has
+  moved and the disk is byte-identical to a commit that never started. Their evidence is
+  the announcement assertion: a child that dies without naming its boundary fails the row.
+  Stated here rather than discovered later, because a row whose oracle cannot fail is
+  worth knowing about before it is written.
 
 T2 and T3 overlap at boundary 5. That is deliberate: T2 is the oracle fix that must land
 even if T3 is deferred, and T3 subsumes it only once green.
@@ -121,3 +157,28 @@ even if T3 is deferred, and T3 subsumes it only once green.
 Design reviewed → the three tests written and reviewed as tests → red for the right reason
 (each falsifier above run once) → green. The re-grade is amended only after that, and the
 amendment cites test bodies, not test names — which is the rule the original grade broke.
+
+## Review
+
+Reviewed before any test code existed, which is the only point at which changing the
+oracle costs a paragraph. The first review verified the commit path, the abort mechanism
+and the recovery read path at source, and three of its findings changed the design:
+
+- **Band 2 was inverted.** The first draft admitted either generation at `ParentSync` on
+  the reasoning that the directory was unsynced. But `reached` calls
+  `std::process::abort()` (`faults.rs:134`), which ends a process and leaves the page
+  cache intact, so a `fs::rename` that already returned is visible to the next process.
+  The new generation is required there, and the draft's disjunction would have passed a
+  rollback regression — the single most valuable thing this test can catch.
+- **T2's failure branch had no type to pin it to.** `AccountError` has no
+  candidate-specific variant (`mod.rs:84-102`) and recovery never enumerates candidates
+  (`storage.rs:594-600`). The branch is dropped rather than tightened, which makes the
+  oracle a single required value and is strictly stronger than what was asked for.
+- **T3's falsifier could not reach every row.** No candidate is selectable before
+  `RecordRename` completes, so one mutation cannot redden all eight pre-replacement rows.
+  The falsifiers are now per-band, and rows 1-3 are recorded as resting on the
+  announcement assertion instead of a recovery mutation.
+
+Two smaller findings are folded in: T1 is specified against the existing lease interfaces
+rather than a binding string, and the external cache and connection consumers are recorded
+as an obligation this test-only change does not discharge.
