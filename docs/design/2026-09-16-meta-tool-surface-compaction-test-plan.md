@@ -827,11 +827,12 @@ criterion would not notice if it stopped being.
 
 ## 6. Review round two
 
-One seat returned `SHIP-WITH-FIXES` with four findings, all rated MEDIUM. The
-other seat produced no verdict on three consecutive attempts, so this plan
-carries **one** recorded review verdict, not two. Each finding below was
-re-checked at source before being accepted; none was taken on the reviewer's
-word.
+Both seats recorded `SHIP-WITH-FIXES`. Each finding below was re-checked at
+source before being accepted; none was taken on the reviewer's word.
+
+The second seat independently re-ran the artifact sweep and reports that the
+six cut names match **only** the four paths §4.6a now allows — so the corrected
+list is confirmed by a party that did not write it.
 
 ### 6.1 The band's upper end can be widened for free — CONFIRMED
 
@@ -878,9 +879,28 @@ existing tests. It would not — the existing Standard-caller test already
 asserts the benchmark count minus four. The claim is withdrawn and no test is
 owed for it.
 
+### 6.35 Two residuals the second seat adds
+
+**The stdio case does not drive the stdio path.** §4.1 exists because the
+published stdio figure of 10 is derived nowhere. The case as written still
+does not drive `run_stdio`, so it would derive the 10 from something that is
+not the shipped stdio path — which is the very defect §4.1 was written to
+close, relocated rather than fixed. The case must exercise `run_stdio` or the
+section should say plainly that the figure stays underived.
+
+**The exhaustiveness guard can be answered with a wildcard.** §4.2 leans on
+the compiler raising E0027 — the error for a struct pattern that omits a field
+— when `MetaToolGates` gains a gate. A developer can silence E0027 by adding
+`..` or binding the new field to `_`, which compiles and leaves the new gate
+untested. The guard is a prompt, not a constraint, and §4.2 should not be
+described as one. This is the same hole GPT's `:243` finding names from the
+other side: the destructuring proves the fixture is complete, and nothing
+proves the sweep is.
+
 ### 6.4 Where this leaves the plan
 
-Recorded verdict: **SHIP-WITH-FIXES**, one seat. The four findings are
-specified above but **not yet written into the cases they correct**; §6 is the
-work list for the next revision, not a record that the work is done. No
+Recorded verdicts: **SHIP-WITH-FIXES from both seats.** The review gate is
+satisfied; the fixes are not applied. Six items — four in §6.1/§6.2, two in
+§6.35 — are **specified but not yet written into the cases they correct**. §6
+is the work list for the next revision, not a record that the work is done. No
 implementation has started.
