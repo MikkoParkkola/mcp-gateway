@@ -89,6 +89,11 @@ struct Gates {
 /// The usage-stats collector is attached unconditionally because `serve`
 /// attaches one unconditionally; `gates.stats` is the operator opt-in that
 /// actually governs the listing.
+///
+/// Coverage boundary: the registry is empty, so the sweep measures the meta
+/// surface alone. No backend tool is ever surfaced or promoted into the
+/// listing, and the band this file pins is the meta-tool band, not a bound on
+/// everything `tools/list` can return.
 fn meta_mcp_with(gates: Gates) -> MetaMcp {
     let backends = Arc::new(BackendRegistry::new());
     #[allow(unused_mut)]
@@ -210,6 +215,18 @@ fn nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band() {
     assert!(
         BAND.contains(&ATTAINABLE_CEILING),
         "the ceiling this build can reach must itself be inside {BAND:?}"
+    );
+    // Containment alone leaves the published ceiling free to move: a `BAND` of
+    // `9..=18` satisfies every other assertion here untouched. Where the cost
+    // gate can be compiled in at all, the highest attainable count IS the
+    // published ceiling, so pin them together. Builds that compiled the cost
+    // tool out keep the containment form above, for the reason given at
+    // `ATTAINABLE_CEILING`.
+    #[cfg(feature = "cost-governance")]
+    assert_eq!(
+        ATTAINABLE_CEILING,
+        *BAND.end(),
+        "the published ceiling of {BAND:?} must be the highest attainable count"
     );
     assert_eq!(
         seen.iter().max().copied(),

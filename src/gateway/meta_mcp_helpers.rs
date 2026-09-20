@@ -13,7 +13,9 @@ use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, PromptsCapability, RequestId,
     ResourcesCapability, ServerCapabilities, Tool, ToolsCallResult, ToolsCapability,
 };
-use crate::ranking::{SearchResult, expand_synonyms};
+use crate::ranking::SearchResult;
+
+use super::meta_mcp_helpers_text::{char_prefix, word_matches_text};
 use crate::stats::StatsSnapshot;
 use crate::{Error, Result};
 
@@ -456,16 +458,6 @@ pub(crate) fn tool_matches_query(tool: &Tool, query: &str) -> bool {
         .any(|word| word_matches_text(word, &name_lower) || word_matches_text(word, &desc_lower))
 }
 
-/// Return `true` if `word` or any of its synonyms appears as a substring of `text`.
-fn word_matches_text(word: &str, text: &str) -> bool {
-    if text.contains(word) {
-        return true;
-    }
-    expand_synonyms(word)
-        .iter()
-        .any(|syn| *syn != word && text.contains(*syn))
-}
-
 /// Build suggestions from the tag index when a search returns zero results.
 ///
 /// Finds tags that share a common prefix with any query word (length ≥ 3) or
@@ -490,8 +482,8 @@ pub(crate) fn build_suggestions(query: &str, all_tags: &[String]) -> Vec<String>
             // Substring: tag contains the word
             tag_lower.contains(*word)
             // Or: word is long enough and shares a common prefix with the tag
-            || (word.len() >= MIN_PREFIX_LEN
-                && tag_lower.starts_with(&word[..MIN_PREFIX_LEN]))
+            || char_prefix(word, MIN_PREFIX_LEN)
+                .is_some_and(|prefix| tag_lower.starts_with(prefix))
         });
         if is_match {
             seen.insert(tag_lower);

@@ -1,0 +1,30 @@
+# Held-out evaluation corpus for MIK-3274.RANKING.1.
+#
+# Frozen before a single abbreviation table entry exists, per the freeze
+# protocol in docs/design/2026-09-12-mik-3274-ranking-abbreviations.md §3.2.
+# Not edited after the freeze: not to add a case the table misses, not to
+# reword one. The unsupported-match control is drawn from this same file.
+#
+# Written from plausible operator phrasing, not from the shipped catalogue's
+# term list. No case carries a supported/unsupported label — labelling at
+# freeze time is the leak the protocol exists to prevent. The supported
+# fraction is whatever the table turns out to cover, and a run that resolves
+# every case is reported as leakage rather than as a pass.
+#
+# Format: query<TAB>intended_tool. Tools live in catalogue.tsv.
+k8s	kubernetes_list_pods
+cfg	config_reload
+msg	message_send
+svc	service_restart
+pkg	package_install
+db	database_query
+img	image_generate
+perms	permissions_check
+i18n	internationalization_status
+creds	credentials_rotate
+mgmt	management_console
+xfer	transfer_file
+l10n	localization_export
+a11y	accessibility_audit
+tmpl	template_render
+qty	quantity_adjust

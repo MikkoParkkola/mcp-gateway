@@ -13,10 +13,15 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod rank_key;
 mod scoring;
 
-use scoring::score_text_relevance;
+use rank_key::sort_by_rank;
+
 pub use scoring::{expand_synonyms, is_schema_field_match};
+// In-crate only: the gateway filter needs it, the public surface does not.
+pub(crate) use scoring::expand_abbreviations;
+use scoring::score_text_relevance;
 
 #[cfg(test)]
 use scoring::{
@@ -403,13 +408,7 @@ impl SearchRanker {
         }
 
         results.retain(|result| result.exclusion.is_none());
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        results
+        sort_by_rank(results, &query_lower, &words)
     }
 
     /// Evaluate ranking quality against deterministic offline fixtures.
