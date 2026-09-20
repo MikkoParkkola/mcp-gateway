@@ -146,6 +146,45 @@ absent from the matrix as evidence, which is the finding: a matrix that omits a
 statement, or cites a
 test that does not bear on it, looks identical to one that covers it.
 
+### Minor 3 — both halves of the ordering statement now carry a test
+
+`MIK-7272.ORDER.1` says `tools/list` returns a deterministic order across
+requests when the tool set has not changed. That is two claims, and they fail
+apart. `ac_order_1_the_tool_order_is_stable_across_callers`
+(`tests/mik_7213_acs.rs:388`) builds a gateway per request, so it pins
+cross-instance agreement — the half a hashed container breaks.
+`ac_order_1_one_unchanged_gateway_repeats_the_same_tool_sequence`
+(`tests/mik_7213_acs.rs:404`) is the statement's own wording: one `AppState`,
+two `tools/list` calls, sequence compared.
+
+The second is narrower than "the first says nothing about a live service", and
+the temptation to write that sentence is worth recording, because it is false
+and the experiment below disproves it: a stateless per-request permutation
+reddens *both* rows. What only the same-gateway row can see is ordering derived
+from state an earlier request left behind — a usage-adaptive surface, an LRU
+reorder, anything that mutates the list as it is served. `post`
+(`tests/mik_7213_acs.rs:243`) constructs a fresh `AppState` per call, so every
+request the first row makes arrives at a gateway that has served none.
+
+Both compare `Vec<String>` rather than sets, and that is load-bearing. A
+rotation injected into `build_meta_tools` (`src/gateway/meta_mcp_tool_defs.rs`,
+scratch, reverted) turned both rows red while the same two lists compared
+**equal** once sorted — the regression is a permutation, so any comparison that
+discards order is green through it. The same experiment shows the surface is
+rebuilt per request rather than cached on the state, which is what makes a
+same-gateway repeat a real observation instead of one `Vec` read twice.
+
+Scope limit, recorded rather than smoothed over: the fixture surfaces eleven
+meta-tools, fewer than `build_meta_tools` pushes. Deleting the last-pushed tool
+in a second scratch probe changed nothing on the wire, because
+`gateway_kill_server`, `gateway_revive_server` and
+`gateway_reload_capabilities` are filtered out before it. These rows pin the
+order of what is served, not of everything that is built.
+
+This replaces a structural argument, not a test: `build_meta_tools` being a
+straight-line conditional-push builder was the whole evidence for the
+same-gateway half, and a straight line is a fact about today's source.
+
 ### Minor 11, closed — and the tracked gap's mechanism was wrong
 
 Three tests now carry it, and the finding that came with them is that the gap

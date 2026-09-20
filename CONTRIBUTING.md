@@ -192,6 +192,17 @@ Public docs should explain install, operation, architecture, security, complianc
 
 Use ignored local paths for private strategy work: `docs/strategy/`, `docs/competitive/`, `docs/competitive-intelligence/`, or `docs/positioning/`. Before pushing, run `scripts/dev/check-public-repo-hygiene.sh`; CI runs the same check and fails if tracked public docs contain high-confidence internal strategy markers.
 
+## Commit Messages
+
+Every message in this repository is world-readable. Write each one as if a stranger were reading it, because one will.
+
+- Subject: `type(scope): summary` in the imperative, 72 characters or fewer, no trailing period.
+- Body: bullets only, one idea each, at most six. The message is an index of what changed.
+- State facts about the code. Evidence, measurements and reasoning belong in the pull request body, the issue, or a code comment.
+- No first person, no apology, no account of how the change was found, no naming the tool or model that wrote it. Attribution goes in a trailer.
+
+`scripts/dev/check-commit-message-hygiene.sh` enforces this over the commits your branch adds; the pre-push hook and CI both run it. Rewrite a flagged message with `git commit --amend` or `git rebase -i` rather than bypassing the hook.
+
 ## Good First Issues
 
 Look for [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/labels/good%20first%20issue) or [`help wanted`](https://github.com/MikkoParkkola/mcp-gateway/labels/help%20wanted). Good starters: adding a zero-config capability, improving error messages, adding edge-case tests, documentation.

@@ -231,7 +231,23 @@ const MINOR: &[Row] = &[
         requirement: "MIK-7272.ORDER.1",
         role: Role::Server,
         transport: Transport::Http,
-        evidence: &["mik_7213_acs::http::ac_order_1_the_tool_order_is_stable_across_callers"],
+        // Two halves, because the statement has two and they fail apart. The
+        // first row builds a fresh gateway per request, so it pins
+        // cross-instance agreement — the half a hashed container breaks. The
+        // second is the statement's own wording: one unchanged gateway, asked
+        // twice, which is the only one of the two that can see ordering
+        // derived from state an earlier request left behind.
+        //
+        // Both compare sequences, and that is the load-bearing part. A
+        // rotation injected into `build_meta_tools` (scratch, reverted)
+        // reddened both rows while the same two lists compared equal once
+        // sorted, so a sorted or set comparison is green through exactly the
+        // regression these guard. That experiment also shows the surface is
+        // rebuilt per request rather than cached on the state.
+        evidence: &[
+            "mik_7213_acs::http::ac_order_1_the_tool_order_is_stable_across_callers",
+            "mik_7213_acs::http::ac_order_1_one_unchanged_gateway_repeats_the_same_tool_sequence",
+        ],
     },
     Row {
         statement: "4. Require Mcp-Method and Mcp-Name headers; support x-mcp-header",
@@ -243,6 +259,10 @@ const MINOR: &[Row] = &[
             "mik_7214_acs::ac_header_4_the_specifications_encoding_table_decodes",
             "mik_7214_acs::http::ac_header_3_a_disagreeing_method_header_is_refused_over_http",
             "mik_7214_acs::http::ac_header_2_a_legacy_request_needs_no_headers",
+            // HEADER.5 is the mirroring half, and it is proved in its own file,
+            // not by the four header-negotiation tests above.
+            "mik_7214_header5_mirroring::ac_header_5_annotated_argument_is_mirrored_onto_mcp_param_header",
+            "mik_7214_header5_mirroring::ac_header_5_caller_supplied_param_header_cannot_forge_a_declaration",
         ],
     },
     Row {

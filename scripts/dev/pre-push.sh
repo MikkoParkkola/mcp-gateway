@@ -18,6 +18,9 @@ if [[ -f Cargo.toml ]]; then
   echo "[pre-push] public repo hygiene"
   scripts/dev/check-public-repo-hygiene.sh
 
+  echo "[pre-push] commit message hygiene"
+  scripts/dev/check-commit-message-hygiene.sh
+
   echo "[pre-push] cargo fmt --check"
   cargo fmt --all --check 2>&1 | tail -20 || { echo "FAIL: cargo fmt"; exit 1; }
 
