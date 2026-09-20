@@ -9,7 +9,8 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 · **Operator ruling**: 2026-09-20, build the full surface for 4.0.0
 · **Supersedes**: `docs/design/2026-09-20-store2-self-revoke.md`
 · **Status**: design reviewed by two external reviewers, both SHIP-WITH-FIXES;
-fixes applied (§15). No code written.
+fixes applied (§15). This revision re-reviewed: reviewer A SHIP-WITH-FIXES, its
+one NOW finding fixed in §3.4; reviewer B outstanding (§15.5). No code written.
 
 The per-user OAuth machinery — storage, custody, fencing, cache binding — is
 built and unit-tested. Nothing is reachable from outside the process. This
@@ -751,6 +752,38 @@ drops them, before calling `invalidate`.** The map is in-process, short-lived an
 small, so a linear scan is the whole implementation — no secondary index, no new
 store primitive, no cancellation counter threaded through the guarded commit.
 
+**The sweep alone is not enough, because it can only see entries still in the
+map.** A callback that has already taken its entry and is blocked on the
+provider's token endpoint is invisible to a linear scan: revoke sweeps nothing,
+`invalidate` writes nothing (the account is `Absent` or already tombstoned), the
+exchange returns, and the commit lands a grant on the account the user was just
+told was revoked. The window is one provider round-trip wide — hundreds of
+milliseconds, not microseconds — so it is reachable by an ordinary user who
+clicks *revoke* while a consent tab is still finishing.
+
+So the callback must stay visible for as long as it can still commit. **The
+handler does not remove its entry on pickup; it transitions it in place to
+`Exchanging` and removes it only after the guarded commit resolves.** Revoke's
+sweep therefore finds in-flight journeys too, and marks them `Cancelled` rather
+than dropping them. After the provider round-trip the handler re-reads its own
+entry inside the same critical section as the guarded commit:
+
+| Entry at commit time | Handler does |
+|---|---|
+| Still `Exchanging`, owned by this journey | Commit the grant, then remove the entry |
+| `Cancelled` by a concurrent revoke | Discard the tokens, commit nothing, refuse the browser |
+| Absent (TTL sweep won the race) | Same as `Cancelled` — refuse, indistinguishable per §3 |
+
+A discarded exchange has already minted a live refresh token at the provider, so
+the cancelled leg **must** present it to the pinned `revocation_endpoint` on the
+way out, for the same reason revoke itself does (below). Dropping it silently
+leaves exactly the live-credential-at-Google state this section exists to
+prevent.
+
+This keeps `ConsentExpectation` and the guarded-commit contract unchanged — the
+fence is "my own pending entry is still mine and not cancelled", evaluated
+beside the commit, not a new expectation variant threaded through it.
+
 Why not the heavier fix: an account-level cancellation revision that pending
 consent captures and the guarded commit checks would also work, and is what an
 external reviewer proposed. It is rejected because it widens
@@ -1408,6 +1441,14 @@ existing `tests/oauth_cancellation.rs`:
 * `a_provider_denial_writes_nothing_to_the_store` (§3)
 * `a_cancelled_reconsent_leaves_an_existing_grant_connected` (§3)
 * `a_consent_that_loses_the_race_is_refused_as_stale_not_as_broken` (§3.4)
+* `a_revoke_during_the_token_exchange_commits_no_grant` (§3.4 — the handler is
+  parked inside a deterministic provider's token endpoint while revoke runs;
+  asserts the account stays revoked and the commit never fires)
+* `a_cancelled_exchange_presents_its_minted_token_for_revocation` (§3.4 —
+  asserts the discarded leg reaches `revocation_endpoint`, so the race fix does
+  not trade a local grant for a live credential at the provider)
+* `a_revoke_after_the_commit_resolves_removes_the_grant` (§3.4 — the other side
+  of the interleaving, proving the fence is a fence and not a lock-out)
 * `a_callback_route_rejects_a_principal_supplied_in_the_query_string` (§2.1)
 * `the_callback_route_is_public_and_no_other_route_became_public` (§2.1 —
   guards the third `public_paths` entry; pairs with the existing bucket test at
@@ -1974,6 +2015,36 @@ surface is unreachable (§0), and both reviewers said so. Their findings are
 static reasoning over source, which is the right instrument for a design and the
 wrong one for a concurrency claim. §10's named tests, not this review, are what
 will show the fencing behaviour holds once stage 1 exists.
+
+### 15.5 Round two — re-review of this revision
+
+§15.1–15.4 record reviews of the revision at `aaedf956` (1948 lines). Those
+findings produced the current text, and a review that produced a revision is not
+a review of it, so both reviewers were re-run against the revision at
+`9a36868b` (2108 lines).
+
+**Reviewer A (`gpt-review`, run `gpt-20260920T023738Z-67591`) — verdict
+SHIP-WITH-FIXES.** One finding at gate NOW, accepted in full: *the pending-
+consent sweep does not fence callbacks already exchanging codes.* The §3.4 fix
+as written swept the pending map, but a handler that has already taken its entry
+and is blocked on the provider's token endpoint is not in the map to be found —
+so revoke swept nothing, `invalidate` wrote nothing, and the exchange committed
+a grant onto a revoked account. The reviewer demonstrated the resurrection with
+an in-memory transition model from both `Absent` and `Revoked`, which is
+stronger evidence than the static reasoning §15.4 disclaims.
+
+§3.4 now keeps the entry in the map as `Exchanging` until the guarded commit
+resolves, has revoke mark it `Cancelled` instead of dropping it, and requires
+the cancelled leg to present its minted token to `revocation_endpoint`. Three
+interleaving tests were added to §10. `ConsentExpectation` and the guarded-
+commit contract are still unchanged, so the §15.3 ruling against widening them
+survives the fix.
+
+**Reviewer B (`grok-review`) — round-two verdict not yet recorded.** The run was
+launched against the same revision and had not returned when this section was
+written. It is named here so its absence is visible rather than implied: this
+row is the receipt for a review that is outstanding, not one that passed.
+
 ## §16 — Prior art in this repository: what is already shipped, and where this design agrees or departs
 
 Four Linear issues cover ground adjacent to this design. All four are **Done**
