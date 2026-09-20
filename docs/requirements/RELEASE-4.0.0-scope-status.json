@@ -271,10 +271,9 @@
       "id": "MIK-3274.RANKING.1",
       "status": "pending",
       "stage": "built",
-      "blocked_on": "an executed acceptance suite on the release line",
+      "blocked_on": "none",
       "evidence": [
         "docs/design/2026-09-12-mik-3274-ranking-abbreviations.md",
-        "a76a17a5 (#607, on origin/main)",
         "src/gateway/meta_mcp_helpers_tests/abbreviations.rs",
         "src/ranking/fixtures/abbreviation-catalogue.tsv",
         "src/ranking/fixtures/abbreviation-corpus.tsv",
