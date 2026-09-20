@@ -1,0 +1,25 @@
+{
+  "k6_image_digest": "sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755",
+  "cells": {
+    "A": {
+      "checkout_sha": "32f135a61fb50c20a044fb4c2347bc1cf8015d89",
+      "health_version": "3.5.0"
+    },
+    "B": {
+      "checkout_sha": "e138680a542b41fa156a94a1ffc9decd9692be77",
+      "health_version": "3.5.1"
+    },
+    "C": {
+      "checkout_sha": "5e557e085988bbce75044f294f592e13ce0a844c",
+      "health_version": "4.0.0"
+    },
+    "D": {
+      "checkout_sha": "5e557e085988bbce75044f294f592e13ce0a844c",
+      "health_version": "4.0.0"
+    },
+    "E": {
+      "checkout_sha": "5e557e085988bbce75044f294f592e13ce0a844c",
+      "health_version": "4.0.0"
+    }
+  }
+}

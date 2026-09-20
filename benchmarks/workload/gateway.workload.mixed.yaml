@@ -26,3 +26,34 @@ failsafe:
   rate_limit:
     requests_per_second: 500
     burst_size: 500
+
+# Operator-authorized exception, 2026-09-20. Cells D and E declare the modern
+# era, where execution admission requires an explicit idempotency key carried
+# by an authenticated principal. The workload client is unauthenticated on
+# purpose -- these cells exist to price the protocol era against a
+# byte-identical binary, not to exercise an auth path -- so without this key
+# both cells are refused at the pinned tools/call and have never produced a
+# measurement in any run
+# (benchmarks/results/rehearsal-2026-09-14/09-modern-era-admission-wall.md).
+#
+# Declaring the probe read-only is sound because the fixture has no side
+# effect an idempotency key would be protecting: it echoes a pinned payload.
+# The declaration reaches exactly one consumer -- is_read_only is read only
+# by read_only_target in src/gateway/meta_mcp/admission.rs -- so it cannot
+# make the call cache-eligible. `cache.enabled: false` above remains the
+# sole, independent control for the real-backend property section 3 requires.
+#
+# The legacy cells parse this list and consult it on every admission, but
+# never reach the read-only branch: a key is demanded only once the modern
+# era is negotiated. D and E therefore take the same Unprotected admission
+# arm C takes via !is_modern, and the file stays byte-identical across every
+# gating cell.
+#
+# What the C->D delta consequently prices is protocol handling for an
+# unauthenticated read-only call: the admission store is bypassed on both
+# sides, not exercised. D and E are not evidence about the authenticated
+# retry path.
+idempotency:
+  read_only_tools:
+    - server: workload
+      tool: workload_probe
