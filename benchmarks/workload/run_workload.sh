@@ -28,6 +28,15 @@ case "${K6_IMAGE_DIGEST:-}" in
 esac
 K6_IMAGE="grafana/k6@${K6_IMAGE_DIGEST}"
 
+# The measured sample size. Six is a floor, not a default to be tuned down: a
+# distribution-free 95% median interval needs n>=6 before an interval exists at
+# all, so a run below it cannot certify the criterion no matter how it lands.
+REPS="${WORKLOAD_REPS:-6}"
+case "$REPS" in
+  ''|*[!0-9]*) echo "void: WORKLOAD_REPS must be a positive integer, got '$REPS'" >&2; exit 3 ;;
+esac
+[[ "$REPS" -ge 6 ]] || { echo "void: WORKLOAD_REPS=$REPS is below the n>=6 median-interval floor" >&2; exit 3; }
+
 REF_A="${REF_A:-v3.5.0}"
 REF_B="${REF_B:-v3.5.1}"
 REF_C="${REF_C:-HEAD}"
@@ -264,9 +273,9 @@ do_measure() {
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \
     "$(cat "$ARMS_DIR/A/.checkout_sha")" "$(cat "$ARMS_DIR/B/.checkout_sha")" \
-    "$(cat "$ARMS_DIR/C/.checkout_sha")" <<'PY'
+    "$(cat "$ARMS_DIR/C/.checkout_sha")" "$REPS" <<'PY'
 import json, subprocess, sys
-path, digest, a, b, c = sys.argv[1:6]
+path, digest, a, b, c, reps = sys.argv[1:7]
 def ver(ref):
     out = subprocess.run(["git","show",f"{ref}:Cargo.toml"],capture_output=True,text=True).stdout
     for line in out.splitlines():
@@ -279,7 +288,8 @@ cells = {
 }
 for cell in ("C","D","E"):
     cells[cell] = {"checkout_sha": c, "health_version": ver(c)}
-json.dump({"k6_image_digest": digest, "cells": cells}, open(path,"w"), indent=2)
+json.dump({"k6_image_digest": digest, "reps": list(range(1, int(reps) + 1)), "cells": cells},
+          open(path,"w"), indent=2)
 PY
 
   # Warm-up, discarded.
@@ -287,12 +297,12 @@ PY
 
   # Measured, interleaved. Spark is shared, so the arms must see the same
   # machine conditions rather than consecutive blocks of time.
-  for n in 1 2 3; do
+  for n in $(seq 1 "$REPS"); do
     for cell in A B C; do run_rep "$cell" "${cell}${n}" "$run" measured; done
   done
 
   # Report-only cells. No counterpart arm exists, so these are never compared.
-  for n in 1 2 3; do
+  for n in $(seq 1 "$REPS"); do
     for cell in D E; do run_rep "$cell" "${cell}${n}" "$run" measured; done
   done
 
