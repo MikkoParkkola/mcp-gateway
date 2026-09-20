@@ -560,3 +560,86 @@ The reviewer challenged both deferrals, and was half right.
 - **`s12` no-write claim.** §5 says a repeat revoke performs *no IO*. The test
   asserts only the resulting state, which an implementation that rewrites an
   equivalent tombstone also satisfies. A write observer distinguishes them.
+
+---
+
+## 6. Review round two — the assertions in §5 do not compile
+
+Second reviewer: **SHIP-WITH-FIXES**, five improvements. Four are refinements
+and are folded below. The fifth exposed a defect in §5.1 that matters more than
+any of them, so it leads.
+
+### 6.1 BLOCKING — the isolation assertion has no seam to assert through
+
+§5.1 asserts `assert_eq!(custody.lookup(&bob), AccountLookup::Connected)`. Two
+independent reasons that cannot compile, both verified at source:
+
+| Claim | Source | Consequence |
+|---|---|---|
+| `AccountLookup` variants carry payloads: `Connected(GrantRecord)`, `Revoked(GrantVersion)` | `src/personal_accounts/mod.rs:168-173` | A bare `AccountLookup::Connected` is not an expression |
+| The test fixture's `Custody` exposes exactly three methods — `releases()`, `refreshes()`, `installed()` | `src/gateway/meta_mcp/account_resolver_fixture.rs:371-387` | There is no `lookup` to call |
+
+So the most important test in this plan — the one that catches a revoke
+targeting the wrong user — was written against an observation seam that does
+not exist. This is the same class of defect the companion design shipped with
+(§2.4's table specified a record the validator rejects): a plausible-looking
+assertion that never met the type it asserts on.
+
+**The seam that does exist.** `PersonalAccountStore` has
+`pub(crate) fn lookup(&self, account: &AccountKey) -> Result<AccountLookup, AccountError>`
+(`mod.rs:476`), and `open` (`mod.rs:436`) reopens a closed store. So the
+isolation check reads the store directly rather than asking custody:
+
+```rust
+// The fixture builds its StoreConfig privately inside `custody_with_rotation`
+// and keeps the TempDir in a private `_root`. Stage 1 must widen exactly one
+// of those — an accessor returning the config — and nothing else.
+let after = PersonalAccountStore::open(custody.config()).expect("reopen");
+assert!(
+    matches!(after.lookup(&bob), Ok(AccountLookup::Connected(_))),
+    "bob shares the descriptor but not the principal; his grant must survive"
+);
+assert!(matches!(after.lookup(&alice), Ok(AccountLookup::Revoked(_))));
+```
+
+`matches!` with `(_)` is deliberate: the test's subject is *which account
+changed state*, not the record's contents. Asserting the payload as well would
+couple the isolation test to token rotation and make it fail for reasons that
+have nothing to do with isolation.
+
+**This is the one fixture change Stage 1 needs.** It is a test-only accessor
+on a `#[cfg(test)]` fixture, so it widens nothing that ships.
+
+### 6.2 The four refinements, accepted
+
+| Improvement | Why it is right |
+|---|---|
+| Round-trip the first-grant fixture through `seal_token` → `open_token` rather than calling `validate_record` directly | The direct call proves the record is *valid*; the round trip proves the write path *checks*. A commit path that bypassed the validator would pass the direct version. |
+| Build `s10`/`s11` keys with `identity::account_key(identity, descriptor)`, not a parallel fixture helper | A never-connected revoke can otherwise return `Absent` for a key the handler never touched — the test passes by looking in the wrong place. |
+| Write `s12` with the existing `empty_store` / `reopen` / `grant` helpers and assert `Ok(AccountLookup::Revoked(version))` | Same reason as §6.1, and it puts the restart case beside `s08` where a reader will find it. |
+| Give the callback-admission request a real `?code=&state=` query string | An origin exemption matched against the full URI rather than `path()` fails here instead of in a browser. |
+
+The fifth — replacing `assert_ne!(status, FORBIDDEN)` with an explicit admitted
+outcome — is §5.3 row 3, already accepted.
+
+### 6.3 One correction to the review
+
+The second reviewer cites `src/server/mod.rs:408` for where `GatewayCustody`
+lives. That file does not exist. The type is in **`src/gateway/server/mod.rs`**
+(`rg -l GatewayCustody src` returns that path and the fixture, nothing else).
+The reviewer's *point* stands unchanged — `MetaMcp` does not hold custody, so a
+self-revoke test at the meta-tool layer must reach it the way the production
+dispatcher does — but the citation would have sent an implementer to a missing
+file.
+
+### 6.4 Where Stage 1 now stands
+
+Two independent reviewers, two rounds, both landing on SHIP-WITH-FIXES. Round
+one found that the tests could not distinguish a correct implementation from
+one that revokes the wrong user's grant. Round two found that the fix for it
+did not compile. Neither round found a test that was *wrong about the
+behaviour* — the design's specification has held through both.
+
+What an implementer picks up: the bodies in §5 and §6, the one fixture
+accessor named in §6.1, and the two rulings §4 still parks with the operator
+(admin standing, STORE.1 migration). Nothing else in Stage 1 is blocked.
