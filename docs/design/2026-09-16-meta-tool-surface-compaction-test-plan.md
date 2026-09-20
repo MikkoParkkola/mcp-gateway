@@ -118,9 +118,10 @@ ends are reached:
   repo's own gate command `cargo test --quiet` sweeps both settings and
   enforces the published 17.
 
-A band nothing reaches the ends of fits anything; this one cannot be widened
-for free. Do not describe it as vacuous. The gap in §4.2 below is strictly
-forward-looking.
+A band nothing reaches the ends of fits anything, so do not describe this one
+as vacuous. **But the earlier claim here — that it cannot be widened for free
+— was wrong at the top end, and §6.1 records why.** The floor is pinned to
+`BAND`; the ceiling is pinned to a constant that `BAND` does not constrain.
 
 ## 4. New tests
 
@@ -821,3 +822,65 @@ One honest caveat for a reviewer: the band test measures through
 sweep attaches no surfaced tools, so it never exercises the appended path.
 Q4 remains scoped out of the criterion — and the test that enforces the
 criterion would not notice if it stopped being.
+
+---
+
+## 6. Review round two
+
+One seat returned `SHIP-WITH-FIXES` with four findings, all rated MEDIUM. The
+other seat produced no verdict on three consecutive attempts, so this plan
+carries **one** recorded review verdict, not two. Each finding below was
+re-checked at source before being accepted; none was taken on the reviewer's
+word.
+
+### 6.1 The band's upper end can be widened for free — CONFIRMED
+
+`nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band`
+makes three assertions. Two reference `BAND`; the decisive one does not.
+
+| Assertion | Anchored to | Survives `BAND` widened to `9..=18`? |
+|---|---|---|
+| `seen.iter().min() == Some(*BAND.start())` | `BAND` | No — this one is genuinely pinned |
+| `BAND.contains(&ATTAINABLE_CEILING)` | `BAND`, but only as containment | Yes — `9..=18` contains 17 |
+| `seen.iter().max() == Some(ATTAINABLE_CEILING)` | the constant, **not** `BAND` | Yes — still 17 |
+
+So the floor is pinned and the ceiling is not. Widening the published band by
+one at the top passes the suite untouched, which is precisely the drift this
+criterion exists to catch.
+
+The test is not careless about it. `nfr_perf_4_meta_tool_band.rs:145-147`
+states the reason in a comment: asserting against `BAND.end()` in a build that
+compiled the cost tool out would fail for the *configuration* rather than for
+a regression. That reasoning is sound and the fix must preserve it.
+
+**Fix:** under `cost-governance` — which is in `default` (`Cargo.toml:179`), so
+the repo's own `cargo test` runs it — require `ATTAINABLE_CEILING ==
+*BAND.end()`. Keep the existing containment form for builds without the
+feature. The published ceiling then cannot move without the test moving.
+
+### 6.2 The remaining three findings
+
+| # | Where | Finding | Fix |
+|---|---|---|---|
+| 1 | `:331` | The dispatch tightening requires success from tools whose default fixtures cannot succeed, even given valid arguments. An implementer meets failures that are not dispatch regressions. | Require a decoded stats payload for R6, supply sessions for the profile calls, and assert the specific configuration error for an unavailable profile or playbook rather than success. |
+| 2 | `:177` | The published-number checks can pass while the prose they protect is wrong. | Compare the actual HTTP and stdio claim values in both documents against measured counts, and read the criterion's current requirement cell rather than searching its historical narrative for a band that matches. |
+| 3 | `:243` | Exhaustively destructuring `MetaToolGates` proves the unit fixture is complete, not that the integration sweep is. Updating one can leave an axis of the other untested. | Share one exhaustive gate matrix between the coverage guard and the served-path sweep, so satisfying the guard cannot be done by touching an unrelated pattern. |
+
+Finding 2 is the sharper restatement of a round-one observation that the
+published-number checks were loosely coupled to the claims they protect. It is
+the same defect class as §6.1: a check anchored to something other than the
+thing it is meant to hold still.
+
+### 6.3 One claim withdrawn
+
+The plan asserted at `:705` that a fifth admin-only tool would escape the
+existing tests. It would not — the existing Standard-caller test already
+asserts the benchmark count minus four. The claim is withdrawn and no test is
+owed for it.
+
+### 6.4 Where this leaves the plan
+
+Recorded verdict: **SHIP-WITH-FIXES**, one seat. The four findings are
+specified above but **not yet written into the cases they correct**; §6 is the
+work list for the next revision, not a record that the work is done. No
+implementation has started.
