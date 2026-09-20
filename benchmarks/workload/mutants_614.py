@@ -41,7 +41,12 @@ PURE = ["test_coverage_calibration", "test_exact_interval_values",
         "test_observed_k_plateau_sawtooth", "test_resolving_power",
         "test_insufficiency_floor", "test_degenerate_input"]
 
-ev.CONF = 0.95
+# Asserted, not assigned. The pinned constants in the mutants below were
+# hand-computed at 95%, and `ev.CONF = 0.95` would paper over a change to the
+# real constant -- the canary that is supposed to catch it cannot fire if the
+# harness overwrites the value it watches.
+assert ev.CONF == 0.95, f"mutant constants assume CONF 0.95, got {ev.CONF}"
+results = {}
 for label, (mi, rhw, ins) in MUTANTS.items():
     ev.median_interval, ev.rel_half_width, ev.interval_insufficient = mi, rhw, ins
     for m in list(sys.modules):
@@ -50,8 +55,20 @@ for label, (mi, rhw, ins) in MUTANTS.items():
     killed = []
     for n in PURE:
         try:
-            getattr(t, n)(); 
+            getattr(t, n)();
         except Exception as e:
             killed.append(f"{n} [{str(e)[:70]}]")
     verdict = "KILLED by " + "; ".join(killed) if killed else "*** SURVIVED ALL ***"
     print(f"{label:16} {verdict}\n")
+    results[label] = killed
+
+# A harness that only prints is a harness nobody fails. The discrimination
+# claim is: every wrong statistic dies, and the right one lives.
+survived = sorted(l for l, k in results.items() if l != "CORRECT" and not k)
+if survived or results["CORRECT"]:
+    if survived:
+        print(f"MUTANTS SURVIVED: {', '.join(survived)}")
+    if results["CORRECT"]:
+        print(f"CORRECT was killed by: {'; '.join(results['CORRECT'])}")
+    sys.exit(1)
+print(f"all {len(results) - 1} mutants killed; CORRECT passes")
