@@ -248,9 +248,16 @@ PY
 }
 
 # --- schedule ---------------------------------------------------------------
+
+# `docker -v` reads a relative source as a NAMED VOLUME, never as a host
+# directory, so a run dir given relative to the checkout silently becomes an
+# empty anonymous mount and k6 dies before it measures anything. Every run dir
+# is made absolute here, once, before anything mounts or writes to it.
+abs_run_dir() { mkdir -p "$1"; (cd "$1" && pwd); }
+
 do_measure() {
   local run="$1"
-  mkdir -p "$run"
+  run="$(abs_run_dir "$run")"
   render_configs "$run"
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \
@@ -295,7 +302,7 @@ PY
 # the same thing. Its output is never scored.
 do_smoke() {
   local run="$1" cell="${2:-C}"
-  mkdir -p "$run"
+  run="$(abs_run_dir "$run")"
   render_configs "$run"
   run_rep "$cell" "smoke-$cell" "$run" warmup
   echo "[smoke] ok: cell $cell plumbing clean; see $run/smoke-$cell.health.json"
