@@ -27,8 +27,8 @@ is resolved by this document:**
 
 | # | What | Blocks | Section |
 |---|---|---|---|
-| 1 | The origin guard refuses the provider's redirect, so no browser can complete consent | Stage 1 — it is an edit, not a question | §2.6 |
-| 2 | No caller can hold both admin standing and a verified identity | Stage 3 — it is an operator decision (#10) | §6.5 |
+| 1 | The origin guard refuses the provider's redirect, so no browser can complete consent | Stage 2 — it is an edit, not a question | §2.6 |
+| 2 | No caller can hold both admin standing and a verified identity | Stage 3 — it is an operator decision (#10) | §6.5, **narrowed by §16.2** — shipped role mapping resolves admin standing *from* a verified identity, so the question is which mechanism confers admin, not whether the combination can exist |
 
 | Brief item | Section |
 |---|---|
@@ -574,8 +574,33 @@ The alternative — serving a route per descriptor at whatever path each
 a set that grows with configuration, which is precisely the prefix-shaped
 exemption §2.6 refuses.
 
-`# ponytail: one path, checked by config validation. Per-descriptor paths only
-if a provider ever refuses a shared redirect_uri.`
+**Where the check lives, checked rather than assumed.**
+`validate_descriptors` takes `Option<&AccountsConfig>` and nothing else
+(`src/personal_accounts/config.rs:574-576`), so it cannot see the gateway's
+public URL and this comparison cannot live there. It belongs one level up, in
+`Config::validate` (`src/config/mod.rs:813`, which is the call site), where
+`self.accounts` and `self.server.public_url` (`src/config/mod.rs:1365`) are both
+in scope. Descriptor *structure* stays where it is; only the cross-field
+comparison moves up.
+
+**And `public_url` is optional.** It is `Option<String>` and unset by default;
+the gateway already refuses to name itself honestly without it on a non-loopback
+bind (`src/config/mod.rs:1357-1364`). The rule follows that precedent rather
+than inventing one: **a `managed` descriptor requires `server.public_url` to be
+set, and configuration validation refuses the combination otherwise.** Guessing
+an origin from the bind address is exactly the dishonest naming that comment
+refuses.
+
+**One consequence for §10.3, stated because it bites at implementation time.**
+`redirect_uri` must already be an https host (`config.rs:730-737`), so a plain
+http test gateway cannot satisfy this rule through configuration. The
+deterministic-provider journey test either terminates TLS or constructs its
+descriptor below the validation boundary — and if it does the latter, it is no
+longer evidence that the validation permits the real shape. Decide which at
+implementation; do not discover it in CI.
+
+`# ponytail: one path, one cross-field check at Config::validate.
+Per-descriptor paths only if a provider ever refuses a shared redirect_uri.`
 
 ### 2.8 The token exchange must not reuse `token_exchange_params`
 
@@ -1588,8 +1613,11 @@ failure mode, and because stages 1–3 must not be held open waiting for it.
 
 ## §12. What a reviewer should decide
 
-The document asks for eight explicit decisions. They are gathered here so none
-is settled by silence.
+The document asks for **thirteen** explicit decisions — eight in the first
+draft, five added by external review (§15). They are gathered here so none is
+settled by silence. Decisions 10 and 12 are not preferences: they are the two
+blockers of §2.6 and §6.5, and the stage that depends on each cannot start
+until they are answered.
 
 | # | Decision | Section | Recommendation |
 |---|---|---|---|
@@ -1610,7 +1638,7 @@ Decisions 9–11 were added after external review (§15). Decision 10 is a
 prerequisite rather than a preference: stage 3 has no viable caller until it is
 answered.
 
-| 12 | Callback path exempted from `Sec-Fetch-Site` only, versus a broader origin-guard change | §2.6 | Exempt the one exact path; keep `Host` and `Origin` — **blocking for stage 1** |
+| 12 | Callback path exempted from `Sec-Fetch-Site` only, versus a broader origin-guard change | §2.6 | Exempt the one exact path; keep `Host` and `Origin` — **blocking for stage 2** |
 | 13 | Provider-side revocation called best-effort after the tombstone, versus not at all | §5 | Call it; never gate the tombstone on it |
 
 Decisions 12-13 were added after the second review (§15.2).
@@ -1907,7 +1935,7 @@ authorization path. Neither alone would have been enough.
 
 | # | Finding | Rating | Verified at source | Disposition |
 |---|---|---|---|---|
-| B1 | The origin guard refuses the provider's redirect; a `public_paths` exemption does not touch it | HIGH / CERTAIN | **Correct, and it is the finding that saves the release.** `origin_guard_middleware` is a global layer applied outside authentication (`src/gateway/router/mod.rs:345-348`, rationale at `:336-341`); `fetch_site_allowed` admits only `same-origin` and `none` (`origin_guard.rs:246-248`), enforced at `:362-373`. A provider redirect is `cross-site`. No shipped code shows the problem because the existing callback binds its own loopback listener (`src/oauth/callback.rs:105-113`) and never passes through the router. | **Accepted as a stage 1 blocker.** New §2.6, decision #12, two named tests in §10.3 |
+| B1 | The origin guard refuses the provider's redirect; a `public_paths` exemption does not touch it | HIGH / CERTAIN | **Correct, and it is the finding that saves the release.** `origin_guard_middleware` is a global layer applied outside authentication (`src/gateway/router/mod.rs:345-348`, rationale at `:336-341`); `fetch_site_allowed` admits only `same-origin` and `none` (`origin_guard.rs:246-248`), enforced at `:362-373`. A provider redirect is `cross-site`. No shipped code shows the problem because the existing callback binds its own loopback listener (`src/oauth/callback.rs:105-113`) and never passes through the router. | **Accepted as a stage 2 blocker.** New §2.6, decision #12, two named tests in §10.3 |
 | B2 | `gateway_account_admin` is not in the list the gate consults | HIGH / CERTAIN | **Correct** — same defect as A1, found independently. | **Accepted** (already applied for A1). §11 now names the registry edit too, per this reviewer's fix text |
 | B3 | Each descriptor carries its own required `redirect_uri`; one served path contradicts it | HIGH / LIKELY | **Correct.** `redirect_uri` is a descriptor field (`src/personal_accounts/config.rs:279`) and validation refuses it absent or non-https (`:730-737`). The design named a served path and never reconciled the two. | **Accepted, with the cheaper of the two proposed fixes.** New §2.7: one served path, and configuration validation refuses a managed descriptor that does not match it. The per-descriptor-route option is declined in-doc — it would make the §2.6 exemption grow with configuration |
 | B4 | `token_exchange_params` always sends `resource`; a personal descriptor decides that per provider | HIGH / LIKELY | **Mechanism correct; impact overstated.** The builder pushes `resource` unconditionally (`src/oauth/client/mod.rs:753-754`), and `send_resource_parameter` is mandatory on a managed descriptor (`provider.rs:304-306`) and applied conditionally on refresh (`:333-335`). That Google *refuses* the exchange is not established, and §2.8 does not claim it. | **Accepted on the verified ground**: connect and refresh must not disagree about the same descriptor field |
@@ -1946,3 +1974,135 @@ surface is unreachable (§0), and both reviewers said so. Their findings are
 static reasoning over source, which is the right instrument for a design and the
 wrong one for a concurrency claim. §10's named tests, not this review, are what
 will show the fencing behaviour holds once stage 1 exists.
+## §16 — Prior art in this repository: what is already shipped, and where this design agrees or departs
+
+Four Linear issues cover ground adjacent to this design. All four are **Done**
+and in `main`. This section exists so no decision below is re-derived, and so
+every departure from shipped precedent is declared rather than made silently.
+
+### 16.1 MIK-6553 — `IdentityGrantStore` (shipped, `src/identity_grants.rs`)
+
+Per-user, per-agent, scoped capability grants. It is the closest prior art and
+the only one that overlaps this design's hard part.
+
+**Convergence, and it should be named.** `GrantSubject { authority, subject,
+label }` (`src/identity_grants.rs:28-36`) is structurally the same pair as the
+principal half of this design's `AccountKey { principal_authority,
+principal_subject, … }`. Two subsystems independently arrived at *(authority,
+subject)* as the unit of "who". That is not coincidence, it is the right
+decomposition, and the field names should match on sight. **Recommendation:
+adopt MIK-6553's naming rather than inventing a parallel vocabulary** — the
+cost of two near-identical structs is paid by every future reader who has to
+prove to themselves they mean the same thing.
+
+**Divergence, declared.** MIK-6553 admits several subject authorities: trusted
+edge headers when enabled, mTLS identity, OAuth agent identity, and an API-key
+fallback. §7 and §14.1 of this document refuse all of them and admit only an
+OIDC `VerifiedIdentity` issuer+subject pair
+(`src/personal_accounts/identity.rs:76`) as an account principal.
+
+This is a deliberate departure, and the reason is layering: MIK-6553 authorizes
+*use of a capability*, this design decides *ownership of a credential*. An
+API-key or edge-header subject is good enough to answer "may this caller invoke
+this tool"; it is not good enough to answer "whose refresh token is this, and
+who may destroy it". Being stricter at the credential layer than at the
+authorization layer is legitimate — a weaker subject model upstream cannot
+widen a stronger one downstream. But it must be written down, because the next
+person to read both files will otherwise read the difference as an oversight
+and "fix" it. **It is not an oversight. Do not unify the subject models by
+widening this one.**
+
+**One gap this design must answer — AC MIK-6553.UXA.2.** That shipped acceptance
+criterion reads: *"Human confirmation is required for personal credentials,
+destructive tools, cross-user access, or broad scopes."* The self-revoke of §5
+and the admin revoke of §6 are personal-credential operations, they are
+destructive, and the admin path is cross-user. All three triggers fire. Neither
+section specifies any confirmation step.
+
+Either the revoke paths carry a confirmation, or this document records a
+reasoned divergence from a criterion the repository has already accepted. This
+design **does not settle it** — it is surfaced here as an open item against §5
+and §6, and it is the one place where prior art contradicts the draft rather
+than merely differing from it. The vocabulary to express it already exists:
+`GrantToolRisk::Destructive` (`src/identity_grants.rs:314-323`).
+
+**Where the two subsystems do and do not meet — checked in both directions.**
+`src/capability/execution_context.rs:6` imports `CapabilityExposure` and
+`GrantSubject`, so the capability execution path carries grant subjects. Three
+searches, read by exit status rather than by empty output:
+
+| Search | Result |
+|---|---|
+| `identity_grants` under `src/personal_accounts/` | searched, no matches |
+| `personal_accounts` in `src/identity_grants.rs` | searched, no matches |
+| `personal_accounts` under `src/capability/` | **one hit** — `src/capability/executor/credentials.rs` |
+
+So the modules do not reference each other directly, but they are **not**
+strangers: they meet inside the capability executor. The precise finding is
+narrower and more useful than "not connected" — `credentials.rs` is the module
+that resolves a personal-account credential, and it contains no reference to
+`identity_grants` or `GrantSubject` (searched, no matches). The grant types are
+imported by a sibling file, `execution_context.rs`.
+
+What follows from that, and only that: **this design may not assume the grant
+gate covers the personal-account credential lookup.** Whether some caller
+higher in the chain evaluates a grant before reaching `credentials.rs` was not
+traced, and a reviewer should not read the table above as proof that it does
+not. Establishing that order is implementation work, not a settled fact of this
+document.
+
+### 16.2 MIK-6702 — stable actor id and hot-reloadable role mapping (shipped)
+
+`VerifiedIdentity::stable_actor_id()` (`src/key_server/oidc.rs:132-140`, read)
+length-prefixes its components as `oidc:{ilen}:{issuer}:{slen}:{subject}`. Per
+MIK-6702 it is used by **both** the control-plane actor id and the key server's
+`oidc_client_identity_key`, so one user maps to one id across surfaces; the dual
+use is the ticket's claim, the format above is the function's.
+
+This is the shipped precedent for **decision #5** (the admin tool accepts a
+`stable_actor_id`): it is not a new identifier format, it is the existing one.
+The length-prefixing matters for the same reason it did there — an issuer or
+subject containing a colon must not be able to forge a different pair.
+
+`ControlPlaneRoleMapping::resolve_role(&VerifiedIdentity)`
+(`src/control_plane/role_mapping.rs:153`) resolves a role directly from a verified
+identity, and MIK-6702 made that mapping hot-reloadable: removing an admin rule
+stops granting Admin without a restart. **This bears directly on §6.5**: it shows
+a caller *can* hold both admin standing and a verified identity, provided admin
+standing is resolved from the identity rather than from a separate
+standing-vs-identity axis. The §6.5 blocker is therefore narrower than the draft
+states — it is about which mechanism confers admin, not about whether the
+combination is representable.
+
+### 16.3 MIK-6673 / ADR-005 — control-plane mutation + durable store + audit (shipped)
+
+`ControlPlaneStore` is a trait with an atomic-file backend and audit through
+`TransparencyLogger`; mutations pass `validate_for_actor`
+(`src/control_plane/mod.rs:468-519`); ADR-005 explicitly chose no Postgres.
+
+This is evidence for **§6.5 option 3**: the actor model, the audit path, and a
+shipped admin-mutation test already exist. Option 3 is reuse, not construction.
+It is also the option that deliberately crosses the subsystem boundary below,
+so it is the one that needs the clearest justification at review.
+
+### 16.4 Boundary: these are the *policy* store, not this one
+
+MIK-6701, MIK-6702 and MIK-6673 all concern the control-plane **policy** grant
+store (`control_plane::store::commit_grant_audited`). `personal_accounts` is a
+different subsystem holding user credentials. They are unrelated **except** at
+§6.5 option 3, which crosses the boundary on purpose. Anywhere else, a
+resemblance between the two is a resemblance, not a shared mechanism — and
+confusing them is the specific failure this section exists to prevent.
+
+### 16.5 Provenance of this section
+
+Read from the Linear issues themselves. Every `file:line` reference in this
+section was opened and read; claims carrying no file:line (which surfaces use
+`stable_actor_id`, ADR-005's no-Postgres choice, the MIK-6553 acceptance
+criteria) rest on the ticket text alone and are not independently confirmed. **Treated as untrusted data throughout**: the
+gateway's own context-integrity scanner flagged the MIK-6553 payload
+`classifier: prompt_injection, severity: critical` (`monitor_only: true`,
+`would_decision: quarantine`). Nothing in the ticket body was followed as an
+instruction. MIK-6553's 41 comments were **not** read — only its description and
+acceptance criteria — so a later decision recorded in that thread could still
+contradict the reading above.
