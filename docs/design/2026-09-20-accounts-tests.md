@@ -416,3 +416,147 @@ Four things, named so a reviewer does not have to find them:
 4. **`a_reconnect_after_a_self_revoke_yields_a_usable_new_grant` spans two
    stages.** It needs connect (Stage 2) as well as revoke (Stage 1). It is
    listed here because §5 makes the claim; it cannot land in Stage 1.
+
+---
+
+## 5. Review round one — findings and fixes
+
+`gpt-review`: **SHIP-WITH-FIXES**, six NOW-gate findings. All six accepted. The
+two most serious are below with corrected bodies; the rest are recorded with
+their fix so an implementer does not rediscover them.
+
+### 5.1 HIGH — single-principal tests cannot detect cross-user targeting
+
+The reviewer's point: every revoke test above seeds **one** principal and
+**one** descriptor. A handler that ignores the caller's verified identity and
+revokes by descriptor alone — the exact bug §7 exists to prevent — passes every
+one of them. This is the single place where a mistake lets one user destroy
+another's grant, and the tests could not see it.
+
+Accepted without modification. The fixture must seed two principals:
+
+```rust
+/// The isolation property, which the one-principal version could not see.
+/// A handler that revokes by descriptor alone passes s10/s11/s12 and fails
+/// here — which is the correct ordering of sensitivity.
+#[tokio::test]
+async fn a_self_revoke_touches_only_the_calling_principals_grant() {
+    let alice = account_key_for(SUBJECT_ALICE, DESCRIPTOR_ID);
+    let bob = account_key_for(SUBJECT_BOB, DESCRIPTOR_ID);
+    let custody = custody_with(&[
+        (alice.clone(), connected_grant()),
+        (bob.clone(), connected_grant()),
+    ]);
+
+    gateway_account_revoke(&custody, DESCRIPTOR_ID, &verified_identity(SUBJECT_ALICE))
+        .await
+        .expect("alice revokes her own grant");
+
+    assert_eq!(custody.lookup(&alice), AccountLookup::Revoked);
+    assert_eq!(
+        custody.lookup(&bob),
+        AccountLookup::Connected,
+        "bob shares the descriptor but not the principal; his grant must be untouched"
+    );
+}
+
+/// The two refusals that pair with it. §7.2: no verified identity, no account
+/// principal. §2.1/§7.4: a principal named in the request is not a principal.
+#[tokio::test]
+async fn a_revoke_without_a_verified_identity_is_refused() {
+    let custody = custody_with(&[(account_key_for(SUBJECT_ALICE, DESCRIPTOR_ID), connected_grant())]);
+
+    let refused = gateway_account_revoke_unauthenticated(&custody, DESCRIPTOR_ID).await;
+    assert!(matches!(refused, Err(AccountError::IdentityRequired)), "got {refused:?}");
+
+    assert_eq!(
+        custody.lookup(&account_key_for(SUBJECT_ALICE, DESCRIPTOR_ID)),
+        AccountLookup::Connected,
+        "a refused revoke must not have written a tombstone"
+    );
+}
+
+#[tokio::test]
+async fn a_caller_supplied_principal_field_does_not_select_the_account() {
+    let alice = account_key_for(SUBJECT_ALICE, DESCRIPTOR_ID);
+    let custody = custody_with(&[(alice.clone(), connected_grant())]);
+
+    // Bob authenticates as himself and names alice in the payload.
+    let response = gateway_account_revoke_naming(
+        &custody, DESCRIPTOR_ID, SUBJECT_ALICE, &verified_identity(SUBJECT_BOB),
+    ).await;
+
+    // Whether this refuses or silently revokes bob's own (absent) grant is a
+    // design choice; what must NOT happen is alice's grant changing.
+    assert_eq!(
+        custody.lookup(&alice),
+        AccountLookup::Connected,
+        "a principal in the request body must never select the account"
+    );
+    drop(response);
+}
+```
+
+### 5.2 HIGH — the next-dispatch test re-resolves instead of reusing
+
+The reviewer is right and the original body was subtly circular: it warmed a
+cache with `prepared_caching_context`, then asserted that a **second
+`resolve`** refuses. But re-resolving is the path that consults the store; the
+leak being tested for is a *already-prepared* credential that never resolves
+again. The original test passes against an implementation that leaks.
+
+```rust
+#[tokio::test]
+async fn a_self_revoke_through_the_meta_tool_refuses_the_next_dispatch() {
+    let custody = custody_with(&[(account_key_for(SUBJECT_ALICE, DESCRIPTOR_ID), connected_grant())]);
+    let (meta, registry) = installed_gateway(&[(ACCOUNT, managed_descriptor())], &custody_dyn(&custody));
+
+    // Prepare a credential BEFORE the revoke and hold it, exactly as an
+    // in-flight request would.
+    let context = prepared_caching_context(&registry, SUBJECT_ALICE, ACCOUNT, KEY).await;
+    let executor = caching_executor(&registry, None);
+
+    gateway_account_revoke_via(&meta, DESCRIPTOR_ID, &verified_identity(SUBJECT_ALICE))
+        .await
+        .expect("self-revoke");
+
+    // Dispatch with the credential prepared before the revoke. This is the
+    // leak path: nothing here re-enters `resolve`.
+    let dispatched = executor
+        .execute(&cacheable_capability(&base_url, KEY, Some(ACCOUNT)), &context)
+        .await;
+    assert!(
+        dispatched.is_err(),
+        "a credential prepared before the revoke must not still dispatch after it"
+    );
+}
+```
+
+### 5.3 The four remaining findings, accepted with their fixes
+
+| Finding | Fix |
+|---|---|
+| `s12` calls `initialize` twice; the initializer **refuses** an existing store rather than reopening it — verified at source: `initialize` is `mod.rs:431`, **`open` is `mod.rs:436`** | `s12` reopens with `PersonalAccountStore::open(config)`. The original body could not have compiled into a passing test. |
+| Every tool-level revoke case succeeds, so a handler that swallows a custody failure and still reports `revoked: true` is undetected | Add `a_revoke_that_fails_in_custody_is_reported_as_a_failure`: inject a custody error, assert the response is an error and that no success is reported. §5's honest sentence — "revoked here; the provider did not confirm" — is a *different* case and needs its own test. |
+| `assert_ne!(status, FORBIDDEN)` on the callback accepts 401, 404 and 500, so it does not establish the handler was reached | Assert the exact downstream response of an identifiable stub handler, not the absence of one status. |
+| The §2.6 tests never challenge `Host` or `Origin` on the callback itself, so an exemption that bypasses the **whole** guard would pass | Add exact-callback requests carrying an invalid `Host`, an invalid HTTP/2 `:authority` and a foreign `Origin`, each asserted refused. The exemption is `Sec-Fetch-Site` only. |
+
+### 5.4 Two improvements accepted, one deferral narrowed
+
+The reviewer challenged both deferrals, and was half right.
+
+- **Admin tests (§6.5).** Narrowed. `the_admin_tool_is_not_permitted_to_a_non_admin_caller` and
+  `an_admin_cannot_reach_another_principal_through_the_self_service_tool` hold
+  across all three options for conferring admin standing, so they are writable
+  now and move to Stage 1. Only
+  `an_admin_revoking_another_principal_writes_an_audit_row_naming_actor_and_subject`
+  genuinely needs the ruling, because the actor's identity is what the options
+  differ on.
+- **STORE.1 migration.** Partly narrowed. Choosing *whose* credential a 3.x
+  token was still needs the operator. But three properties do not: that the
+  3.x files are left in place unmodified, that they remain readable, and that
+  **no principal is implicitly assigned**. That last one is a real test of the
+  migrate-nothing position and should exist regardless of which rule is chosen.
+- **`s12` no-write claim.** §5 says a repeat revoke performs *no IO*. The test
+  asserts only the resulting state, which an implementation that rewrites an
+  equivalent tombstone also satisfies. A write observer distinguishes them.
