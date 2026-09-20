@@ -12,3 +12,17 @@ backends:
   workload:
     command: "python3 ${WORKLOAD_FIXTURE} --protocol-version 2025-06-18"
     description: "Deterministic fixture backend for NFR.WORKLOAD.1 (mixed-era)"
+
+# Void 10 fix (2026-09-17): both keys below are shipped defaults the workload
+# used to inherit silently. The response cache removed the real-backend
+# property -- a cached cell measures the cache, not the gateway -- and the
+# default 100 rps / burst 50 limit shed roughly a third of the offered ~137/s,
+# so the semantic-assertion rate scored the harness. The key paths exist
+# identically at v3.5.0, v3.5.1 and HEAD (src/config/mod.rs, cache + failsafe).
+cache:
+  enabled: false
+
+failsafe:
+  rate_limit:
+    requests_per_second: 500
+    burst_size: 500

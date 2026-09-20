@@ -18,7 +18,7 @@
 
 **One gateway between your AI and every tool it needs, without flooding the context window.**
 
-MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect MCP servers and REST APIs behind it, and the agent sees a compact meta-surface of 14 to 17 tools instead of every backend definition. It discovers and calls backend tools on demand. A small live-agent benchmark found no completed-task token saving from that extra hop, so the value is catalog capacity plus policy and routing—not a blanket token claim. See [Benchmarks](docs/BENCHMARKS.md).
+MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect MCP servers and REST APIs behind it, and the agent sees a compact meta-surface of 9 to 17 tools instead of every backend definition. It discovers and calls backend tools on demand. A small live-agent benchmark found no completed-task token saving from that extra hop, so the value is catalog capacity plus policy and routing—not a blanket token claim. See [Benchmarks](docs/BENCHMARKS.md).
 
 ![demo](demo.gif)
 
@@ -34,7 +34,7 @@ MCP Gateway moves the full catalog out of the exposed tool list. The agent loads
 flowchart LR
     AI["AI client<br/>(Claude, Cursor, ...)"]
     subgraph GW["MCP Gateway (single binary)"]
-        META["Compact meta-surface<br/>14-17 tools"]
+        META["Compact meta-surface<br/>9-17 tools"]
         DISC{"Discover on demand<br/>gateway_search_tools<br/>gateway_invoke"}
     end
     T1["MCP backend<br/>Tavily (stdio)"]
@@ -43,7 +43,7 @@ flowchart LR
     C2["REST capability<br/>Stripe"]
     Cn["110+ capabilities"]
 
-    AI -->|"14-17 tool defs"| META
+    AI -->|"9-17 tool defs"| META
     META --> DISC
     DISC --> T1
     DISC --> T2
@@ -64,7 +64,7 @@ mcp-gateway serve                            # 3. run
 mcp-gateway doctor                           # 4. verify everything is healthy
 ```
 
-That is it. Your AI clients now talk to the gateway, and the gateway routes to every backend you already had configured, at a flat `~15 tools` instead of `~150`. Start with `gateway_search_tools` from your AI client to find any backend tool, then invoke it with `gateway_invoke`.
+That is it. Your AI clients now talk to the gateway, and the gateway routes to every backend you already had configured, at a flat `11 tools` instead of `~150` — 11 is the default HTTP configuration counted for an administrator; an ordinary client is shown four fewer. Start with `gateway_search_tools` from your AI client to find any backend tool, then invoke it with `gateway_invoke`.
 
 > **Nothing to import yet?** `mcp-gateway init --with-examples` writes a working `gateway.yaml` with public capabilities so you can confirm the gateway is alive before adding your own servers.
 
@@ -82,7 +82,7 @@ Your agent will install the binary, run the setup wizard, import your existing M
 | **Cargo** | `cargo install mcp-gateway` |
 | **cargo-binstall** | `cargo binstall mcp-gateway` |
 | **Direct binary download (Windows x64)** | Download `mcp-gateway-windows-x86_64.exe` from the [latest release](https://github.com/MikkoParkkola/mcp-gateway/releases/latest) |
-| **Docker** | `docker run -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml` |
+| **Docker** | `docker run -p 127.0.0.1:39400:39400 -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400` |
 
 On Linux, the image runs as UID/GID 1001. Make an owner-only deployment copy
 instead of changing ownership on your working config: `install -m 600
@@ -256,15 +256,15 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 
 | | Without gateway | With gateway |
 |---|----------------|--------------|
-| **Tools in context** | Every definition, every request | 17 meta-tools in the README benchmark (~1,700 tokens) |
-| **Schema footprint** | ~15,000 modeled tokens (100 tools) | ~1,700 modeled tokens before discovery; not completed-task cost |
+| **Tools in context** | Every definition, every request | 11 meta-tools in the README benchmark (~1,100 tokens) |
+| **Schema footprint** | ~15,000 modeled tokens (100 tools) | ~1,100 modeled tokens before discovery; not completed-task cost |
 | **Measured task cost** | Direct path was lower at every tested size | Meta path used 1.2–16.1% more input tokens and one extra turn |
 | **Practical tool limit** | 20 to 50 tools under context pressure | Unlimited, discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
-The gateway exposes 14 tools minimum, 17 in the README benchmark scenario. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, and reload. Webhook status is listed only where it can answer: a deployment with a webhook registry attached, which the stdio transport never has. It costs context exactly where it is useful.
+The gateway exposes 9 tools minimum, 11 in the README benchmark scenario, counted for an administrator; a caller without admin standing is shown four fewer. The base discovery quartet stays fixed. Everything else is listed only where it can answer: stats, cost reporting, playbooks and profile control appear once the configuration that backs them exists, and webhook status where a webhook registry is attached, which the stdio transport never has. A deployment that turns all of them on is served 17. It costs context exactly where it is useful.
 
 ### Code Mode: two tools instead of the meta-tool set
 
@@ -305,7 +305,7 @@ Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gatew
 ```mermaid
 flowchart TB
     subgraph GW["MCP Gateway (:39400)"]
-        META["Meta-MCP surface: 14-17 tools<br/>gateway_list_servers · gateway_list_tools<br/>gateway_search_tools · gateway_invoke"]
+        META["Meta-MCP surface: 9-17 tools<br/>gateway_list_servers · gateway_list_tools<br/>gateway_search_tools · gateway_invoke"]
         FS["Failsafes: circuit breaker · retry · rate limit"]
         META --> FS
     end
@@ -408,7 +408,7 @@ mcp-gateway and Anthropic's MCP tunnel sit at different layers and compose. The 
 
 | Concern | Anthropic MCP tunnel | mcp-gateway | Boundary |
 |---|---|---|---|
-| **Backend topology** | Single MCP server per tunnel, exposed through one outbound connection ([overview](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)) | N-backend aggregation: 110+ REST capabilities plus multiple MCP backends behind a compact 14-17 tool meta-surface (`src/gateway/`, `capabilities/*.yaml`) | Different primitive: 1-server reachability vs many-backend aggregation |
+| **Backend topology** | Single MCP server per tunnel, exposed through one outbound connection ([overview](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)) | N-backend aggregation: 110+ REST capabilities plus multiple MCP backends behind a compact 9-17 tool meta-surface (`src/gateway/`, `capabilities/*.yaml`) | Different primitive: 1-server reachability vs many-backend aggregation |
 | **Tool routing** | Opaque pass-through; the agent sees whatever tool list the tunneled server publishes | Capability namespacing plus dynamic `gateway_search_tools` / `gateway_invoke` discovery (`src/gateway/`); SHA-256 pinning per capability (`src/capability/hash.rs`) | Different layer: transport reachability vs tool-surface curation and integrity |
 | **Observability** | Per-tunnel session telemetry from Anthropic's side | Unified `trace_id` and cost accounting across every backend invocation (`src/cost_accounting/`, `src/gateway/`) | Scope distinction: per-tunnel session vs cross-backend trace correlation |
 
@@ -486,6 +486,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Upgrading to 4.0](docs/UPGRADING-4.0.md) | Per-issuer OAuth storage, strict `env_files` parsing, protocol floor, and the single-license change |
 | [Upgrading to 3.0](docs/UPGRADING-3.0.md) | Per-user OAuth isolation and identity-propagation upgrade path |
 | [Deployment Guide](docs/DEPLOYMENT.md) | Docker, systemd, TLS/mTLS, scaling |
+| [Multi-User Setup](docs/MULTI_USER.md) | Key server, policy scopes, per-backend identity propagation |
 | [OpenAPI Import](docs/OPENAPI_IMPORT.md) | Generate capabilities from OpenAPI specs |
 | [Webhooks](docs/WEBHOOKS.md) | Event integration setup |
 | [Community Registry](docs/COMMUNITY_REGISTRY.md) | Share and install capabilities |
@@ -564,7 +565,7 @@ mcp-gateway is part of a suite of MCP tools:
 
 | Tool | Description |
 |------|-------------|
-| **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **Universal MCP gateway: a compact 14-17 tool surface replaces 100+ registrations** |
+| **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **Universal MCP gateway: a compact 9-17 tool surface replaces 100+ registrations** |
 | [trvl](https://github.com/MikkoParkkola/trvl) | AI travel agent, 36 MCP tools for flights, hotels, ground transport |
 | [nab](https://github.com/MikkoParkkola/nab) | Web content extraction: fetch any URL with cookies and anti-bot bypass |
 | [axterminator](https://github.com/MikkoParkkola/axterminator) | macOS GUI automation, 34 MCP tools via the Accessibility API |

@@ -9,28 +9,30 @@ use serde_json::json;
 
 #[test]
 fn build_meta_tools_base_count_without_optional_features() {
-    // GIVEN: no stats, reload, or cost_report; 42 tools, 3 servers
+    // GIVEN: every gate off; 42 tools, 3 servers
     // WHEN: building meta tools
-    // THEN: 4 base + 1 playbook + 2 kill/revive + 2 set/get profile + 1 disabled-caps
-    //       + 1 list-profiles + 1 set-state + 1 reload-capabilities = 13
+    // THEN: 4 base + 2 kill/revive + 1 disabled-caps + 1 set-state
+    //       + 1 reload-capabilities = 9, the floor of the `NFR.PERF.4` band
     let tools = build_meta_tools(
         MetaToolGates {
             stats: false,
             reload: false,
             cost_report: false,
             webhook_status: false,
+            playbooks: false,
+            profiles: false,
         },
         42,
         3,
     );
-    assert_eq!(tools.len(), 13);
+    assert_eq!(tools.len(), 9);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_list_servers"));
     assert!(names.contains(&"gateway_invoke"));
-    assert!(names.contains(&"gateway_run_playbook"));
     assert!(names.contains(&"gateway_kill_server"));
     assert!(names.contains(&"gateway_revive_server"));
-    assert!(names.contains(&"gateway_list_profiles"));
+    assert!(!names.contains(&"gateway_run_playbook"));
+    assert!(!names.contains(&"gateway_list_profiles"));
     assert!(!names.contains(&"gateway_get_stats"));
     assert!(!names.contains(&"gateway_webhook_status"));
     assert!(!names.contains(&"gateway_reload_config"));
@@ -45,6 +47,8 @@ fn build_meta_tools_with_stats_adds_stats_tool() {
             reload: false,
             cost_report: false,
             webhook_status: false,
+            playbooks: false,
+            profiles: false,
         },
         0,
         0,
@@ -66,25 +70,31 @@ fn webhook_status_is_enumerated_exactly_when_its_registry_is_attached() {
     for stats in [false, true] {
         for reload in [false, true] {
             for cost_report in [false, true] {
-                for attached in [false, true] {
-                    let tools = build_meta_tools(
-                        MetaToolGates {
-                            stats,
-                            reload,
-                            cost_report,
-                            webhook_status: attached,
-                        },
-                        0,
-                        0,
-                    );
-                    assert_eq!(
-                        tools.iter().any(|t| t.name == "gateway_webhook_status"),
-                        attached,
-                        "webhook status is enumerated exactly when a registry is \
-                         attached, and is independent of every other flag: \
-                         stats={stats} reload={reload} cost_report={cost_report} \
-                         attached={attached}"
-                    );
+                for playbooks in [false, true] {
+                    for profiles in [false, true] {
+                        for attached in [false, true] {
+                            let tools = build_meta_tools(
+                                MetaToolGates {
+                                    stats,
+                                    reload,
+                                    cost_report,
+                                    webhook_status: attached,
+                                    playbooks,
+                                    profiles,
+                                },
+                                0,
+                                0,
+                            );
+                            assert_eq!(
+                                tools.iter().any(|t| t.name == "gateway_webhook_status"),
+                                attached,
+                                "webhook status is enumerated exactly when a registry is \
+                                 attached, and is independent of every other flag: \
+                                 stats={stats} reload={reload} cost_report={cost_report} \
+                                 playbooks={playbooks} profiles={profiles} attached={attached}"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -99,6 +109,8 @@ fn build_meta_tools_with_reload_adds_reload_tool() {
             reload: true,
             cost_report: false,
             webhook_status: false,
+            playbooks: false,
+            profiles: false,
         },
         0,
         0,
@@ -115,6 +127,8 @@ fn build_meta_tools_with_cost_report_adds_cost_report_tool() {
             reload: false,
             cost_report: true,
             webhook_status: false,
+            playbooks: false,
+            profiles: false,
         },
         0,
         0,
@@ -125,25 +139,24 @@ fn build_meta_tools_with_cost_report_adds_cost_report_tool() {
 
 #[test]
 fn build_meta_tools_spans_the_documented_band() {
-    // 4 base + 1 stats + 1 cost_report + 1 playbook + 2 kill/revive
-    // + 2 set/get profile + 1 disabled-caps + 1 list-profiles + 1 reload-config
-    // + 1 set-state + 1 reload-capabilities = 16, and a 17th when a webhook
-    // registry is attached. Both ends are pinned because `NFR.PERF.4` bands the
-    // surface at 14-17: a change that moved only one end would keep the other
-    // assertion green.
+    // Every gate off is 9; every gate on is 17. `NFR.PERF.4` bands the surface
+    // at 9-17 over gate configuration, and both ends are pinned because a
+    // change that moved only one would keep the other assertion green.
     assert_eq!(
         build_meta_tools(
             MetaToolGates {
-                stats: true,
-                reload: true,
-                cost_report: true,
-                webhook_status: false
+                stats: false,
+                reload: false,
+                cost_report: false,
+                webhook_status: false,
+                playbooks: false,
+                profiles: false
             },
             0,
             0
         )
         .len(),
-        16
+        9
     );
     assert_eq!(
         build_meta_tools(
@@ -151,7 +164,9 @@ fn build_meta_tools_spans_the_documented_band() {
                 stats: true,
                 reload: true,
                 cost_report: true,
-                webhook_status: true
+                webhook_status: true,
+                playbooks: true,
+                profiles: true
             },
             0,
             0
@@ -239,6 +254,8 @@ fn all_gateway_meta_tools_have_complete_annotations_with_titles() {
             reload: true,
             cost_report: true,
             webhook_status: true,
+            playbooks: true,
+            profiles: true,
         },
         42,
         3,
@@ -495,6 +512,8 @@ fn empty_allow_list_exposes_the_whole_roster() {
             reload: true,
             cost_report: true,
             webhook_status: true,
+            playbooks: true,
+            profiles: true,
         },
         42,
         3,
@@ -505,6 +524,8 @@ fn empty_allow_list_exposes_the_whole_roster() {
             reload: true,
             cost_report: true,
             webhook_status: true,
+            playbooks: true,
+            profiles: true,
         },
         42,
         3,
@@ -530,6 +551,8 @@ fn allow_list_yields_only_the_named_tools() {
             reload: true,
             cost_report: true,
             webhook_status: true,
+            playbooks: true,
+            profiles: true,
         },
         42,
         3,
@@ -594,11 +617,13 @@ fn unfiltered_builder_is_unchanged_by_the_exposure_work() {
             reload: false,
             cost_report: false,
             webhook_status: false,
+            playbooks: false,
+            profiles: false,
         },
         42,
         3,
     );
-    assert_eq!(tools.len(), 13);
+    assert_eq!(tools.len(), 9);
 }
 
 /// 449.EXPOSE.7 — the config default exposes everything, so upgrading without
@@ -644,6 +669,8 @@ fn every_builder_contributes_to_the_governed_set() {
             reload: true,
             cost_report: true,
             webhook_status: true,
+            playbooks: true,
+            profiles: true,
         },
         0,
         0,

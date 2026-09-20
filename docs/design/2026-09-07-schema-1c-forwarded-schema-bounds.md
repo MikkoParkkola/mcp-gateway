@@ -112,7 +112,7 @@ composition bounds"* name (a) a numeric limit the 2026-11-25 revision states,
 
 - asked of: the release owner, as confirm-or-reject of reading (c);
 - answered by: the release team lead, ruling `R6`,
-  `docs/release/2026-09-08-team-lead-rulings.md:103`, 2026-09-08;
+  `docs/internal/release/2026-09-08-team-lead-rulings.md:103`, 2026-09-08;
 - the answer: **(c), and the meta-validity half is refused on purpose.** The
   row's value is the `$ref` bound, which the walk delivers. Meta-validity is a
   different property, and buying it means promoting `jsonschema` from

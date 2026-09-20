@@ -261,6 +261,11 @@ IMAGETOOLS_CREATE = re.compile(r"docker\s+buildx\s+imagetools\s+create(?![-\w])"
 # and by the one that protects the steps running it, so a step cannot be
 # protected under one spelling and unguarded under the other.
 GATE_SCRIPT = re.compile(r"(?:python3?|uv run)\s+scripts/release/")
+# The one step that starts a container. An interpreter in front of it runs the
+# same gate, so the spelling is not what is pinned -- the complete filename is,
+# ending at a shell argument boundary, or `smoke-image.sh.bak` (a different
+# script, or none) satisfies every assertion below.
+SMOKE_GATE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/smoke-image\.sh(?=\s|$)")
 # A step key that turns a failure into a log line, or a condition that is false
 # whatever the run: both leave every wiring assertion above satisfied.
 NEVER_RUNS = re.compile(r"^(?:- )?if:\s*['\"]?(?:\$\{\{\s*)?false(?:\s*\}\})?['\"]?$")
@@ -1281,23 +1286,136 @@ class WorkflowWiring(unittest.TestCase):
             "ci.yml: the major.minor tag is also used outside the stable guard",
         )
 
+    def test_both_publishers_start_the_image_before_they_hand_it_on(self):
+        # NFR.PKG.1: "the container image the release publishes starts, and
+        # serves an MCP request from outside the container". Every other image
+        # gate reads the image at rest -- trivy walks layers, cosign signs a
+        # digest, syft reads a filesystem -- and none of them start a
+        # container, which is how `:a2505be` shipped green while exiting 1 on
+        # startup. `scripts/ci/smoke-image.sh` is the only step that runs it,
+        # and nothing until now asserted that either publisher calls it: the
+        # gate could be dropped from a workflow and the whole suite stay green.
+        #
+        # Order is half the claim. A smoke step after the handoff still proves
+        # the image boots, but about bytes that are already reachable, which is
+        # a report, not a gate. Both publishers now push by digest under no
+        # name at all, so nothing is reachable when the build job ends; what
+        # makes a name resolve is the manifest job, whose only input is the
+        # uploaded digest -- so that upload is each job's point of no return.
+        for workflow, job, handoff, marker in (
+            (
+                "docker.yml",
+                "build",
+                "the digest upload the branch tags are built from",
+                re.compile(r"^\s*uses:\s*actions/upload-artifact@"),
+            ),
+            (
+                "ci.yml",
+                "docker-build",
+                "the digest upload the release tag is built from",
+                re.compile(r"^\s*uses:\s*actions/upload-artifact@"),
+            ),
+        ):
+            blocks = steps(workflow, job)
+            self.assertTrue(blocks, f"{workflow}: {job} has no steps to read")
+            # A command position, not a mention: a `paths:` filter naming the
+            # script, or an `echo` of the command, satisfies a text search of
+            # the file while starting nothing.
+            smoke = [
+                index
+                for index, block in enumerate(blocks)
+                if any(runs(command, SMOKE_GATE) for command in joined(block))
+            ]
+            # Asserted before it is indexed. An empty list here IS the
+            # regression this test is about, and an IndexError would report it
+            # as a crashed assertion rather than a failed one.
+            self.assertTrue(
+                smoke,
+                f"{workflow}: {job} never runs scripts/ci/smoke-image.sh, so "
+                "nothing starts the image it publishes",
+            )
+            handoffs = [
+                index
+                for index, block in enumerate(blocks)
+                if any(marker.match(line) for line in block)
+            ]
+            self.assertTrue(
+                handoffs, f"{workflow}: {job} no longer reaches {handoff}"
+            )
+            # Earliest against earliest. Against the last handoff, a smoke step
+            # wedged between two of them would pass while the first already
+            # went out unstarted; against the last smoke step, a second one
+            # added after the handoff would satisfy the check for the first.
+            self.assertLess(
+                min(smoke),
+                min(handoffs),
+                f"{workflow}: {job} reaches {handoff} before the image is ever "
+                f"started ({blocks[min(handoffs)][0].strip()})",
+            )
+            for index in smoke:
+                for command in joined(blocks[index]):
+                    if not runs(command, SMOKE_GATE):
+                        continue
+                    # The script takes the image to start as its one argument
+                    # and exits non-zero without it. Run bare it is a usage
+                    # error, which is a red step today -- but a `|| true` away
+                    # from a green one that started nothing.
+                    self.assertRegex(
+                        shell(command),
+                        r"smoke-image\.sh\s+\S",
+                        f"{workflow}: the smoke gate is handed no image: "
+                        f"{shell(command)}",
+                    )
+
     def test_the_branch_builder_still_refuses_to_push_on_a_tag(self):
         # A regression lock, green today: docker.yml handed :VERSION over, and
-        # its push condition is the only thing keeping the second publisher
-        # from coming back on the same name from the same commit.
-        pushes = [
-            line
-            for block in steps("docker.yml")
+        # this condition is the only thing keeping the second publisher from
+        # coming back on the same name from the same commit.
+        #
+        # It used to live on one step-level `push:`. It no longer can: the
+        # build job pushes by digest under no name and a `manifest` job creates
+        # the branch tags, so the condition sits on the publishing steps' `if:`
+        # and on that job's own `if:`. A job-level `if:` cannot read a step
+        # output or an env alias, so the sites carry the literal expression --
+        # and the lock is that they agree. One site left off skips a step the
+        # others still run: an ungated record step reads an empty digest on a
+        # pull request, and an ungated manifest job tags a tag build.
+        publishers = [
+            block
+            for block in steps("docker.yml", "build")
             for line in block
-            if re.match(r"^\s*push:", line.strip())
+            if re.search(r"\bpush\s*=\s*true\b", line)
+            or re.match(r"^\s*push:\s*\$\{\{", line)
+            or re.match(r"^\s*uses:\s*actions/upload-artifact@", line)
+            or re.search(r"\bdigests/", line)
         ]
-        self.assertTrue(pushes, "docker.yml: no build step declares push:")
-        for line in pushes:
-            self.assertRegex(
-                line,
-                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)",
-                f"docker.yml pushes on a tag again: {line.strip()}",
+        # Asserted before it is read. An empty list here IS the regression --
+        # a build job that publishes through some step this no longer finds.
+        self.assertTrue(
+            publishers, "docker.yml: build declares no publishing step"
+        )
+        conditions = []
+        for block in publishers:
+            guard = [line for line in block if re.match(r"^\s*if:", line)]
+            self.assertTrue(
+                guard,
+                "docker.yml: a publishing step carries no condition: "
+                f"{block[0].strip()}",
             )
+            conditions.extend(line.split(":", 1)[1].strip() for line in guard)
+        conditions.append(job_if("docker.yml", "manifest"))
+        for condition in conditions:
+            self.assertRegex(
+                condition,
+                r"!\s*startsWith\(\s*github\.ref\s*,\s*'refs/tags/v'\s*\)",
+                f"docker.yml pushes on a tag again: {condition}",
+            )
+        self.assertEqual(
+            len(set(conditions)),
+            1,
+            "docker.yml: the publish sites no longer agree, so one of them "
+            f"runs where the others skip: {sorted(set(conditions))}",
+        )
 
     def test_a_comment_is_stripped_and_a_quoted_hash_is_not(self):
         # Every assertion here reads uncommented text, so both directions are
@@ -1373,17 +1491,19 @@ class WorkflowWiring(unittest.TestCase):
 
     def test_no_signing_or_gate_step_is_allowed_to_fail(self):
         # `continue-on-error` keeps the job green when the step fails. On a
-        # step that signs, verifies, or runs the gate, that is the whole
-        # check turned into a log line: a mismatched manifest or a missing
-        # signature still publishes, and every assertion above still passes
-        # because the wiring is all still there. The key is rejected however
-        # it is valued — `false` today is `true` in one character.
+        # step that signs, verifies, starts the image, or runs the gate, that
+        # is the whole check turned into a log line: a mismatched manifest, a
+        # missing signature or an image that exits on startup still publishes,
+        # and every assertion above still passes because the wiring is all
+        # still there. The key is rejected however it is valued — `false`
+        # today is `true` in one character.
         guarded = 0
         for workflow in ("release.yml", "ci.yml", "docker.yml"):
             for block in steps(workflow):
                 commands_in = joined(block)
                 if not any(
-                    runs(c, COSIGN_ANY) or runs(c, GATE_SCRIPT) for c in commands_in
+                    runs(c, COSIGN_ANY) or runs(c, GATE_SCRIPT) or runs(c, SMOKE_GATE)
+                    for c in commands_in
                 ):
                     continue
                 guarded += 1

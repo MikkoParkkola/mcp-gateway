@@ -192,19 +192,32 @@ Public docs should explain install, operation, architecture, security, complianc
 
 Use ignored local paths for private strategy work: `docs/strategy/`, `docs/competitive/`, `docs/competitive-intelligence/`, or `docs/positioning/`. Before pushing, run `scripts/dev/check-public-repo-hygiene.sh`; CI runs the same check and fails if tracked public docs contain high-confidence internal strategy markers.
 
+## Commit Messages
+
+Every message in this repository is world-readable. Write each one as if a stranger were reading it, because one will.
+
+- Subject: `type(scope): summary` in the imperative, 72 characters or fewer, no trailing period.
+- Body: bullets only, one idea each, at most six. The message is an index of what changed.
+- State facts about the code. Evidence, measurements and reasoning belong in the pull request body, the issue, or a code comment.
+- No first person, no apology, no account of how the change was found, no naming the tool or model that wrote it. Attribution goes in a trailer.
+
+`scripts/dev/check-commit-message-hygiene.sh` enforces this over the commits your branch adds; the pre-push hook and CI both run it. Rewrite a flagged message with `git commit --amend` or `git rebase -i` rather than bypassing the hook.
+
 ## Good First Issues
 
 Look for [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/labels/good%20first%20issue) or [`help wanted`](https://github.com/MikkoParkkola/mcp-gateway/labels/help%20wanted). Good starters: adding a zero-config capability, improving error messages, adding edge-case tests, documentation.
 
-## Contributor License Agreement (required)
+## Contributor License Agreement
 
-Before your first contribution can be merged, you must agree to the
-**[Contributor License Agreement](CLA.md)**. It lets the maintainer offer
+Contributing to this repository is acceptance of the
+**[Contributor License Agreement](CLA.md)** — it binds on submission, so
+there is nothing to sign and nothing is requested before a merge. It lets the maintainer offer
 commercial licenses for the Noncommercial-licensed code (which a bare
 inbound=outbound or DCO cannot do): you keep your copyright, and you grant a
 broad, sublicensable, **relicensable** copyright and patent license, plus
-represent that you have the right to contribute the work. Signing is a one-line
-statement in your first PR — see `CLA.md` for the exact wording and how to sign.
+represent that you have the right to contribute the work. To record the
+acceptance explicitly, `CLA.md` gives a one-line statement you can add to your
+first PR; it is optional.
 
 ## License
 

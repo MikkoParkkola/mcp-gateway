@@ -28,7 +28,9 @@ fn with_agent_secret(spec: &str) -> Config {
         rs256_public_key: None,
         scopes: Vec::new(),
         issuer: None,
-        audience: None,
+        // Validation refuses an audience-less agent before it reaches the
+        // secret, so a secret-resolution fixture has to set one.
+        audience: Some("mcp-gateway-test".to_string()),
     }];
     c
 }

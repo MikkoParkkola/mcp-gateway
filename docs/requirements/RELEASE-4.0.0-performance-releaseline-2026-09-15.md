@@ -3,7 +3,7 @@
 
 # NFR.PERF.1 — release-line benchmark, 2026-09-15
 
-Archived so the figures quoted in `docs/release/v4.0.0-burndown-tracker.md` row
+Archived so the figures quoted in `docs/internal/release/v4.0.0-burndown-tracker.md` row
 `2026-09-15n` can be checked against their source rather than taken on trust.
 
 ## Method

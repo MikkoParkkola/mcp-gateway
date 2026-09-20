@@ -157,7 +157,7 @@ asked for; narrowing a criterion is not available on this release. It escalates 
 question, never as a request to drop it.
 
 **Ticket spelling stands as the repo spells it**: `MIK-7272` throughout the requirements and status
-documents, `MIK-7414` as the lane's tracker (`docs/release/v4.0.0-gap-closure-plan.md:51`). Nothing is
+documents, `MIK-7414` as the lane's tracker (`docs/internal/release/v4.0.0-gap-closure-plan.md:51`). Nothing is
 renamed to reconcile them.
 
 **Dual-vendor review of this note is deferred deliberately.** Its load-bearing section is the pair of

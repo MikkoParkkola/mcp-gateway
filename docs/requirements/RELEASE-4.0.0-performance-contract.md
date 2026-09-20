@@ -437,7 +437,7 @@ the run to fail was added — the only direction an amendment may move a gate in
 ## Amendment 4 — 2026-09-08, on release-owner rulings R18-R20
 
 Three rulings landed while the run was in flight (`21bf7566`,
-`docs/release/2026-09-08-team-lead-rulings.md`). Two of them change what this contract
+`docs/internal/release/2026-09-08-team-lead-rulings.md`). Two of them change what this contract
 measures and one changes what a result *means*. All three are recorded before any number
 exists, which is the only time a reclassification rule is worth anything.
 

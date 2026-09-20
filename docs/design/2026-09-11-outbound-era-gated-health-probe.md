@@ -5,7 +5,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Design — an era-gated backend health probe (MIK-7217.OUTBOUND.1, .2)
 
 Status: design, awaiting review. Governs cluster **L** of
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md`. Supersedes nothing.
+`docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md`. Supersedes nothing.
 Prior art it must not re-litigate: `docs/design/2026-08-31-discover-outbound-era-probe.md`,
 which wired the **start-path** era probe (DISCOVER.4/.5). This design is about the
 **recurring** health probe, a different call site with different constraints.
@@ -299,6 +299,20 @@ Opened while writing rows 16 and 16d and closed by two independent reviews, 2026
   silent false-healthy, and a peer that answers no liveness method has no liveness signal
   to preserve. Recorded rather than exempted, because exempting `-32601` on the legacy arm
   would re-open the wedged-backend hole the bound exists to close.
+
+  **Superseded 2026-09-18.** This residual was written as the intended
+  trade; measurement since has gone against it. Under a 60-second load test a conformant
+  ping-less backend shed traffic continuously - `tools/call` 48.7% against 100% on v3.5.x,
+  with zero HTTP errors and `initialize`/`tools/list` at 100% throughout (NFR.WORKLOAD.1,
+  `docs/release/nfr-workload-1-void-root-cause.md`). The restart does not clear the
+  condition, because the rebuilt process still does not implement `ping`, so the escalation
+  is neither loud-and-bounded nor recoverable: it is a permanent outage for a backend whose
+  traffic path works. `d11bf4a1` exempts `-32601` specifically on that basis and is on the
+  branch. Both gating verdicts are now in and both endorse it (kimi `SHIP-WITH-FIXES --
+  REVERSE`, grok `SHIP`), so the residual above no longer describes the shipped rule and
+  MIK-7217.OUTBOUND.2(d) has been amended to match. What still escalates is unchanged:
+  transport faults and timeouts restart immediately, and every unserved code other than
+  `-32601` still trips at the same bounded count.
 
 - *An intermediary can forge the middle row* - **closed in this design, not deferred.** A
   proxy or load balancer answering a non-2xx with its own JSON-RPC-shaped body would be

@@ -261,10 +261,15 @@ scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + rout
 # Linux bind mounts: prepare a dedicated owner-only copy for container UID 1001.
 install -m 600 gateway.yaml gateway.container.yaml
 sudo chown 1001:1001 gateway.container.yaml
-docker run --rm -p 39400:39400 \
+# The container must bind 0.0.0.0 to receive anything, and the config `init`
+# writes keeps /mcp public, so the gateway refuses that pairing unless the
+# allow-flag is set. The boundary is the publish: 127.0.0.1 only, so nothing
+# off this host reaches the port. Mirrors deploy/single-node/docker-compose.yaml.
+docker run --rm -p 127.0.0.1:39400:39400 \
+  -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -v "$PWD/gateway.container.yaml:/config.yaml:ro" \
   -v "$PWD/capabilities:/capabilities:ro" \
-  ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml
+  ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400
 scripts/dev/docker-smoke.sh  # repo checkout: container health + routed tool call
 
 # Native service templates

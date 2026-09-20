@@ -2,7 +2,7 @@
 
 Date: 2026-09-04
 Closes: code-scanning alerts #90, #91 (`rust/cleartext-transmission`, HIGH)
-Policy owner: `docs/requirements/RELEASE-4.0.0-readiness-board.md`, section
+Policy owner: `docs/internal/requirements/RELEASE-4.0.0-readiness-board.md`, section
 "The CodeQL `#90`/`#91` policy question — decided by the agent, under a stated assumption"
 
 ## Problem
@@ -311,7 +311,7 @@ normalisation covers them all.
 
 # Amendment — operator ruling R35 (2026-09-08)
 
-R35 (`docs/release/2026-09-08-team-lead-rulings.md`) rules on the same behaviour this
+R35 (`docs/internal/release/2026-09-08-team-lead-rulings.md`) rules on the same behaviour this
 document designed, and changes two things about it. Recorded here rather than in a new
 document because a second design for one mechanism is how two designs come to disagree.
 

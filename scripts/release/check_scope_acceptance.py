@@ -91,6 +91,33 @@ def manifest_version_errors(root):
     return version, []
 
 
+# Ordered delivery stages. A criterion advances left to right; only the last
+# one satisfies the tag gate. The intermediate stages exist so that a day of
+# real progress is visible in the tracker instead of reading as no movement.
+STAGES = ("ungraded", "graded", "built", "on-line", "proven", "met")
+BLOCKED_ON = ("none", "operator", "external")
+# Anything but "none" is someone else's turn. Deriving the held set keeps a
+# blocker category added later from validating but staying invisible.
+HELD_ON = tuple(value for value in BLOCKED_ON if value != "none")
+
+
+def stage_burnup(criteria):
+    """Render the per-stage counts in stage order, plus what is externally held."""
+    counts = {stage: 0 for stage in STAGES}
+    for row in criteria:
+        if isinstance(row, dict) and row.get("stage") in counts:
+            counts[row["stage"]] += 1
+    held = [
+        f"{row['id']} ({row['blocked_on']})"
+        for row in criteria
+        if isinstance(row, dict) and row.get("blocked_on") in HELD_ON
+    ]
+    line = f"{counts['met']}/{len(criteria)} met; " + " | ".join(
+        f"{stage} {counts[stage]}" for stage in STAGES
+    )
+    return line + (f"; held: {', '.join(held)}" if held else "; held: none")
+
+
 def evidence_errors(root, evidence, label, required):
     if not isinstance(evidence, list):
         return [f"{label}: evidence must be a list of repository file paths"]
@@ -101,7 +128,11 @@ def evidence_errors(root, evidence, label, required):
         if not isinstance(item, str) or not item.strip():
             errors.append(f"{label}: invalid evidence path")
             continue
-        path = pathlib.Path(item)
+        cite, span = split_citation(item)
+        if span is None and cite is None:
+            errors.append(f"{label}: evidence line citation must be numeric: {item}")
+            continue
+        path = pathlib.Path(cite)
         resolved = (root / path).resolve()
         if path.is_absolute() or not resolved.is_relative_to(root.resolve()):
             errors.append(
@@ -109,7 +140,40 @@ def evidence_errors(root, evidence, label, required):
             )
         elif not resolved.is_file():
             errors.append(f"{label}: evidence file does not exist: {item}")
+        elif span:
+            first, last = span
+            if first > last:
+                errors.append(f"{label}: evidence range runs backwards: {item}")
+                continue
+            lines = len(resolved.read_text(errors="replace").splitlines())
+            if last > lines:
+                errors.append(
+                    f"{label}: evidence cites line {last} of a"
+                    f" {lines}-line file: {item}"
+                )
     return errors
+
+
+def split_citation(item):
+    """Split "path:12" or "path:12-18" into the path and its line span.
+
+    A citation that names lines is checked against the file, so a stale line
+    number cannot keep passing as proof after the file it points into moves on.
+    Returns (None, None) when the suffix is present but not numeric.
+    """
+    head, sep, tail = item.rpartition(":")
+    if not sep or not tail:
+        return item, None
+    first, _, last = tail.partition("-")
+    if not first.isdigit() or (last and not last.isdigit()):
+        return (None, None) if head else (item, None)
+    return head, (int(first), int(last or first))
+
+
+DECISION_KEYS = frozenset({"id", "status", "selection", "evidence"})
+DECISION_NOTES = frozenset(
+    {"resolved", "authority", "rationale", "consequence", "not_evidence"}
+)
 
 
 def inspect_contract(root, document, data, baseline):
@@ -139,14 +203,23 @@ def inspect_contract(root, document, data, baseline):
     if not isinstance(criteria, list):
         errors.append("criteria must be a list")
         criteria = []
-    for row in criteria:
+    for position, row in enumerate(criteria, start=1):
         if not isinstance(row, dict) or set(row) != {
             "id",
             "status",
+            "stage",
+            "blocked_on",
             "evidence",
             "note",
         }:
-            errors.append("each criterion needs id, status, evidence and note")
+            # Name the offending row: the rest of its diagnostics are skipped, so
+            # without this the reader has to diff the whole ledger by hand.
+            named = isinstance(row, dict) and isinstance(row.get("id"), str)
+            label = row["id"] if named else f"criterion #{position}"
+            errors.append(
+                f"{label}: each criterion needs id, status, stage, blocked_on,"
+                " evidence and note"
+            )
             continue
         ident = row["id"]
         if not isinstance(ident, str):
@@ -157,6 +230,20 @@ def inspect_contract(root, document, data, baseline):
         seen.add(ident)
         if row["status"] not in ("pending", "met"):
             errors.append(f"{ident}: status must be pending or met")
+        if row["stage"] not in STAGES:
+            errors.append(f"{ident}: stage must be one of {', '.join(STAGES)}")
+        elif (row["stage"] == "met") != (row["status"] == "met"):
+            # Only the terminal stage may claim the tag-blocking status, so a row
+            # cannot advertise progress it has not finished or hide a finished one.
+            errors.append(f"{ident}: stage 'met' and status 'met' must agree")
+        if row["blocked_on"] not in BLOCKED_ON:
+            errors.append(
+                f"{ident}: blocked_on must be one of {', '.join(BLOCKED_ON)}"
+            )
+        elif row["blocked_on"] != "none" and row["stage"] == "met":
+            # Nothing is still held by someone once it is finished, and a row
+            # claiming both would keep a closed criterion on the held list.
+            errors.append(f"{ident}: a met criterion cannot still be blocked")
         if not isinstance(row["note"], str) or not row["note"].strip():
             errors.append(f"{ident}: a verdict needs a nonempty explanatory note")
         errors.extend(
@@ -175,15 +262,18 @@ def inspect_contract(root, document, data, baseline):
         errors.append("decisions must be a list")
         decisions = []
     for row in decisions:
-        if not isinstance(row, dict) or set(row) != {
-            "id",
-            "status",
-            "selection",
-            "evidence",
-        }:
+        if not isinstance(row, dict) or not DECISION_KEYS <= set(row):
             errors.append("each decision needs id, status, selection and evidence")
             continue
         ident = row["id"]
+        # A ruling carries why it was taken and who took it. The four keys above
+        # stay mandatory; the rest is a closed set so the row cannot become a
+        # dumping ground for prose the gate never reads.
+        for key in sorted(set(row) - DECISION_KEYS - DECISION_NOTES):
+            errors.append(f"{ident}: {key} is not a decision field")
+        for key in sorted(DECISION_NOTES & set(row)):
+            if not isinstance(row[key], str) or not row[key].strip():
+                errors.append(f"{ident}: {key} must carry text when present")
         if not isinstance(ident, str):
             errors.append("decision ID must be a string")
             continue
@@ -279,6 +369,7 @@ def main(argv=None):
         f"Scope contract consistent: {len(data['criteria'])} criteria; "
         f"{len(pending)} pending criteria/decisions; {len(blockers)} baseline blocking rows."
     )
+    print("Stage burnup: " + stage_burnup(data["criteria"]))
     if require_acceptance and (pending or blockers):
         print(
             "Release acceptance incomplete:\n  " + "\n  ".join(pending + blockers),

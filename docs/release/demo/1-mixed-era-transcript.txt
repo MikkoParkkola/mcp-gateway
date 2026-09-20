@@ -1,0 +1,100 @@
+== NFR.DEMO.1 scenario 1: mixed-era interaction ==
+gateway:        mcp-gateway 4.0.0
+modern peer:    protocolVersion 2026-07-28, server/discover names a modern revision
+legacy peer:    protocolVersion 2025-06-18, server/discover names none
+run dir:        $RUN_DIR/s1b
+gateway up (pid 45761, port 62648)
+
+-- the same call through both eras, from one client --
+modern_peer -> {
+  "content": [
+    {
+      "text": "modern_peer answered: mixed-era",
+      "type": "text"
+    }
+  ],
+  "trace_id": "gw-7f7f125b-d995-494b-a3d2-04fda8b5f3c8"
+}
+legacy_peer -> {
+  "content": [
+    {
+      "text": "legacy_peer answered: mixed-era",
+      "type": "text"
+    }
+  ],
+  "trace_id": "gw-d001c77a-736a-4231-b297-098f3b0b36c0"
+}
+[PASS] S1.MODERN_CALL_SUCCEEDS
+        expected: modern_peer answered: mixed-era present
+        actual:   modern_peer answered: mixed-era present
+[PASS] S1.LEGACY_CALL_SUCCEEDS
+        expected: legacy_peer answered: mixed-era present
+        actual:   legacy_peer answered: mixed-era present
+
+-- the gateway's own era fields, read through gateway_list_servers --
+{
+    "servers": [
+        {
+            "circuit_breaker": "closed",
+            "era": "modern",
+            "era_evidence": "discover_modern",
+            "era_probe_trigger": "start",
+            "era_probed_at": "2026-09-17T13:54:22Z",
+            "era_source": "probed",
+            "name": "modern_peer",
+            "running": true,
+            "status": "active",
+            "tools_count": 1,
+            "transport": "stdio"
+        },
+        {
+            "circuit_breaker": "closed",
+            "era": "legacy",
+            "era_evidence": "discover_not_modern",
+            "era_probe_trigger": "start",
+            "era_probed_at": "2026-09-17T13:54:22Z",
+            "era_source": "probed",
+            "name": "legacy_peer",
+            "running": true,
+            "status": "active",
+            "tools_count": 1,
+            "transport": "stdio"
+        },
+        {
+            "circuit_breaker": "closed",
+            "name": "gateway",
+            "running": true,
+            "status": "active",
+            "tools_count": 125,
+            "transport": "capability"
+        }
+    ]
+}
+
+[PASS] S1.MODERN_ERA
+        expected: modern
+        actual:   modern
+[PASS] S1.MODERN_ERA_SOURCE
+        expected: probed
+        actual:   probed
+[PASS] S1.MODERN_ERA_EVIDENCE
+        expected: discover_modern
+        actual:   discover_modern
+[PASS] S1.LEGACY_ERA
+        expected: legacy
+        actual:   legacy
+[PASS] S1.LEGACY_ERA_SOURCE
+        expected: probed
+        actual:   probed
+[PASS] S1.LEGACY_ERA_EVIDENCE
+        expected: discover_not_modern
+        actual:   discover_not_modern
+
+-- negotiation: the legacy client must not be answered in a modern revision --
+legacy client negotiated: 2025-06-18
+[PASS] S1.NEGOTIATED_VERSION_FOR_LEGACY_CLIENT
+        expected: 2025-06-18
+        actual:   2025-06-18
+
+results: $RUN_DIR/s1b/results.json
+transcript: $RUN_DIR/s1b/transcript.txt

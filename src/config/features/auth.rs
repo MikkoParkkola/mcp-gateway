@@ -199,6 +199,7 @@ impl ApiKeyConfig {
 ///     - client_id: "my-backend-agent"
 ///       name: "My Backend Agent"
 ///       hs256_secret: "env:AGENT_SECRET"
+///       audience: "mcp-gateway-prod"
 ///       scopes:
 ///         - "tools:surreal:*"
 ///         - "tools:brave:search:read"
@@ -232,7 +233,15 @@ pub struct AgentDefinitionConfig {
     /// Expected issuer (`iss` claim). Optional.
     #[serde(default)]
     pub issuer: Option<String>,
-    /// Expected audience (`aud` claim). Optional.
+    /// Expected audience (`aud` claim).
+    ///
+    /// Required whenever `agent_auth` is enabled: configuration validation
+    /// refuses an agent that sets none, because the signing key may be shared
+    /// with other relying parties and an unchecked `aud` would then accept
+    /// their tokens. An empty or whitespace-only value is refused on the same
+    /// grounds -- it names no relying party, so it cannot distinguish one.
+    /// `Option` only so an absent field yields a named error rather than a
+    /// serde failure.
     #[serde(default)]
     pub audience: Option<String>,
 }

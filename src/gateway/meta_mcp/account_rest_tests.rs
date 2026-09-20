@@ -31,6 +31,7 @@ use crate::personal_accounts::AccountCustody;
 use super::account_resolver_fixture::{
     ALICE_PERSONAL_TOKEN, ALICE_WORK_TOKEN, BOB_WORK_TOKEN, PERSONAL, ROTATED_TOKEN,
     STATIC_FALLBACK, WORK, account_key, custody_with, grant, identity, reconnect_from,
+    revoke_and_reconnect,
 };
 use super::account_rest_fixture::{
     Captured, EXPIRED_EXTERNAL_TOKEN, TOOL, backend_with, cacheable_base_url, cacheable_capability,
@@ -1342,5 +1343,70 @@ async fn a_reconnected_grant_refuses_the_credential_prepared_under_the_old_one()
         1,
         "the refusal must reach neither the cache nor the wire: no new request, and an error \
          instead of the stored body"
+    );
+}
+
+/// STORE.2 C5 (#556): AFTER A REAL REVOKE, THE FIRST CALL SERVES THE
+/// SUCCESSOR'S CREDENTIAL UNDER A NEW GENERATION — NOT THE REVOKED ONE.
+///
+/// The sibling above proves a credential prepared under the OLD grant is
+/// refused; it never proves a grant is actually SERVED after re-consent, and
+/// its successor only bumps the token revision, never the generation. A
+/// binding keyed on revision alone cannot tell "same consent, rotated token"
+/// apart from "different consent entirely" — this is the axis #556 names as
+/// untested. `revoke_and_reconnect` durably revokes the seeded grant through
+/// real custody and commits a successor under `RECONNECT_GENERATION`'s
+/// value, then a FRESH resolve (exactly what the next inbound request would
+/// do) must dispatch the successor's token, reaching the real wire rather
+/// than a cached reply, and the revoked token must never resurface.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revoked_grant_is_replaced_by_its_successor_under_a_new_generation() {
+    let (port, captured) = capture_endpoint().await;
+    let alice = account_key("alice", WORK);
+    let seeded = grant(ALICE_WORK_TOKEN, FRESH);
+    let custody = custody_with(&[(alice.clone(), seeded.clone())]);
+    let installed: Arc<dyn AccountCustody> = custody.installed();
+    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let executor = caching_executor(&registry, Some((LEGACY_TRAP_TOKEN, &dir)));
+    let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));
+
+    let warm = prepared_caching_context(&registry, "alice", WORK, "oauth:google").await;
+    executor
+        .execute_with_context(&capability, json!({}), warm)
+        .await
+        .expect("the seeded grant must dispatch while it is current");
+    assert_eq!(captured.count(), 1, "the first call must reach the wire");
+
+    let successor = revoke_and_reconnect(&custody, &alice, &seeded, ROTATED_TOKEN).await;
+    assert_ne!(
+        successor.generation, seeded.generation,
+        "the fixture must model a re-consent boundary, not a same-generation bump"
+    );
+
+    let fresh = prepared_caching_context(&registry, "alice", WORK, "oauth:google").await;
+    let served = executor
+        .execute_with_context(&capability, json!({}), fresh)
+        .await
+        .expect("the successor's grant must dispatch on the first call after re-consent");
+
+    assert_eq!(
+        served["authorization"],
+        json!(format!("Bearer {ROTATED_TOKEN}")),
+        "the first call after re-consent must carry the successor's token"
+    );
+    assert_eq!(
+        captured.count(),
+        2,
+        "the successor's request must reach the real wire, not a cached reply"
+    );
+    let authorizations = captured.authorizations();
+    assert!(
+        authorizations
+            .iter()
+            .skip(1) // call 0 is the legitimate pre-revoke dispatch; only post-revoke calls matter here
+            .flatten()
+            .all(|value| !value.contains(ALICE_WORK_TOKEN)),
+        "the revoked token must never reach the wire again after re-consent: {authorizations:?}"
     );
 }

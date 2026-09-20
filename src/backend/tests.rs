@@ -614,12 +614,14 @@ fn normalize_tool_annotations_preserves_downstream_annotation_title_and_hints() 
     assert_eq!(annotations.open_world_hint, Some(false));
 }
 
-#[test]
-fn cached_metadata_tracks_freshness() {
+#[tokio::test]
+async fn cached_metadata_tracks_freshness() {
     let cache = CachedMetadata::new();
     assert!(!cache.is_fresh(Duration::from_secs(60)));
 
-    cache.store_shared(Arc::new(vec![1, 2, 3]));
+    let _ = cache
+        .get_or_fetch_shared(Duration::from_secs(60), || async { Ok(vec![1, 2, 3]) })
+        .await;
 
     assert!(cache.is_fresh(Duration::from_secs(60)));
     let snapshot = cache.snapshot_shared().unwrap();
@@ -742,46 +744,6 @@ async fn get_tools_does_not_cache_json_rpc_error_response() {
     assert!(result.is_err());
     assert!(!backend.has_cached_tools());
     assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
-}
-
-// MIK-7334.CATALOGUE.1 — a `session_mode = per_user` backend has no
-// per-identity catalogue fetch anywhere in this codebase yet, so the shared
-// `PoolKey::Shared` metadata cache (one connection, shared by every caller)
-// must be withheld rather than served under a caller's own identity. No
-// transport is configured: if the guard did not short-circuit, this test
-// would fail with a transport error instead of an empty, uncached result.
-#[tokio::test]
-async fn per_user_backend_withholds_shared_tool_cache() {
-    use crate::identity_propagation::{
-        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
-    };
-
-    let backend = Backend::new(
-        "test",
-        BackendConfig {
-            identity_propagation: Some(IdentityPropagationConfig {
-                strategy: PropagationStrategyKind::SignedAssertion,
-                audience: "aud".to_string(),
-                required: false,
-                session_mode: SessionMode::PerUser,
-                token_exchange_endpoint: None,
-                token_exchange_scope: None,
-            }),
-            ..Default::default()
-        },
-        &crate::config::FailsafeConfig::default(),
-        Duration::from_secs(60),
-    );
-
-    let tools = backend.get_tools().await.expect("withheld, not errored");
-
-    assert!(
-        tools.is_empty(),
-        "per_user backend must not serve the shared cache"
-    );
-    assert!(!backend.has_cached_tools());
-    assert_eq!(backend.cached_tools_count(), 0);
-    assert!(backend.get_cached_tool("anything").is_none());
 }
 
 // --- MIK-7214.HEADER.8 — tools violating an `x-mcp-header` constraint are
@@ -1838,12 +1800,24 @@ fn per_user_backend(cache_ttl: Duration) -> Backend {
     )
 }
 
-/// GIVEN a per-identity backend that advertises `alpha_tool` to the first
-/// identity and `beta_tool` to the second
-/// WHEN the first identity's read fills the cache and the second identity reads
-/// THEN the second identity must not be served the first identity's catalogue.
+/// GIVEN a `per_user` backend whose upstream would answer `tools/list`
+/// differently per identity
+/// WHEN two callers read its catalogue
+/// THEN both are served the SAME single answer, because the metadata fetch
+/// carries no identity at all.
+///
+/// This is the isolation argument, stated as the code actually holds it:
+/// `request_internal` reaches for `shared_transport()` (`PoolKey::Shared`) and
+/// passes no identity, so the cached catalogue is the gateway's own
+/// static-credential answer, not any caller's. One upstream fetch serving both
+/// callers is the proof — `PerIdentityTools` errors on a second fetch, so a
+/// second answer could not be served even if one were asked for.
+///
+/// What this does NOT establish: that a per-identity catalogue is isolated.
+/// None is fetched anywhere in this codebase; delivering that mode is
+/// MIK-7334's remaining work, not a property of this cache.
 #[tokio::test]
-async fn differing_per_identity_schemas_do_not_cross_callers() {
+async fn per_user_metadata_fetch_is_identity_free_and_shared() {
     let backend = Arc::new(per_user_backend(Duration::from_secs(60)));
     let transport = Arc::new(PerIdentityTools::new(
         &["alpha_tool", "beta_tool"],
@@ -1852,24 +1826,28 @@ async fn differing_per_identity_schemas_do_not_cross_callers() {
     let transport_dyn: Arc<dyn Transport> = transport.clone();
     backend.set_transport_for_test(transport_dyn);
 
-    // Identity A: cold read.
     let seen_by_a = backend.get_tools().await.expect("identity A read");
-    // Identity B: hot read against the same un-keyed cache.
     let seen_by_b = backend.get_tools().await.expect("identity B read");
 
-    let names_b: Vec<&str> = seen_by_b.iter().map(|t| t.name.as_str()).collect();
-    assert!(
-        !names_b.contains(&"alpha_tool"),
-        "identity B was served identity A's catalogue: {names_b:?} \
-         (A saw {:?}, upstream fetches: {})",
-        seen_by_a.iter().map(|t| &t.name).collect::<Vec<_>>(),
-        transport.requests.load(Ordering::SeqCst)
+    let names = |tools: &[Tool]| -> Vec<String> { tools.iter().map(|t| t.name.clone()).collect() };
+    assert_eq!(
+        names(&seen_by_a),
+        vec!["alpha_tool".to_string()],
+        "the first read must be served the static-credential catalogue"
+    );
+    assert_eq!(
+        names(&seen_by_b),
+        names(&seen_by_a),
+        "the catalogue is not identity-dependent, so every caller gets the same one"
+    );
+    assert_eq!(
+        transport.requests.load(Ordering::SeqCst),
+        1,
+        "one identity-free upstream fetch backs every caller"
     );
     assert!(
-        !backend
-            .get_cached_tool_names()
-            .contains(&"alpha_tool".to_string()),
-        "one identity's catalogue is readable from the shared cache by every caller"
+        backend.has_cached_tools(),
+        "a per_user backend's catalogue must be cached and discoverable, not blanked"
     );
 }
 

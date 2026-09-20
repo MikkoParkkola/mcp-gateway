@@ -475,7 +475,7 @@ there is no session header there to shape.
 
 The question this design was expected to defer — emit or omit the protocol version — turned
 out checkable, is recorded above, and was confirmed by the team lead on 2026-09-03. Recorded
-in checkable form in `docs/requirements/RELEASE-4.0.0-residue-triage.md`, which no longer
+in checkable form in `docs/internal/requirements/RELEASE-4.0.0-residue-triage.md`, which no longer
 carries it as a deferral.
 
 ## Next step
@@ -538,7 +538,7 @@ cited by full path, per §P4.
 | D15 clean | the residue-triage deferral this design closed is removed there, not left contradicting |
 | D24 enforcement | N/A — a design document has nothing to enforce; the rules it decides are enforced by the test plan's cases, which is the next increment |
 
-**§P4a documentation delta.** `docs/requirements/RELEASE-4.0.0-residue-triage.md` carried the
+**§P4a documentation delta.** `docs/internal/requirements/RELEASE-4.0.0-residue-triage.md` carried the
 protocol-version question as an open deferral with a leading option; this design settled it,
 so that entry is updated in the same change. No other document is made untrue: the requirement
 text is unchanged, and the readiness board's row for HEADER.9 already points here.

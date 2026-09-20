@@ -859,10 +859,11 @@ async fn mik_7332_discovery_1_admin_axis_disclosure_versus_invocation() {
 }
 
 /// Acceptance clause B (configured/unconfigured features). `gateway_get_stats`
-/// is gated at disclosure by `MetaToolGates.stats` (`mod.rs:1410`) and at
-/// invocation by the same `Option` (`invoke.rs:3206`). This asserts both ends
-/// move together: unconfigured contributes nothing to the served list and
-/// refuses, configured appears and runs.
+/// is gated at disclosure by `meta_mcp.expose_stats_tool` and at invocation by
+/// the collector `Option` (`invoke.rs:3206`). "Unconfigured" is a deployment
+/// that set neither, "configured" one that set both. This asserts both ends
+/// move together for that operator: unconfigured contributes nothing to the
+/// served list and refuses, configured appears and runs.
 #[tokio::test]
 async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable() {
     let exposure = ["gateway_get_stats".to_string()];
@@ -902,7 +903,8 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
         None,
         Duration::from_secs(60),
     )
-    .with_exposed_meta_tools(&exposure);
+    .with_exposed_meta_tools(&exposure)
+    .with_expose_stats_tool(true);
     let listed = listed_names(&configured.handle_tools_list_for_session(
         RequestId::Number(3),
         None,

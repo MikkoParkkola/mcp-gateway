@@ -564,23 +564,44 @@ pub(crate) fn build_cost_report_tool() -> Tool {
 
 /// Which conditionally-served meta-tools a caller wants.
 ///
-/// Four independent booleans in a parameter list are silently transposable --
+/// Six independent booleans in a parameter list are silently transposable --
 /// nothing at a call site says which position is which, and the positions are
 /// not interchangeable. Named fields make each gate something the caller
 /// states rather than something a reader counts.
+///
+/// Deliberately has **no `Default`**. Both `governed_meta_tool_names` and
+/// `DESTRUCTIVE_META_TOOLS` set every flag by hand, and a derived default
+/// would let a seventh field be answered with `..Default::default()`: that
+/// compiles, and it silently drops the tools the new field governs out of the
+/// operator allow-list's governed set and out of the destructive-confirmation
+/// set at once, because `is_exposed` admits anything ungoverned. Without the
+/// derive that shortcut is a build failure.
 #[allow(clippy::struct_excessive_bools)]
 // Independent gates; each is read from a
 // different source and none constrains another, so an enum would only rename them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MetaToolGates {
-    /// `gateway_stats`, served when a stats collector is attached.
+    /// `gateway_get_stats`, served on the `meta_mcp.expose_stats_tool` opt-in.
+    ///
+    /// Not "a collector is attached": `serve` always attaches one, so that
+    /// source was never a gate. `/metrics` covers an HTTP operator, and a
+    /// stdio client that wants the handler calls it by name.
     pub(crate) stats: bool,
     /// `gateway_reload_config`, served when a reload context exists.
     pub(crate) reload: bool,
-    /// `gateway_cost_report`, hardcoded true on the served path.
+    /// `gateway_cost_report`, served when a cost registry is attached, which
+    /// follows `cost_governance.enabled`. Hiding a tool where it cannot answer
+    /// is the rule `webhook_status` already follows.
     pub(crate) cost_report: bool,
     /// `gateway_webhook_status`, served where a webhook registry is attached.
     pub(crate) webhook_status: bool,
+    /// `gateway_run_playbook`, served when the playbook engine is non-empty.
+    pub(crate) playbooks: bool,
+    /// `gateway_set_profile`, `gateway_get_profile` and `gateway_list_profiles`,
+    /// served when at least one routing profile is configured. With none, `get`
+    /// returns an allow-all fallback for every name, so the three tools
+    /// describe and switch between profiles that do not exist.
+    pub(crate) profiles: bool,
 }
 
 /// Construct the full meta-tool list, optionally including stats, cost reporting, and reload.
@@ -597,10 +618,13 @@ pub(crate) struct MetaToolGates {
 /// config flag would advertise a tool that cannot answer on the commonest local
 /// transport; enumerating on attachment cannot.
 ///
-/// This is why `NFR.PERF.4` bands the surface at 14-17 rather than 14-16: the
-/// webhook feature defaults to enabled, so an HTTP deployment reaching 17 is
-/// the shipped default, not an exotic combination. See
-/// `docs/design/2026-09-08-perf4-webhook-status-restoration.md`.
+/// This is why `NFR.PERF.4` bands the surface at 9-17 rather than 9-16: the
+/// webhook feature defaults to enabled, so an HTTP deployment serving the
+/// diagnostic is the shipped default, not an exotic combination. See
+/// `docs/design/2026-09-08-perf4-webhook-status-restoration.md`. Nine is every
+/// gate off; the band is quantified over gate configuration at the admin
+/// ceiling, never over caller standing
+/// (`docs/design/2026-09-16-meta-tool-surface-compaction.md` §7).
 pub(crate) fn build_meta_tools(
     gates: MetaToolGates,
     tool_count: usize,
@@ -613,13 +637,21 @@ pub(crate) fn build_meta_tools(
     if gates.cost_report {
         tools.push(build_cost_report_tool());
     }
-    tools.push(build_playbook_tool());
+    if gates.playbooks {
+        tools.push(build_playbook_tool());
+    }
     tools.push(build_kill_server_tool());
     tools.push(build_revive_server_tool());
-    tools.push(build_set_profile_tool());
-    tools.push(build_get_profile_tool());
+    if gates.profiles {
+        tools.push(build_set_profile_tool());
+        tools.push(build_get_profile_tool());
+    }
     tools.push(build_list_disabled_capabilities_tool());
-    tools.push(build_list_profiles_tool());
+    // Third profile tool, in two blocks rather than one: `tools/list` order is
+    // pinned by fixtures, and grouping the three would move an ungated tool.
+    if gates.profiles {
+        tools.push(build_list_profiles_tool());
+    }
     tools.push(build_set_state_tool());
     if gates.reload {
         tools.push(build_reload_config_tool());
@@ -820,6 +852,8 @@ fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
                 reload: true,
                 cost_report: true,
                 webhook_status: true,
+                playbooks: true,
+                profiles: true,
             },
             0,
             0,

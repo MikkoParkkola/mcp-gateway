@@ -118,6 +118,15 @@ impl ExtensionSet {
         self.supported.contains(&extension)
     }
 
+    /// The extensions in this set.
+    ///
+    /// Yields [`Extension`], never the peer's own identifier strings: an
+    /// unknown identifier was already dropped on the way in, and re-admitting
+    /// one here would undo that.
+    pub fn iter(&self) -> impl Iterator<Item = Extension> + '_ {
+        self.supported.iter().copied()
+    }
+
     /// Whether it contains nothing.
     #[must_use]
     pub fn is_empty(&self) -> bool {

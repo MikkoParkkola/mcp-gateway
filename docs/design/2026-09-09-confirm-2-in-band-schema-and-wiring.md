@@ -192,7 +192,7 @@ than a refusal, W1 needs a version byte instead of a field.
 
 **Q4 — does an in-band answer count as a human confirmation? (ASKABLE — RESOLVED 2026-09-09.)**
 
-> `Q4 — does an in-band answer count as a human confirmation? — asked of the operator, twice — answered by the standing ruling at `docs/requirements/RELEASE-4.0.0-blocking-rollup.md`, § *Standing ruling — narrowing a criterion is not available on this release*, which names `MIK-7246.CONFIRM.2` — the fork resolves to **build the mechanism**, and `CONFIRM.2` stays open until it is built, then closes.` The ruling states that a question put to the operator and unanswered is answered by it rather than by a third attempt, so this is not re-asked. The table below is kept as the record of what was asked and what each branch would have cost; its "what would resolve it" row is now history, not a pending action.
+> `Q4 — does an in-band answer count as a human confirmation? — asked of the operator, twice — answered by the standing ruling at `docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md`, § *Standing ruling — narrowing a criterion is not available on this release*, which names `MIK-7246.CONFIRM.2` — the fork resolves to **build the mechanism**, and `CONFIRM.2` stays open until it is built, then closes.` The ruling states that a question put to the operator and unanswered is answered by it rather than by a third attempt, so this is not re-asked. The table below is kept as the record of what was asked and what each branch would have cost; its "what would resolve it" row is now history, not a pending action.
 
 This is the question the code cannot answer and it decides whether CONFIRM.2 can close on this
 path at all. On the legacy path the elicitation reaches a *client*, which shows a person a prompt.
@@ -208,7 +208,7 @@ RFC 8628 routes the decision to a second device rather than refusing — and sto
 | owner | the operator — this is what confirmation *means* for 4.0.0, not a repo fact |
 | what would resolve it | a ruling: (a) an in-band answer from the authenticated admin principal is confirmation, and CONFIRM.2 closes on this path; or (b) confirmation requires evidence a human saw the prompt, in which case Option I delivers spec conformance but **not** the criterion, and that gap is reported rather than papered over |
 | when | **before the emit side is wired.** Answer (b) does not change the schema above, but it changes what the row may claim, and a criterion closed under the wrong reading is worse than one left open |
-| what if it resolves badly | under (b), the in-band path ships as protocol conformance with the criterion still open, carried to the operator with this measurement attached. Narrowing the criterion and deferring the row are both withheld from the slice owner by the standing ruling (`docs/requirements/RELEASE-4.0.0-blocking-rollup.md:18-47`) |
+| what if it resolves badly | under (b), the in-band path ships as protocol conformance with the criterion still open, carried to the operator with this measurement attached. Narrowing the criterion and deferring the row are both withheld from the slice owner by the standing ruling (`docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md:18-47`) |
 
 The two open items inherited from the 2026-09-06 design — whether a shipping client declares
 `elicitation` and actually retries, and what a confirmation or refusal must persist — are carried
@@ -271,7 +271,7 @@ K4 re-verified while checking: `InputRequired.requests` and `.request_state` are
 **Correction, 2026-09-09.** An earlier revision of this paragraph called Q4 open and concluded that
 `CONFIRM.2` stays open regardless of what this slice builds. Both halves are wrong, and the answer was
 already in this repo when they were written: the standing ruling at
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md:57` names `MIK-7246.CONFIRM.2` explicitly, settles
+`docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md:57` names `MIK-7246.CONFIRM.2` explicitly, settles
 the build-or-rewrite fork toward **build the mechanism**, and states that a question put to the operator
 twice and unanswered is answered by the ruling rather than by a third attempt. The "stays open regardless"
 reading only holds if narrowing were available, and it is not. `CONFIRM.2` stays open until the mechanism

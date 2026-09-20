@@ -15,10 +15,21 @@ cleanup() {
   if [[ -n "$container" ]]; then
     docker logs "$container" >"$log_dir/redis.log" 2>&1 || true
     docker stop --time 3 "$container" >"$log_dir/redis-stop.log" 2>&1 || rc=1
-    if docker inspect "$container" >/dev/null 2>&1; then
-      echo 'Owned Redis container was not removed.' >&2
-      rc=1
-    else
+    # `docker run --rm` removes the container in the daemon's reaper, not in
+    # `docker stop`, which returns as soon as the process is down. A single
+    # `docker inspect` here therefore races the removal and fails a journey that
+    # passed. Wait for the removal the fixture actually promises, and only call
+    # it a leak once the container is still there after the deadline.
+    removal_deadline=$((SECONDS + 30))
+    while docker inspect "$container" >/dev/null 2>&1; do
+      if ((SECONDS >= removal_deadline)); then
+        echo 'Owned Redis container was not removed.' >&2
+        rc=1
+        break
+      fi
+      sleep 0.2
+    done
+    if ! docker inspect "$container" >/dev/null 2>&1; then
       echo 'owned Redis removed' >"$log_dir/redis-cleanup.log"
     fi
   fi

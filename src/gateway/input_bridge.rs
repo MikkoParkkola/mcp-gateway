@@ -208,7 +208,33 @@ pub enum BridgeError {
     RequestBudgetExhausted,
     /// The aggregate wall-clock budget for the call ran out.
     Deadline,
-    /// A bridged retry round did not reach the backend, or the backend failed.
+    /// A bridged retry round was refused before anything was dispatched.
+    ///
+    /// Kept apart from [`BridgeError::BackendFailed`] because the two settle
+    /// differently: nothing ran, so the round carries no side effect to
+    /// protect and the caller may retry once the refusal lifts.
+    NotAdmitted {
+        /// Why the round was refused, as reported by the invoker.
+        message: String,
+    },
+    /// The round's client-visible batch was refused by policy before it was sent.
+    ///
+    /// Carries no message on purpose: the caller restores it to
+    /// [`crate::Error::ResponseFirewallRefused`], whose typed arm builds the
+    /// delivery-refusal projection. Flattening a policy refusal into a generic
+    /// bridge failure loses that projection and reports it as an ordinary
+    /// client-attributable error instead.
+    ChallengeRefused {
+        /// Whether any round of this call already reached the backend.
+        ///
+        /// A refusal on round one ends a call that never dispatched, so its
+        /// idempotency key releases. From round two on the backend has already
+        /// run the tool at least once, and releasing the key would readmit a
+        /// retry of a side effect that may have taken effect (ADR-012
+        /// consequence 1), so the key settles instead.
+        dispatched: bool,
+    },
+    /// A bridged retry round reached the backend and did not come back.
     ///
     /// Carries the reason as text rather than the error itself: this type is
     /// `Clone + PartialEq` so tests can assert on it, and `crate::Error` is
@@ -363,6 +389,27 @@ pub trait BackendInvoker: Send + Sync {
     async fn invoke(&self, retry_params: Value) -> Result<Value, BridgeError>;
 }
 
+/// The policy end: admit one round's client-visible batch, or refuse it.
+///
+/// A seam rather than a direct firewall call because the bridge is the protocol
+/// layer and owns no policy. It is consulted inside the round loop, before
+/// every `ask`: rounds 2..N carry prompts built from a backend result this
+/// bridge has not yet seen, so a gate placed before [`InputBridge::run`] would
+/// inspect the first round and admit every later one unread.
+pub trait ChallengeGate: Send + Sync {
+    /// Admit this batch, or refuse the exchange.
+    fn admit(&self, challenge: &Value) -> Result<(), BridgeError>;
+}
+
+/// Admits every batch: the bridge's behaviour when no policy is configured.
+pub struct OpenChallengeGate;
+
+impl ChallengeGate for OpenChallengeGate {
+    fn admit(&self, _challenge: &Value) -> Result<(), BridgeError> {
+        Ok(())
+    }
+}
+
 /// Where the bridge's counters go.
 ///
 /// A seam rather than a metrics call because the requirement is about what the
@@ -377,6 +424,8 @@ pub trait BridgeObserver: Send + Sync {
 pub struct InputBridge<'a> {
     /// The client to ask.
     pub channel: &'a dyn ClientChannel,
+    /// The policy consulted before each round's batch is sent.
+    pub gate: &'a dyn ChallengeGate,
     /// The backend to retry.
     pub backend: &'a dyn BackendInvoker,
     /// Where the counters go.
@@ -413,6 +462,7 @@ impl InputBridge<'_> {
         let started = std::time::Instant::now();
         let mut interim = first.clone();
         let mut spent = 0_u32;
+        let mut dispatched = false;
         for _ in 0..self.bounds.rounds {
             if started.elapsed() >= self.bounds.aggregate {
                 return Err(BridgeError::Deadline);
@@ -423,9 +473,21 @@ impl InputBridge<'_> {
                 return Err(BridgeError::RequestBudgetExhausted);
             }
             self.observe(&interim);
+            // A gate sees one round's batch and cannot know whether an earlier
+            // round reached the backend, so the refusal it raises is rebuilt
+            // here with the only fact that decides the key's fate.
+            self.gate
+                .admit(&Self::challenge(&prompts))
+                .map_err(|error| match error {
+                    BridgeError::ChallengeRefused { .. } => {
+                        BridgeError::ChallengeRefused { dispatched }
+                    }
+                    other => other,
+                })?;
             let answers = self.ask(session_id, prompts, started).await?;
             let retry = crate::protocol::mrtr::Bridge::retry_params(&interim, answers);
             let result = self.backend.invoke(retry).await?;
+            dispatched = true;
             match crate::protocol::mrtr::InputRequired::from_result(&result) {
                 Some(next) => interim = next,
                 None => return Ok(result),
@@ -488,6 +550,31 @@ impl InputBridge<'_> {
             kind,
             params: request.get("params").cloned(),
         })
+    }
+
+    /// The round's batch as the client will see it, and nothing else.
+    ///
+    /// Built from the planned prompts rather than from the interim result so
+    /// the artifact the gate inspects is the artifact that goes on the wire.
+    /// The backend's opaque `requestState` never reaches a prompt — `prompt`
+    /// copies the `params` member alone — so it is neither scanned nor
+    /// delivered, and a canary carried only there stays invisible to both.
+    /// `Prompt::key` is held back for the same reason: `ask` mints its own wire
+    /// id per frame and files the answer under the key afterwards, so the key
+    /// is backend-facing bookkeeping the client never sees. Scanning it would
+    /// refuse exchanges over content no client could read.
+    fn challenge(prompts: &[Prompt]) -> Value {
+        Value::Array(
+            prompts
+                .iter()
+                .map(|prompt| {
+                    serde_json::json!({
+                        "method": prompt.kind.method(),
+                        "params": prompt.params,
+                    })
+                })
+                .collect(),
+        )
     }
 
     /// Put one round's prompts to the client and collect what came back.

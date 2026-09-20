@@ -123,6 +123,7 @@ impl ConfirmationPolicy {
 /// every transport passes, instead of on one transport's edge. A transport
 /// that has no way to reach an operator says so here; it does not get to skip
 /// the gate by not running the code that holds it.
+#[derive(Clone)]
 pub enum ConfirmationChannel<'a> {
     /// An asker may exist. `proxy` reaches it; `policy` says what to do when
     /// the ask fails. Constructed even when no session is present: "found no
@@ -233,6 +234,8 @@ static DESTRUCTIVE_META_TOOLS: LazyLock<HashSet<String>> = LazyLock::new(|| {
             reload: true,
             cost_report: true,
             webhook_status: true,
+            playbooks: true,
+            profiles: true,
         },
         0,
         0,
@@ -427,6 +430,8 @@ mod tests {
                 reload: true,
                 cost_report: true,
                 webhook_status: true,
+                playbooks: true,
+                profiles: true,
             },
             0,
             0,
@@ -479,6 +484,8 @@ mod tests {
                 reload: true,
                 cost_report: true,
                 webhook_status: true,
+                playbooks: true,
+                profiles: true,
             },
             0,
             0,

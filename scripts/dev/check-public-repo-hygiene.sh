@@ -64,6 +64,60 @@ blocked_reasons=(
   "protected auth material"
 )
 
+# A working document narrates how the work was conducted: per-ticket status
+# and burndown counts, remaining-plan bookkeeping, review transcripts and
+# verdicts, rulings, audits of our own output. It is kept, because the history
+# is worth having, but it lives under docs/internal/ and not beside the install
+# and architecture pages a reader came for. The markers are matched against the
+# headings in the first fifteen lines -- where a working document announces
+# itself -- so a design page that merely cites a ruling is not a hit.
+internal_heading_markers=(
+  "burn-?down"
+  "remaining plan|what is left|what (actually )?blocks|close-?out plan|gap[ -](closure|plan|assessment)"
+  "next steps"
+  "(review|verification) (findings|log|notes)|review (transcript|brief)|(design|test|adversarial|second-leg) review|unreviewed[ -]slice"
+  "combined verdict|acceptance-criterion verdicts|reviewer verdict|ac verdicts"
+  "adjudicat"
+  "team-lead ruling"
+  "readiness (board|plan|gaps)|release readiness|what is actually missing"
+  "merge queue"
+  "resume point"
+  "(worktree|branch) (audit|maintenance|survey|criteria)"
+  "dod (check|evidence)"
+  "triage"
+  "shard [0-9]+|shard review|shard:"
+  "process compliance"
+  "green progress|progress tracker"
+  "rederivation"
+  "(scope|criteria|ac) (grading|re-?grade|verification)|scope contract"
+  "sub-?agent|agent session"
+  "done log"
+  "work plan|implementation plan|delivery plan|implementation brief|execution plan to"
+  "(coverage|partial requirements|upgrade notice) audit|audit notes"
+  "pr #?[0-9]+"
+  "blocker|blocked:|fix log|drift probe"
+  "expected-?red|the residue|mutants"
+  "functional pass"
+  "census"
+)
+
+# The same class of document often announces itself in its name alone, with a
+# heading that reads like prose.
+internal_path_markers=(
+  "(^|/)pr-?[0-9]{3}"
+  "(^|/)shard-[0-9]"
+  "-triage|-burndown|rederivation|scope-grading|audit-notes/|-blocker|codeql-"
+  "resume-|close-plan|close-?out|-recut-|-worktree-audit|worktree-branch-audit"
+  "adjudicat|-regrade|-pr-body|-coverage-audit|-notice-audit|-audit-partial|-rollup"
+)
+
+# Documents another lane owns at the moment. Each entry is a debt, not a
+# carve-out: when the lane lands, the file moves under docs/internal/ and the
+# line goes.
+internal_doc_allowlist=(
+  "docs/analysis/release-4.0-remaining-plan.md"
+)
+
 # Every tracked file at the repository root. Not filtered by extension: the
 # material this rule exists to catch arrives as an agent brief, a generated map
 # or an extensionless review prompt, and an extension filter lets each of those
@@ -133,6 +187,33 @@ for sample in "${ignore_samples[@]}"; do
   fi
 done
 
+is_allowlisted_internal() {
+  local file="$1"
+  local permitted
+  for permitted in "${internal_doc_allowlist[@]}"; do
+    [[ "$file" == "$permitted" ]] && return 0
+  done
+  return 1
+}
+
+report_internal_doc() {
+  local file="$1"
+  local evidence="$2"
+  report_failure "$file reads as an internal working document ($evidence)"
+  printf 'Remediation: git mv it under docs/internal/ keeping its subdirectory, then repoint the links that named it.\n' >&2
+}
+
+# docs/internal/ is published, not hidden: the history is worth reading and the
+# gate above is satisfied by moving a document there, which only works if the
+# destination stays in the index.
+if git ls-files --error-unmatch docs/internal >/dev/null 2>&1 || [[ -d docs/internal ]]; then
+  if git check-ignore -q docs/internal; then
+    report_failure "docs/internal is ignored; the internal-document gate has no tracked destination"
+  elif [[ -z "$(git ls-files docs/internal)" ]]; then
+    report_failure "docs/internal exists but nothing under it is tracked"
+  fi
+fi
+
 is_public_competitive_doc() {
   local file="$1"
   local public_file
@@ -171,6 +252,24 @@ while IFS= read -r file; do
     if match="$(grep -E -i -n -m 1 "${blocked_patterns[$i]}" "$file" || true)"; [[ -n "$match" ]]; then
       report_failure "$file contains ${blocked_reasons[$i]} marker: $match"
       printf 'Remediation: move the material to ignored docs/strategy/, docs/positioning/, docs/competitive/, or docs/competitive-intelligence/ as appropriate.\n' >&2
+    fi
+  done
+
+  [[ "$file" == *.md ]] || continue
+  [[ "$file" == docs/internal/* ]] && continue
+  is_allowlisted_internal "$file" && continue
+
+  headings="$(head -15 "$file" | grep -E '^#{1,3} ' || true)"
+  for marker in "${internal_heading_markers[@]}"; do
+    if match="$(printf '%s\n' "$headings" | grep -E -i -m 1 -e "$marker" || true)"; [[ -n "$match" ]]; then
+      report_internal_doc "$file" "heading marker /$marker/: $match"
+      continue 2
+    fi
+  done
+  for marker in "${internal_path_markers[@]}"; do
+    if printf '%s\n' "$file" | grep -E -q -i -e "$marker"; then
+      report_internal_doc "$file" "path marker /$marker/"
+      continue 2
     fi
   done
 done < <(git ls-files)

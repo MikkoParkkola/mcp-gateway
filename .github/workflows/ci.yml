@@ -26,10 +26,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Validate public repo hygiene scripts
-        run: bash -n scripts/dev/check-public-repo-hygiene.sh tests/public_repo_hygiene.sh
+        run: bash -n scripts/dev/check-public-repo-hygiene.sh tests/public_repo_hygiene.sh scripts/dev/check-commit-message-hygiene.sh tests/commit_message_hygiene.sh
       - name: Validate public repo hygiene fixtures
         run: tests/public_repo_hygiene.sh
+      - name: Validate commit message hygiene fixtures
+        run: tests/commit_message_hygiene.sh
+      - name: Validate the commit messages this branch adds
+        if: github.event_name == 'pull_request'
+        run: scripts/dev/check-commit-message-hygiene.sh "origin/${{ github.base_ref }}..HEAD"
       - name: Validate tracked public docs boundary
         run: scripts/dev/check-public-repo-hygiene.sh
       - name: Enforce the Noncommercial license header on every source file
@@ -40,6 +47,10 @@ jobs:
         run: scripts/ci/check-hosted-runners.sh --self-test
       - name: Require every job to run on a GitHub-hosted runner
         run: scripts/ci/check-hosted-runners.sh
+      - name: Validate the 800-LOC ratchet
+        run: scripts/ci/check-loc-ceiling.sh --self-test
+      - name: Hold the 800-LOC ceiling deviation at its current count
+        run: scripts/ci/check-loc-ceiling.sh
 
   service-template-smoke:
     name: Service template smoke
@@ -325,6 +336,10 @@ jobs:
         run: python3 scripts/release/test_scope_acceptance.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
+      - name: Test the NFR.DEMO.1 recording gate
+        run: python3 scripts/release/test_check_nfr_demo_1_recordings.py
+      - name: Check the NFR.DEMO.1 recording manifest against its transcripts
+        run: python3 scripts/release/check_nfr_demo_1_recordings.py
       # Proves the workflow-wiring assertions still discriminate: each case
       # breaks one rule, or restates it in an equivalent spelling, and the
       # suite has to return the stated verdict. Runs against a copy of the
@@ -335,6 +350,21 @@ jobs:
         run: python3 scripts/release/check_scope_acceptance.py --check
       - name: Require completed acceptance in publishing context
         run: python3 scripts/release/check_scope_acceptance.py --publish-check
+
+  capability-pins:
+    name: Capability pin counts and drift
+    runs-on: ubuntu-latest
+    # tests/capability_pin_policy.rs already asserts the privilege rule and the
+    # drift rule, but only behind a full --all-features build. This is the drift
+    # half in two seconds on the cheapest runner, so a capability file rewritten
+    # without re-issuing its pin is caught before the Rust jobs finish. It also
+    # re-measures the counts printed in docs/release/v4.0.0-supported-matrix.md,
+    # which NFR.BUILD.1 C2 is graded against — a count nobody recomputes reads
+    # as evidence while being a memory of what was once true.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check capability pins against the catalogue and the matrix
+        run: bash scripts/ci/check-capability-pin-counts.sh
 
   secrets-scan:
     name: Secrets scan
@@ -362,6 +392,18 @@ jobs:
         run: python3 scripts/dev/test_cwe532_leak_lint.py
       - name: Run CWE-532 leak lint
         run: python3 scripts/dev/cwe532-leak-lint.py src crates
+
+  file-size-ceiling:
+    name: File-size ceiling (800 lines)
+    # The ceiling governs a file, not a change. 91 files already exceed it, so
+    # the gate ratchets off a recorded baseline: a listed file may shrink,
+    # never grow, and no file may newly cross 800 lines. Splitting the existing
+    # offenders is sequenced after the release to avoid mass merge conflicts.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the 800-line ceiling
+        run: python3 scripts/dev/check-file-size.py
 
   control-drift-probes:
     name: Control-drift probes (NFR.SEC.7)

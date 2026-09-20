@@ -136,7 +136,7 @@ fn captured_header(captured: &Arc<Mutex<Captured>>, name: &str) -> Option<String
 }
 
 #[tokio::test]
-async fn annotated_argument_is_mirrored_onto_mcp_param_header() {
+async fn ac_header_5_annotated_argument_is_mirrored_onto_mcp_param_header() {
     let (url, captured) = start_mock().await;
     let backend = backend_for(&url);
 
@@ -174,7 +174,7 @@ async fn annotated_argument_is_mirrored_onto_mcp_param_header() {
 }
 
 #[tokio::test]
-async fn caller_supplied_param_header_cannot_forge_a_declaration() {
+async fn ac_header_5_caller_supplied_param_header_cannot_forge_a_declaration() {
     let (url, captured) = start_mock().await;
     let backend = backend_for(&url);
     backend.get_tools().await.expect("tools/list");

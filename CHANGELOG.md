@@ -7,12 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Six meta-tools are now listed only where they can answer.** `gateway_get_stats`,
+  `gateway_cost_report`, `gateway_run_playbook`, `gateway_set_profile`,
+  `gateway_get_profile` and `gateway_list_profiles` were listed in `tools/list`
+  unconditionally, so a default deployment spent context on six tools whose only
+  possible reply was "not configured". Each is now gated on the thing that lets it
+  answer: a cost registry, a non-empty playbook engine, a configured routing
+  profile, and for statistics a new `meta_mcp.expose_stats_tool` opt-in (the usage
+  collector is always attached, so its presence never gated anything). The default
+  HTTP surface drops from 17 tools to 11, stdio from 16 to 10, and the
+  `NFR.PERF.4` band from `14..=17` to `9..=17`, all at admin standing.
+
+  **This is a disclosure change, not a capability removal.** All seventeen names
+  still dispatch by name on every deployment. A caller that invokes a tool it was
+  not shown gets the tool's own answer — for a gated one, a refusal naming the
+  configuration to add — never "no such tool". An operator who wants a tool back
+  in the listing configures the feature it reports on; `meta_mcp.expose_stats_tool:
+  true` restores `gateway_get_stats`. Operator-visible consequence: a client that
+  enumerates `tools/list` and refuses to call anything absent from it will stop
+  reaching these six until the corresponding feature is configured. See
+  `docs/design/2026-09-16-meta-tool-surface-compaction.md`.
+
 ## [4.0.0] - 2026-09-19
 
 > Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). A 3.x `gateway.yaml`
 > loads unchanged and no migration edits it; the strict `env_files` parsing is the one change that
 > refuses a start rather than warning. The first start from a 3.x install prints the changes that
 > need an operator action.
+
+> **What the performance numbers are, and are not.** The 4.0.0 comparison against
+> 3.5.0 is a component benchmark, not an end-to-end one. It measures in-process
+> work with `criterion` — no wire, no backend, no queue — and reports a point
+> estimate with a bootstrap confidence interval. It therefore produces **no P50
+> and no P99**: a confidence interval is not a percentile, and the repository has
+> no client-to-backend harness at any version to take percentiles from. What the
+> measurement does support: over the 47 cases 3.5.0 and 4.0.0 share, the worst
+> regression is +6.07% (`session_sandbox/check_tool_denied`, 86.27 ns to 94.18 ns)
+> and the largest movement is a 67% improvement. Nothing approaches the 5% P50 or
+> 10% P99 budgets those bounds were written against. Read it as headroom on
+> component cost, and do not quote it as end-to-end latency.
 
 ### Added
 
@@ -187,6 +222,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A backend whose SSE response opens with a retry priming frame is no longer
+  a transport error** (GH #563). Servers built on `rmcp` with its default
+  `sse_retry` prepend such a frame -- a `data:` line with nothing after it,
+  plus `id:` and `retry:` -- to every POST response stream. 3.5.x took the
+  first `data:` line verbatim and failed the whole call with
+  `Failed to parse SSE data: EOF while parsing a value at line 1 column 0`, so
+  no such backend could be used at all. The response stream is now decoded
+  frame by frame: a block whose joined `data` is empty carries no event, and
+  fields that are neither `data` nor `event` are ignored, so the exchange
+  resolves on the frame that actually holds the JSON-RPC response.
+
+- **Windows stdio backends start with a usable environment, and quoted
+  commands parse by host rules.** `APPDATA` and `LOCALAPPDATA` were never
+  passed to stdio child processes, so a backend resolving its own
+  configuration under those paths started degraded on Windows. Configured
+  stdio commands now go through a single parser, `transport::split_command`,
+  which follows `CommandLineToArgvW` on Windows so the backslashes in a path
+  survive; spawn, lifecycle, diagnostics, the UI summary and `doctor` all
+  read that one parser, and `doctor` fails on invalid quoting instead of
+  reporting a false `PASS`.
+  ([@yfcyfc123234](https://github.com/yfcyfc123234), [#522](https://github.com/MikkoParkkola/mcp-gateway/pull/522),
+  [#564](https://github.com/MikkoParkkola/mcp-gateway/pull/564))
+
+- **A backend that rejects the gateway's protocol version is negotiated down
+  rather than failed.** A Streamable HTTP backend supporting 2025-06-18 or
+  earlier answered `initialize` with a `400`, and the gateway gave up instead
+  of offering a revision that backend could accept. The gateway now adopts
+  the server-selected version for post-handshake headers, negotiates when a
+  version is rejected by HTTP status, and fails the backend by name only when
+  the selection is genuinely unsupported.
+  (reported by [@luochen1990](https://github.com/luochen1990),
+  [#517](https://github.com/MikkoParkkola/mcp-gateway/issues/517))
+
 - **A throttled backend no longer looks like a failing one.** A rate-limited
   response counted against the backend error budget, the per-capability budget
   and the circuit breaker exactly as a `500` did, so a caller fast enough to be
@@ -196,6 +264,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   neither success nor failure, because a throttle says nothing about health.
   Every exclusion increments `mcp_error_budget_suppressed_total`, so the
   suppression is visible rather than inferred.
+  (requested by [@crepererum](https://github.com/crepererum),
+  [#475](https://github.com/MikkoParkkola/mcp-gateway/issues/475))
 
 - **A failed config load no longer leaks its env files into the process.**
   Reading a config file used to apply every `env_files` entry it named to the

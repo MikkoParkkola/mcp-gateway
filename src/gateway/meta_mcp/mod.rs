@@ -65,7 +65,13 @@ use super::meta_mcp_tool_defs::{
 use super::webhooks::WebhookRegistry;
 
 pub(crate) mod admission;
+mod chain_interim;
+#[cfg(test)]
+mod chain_interim_tests;
 mod direct_route;
+mod interim_promotion;
+#[cfg(test)]
+mod interim_promotion_tests;
 pub(crate) mod invoke;
 mod prompt_cache;
 mod protocol;
@@ -215,6 +221,43 @@ pub struct MetaMcpCallerContext<'a> {
     pub channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
 }
 
+impl<'a> MetaMcpCallerContext<'a> {
+    /// The same caller, presenting different multi-round-trip fields.
+    ///
+    /// A chain runs its steps as one caller, and only the step that was
+    /// stopped may redeem the answers. Rebuilding the context per step is what
+    /// keeps that structural: `task` is not carried, because a chain step
+    /// never begins a background task of its own — the intent was already
+    /// taken at the dispatch gate above.
+    pub(crate) fn with_retry<'b>(
+        &self,
+        retry: &'b crate::protocol::mrtr::RetryFields,
+    ) -> MetaMcpCallerContext<'b>
+    where
+        'a: 'b,
+    {
+        MetaMcpCallerContext {
+            is_modern: self.is_modern,
+            protocol_revision: self.protocol_revision,
+            credential_principal: self.credential_principal,
+            execution: self.execution,
+            signing: self.signing,
+            authorizer: self.authorizer,
+            api_key_name: self.api_key_name,
+            agent_id: self.agent_id,
+            grant_subject: self.grant_subject.clone(),
+            verified_identity: self.verified_identity,
+            is_admin: self.is_admin,
+            input_capabilities: self.input_capabilities,
+            confirmation: self.confirmation.clone(),
+            retry,
+            task: None,
+            era: self.era,
+            channel: self.channel,
+        }
+    }
+}
+
 // ============================================================================
 // MetaMcp struct
 // ============================================================================
@@ -279,6 +322,9 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
 }
 
 /// Meta-MCP handler — the central dispatcher for all gateway meta-tools.
+// Independent, unrelated switches on a long-lived handler. A state machine
+// over their product would have more states than the struct has fields.
+#[allow(clippy::struct_excessive_bools)]
 pub struct MetaMcp {
     pub(super) backends: Arc<BackendRegistry>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
@@ -398,6 +444,12 @@ pub struct MetaMcp {
     /// Consulted on both `tools/list` and `tools/call`. The default exposes every
     /// meta-tool, so an existing deployment is unaffected.
     pub(super) meta_tool_exposure: MetaToolExposure,
+    /// List `gateway_get_stats`, from `MetaMcpConfig::expose_stats_tool`.
+    ///
+    /// Enumeration only: the handler answers whoever calls it by name either
+    /// way. Separate from `meta_tool_exposure` because that is an allow-list
+    /// over the whole surface, while this is one tool's own gate.
+    pub(super) expose_stats_tool: bool,
     /// Per-backend bound for `prompts/list` and `resources/list`
     /// aggregation. Configurable via `meta_mcp.prompts_resources_fetch_timeout`
     /// (default 10s); overridable per-instance for tests.
@@ -581,6 +633,7 @@ impl MetaMcp {
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
             meta_tool_exposure: MetaToolExposure::expose_all(),
+            expose_stats_tool: false,
             prompts_resources_fetch_timeout: std::time::Duration::from_secs(10),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
@@ -714,6 +767,16 @@ impl MetaMcp {
     #[must_use]
     pub fn with_exposed_meta_tools(mut self, names: &[String]) -> Self {
         self.meta_tool_exposure = MetaToolExposure::from_names(names);
+        self
+    }
+
+    /// List `gateway_get_stats` in `tools/list` (consuming builder).
+    ///
+    /// Off by default. The tool stays callable by name regardless; this
+    /// governs enumeration only.
+    #[must_use]
+    pub fn with_expose_stats_tool(mut self, enabled: bool) -> Self {
+        self.expose_stats_tool = enabled;
         self
     }
 
@@ -1600,14 +1663,23 @@ impl MetaMcp {
             let (tool_count, server_count) = self.backend_counts();
             build_meta_tools_filtered(
                 MetaToolGates {
-                    stats: self.stats.is_some(),
+                    // The collector is always attached, so its presence was
+                    // never a gate. The operator opt-in is.
+                    stats: self.expose_stats_tool,
                     reload: self.get_reload_context().is_some(),
-                    // The tracker is always present, so this gate is always on.
-                    cost_report: true,
+                    // Follows `cost_governance.enabled`, which is what decides
+                    // whether a registry is attached at all. Without the
+                    // feature there is nothing to report.
+                    #[cfg(feature = "cost-governance")]
+                    cost_report: self.cost_registry.is_some(),
+                    #[cfg(not(feature = "cost-governance"))]
+                    cost_report: false,
                     // Attachment, not configuration: the registry is set after
                     // construction and never over stdio, so this is read here
                     // rather than passed in.
                     webhook_status: self.get_webhook_registry().is_some(),
+                    playbooks: !self.playbook_engine.read().is_empty(),
+                    profiles: self.profile_registry.has_configured_profiles(),
                 },
                 tool_count,
                 server_count,
@@ -2150,9 +2222,27 @@ impl MetaMcp {
 
         match result {
             Ok(content) => match shape {
+                // MRTR.11a: an interim round must not be pretty-printed into
+                // `content[0].text`. `wrap_tool_success` states `is_error:
+                // false` and buries `resultType` inside a JSON string, where
+                // neither a protocol client nor the firewall's
+                // `PreserveInputRequired` policy can read it — a question
+                // committed as an answer. The task worker already escapes via
+                // `ResultShape::Native`; this is the same escape for the
+                // synchronous thread, gated so a backend cannot mint one.
                 ResultShape::Wrapped => {
-                    let has_output_schema = tool_name == "gateway_search_tools";
-                    wrap_tool_success(id, &content, has_output_schema)
+                    match interim_promotion::promote_interim(&content, caller.input_capabilities) {
+                        interim_promotion::Promotion::Native => {
+                            JsonRpcResponse::success(id, content)
+                        }
+                        interim_promotion::Promotion::Wrap => {
+                            let has_output_schema = tool_name == "gateway_search_tools";
+                            wrap_tool_success(id, &content, has_output_schema)
+                        }
+                        interim_promotion::Promotion::UpstreamFault(message) => {
+                            error_response_preserving_status(id, &Error::json_rpc(-32603, message))
+                        }
+                    }
                 }
                 ResultShape::Native => JsonRpcResponse::success(id, content),
             },
@@ -2333,6 +2423,10 @@ mod search_disclosure_e2e;
 #[cfg(test)]
 #[path = "trace_correlation_tests.rs"]
 mod trace_correlation_tests;
+
+#[cfg(test)]
+#[path = "chain_resume_live_tests.rs"]
+mod chain_resume_live_tests;
 
 #[cfg(test)]
 #[path = "account_entry_point_authz_tests.rs"]
@@ -2705,3 +2799,7 @@ async fn destructive_confirmation_gate(
 #[cfg(test)]
 #[path = "outbound_log_tests.rs"]
 mod outbound_log_tests;
+
+#[cfg(test)]
+#[path = "surface_compaction_tests.rs"]
+mod surface_compaction_tests;
