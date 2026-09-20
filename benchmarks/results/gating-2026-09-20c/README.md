@@ -6,7 +6,8 @@ A0 warm-up. Zero voids, zero HTTP errors, semantic assertion rate 1.0 in every r
 **Recorded verdict: INCONCLUSIVE** (`eval_workload.py` exit 2, `verdict.json`).
 
 Read the rest of this note before quoting that verdict. INCONCLUSIVE is the grade the
-stability gate produced; it is masking a p50 result that no re-run can turn into a pass.
+stability gate produced; underneath it sits a p50 figure that is over the budget under
+every baseline this run's own data supports.
 
 ## Why this run matters
 
@@ -56,12 +57,17 @@ Baseline `min(A.p50, B.p50)` = 0.6681, limit at the 5% budget = 0.7015.
 Candidate C = **0.7321, which is 4.4% over the limit** — 8.3% slower than A, 9.6% slower
 than B. p99 passes: 1.5146 against a 1.6135 limit.
 
-**No re-run turns this into a pass.** B1 is a contaminated rep (p50 0.5903 low, p99 4.9451
-high against 1.4668/1.3933 in its siblings) and it is currently *depressing* the baseline.
-Discard it and the baseline rises to 0.6734, the limit to 0.7071 — still under C. Take A
-alone, the most stable legacy cell at 3.1% spread, and the limit is 0.7099 — still under C.
-C is itself the most stable cell in the run at 1.3% spread. The p50 overrun is not a noise
-artifact.
+**The overrun does not depend on which baseline you pick from this run's data.** B1 is a
+contaminated rep (p50 0.5903 low, p99 4.9451 high against 1.4668/1.3933 in its siblings)
+and it is currently *depressing* the baseline. Discard it and the baseline rises to 0.6734,
+the limit to 0.7071 — still under C. Take A alone, the most stable legacy cell at 3.1%
+spread, and the limit is 0.7099 — still under C. C is itself the most stable cell in the
+run at 1.3% spread, so the candidate figure is the best-resolved number here.
+
+That is a statement about re-analysing this run, not a prediction about the next one. A
+re-run re-measures A and B, and the limit moves with them; it does not carry over. What
+this run establishes is an observed overrun on three reps per cell, not a settled
+expectation for future runs.
 
 The grade is INCONCLUSIVE rather than FAIL because the stability gate trips first, on
 `B.p50` 0.150 > 0.050, `B.p99` 2.549 > 0.100 and `C.p99` 0.138 > 0.100. Two independent
@@ -71,9 +77,11 @@ the margin it is judged against.
 ## Shape of the regression
 
 +0.056 ms at p50 (8.3%) against a 5% budget, but only +3.3% at p99 against a 10% budget.
-Fixed per-call overhead on the hot path, not contention or queueing — a contention story
-widens the tail first. That is a diagnosable target, and it is on the release line: cell C
-is `5e557e08`, an ancestor of `origin/main`.
+A cost that lands on the median and not on the tail is more consistent with fixed per-call
+overhead than with contention or queueing, which widen the tail first. That is a hypothesis
+worth bisecting, not a diagnosis — three reps per cell, with B and C both failing the
+stability gate, cannot establish a mechanism. What is on the release line either way: cell
+C is `5e557e08`, an ancestor of `origin/main`.
 
 ## What D and E priced
 
