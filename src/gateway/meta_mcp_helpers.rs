@@ -13,7 +13,9 @@ use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, PromptsCapability, RequestId,
     ResourcesCapability, ServerCapabilities, Tool, ToolsCallResult, ToolsCapability,
 };
-use crate::ranking::{SearchResult, expand_abbreviations, expand_synonyms};
+use crate::ranking::SearchResult;
+
+use super::meta_mcp_helpers_text::{char_prefix, word_matches_text};
 use crate::stats::StatsSnapshot;
 use crate::{Error, Result};
 
@@ -454,39 +456,6 @@ pub(crate) fn tool_matches_query(tool: &Tool, query: &str) -> bool {
     query
         .split_whitespace()
         .any(|word| word_matches_text(word, &name_lower) || word_matches_text(word, &desc_lower))
-}
-
-/// Return `true` if `word`, any of its synonyms, or any expansion of it as a
-/// supported abbreviation appears as a substring of `text`.
-///
-/// Abbreviations are consulted last, so this only ever admits more than before:
-/// nothing that matched already stops matching.
-fn word_matches_text(word: &str, text: &str) -> bool {
-    if text.contains(word) {
-        return true;
-    }
-    if expand_synonyms(word)
-        .iter()
-        .any(|syn| *syn != word && text.contains(*syn))
-    {
-        return true;
-    }
-    expand_abbreviations(word)
-        .iter()
-        .any(|full| *full != word && text.contains(*full))
-}
-
-/// The first `chars` characters of `word`, or `None` when `word` is shorter.
-///
-/// Byte slicing panics when the index falls inside a multi-byte character, so
-/// a prefix rule stated in characters has to be cut on character boundaries.
-/// For ASCII input the result is the same slice the byte cut produced.
-fn char_prefix(word: &str, chars: usize) -> Option<&str> {
-    let end = word
-        .char_indices()
-        .nth(chars)
-        .map_or(word.len(), |(at, _)| at);
-    (word[..end].chars().count() == chars).then_some(&word[..end])
 }
 
 /// Build suggestions from the tag index when a search returns zero results.
