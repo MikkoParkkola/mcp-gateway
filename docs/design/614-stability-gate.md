@@ -12,16 +12,23 @@ budget margin (`:176-187`) to decide whether a run can resolve the question it w
 
 The comparison is against the right *quantity* — the margin is 0.05 at p50 and 0.10 at p99 —
 but `spread` is a **range** statistic. Each added repetition can only move `max` up or `min`
-down. Its expected value under pure noise grows without bound in N (for a normal sample the
-expected range grows roughly as `2σ·sqrt(2 ln N)`). So:
+down, so it is **pathwise non-decreasing in N**: it never shrinks, for any sample, ever.
 
 - The instinctive remedy for a noisy run — collect more repetitions — makes the gate
-  **strictly harder**.
-- There may be no N at which the gate is satisfiable on this harness. Passing it is a matter
-  of getting lucky with 3 draws, not of gathering evidence.
+  **strictly harder**. A cell that failed cannot be rescued by more evidence; only by a
+  luckier draw.
+- Planning a larger N to "settle" a noisy result makes a fresh pass *less* likely, which is
+  the exact opposite of what the plan intends.
 
-A gate that cannot be satisfied by evidence is not a measurement gate. The 2026-09-20 run
-tripped it on `B.p50` 0.150, `B.p99` 2.549 and `C.p99` 0.138, and recorded INCONCLUSIVE.
+Stated precisely, because an earlier draft of this document overstated it: the gate is **not**
+unsatisfiable. The 2026-09-20 run passed it on three cells — A.p50 at 0.031, A.p99 at 0.093
+and C.p50 at 0.013, all inside their margins. The defect is not that passing is impossible;
+it is that passing is a property of the draw rather than of the evidence, and that the one
+lever an engineer has — run it more times — pushes the wrong way.
+
+A gate whose pass probability *decreases* in the amount of evidence is not a measurement
+gate. The 2026-09-20 run tripped it on `B.p50` 0.150, `B.p99` 2.549 and `C.p99` 0.138, and
+recorded INCONCLUSIVE.
 
 ## What the gate is actually asking
 
@@ -70,6 +77,12 @@ unstable if rel_half_width > margin
 If no `k ≥ 1` satisfies the coverage requirement, the cell is **unstable by insufficiency**:
 the sample cannot support a 95% interval at any width, and the gate says so rather than
 inventing one.
+
+`spread` is **retained as a reported diagnostic**, just no longer as the gate. It is the
+signal that makes a dirty Spark run legible — a cell whose range blows out while its
+interval stays tight is a machine-conditions story, not a code story — and dropping it would
+cost that visibility for nothing. Both appear per cell in `report["cells"]`; only the
+interval decides the verdict.
 
 The earlier draft used `t(0.95, n-1) · stdev/sqrt(n) · sqrt(pi/2)`. Review refuted it
 empirically: 100,000 trials at n=3 from a bimodal population gave **85.5% coverage, not
@@ -170,7 +183,10 @@ from 3 warm-up + 9 compared (A/B/C × 3) + 6 report-only (D/E × 3) = 18 reps, t
 same machine conditions — so the reps cannot be parallelised away.
 
 Merging that into this change would conflate a statistic fix with a benchmark-cost decision.
-It is tracked separately in #615. Until it lands, this gate reports insufficiency on every run, which
+It is tracked separately in #615, which also owns deriving the N that actually resolves each
+margin from the observed dispersion — n=6 is the coverage floor, and the p99 margin will
+plausibly need more than the p50 one. Commissioning a rerun at the floor alone risks a second
+ungradeable run. Until that lands, this gate reports insufficiency on every run, which
 is the accurate answer for a 3-rep sample and is strictly better than the current behaviour
 of returning a number that reads like a measurement.
 
