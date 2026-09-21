@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Summarise the powered end-to-end A/B into quotable percentiles.
 
 NFR.PERF.1's residual asks for a P50/P99 for the release line that may be
