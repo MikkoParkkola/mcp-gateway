@@ -187,7 +187,7 @@ Clusters A, C, D, F, G, H, I, J, L, M and N have cleared — N last, on 2026-09-
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
 | K | deployed-build control drift | `NFR.SEC.7` | 1 | both halves of a new row, added 2026-09-11 for MIK-7265, which had no requirement governing it. The origin guard `src/gateway/router/origin_guard.rs` is merged (added by `5d25f104`, 2026-08-28; `55970c2b` two days earlier only adds a tunnel-hostname unit test to it) and wired at `src/gateway/router/mod.rs:313`, with the policy built from live config at `:216`, so this is not unbuilt protocol work; a drift check cannot ask the process what it runs: there is no `build.rs` in the crate and no git sha is compiled in - `env!("CARGO_PKG_VERSION")` is the only provenance the binary carries (`src/gateway/server/support.rs`), so `3.4.0` is all it can report, and the commit is knowable only from the install artefact's path (`~/.local/libexec/mcp-gateway/3.4.0-f30539af`). Built 2026-09-11: `scripts/dev/check-control-drift.py` with the manifest `security-controls.toml`, the probe rows in `scripts/dev/test_check_control_drift.py` and the reviewed design at `docs/design/2026-09-11-merged-versus-listening-drift-check.md`. The checker therefore probes behaviour on the wire and uses the reported version only to corroborate, via `git merge-base --is-ancestor <control commit> v<version>`. Verified both ways the same day: a gateway built from this tree refuses the foreign `Origin` and the foreign `Host` and answers the legitimate request, exit 0; the listening install answers all three with 200, exit 1, noting `5d25f104 is NOT in v3.4.0`. What remains is the first half only — an install of a build that carries the guard. That is a deployment, and it is the operator's call; the row stays blocking until the live endpoint passes the check. |
-| O | the container image has never been started | `NFR.PKG.1` | 1 | an image every supported host can run. Two defects, one fixed: the published image for the release commit exited 1 on startup, because the runtime user was created with `useradd -r` and so had no home directory, while three features resolve paths under `$HOME` and the task store treats an uncreatable parent as fatal. It failed before configuration was consulted, so no operator config avoided it. The binary itself is sound -- given a writable home the same image serves `/health` and a full `initialize` from outside the container. That defect is fixed on the line (`ead3e40b`, `useradd -m`), and 2026-09-18 closed the test gap behind it: `scripts/ci/smoke-image.sh` starts the built image and requires the image's own `HEALTHCHECK` to reach `healthy`. Both publishers call it -- `docker.yml` before any push, `ci.yml` before the release push -- because they fire on the same tag independently and neither can block the other. Proven two-sided before wiring: the published `a2505be` image exits 1 under the gate, an image carrying the fix exits 0. Second defect, still open and now the only thing keeping this row blocking, though not in the form first recorded: the multi-architecture build is written but has never run. `c8803f06` (#568) added a matrix that builds each architecture on its own native runner and a `docker-manifest` job that refuses to publish a list missing either digest (`ci.yml:587`, `ci.yml:599`), which is the remedy this row deferred to a reviewed design. `ci.yml:402` gates that job on a `refs/tags/v` ref, and no tag contains the commit -- the newest, `v3.5.1`, predates it by two weeks -- so no two-platform list has ever been produced and no arm64 image has ever been started. Wired and unexercised is not met. MIK-7482 carries the defects, MIK-7481 the CI step. |
+| O | the container image has never been started | `NFR.PKG.1` | 1 | an image every supported host can run. Two defects, one fixed: the published image for the release commit exited 1 on startup, because the runtime user was created with `useradd -r` and so had no home directory, while three features resolve paths under `$HOME` and the task store treats an uncreatable parent as fatal. It failed before configuration was consulted, so no operator config avoided it. The binary itself is sound -- given a writable home the same image serves `/health` and a full `initialize` from outside the container. That defect is fixed on the line (`ead3e40b`, `useradd -m`), and 2026-09-18 closed the test gap behind it: `scripts/ci/smoke-image.sh` starts the built image and requires the image's own `HEALTHCHECK` to reach `healthy`. Both publishers call it -- `docker.yml` before any push, `ci.yml` before the release push -- because they fire on the same tag independently and neither can block the other. Proven two-sided before wiring: the published `a2505be` image exits 1 under the gate, an image carrying the fix exits 0. Second defect, still open and now the only thing keeping this row blocking, though not in the form first recorded: the multi-architecture build is written but has never run. `c8803f06` (#568) added a matrix that builds each architecture on its own native runner and a `docker-manifest` job that refuses to publish a list missing either digest (`ci.yml:587`, `ci.yml:599`), which is the remedy this row deferred to a reviewed design. `ci.yml:402` gates that job on a `refs/tags/v` ref, and no tag contains the commit -- the newest, `v3.5.1`, predates it by two weeks -- so no two-platform list has ever been produced and no arm64 image has ever been started. Wired and unexercised is not met. MIK-7482 carries the defects, MIK-7481 the CI step. **2026-09-21, arm64 is no longer unexercised.** The claim "no arm64 image has ever been started" is now false, and it was retired by building one rather than by waiting for a tag. This host is native Apple-Silicon arm64 with an `linux/arm64` Docker daemon, so `docker build --platform linux/arm64` produces a real arm64 image from the release line -- no emulation, no cross-compilation. The image (`mcp-gateway:nfr-pkg1-arm64`, verified `linux/arm64` via `docker image inspect`) was then put through the release's own gate: `scripts/ci/smoke-image.sh` **exit 0** -- it starts, its own `HEALTHCHECK` reaches `healthy`, it serves an MCP request from outside the container, and it refuses cleanly with no config. The `useradd -m` home-directory fix (`ead3e40b`) therefore holds on arm64 as well as amd64. **What is still unexercised is narrower than the row said:** not the arm64 runtime, but the `docker-manifest` job that publishes a two-platform manifest list (`ci.yml:402` gates it on a `refs/tags/v` ref). That is a publish-time proof and cutting the tag is the operator's call, so this row stays blocking on the manifest list alone. |
 
 Cluster C's `SUB.4` prerequisite — the idempotency key binding the calling principal — closed, and
 all three moves it named are in source (re-verified 2026-09-11). It was recorded because
@@ -1557,3 +1557,42 @@ and is not edited retroactively. At this head the following rows no longer descr
   the correction that the origin guard is unconditional rather than default-on.
 
 The H1–H11, D1–D30 and §1–13 tables themselves stand; only these rows have moved.
+
+## 2026-09-21 — the blocking set is two rows, and neither is engineer-actionable
+
+`scripts/release/count-release-criteria.py` reads `149 criteria, 193 rows, 191 met or
+non-blocking, 2 blocking` at this head. That supersedes the "1 blocking" row in the
+2026-09-11 table above, and the count rose because rows were added — the code/deploy
+split of `NFR.SEC.7` among them — not because a met row regressed.
+
+The `blocking` column was parsed across every table row rather than the two ids already
+known. `yes` appears at exactly two: `NFR.SEC.7` (`RELEASE-4.0.0-criteria-status.md:414`)
+and `NFR.PKG.1` (`:427`). There is no third, so what follows is the whole remainder.
+
+**`NFR.SEC.7` — the coverage half is met, the live half is the cutover.**
+`scripts/dev/check-control-drift.py` carries `--coverage-only`, whose help text is
+"check the manifest against its authorities and stop; needs no listening install". It ran
+2026-09-21, exit 0, zero coverage gaps (`:414`). What remains is a probe against a
+release-representative *listening* install, and the binary is not the obstacle: the only
+running one is bound to a deliberately unauthenticated benchmark config, so probing it
+would prove nothing about the shipped default. A correctly-configured deployment is the
+operator's cutover (`docs/runbooks/nfr-sec-7-cutover.md`), not something an engineer can
+substitute for.
+
+**`NFR.PKG.1` — the manifest publish, and nothing else.** The cluster-O row above already
+narrows this to the two-platform manifest list; arm64 runtime is exercised and the
+`useradd -m` fix holds on both architectures. The remaining job is `docker-manifest`
+(`.github/workflows/ci.yml:557`), gated `if: startsWith(github.ref, 'refs/tags/v')`
+(`:560`). Its line citation has drifted since the cluster-O row was written, which quoted
+`ci.yml:402`; `:402` is now unrelated and the gate moved with the file. No dry-run route
+exists: `ci.yml`'s `on:` block is `push` (branches `[main]`, tags `["v*"]`) plus
+`pull_request`, and the file contains **no `workflow_dispatch`** — that trigger lives only
+in `release.yml:7`. So the job runs only on a `v*` tag push, which is also the publish to
+ghcr.io. Cutting the tag is the operator's call precisely because cutting it ships.
+
+**What this means for the release.** Every criterion an engineer can discharge is
+discharged. The two that remain are gated on operator actions that *are* the cutover — a
+configured deployment and a signed tag — so they cannot be closed ahead of it by design
+rather than by omission. Marked `V`: the counter output, both ledger cells and the
+workflow file were each read at this head, and the workflow line numbers above were
+re-derived here rather than carried forward.
