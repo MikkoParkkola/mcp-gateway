@@ -20,7 +20,9 @@ Coverage is exact-by-construction: for n reps the interval is
 and the realised coverage is reported rather than rounded to "95%".
 
 Usage: summarize-powered-ab.py <reps.csv>
-Exit 1 if the sample cannot support an interval or if any rep is VOID.
+VOID reps are dropped with a note and cost only sample size. Exit 1 if the
+surviving sample cannot support an interval, or if the CSV holds duplicate
+rep/arm rows, which would inflate n and narrow every interval.
 """
 
 from __future__ import annotations
@@ -56,10 +58,14 @@ def main(path: str) -> int:
         print("no rows", file=sys.stderr)
         return 1
 
+    # A VOID rep costs sample size and nothing else, so drop it and report the
+    # reduced n rather than refusing to summarise the reps that did succeed.
+    # A duplicate row is different in kind: it means the CSV was appended twice
+    # and n is inflated, which silently narrows every interval below.
     voids = [r for r in rows if r["p50_ms"] == "VOID"]
-    if voids:
-        print(f"{len(voids)} VOID rep(s) present; refusing to quote", file=sys.stderr)
-        return 1
+    for r in voids:
+        print(f"  dropped VOID rep {r['rep']} arm {r['arm']}", file=sys.stderr)
+    rows = [r for r in rows if r["p50_ms"] != "VOID"]
 
     seen: set[tuple[str, str]] = set()
     for r in rows:

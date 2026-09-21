@@ -167,8 +167,50 @@ intervals. Bisect only if that run confirms a regression larger than the ±1.52%
   averaging out. This does not touch the single-arm percentiles, which are the
   deliverable — an absolute p50 for the release line does not care what ran before it —
   but it is a real caveat on the drift-control comparison, which is why that arm is
-  recorded as a control and not as a gate. The first observed pair runs counter to the
-  predicted bias (release line 0.7287 ms against 3.5.1's 0.7046 ms, i.e. the *first*
-  position measured slower), so the effect is smaller than the difference it would have
-  to explain away. Alternating the order by rep parity is the fix if this arm is ever
-  promoted to a gate.
+  recorded as a control and not as a gate. The observed direction is **consistent with
+  the bias, not counter to it**: under the ordinary benchmarking assumption — warm page
+  cache, boosted clocks, warm branch predictors make the *second* arm faster — the
+  release line running first and measuring slower is exactly the predicted artefact.
+  An earlier draft of this caveat argued the opposite by assuming warmer meant slower;
+  that reading was wrong. Any release-line-vs-3.5.1 claim therefore requires the
+  order-reversal check below before it may be quoted.
+
+## What the replacement run establishes, and what it does not
+
+Three checks were run against the live measurement rather than assumed.
+
+**Arm identity is verified, not trusted.** An adversarial review of the harness found
+that the health probe confirms only that *something* answers on the shared port, so a
+leftover process could in principle be scored as the release arm. The gateway's
+`/health` response carries a `version` field, which turns that into a checkable fact:
+every release-line rep recorded `4.0.0` and every control rep recorded `3.5.1`, with no
+duplicate `rep,arm` rows and no VOID reps. The design weakness is real and worth fixing
+before the harness is reused; it did not fire in this run.
+
+**The interval is distribution-free, because a CV-based one would not be honest.** The
+per-rep percentiles are reduced by `scripts/release/summarize-powered-ab.py` to a median
+plus an order-statistic interval, with the realised coverage printed rather than rounded
+to 95%. A normal error bar derived from the 1.16% CV — the obvious method, and the one
+the harness comments reach for — assumes approximate normality with known spread. That
+is defensible for a median of a dense sample and **not** defensible for P99, where each
+rep's estimate rests on roughly the top 1% of its own requests. The order-statistic
+interval assumes nothing, so one method covers P50 and P99 alike. It also reproduces the
+known floor: at n=3 it yields no interval at all and the script refuses to quote.
+
+**P99 between arms is a low-power null, not a finding of no difference.** The two P99
+intervals overlap almost entirely. That is the same structure as the nine bisect
+verdicts ruled unresolvable above — separation smaller than uncertainty — and it must be
+written as *this run cannot distinguish P99 between arms at this n*, never as *P99 is
+unchanged*.
+
+Two further limits bind the write-up:
+
+- **The single-arm percentiles are the deliverable and are order-independent.** An
+  absolute P50 for the release line does not care what ran before it. The
+  release-line-against-3.5.1 *ratio* is a different claim, it inherits the fixed-order
+  bias above, and it is quotable only after a reversed-order block confirms it.
+- **The component bench's 10% P99 bound does not govern this number.** That bound was
+  written for `session_sandbox/check_tool_denied`, in-process work at roughly 86
+  nanoseconds; this run measures end-to-end request latency at roughly 0.7
+  milliseconds. Grading one against the other repeats exactly the incomparable-procedure
+  error that invalidated the bisect anchors.
