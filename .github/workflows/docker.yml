@@ -5,7 +5,7 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [main, docs/ranking-1-release-line]
 
 env:
   REGISTRY: ghcr.io
