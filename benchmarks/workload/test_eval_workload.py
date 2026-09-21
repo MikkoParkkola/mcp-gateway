@@ -29,6 +29,7 @@ CELLS = {
     "E": ("4.0.0", "ccccccc"),
 }
 DIGEST = "sha256:deadbeef"
+NCPU = 20  # Spark's CPU count, and so the declared loadavg envelope.
 
 
 def summary(p50, p99, *, http_err=0.0, semantic=1.0, checks=1.0):
@@ -62,6 +63,8 @@ def build(run: Path, latencies, *, reps=6, **overrides):
     pins = {
         "k6_image_digest": DIGEST,
         "reps": list(range(1, reps + 1)),
+        "ncpu": NCPU,
+        "load_envelope": {"max_load1": float(NCPU)},
         "cells": {
             c: {"health_version": v, "checkout_sha": s} for c, (v, s) in CELLS.items()
         },
@@ -83,6 +86,13 @@ def build(run: Path, latencies, *, reps=6, **overrides):
                 "checkout_sha": CELLS[cell][1],
                 "health_version": CELLS[cell][0],
                 "k6_image_digest": DIGEST,
+                # Comfortably inside the envelope. Every fixture carries these
+                # so the enforced path, not a bypass, is what the whole suite
+                # exercises -- a default that omitted them would let the
+                # envelope rot untested behind the pin-absent fallback.
+                "load1_start": 2.0,
+                "load1_end": 3.0,
+                "ncpu": NCPU,
             }
             meta.update(overrides.get("meta", {}).get(name, {}))
             (run / f"{name}.meta.json").write_text(json.dumps(meta))
@@ -675,7 +685,8 @@ def test_runner_declares_the_sample_it_runs():
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
         ).stdout.strip()
         proc = subprocess.run(
-            [sys.executable, "-c", writer.group(1), str(out), DIGEST, head, head, head, "6"],
+            [sys.executable, "-c", writer.group(1), str(out), DIGEST, head, head, head,
+             "6", str(NCPU)],
             capture_output=True, text=True, cwd=EVAL.parent.parent.parent,
         )
         assert proc.returncode == 0, f"runner pin writer failed: {proc.stderr}"
@@ -683,6 +694,14 @@ def test_runner_declares_the_sample_it_runs():
 
     assert pins["reps"] == [1, 2, 3, 4, 5, 6], (
         f"runner declared {pins.get('reps')!r}, not the six reps it ran"
+    )
+    # The envelope is declared by the runner BEFORE any rep runs, and is the
+    # machine's CPU count rather than a threshold fitted to a run already seen.
+    # Both halves matter: a missing declaration turns the grader's enforcement
+    # off silently, and a hand-tuned number is a filter chosen after the fact.
+    assert pins.get("load_envelope", {}).get("max_load1") == float(NCPU), (
+        f"runner declared envelope {pins.get('load_envelope')!r}, not the "
+        f"{NCPU}-CPU machine it measured on"
     )
     # The grader's own validation is the oracle, not a second copy of it here.
     with tempfile.TemporaryDirectory() as tmp:
@@ -694,6 +713,139 @@ def test_runner_declares_the_sample_it_runs():
         )
         rc = run_eval(run)
     assert rc != ev.EXIT_VOID, "the runner's own pin voids in the grader"
+
+
+def test_oversubscribed_machine_voids_the_run():
+    """A rep measured at loadavg >= ncpu voids the RUN, by name.
+
+    The 2026-09-21 n=12 run is the case. A three-minute excursion to loadavg 34
+    on Spark's 20 CPUs covered A2, B2 and C2 -- three reps that are consecutive
+    in wall-clock, not a rep index the gated cells share -- and took tools-call
+    p99 from ~3ms to 58.7 / 75.0 / 33.9ms. /health p99 went 3.1ms -> 69ms in the
+    same three reps: it does no routing and no backend round-trip, so the stall
+    is not in the tool path, and the same binary hand-run at loadavg 34.9-51.1
+    reproduced those numbers from CPU scarcity alone. D and E were spared
+    because they ran 35 minutes later at loadavg ~3, not because they are
+    report-only.
+
+    The numbers below are that run's, so this check fails if the envelope stops
+    being enforced on the very sample that motivated it.
+    """
+    # A2's own window: the trailing loadavg-1 read 7.75 when the rep started
+    # and 20.65 when it ended, because the excursion began INSIDE the window.
+    # Sampling only at the start -- what the runner used to do -- records this
+    # rep as clean, which is the defect.
+    out_of_envelope = {"load1_start": 7.75, "load1_end": 20.65}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp)
+        build(run, FLAT, meta={"A2": out_of_envelope})
+        proc = subprocess.run(
+            [sys.executable, str(EVAL), str(run)], capture_output=True, text=True
+        )
+    assert proc.returncode == ev.EXIT_VOID, (
+        f"an oversubscribed rep must VOID the run, got exit {proc.returncode}"
+    )
+    assert "A2" in proc.stderr, f"the void must name the rep: {proc.stderr}"
+    assert "20.65" in proc.stderr, f"the void must state the load seen: {proc.stderr}"
+
+    # A start-only sample is not enough, and neither is a rep that never
+    # finished its window: the runner writes load1_end only after k6 returns.
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp)
+        build(run, FLAT, meta={"B3": {"load1_end": None}})
+        (run / "B3.meta.json").write_text(
+            json.dumps(
+                {
+                    k: v
+                    for k, v in json.loads((run / "B3.meta.json").read_text()).items()
+                    if k != "load1_end"
+                }
+            )
+        )
+        proc = subprocess.run(
+            [sys.executable, str(EVAL), str(run)], capture_output=True, text=True
+        )
+    assert proc.returncode == ev.EXIT_VOID, (
+        f"a rep with no closing load sample must VOID, got exit {proc.returncode}"
+    )
+    assert "load1_end" in proc.stderr, proc.stderr
+
+    # NaN is the sample that silently disables the gate: every comparison
+    # against it is False, so `seen >= limit` lets it through. json.dumps writes
+    # it as the bare token NaN and json.loads takes it back, so an imported or
+    # hand-edited artifact really can carry one.
+    for bad in (float("nan"), -1.0, True):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            build(run, FLAT, meta={"C4": {"load1_end": bad}})
+            assert run_eval(run) == ev.EXIT_VOID, (
+                f"meta.load1_end={bad!r} must VOID rather than pass the envelope"
+            )
+
+    # A run recorded before the envelope was declared is graded as it was.
+    # Back-filling the load it never sampled would be inventing the evidence.
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp)
+        build(run, FLAT, meta={"A2": out_of_envelope})
+        pins = json.loads((run / "pins.json").read_text())
+        pins.pop("load_envelope")
+        (run / "pins.json").write_text(json.dumps(pins))
+        assert run_eval(run) != ev.EXIT_VOID, (
+            "a run predating the pin must grade as it did, not void"
+        )
+
+    # The remedy this gate must never take. Removing the corrupted rep does not
+    # tighten the interval -- it WIDENS it, because n=12 -> 11 steps the rank
+    # ladder from k=3 to k=2 and the extreme value was already outside the k=3
+    # interval. Real p99s from cell A of that run.
+    a_p99 = [3.043, 58.737, 4.791, 3.006, 2.619, 3.539,
+             2.853, 3.035, 2.934, 2.720, 2.888, 2.654]
+    with_rep2 = ev.rel_half_width(a_p99)
+    without = ev.rel_half_width([v for i, v in enumerate(a_p99) if i != 1])
+    assert ev._max_rank(12) == 3 and ev._max_rank(11) == 2, (
+        "the rank ladder moved; the arithmetic below no longer holds"
+    )
+    assert without > with_rep2, (
+        f"dropping the corrupted rep must not be mistakable for a fix: "
+        f"half-width {with_rep2:.3f} -> {without:.3f}"
+    )
+
+    # The grader can only void on evidence the runner actually writes. A start
+    # sample alone is the original defect -- loadavg-1 is a trailing average, so
+    # it describes the minute BEFORE the window -- so both ends are asserted at
+    # the source, not just in the fixture.
+    runner = (EVAL.parent / "run_workload.sh").read_text()
+    for field in ("load1_start", "load1_end"):
+        assert f"float({field})" in runner, (
+            f"run_workload.sh no longer writes meta.{field}; the envelope then "
+            f"has nothing to read and every real run voids on a missing field"
+        )
+    assert runner.index('"load1_end"') > runner.index("docker run"), (
+        "load1_end must be sampled AFTER k6 returns, or it describes the "
+        "minute before the measured window rather than the window itself"
+    )
+
+
+def test_every_cell_is_interleaved():
+    """One measured loop over all five cells, warm-up included.
+
+    Running D and E as a trailing block gave them a different machine: in the
+    2026-09-21 run the gated cells drew a window averaging loadavg 7 and the
+    report-only pair, 35 minutes later, drew one averaging 3.4. That is the
+    whole reason the excursion looked like a property of the gated cells. The
+    runner's own comment already required interleaving; it was applied to A, B,
+    C only.
+    """
+    runner = (EVAL.parent / "run_workload.sh").read_text()
+    cells = sorted(ev.LEGACY_CELLS + ev.REPORT_ONLY_CELLS)
+    loops = re.findall(r'for cell in ([A-E ]+); do run_rep', runner)
+    assert loops, "run_workload.sh no longer loops over cells"
+    for loop in loops:
+        assert sorted(loop.split()) == cells, (
+            f"cell loop `{loop.strip()}` does not span every cell {cells}; a cell "
+            f"in its own block is measured on its own machine conditions"
+        )
 
 
 def check(name, fn):
@@ -814,6 +966,8 @@ def main() -> None:
     check("gate/archived run wiring", test_archived_run_regrades_as_insufficiency)
     check("gate/duplicate reps VOID", test_duplicate_reps_void)
     check("gate/runner declares its sample", test_runner_declares_the_sample_it_runs)
+    check("gate/oversubscribed machine VOIDs", test_oversubscribed_machine_voids_the_run)
+    check("gate/every cell interleaved", test_every_cell_is_interleaved)
     check(
         "gate/malformed reps pin VOID",
         test_malformed_reps_pin_voids_rather_than_falling_back,

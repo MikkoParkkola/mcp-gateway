@@ -70,6 +70,78 @@ def rate(summary, name):
     raise Void(f"metric {name} has no rate")
 
 
+def finite_number(value):
+    """True for a real, finite number. Rejects bool, NaN and the infinities.
+
+    NaN is the one that matters: every comparison against it is False, so a
+    NaN load sample slides past `seen >= limit` and an artifact with a NaN
+    envelope would disable enforcement without a word. bool is excluded because
+    Python makes True an int, and a flag is not a load average.
+    """
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def check_envelope(rep: str, meta: dict, pins: dict) -> None:
+    """Void the run when a rep was measured on an oversubscribed machine.
+
+    Spark is shared. A rep whose window ran at loadavg >= the CPU count timed
+    the run queue, not the gateway -- observed on 2026-09-21, where a
+    three-minute excursion to loadavg 34 on 20 CPUs took tools-call p99 from
+    ~3ms to 58.7ms in A2, 75.0ms in B2 and 33.9ms in C2.
+
+    /health moved with it, 3.1ms -> 69ms in the same three reps. /health does no
+    routing and no backend round-trip, so the stall is not in the tool path;
+    being in the same process, it does not by itself separate host contention
+    from a process-wide stall. What separates them is the controlled run: the
+    same binary, hand-run with no harness change, at loadavg 34.9-51.1 returned
+    health p99 60.01ms and tools p99 59.71ms -- A2's numbers, from CPU scarcity
+    alone.
+
+    This voids the RUN, never the rep. Grading the surviving reps would be
+    choosing which measurements count after seeing them, which is the failure
+    this gate exists to prevent; it is also useless, because the order-statistic
+    interval already ignores an extreme value -- dropping A2 moves A.p99's
+    half-width from 0.138 to 0.151, WIDER, since n=12 -> 11 steps k from 3 to 2.
+
+    The envelope is read from pins.json, where the runner declares it before any
+    rep runs. A run recorded before the pin existed has no envelope key and no
+    recorded machine conditions; it is graded as it was, because inventing the
+    load numbers it never sampled would be fabricating the evidence. The report
+    says which of the two happened, so a legacy grade is never mistaken for an
+    enforced one. Once the key IS declared, a rep missing either sample is a
+    void: the runner writes load1_end only after k6 returns, so its absence
+    means the rep never finished a valid window.
+    """
+    envelope = pins.get("load_envelope")
+    if envelope is None:
+        return
+    if not isinstance(envelope, dict):
+        raise Void(f"pins.load_envelope {envelope!r} must be an object")
+    limit = envelope.get("max_load1")
+    if not finite_number(limit) or limit <= 0:
+        raise Void(f"pins.load_envelope.max_load1 {limit!r} must be a positive number")
+    for field in ("load1_start", "load1_end"):
+        value = meta.get(field)
+        if not finite_number(value) or value < 0:
+            raise Void(
+                f"{rep}: meta.{field} is {value!r}, but pins.json declares a load "
+                f"envelope; a rep with no usable record of its machine conditions "
+                f"cannot certify a latency criterion"
+            )
+    seen = max(meta["load1_start"], meta["load1_end"])
+    if seen >= limit:
+        raise Void(
+            f"{rep}: loadavg {seen:.2f} over the rep window reached the "
+            f"{limit:.2f}-CPU envelope; the machine was oversubscribed and this "
+            f"rep timed the run queue, not the gateway. Re-run on a quiet "
+            f"machine -- do not grade the reps that happened to survive."
+        )
+
+
 def check_rep(run: Path, rep: str, pins: dict) -> dict:
     summary = load(run / f"{rep}.summary.json")
     meta = load(run / f"{rep}.meta.json")
@@ -101,6 +173,8 @@ def check_rep(run: Path, rep: str, pins: dict) -> dict:
     if meta.get("k6_image_digest") != pins["k6_image_digest"]:
         raise Void(f"{rep}: k6 image {meta.get('k6_image_digest')} is not the pin")
 
+    check_envelope(rep, meta, pins)
+
     # Void 3: any HTTP error in a measured rep.
     if rate(summary, "http_error_rate") > 0:
         raise Void(f"{rep}: http_error_rate above zero")
@@ -121,6 +195,17 @@ def check_rep(run: Path, rep: str, pins: dict) -> dict:
         "rep": rep,
         "p50": metric(summary, "mcp_tools_call_latency", "p(50)"),
         "p99": metric(summary, "mcp_tools_call_latency", "p(99)"),
+        # Reported beside the latencies, never gating. The envelope above is a
+        # NECESSARY condition, not a certificate of a quiet machine: a rep
+        # measured at loadavg 17.7 of 20 CPUs clears it and still returned p99
+        # 20.5ms against a quiet-machine 2.6ms (hand-run on spark, 2026-09-21).
+        # So when a cell reads INCONCLUSIVE, the conditions it drew are in the
+        # same artifact as the width that made it inconclusive.
+        "load1_max": (
+            max(meta["load1_start"], meta["load1_end"])
+            if isinstance(meta.get("load1_end"), (int, float))
+            else None
+        ),
     }
 
 
@@ -252,7 +337,16 @@ def evaluate(run: Path) -> int:
         cells[cell] = [check_rep(run, f"{cell}{n}", pins) for n in measured]
 
     report = {"per_rep": cells, "cells": {}}
+    # Say which of the two gradings this was. A run predating the envelope is
+    # graded as it always was, and that is correct -- but a reader comparing it
+    # against an enforced run must be able to see that it rests on weaker
+    # evidence, without inferring it from an absent key.
+    report["load_envelope"] = {
+        "enforced": "load_envelope" in pins,
+        "max_load1": (pins.get("load_envelope") or {}).get("max_load1"),
+    }
     for cell, reps in cells.items():
+        loads = [r["load1_max"] for r in reps if r["load1_max"] is not None]
         report["cells"][cell] = {
             "p50": pooled([r["p50"] for r in reps]),
             "p99": pooled([r["p99"] for r in reps]),
@@ -260,6 +354,12 @@ def evaluate(run: Path) -> int:
             "p99_rel_half_width": rel_half_width([r["p99"] for r in reps]),
             "p50_spread": spread([r["p50"] for r in reps]),
             "p99_spread": spread([r["p99"] for r in reps]),
+            # The machine each cell actually drew. With every cell interleaved
+            # these should agree; a cell whose window differs from its siblings'
+            # is being compared against a different machine, which is what the
+            # 2026-09-21 run did to D and E.
+            "load1_max": max(loads) if loads else None,
+            "load1_median": pooled(loads) if loads else None,
         }
 
     a, b, c = (report["cells"][k] for k in LEGACY_CELLS)
