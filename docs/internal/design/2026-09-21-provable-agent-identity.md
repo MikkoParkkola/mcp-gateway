@@ -290,6 +290,10 @@ The property preserved is the one that mattered: the operator states in configur
 
 Keying by bare identifier lets two independent namespaces collide. A caller presenting a valid client certificate for principal **A** and a valid JWT for principal **B** must not combine A's `known_agents` membership with B's scopes. Both `known_agents` and `principal_labels` are therefore keyed by `(proof source, id)`, and the resolved principal is a single `(source, id)` pair chosen by `ProofSource: Ord` — the losing credential is audited (section 9) and grants nothing. String equality between an mTLS CN and a JWT `sub` is a coincidence, never an identity.
 
+**Round 2: "grants nothing" has to include scopes.** Ranking the principal is not sufficient on its own, because scope authorization reads the JWT independently of which principal won the ranking. If an mTLS certificate for A outranks a JWT for B, but B's scopes still authorize the call, the combining this decision exists to prevent happens one layer down. The rule is therefore: **the losing credential contributes no authorization input of any kind** — not a principal, not a scope, not an allowlist membership. When mTLS wins and the JWT belongs to a different principal, the request is authorized on the mTLS policy path alone; a call that needed the JWT's scopes is refused, not silently granted them. An operator who genuinely wants both must map them as one principal, explicitly, which is what `principal_labels` is for.
+
+**Round 2: an exact-match certificate rule is a predicate, not a roster.** DECISION 7.2's table lists "mTLS, explicit subject list" as enumerable. That is only true when the configuration literally contains the subjects. An exact-match *policy rule* — a rule whose comparison happens to be equality — still admits any certificate the CA signs that satisfies it, and the gateway cannot walk the set of such certificates. Enumerable therefore means **the config holds the identifiers**, never **the comparison is exact**. A policy that matches by equality against a value the config does not enumerate takes the namespace waiver like any other non-enumerable source.
+
 That closes the namespace trap without weakening change 2:
 
 - Contradiction-is-refusal is the **default**, matching the ruling literally. It fires on every mismatch in a mapped namespace.
@@ -340,9 +344,16 @@ Under the split, the single `agent_id` field becomes two, and the consumers divi
 
 | Consumer | Field | Rationale |
 |---|---|---|
-| `IdentityGrantRequest.agent_id` → `GrantAgent::matches` | **proven id only** | An access decision. A declared label must never satisfy it. |
+| `IdentityGrantRequest.agent_id` → `GrantAgent::matches` | **proven `(source, id)` pair** | An access decision. A declared label must never satisfy it, and a bare id would re-open DECISION 7.3: an mTLS subject and a JWT `sub` that happen to be the same string are not the same principal, so `GrantAgent::Exact` must compare the pair. |
+| Task-recovery authorization (`handlers/tasks.rs:295`) | **proven `(source, id)` pair** | Also an access decision — see below. |
 | `MetaMcpCallerContext` audit / `agent_declared` | both, distinct | Section 9's audit rule. |
-| `tasks::RecoveryCaller.agent_id` | declared, falling back to proven | Attribution, no access decision — the claim holds for this consumer alone. |
+| `tasks::RecoveryCaller` attribution / cost | declared, falling back to proven | The only consumer with no access decision behind it. |
+
+**Round 2 correction — recovery is authorization too.** A round-1 draft of this table left `RecoveryCaller.agent_id` on the attribution side. That is wrong, verified at source: `handlers/tasks.rs:295` assigns `agent_id: caller.agent_id` into a caller context whose own comment at `:286` reads "This context checks authorization only; it never accesses a cache", and whose `signing: None` at `:290-292` exists specifically to keep `check_invocation_policy` running on that read. So the recovery path evaluates invocation policy and grants on the same value. The attribution/authorization split therefore runs *through* `RecoveryCaller`, not around it: the struct carries both fields, and the recovery context reads the proven pair while cost attribution reads the declared label.
+
+This is the second time the "it is only telemetry" claim has been falsified by a grep of its consumers, which is itself the argument for the type split: as long as one `Option<String>` carries both meanings, every new consumer is a coin flip.
+
+**The grant-input change is unconditional, and section 10 must say so.** DECISION 9.1 changes what is passed to `GrantAgent::matches` regardless of `security.agent_identity.enabled`. A deployment that leaves identity enforcement off but uses agent-scoped identity grants **does** change behaviour: grants that matched a declared label stop matching. "Enforcement off means nothing changes" is true of sections 6 through 8 and false of this one. It belongs in the breaking-change set, not in "what does not break".
 
 `GrantAgent::Exact` keeps its shape; what changes is what is passed to it. Grants minted under 3.x against a declared label stop matching once the caller can no longer prove that label — which is the vulnerability closing, not a regression, and it is listed in section 10's breaking-change set and section 11's Tier 1 rows.
 - **Mismatch signal**: when a proven principal and a declared label are both present and differ under a DECISION 7.1 rule 3 waiver, audit emits `declared_label_mismatch` with both values. Under rules 1 and 2 the same situation is a refusal — and **the refusal path emits no audit record today**, verified at source: `handlers.rs:612-618` returns `build_http_error_response(None, -32600, reason, FORBIDDEN)` straight from the `validate_agent_identity` error arm, with no audit call, and `backend_handlers.rs:526` has the same shape. So "the refusal is already its own audit record" is false as written. Emitting an identity audit event on the refusal arm is therefore **new work in this change**, not an existing property being relied on; it is listed in section 12's stages and carries its own Tier 3 test row. Without it, the ruling's detection signal exists only on the waiver path, which is the one path an attacker is least likely to be on.
@@ -529,3 +540,30 @@ scope and neither reviewer disputed that. Neither reviewer ran the gateway or a 
 there is no implementation yet. That is the point of reviewing at this stage — B1 and B4 would
 each have cost a branch to discover after the code was written, and B1 would have shipped a
 second unauthenticated string match into the grant system.
+
+### Round 2 — gpt reviewer, on the revised document
+
+Run record: `/private/tmp/claude-501/.../tasks/bq5l4h41e.output`. Verdict **SHIP-WITH-FIXES**:
+"authorization still loses identity provenance at grant and recovery boundaries." Five findings,
+all applied. Three of them are round-1 fixes that were incomplete rather than new ground, which
+is the expected shape of a second round and the reason one was run.
+
+| # | Finding | Verified at | Disposition |
+|---|---|---|---|
+| R2-1 | DECISION 9.1 said "proven id", contradicting DECISION 7.3's `(source, id)` keying — an mTLS subject could satisfy a grant meant for a same-named JWT principal | internal inconsistency between two decisions added in the same round | 9.1's table now reads **proven `(source, id)` pair** |
+| R2-2 | DECISION 7.3 ranks the principal but leaves the losing credential's **scopes** authorizing independently | scope authorization reads the JWT without consulting which principal won | 7.3 extended: the losing credential contributes no authorization input of any kind |
+| R2-3 | `RecoveryCaller.agent_id` was classified attribution-only, but the recovery path authorizes on it | `handlers/tasks.rs:295`, in a context whose comment at `:286` says "checks authorization only" and whose `signing: None` at `:290-292` keeps `check_invocation_policy` running | recovery moved to the authorization side; the split now runs through `RecoveryCaller` |
+| R2-4 | "mTLS, explicit subject list" was treated as enumerable on the strength of an exact comparison | an equality rule still admits any CA-signed certificate satisfying it | enumerable redefined: the **config holds the identifiers**, never "the comparison is exact" |
+| R2-5 | Section 10 claimed enforcement-off deployments are untouched, but the grant-input change is unconditional | DECISION 9.1 changes `GrantAgent::matches` input regardless of `agent_identity.enabled` | stated as a breaking change; agent-scoped grants change behaviour with enforcement off |
+
+Two improvements also taken: the serialized shape of the source-qualified allowlist and its
+treatment of legacy bare strings under the escape hatch needs specifying at implementation
+time, and the test plan gains explicit rows for anonymous-allowlist rejection, refusal
+auditing, grant spoofing, namespace collision and recovery authorization.
+
+**The pattern worth naming.** R2-3 is the second time a consumer of the flattened `agent_id`
+was called telemetry and turned out to authorize. Round 1 found the grant path; round 2 found
+the recovery path behind it. Neither was found by reasoning about the design — both were found
+by grepping the consumers. Before implementation begins, the remaining consumers of
+`MetaMcpCallerContext.agent_id` get the same treatment, and the result is recorded here rather
+than assumed.
