@@ -1,6 +1,6 @@
 {
   "criterion": "NFR.PERF.1",
-  "started_utc": "2026-09-21T10:01:39Z",
+  "started_utc": "2026-09-21T10:14:24Z",
   "host": "spark",
   "arch": "aarch64",
   "cores": "20",

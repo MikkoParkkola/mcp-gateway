@@ -174,6 +174,22 @@ def ratio_stats(pairs: list[dict], metric: str) -> dict:
     }
 
 
+def split_by_order(pairs: list[dict], metric: str) -> dict:
+    """Paired ratio computed separately over each counterbalance position.
+
+    `order` is the slot the arm occupied inside its pair, 1 or 2. The baseline
+    sitting in slot 2 means the CANDIDATE went first, so the labels are read off
+    the baseline's slot inverted -- getting this backwards would report a
+    position effect as its own mirror image.
+    """
+    out = {}
+    for base_slot, label in ((1, "baseline_first"), (2, "candidate_first")):
+        subset = [p for p in pairs if p["base"]["order"] == base_slot]
+        sub = ratio_stats(subset, metric)
+        out[label] = {"n": sub["n"], "ratio": sub["ratio"]}
+    return out
+
+
 def register(args) -> int:
     """Derive the gate from CALIBRATION pairs only, before any scored rep."""
     pairs, _ = load_pairs(args.csv, scored_only=False)
@@ -243,11 +259,7 @@ def verdict(args) -> int:
         # Counterbalance check: the same ratio computed on the pairs that ran
         # the candidate first and on those that ran the baseline first. If the
         # two disagree, the number is position, not version.
-        by_order = {}
-        for first, label in ((2, "baseline_first"), (1, "candidate_first")):
-            subset = [p for p in pairs if p["base"]["order"] == first]
-            sub = ratio_stats(subset, metric)
-            by_order[label] = {"n": sub["n"], "ratio": sub["ratio"]}
+        by_order = split_by_order(pairs, metric)
         per_metric[metric] = dict(st, budget=budgets[metric], verdict=v, by_order=by_order)
         verdicts.append(v)
     overall = "FAIL" if "FAIL" in verdicts else ("INCONCLUSIVE" if "INCONCLUSIVE" in verdicts else "PASS")
@@ -289,12 +301,84 @@ def verdict(args) -> int:
     return 0
 
 
+SELFTEST_CSV = """pair,order,arm,sha,p50_ms,p99_ms,reqs,iters,status,reason
+1000,1,rel,0c93384,10,20,1200,100,OK,
+1000,2,base,32f135a,10,20,1200,100,OK,
+1001,1,base,32f135a,10,20,1200,90,OK,
+1001,2,rel,0c93384,10,20,1200,100,OK,
+1002,1,rel,0c93384,10,20,1200,89,OK,
+1002,2,base,32f135a,10,20,1200,100,OK,
+1003,1,base,32f135a,10,20,1200,100,OK,
+1003,2,rel,0c93384,,,,,VOID,k6-exit-99
+1004,1,rel,0c93384,10,20,1200,100,OK,
+"""
+
+
+def selftest() -> int:
+    """Exercise the registered iteration gate. Run: `--selftest`.
+
+    The gate decides which pairs reach the verdict, so it gets a check that
+    fails if it stops excluding, starts excluding one arm only, or miscounts.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = f"{tmp}/reps.csv"
+        with open(path, "w") as fh:
+            fh.write(SELFTEST_CSV)
+
+        kept, dropped = load_pairs(path, scored_only=True, min_iters=90)
+        survivors = [p["pair"] for p in kept]
+
+        # 1001 sits exactly on the floor and survives: the gate is `<`, not `<=`.
+        assert 1001 in survivors, survivors
+        # 1002 is one iteration under on the candidate arm only, and the whole
+        # pair goes -- the surviving record carries neither of its arms.
+        assert 1002 not in survivors, survivors
+        # 1000 is clear on both arms.
+        assert survivors == [1000, 1001], survivors
+        # Each exclusion is counted under its own reason, not pooled.
+        assert dropped == {"void": 1, "incomplete": 1, "below_iteration_gate": 1}, dropped
+
+        # The base arm trips the same gate as the candidate arm.
+        under_base = SELFTEST_CSV.replace(
+            "1001,1,base,32f135a,10,20,1200,90", "1001,1,base,32f135a,10,20,1200,80"
+        )
+        with open(path, "w") as fh:
+            fh.write(under_base)
+        kept, dropped = load_pairs(path, scored_only=True, min_iters=90)
+        assert [p["pair"] for p in kept] == [1000], kept
+        assert dropped["below_iteration_gate"] == 2, dropped
+
+        # min_iters=0 disables the gate, so calibration scoring is unchanged.
+        kept, dropped = load_pairs(path, scored_only=True, min_iters=0)
+        assert [p["pair"] for p in kept] == [1000, 1001, 1002], kept
+        assert dropped["below_iteration_gate"] == 0, dropped
+
+    # The counterbalance labels follow the baseline's SLOT, inverted: a pair
+    # whose baseline sat in slot 2 is a pair the candidate opened.
+    def mkpair(base_slot: int, rel_p50: float) -> dict:
+        return {
+            "base": {"p50": 10.0, "order": base_slot},
+            "rel": {"p50": rel_p50, "order": 2 if base_slot == 1 else 1},
+        }
+
+    split = split_by_order([mkpair(2, 20.0), mkpair(2, 20.0), mkpair(1, 10.0), mkpair(1, 10.0)], "p50")
+    assert split["candidate_first"]["n"] == 2, split
+    assert abs(split["candidate_first"]["ratio"] - 2.0) < 1e-9, split
+    assert abs(split["baseline_first"]["ratio"] - 1.0) < 1e-9, split
+
+    print("selftest OK: iteration gate excludes whole pairs; order labels follow slot")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="NFR.PERF.1 paired A/B evaluator")
     ap.add_argument("--read-rep", metavar="SUMMARY")
     ap.add_argument("--samples", metavar="CSV")
     ap.add_argument("--register", action="store_true")
     ap.add_argument("--verdict", action="store_true")
+    ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--read-gate", metavar="GATE")
     ap.add_argument("--field")
     ap.add_argument("--csv")
@@ -313,6 +397,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print(read_rep(args.read_rep, args.samples))
         return 0
+    if args.selftest:
+        return selftest()
     if args.read_gate:
         print(json.load(open(args.read_gate))[args.field])
         return 0
@@ -320,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
         return register(args)
     if args.verdict:
         return verdict(args)
-    ap.error("one of --read-rep, --register, --verdict, --read-gate is required")
+    ap.error("one of --read-rep, --register, --verdict, --read-gate, --selftest is required")
     return 64
 
 

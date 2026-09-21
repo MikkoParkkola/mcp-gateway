@@ -208,3 +208,41 @@ which predates the existence of any gate file. Only the floor is involved: the b
 (5% P50, 10% P99) and the decision rule are untouched, and neither has been looked at against
 scored data. Raising a rep-count floor to match an already-committed document is conformance
 with the pre-registration, not a threshold chosen after the numbers.
+
+## Amendment 2 — 2026-09-21, after the scored run started
+
+Declared mid-run, which is the part that needs justifying. The scored run began at
+2026-09-21T10:14:24Z, four minutes after the gate was stamped, and this amendment lands
+while it is still producing pairs. Two changes,
+neither touching a threshold, the decision rule, the pair count or the baseline pin:
+
+### A2.1 — the counterbalance split reported its two groups inverted
+
+`order` in `reps.csv` is the slot an arm occupied inside its pair, 1 or 2. A pair whose
+baseline sat in slot 2 is a pair the **candidate** opened. The reporting code read the
+baseline's slot without inverting, so the candidate-first group would have been printed
+under `baseline_first` and vice versa. The diagnostic that exists to expose a position
+effect would have exposed its mirror image.
+
+Found by writing the test below, not by reading the code again.
+
+### A2.2 — the iteration gate and the order split now carry a runnable check
+
+`powered_ab_score.py --selftest` asserts, against a fixture CSV: a pair one iteration
+under the floor is dropped; a pair exactly on the floor is kept; the drop removes the
+whole pair rather than the offending arm; either arm can trip it; the dropped count is
+reported under its own reason; `min_iters=0` leaves calibration scoring untouched; and
+the order labels follow the baseline's slot inverted. A control that decides which data
+reaches the verdict is not shippable on inspection alone — A1.1 said exactly that about
+a gate that was registered but never read back, and then added the gate untested.
+
+### Why this is legal mid-run
+
+The pass rule, the budgets, the registered pair count and the baseline commit are
+unchanged and remain in `registered_gate.json` as stamped at 10:10:21Z. The scored
+samples are untouched: `--read-rep`, which converts a rep into numbers, is not modified,
+so every pair already on disk keeps the value it had. What changed is how the finished
+pairs are labelled in the report and whether the evaluator has a test. Neither could be
+selected to favour an outcome, because no verdict has been computed and no scored pair
+has been looked at. Recorded here rather than folded in silently, on the same principle
+as Amendment 1.
