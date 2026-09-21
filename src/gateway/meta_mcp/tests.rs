@@ -1073,9 +1073,9 @@ async fn tools_resolve_omits_oauth_isolated_backend_on_multi_user_gateway() {
     let meta = MetaMcp::new(registry);
     meta.set_multi_user(true);
 
-    let resp = meta
-        .handle_tools_resolve(RequestId::Number(2), Some(&json!({ "name": "recall" })))
-        .await;
+    let params = json!({ "name": "recall" });
+    let id = RequestId::Number(2);
+    let resp = meta.handle_tools_resolve(id, Some(&params), None).await;
 
     assert!(
         resp.error.is_some(),
