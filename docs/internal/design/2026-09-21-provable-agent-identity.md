@@ -21,7 +21,7 @@
 11. Test plan
 12. Out of scope, and the stages remaining
 13. Falsifier
-14. Design review round 1 — findings and disposition
+14. Design review rounds 1 and 2 — findings and disposition
 
 ## 1. The ruling, verbatim
 
