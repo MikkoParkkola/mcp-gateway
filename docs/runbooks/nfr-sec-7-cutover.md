@@ -198,14 +198,42 @@ directory — step 7 covers that.
 
 ## Pass output
 
-Step 7 must print exactly four lines, in manifest order, and exit 0:
+Step 7 must exit 0. Do not match the output line-for-line: the checker prints a header,
+then one line per control **in manifest order**, then a tally, so the line count tracks
+the manifest and grows whenever a control is added. An earlier revision of this runbook
+pinned "exactly four lines" and `2 probed, 1 uncovered, 0 failing`, taken when the
+manifest held three controls; it holds 33 as of 2026-09-21, and that stale shape would
+read a correct run as a failure.
+
+Grade on these four conditions, not on the transcript:
+
+1. exit status 0,
+2. the tally ends `0 failing`,
+3. `origin-guard` and `host-guard` each read `refused 403; legitimate request 200`,
+4. no control that was covered in the recorded baseline has become `uncovered`.
+
+The shape, measured against the 4.0.0 build on 2026-09-21:
 
 ```
+18 authority rows, 17 security modules, 33 manifest controls, 0 coverage gaps
 origin-guard: refused 403; legitimate request 200 [<provenance>]
 host-guard: refused 403; legitimate request 200 [<provenance>]
-unsafe-code-denied: uncovered -- a compile-time lint leaves no signal on the wire; drift is caught by the build, not by a request
-2 probed, 1 uncovered, 0 failing
+...one line per remaining manifest control, most of them `uncovered` with a reason...
+5 probed, 28 uncovered, 0 failing
 ```
+
+`uncovered` is not a failure. Most controls carry a recorded reason why no request can
+observe them on a live install — a compile-time lint leaves no signal on the wire, a
+config-gated control is off by default, and the negative half of several probes would be
+the outage or the attack they are looking for. Condition 4 is what makes the count
+load-bearing: a control silently dropping from probed to uncovered is drift that the
+`0 failing` tally alone will not show.
+
+Condition 4 has no baseline yet. The step-3 smoke printed its transcript to the terminal
+and nothing captured it, so there is no recorded prior run to diff against. Redirect the
+step-5 run to `docs/internal/evidence/nfr-sec-7-control-drift-baseline.txt` and commit
+it; that file becomes the baseline every later run grades condition 4 against. Until it
+exists, condition 4 is ungradeable — grade steps 5-7 on conditions 1-3 and say so.
 
 - `<provenance>` is `provenance: 5d25f104 is in v3.5.1` for option A, and
   `provenance unavailable: v4.0.0 is not a tag in this repository` for a pre-tag 4.0.0
