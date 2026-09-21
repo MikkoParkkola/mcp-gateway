@@ -46,8 +46,19 @@ fn legacy_file_name(backend_name: &str, resource_url: &str) -> String {
     format!("{}_tokens.json", hex::encode(&hash[..8]))
 }
 
-/// Literal 3.x token JSON: the exact field set v3.5.1 serialized, with none of
-/// the fields 4.0.0 later added. Parsing this is the READABLE claim.
+/// Literal 3.x token JSON. Parsing this is the READABLE claim.
+///
+/// It omits `token_endpoint`, `client_id` and `client_secret`, which 4.0.0 did
+/// NOT add: `TokenInfo` is byte-identical between `v3.5.1` and this tree across
+/// its whole definition, and all three are declared `Option<String>` at
+/// `src/oauth/storage.rs:42`, `:46` and `:50` in both. They are omitted here
+/// because a 3.x record written before those fields were populated simply does
+/// not carry them, and `serde(default)` absorbs the omission. The distinction
+/// matters: "fields 4.0.0 added" implies a schema change across the major
+/// version, and a migration designed against that premise goes looking for a
+/// decryption or conversion step that does not exist. The real 3.x barrier is
+/// the storage KEY, which `legacy_single_user_record_is_not_reachable_under_the_4_0_0_issuer_key`
+/// pins.
 fn legacy_record_json() -> String {
     format!(
         r#"{{
