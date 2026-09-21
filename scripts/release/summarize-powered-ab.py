@@ -84,8 +84,14 @@ def main(path: str) -> int:
         print(f"\n{label}  ({sample[0]['sha']})")
         print(f"  reps {len(sample)}   requests {reqs:,}")
         for col, name in (("p50_ms", "P50"), ("p90_ms", "P90"), ("p95_ms", "P95"), ("p99_ms", "P99")):
-            mid, lo, hi, cov = median_ci([float(r[col]) for r in sample])
+            vals = [float(r[col]) for r in sample]
+            mid, lo, hi, cov = median_ci(vals)
+            # The observed spread is printed next to the interval so a single
+            # excursion stays visible. The interval itself is an order statistic
+            # and barely moves when one rep misbehaves, which is the point of
+            # choosing it -- but a reader is entitled to see that it happened.
             print(f"  {name}  {mid:.4f} ms   95% CI [{lo:.4f}, {hi:.4f}]   (exact coverage {cov:.3f})")
+            print(f"        observed spread [{min(vals):.4f}, {max(vals):.4f}]")
     return 0
 
 
