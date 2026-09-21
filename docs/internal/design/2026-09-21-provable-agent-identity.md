@@ -213,7 +213,9 @@ Closed by import sweep, not only by literal search: the sole importers of the ty
 
 Beyond the type itself, this work adds two fields to `AgentIdentityConfig` — `allow_unverified_agent_identity` (section 10) and `principal_labels` (section 7). The config surface is `src/config/features/security.rs:8` (which re-exports `AgentIdentityConfig`), `:583` and `:627`, and `src/config/mod.rs:36`. Both fields are additive under the existing `#[serde(default)]` on the struct (`src/security/agent_identity.rs:35-37`), so no existing configuration fails to parse; the behaviour change is in validation, not deserialization.
 
-Downstream of sites 12 and 13, `agent_id` travels as a plain `Option<&str>` — `tasks.rs:112`, `:171`, `:211`, `:295` — so no type change propagates past the router. That boundary is what keeps the blast radius at sixteen sites.
+Downstream of sites 12 and 13, `agent_id` travels as a plain `Option<&str>` — `tasks.rs:112`, `:171`, `:211`, `:295`.
+
+**Round 2 retracts the conclusion that used to follow this sentence.** It read "so no type change propagates past the router. That boundary is what keeps the blast radius at sixteen sites." That was true of the original scope and stopped being true the moment DECISION 9.1 made grants and task recovery authorize on the proven pair: a downstream consumer that still holds one flattened `Option<&str>` cannot express `(source, id)`, so the split has to reach it. Three sites past the router are therefore in scope and are listed in section 12 stage 4 — `MetaMcpCallerContext` (`src/gateway/meta_mcp/mod.rs:157`), its read at `invoke.rs:1137`, and the ASI03 audit line at `invoke.rs:1893-1915`. Leaving the freeze in place was an invitation to re-flatten at exactly the chokepoint the split exists to open.
 
 ### Test sites requiring rework
 
@@ -281,16 +283,27 @@ The census therefore has two tiers:
 | Proof source | Enumerable? | Startup requirement |
 |---|---|---|
 | Verified JWT `sub` | yes — the `client_id` registry | every registered client needs a `principal_labels` entry (label set or waiver) |
-| mTLS, explicit subject list | yes | every listed subject needs an entry |
-| mTLS, `any` / OU / SAN glob | **no** | a single **namespace-level** waiver for the proof source, written explicitly; startup refuses if declared labels are accepted and no namespace entry exists |
+| mTLS rule whose match value is a literal identifier | yes | every such value needs an entry |
+| mTLS rule whose match value is a glob, or `any` | **no** | a single **namespace-level** waiver for the proof source, written explicitly; startup refuses if declared labels are accepted and no namespace entry exists |
+
+**Which mTLS rules are enumerable, against the type as it exists.** `CertMatchConfig` (`src/mtls/config.rs:122-136`) has exactly five fields and no separate "exact" mode: `cn` and `ou` are documented "exact or glob", `san_uri` and `san_dns` are glob, and `any` is a catch-all boolean. There is no "explicit subject list" to point at. Enumerability is therefore a property of the **configured value**, not of the field: a `cn` or `ou` holding no glob metacharacter is a literal the startup check can read and enumerate; any value containing one, and `any: true`, is not. Deciding this per field rather than per value would push every mTLS deployment into the namespace waiver and switch contradiction-refusal off for all of them, which is the opposite of DECISION 7.1's default.
 
 The property preserved is the one that mattered: the operator states in configuration that a namespace is incomparable, rather than the gateway inferring it. What is given up is per-principal granularity for glob policies, which was never available to begin with.
 
 ### DECISION 7.3 — no cross-namespace credential combining
 
-Keying by bare identifier lets two independent namespaces collide. A caller presenting a valid client certificate for principal **A** and a valid JWT for principal **B** must not combine A's `known_agents` membership with B's scopes. Both `known_agents` and `principal_labels` are therefore keyed by `(proof source, id)`, and the resolved principal is a single `(source, id)` pair chosen by `ProofSource: Ord` — the losing credential is audited (section 9) and grants nothing. String equality between an mTLS CN and a JWT `sub` is a coincidence, never an identity.
+Keying by bare identifier lets two independent namespaces collide. A caller presenting a valid client certificate for principal **A** and a valid JWT for principal **B** must not combine A's `known_agents` membership with B's scopes. Both `known_agents` and `principal_labels` are therefore keyed by `(proof source, id)`, and the resolved principal is a single `(source, id)` pair chosen by `ProofSource: Ord` — the losing credential is audited (section 9) and grants nothing.
+
+**Round 2: the pair has to be carried by the types, or it is prose.** Saying the keying is by pair changes nothing while the config surfaces still hold bare strings, and three of them do, verified at source: `known_agents: Vec<String>` (`src/security/agent_identity.rs:49`) compared with `contains(&identity.id)` (`:161`), and `GrantAgent::Exact(String)` compared with `actual == expected` (`src/identity_grants.rs:65-68`, reached from `:232` and `:608`). An implementer reading only section 5's site inventory would keep all three and ship the collision this decision exists to close. The schema changes are therefore part of the decision, not an implementation detail:
+
+- `known_agents` becomes a list of `(proof source, id)` entries, and `validate_agent_identity` looks up that pair rather than the id. A bare-string entry in an existing config is a load error naming the proof source it must declare — not a silently widened match.
+- `GrantAgent::Exact` carries the proof source alongside the identifier, and `Grant::covers` receives the proven pair. This rides the 4.0.0 grant migration DECISION 9.1 already declares, so it costs no second migration.
+
+Without both, a JWT `sub` of `runner` and an mTLS CN of `runner` remain one principal to the gateway and inherit each other's allowlist membership and grants. String equality between an mTLS CN and a JWT `sub` is a coincidence, never an identity.
 
 **Round 2: "grants nothing" has to include scopes.** Ranking the principal is not sufficient on its own, because scope authorization reads the JWT independently of which principal won the ranking. If an mTLS certificate for A outranks a JWT for B, but B's scopes still authorize the call, the combining this decision exists to prevent happens one layer down. The rule is therefore: **the losing credential contributes no authorization input of any kind** — not a principal, not a scope, not an allowlist membership. When mTLS wins and the JWT belongs to a different principal, the request is authorized on the mTLS policy path alone; a call that needed the JWT's scopes is refused, not silently granted them. An operator who genuinely wants both must map them as one principal, explicitly, which is what `principal_labels` is for.
+
+**Where that rule has to be enforced, since it is not enforced today.** `authorize_tool_target` applies the mTLS policy (`src/gateway/router/authorization.rs:183-204`) and the agent JWT's scopes (`:206-214`) as two independent gates, neither consulting the other's principal. The ranking in this module cannot reach either. So this rule is a funded change at `:206-214` — when a proven principal was resolved and the JWT `sub` is not that principal, the JWT's scopes do not authorize the call — and it is listed in section 12 stage 4 and tested at T16. Left unfunded, the paragraph above would be a decision recorded as done inside the document that hides the gap.
 
 **Round 2: an exact-match certificate rule is a predicate, not a roster.** DECISION 7.2's table lists "mTLS, explicit subject list" as enumerable. That is only true when the configuration literally contains the subjects. An exact-match *policy rule* — a rule whose comparison happens to be equality — still admits any certificate the CA signs that satisfies it, and the gateway cannot walk the set of such certificates. Enumerable therefore means **the config holds the identifiers**, never **the comparison is exact**. A policy that matches by equality against a value the config does not enumerate takes the namespace waiver like any other non-enumerable source.
 
@@ -316,11 +329,14 @@ New behaviour of `validate_agent_identity`:
 | `require_id = true`, nothing present | refuse (`:151-157`) | unchanged |
 | `require_id = true`, declared label only | **accept** — `:150` sees `Some`, `:161` allowlist skipped when empty | **refuse**: a label is not an ID |
 | `require_id = true`, proven present | accept | unchanged |
+| `known_agents` non-empty, nothing present | accept — `:150` returns `Ok` before the allowlist is reached | **unchanged**: still accept. See below. |
 | `known_agents` non-empty, declared label only | **accept if the label is listed** (`:161`) | **refuse**: the allowlist is not satisfiable by self-declaration |
 | `known_agents` non-empty, proven present | accept if `identity.id` listed | accept if the `(proof source, proven.id)` pair is listed (DECISION 7.3); the label is not consulted |
 | `known_agents` non-empty, **nothing** present | **accept** — `:161` is skipped when no identity resolves | **refuse**: an allowlist cannot admit an anonymous caller |
 
 Three rows flip from accept to refuse. They are the vulnerability.
+
+**The anonymous row does not flip, and the table now says so.** Round 2 read a fourth break here — an unidentified caller against a non-empty `known_agents` losing access on upgrade — so the omission was costing a careful reader a wrong conclusion. Verified at source: `validate_agent_identity` returns `Ok(())` at `src/security/agent_identity.rs:159` when no identity resolves and `require_id` is false, **before** the allowlist check at `:161`. A non-empty `known_agents` has never refused an anonymous caller, and this design does not start. The operator who wanted "listed or nothing" gets that from `require_id = true`, as today. What that operator does lose is the declared-only row, which DECISION 10.1 names as the breaking change and the hatch restores.
 
 The module documentation has to change with them. `src/security/agent_identity.rs:24` currently describes `known_agents` as an "optional allowlist of accepted agent IDs", and `:27-28` states the allowlist applies only "when `known_agents` is non-empty and `require_id` is true" — which the C5 review already found wrong at source, since `:161` runs whenever an identity resolves. Both must be rewritten to say the allowlist is a **proven-principal** allowlist. The C5 review recorded the reason plainly and it still holds: `known_agents` is a declared-label policy, not a cryptographic allowlist, and the name implies otherwise. This change makes the name true rather than continuing to document around it.
 
@@ -396,9 +412,13 @@ The more serious compatibility consequence is not the header-only deployment. It
 
 That last row is a dead gateway produced by a config that looks reasonable, and it is reachable from today's working configuration by upgrading alone. Three obligations follow:
 
-1. **Startup validation must refuse this combination**, not discover it per request. `agent_identity.enabled` with `require_id` or a non-empty `known_agents`, neither agent auth nor mTLS configured, **and `allow_unverified_agent_identity = false`**, is a configuration error — fail at startup naming both the missing proof sources and the hatch. With the hatch `true` the same combination is legal and starts with the weakening warning. A gateway that starts and then refuses everything is the worst available outcome.
+1. **Startup validation must refuse this combination**, not discover it per request. `agent_identity.enabled` with `require_id` or a non-empty `known_agents`, no proof source **gating** requests, **and `allow_unverified_agent_identity = false`**, is a configuration error — fail at startup naming both the missing proof sources and the hatch. With the hatch `true` the same combination is legal and starts with the weakening warning. A gateway that starts and then refuses everything is the worst available outcome.
 2. **`known_agents` values change meaning.** Under DECISION 3.1 entries must be registered `client_id` values or mTLS subjects, not free labels. No shipped configuration sets `known_agents` — the only occurrences are test fixtures (section 3) — so the repo carries no inventory to migrate, but operator configurations do.
 3. **Upgrade notes.** This needs an entry in the 4.0.0 migration material alongside the identity-keyed catalogue and the 3.x credential migration, which the ruling already flags as concurrent load on this release. The migration framework at `src/commands/upgrade.rs` is the existing home for it.
+
+**"Configured" is the wrong predicate for mTLS; reuse the one that already exists.** `config.mtls.enabled` alone does not mean certificates gate anything: `require_client_cert: false` with empty policies is the documented encryption-only migration mode (`src/mtls/config.rs:56-62`), which encrypts and authenticates nobody. Treating that as a proof source lets the gateway start and then refuse every request without a certificate — exactly the dead gateway obligation 1 exists to prevent, arrived at from the other direction. The predicate is the one `support.rs:627-628` already computes for the same question: `mtls.enabled && (mtls.require_client_cert || !mtls.policies.is_empty())`, or `agent_auth.enabled`. Startup uses that, not `enabled`.
+
+**Obligation 2 is a schema change, not a re-reading.** Under DECISION 7.3 `known_agents` entries become `(proof source, id)` pairs, so an existing bare-string list fails to load with a message naming the proof source each entry must declare. That is a louder break than "values change meaning" and it is the intended one: silently reinterpreting an existing string as a proven-principal id is how a stale allowlist entry survives into a release that claims to check proof.
 
 ### What does not break
 
@@ -445,6 +465,12 @@ T3 is the row that matters most. T5 is the row most likely to be quietly dropped
 | T14b | Mapped proven principal, declared label outside its set | **refuse** (DECISION 7.1 rule 2) |
 | T14c | `agent_identity.enabled`, proven source configured, declared labels accepted, a principal absent from `principal_labels` | **startup fails** — the no-fourth-case invariant |
 | T15 | Audit record for any accepted request carrying both | `agent_proven`, `agent_proof`, `agent_declared` present as distinct fields |
+| T16 | mTLS proves principal A; a valid JWT for principal B rides along; the call needs a scope only B holds | **refuse** — the outranked credential contributes no scope (DECISION 7.3, `authorization.rs:206-214`) |
+| T17 | Grant minted for `GrantAgent::Exact` on a proven principal; caller sends only `X-Agent-ID` naming it | **refuse** — a declared label never satisfies a grant (DECISION 9.1). Red at `HEAD`: today it passes |
+| T18 | `known_agents` holds `(jwt, "runner")`; caller proves mTLS CN `runner` | **refuse** — the pair does not match; string equality is a coincidence (DECISION 7.3). Red at `HEAD` |
+| T19 | Grant holds `(jwt, "runner")`; caller proves mTLS CN `runner` | **refuse** — the same pair rule at the grant surface. Red at `HEAD` |
+| T20 | `mtls.enabled = true`, `require_client_cert = false`, empty policies, `agent_identity.enabled`, `require_id = true`, hatch `false` | **startup fails** — encryption-only mTLS is not a proof source (section 10 obligation 1) |
+| T21 | Existing config with bare-string `known_agents` entries | **load error** naming the proof source each entry must declare (section 10 obligation 2) |
 
 ### Route parity
 
@@ -489,7 +515,7 @@ Per the ruling, design review comes before any code. Order, from `funded_work[0]
 1. **Design review** — this document. **Round 1 is complete** (section 14). DECISION 3.1, 7.1, 7.2, 7.3, 9.1 and 10.1 need explicit sign-off. 7.1 adds a mandatory operator config step, 9.1 narrows an existing grant behaviour, and 10.1 breaks existing deployments; all three are reasonable places for a reviewer to rule differently.
 2. **Test review** — section 11 reviewed as a plan, including the red-before-green ordering and the positive rows added in round 1.
 3. **Failing tests** — Tier 1 written and demonstrated red against `HEAD`.
-4. **Implementation** — sixteen production sites from section 5, **plus two surfaces round 1 added**: the identity-grant request path (DECISION 9.1, `handlers.rs:1448/1566/1597` → `identity_grants.rs:608`) and an identity audit event on the refusal arm (`handlers.rs:612-618`, `backend_handlers.rs:526`), which does not exist today. The repo gate fires here: `gitnexus_impact` on `extract_agent_identity` and `validate_agent_identity` before editing either, and `gitnexus_detect_changes` before committing.
+4. **Implementation** — sixteen production sites from section 5, **plus two surfaces round 1 added**: the identity-grant request path (DECISION 9.1, `handlers.rs:1448/1566/1597` → `identity_grants.rs:608`) the JWT-scope gate at `authorization.rs:206-214` that DECISION 7.3 funds, the `MetaMcpCallerContext` and `invoke.rs` ASI03 audit line that carry `agent_id` past the router (`src/gateway/meta_mcp/mod.rs:157`, `invoke.rs:1137`, `:1893-1915`), and an identity audit event on the refusal arm (`handlers.rs:612-618`, `backend_handlers.rs:526`), which does not exist today. The repo gate fires here: `gitnexus_impact` on `extract_agent_identity` and `validate_agent_identity` before editing either, and `gitnexus_detect_changes` before committing.
 5. **Final review** — including a re-run of the OWASP Agentic AI checklist at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`, since ASI03 is the control this module claims.
 6. **Docs and housekeeping** — module docs at `:10-15` and `:24-28`, the upgrade notes from section 10, and `funded_work[0]` moved off `stage: design`.
 
@@ -567,3 +593,29 @@ the recovery path behind it. Neither was found by reasoning about the design —
 by grepping the consumers. Before implementation begins, the remaining consumers of
 `MetaMcpCallerContext.agent_id` get the same treatment, and the result is recorded here rather
 than assumed.
+
+### Round 2 — grok reviewer, on the revised document
+
+Verdict **SHIP-WITH-FIXES**: *"DECISION 7.3 is not reflected in the `known_agents` config
+surface or the validation-site inventory, so the round-1 namespace finding is not closed."*
+Four blockers and five improvements. Record at
+`~/.claude/data/reviews/runs/grok-20260920T235914Z-54577.md`. Every claim below was checked
+against source before it was accepted or rejected; the reviewer's word is not the evidence.
+
+| # | Finding | Verified? | Disposition |
+|---|---|---|---|
+| G1 | DECISION 7.3 keys by `(proof source, id)` in prose while `known_agents` stays `Vec<String>` | **yes** — `agent_identity.rs:49`, `:161` | applied: the schema change is now part of 7.3, and section 10 obligation 2 states it as a load error rather than a re-reading |
+| G2 | Section 10 obligation 1 treats "mTLS configured" as a proof source, weaker than `mtls_gates_tools` | **yes** — `support.rs:627-628`, `mtls/config.rs:56-62` | applied: obligation 1 reuses the existing predicate; encryption-only mTLS is not a proof source, tested at T20 |
+| G3 | The row-1 flip — anonymous caller against a non-empty `known_agents` — is an unnamed break | **no** | rejected on source: `:159` returns `Ok` before the allowlist at `:161`, so that row has never refused and does not start. The table was missing the row, which is what produced the misread; the row and the reasoning are now in section 8 |
+| G4 | DECISION 9.1 keeps `GrantAgent::Exact` as bare-string equality, reopening 7.3 at the grant surface | **yes** — `identity_grants.rs:65-68`, `:232`, `:608` | applied: `Exact` carries the proof source, `Grant::covers` takes the pair, T19 pins it |
+| G5 | Section 5's "no type change past the router" freeze contradicts 9.1 | **yes** — `meta_mcp/mod.rs:157`, `invoke.rs:1137`, `:1893-1915` | applied: the freeze is retracted in place and the three sites are in section 12 stage 4 |
+| G6 | 7.2's "mTLS, explicit subject list" describes a type that does not exist | **yes** — `CertMatchConfig` has five fields, `cn`/`ou` are "exact or glob" | applied: enumerability is a property of the configured value, not of the field |
+| G7 | 7.3's "the losing credential grants nothing" is false while JWT scopes apply independently | **yes** — `authorization.rs:183-204` and `:206-214` are two independent gates | applied: the rule is funded at `:206-214`, listed in stage 4 and tested at T16, rather than asserted |
+| G8 | Show YAML for `principal_labels` and the namespace waiver as distinct fields | n/a — editorial | **deferred to the test-review stage**, where the config shape is reviewed against the tests that exercise it. Recorded here so it is not lost |
+| G9 | Add Tier 1 rows for declared-only grant rejection and cross-namespace allowlist | — | applied as T17 and T18 |
+
+Two of these — G1 and G4 — are the same defect wearing two config surfaces, and both are
+round-1 fixes that stopped at the prose layer. That is now the second review in a row where
+the recurring failure is a decision stated in a paragraph and not carried into a type. The
+discriminator the next round should apply to every decision in this document: **name the type
+or the config key the decision changes, or the decision is not made.**
