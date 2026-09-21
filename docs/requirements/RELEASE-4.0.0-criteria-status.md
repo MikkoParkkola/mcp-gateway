@@ -519,16 +519,24 @@ MIK-7272 criteria — was closed on 2026-08-31 and each of the 10 was re-verifie
 the same date.
 
 That is not the same as covering the requirements document. Section 4 of
-`docs/requirements/RELEASE-4.0.0-requirements.md` (lines 204-253) carries 22 non-functional
-requirements, each with its own verification method, and until 2026-09-01 not one of them had a row
-anywhere in this file. They now have rows, below. Recounted from the table on 2026-09-11, and stated as a
-derivation rather than a remembered figure: 23 rows cover the 22 requirements plus
-`NFR.SEC.7`, added that day to govern MIK-7265. Nineteen are MET, `NFR.SEC.1` is MET
-with a recorded caveat, `NFR.COMPAT.3` is N/A, `NFR.PERF.1` is PARTIAL because the
-harness it would be graded against produces no end-to-end percentile, not because the
-measurement is missing or stale — it was re-run 2026-09-13 and the grade is unchanged, and `NFR.SEC.7` is PARTIAL — its drift check
-was built and verified on 2026-09-11, its listening install still fails that check —
-and is the group's only blocking row. The figure this paragraph replaced read "thirteen of the 22 are
+`docs/requirements/RELEASE-4.0.0-requirements.md` (lines 265-316) carries 23 `NFR.*` ids, each with its own verification method, and until 2026-09-01 not one of them had a row
+anywhere in this file. They now have rows, below. Recounted from the table on 2026-09-21, and stated as a
+derivation rather than a remembered figure: the table carries 24 `NFR.*` rows and the
+requirements document carries 24 `NFR.*` ids, so the two sides match one-for-one with
+nothing orphaned on either. Twenty rows are MET, `NFR.SEC.1` is MET with a recorded
+caveat, `NFR.COMPAT.3` is N/A, and exactly two are PARTIAL: `NFR.SEC.7` — its drift
+check was built and verified on 2026-09-11, its listening install still fails that
+check — and `NFR.PKG.1`, whose remaining half publishes only on a tag push. Those same
+two rows are the *whole release's* blocking set, not merely this group's, which is why
+no third row is named anywhere below.
+
+Two figures in this paragraph were wrong until 2026-09-21 and are corrected rather than
+quietly dropped. It read "`NFR.PERF.1` is PARTIAL because the harness it would be graded
+against produces no end-to-end percentile"; the powered run now records one, and the row
+is MET. It also called `NFR.SEC.7` "the group's only blocking row", which stopped being
+true when `NFR.PKG.1` began blocking. Its cross-reference to section 4 as "lines 204-253"
+was stale too — that section now spans lines 265-316 of
+`docs/requirements/RELEASE-4.0.0-requirements.md`. The figure this paragraph replaced read "thirteen of the 22 are
 blocking … nine ABSENT … three PARTIAL", recounted 2026-09-06 and stale within days;
 it over-reported the gap by twelve rows. The authority for any number quoted from this
 file is the table and `scripts/release/count-release-criteria.py --check`, never a
