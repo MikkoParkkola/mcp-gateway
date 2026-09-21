@@ -137,7 +137,7 @@ pub struct ProvenPrincipal {
 }
 
 /// Ordered by strength. Ranking is the discriminant order, not a call order.
-#[derive(PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProofSource {
     /// Verified JWT `sub`, from `validate_agent_token`.
     VerifiedJwtSubject,
