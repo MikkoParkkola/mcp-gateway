@@ -6,9 +6,9 @@
 //! interface. Kept separate from the helper utilities so the schema definitions
 //! can be updated without touching the routing/search logic.
 
-use serde_json::{Value, json};
-
+pub(crate) use super::meta_mcp_tool_total::ToolTotal;
 use crate::protocol::{Tool, ToolAnnotations};
+use serde_json::{Value, json};
 
 // ============================================================================
 // Traditional meta-tool definitions (used when Code Mode is OFF)
@@ -42,44 +42,15 @@ fn build_list_servers_tool(server_count: usize) -> Tool {
     }
 }
 
-/// A bare `0` cannot distinguish "exposes no tools" from "not asked yet".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolTotal {
-    Unknown,
-    AtLeast(usize),
-    Exact(usize),
-}
-
-impl ToolTotal {
-    /// "42 tools", "at least 42 tools", or plain "tools".
-    pub(crate) fn phrase(self) -> String {
-        match self {
-            Self::Unknown => "tools".to_string(),
-            Self::AtLeast(count) => format!("at least {count} tools"),
-            Self::Exact(count) => format!("{count} tools"),
-        }
-    }
-
-    /// Widen by tools known independently of the cache. Never de-hedges.
-    pub(crate) fn plus(self, extra: usize) -> Self {
-        match self {
-            Self::Unknown => Self::Unknown,
-            Self::AtLeast(count) => Self::AtLeast(count + extra),
-            Self::Exact(count) => Self::Exact(count + extra),
-        }
-    }
-}
-
 /// Build the `gateway_list_tools` meta-tool definition.
 fn build_list_tools_tool(tool_count: ToolTotal, server_count: usize) -> Tool {
     Tool {
         name: "gateway_list_tools".to_string(),
         title: Some("List Tools".to_string()),
         description: Some(format!(
-            "List tools from a specific backend, or omit server to list all {} across \
+            "List tools from a specific backend, or omit server to list all {tool_count} across \
          {server_count} backends. Returns names and descriptions — use \
-         gateway_search_tools for ranked results with full schemas.",
-            tool_count.phrase()
+         gateway_search_tools for ranked results with full schemas."
         )),
         input_schema: json!({
             "type": "object",
@@ -133,11 +104,10 @@ fn build_search_tools_tool(tool_count: ToolTotal, server_count: usize) -> Tool {
         name: "gateway_search_tools".to_string(),
         title: Some("Search Tools".to_string()),
         description: Some(format!(
-            "Search {} across {server_count} servers by keyword. Returns ranked \
+            "Search {tool_count} across {server_count} servers by keyword. Returns ranked \
          matches (name, description, score) while avoiding the prompt bloat of loading every tool \
          definition upfront. Ranking diagnostics are omitted unless explain is true. \
-         Supports multi-word queries and synonym expansion.",
-            tool_count.phrase()
+         Supports multi-word queries and synonym expansion."
         )),
         input_schema: json!({
             "type": "object",
@@ -224,8 +194,7 @@ pub(crate) fn require_gateway_invoke_nonce(tools: &mut [Tool]) {
 ///
 /// # Arguments
 ///
-/// * `tool_count` — total tools across all connected backends, or `None` when any
-///   backend has not been enumerated yet
+/// * `tool_count` — total tools across all backends enumerated so far
 /// * `server_count` — number of connected backend servers
 pub(crate) fn build_base_tools(tool_count: ToolTotal, server_count: usize) -> Vec<Tool> {
     vec![

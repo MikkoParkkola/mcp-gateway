@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::attestation::signer::BnautAttestationSigner;
-use crate::backend::{Backend, BackendRegistry};
+use crate::backend::BackendRegistry;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
 use crate::config::SurfacedToolConfig;
@@ -1571,11 +1571,10 @@ impl MetaMcp {
 
     fn build_instructions(&self) -> String {
         let backends = self.backends.all();
-        let mut tool_total = tool_total(&backends);
+        let mut tool_total = super::meta_mcp_tool_total::tool_total(&backends);
         let mut server_count = backends.len();
 
         if let Some(cap) = self.get_capabilities() {
-            // Capabilities are always enumerated, so they only widen the floor.
             tool_total = tool_total.plus(cap.get_tools().len());
             server_count += 1;
         }
@@ -1600,7 +1599,10 @@ impl MetaMcp {
     fn backend_counts(&self) -> (ToolTotal, usize) {
         let backends = self.backends.all();
         let server_count = backends.len();
-        (tool_total(&backends), server_count)
+        (
+            super::meta_mcp_tool_total::tool_total(&backends),
+            server_count,
+        )
     }
 
     /// Handle `tools/list` — Code Mode returns 2 tools; Traditional returns full set.
@@ -2795,19 +2797,6 @@ async fn destructive_confirmation_gate(
         }
     }
     GateOutcome::Proceed
-}
-
-/// A floor over the backends enumerated so far; `Unknown` when none has been.
-fn tool_total(backends: &[Arc<Backend>]) -> ToolTotal {
-    let enumerated = backends.iter().filter(|b| b.cached_tools_known()).count();
-    let total: usize = backends.iter().map(|b| b.cached_tools_count()).sum();
-    if enumerated == backends.len() {
-        ToolTotal::Exact(total)
-    } else if enumerated == 0 {
-        ToolTotal::Unknown
-    } else {
-        ToolTotal::AtLeast(total)
-    }
 }
 
 #[cfg(test)]
