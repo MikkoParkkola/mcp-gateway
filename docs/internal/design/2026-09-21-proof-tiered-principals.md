@@ -99,67 +99,139 @@ proposal therefore does **not** add call sites that bypass `account_key()`. It
 changes `account_key()`'s input from "a verified OIDC identity" to "a proven
 principal", keeping exactly one construction site.
 
-## 4. The safety argument, and why it needs no new comparison logic
+## 4. Mutually exclusive modes, and why that is the right shape
 
-The tempting design is a rank comparison: a grant proven at tier N may be
-leased by a principal proven at tier ≥ N. **That is unnecessary and it is the
-part that would be dangerous**, because it invites a weak local proof to open
-a strong enterprise grant.
+**Operator steer, 2026-09-21:** the authentication methods should be *mutually
+exclusive operating modes* that the admin chooses — single-user local, API key,
+mTLS, OIDC — enforced for everybody, rather than several active at once for
+different users.
 
-The existing key equality already does the work. The authority string
-**namespaces the tier**:
+That is a better design than the tiered one this document opened with, and it
+is adopted. The reason is not simplicity for its own sake: it removes a hole
+that review found in the original.
 
+The first version argued that no rank comparison was needed because `"local"`
+can never equal an OIDC issuer URL, so tiers could not collide. Review was
+right that **nothing enforces that** — §3 celebrates `principal_authority`
+being an unvalidated string, which is exactly what would let an operator
+configure an issuer literally named `local`. The disjointness was a convention
+presented as a security boundary.
+
+**With one mode per deployment there is no second namespace to collide with.**
+The property stops being a rule that must be written, tested and kept true, and
+becomes a consequence of the configuration. The guard disappears rather than
+being implemented.
+
+### 4.1 The mode discrimination already exists
+
+**V** `AuthConfig::implies_multi_user()` at
+`src/config/features/auth.rs:94-100`:
+
+```rust
+if !self.enabled {
+    return false;
+}
+let hard_multi_user = self.api_keys.len() > 1 || has_oidc;
+hard_multi_user || !self.single_user
 ```
-("local",  "single-user")        # sole tier
-("apikey", "alice")              # key tier
-("mtls",   "alice@corp.example") # mtls tier
-("https://accounts.google.com", "10769150350006150715")   # oidc tier
-```
 
-`"local"` can never equal an OIDC issuer URL. Two principals from different
-tiers are simply **different keys** and never collide. No ordering, no
-comparison, no bypass surface — the mechanism that prevents cross-tier
-escalation is the one already under test.
+**V** And the field's own doc comment at `:33-42` already reasons exactly the
+way the steer does, as ADR-008 INV-2 (MIK-6752):
 
-The tier is therefore recorded for **audit and policy**, never for matching.
+> Default `false` is deliberately fail-closed: a single shared API key or
+> bearer token can be handed to a whole team, and the gateway cannot prove
+> from credential count alone that only one human is behind the auth. […] More
+> than one API key or any OIDC issuer is a hard multi-user signal that
+> overrides this hint.
 
-### 4.0 Two claims, and only one of them is currently true
+So the product **already computes the mode**, already fail-closed, already
+tested, already tied to a ratified ADR. It returns "single user" only when auth
+is enabled, there is at most one API key, there is no OIDC issuer, **and** the
+operator has explicitly asserted it.
 
-Review separated these, correctly. They are not the same claim:
+### 4.2 What this reduces the 4.0.0 change to
 
-1. **Exact-key matching is sound.** A grant is reachable only by a principal
-   whose `(authority, subject)` pair is byte-equal. **V** This holds today:
-   `AccountKey::digest` hashes the fields and equality is over the digest.
-2. **Authority strings occupy disjoint namespaces.** This is an **assumption,
-   not an enforced invariant** — and it is the one §3 makes possible by
-   celebrating that `principal_authority` is unvalidated. Nothing stops an
-   operator configuring an identity provider whose issuer is the literal string
-   `local`, which would collide with the `sole` tier exactly.
+The whole of it: **when `implies_multi_user()` is false, mint one fixed
+principal**, and carry it through the lease path.
 
-**So the invariant must be enforced, not assumed.** Reserve the tier labels
-`local`, `apikey` and `mtls` as authority values, and refuse at config load any
-identity provider whose issuer equals a reserved label. Fail closed, name both
-the reserved word and the setting that used it.
+| Originally proposed | Now |
+|---|---|
+| A new `sole` tier and vocabulary | Reuse the existing single-user determination |
+| A new config key | None — `auth.single_user` already exists |
+| A mutual-exclusion guard between `single_user` and OIDC | None — `implies_multi_user` **is** that guard |
+| Reserved authority labels, enforced at config load | None — one mode means one authority |
+| A rank comparison across tiers | None |
 
-Without that guard the design in §4 is a convention, and a convention is not a
-security boundary. With it, the no-rank-comparison property is real.
+What remains is genuinely small: one producer behind an existing condition,
+wired into `account_key()` (`identity.rs:71-98`) and carried through
+`VaultStrategy::prepare` (`vault.rs:133`), plus tests.
 
-### 4.1 The one real hazard, and its guard
+### 4.3 The generalisation, for later
 
-An enterprise deployment that *also* sets `auth.single_user: true` would mint
-`("local", "single-user")` for every caller, collapsing all users into one
-principal — a genuine credential-sharing defect.
+The steer's full shape is `implies_multi_user` widening from a boolean to an
+enumerated mode — `SingleUser | ApiKey | Mtls | Oidc` — chosen by the admin and
+enforced for every caller. That is the 4.1 direction and it subsumes §6's
+staging. It should be designed once, against `MIK-6746.IDENTITY.1`, rather than
+grown a mode at a time.
 
-**Guard, fail-closed at config load:** `auth.single_user: true` is mutually
-exclusive with any configured identity provider. Refuse to start and name both
-settings. **I** This fits existing practice: `upgrade.rs` already treats
-`single_user` as a *declared posture* rather than a runtime inference, and the
-`MIK-6746.IDENTITY.1` design already refuses contradictory identity
-configuration at load.
+**One caution worth recording before that design starts:** mTLS is frequently
+deployed as a *transport* requirement underneath an application-level identity,
+not as an alternative to it — a deployment may reasonably want client
+certificates required at the connection AND OIDC deciding who the user is.
+Making those two mutually exclusive would forbid a real and sensible
+configuration. The exclusivity that is clearly right is over *who the user is*;
+whether it should also cover transport-level requirements is an open question
+for that design, not a settled one.
 
-**A** Assumption needing confirmation: that no shipped deployment currently
-sets both. Cheap to check before the guard lands, and the guard should name the
-remedy rather than simply exiting.
+## 4A. Superseded: the original tiered argument
+
+Kept because the reason it was wrong is the reason §4 is right, and a reader
+who only sees the conclusion cannot check it.
+
+The first draft argued that no rank comparison was needed because the authority
+string namespaces the tier — `("local", "single-user")` versus
+`("https://accounts.google.com", "10769150350006150715")` — so principals from
+different tiers are different keys and never collide.
+
+Half of that survives and half does not:
+
+- **Exact-key matching is sound. V** A grant is reachable only by a principal
+  whose `(authority, subject)` pair is byte-equal, because `AccountKey::digest`
+  hashes the fields and equality is over the digest.
+- **Namespace disjointness was never enforced.** Nothing stops an operator
+  configuring an identity provider whose issuer is the literal string `local`.
+  §3 is what makes that possible, by establishing that `principal_authority` is
+  an unvalidated string. So the disjointness was a convention presented as a
+  security boundary — the precise failure mode this document warns about
+  elsewhere.
+
+The original fix was to reserve the tier labels and refuse them at config load.
+The operator's mutually-exclusive-modes steer removes the need for that guard
+entirely, which is why §4 supersedes this rather than patching it. **A guard
+that does not have to exist cannot rot.**
+
+### 4A.1 The hazard it worried about was already handled
+
+The original §4.1 raised this: an enterprise deployment that *also* sets
+`auth.single_user: true` would mint one principal for every caller, collapsing
+all users together — a real credential-sharing defect. It proposed a new
+fail-closed guard refusing that combination at config load.
+
+**V That guard already exists and is already the shipped behaviour.**
+`implies_multi_user()` (`auth.rs:94-100`) treats `has_oidc` as a *hard*
+multi-user signal that overrides the `single_user` hint, and the field's doc
+comment at `:33-42` states the reasoning as ADR-008 INV-2. An enterprise that
+sets both is already resolved to multi-user, so the collapse cannot happen.
+
+Two lessons worth keeping, since this document nearly shipped both mistakes:
+
+- A proposed guard should be checked against existing behaviour before it is
+  designed. This one was written from the field's *name* rather than from the
+  function that consumes it, and the function was ten lines away.
+- The `**A**` assumption attached to it — "no shipped deployment currently sets
+  both" — was never load-bearing, because the code never let the combination
+  mean what the guard feared. An assumption about deployments was standing in
+  for a fact about code.
 
 ## 5. What each deployment gets
 
@@ -185,9 +257,9 @@ Deliberately staged. The full ladder is not 4.0.0 work.
 
 | Stage | Content | Why here |
 |---|---|---|
-| **4.0.0** | `sole` tier only, gated on `auth.single_user: true`; the §4.1 mutual-exclusion guard; the §4.0 reserved-label guard; **and carrying a `sole` principal through `VaultStrategy::prepare` (`vault.rs:133`)** | The smallest change that makes STORE.1 deliver to its actual population. Widening `account_key()` alone is not enough — the lease path is where a grant becomes usable |
-| **4.1** | `key` tier — API-key-named principals | The family/small-team story; needs its own threat model, since a bearer secret is weaker than a certificate |
-| **behind IDENTITY.1** | `mtls` tier | `MIK-6746.IDENTITY.1` is already building a proof ranking (`ProofSource: Ord`). This slots in behind it rather than inventing a second ranking |
+| **4.0.0** | Single-user mode only: mint one fixed principal when `implies_multi_user()` is false, and **carry it through `VaultStrategy::prepare` (`vault.rs:133`)** | The smallest change that makes STORE.1 deliver to its actual population. No new config key and no new guard — the condition already exists and is tested. Widening `account_key()` alone is not enough: the lease path is where a grant becomes usable |
+| **4.1** | API-key mode — per-key named principals | The family/small-team story; needs its own threat model, since a bearer secret is weaker than a certificate |
+| **behind IDENTITY.1** | mTLS mode | `MIK-6746.IDENTITY.1` is already building a proof ranking (`ProofSource: Ord`). This slots in behind it rather than inventing a second ranking |
 
 ### 6.1 Obligations that gate the deferred tiers
 
