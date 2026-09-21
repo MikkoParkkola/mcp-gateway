@@ -145,22 +145,77 @@ way the steer does, as ADR-008 INV-2 (MIK-6752):
 > overrides this hint.
 
 So the product **already computes the mode**, already fail-closed, already
-tested, already tied to a ratified ADR. It returns "single user" only when auth
-is enabled, there is at most one API key, there is no OIDC issuer, **and** the
-operator has explicitly asserted it.
+tested, already tied to a ratified ADR.
+
+### 4.1a The condition is NOT `!implies_multi_user()` — that is a security defect
+
+**Caught by review before this proposal was acted on, and it is the most
+dangerous mistake in this document's history.**
+
+An earlier revision proposed: *"when `implies_multi_user()` is false, mint one
+fixed principal."* Read the function's first branch again:
+
+```rust
+if !self.enabled {
+    return false;
+}
+```
+
+**V** `implies_multi_user()` returns `false` when authentication is **turned
+off entirely**. That is correct for the function's own purpose — with no auth,
+the per-user isolation question is moot — and it is completely wrong as a
+predicate for "exactly one identified human is behind this gateway".
+
+Under the rejected rule, a gateway running with `auth.enabled = false` would
+mint the shared single-user principal, and **any anonymous caller able to reach
+the port would be handed the stored OAuth credentials.** Authentication being
+absent is not the same as one user being present.
+
+The correct condition must establish the boundary positively:
+
+```
+auth.enabled
+  && auth.single_user            # the operator's explicit assertion
+  && auth.api_keys.len() <= 1    # no second credential to hand out
+  && !has_oidc                   # no identity provider in play
+```
+
+Equivalently `auth.enabled && !implies_multi_user(has_oidc)` — but the explicit
+form is preferred in the implementation, because the bug above is exactly what
+happens when a reader takes the composite predicate's *name* for its meaning.
+
+**Two lessons, both recorded because this document made both:**
+
+- The function was quoted **verbatim in this very document**, `!enabled` branch
+  included, and the implication was still missed. Reading a predicate is not
+  the same as enumerating the inputs that make it true. Enumerate them.
+- A predicate named for one question (`implies_multi_user`) answers only that
+  question. Reusing it for a different question — "is this safely one user?" —
+  inherits every edge case its author never had to consider, silently.
+
+Whatever the implementation ends up calling this, it must be a **new, named,
+separately tested predicate** with its own test for the auth-disabled case, not
+a negation of an existing one.
+
+### 4.1b What the mode determination gives us, stated accurately
+
+With the correction above, the determination returns "single user" only when
+auth is enabled, there is at most one API key, there is no OIDC issuer, **and**
+the operator has explicitly asserted it.
 
 ### 4.2 What this reduces the 4.0.0 change to
 
-The whole of it: **when `implies_multi_user()` is false, mint one fixed
-principal**, and carry it through the lease path.
+The whole of it: **when the corrected single-user condition of §4.1a holds,
+mint one fixed principal**, and carry it through the lease path.
 
 | Originally proposed | Now |
 |---|---|
 | A new `sole` tier and vocabulary | Reuse the existing single-user determination |
 | A new config key | None — `auth.single_user` already exists |
-| A mutual-exclusion guard between `single_user` and OIDC | None — `implies_multi_user` **is** that guard |
+| A mutual-exclusion guard between `single_user` and OIDC | None — the OIDC term is already a hard override |
 | Reserved authority labels, enforced at config load | None — one mode means one authority |
 | A rank comparison across tiers | None |
+| — | **New:** a separately named and tested predicate per §4.1a, including an auth-disabled case |
 
 What remains is genuinely small: one producer behind an existing condition,
 wired into `account_key()` (`identity.rs:71-98`) and carried through
@@ -257,7 +312,7 @@ Deliberately staged. The full ladder is not 4.0.0 work.
 
 | Stage | Content | Why here |
 |---|---|---|
-| **4.0.0** | Single-user mode only: mint one fixed principal when `implies_multi_user()` is false, and **carry it through `VaultStrategy::prepare` (`vault.rs:133`)** | The smallest change that makes STORE.1 deliver to its actual population. No new config key and no new guard — the condition already exists and is tested. Widening `account_key()` alone is not enough: the lease path is where a grant becomes usable |
+| **4.0.0** | Single-user mode only: mint one fixed principal when the **§4.1a** condition holds — `auth.enabled && single_user && api_keys.len() <= 1 && !has_oidc` — and **carry it through `VaultStrategy::prepare` (`vault.rs:133`)** | The smallest change that makes STORE.1 deliver to its actual population. No new config key. Widening `account_key()` alone is not enough: the lease path is where a grant becomes usable. The predicate is new and separately tested — **not** `!implies_multi_user()`, which is true for an unauthenticated gateway |
 | **4.1** | API-key mode — per-key named principals | The family/small-team story; needs its own threat model, since a bearer secret is weaker than a certificate |
 | **behind IDENTITY.1** | mTLS mode | `MIK-6746.IDENTITY.1` is already building a proof ranking (`ProofSource: Ord`). This slots in behind it rather than inventing a second ranking |
 
