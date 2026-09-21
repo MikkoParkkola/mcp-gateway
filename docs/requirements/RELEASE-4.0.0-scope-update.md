@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 31
+Approved supplemental criteria: 32
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -45,6 +45,7 @@ protocol requirements additionally use the pinned specifications linked below.
 | MIK-6745.JOURNEY.2 | Two users reach their own personal accounts concurrently; an unconnected user gets an actionable refusal and cannot fall back to an operator/shared account. | ACCOUNTS |
 | MIK-6745.JOURNEY.3 | List/search, calls, prompts/resources where supported, MCP backends and REST capabilities apply consistent personal-account authorization on their public entry points. | ACCOUNTS |
 | MIK-6746.CONTRACT.1 | Gateway and downstream authorization boundaries conform to the current audience rules; document and test supported client mechanisms and route parity before expanding credential forwarding. | ACCOUNTS |
+| MIK-6746.IDENTITY.1 | Agent identity distinguishes a proven principal from a declared label: proof outranks declaration, a declared label contradicting a proven one is refused rather than silently applied, known_agents and require_id admit proven identities only, and the audit record carries both so a proved-A-claimed-B mismatch is detectable. | ACCOUNTS |
 | MIK-3274.RANKING.1 | Fuzzy ranking improves supported abbreviation and word-boundary discovery while exact identifiers, existing relevant matches and Code Mode globs remain reliable. | DISCOVERY |
 | MIK-3274.RANKING.2 | Both discovery routes apply authorization before disclosure and rank before truncation; usage feedback cannot promote an irrelevant or forbidden tool over a relevant allowed tool. | DISCOVERY |
 | MIK-3274.RANKING.3 | Held-out selection quality, discovery turns, invalid invocations and total completed-task tokens meet thresholds frozen after baseline measurement and before ranking implementation. | DISCOVERY |
