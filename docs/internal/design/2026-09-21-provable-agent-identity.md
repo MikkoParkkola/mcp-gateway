@@ -349,7 +349,7 @@ That closes the namespace trap without weakening change 2:
 
 **The naive alternative, rejected:** `proven.id != declared.id` refuses unconditionally. This looks like the most literal reading of change 2 but rejects every caller presenting a client certificate and an `X-Agent-ID`, because `spiffe://cluster/ns/agents/sa/runner` never string-equals `runner`. It refuses on namespace difference rather than on contradiction, which is a different property than the one the ruling asks for, and it makes mTLS plus a declared label unusable.
 
-**Cost, stated plainly:** requiring `principal_labels` adds a mandatory config step for any deployment combining enforcement with declared labels. That is a second new config surface on top of `allow_unverified_agent_identity`, on a release the ruling already notes is carrying the identity-keyed catalogue and the 3.x credential migration. It is the price of not having the gateway guess about identity, and it is flagged here for the design reviewer rather than absorbed quietly.
+**Cost, stated plainly:** requiring `principal_labels` adds a mandatory config step for any deployment combining enforcement with declared labels. That is a third new config surface alongside `allow_unverified_agent_identity` and `disable_declared_labels`, on a release the ruling already notes is carrying the identity-keyed catalogue and the 3.x credential migration. It is the price of not having the gateway guess about identity, and it is flagged here for the design reviewer rather than absorbed quietly. The one documented escape is DECISION 7.2a's `disable_declared_labels`: an operator who turns declared-label intake off owes no mapping at all, because no label can arrive to contradict a principal. That is the honest floor on this cost — enforcement without the mapping step is available, but only by giving up the caller-supplied tag entirely.
 
 ## 8. `known_agents` and `require_id` under the split
 
@@ -423,7 +423,7 @@ The escape hatch is the one the ruling names: `security.agent_identity.allow_unv
 
 **What the hatch does not restore, stated because its name implies otherwise.** It restores exactly one behaviour: row 2 of the precedence table — declared-only may satisfy `require_id` and `known_agents`. It does **not** restore header-over-proof. With the hatch on, a declared label still never outranks a proven principal (rows 3–8 are unchanged) and a contradiction is still a refusal. The hatch also does not touch DECISION 9.1: identity grants authorize on the proven id whether or not it is set, because a hatch that re-opened grant matching to declared labels would re-open the vulnerability rather than defer it.
 
-**The mis-aimed-hatch trap.** The operator most likely to reach for this flag is the one running mTLS or a JWT *and* sending `X-Agent-ID` — and they will still get a 403, because their failure is a section 7 contradiction, not an unproven identity. Their fix is `principal_labels` (a label set or an incomparable-namespace waiver), which the ruling did not name. The startup warning and the migration note must both say so explicitly, or this flag becomes the first thing tried and the last thing that helps. Renaming it is out of scope — the ruling names the flag — so the documentation carries the correction.
+**The mis-aimed-hatch trap.** The operator most likely to reach for this flag is the one running a **JWT** *and* sending `X-Agent-ID` — and they will still get a 403, because their failure is a section 7 contradiction, not an unproven identity. Their fix is a `principal_labels` entry for that `client_id`, which the ruling did not name. The mTLS operator is a different case and must not be told the same thing: under DECISION 7.2 mTLS always carries a namespace waiver, so a mismatched label there is **accepted and audited, never refused** — if an mTLS deployment is seeing 403s, the cause is elsewhere and this flag will not help either. The startup warning and the migration note must distinguish the two, or this flag becomes the first thing tried and the last thing that helps. Renaming it is out of scope — the ruling names the flag — so the documentation carries the correction.
 
 **The hatch exempts obligation 1.** Startup refusal below fires only when the hatch is `false`. With it `true`, a deployment with no proof source configured is coherent — declared labels satisfy the controls — and must start.
 
@@ -738,4 +738,17 @@ This round added one config field that did not exist when the round began
 (`disable_declared_labels`), so section 5's field count was updated in the same pass. Recording
 that explicitly because it is precisely the move that seeded rounds 2 through 4: a decision
 added in one section and not reconciled with the sections that already counted it.
+
+**Self-check, and what it caught.** Applying the discriminator to this round's own edits — grep
+the document for every other place each changed decision is described — found two further sites
+neither reviewer reported. Section 7.1's cost paragraph still called `principal_labels` the
+"second" new config surface, already stale by one field. More seriously, section 10's
+mis-aimed-hatch paragraph told the mTLS operator they "will still get a 403": a fourth instance
+of R4-2, in a section neither reviewer cited for it, and the one place a wrong answer would have
+reached an operator debugging a live deployment. Under DECISION 7.2 an mTLS mismatch is accepted
+and audited, so that operator has no 403 to explain and would have been sent chasing a
+`principal_labels` entry the schema now refuses to accept. Both are fixed. The lesson is that
+the discriminator works and that reviewer coverage is not a substitute for running it: two
+independent seats read this document and neither flagged the paragraph most likely to mislead a
+human.
 
