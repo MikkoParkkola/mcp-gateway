@@ -20,6 +20,17 @@ the runbook reserves them for the operator and this record does not take them.
 There is no published digest to compare against: `v4.0.0` is not a tag in this
 repository, so provenance is unavailable by construction rather than missing.
 
+The artefact also carries no build commit. The repository has no `build.rs`, every
+version string resolves to `env!("CARGO_PKG_VERSION")` — the bare string `4.0.0` — and
+`e82d7ee4` does not appear anywhere in the installed binary. The only thing tying this
+binary to that tree is the directory someone named `4.0.0-e82d7ee4`. Rename the
+directory and the record says something else. For a security cutover whose whole claim
+is "this build contains the origin guard", that proof chain runs through a filename.
+
+Two ways to close it, both operator calls: tag `v4.0.0` at `e82d7ee4`, which makes the
+commit externally checkable, or add a build script that compiles the commit into the
+binary so the artefact answers for itself. Neither is taken here.
+
 ## Step 1c - guard compiled in
 
 The refusal string from `src/gateway/router/origin_guard.rs:398` is present in the
