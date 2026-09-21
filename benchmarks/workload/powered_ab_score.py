@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""NFR.PERF.1 evaluator -- frozen before the scored run, per contract A8.
+
+Two properties this file exists to guarantee:
+
+1. ORDER STATISTICS, NOT SUMMARY STATISTICS. P50 and P99 are read off the sorted
+   raw per-request samples k6 wrote. They are never taken from a summary block,
+   never averaged across reps, and never inferred from a mean or a confidence
+   interval about a mean. Averaging three p99 values is not the p99 of three reps.
+2. THE PASS RULE IS READ FROM DISK. `--verdict` loads the thresholds and the rep
+   count from the gate file `--register` wrote before the first scored rep. It
+   cannot re-derive them from the data it is scoring.
+
+Identical inputs give an identical verdict, which is the only version of "the
+rule was not chosen afterwards" that a reader who was not there can check.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import gzip
+import json
+import math
+import statistics
+import sys
+from datetime import datetime, timezone
+
+METRIC = "mcp_tools_call_latency"
+
+
+def _open(path: str):
+    return gzip.open(path, "rt") if path.endswith(".gz") else open(path, "rt")
+
+
+def quantile(sorted_vals: list[float], q: float) -> float:
+    """Nearest-rank order statistic. No interpolation, no model, no smoothing."""
+    if not sorted_vals:
+        raise ValueError("empty sample")
+    rank = max(1, math.ceil(q * len(sorted_vals)))
+    return sorted_vals[rank - 1]
+
+
+def read_samples(path: str) -> list[float]:
+    vals: list[float] = []
+    with _open(path) as fh:
+        for row in csv.DictReader(fh):
+            if row.get("metric_name") == METRIC:
+                try:
+                    vals.append(float(row["metric_value"]))
+                except (TypeError, ValueError):
+                    continue
+    vals.sort()
+    return vals
+
+
+def read_rep(summary_path: str, samples_path: str) -> str:
+    """One line: `OK p50 p90 p95 p99 max reqs iters` or `VOID <reason>`.
+
+    A rep with any http error, any failed semantic assertion, or a missing
+    metric is VOID with a reason -- never a number that silently joins the
+    distribution.
+    """
+    try:
+        summary = json.load(open(summary_path))
+    except Exception as exc:  # noqa: BLE001 - any unreadable summary is a void
+        return f"VOID summary-unreadable-{type(exc).__name__}"
+
+    metrics = summary.get("metrics", {})
+
+    def rate(name: str) -> float | None:
+        block = metrics.get(name)
+        if not isinstance(block, dict):
+            return None
+        val = block.get("rate") if "rate" in block else block.get("value")
+        return float(val) if val is not None else None
+
+    http_err = rate("http_error_rate")
+    if http_err is None:
+        return "VOID no-http-error-rate"
+    if http_err > 0:
+        return f"VOID http-errors-{http_err:.6f}"
+
+    semantic = rate("semantic_assertion_rate")
+    if semantic is None:
+        return "VOID no-semantic-assertion-rate"
+    if semantic < 1.0:
+        return f"VOID semantic-assertion-rate-{semantic:.6f}"
+
+    failures = metrics.get("semantic_failures", {})
+    if isinstance(failures, dict) and float(failures.get("count", 0) or 0) > 0:
+        return f"VOID semantic-failures-{failures.get('count')}"
+
+    try:
+        vals = read_samples(samples_path)
+    except Exception as exc:  # noqa: BLE001
+        return f"VOID samples-unreadable-{type(exc).__name__}"
+    if len(vals) < 1000:
+        # Below 1000 the p99 is not a real order statistic: it is one of the
+        # last handful of samples and moves by whole ranks.
+        return f"VOID too-few-samples-{len(vals)}"
+    if not all(math.isfinite(v) for v in vals):
+        return "VOID non-finite-sample"
+
+    iters = metrics.get("iterations", {}).get("count", 0)
+    return (
+        f"OK {quantile(vals, 0.50):.6f} {quantile(vals, 0.90):.6f} "
+        f"{quantile(vals, 0.95):.6f} {quantile(vals, 0.99):.6f} "
+        f"{vals[-1]:.6f} {len(vals)} {int(iters or 0)}"
+    )
+
+
+def load_pairs(csv_path: str, scored_only: bool) -> list[dict]:
+    """Pairs with both arms OK. A pair missing either arm is dropped whole."""
+    rows: dict[int, dict] = {}
+    with open(csv_path) as fh:
+        for row in csv.DictReader(fh):
+            pair = int(row["pair"])
+            if scored_only and pair < 1000:
+                continue
+            if not scored_only and pair >= 1000:
+                continue
+            slot = rows.setdefault(pair, {"pair": pair})
+            if row["status"] != "OK":
+                slot["void"] = row.get("reason") or "unspecified"
+                continue
+            slot[row["arm"]] = {
+                "p50": float(row["p50_ms"]),
+                "p99": float(row["p99_ms"]),
+                "iters": int(row["iters"] or 0),
+                "order": int(row["order"]),
+            }
+    out = []
+    for pair in sorted(rows):
+        rec = rows[pair]
+        if "void" in rec or "base" not in rec or "rel" not in rec:
+            continue
+        out.append(rec)
+    return out
+
+
+def ratio_stats(pairs: list[dict], metric: str) -> dict:
+    """Paired ratio, aggregated in log space so the interval is symmetric on
+    the multiplicative scale the criterion is written in."""
+    logs = [math.log(p["rel"][metric] / p["base"][metric]) for p in pairs]
+    n = len(logs)
+    if n < 2:
+        return {"n": n, "ratio": None, "lo": None, "hi": None, "sd_log": None}
+    mean = statistics.fmean(logs)
+    sd = statistics.stdev(logs)
+    # Normal quantile: n is >= 27 by construction, where t and z differ by <2%.
+    half = 1.96 * sd / math.sqrt(n)
+    return {
+        "n": n,
+        "ratio": math.exp(mean),
+        "lo": math.exp(mean - half),
+        "hi": math.exp(mean + half),
+        "sd_log": sd,
+        "halfwidth_pct": (math.exp(half) - 1) * 100,
+    }
+
+
+def register(args) -> int:
+    """Derive the gate from CALIBRATION pairs only, before any scored rep."""
+    pairs = load_pairs(args.csv, scored_only=False)
+    if len(pairs) < 2:
+        print(f"calibration produced {len(pairs)} usable pairs; need >= 2", file=sys.stderr)
+        return 3
+    need = {}
+    for metric, budget in (("p50", args.p50_budget), ("p99", args.p99_budget)):
+        st = ratio_stats(pairs, metric)
+        # Target precision: the 95% halfwidth must fit inside a third of the
+        # budget, so the interval can land decisively on one side of it.
+        target = math.log(1.0 + budget) / 3.0
+        n = math.ceil((1.96 * st["sd_log"] / target) ** 2) if st["sd_log"] else args.min_pairs
+        need[metric] = {"sd_log_calib": st["sd_log"], "ratio_calib": st["ratio"], "n_required": n}
+    pairs_needed = max(args.min_pairs, need["p50"]["n_required"], need["p99"]["n_required"])
+    pairs_needed = min(pairs_needed, args.max_pairs)
+    min_iters = min(min(p["base"]["iters"], p["rel"]["iters"]) for p in pairs)
+    gate = {
+        "registered_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "criterion": "NFR.PERF.1",
+        "baseline": "v3.5.0 32f135a61fb50c20a044fb4c2347bc1cf8015d89",
+        "budgets": {"p50": args.p50_budget, "p99": args.p99_budget},
+        "decision_rule": (
+            "For each metric, the paired rel/base ratio is aggregated in log space over "
+            "pairs and a 95% interval is formed. FAIL if the interval's LOWER bound "
+            "exceeds the budget. PASS if its UPPER bound is at or below the budget. "
+            "Otherwise INCONCLUSIVE. The overall verdict is FAIL if either metric fails, "
+            "else INCONCLUSIVE if either is inconclusive, else PASS."
+        ),
+        "pairs": pairs_needed,
+        "min_requests_per_group_per_rep": 1000,
+        "void_gate_min_iterations": int(min_iters * 0.90),
+        "calibration": {"pairs_used": len(pairs), "derivation": need},
+    }
+    with open(args.out, "w") as fh:
+        json.dump(gate, fh, indent=2)
+        fh.write("\n")
+    return 0
+
+
+def classify(st: dict, budget: float) -> str:
+    if st["ratio"] is None:
+        return "INCONCLUSIVE"
+    bound = 1.0 + budget
+    if st["lo"] > bound:
+        return "FAIL"
+    if st["hi"] <= bound:
+        return "PASS"
+    return "INCONCLUSIVE"
+
+
+def verdict(args) -> int:
+    gate = json.load(open(args.gate))
+    pairs = load_pairs(args.csv, scored_only=True)
+    budgets = gate["budgets"]
+    per_metric, verdicts = {}, []
+    for metric in ("p50", "p99"):
+        st = ratio_stats(pairs, metric)
+        v = classify(st, budgets[metric])
+        if st["n"] < gate["pairs"]:
+            # Underpowered yields INCONCLUSIVE, never "no effect" -- unless the
+            # data already excludes the budget, which no amount of extra power
+            # would undo.
+            v = "FAIL" if v == "FAIL" else "INCONCLUSIVE"
+        per_metric[metric] = dict(st, budget=budgets[metric], verdict=v)
+        verdicts.append(v)
+    overall = "FAIL" if "FAIL" in verdicts else ("INCONCLUSIVE" if "INCONCLUSIVE" in verdicts else "PASS")
+    out = {
+        "criterion": "NFR.PERF.1",
+        "scored_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "verdict": overall,
+        "pairs_scored": len(pairs),
+        "pairs_registered": gate["pairs"],
+        "gate_registered_utc": gate["registered_utc"],
+        "decision_rule": gate["decision_rule"],
+        "metrics": per_metric,
+        "run_record": json.load(open(args.run_record)) if args.run_record else None,
+    }
+    if args.out:
+        with open(args.out, "w") as fh:
+            json.dump(out, fh, indent=2)
+            fh.write("\n")
+    print(f"NFR.PERF.1 {overall}  ({len(pairs)}/{gate['pairs']} paired reps)")
+    for metric in ("p50", "p99"):
+        m = per_metric[metric]
+        if m["ratio"] is None:
+            print(f"  {metric.upper()}: too few pairs to form a ratio")
+            continue
+        print(
+            f"  {metric.upper()}: ratio {m['ratio']:.4f} "
+            f"[{m['lo']:.4f}, {m['hi']:.4f}] vs budget {1 + m['budget']:.2f} -> {m['verdict']}"
+        )
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="NFR.PERF.1 paired A/B evaluator")
+    ap.add_argument("--read-rep", metavar="SUMMARY")
+    ap.add_argument("--samples", metavar="CSV")
+    ap.add_argument("--register", action="store_true")
+    ap.add_argument("--verdict", action="store_true")
+    ap.add_argument("--read-gate", metavar="GATE")
+    ap.add_argument("--field")
+    ap.add_argument("--csv")
+    ap.add_argument("--gate")
+    ap.add_argument("--run-record")
+    ap.add_argument("--out")
+    ap.add_argument("--p50-budget", type=float, default=0.05)
+    ap.add_argument("--p99-budget", type=float, default=0.10)
+    ap.add_argument("--min-pairs", type=int, default=27)
+    ap.add_argument("--max-pairs", type=int, default=60)
+    args = ap.parse_args(argv)
+
+    if args.read_rep:
+        if not args.samples:
+            print("VOID no-samples-argument")
+            return 0
+        print(read_rep(args.read_rep, args.samples))
+        return 0
+    if args.read_gate:
+        print(json.load(open(args.read_gate))[args.field])
+        return 0
+    if args.register:
+        return register(args)
+    if args.verdict:
+        return verdict(args)
+    ap.error("one of --read-rep, --register, --verdict, --read-gate is required")
+    return 64
+
+
+if __name__ == "__main__":
+    sys.exit(main())
