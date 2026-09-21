@@ -147,7 +147,10 @@ If the gateway is not running, tests will gracefully skip with a warning:
 **What it tests**:
 - Calls `gateway_list_servers`
 - Verifies at least one server is returned (capabilities backend always present)
-- Each server has: `name`, `running`, `transport`, `tools_count`, `circuit_state`
+- Each server has: `name`, `running`, `transport`, `tools_count`, `tools_known`, `circuit_state`
+- `tools_known` is `false` when the backend has not been enumerated yet, in which
+  case `tools_count` is `0` because nothing has been cached — not because the
+  backend exposes no tools
 - Validates field types
 
 **Expected output**:
@@ -159,6 +162,7 @@ If the gateway is not running, tests will gracefully skip with a warning:
       "running": true,
       "transport": "capability",
       "tools_count": 8,
+      "tools_known": true,
       "circuit_state": "Closed"
     }
   ]

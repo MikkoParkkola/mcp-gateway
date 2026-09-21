@@ -186,7 +186,7 @@ fn build_stats_response_fields() {
         total_cached_tokens: 0,
         cached_tokens_by_server: vec![],
     };
-    let resp = build_stats_response(&snapshot);
+    let resp = build_stats_response(&snapshot, true);
     assert_eq!(resp["invocations"], 100);
     assert_eq!(resp["cache_hits"], 30);
     assert_eq!(resp["cache_hit_rate"], "30.0%");
@@ -208,7 +208,7 @@ fn build_stats_response_zero_values() {
         total_cached_tokens: 0,
         cached_tokens_by_server: vec![],
     };
-    let resp = build_stats_response(&snapshot);
+    let resp = build_stats_response(&snapshot, true);
     assert_eq!(resp["invocations"], 0);
 }
 
