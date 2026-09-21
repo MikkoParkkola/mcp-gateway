@@ -121,6 +121,36 @@ In order of what to do:
 
 Step 1 is the recommendation. It is the smallest experiment that can falsify the premise.
 
+## The bisect is answering a question the residual did not ask
+
+`RELEASE-4.0.0-criteria-status.md:415` records what NFR.PERF.1 actually still owes. The
+row is **PARTIAL**, its blocking flag was **lifted 2026-09-05**, and the release owner
+ruled that 4.0.0 ships on the headroom argument (worst shared case +6.07% against a 10%
+P99 bound). What survives that ruling is one residual:
+
+> no P50 or P99 for this release may be quoted publicly until an end-to-end run produces one
+
+The row also states plainly that the criterion bench cannot supply it — it measures
+in-process component work, so there is no latency distribution to take percentiles from.
+The k6 workload this bisect runs is the end-to-end harness built to close exactly that
+gap (`#618`, the BAD anchor).
+
+So the outstanding deliverable is **a quotable end-to-end P50/P99 for the release**, not
+a regressing commit. A bisect cannot produce that number no matter how it converges. And
+the two goals have very different costs: the bisect has already spent 9 steps × 8 runs =
+**72 workload runs** and has produced no quotable percentile, while a single adequately
+powered A/B — `HEAD` against `v3.5.0` (`32f135a6`), n≈30 per arm — costs about **60 runs**
+and yields the number the residual demands, with an interval attached.
+
+That measurement is also strictly more informative than the bisect: if it shows no
+regression beyond budget at adequate n, the residual discharges and there is nothing to
+bisect; if it does show one, it establishes a real, powered target and the bisect can be
+restarted from anchors that were measured rather than declared.
+
+**Recommendation, revised:** stop treating "find the regressing commit" as the task. Run
+one powered end-to-end A/B at `HEAD` vs `v3.5.0`, n≈30, report P50 and P99 with
+intervals. Bisect only if that run confirms a regression larger than the ±1.52% band.
+
 ## Caveats
 
 - The `1.16·σ/√n` factor for the SE of a median assumes approximate normality of the
