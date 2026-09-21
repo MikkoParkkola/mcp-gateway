@@ -164,16 +164,17 @@ intervals. Bisect only if that run confirms a regression larger than the ±1.52%
   first and the baseline second; the replacement run does the same with the release line
   and 3.5.1. If the machine warms measurably across a pair, the second arm inherits the
   warmer machine every time, which biases the ratio in one direction rather than
-  averaging out. This does not touch the single-arm percentiles, which are the
-  deliverable — an absolute p50 for the release line does not care what ran before it —
-  but it is a real caveat on the drift-control comparison, which is why that arm is
-  recorded as a control and not as a gate. The observed direction is **consistent with
-  the bias, not counter to it**: under the ordinary benchmarking assumption — warm page
-  cache, boosted clocks, warm branch predictors make the *second* arm faster — the
-  release line running first and measuring slower is exactly the predicted artefact.
-  An earlier draft of this caveat argued the opposite by assuming warmer meant slower;
-  that reading was wrong. Any release-line-vs-3.5.1 claim therefore requires the
-  order-reversal check below before it may be quoted.
+  averaging out. This does not invalidate the single-arm percentiles, which are the
+  deliverable, but neither are they position-free: the release arm sat first in every
+  pair, and that is recorded alongside the number rather than argued away. The caveat
+  binds hardest on the drift-control comparison, which is why that arm is recorded as a
+  control and not as a gate. **No direction is claimed for the effect.** An earlier draft
+  argued the observed gap ran counter to a warming bias by assuming a warmer machine is
+  slower; a later draft reversed that and called it consistent. Both readings were
+  reaching for a sign the data cannot supply — in a continuously alternating sequence the
+  warming argument is weak in either direction. What stands is the structural point: the
+  order is fixed, so any release-line-vs-3.5.1 claim requires the order-reversal check
+  below before it may be quoted.
 
 ## What the replacement run establishes, and what it does not
 
@@ -205,12 +206,57 @@ unchanged*.
 
 Two further limits bind the write-up:
 
-- **The single-arm percentiles are the deliverable and are order-independent.** An
-  absolute P50 for the release line does not care what ran before it. The
-  release-line-against-3.5.1 *ratio* is a different claim, it inherits the fixed-order
-  bias above, and it is quotable only after a reversed-order block confirms it.
+- **The single-arm percentiles are the deliverable, and the position they were measured
+  in is disclosed rather than argued away.** The release arm occupied the first slot of
+  every pair, so its absolute number carries whatever position effect the sequence
+  imposes; that is a stated property of the quoted figure, not a defect in it. The
+  residual asks that an end-to-end run *produce* a P50 and a P99, not that it produce a
+  position-effect-free steady-state estimate. The release-line-against-3.5.1 *ratio* is a
+  different claim: it is the quantity the fixed order actually threatens, and it is
+  quotable only after a reversed-order block confirms it.
 - **The component bench's 10% P99 bound does not govern this number.** That bound was
   written for `session_sandbox/check_tool_denied`, in-process work at roughly 86
   nanoseconds; this run measures end-to-end request latency at roughly 0.7
   milliseconds. Grading one against the other repeats exactly the incomparable-procedure
   error that invalidated the bisect anchors.
+
+## Result — the run completed 2026-09-21
+
+Twenty pairs, 1,300,456 requests, both arms at n=20. The release line is commit
+`e82d7ee46b8e6edccfb1c1bee0f8bb8526194e5b`, which is **13 `src/` commits ahead of
+`a2505be0`**, the commit `NFR.PKG.1` names as the release cut point. The number below
+belongs to the commit it was measured at, and is quoted that way.
+
+| arm | reps | requests | P50 (95% CI) | P90 | P95 | P99 (95% CI) |
+|---|---|---|---|---|---|---|
+| release line `e82d7ee46b` | 20 | 650,804 | **0.7310** [0.7140, 0.7543] | 1.3062 | 1.8543 | **2.8756** [2.6615, 3.1234] |
+| 3.5.1 drift control | 20 | 649,652 | 0.6758 [0.6526, 0.6999] | 1.2212 | 1.7128 | 2.7640 [2.5869, 3.9305] |
+
+All figures in milliseconds; realised interval coverage 0.959, printed rather than
+rounded to "95%".
+
+**The contention event did not move the estimate.** A peer build took load average from
+7.09 to 19.76 mid-run; two reps degraded to p99 10.46 ms with a 51 ms max. No rep was
+dropped — filtering on observed values after seeing them is outcome-dependent and
+corrupts the interval as thoroughly as the contention would. The pre-specified clean
+prefix (reps 1-14) is the disclosed sensitivity check and agrees: P50 0.7261
+[0.7113, 0.7543], P99 2.7218 [2.6143, 2.9111]. The order-statistic interval absorbed the
+excursion; the separately printed observed spread (P99 up to 17.44 ms on the release arm,
+22.57 ms on the control) keeps the event visible instead of buried.
+
+**Arm identity was checked, not assumed.** Every rep's `/health` `version` field was
+recorded: 20 reps `4.0.0`, 20 reps `3.5.1`, exactly two distinct arm/sha combinations
+across the CSV, no duplicate `rep,arm` rows, no VOID reps. Note the summariser prints only
+the first row's sha per arm, so the uniqueness check is a separate pass over the file
+rather than something the tool guarantees — worth folding into the script before reuse.
+
+**The P50 intervals are disjoint.** The release arm's interval lies entirely above the
+control's (0.6999 < 0.7140). That is a real observation and it is new information for the
+release owner, who ruled on the +6.07% component-bench figure. It is **not** yet
+attributable to code: the release arm held the first slot in every pair, and the
+reversed-order block is what would separate a code difference from a position effect.
+
+**P99 between the arms is a low-power null.** The intervals overlap heavily. This run
+cannot distinguish P99 between arms at this n — which is a statement about the run, not a
+finding that P99 is unchanged, and it has the same shape as the nine bisect verdicts ruled
+unresolvable above.
