@@ -826,6 +826,10 @@ impl Transport for StdioTransport {
 mod tests;
 
 #[cfg(test)]
+#[path = "stdio_cache_tests.rs"]
+mod cache_tests;
+
+#[cfg(test)]
 mod spawn_classification_tests {
     use super::StdioTransport;
     use crate::Error;
