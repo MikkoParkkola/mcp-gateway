@@ -24,13 +24,33 @@ Everything else that constructs one is a test or a fixture.
 `src/gateway/router/handlers.rs:2218` looks like a third and is not: it sits
 inside `#[cfg(test)] mod caller_identity_tests`, opened at `:2177`.
 
-**V** So a deployment with no OIDC identity provider can never produce a
-principal, can never match an `AccountKey`, and therefore cannot use the
-per-user credential store at all.
+**V** So a deployment with **no supported end-user identity producer** can
+never produce a principal, can never match an `AccountKey`, and therefore
+cannot use the per-user credential store at all.
 
-That is the whole of O3. A 3.x single-user install upgrading to 4.0.0 is
-*exactly* such a deployment, so the STORE.1 migration would be correct on disk
-and deliver nothing to the population whose tokens it migrates.
+That wording is deliberate and was corrected in review. "No OIDC" is too broad:
+the OpenWebUI adapter is configured independently of any OIDC provider, so a
+deployment running it *does* have a producer. The population that has neither
+is the one O3 is about — and a 3.x single-user install upgrading to 4.0.0 is
+squarely in it, so the STORE.1 migration would be correct on disk and deliver
+nothing to the very population whose tokens it migrates.
+
+### 1.1 The precedent this proposal builds on
+
+**V** The OpenWebUI adapter is not a second OIDC path. It validates claim
+coherence — expiry after issuance, lifetime within a configured maximum, no
+future-dated issuance beyond configured skew — and then constructs a
+`VerifiedIdentity` at `:421` with a comment that states its own epistemic
+status plainly:
+
+> Not carried: an adapter **asserts** a subject, and an email or group list
+> taken from it would flow into role mapping as if an IdP had verified it.
+
+So the product **already ships, and has already reviewed, an assertion-based
+identity producer** that deliberately carries less than a verified one. This
+proposal is an extension of an existing accepted pattern, not the introduction
+of a new one — and the adapter's discipline of refusing to carry unverified
+attributes is the model the `sole` tier should copy.
 
 ## 2. The reframe
 
@@ -103,6 +123,27 @@ escalation is the one already under test.
 
 The tier is therefore recorded for **audit and policy**, never for matching.
 
+### 4.0 Two claims, and only one of them is currently true
+
+Review separated these, correctly. They are not the same claim:
+
+1. **Exact-key matching is sound.** A grant is reachable only by a principal
+   whose `(authority, subject)` pair is byte-equal. **V** This holds today:
+   `AccountKey::digest` hashes the fields and equality is over the digest.
+2. **Authority strings occupy disjoint namespaces.** This is an **assumption,
+   not an enforced invariant** — and it is the one §3 makes possible by
+   celebrating that `principal_authority` is unvalidated. Nothing stops an
+   operator configuring an identity provider whose issuer is the literal string
+   `local`, which would collide with the `sole` tier exactly.
+
+**So the invariant must be enforced, not assumed.** Reserve the tier labels
+`local`, `apikey` and `mtls` as authority values, and refuse at config load any
+identity provider whose issuer equals a reserved label. Fail closed, name both
+the reserved word and the setting that used it.
+
+Without that guard the design in §4 is a convention, and a convention is not a
+security boundary. With it, the no-rank-comparison property is real.
+
 ### 4.1 The one real hazard, and its guard
 
 An enterprise deployment that *also* sets `auth.single_user: true` would mint
@@ -144,9 +185,40 @@ Deliberately staged. The full ladder is not 4.0.0 work.
 
 | Stage | Content | Why here |
 |---|---|---|
-| **4.0.0** | `sole` tier only, gated on `auth.single_user: true`, plus the §4.1 mutual-exclusion guard | The smallest change that makes STORE.1 deliver to its actual population. One producer, one guard, tests |
+| **4.0.0** | `sole` tier only, gated on `auth.single_user: true`; the §4.1 mutual-exclusion guard; the §4.0 reserved-label guard; **and carrying a `sole` principal through `VaultStrategy::prepare` (`vault.rs:133`)** | The smallest change that makes STORE.1 deliver to its actual population. Widening `account_key()` alone is not enough — the lease path is where a grant becomes usable |
 | **4.1** | `key` tier — API-key-named principals | The family/small-team story; needs its own threat model, since a bearer secret is weaker than a certificate |
 | **behind IDENTITY.1** | `mtls` tier | `MIK-6746.IDENTITY.1` is already building a proof ranking (`ProofSource: Ord`). This slots in behind it rather than inventing a second ranking |
+
+### 6.1 Obligations that gate the deferred tiers
+
+Both were raised as CRITICAL in review, and both are real. Neither blocks
+4.0.0, because neither tier ships in it — but each must be closed **before its
+own tier reaches production**, and recording them here is what stops a later
+stage treating the tier as pre-approved.
+
+- **`key` tier — an API key name is not a stable owner identifier.** Keys get
+  rotated, renamed and reassigned. If `api_keys[].name` is the subject and a
+  key is reassigned to a different person while grants are bound to that name,
+  the new holder inherits the previous holder's credentials. Before shipping
+  this tier: require a non-empty owner identifier that is unique, stable across
+  key rotation, and refuses reassignment while any grant remains bound to it.
+
+- **`mtls` tier — SAN-URI-or-CN is not globally unique.** If more than one
+  trusted issuer can mint certificates, two independent authorities can issue
+  the same subject string and their holders collapse into one principal.
+  Before shipping this tier: qualify the subject by trust domain, so the
+  authority half of the key distinguishes issuers rather than flattening them.
+
+### 6.2 Vocabulary, not semantics, is what IDENTITY.1 shares
+
+The `sole` tier is an **operator assertion**, and `MIK-6746.IDENTITY.1`'s
+ranking is about **proof**. Reusing its vocabulary must not quietly add an
+assertion to a proof-only enumeration, or a declared label inherits
+proof-grade semantics by nothing more than sharing a type.
+
+Whatever mechanism carries assertion-based tiers must be visibly distinct from
+the proven rung at the type level. That is a question for the IDENTITY.1
+design, not for this one to settle unilaterally.
 
 **The integration rule, and it is not optional:** `MIK-6746.IDENTITY.1` already
 defines a proof ladder. This proposal must **reuse** that ranking and its
@@ -156,15 +228,20 @@ design simultaneously right now.
 
 ## 7. What this changes elsewhere
 
-**It weakens the `MIK-7334.CATALOGUE.1` descope argument.** That descope rests
-on 4.0.0 shipping no multi-user mode, so the isolation clause has nothing to
-range over. If principals become producible at several tiers, small-team
-deployments become real, multi-caller isolation starts to matter, and the
-premise erodes.
+**It interacts with the `MIK-7334.CATALOGUE.1` descope, but only from 4.1.**
+That descope rests on 4.0.0 shipping no multi-user mode, so the isolation
+clause has nothing to range over.
 
-These two decisions should therefore be taken **together**, not separately.
-Ratifying the CATALOGUE.1 descope and adopting this proposal in the same
-release would be close to contradictory.
+The staging in §6 matters here, and the first version of this section
+overstated the conflict. **4.0.0 ships the `sole` tier only, which is
+single-user by construction and therefore does not create a multi-user mode.**
+The descope premise survives 4.0.0 intact.
+
+It is the **`key` tier in 4.1** that makes small-team deployments real, and at
+that point multi-caller isolation starts to matter and the premise erodes. So
+the honest statement is not "these contradict" but: ratifying the descope is
+consistent with 4.0.0, and whoever ratifies it should know the premise has a
+known expiry date rather than discovering it during 4.1 planning.
 
 **It does not reopen the STORE.1 attribution decision.** Migration still runs
 only from an explicit operator declaration. This proposal changes what a
@@ -189,18 +266,28 @@ Two of the three were checkable immediately and were run.
    it as a URL. The namespacing argument in §4 holds.
 
 3. **`account_key()` having a second caller that assumes OIDC semantics.**
-   **CHECKED — survives, and more strongly than expected. V** Outside its own
-   definition, `account_key(` appears only in `account_resolver_fixture.rs:185`
-   and in `account_resolver_tests.rs`, where the two-argument `account_key(...)`
-   is a *different local test helper* entirely. There is **no production caller
-   of `account_key()` anywhere**, which matches its
-   `expect(dead_code, reason = "per-user OAuth scaffolding, deferred to
-   post-4.0.0 backlog MIK-6744/6745/6746")` annotation.
+   **CHECKED AND FAILED — the first version of this section was wrong.**
 
-   That last result materially lowers the cost: widening this function's input
-   changes **no production call site**, because it currently has none. The
-   change is confined to the function, its tests, and whatever new producer
-   calls it.
+   **V** `src/personal_accounts/vault.rs:133` calls
+   `account_key(Some(identity), &self.descriptor)` inside `VaultStrategy`, and
+   the result goes straight to `custody.refresh_if_expired(&account)` at `:137`.
+   That is a **production caller**, and it sits on precisely the lease path a
+   migrated grant has to travel.
+
+   The original claim — "no production caller anywhere" — came from a grep
+   piped through `head -12`. An alphabetically earlier test file produced more
+   than twelve hits and filled the window, so `src/personal_accounts/` was cut
+   off before it was ever displayed. A truncated listing was read as a census.
+   Recorded here rather than silently fixed, because the false version made the
+   proposal look cheaper than it is.
+
+   **Consequences, both real:**
+   - §6's 4.0.0 stage must include carrying a `sole` principal through
+     `VaultStrategy::prepare`. Widening `account_key()` alone does not deliver
+     a usable grant.
+   - §3.1's single-construction-site claim **survives** and should not be
+     confused with this: `vault.rs` *calls* `account_key()`, it does not build
+     an `AccountKey` itself. There is still exactly one construction site.
 
 ## 9. The honest cost
 
