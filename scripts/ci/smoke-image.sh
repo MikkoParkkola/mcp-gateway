@@ -41,8 +41,15 @@ EXTERNAL="smoke-ext-$$"
 DEFAULTS="smoke-default-$$"
 WORKDIR="${RUNNER_TEMP:-/tmp}"
 # Published on loopback only: a CI runner is not a place to expose an
-# unauthenticated gateway to its network.
-HOST_PORT=39401
+# unauthenticated gateway to its network. The port itself is Docker's to choose
+# (`-p 127.0.0.1::39400`, read back below): a fixed one is answerable by whatever
+# already holds it, and leg 2 cannot tell that apart from the container serving.
+# A gateway listening on the host satisfies the assertion while the container
+# under test serves nobody -- observed on 39401, where a developer machine's own
+# gateway answered `initialize` and the leg passed green. The same collision
+# voided a performance run before any rep (RELEASE-4.0.0-performance-contract.md,
+# Amendment 3), and two agents running this gate at once would collide too.
+# Docker hands out a free port, so only the container's own forward can answer.
 
 trap 'docker rm -f "${NAME}" "${EXTERNAL}" "${DEFAULTS}" > /dev/null 2>&1 || true' EXIT
 
@@ -124,9 +131,14 @@ docker rm -f "${NAME}" > /dev/null
 # the container boundary. A loopback-bound gateway passes leg 1 and fails here,
 # which is the whole point of running it.
 docker run -d --name "${EXTERNAL}" --pull never \
-  -p "127.0.0.1:${HOST_PORT}:39400" \
+  -p "127.0.0.1::39400" \
   -v "${WORKDIR}/smoke-external.yaml:/config.yaml:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
+
+# Read back what Docker allocated. An empty readback means the mapping never
+# happened, and curling a portless URL would fail for the wrong reason.
+HOST_PORT="$(docker port "${EXTERNAL}" 39400/tcp | head -1 | sed 's/.*://')"
+: "${HOST_PORT:?docker published no host port for 39400/tcp}"
 
 REQUEST='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-image","version":"0"}}}'
 ANSWER=
@@ -152,7 +164,7 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 if [ -z "${ANSWER}" ]; then
-  echo "::error::${IMAGE} never answered an MCP request on the published port within 60s"
+  echo "::error::${IMAGE} never answered an MCP request on published port ${HOST_PORT} within 60s"
   docker logs "${EXTERNAL}"
   exit 1
 fi
