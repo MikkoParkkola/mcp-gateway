@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -636,6 +637,65 @@ def test_spread_is_reported_but_never_gates():
         )
 
 
+def test_runner_declares_the_sample_it_runs():
+    """The runner writes pins.reps; the grader reads it and never globs.
+
+    Two processes in two languages agree on one list. If run_workload.sh lifts
+    its rep loop without lifting the pin, every extra rep is measured, paid for
+    and then silently dropped from the grade -- the failure the pin exists to
+    prevent, invisible in a green run. So the shell's own writer is executed
+    here and its output handed to the grader's validation, rather than a
+    fixture restating the shape both sides are supposed to share.
+    """
+    runner = (EVAL.parent / "run_workload.sh").read_text()
+
+    floor = re.search(r'REPS="\$\{WORKLOAD_REPS:-(\d+)\}"', runner)
+    assert floor, "run_workload.sh no longer defines a WORKLOAD_REPS default"
+    assert int(floor.group(1)) >= 6, (
+        f"runner default {floor.group(1)} reps is below the n>=6 interval floor"
+    )
+
+    # Every measured loop must span the same ids: the grader applies one rep
+    # list to LEGACY_CELLS + REPORT_ONLY_CELLS alike, so a loop left at `1 2 3`
+    # makes the report-only cells void on a missing file.
+    loops = re.findall(r'for n in ([^;]+); do', runner)
+    assert loops, "run_workload.sh no longer loops over reps"
+    assert all('seq 1 "$REPS"' in l for l in loops), (
+        f"a measured rep loop does not follow REPS: {loops}"
+    )
+
+    writer = re.search(
+        r'python3 - "\$run/pins\.json".*?<<\'PY\'\n(.*?)\nPY\n', runner, re.S
+    )
+    assert writer, "could not locate the pins.json writer in run_workload.sh"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "pins.json"
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        proc = subprocess.run(
+            [sys.executable, "-c", writer.group(1), str(out), DIGEST, head, head, head, "6"],
+            capture_output=True, text=True, cwd=EVAL.parent.parent.parent,
+        )
+        assert proc.returncode == 0, f"runner pin writer failed: {proc.stderr}"
+        pins = json.loads(out.read_text())
+
+    assert pins["reps"] == [1, 2, 3, 4, 5, 6], (
+        f"runner declared {pins.get('reps')!r}, not the six reps it ran"
+    )
+    # The grader's own validation is the oracle, not a second copy of it here.
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp)
+        build(run, {c: (0.05, 0.10) for c in CELLS}, reps=6)
+        (run / "pins.json").write_text(
+            json.dumps({**json.loads((run / "pins.json").read_text()),
+                        "reps": pins["reps"]})
+        )
+        rc = run_eval(run)
+    assert rc != ev.EXIT_VOID, "the runner's own pin voids in the grader"
+
+
 def check(name, fn):
     """Run one gate check, record the failure, keep going.
 
@@ -753,6 +813,7 @@ def main() -> None:
     check("gate/degenerate input", test_degenerate_input)
     check("gate/archived run wiring", test_archived_run_regrades_as_insufficiency)
     check("gate/duplicate reps VOID", test_duplicate_reps_void)
+    check("gate/runner declares its sample", test_runner_declares_the_sample_it_runs)
     check(
         "gate/malformed reps pin VOID",
         test_malformed_reps_pin_voids_rather_than_falling_back,
