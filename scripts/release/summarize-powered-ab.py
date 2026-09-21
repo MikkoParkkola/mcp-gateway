@@ -32,6 +32,31 @@ import sys
 from math import comb
 
 
+COLS = (("p50_ms", "P50"), ("p90_ms", "P90"), ("p95_ms", "P95"), ("p99_ms", "P99"))
+
+
+def paired_ratios(rows: list[dict]) -> dict[str, list[float]]:
+    """Per-rep release/control ratios, keyed by percentile column.
+
+    The ratio is always rel/b -- keyed by ARM, never by slot position. That
+    distinction is the whole point: a position-keyed ratio silently inverts when
+    a block runs the arms in the opposite order, so the forward and reversed
+    blocks would not be comparable and the inversion would not show up as an
+    error. Defining it by arm is what makes the crossover contrast possible.
+    """
+    by_rep: dict[str, dict[str, dict]] = {}
+    for r in rows:
+        by_rep.setdefault(r["rep"], {})[r["arm"]] = r
+    return {
+        col: [
+            float(cells["rel"][col]) / float(cells["b"][col])
+            for cells in by_rep.values()
+            if "rel" in cells and "b" in cells
+        ]
+        for col, _ in COLS
+    }
+
+
 def median_ci(values: list[float]) -> tuple[float, float, float, float]:
     """Return (median, lo, hi, realised_coverage) for a sorted-safe sample."""
     xs = sorted(values)
@@ -81,9 +106,17 @@ def main(path: str) -> int:
             continue
         label = "release line" if arm == "rel" else "3.5.1 drift control"
         reqs = sum(int(r["http_reqs"]) for r in sample)
-        print(f"\n{label}  ({sample[0]['sha']})")
+        # Every rep's sha, not just the first. A rebuilt arm still answers
+        # /health with the same version string, so the recorded sha is the only
+        # signal that the binary moved under a block -- which would silently
+        # break any comparison between two blocks that assume the same pair.
+        shas = sorted({r["sha"] for r in sample})
+        if len(shas) > 1:
+            print(f"arm {arm} spans {len(shas)} distinct shas: {shas}", file=sys.stderr)
+            return 1
+        print(f"\n{label}  ({shas[0]})")
         print(f"  reps {len(sample)}   requests {reqs:,}")
-        for col, name in (("p50_ms", "P50"), ("p90_ms", "P90"), ("p95_ms", "P95"), ("p99_ms", "P99")):
+        for col, name in COLS:
             vals = [float(r[col]) for r in sample]
             mid, lo, hi, cov = median_ci(vals)
             # The observed spread is printed next to the interval so a single
@@ -92,6 +125,31 @@ def main(path: str) -> int:
             # choosing it -- but a reader is entitled to see that it happened.
             print(f"  {name}  {mid:.4f} ms   95% CI [{lo:.4f}, {hi:.4f}]   (exact coverage {cov:.3f})")
             print(f"        observed spread [{min(vals):.4f}, {max(vals):.4f}]")
+
+    # The arms are interleaved within a rep, so the design is paired and the
+    # per-arm sections above discard that pairing. The ratio below keeps it, and
+    # is the only figure that can be compared across a forward and a reversed
+    # block: with multiplicative effects the forward ratio carries code+position
+    # and the reversed one carries code-position, so their geometric mean
+    # isolates the code effect and sqrt(forward/reversed) isolates position.
+    ratios = paired_ratios(rows)
+    n_pairs = len(ratios["p50_ms"])
+    if n_pairs:
+        print(f"\npaired release/control ratio   ({n_pairs} complete pairs)")
+        if n_pairs <= 6:
+            print("  note: at n<=6 the order-statistic interval degenerates to [min, max]")
+            print("        and the sign test is decisive only on unanimity (6/6 -> p=0.031,")
+            print("        5/6 -> p=0.22). Pool a second block rather than reading n=6 alone.")
+        for col, name in COLS:
+            vals = ratios[col]
+            above = sum(1 for v in vals if v > 1.0)
+            try:
+                mid, lo, hi, cov = median_ci(vals)
+            except ValueError as exc:
+                print(f"  {name}  {sorted(vals)[len(vals) // 2]:.4f}   (no interval: {exc})")
+                continue
+            print(f"  {name}  {mid:.4f}   95% CI [{lo:.4f}, {hi:.4f}]   (exact coverage {cov:.3f})")
+            print(f"        {above}/{len(vals)} reps above 1.0")
     return 0
 
 
