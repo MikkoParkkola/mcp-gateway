@@ -1875,7 +1875,7 @@ async fn meta_mcp_dispatch(
         "tools/resolve" => {
             state
                 .meta_mcp
-                .handle_tools_resolve(id, params.as_ref())
+                .handle_tools_resolve(id, params.as_ref(), Some(session_id.as_str()))
                 .await
         }
 

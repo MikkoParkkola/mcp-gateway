@@ -132,11 +132,16 @@ impl MetaMcp {
     /// Searches the capability backend and all MCP backend caches.  Returns a
     /// JSON-RPC error when the tool is not found in any cache, with a "did you mean?"
     /// suggestion when the name is a close misspelling of a known tool.
+    ///
+    /// `session_id` selects the routing profile the suggestions are drawn
+    /// through (MIK-7517): a miss must not describe a catalogue wider than the
+    /// one this caller is allowed to list.
     #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     pub async fn handle_tools_resolve(
         &self,
         id: RequestId,
         params: Option<&Value>,
+        session_id: Option<&str>,
     ) -> JsonRpcResponse {
         let tool_name = params.and_then(|p| p.get("name")).and_then(Value::as_str);
 
@@ -152,7 +157,11 @@ impl MetaMcp {
             let result = json!({ "tool": tool });
             JsonRpcResponse::success(id, result)
         } else {
-            let msg = self.build_tool_not_found_message(name);
+            // Read the profile here rather than take one from the router, so
+            // both spec-preview discovery answers for a connection are decided
+            // by the same lookup `handle_tools_list_filtered` makes.
+            let profile = self.active_profile(session_id);
+            let msg = self.build_tool_not_found_message(name, &profile);
             JsonRpcResponse::error(Some(id), -32601, msg)
         }
     }
@@ -185,8 +194,12 @@ impl MetaMcp {
     }
 
     /// Build a "not found" error message, optionally including Levenshtein suggestions.
-    fn build_tool_not_found_message(&self, name: &str) -> String {
-        let all_names: Vec<String> = self.collect_all_cached_tool_names();
+    fn build_tool_not_found_message(
+        &self,
+        name: &str,
+        profile: &crate::routing_profile::RoutingProfile,
+    ) -> String {
+        let all_names: Vec<String> = self.collect_all_cached_tool_names(profile);
         let candidates: Vec<&str> = all_names.iter().map(String::as_str).collect();
 
         match did_you_mean(name, &candidates, 3, 3) {
@@ -196,18 +209,45 @@ impl MetaMcp {
     }
 
     /// Collect tool names from every cached backend (for suggestions).
-    fn collect_all_cached_tool_names(&self) -> Vec<String> {
+    ///
+    /// Suggestions are a discovery surface, so they answer to the same two
+    /// gates discovery does, and the gates are not interchangeable: isolation
+    /// decides *whose* backend this is, authorization decides whether *this*
+    /// caller may see the name at all. A tool denied by the profile is absent
+    /// from every other route the caller has (`search::list_tools`,
+    /// `collect_filtered_backend_tools`), so naming it here would make a miss
+    /// more informative than a hit — the enumeration oracle MIK-7517 reports.
+    fn collect_all_cached_tool_names(
+        &self,
+        profile: &crate::routing_profile::RoutingProfile,
+    ) -> Vec<String> {
         let mut names = Vec::new();
-        if let Some(cap) = self.get_capabilities() {
-            names.extend(cap.get_tools().into_iter().map(|t| t.name));
+        // The capability backend carries no per-caller identity, so only the
+        // authorization gate applies to it — but it applies in full.
+        if let Some(cap) = self.get_capabilities()
+            && profile.backend_allowed(&cap.name)
+        {
+            names.extend(
+                cap.get_tools()
+                    .into_iter()
+                    .map(|t| t.name)
+                    .filter(|n| profile.tool_allowed(n)),
+            );
         }
         for backend in self.backends.all() {
             // INV-2 (MIK-6742): don't leak an isolated backend's tool names via
             // "did you mean?" suggestions on a multi-user gateway.
-            if self.meta_route_isolation_refused(&backend) {
+            if self.meta_route_isolation_refused(&backend)
+                || !profile.backend_allowed(&backend.name)
+            {
                 continue;
             }
-            names.extend(backend.get_cached_tool_names());
+            names.extend(
+                backend
+                    .get_cached_tool_names()
+                    .into_iter()
+                    .filter(|n| profile.tool_allowed(n)),
+            );
         }
         names
     }
@@ -460,7 +500,9 @@ mod tests {
     async fn handle_tools_resolve_missing_name_returns_error() {
         // GIVEN: params without 'name'
         let m = meta();
-        let resp = m.handle_tools_resolve(RequestId::Number(5), None).await;
+        let resp = m
+            .handle_tools_resolve(RequestId::Number(5), None, None)
+            .await;
         // THEN: JSON-RPC error -32602
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32602);
@@ -472,7 +514,7 @@ mod tests {
         let m = meta();
         let params = json!({ "name": "nonexistent_tool_xyz" });
         let resp = m
-            .handle_tools_resolve(RequestId::Number(6), Some(&params))
+            .handle_tools_resolve(RequestId::Number(6), Some(&params), None)
             .await;
         // THEN: JSON-RPC error -32601 with descriptive message
         assert!(resp.error.is_some());
