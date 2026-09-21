@@ -1702,6 +1702,13 @@ class SmokeGateCoverage(unittest.TestCase):
         # them -- so an assertion about an argument on a later line passes
         # whether or not the argument is there.
         self.folded = re.sub(r"\\\n\s*", " ", self.body)
+        # Comments stripped, for assertions that must not be satisfied by prose.
+        # A guard that survives only inside a `#` line is not a guard, and the
+        # comments here quote the very constructs the assertions look for.
+        self.uncommented = "\n".join(
+            "" if line.lstrip().startswith("#") else line
+            for line in self.folded.splitlines()
+        )
 
     def test_the_gate_probes_the_image_from_outside_the_container(self):
         self.assertRegex(
@@ -1759,29 +1766,82 @@ class SmokeGateCoverage(unittest.TestCase):
         # another process already owns 39401 -- the forward loses to the
         # incumbent silently -- so the probe can be answered by whatever else is
         # listening, and the gate passes green having never reached the
-        # container. This repo has already lost a performance run to a collision
-        # on this exact port (RELEASE-4.0.0-performance-contract.md, Amendment
-        # 3), so it is a known local hazard, not a theoretical one.
+        # container. Reproduced on a developer machine: a `sleep` container
+        # published on an occupied 39401 came up with the mapping displayed, and
+        # `curl /health` answered 200 from the unrelated process that held the
+        # port. This repo had already lost a performance run to a collision on
+        # that same port (RELEASE-4.0.0-performance-contract.md, Amendment 3).
         #
         # Two published ports on one host also collide with each other, so
         # concurrent runs of this gate cannot both be trusted.
+        #
+        # The host-port field is read structurally rather than matched for
+        # digits: the defect's own spelling was `${HOST_PORT}`, so an assertion
+        # keyed on a literal number tolerates the exact bug it was written for.
+        # The form is required positively -- loopback bind, empty host port --
+        # rather than by enumerating forbidden spellings, because `-p
+        # 39401:39400`, `--publish=...` and `-p "::39400"` are all the same
+        # defect (or a worse one: the last publishes on every interface).
         published = re.findall(
-            r"(?:-p|--publish)\s+\"?(?:127\.0\.0\.1|localhost):([0-9]+):",
-            self.folded,
+            r"(?:-p|--publish)(?:\s+|=)\"?([^\"'\s]+)\"?|"
+            r"(?:-p|--publish)(?:\s+|=)'([^']+)'",
+            self.uncommented,
         )
-        self.assertEqual(
-            published,
-            [],
-            "smoke-image.sh: the host port is pinned to "
-            f"{', '.join(published)}; Docker reports success publishing a port "
-            "another process already holds, so the probe can be answered by the "
-            "machine's own gateway and the gate passes on the wrong process",
+        mappings = [a or b for a, b in published]
+        serving = [m for m in mappings if "39400" in m]
+        self.assertTrue(
+            serving,
+            "smoke-image.sh: nothing publishes the gateway port, so the probe "
+            "cannot reach the image from the runner",
         )
-        self.assertRegex(
-            self.folded,
-            r"docker port\s",
-            "smoke-image.sh: the host port is never read back from Docker, so "
+        for mapping in serving:
+            fields = mapping.split(":")
+            self.assertEqual(
+                len(fields),
+                3,
+                f"smoke-image.sh: publish argument {mapping!r} is not "
+                "ip:hostport:containerport; without an explicit bind address "
+                "the gateway is published on every interface",
+            )
+            self.assertIn(
+                fields[0],
+                ("127.0.0.1", "localhost"),
+                f"smoke-image.sh: publish argument {mapping!r} does not bind "
+                "loopback; a CI runner is not a place to expose an "
+                "unauthenticated gateway to its network",
+            )
+            self.assertEqual(
+                fields[1],
+                "",
+                f"smoke-image.sh: the host port is pinned in {mapping!r}. "
+                "Docker reports success publishing a port another process "
+                "already holds, so the probe can be answered by the machine's "
+                "own gateway and the gate passes on the wrong process",
+            )
+
+    def test_the_gate_probes_the_port_docker_actually_assigned(self):
+        # Allocating the port dynamically buys nothing if the probe still aims
+        # at a constant, so the variable the readback writes has to be the one
+        # the request reads.
+        assigned = re.search(
+            r"([A-Za-z_][A-Za-z0-9_]*)=\"?\$\(\s*docker port\b", self.uncommented
+        )
+        self.assertIsNotNone(
+            assigned,
+            "smoke-image.sh: no variable is assigned from `docker port`, so "
             "nothing knows which port the container actually got",
+        )
+        name = assigned.group(1)
+        probe = re.search(r"curl[^\n]*127\.0\.0\.1:([^/\s\"]+)", self.folded)
+        self.assertIsNotNone(
+            probe, "smoke-image.sh: no curl probe against 127.0.0.1 was found"
+        )
+        self.assertIn(
+            name,
+            probe.group(1),
+            f"smoke-image.sh: the probe targets {probe.group(1)!r}, not the "
+            f"port `{name}` that docker reported; the gate would reach whatever "
+            "happens to hold that port",
         )
 
     def test_the_gate_fails_when_the_port_readback_is_empty(self):
@@ -1790,11 +1850,36 @@ class SmokeGateCoverage(unittest.TestCase):
         # `http://127.0.0.1:/mcp` -- a malformed URL curl refuses -- which
         # reads as "the image did not answer" rather than "the gate is broken",
         # so a harness fault would be reported as a product defect.
+        #
+        # Keyed on the variable the readback actually writes, and read from the
+        # comment-stripped body: a guard on a different variable, or one that
+        # survives only inside a comment, is not a guard.
+        assigned = re.search(
+            r"([A-Za-z_][A-Za-z0-9_]*)=\"?\$\(\s*docker port\b", self.uncommented
+        )
+        self.assertIsNotNone(
+            assigned, "smoke-image.sh: no variable is assigned from `docker port`"
+        )
+        name = assigned.group(1)
+        # Closed immediately after the variable: `-z "${HOST_PORT}x"` and
+        # `-z "${HOST_PORT:-x}"` are both tests that can never fire, and a
+        # regex that stops at the variable accepts either.
+        emptiness = r"-z\s+\"?\$\{?" + re.escape(name) + r"\}?\"?\s*\]"
         self.assertRegex(
-            self.folded,
-            r"(?s)docker port.{0,400}?(?:-z\s+\"?\$\{?[A-Z_]+|\[\s+-z)",
-            "smoke-image.sh: an empty `docker port` readback is not checked, so "
-            "a missing mapping is reported as the image failing to answer",
+            self.uncommented,
+            emptiness,
+            f"smoke-image.sh: nothing checks `{name}` for emptiness -- or the "
+            "check is written so it can never fire -- so a missing mapping is "
+            "reported as the image failing to answer",
+        )
+        # And the check has to precede the request it protects.
+        guard = re.search(emptiness, self.uncommented)
+        probe = self.uncommented.index("curl")
+        self.assertLess(
+            guard.start(),
+            probe,
+            f"smoke-image.sh: `{name}` is checked for emptiness only after the "
+            "request that needs it",
         )
 
 

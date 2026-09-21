@@ -130,14 +130,33 @@ docker run -d --name "${EXTERNAL}" --pull never \
   "${IMAGE}" --config /config.yaml > /dev/null
 
 # Which port did it actually get? Docker answers `<ip>:<port>`; take the last
-# field so an IPv6 mapping does not shear on the colons. `docker port` prints
-# nothing and still exits 0 when the mapping is absent, so an unchecked read
-# would probe `http://127.0.0.1:/mcp` and report the image as unresponsive --
-# a harness fault dressed up as a product defect.
-HOST_PORT="$(docker port "${EXTERNAL}" 39400/tcp 2>/dev/null | head -n 1)"
+# field so an IPv6 mapping does not shear on the colons.
+#
+# Two traps here, both fatal under the `set -euo pipefail` above. Sending
+# stderr to /dev/null and assigning in one step means a failed `docker port`
+# exits the script immediately with no diagnostic at all -- a red CI step that
+# cannot say why. And piping to `head -n 1` lets the reader close the pipe
+# early, so `docker port` can take SIGPIPE and the pipeline reports 141 on what
+# was actually a success. So: capture stderr, test the status explicitly, and
+# cut the first line with parameter expansion rather than a pipe.
+if ! HOST_PORT="$(docker port "${EXTERNAL}" 39400/tcp 2>&1)"; then
+  echo "::error::${IMAGE}: docker port failed: ${HOST_PORT}"
+  docker logs "${EXTERNAL}"
+  exit 1
+fi
+# `docker port` prints nothing and still exits 0 when the mapping is absent, so
+# the status check above is necessary but not sufficient. An unchecked empty
+# read would probe `http://127.0.0.1:/mcp` and report the image as
+# unresponsive -- a harness fault dressed up as a product defect. Keep the raw
+# answer so that branch can show what docker actually said.
+PORT_RAW="${HOST_PORT}"
+HOST_PORT="${HOST_PORT%%$'\n'*}"
 HOST_PORT="${HOST_PORT##*:}"
 if [ -z "${HOST_PORT}" ]; then
-  echo "::error::${IMAGE}: docker published no host port for 39400/tcp"
+  echo "::error::${IMAGE}: docker published no host port for 39400/tcp;" \
+    "docker port said: ${PORT_RAW:-<empty>}"
+  docker ps -a --filter "name=${EXTERNAL}" \
+    --format 'container: {{.Names}} {{.Status}} {{.Ports}}'
   docker logs "${EXTERNAL}"
   exit 1
 fi

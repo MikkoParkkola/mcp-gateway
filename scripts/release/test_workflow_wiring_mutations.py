@@ -1018,8 +1018,63 @@ SMOKE_CASES = [
         # from the case above: no variable is left to check, so an assertion
         # written only against the emptiness guard would miss it.
         "port-never-read-back-from-docker",
-        'HOST_PORT="$(docker port "${EXTERNAL}" 39400/tcp 2>/dev/null | head -n 1)"',
-        "HOST_PORT=39401",
+        'if ! HOST_PORT="$(docker port "${EXTERNAL}" 39400/tcp 2>&1)"; then',
+        'HOST_PORT=39401\nif false; then',
+        CAUGHT,
+    ),
+    (
+        # `--publish=` takes an equals sign, not whitespace. Same defect, a
+        # spelling an assertion anchored on `\s+` never sees.
+        "host-port-pinned-through-the-long-flag",
+        '-p "127.0.0.1::39400"',
+        "--publish=127.0.0.1:39401:39400",
+        CAUGHT,
+    ),
+    (
+        # No bind address at all. Worse than the pin it replaces: this
+        # publishes an unauthenticated gateway on every interface of the
+        # runner, and it still pins the host port.
+        "publish-drops-the-loopback-bind",
+        '-p "127.0.0.1::39400"',
+        '-p "39401:39400"',
+        CAUGHT,
+    ),
+    (
+        # The empty host port kept, the loopback bind dropped. An assertion
+        # that only checks the host-port field tolerates this.
+        "publish-on-every-interface-with-an-allocated-port",
+        '-p "127.0.0.1::39400"',
+        '-p "::39400"',
+        CAUGHT,
+    ),
+    (
+        # Single quotes instead of double. Shell-equivalent, regex-invisible.
+        "host-port-pinned-in-single-quotes",
+        '-p "127.0.0.1::39400"',
+        "-p '127.0.0.1:39401:39400'",
+        CAUGHT,
+    ),
+    (
+        # A guard that can never fire: the variable is never empty once a
+        # character is appended to it.
+        "emptiness-guard-made-vacuous",
+        'if [ -z "${HOST_PORT}" ]; then',
+        'if [ -z "${HOST_PORT}x" ]; then',
+        CAUGHT,
+    ),
+    (
+        # The same, by default-substitution rather than concatenation.
+        "emptiness-guard-defeated-by-a-default",
+        'if [ -z "${HOST_PORT}" ]; then',
+        'if [ -z "${HOST_PORT:-x}" ]; then',
+        CAUGHT,
+    ),
+    (
+        # Allocating the port dynamically buys nothing if the probe still aims
+        # at a constant -- the gate reaches whatever holds 39401.
+        "probe-aimed-at-a-constant-port",
+        "${HOST_PORT}/mcp",
+        "39401/mcp",
         CAUGHT,
     ),
 ]
@@ -1117,7 +1172,34 @@ def main():
         # a crash, and the next run would gate the release on a script nobody
         # wrote.
         shutil.copy2(SMOKE_SCRIPT, copy / "smoke-image.sh")
-        for label, before, after, expected in SMOKE_CASES:
+        # Baseline first. Every mutation verdict here is "did the suite go
+        # red", so a suite already red for an unrelated reason reports CAUGHT
+        # for all of them and the run prints ok -- a corpus that certifies
+        # itself. Nothing downstream can detect that, so it is checked once,
+        # up front, against the unmutated copy.
+        baseline = subprocess.run(
+            [sys.executable, str(SUITE), "SmokeGateCoverage"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "MCPGW_SMOKE_SCRIPT": str(copy / "smoke-image.sh")},
+        )
+        if baseline.returncode != 0:
+            print("FAIL smoke-baseline: SmokeGateCoverage is red before any mutation")
+            print(
+                "\n".join(
+                    f"    | {line}"
+                    for line in (baseline.stdout + baseline.stderr).splitlines()
+                )
+            )
+            failures.append(
+                "smoke-baseline: the suite is red unmutated, so every smoke "
+                "mutation below would read caught for the wrong reason"
+            )
+            smoke_cases = []
+        else:
+            print("ok   smoke-baseline: clean before mutation")
+            smoke_cases = SMOKE_CASES
+        for label, before, after, expected in smoke_cases:
             got, output = smoke_verdict(copy, before, after)
             if got is None:
                 failures.append(
