@@ -210,7 +210,7 @@ Grade on these four conditions, not on the transcript:
 1. exit status 0,
 2. the tally ends `0 failing`,
 3. `origin-guard` and `host-guard` each read `refused 403; legitimate request 200`,
-4. no control that was covered in the previous run has become `uncovered`.
+4. no control that was covered in the recorded baseline has become `uncovered`.
 
 The shape, measured against the 4.0.0 build on 2026-09-21:
 
@@ -228,6 +228,12 @@ config-gated control is off by default, and the negative half of several probes 
 the outage or the attack they are looking for. Condition 4 is what makes the count
 load-bearing: a control silently dropping from probed to uncovered is drift that the
 `0 failing` tally alone will not show.
+
+Condition 4 has no baseline yet. The step-3 smoke printed its transcript to the terminal
+and nothing captured it, so there is no recorded prior run to diff against. Redirect the
+step-5 run to `docs/internal/evidence/nfr-sec-7-control-drift-baseline.txt` and commit
+it; that file becomes the baseline every later run grades condition 4 against. Until it
+exists, condition 4 is ungradeable — grade steps 5-7 on conditions 1-3 and say so.
 
 - `<provenance>` is `provenance: 5d25f104 is in v3.5.1` for option A, and
   `provenance unavailable: v4.0.0 is not a tag in this repository` for a pre-tag 4.0.0

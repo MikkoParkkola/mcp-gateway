@@ -58,7 +58,10 @@ answering the legitimate request 200.
 ## Step 4 - rollback rehearsed, then left at the old build
 
 The launcher symlink was flipped to `4.0.0-e82d7ee4` and back to `3.4.0-f30539af`,
-proving the rollback command works before it is needed. It is deliberately left
+proving the flip command works before it is needed. That is the limit of the rehearsal:
+no `launchd` exec of either build was performed, so the restart half of rollback is
+first exercised at step 5. The exposure is small because 3.4.0 is the build currently
+running, but it is not zero and it is not rehearsed. It is deliberately left
 pointing at `3.4.0-f30539af`: `launchd` reads the symlink at exec time, so leaving
 it at the new build would make any unattended restart an unwatched cutover.
 
