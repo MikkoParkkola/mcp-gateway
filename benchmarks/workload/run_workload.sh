@@ -95,6 +95,28 @@ sha256_of() {
   else shasum -a 256 "$@"; fi
 }
 
+# --- machine conditions -----------------------------------------------------
+# Spark is shared -- 57 other users during the 2026-09-21 run -- so a rep can
+# measure the machine's run queue instead of the gateway. The 2026-09-21 run
+# did exactly that: a three-minute excursion to loadavg 34 on 20 CPUs put
+# tools-call p99 at 58.7ms in A2, 75.0ms in B2 and 33.9ms in C2 against a body
+# of ~3ms, and lifted /health p99 from 3.1ms to 69ms in the same three reps.
+# /health does no routing and no backend round-trip, so the stall is not in the
+# tool path; the same binary hand-run at loadavg 34.9-51.1, with no harness
+# change, then reproduced those numbers from CPU scarcity alone.
+#
+# `uptime` was already sampled per rep and then never read by anything. It is
+# replaced here by /proc/loadavg, which is exact rather than locale-formatted
+# prose, and by a sample at BOTH ends of the rep: loadavg-1 is a trailing
+# exponential average, so a single reading taken before k6 starts describes the
+# minute BEFORE the measured window. That lag is why A2 recorded as clean at
+# 7.75 while its own window ran at 20-plus.
+ncpu() { getconf _NPROCESSORS_ONLN; }
+loadavg1() {
+  [[ -r /proc/loadavg ]] || die "no /proc/loadavg; the runner is Linux-only"
+  cut -d' ' -f1 /proc/loadavg
+}
+
 # --- build ------------------------------------------------------------------
 # --release --locked, deliberately outside CI's RUSTFLAGS: -Dwarnings. The
 # binary is what is being measured, not the lint gate.
@@ -215,15 +237,18 @@ run_rep() {
     "$run/$rep.health.json")"
 
   # Written BEFORE k6 starts. A rep that dies mid-arm still leaves this behind.
-  python3 - "$run/$rep.meta.json" "$GW_ARGV" "$sha" "$version" "$K6_IMAGE_DIGEST" "$(uptime)" <<'PY'
+  python3 - "$run/$rep.meta.json" "$GW_ARGV" "$sha" "$version" "$K6_IMAGE_DIGEST" "$(uptime)" \
+    "$(loadavg1)" "$(ncpu)" <<'PY'
 import json, sys
-path, argv, sha, version, digest, load = sys.argv[1:7]
+path, argv, sha, version, digest, load, load1_start, ncpu = sys.argv[1:9]
 json.dump({
     "argv": argv.split(),
     "checkout_sha": sha,
     "health_version": version,
     "k6_image_digest": digest,
     "uptime": load,
+    "load1_start": float(load1_start),
+    "ncpu": int(ncpu),
 }, open(path, "w"), indent=2)
 PY
 
@@ -252,6 +277,18 @@ PY
 
   [[ -s "$run/$rep.summary.json" ]] || die "$rep: k6 wrote no summary export"
 
+  # The closing sample. It is taken here, before the gateway is stopped, so it
+  # describes the minute the measurement actually ran in. A rep that died above
+  # never reaches this line and so carries no load1_end -- which the evaluator
+  # reads as a rep with no valid window, not as a rep that passed.
+  python3 - "$run/$rep.meta.json" "$(loadavg1)" <<'PY'
+import json, sys
+path, load1_end = sys.argv[1:3]
+meta = json.load(open(path))
+meta["load1_end"] = float(load1_end)
+json.dump(meta, open(path, "w"), indent=2)
+PY
+
   stop_gateway
   [[ "$measured" == "measured" ]] || rm -f "$run/$rep.summary.json"
 }
@@ -273,9 +310,9 @@ do_measure() {
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \
     "$(cat "$ARMS_DIR/A/.checkout_sha")" "$(cat "$ARMS_DIR/B/.checkout_sha")" \
-    "$(cat "$ARMS_DIR/C/.checkout_sha")" "$REPS" <<'PY'
+    "$(cat "$ARMS_DIR/C/.checkout_sha")" "$REPS" "$(ncpu)" <<'PY'
 import json, subprocess, sys
-path, digest, a, b, c, reps = sys.argv[1:7]
+path, digest, a, b, c, reps, ncpu = sys.argv[1:8]
 def ver(ref):
     out = subprocess.run(["git","show",f"{ref}:Cargo.toml"],capture_output=True,text=True).stdout
     for line in out.splitlines():
@@ -288,22 +325,30 @@ cells = {
 }
 for cell in ("C","D","E"):
     cells[cell] = {"checkout_sha": c, "health_version": ver(c)}
-json.dump({"k6_image_digest": digest, "reps": list(range(1, int(reps) + 1)), "cells": cells},
+# The envelope is DECLARED here, before any rep runs, and is the machine's own
+# CPU count -- not a constant fitted to the gap in some past run. At loadavg
+# >= ncpu every runnable thread is queued behind a core and the rep is timing
+# the queue. Declaring it up front is what keeps this from being a filter
+# chosen after the numbers were seen.
+json.dump({"k6_image_digest": digest, "reps": list(range(1, int(reps) + 1)),
+           "ncpu": int(ncpu), "load_envelope": {"max_load1": float(ncpu)},
+           "cells": cells},
           open(path,"w"), indent=2)
 PY
 
-  # Warm-up, discarded.
-  for cell in A B C; do run_rep "$cell" "${cell}0" "$run" warmup; done
+  # Warm-up, discarded. Every cell gets one, including the report-only pair:
+  # a cell that skips it is measured on a colder page cache than its siblings.
+  for cell in A B C D E; do run_rep "$cell" "${cell}0" "$run" warmup; done
 
   # Measured, interleaved. Spark is shared, so the arms must see the same
-  # machine conditions rather than consecutive blocks of time.
+  # machine conditions rather than consecutive blocks of time. D and E are in
+  # this loop for that reason and no other: running them as a trailing block
+  # gave them a different machine. In the 2026-09-21 run the gated cells drew a
+  # window averaging loadavg 7 and the report-only pair, 35 minutes later, drew
+  # one averaging 3.4 -- which is the whole of why D and E looked untouched by
+  # an excursion that was never about which cells were gated.
   for n in $(seq 1 "$REPS"); do
-    for cell in A B C; do run_rep "$cell" "${cell}${n}" "$run" measured; done
-  done
-
-  # Report-only cells. No counterpart arm exists, so these are never compared.
-  for n in $(seq 1 "$REPS"); do
-    for cell in D E; do run_rep "$cell" "${cell}${n}" "$run" measured; done
+    for cell in A B C D E; do run_rep "$cell" "${cell}${n}" "$run" measured; done
   done
 
   echo "[done] run dir $run"
