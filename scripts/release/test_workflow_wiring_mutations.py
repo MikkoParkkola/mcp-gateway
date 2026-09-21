@@ -973,6 +973,85 @@ CASES = [
     ),
 ]
 
+# The smoke gate is a shell script rather than a workflow, so its assertions
+# need their own corpus: `verdict` below mutates a workflow file and points the
+# suite at a copied workflows directory, which a shell script never sees.
+#
+# These cases exist because the gate had this defect in production. It published
+# `127.0.0.1:39401:39400`, and Docker REPORTS SUCCESS for a publish whose host
+# port another process already owns -- the forward loses to the incumbent
+# silently. The machine's own gateway answered the probe and the gate passed
+# green having never reached the container under test. An assertion that only
+# holds for the fixed script proves nothing about that; it has to fail when the
+# pin comes back.
+SMOKE_SCRIPT = HERE.parents[2] / "scripts" / "ci" / "smoke-image.sh"
+
+# (label, before, after, expected) -- `before` must occur verbatim, exactly once.
+SMOKE_CASES = [
+    (
+        # The regression itself, restored.
+        "host-port-pinned-to-a-constant",
+        '-p "127.0.0.1::39400"',
+        '-p "127.0.0.1:39401:39400"',
+        CAUGHT,
+    ),
+    (
+        # A different spelling of the same defect: any pinned port, not just the
+        # one that bit. An assertion keyed on the literal 39401 would tolerate
+        # this and report the class as covered.
+        "host-port-pinned-to-some-other-constant",
+        '-p "127.0.0.1::39400"',
+        '-p "127.0.0.1:45999:39400"',
+        CAUGHT,
+    ),
+    (
+        # `docker port` prints nothing and still exits 0 when the mapping is
+        # absent, so defeating the emptiness check turns a harness fault into a
+        # report that the image failed to answer.
+        "empty-port-readback-goes-unchecked",
+        'if [ -z "${HOST_PORT}" ]; then',
+        "if false; then",
+        CAUGHT,
+    ),
+    (
+        # The readback deleted outright, pin restored in its place. Distinct
+        # from the case above: no variable is left to check, so an assertion
+        # written only against the emptiness guard would miss it.
+        "port-never-read-back-from-docker",
+        'HOST_PORT="$(docker port "${EXTERNAL}" 39400/tcp 2>/dev/null | head -n 1)"',
+        "HOST_PORT=39401",
+        CAUGHT,
+    ),
+]
+
+
+def smoke_verdict(directory, before, after):
+    """Apply one mutation to a copy of the smoke gate and run its assertions."""
+    path = directory / "smoke-image.sh"
+    original = path.read_text(encoding="utf-8")
+    if original.count(before) != 1:
+        return None, ""
+    path.write_text(original.replace(before, after, 1), encoding="utf-8")
+    try:
+        done = subprocess.run(
+            # Only the class that reads the script. The workflow classes read a
+            # directory this mutation cannot reach, so including them would add
+            # assertions that can never fire and dilute the verdict.
+            [sys.executable, str(SUITE), "SmokeGateCoverage"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "MCPGW_SMOKE_SCRIPT": str(path)},
+        )
+    finally:
+        path.write_text(original, encoding="utf-8")
+    output = done.stdout + done.stderr
+    if done.returncode == 0:
+        return TOLERATED, output
+    if "ERROR:" in output or "FAIL:" not in output:
+        return BROKEN, output
+    return CAUGHT, output
+
+
 
 def verdict(directory, workflow, before, after):
     """Apply one mutation to the copied workflows and run the suite against it."""
@@ -1014,6 +1093,7 @@ def verdict(directory, workflow, before, after):
 
 def main():
     failures = []
+    total = len(CASES) + len(SMOKE_CASES)
     with tempfile.TemporaryDirectory() as directory:
         copy = pathlib.Path(directory)
         shutil.copytree(WORKFLOWS, copy, dirs_exist_ok=True)
@@ -1031,13 +1111,33 @@ def main():
                 print("\n".join(f"    | {line}" for line in output.splitlines()))
                 continue
             print(f"ok   {label}: {got}")
+
+        # The smoke gate is copied alongside, for the same reason the workflows
+        # are: a harness that mutated it in place would leave the pin behind on
+        # a crash, and the next run would gate the release on a script nobody
+        # wrote.
+        shutil.copy2(SMOKE_SCRIPT, copy / "smoke-image.sh")
+        for label, before, after, expected in SMOKE_CASES:
+            got, output = smoke_verdict(copy, before, after)
+            if got is None:
+                failures.append(
+                    f"{label}: its anchor is no longer in smoke-image.sh"
+                )
+                print(f"STALE {label}")
+                continue
+            if got != expected:
+                failures.append(f"{label}: expected {expected}, got {got}")
+                print(f"FAIL {label}: {got}")
+                print("\n".join(f"    | {line}" for line in output.splitlines()))
+                continue
+            print(f"ok   {label}: {got}")
     print()
     if failures:
-        print(f"{len(failures)} of {len(CASES)} mutation cases disagree with the suite:")
+        print(f"{len(failures)} of {total} mutation cases disagree with the suite:")
         for line in failures:
             print(" -", line)
         return 1
-    print(f"{len(CASES)} mutation cases agree with the suite")
+    print(f"{total} mutation cases agree with the suite")
     return 0
 
 

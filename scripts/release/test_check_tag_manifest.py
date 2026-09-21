@@ -1753,6 +1753,50 @@ class SmokeGateCoverage(unittest.TestCase):
             "smoke-image.sh: nothing pins the HEALTHCHECK to the health endpoint",
         )
 
+    def test_the_gate_lets_docker_allocate_the_host_port(self):
+        # A pinned host port makes the gate's identity depend on ambient machine
+        # state. `docker run -p 127.0.0.1:39401:39400` REPORTS SUCCESS when
+        # another process already owns 39401 -- the forward loses to the
+        # incumbent silently -- so the probe can be answered by whatever else is
+        # listening, and the gate passes green having never reached the
+        # container. This repo has already lost a performance run to a collision
+        # on this exact port (RELEASE-4.0.0-performance-contract.md, Amendment
+        # 3), so it is a known local hazard, not a theoretical one.
+        #
+        # Two published ports on one host also collide with each other, so
+        # concurrent runs of this gate cannot both be trusted.
+        published = re.findall(
+            r"(?:-p|--publish)\s+\"?(?:127\.0\.0\.1|localhost):([0-9]+):",
+            self.folded,
+        )
+        self.assertEqual(
+            published,
+            [],
+            "smoke-image.sh: the host port is pinned to "
+            f"{', '.join(published)}; Docker reports success publishing a port "
+            "another process already holds, so the probe can be answered by the "
+            "machine's own gateway and the gate passes on the wrong process",
+        )
+        self.assertRegex(
+            self.folded,
+            r"docker port\s",
+            "smoke-image.sh: the host port is never read back from Docker, so "
+            "nothing knows which port the container actually got",
+        )
+
+    def test_the_gate_fails_when_the_port_readback_is_empty(self):
+        # `docker port` prints nothing and still exits 0 when the mapping is
+        # absent. Reading it into a variable and carrying on would probe
+        # `http://127.0.0.1:/mcp` -- a malformed URL curl refuses -- which
+        # reads as "the image did not answer" rather than "the gate is broken",
+        # so a harness fault would be reported as a product defect.
+        self.assertRegex(
+            self.folded,
+            r"(?s)docker port.{0,400}?(?:-z\s+\"?\$\{?[A-Z_]+|\[\s+-z)",
+            "smoke-image.sh: an empty `docker port` readback is not checked, so "
+            "a missing mapping is reported as the image failing to answer",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -41,8 +41,9 @@ EXTERNAL="smoke-ext-$$"
 DEFAULTS="smoke-default-$$"
 WORKDIR="${RUNNER_TEMP:-/tmp}"
 # Published on loopback only: a CI runner is not a place to expose an
-# unauthenticated gateway to its network.
-HOST_PORT=39401
+# unauthenticated gateway to its network. The host port is left for Docker to
+# allocate and read back below -- pinning one makes this gate's identity depend
+# on the host being quiet, which nothing enforces.
 
 trap 'docker rm -f "${NAME}" "${EXTERNAL}" "${DEFAULTS}" > /dev/null 2>&1 || true' EXIT
 
@@ -124,9 +125,22 @@ docker rm -f "${NAME}" > /dev/null
 # the container boundary. A loopback-bound gateway passes leg 1 and fails here,
 # which is the whole point of running it.
 docker run -d --name "${EXTERNAL}" --pull never \
-  -p "127.0.0.1:${HOST_PORT}:39400" \
+  -p "127.0.0.1::39400" \
   -v "${WORKDIR}/smoke-external.yaml:/config.yaml:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
+
+# Which port did it actually get? Docker answers `<ip>:<port>`; take the last
+# field so an IPv6 mapping does not shear on the colons. `docker port` prints
+# nothing and still exits 0 when the mapping is absent, so an unchecked read
+# would probe `http://127.0.0.1:/mcp` and report the image as unresponsive --
+# a harness fault dressed up as a product defect.
+HOST_PORT="$(docker port "${EXTERNAL}" 39400/tcp 2>/dev/null | head -n 1)"
+HOST_PORT="${HOST_PORT##*:}"
+if [ -z "${HOST_PORT}" ]; then
+  echo "::error::${IMAGE}: docker published no host port for 39400/tcp"
+  docker logs "${EXTERNAL}"
+  exit 1
+fi
 
 REQUEST='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-image","version":"0"}}}'
 ANSWER=
