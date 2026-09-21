@@ -268,9 +268,10 @@ This is **not** yet a code effect. The release arm held the first slot in every 
 the forward ratio carries code and position together. Under multiplicative effects the
 reversed block yields the complementary combination, so the geometric mean of the two
 median ratios isolates the code effect and the square root of their quotient isolates the
-position effect. Until that block lands, 1.0885 is an upper bound on the code difference,
-and it is worth noting it is larger than the +6.07% component-bench figure the release
-owner ruled on.
+position effect. That block has since run, and the next section reports it: 1.0885 was an
+upper bound on the code difference at the time it was written, and the crossover puts the
+code effect at +8.73% with position contributing +0.12%. It is worth noting either figure
+is larger than the +6.07% component-bench figure the release owner ruled on.
 
 One disclosure about that block: the CSV schema carries no load column, so its contention
 detection is coarser than this run's. The excursion here was caught by watching load
@@ -279,6 +280,49 @@ view rather than a per-rep record. It reuses the identical two binaries — the 
 pinned to the same sha rather than rebuilt from a branch name, and the summariser now
 rejects an arm whose reps span more than one sha, so a silently moved control fails the
 run instead of passing unnoticed.
+
+## The reversed block resolved it: the P50 gap is code, not measurement position
+
+Six pairs ran with the arms reversed (`b` first in every rep), pinned to the same two
+binaries. Cross-block identity was checked rather than assumed: both CSVs carry exactly
+`rel = e82d7ee46b8e6edccfb1c1bee0f8bb8526194e5b` and `b = v3.5.1`, so the crossover
+compares the same pair of builds in both orders.
+
+| block | order | pairs | P50 paired ratio | reps above 1.0 |
+|---|---|---|---|---|
+| forward | `rel` first | 20 | 1.0885 [1.0726, 1.1125] | 18/20 |
+| reversed | `b` first | 6 | 1.0860 [1.0762, 1.1149] | **6/6** |
+
+Under multiplicative effects the forward ratio carries code × position and the reversed
+one carries code ÷ position, so:
+
+- **code effect = √(1.0885 × 1.0860) = 1.0872, or +8.73%**
+- **position effect = √(1.0885 ÷ 1.0860) = 1.0012, or +0.12%**
+
+Position is nil. The two blocks agree to within 0.25% on a quantity that would have
+diverged in opposite directions had slot order been driving the gap, which is the specific
+thing the reversed block was run to test. The release line is genuinely slower than the
+3.5.1 control at P50 by roughly 8.7%, and that is **2.7 percentage points above the
++6.07% component-bench figure the release owner ruled on**.
+
+Two limits on that conclusion, both real:
+
+**It is P50 only.** In the reversed block P90, P95 and P99 all split 3/6 with intervals
+spanning 0.53 to 2.59 — noise, not signal. The tail says nothing at this n and should not
+be quoted either direction.
+
+**The reversed block ran contended.** Load average reached 17.50 and one control rep
+recorded p99 22.4 ms against a max of 83.8 ms. No rep was dropped, because deciding to
+discard reps after seeing their values is the same outcome-dependent filtering that
+corrupts an interval. The relevant observation is that the P50 ratio came through anyway —
+unanimous at 6/6 and within 0.25% of the forward block measured at roughly half the load.
+That is the paired design doing its job: contention inside a rep hits both arms and
+largely divides out, which is exactly why the ratio is the figure to read and the per-arm
+percentiles are not.
+
+At n=6 the order-statistic interval degenerates to [min, max], so the interval printed for
+the reversed block is not doing inferential work. The unanimous sign is: 6 of 6 on one
+side of 1.0 is p ≈ 0.031 under the null, which is the only outcome at this n that carries.
 
 **P99 between the arms is a low-power null.** The intervals overlap heavily. This run
 cannot distinguish P99 between arms at this n — which is a statement about the run, not a
