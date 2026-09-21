@@ -1557,3 +1557,42 @@ and is not edited retroactively. At this head the following rows no longer descr
   the correction that the origin guard is unconditional rather than default-on.
 
 The H1–H11, D1–D30 and §1–13 tables themselves stand; only these rows have moved.
+
+## 2026-09-21 — the blocking set is two rows, and neither is engineer-actionable
+
+`scripts/release/count-release-criteria.py` reads `149 criteria, 193 rows, 191 met or
+non-blocking, 2 blocking` at this head. That supersedes the "1 blocking" row in the
+2026-09-11 table above, and the count rose because rows were added — the code/deploy
+split of `NFR.SEC.7` among them — not because a met row regressed.
+
+The `blocking` column was parsed across every table row rather than the two ids already
+known. `yes` appears at exactly two: `NFR.SEC.7` (`RELEASE-4.0.0-criteria-status.md:414`)
+and `NFR.PKG.1` (`:427`). There is no third, so what follows is the whole remainder.
+
+**`NFR.SEC.7` — the coverage half is met, the live half is the cutover.**
+`scripts/dev/check-control-drift.py` carries `--coverage-only`, whose help text is
+"check the manifest against its authorities and stop; needs no listening install". It ran
+2026-09-21, exit 0, zero coverage gaps (`:414`). What remains is a probe against a
+release-representative *listening* install, and the binary is not the obstacle: the only
+running one is bound to a deliberately unauthenticated benchmark config, so probing it
+would prove nothing about the shipped default. A correctly-configured deployment is the
+operator's cutover (`docs/runbooks/nfr-sec-7-cutover.md`), not something an engineer can
+substitute for.
+
+**`NFR.PKG.1` — the manifest publish, and nothing else.** The cluster-O row above already
+narrows this to the two-platform manifest list; arm64 runtime is exercised and the
+`useradd -m` fix holds on both architectures. The remaining job is `docker-manifest`
+(`.github/workflows/ci.yml:557`), gated `if: startsWith(github.ref, 'refs/tags/v')`
+(`:560`). Its line citation has drifted since the cluster-O row was written, which quoted
+`ci.yml:402`; `:402` is now unrelated and the gate moved with the file. No dry-run route
+exists: `ci.yml`'s `on:` block is `push` (branches `[main]`, tags `["v*"]`) plus
+`pull_request`, and the file contains **no `workflow_dispatch`** — that trigger lives only
+in `release.yml:7`. So the job runs only on a `v*` tag push, which is also the publish to
+ghcr.io. Cutting the tag is the operator's call precisely because cutting it ships.
+
+**What this means for the release.** Every criterion an engineer can discharge is
+discharged. The two that remain are gated on operator actions that *are* the cutover — a
+configured deployment and a signed tag — so they cannot be closed ahead of it by design
+rather than by omission. Marked `V`: the counter output, both ledger cells and the
+workflow file were each read at this head, and the workflow line numbers above were
+re-derived here rather than carried forward.
