@@ -160,3 +160,15 @@ intervals. Bisect only if that run confirms a regression larger than the ±1.52%
   verdict is a per-step comparison against a fixed budget, so ±1.52% is the figure that
   governs it.
 - None of this says a regression does not exist. It says this run cannot tell us.
+- **Within-pair order is fixed in both designs.** The bisect always ran the candidate
+  first and the baseline second; the replacement run does the same with the release line
+  and 3.5.1. If the machine warms measurably across a pair, the second arm inherits the
+  warmer machine every time, which biases the ratio in one direction rather than
+  averaging out. This does not touch the single-arm percentiles, which are the
+  deliverable — an absolute p50 for the release line does not care what ran before it —
+  but it is a real caveat on the drift-control comparison, which is why that arm is
+  recorded as a control and not as a gate. The first observed pair runs counter to the
+  predicted bias (release line 0.7287 ms against 3.5.1's 0.7046 ms, i.e. the *first*
+  position measured slower), so the effect is smaller than the difference it would have
+  to explain away. Alternating the order by rep parity is the fix if this arm is ever
+  promoted to a gate.
