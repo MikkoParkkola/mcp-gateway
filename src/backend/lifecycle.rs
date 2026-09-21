@@ -381,7 +381,11 @@ impl Backend {
                 let launch = self.resolve_stdio_runtime_launch(command)?;
                 let transport = StdioTransport::new(
                     &launch.command,
-                    launch.env,
+                    crate::transport::isolated_package_manager_env(
+                        &self.name,
+                        &launch.command,
+                        launch.env,
+                    ),
                     cwd.clone(),
                     self.config.timeout,
                     protocol_version.clone(),
