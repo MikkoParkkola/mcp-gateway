@@ -246,3 +246,28 @@ pairs are labelled in the report and whether the evaluator has a test. Neither c
 selected to favour an outcome, because no verdict has been computed and no scored pair
 has been looked at. Recorded here rather than folded in silently, on the same principle
 as Amendment 1.
+
+### A2.3 — each metric now reports the power its own calibration asked for
+
+`registered_gate.json` records, per metric, the pair count the calibration spread implied:
+15 for the median, **1399 for the 99th percentile**. Only 60 were registered, because 60 is
+the cap the budget allows. Nothing about that is new — it was stamped into the gate before
+the run — but the verdict printed only PASS / FAIL / INCONCLUSIVE, so a tail metric could
+return PASS while being short of its own requirement by a factor of twenty-three, and the
+report would not say so.
+
+The verdict now carries `n_required_calib` per metric and prints an explicit
+`UNDERPOWERED BY ITS OWN DERIVATION` line whenever the registered pair count falls below it.
+This is reporting only: the decision rule is untouched, and a p99 PASS remains a PASS under
+the rule stamped at 10:10:21Z. What changes is that the reader is told what that PASS rests
+on. The earlier claim that the tail would come back INCONCLUSIVE "by construction" was
+simply wrong — at 60 pairs the registered rule can return PASS for the tail — and predicting
+a verdict was itself the wrong instinct in a document whose purpose is to not do that.
+
+### A2.4 — the decision rule is now tested in both directions
+
+`--selftest` drives the full verdict path on fixtures: three pairs against a registered 60
+with every pair 20% over budget must return **FAIL**, not a softened INCONCLUSIVE, because
+no amount of extra power undoes an interval that already excludes the budget; the same three
+pairs with identical arms must return **INCONCLUSIVE**, never PASS. That pair of assertions
+is the one that guards trap 4, and until now it existed only as a sentence in this document.

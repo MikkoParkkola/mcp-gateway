@@ -260,7 +260,12 @@ def verdict(args) -> int:
         # the candidate first and on those that ran the baseline first. If the
         # two disagree, the number is position, not version.
         by_order = split_by_order(pairs, metric)
-        per_metric[metric] = dict(st, budget=budgets[metric], verdict=v, by_order=by_order)
+        # Carried into the report so a verdict cannot be read as well-powered
+        # when its own calibration asked for more pairs than were registered.
+        need = gate.get("calibration", {}).get("derivation", {}).get(metric, {}).get("n_required")
+        per_metric[metric] = dict(
+            st, budget=budgets[metric], verdict=v, by_order=by_order, n_required_calib=need
+        )
         verdicts.append(v)
     overall = "FAIL" if "FAIL" in verdicts else ("INCONCLUSIVE" if "INCONCLUSIVE" in verdicts else "PASS")
     out = {
@@ -294,6 +299,12 @@ def verdict(args) -> int:
             f"  {metric.upper()}: ratio {m['ratio']:.4f} "
             f"[{m['lo']:.4f}, {m['hi']:.4f}] vs budget {1 + m['budget']:.2f} -> {m['verdict']}"
         )
+        need = m.get("n_required_calib")
+        if need and need > out["pairs_registered"]:
+            print(
+                f"    UNDERPOWERED BY ITS OWN DERIVATION: calibration asked for {need} pairs, "
+                f"{out['pairs_registered']} were registered"
+            )
         cf = m["by_order"]["candidate_first"]
         bf = m["by_order"]["baseline_first"]
         fmt = lambda d: "n/a" if d["ratio"] is None else f"{d['ratio']:.4f} (n={d['n']})"  # noqa: E731
@@ -368,7 +379,52 @@ def selftest() -> int:
     assert abs(split["candidate_first"]["ratio"] - 2.0) < 1e-9, split
     assert abs(split["baseline_first"]["ratio"] - 1.0) < 1e-9, split
 
+    # The underpowered forcing is the rule most likely to be quietly wrong in
+    # the direction that flatters the release, so it gets both directions.
+    tmp2_ctx = tempfile.TemporaryDirectory()
+    tmp2 = tmp2_ctx.name
+    csv_path = f"{tmp2}/reps.csv"
+    gate_path = f"{tmp2}/gate.json"
+    with open(gate_path, "w") as fh:
+        json.dump(
+            {
+                "registered_utc": "2026-01-01T00:00:00Z",
+                "pairs": 60,
+                "budgets": {"p50": 0.05, "p99": 0.10},
+                "decision_rule": "selftest",
+                "void_gate_min_iterations": 0,
+            },
+            fh,
+        )
+
+    def run_verdict(rel_ms: float) -> dict:
+        rows = ["pair,order,arm,sha,p50_ms,p99_ms,reqs,iters,status,reason"]
+        for n in (1000, 1001, 1002):
+            rows.append(f"{n},1,base,32f135a,10,10,1200,100,OK,")
+            rows.append(f"{n},2,rel,0c93384,{rel_ms},{rel_ms},1200,100,OK,")
+        with open(csv_path, "w") as fh:
+            fh.write("\n".join(rows) + "\n")
+        out_path = f"{tmp2}/verdict.json"
+        verdict(argparse.Namespace(gate=gate_path, csv=csv_path, run_record=None, out=out_path))
+        return json.load(open(out_path))
+
+    # Three pairs against a registered 60, every pair 20% over budget: the run
+    # is underpowered AND the interval already excludes the budget. A FAIL that
+    # extra power could not undo must not be softened into INCONCLUSIVE.
+    got = run_verdict(12.0)
+    assert got["verdict"] == "FAIL", got["verdict"]
+    assert got["metrics"]["p50"]["verdict"] == "FAIL", got["metrics"]["p50"]
+    assert got["pairs_scored"] == 3 and got["pairs_registered"] == 60, got
+
+    # Same three pairs, both arms identical: inside budget on the numbers, but
+    # three pairs cannot license "no regression". Never PASS.
+    got = run_verdict(10.0)
+    assert got["verdict"] == "INCONCLUSIVE", got["verdict"]
+    assert got["metrics"]["p99"]["verdict"] == "INCONCLUSIVE", got["metrics"]["p99"]
+
+    tmp2_ctx.cleanup()
     print("selftest OK: iteration gate excludes whole pairs; order labels follow slot")
+    print("selftest OK: underpowered forces INCONCLUSIVE but never softens a FAIL")
     return 0
 
 
