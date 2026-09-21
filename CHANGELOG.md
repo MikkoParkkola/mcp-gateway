@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two backends running the same command no longer share a package cache.**
+  `npx -y <pkg>` installs into a cache directory shared by every process on the
+  host, and concurrent installs into one tree can tear it — after which npm
+  trusts the damaged tree and every later spawn of that command fails with
+  `MODULE_NOT_FOUND`, reported as "Backend timeout" with zero tools. Each
+  backend now gets its own cache directory. An operator-set
+  `npm_config_cache` is left alone.
+
 ### Changed
 
 - **Six meta-tools are now listed only where they can answer.** `gateway_get_stats`,
