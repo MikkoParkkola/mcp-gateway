@@ -1,0 +1,24 @@
+{
+  "criterion": "NFR.PERF.1",
+  "started_utc": "2026-09-21T10:01:39Z",
+  "host": "spark",
+  "arch": "aarch64",
+  "cores": "20",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "k6_image": "grafana/k6@sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755",
+  "features": "a2a,webui,config-export,cost-governance,firewall,discovery,semantic-search,tool-profiles,metrics",
+  "baseline": {
+    "label": "v3.5.0",
+    "sha": "32f135a61fb50c20a044fb4c2347bc1cf8015d89",
+    "binary": "/home/mikko/perf-workload/arms/A/target/release/mcp-gateway",
+    "sha256": "809093be2e6cb0c927b675e971c8ea579b3031cfb0bf8a4e830c3575e2d87bf9",
+    "port": 39425
+  },
+  "candidate": {
+    "ref": "0c93384b",
+    "sha": "0c93384b0efd474c8922fdf039f3a0d8caa53b08",
+    "binary": "/home/mikko/perf-workload/arms/bisect/target/release/mcp-gateway",
+    "sha256": "604b43c227ea58fe6028a97649ec662b5e4082a82cd1d0c22780380855e2dccb",
+    "port": 39426
+  }
+}

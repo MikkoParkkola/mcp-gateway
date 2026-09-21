@@ -109,8 +109,14 @@ def read_rep(summary_path: str, samples_path: str) -> str:
     )
 
 
-def load_pairs(csv_path: str, scored_only: bool) -> list[dict]:
-    """Pairs with both arms OK. A pair missing either arm is dropped whole."""
+def load_pairs(csv_path: str, scored_only: bool, min_iters: int = 0) -> tuple[list[dict], dict]:
+    """Pairs with both arms OK. A pair missing either arm is dropped whole.
+
+    `min_iters` is the pre-registered void gate: a rep that delivered fewer
+    iterations than the scenario offers spent that time blocked, so its tail is
+    host noise rather than gateway latency. The threshold is registered before
+    any scored rep and read back here; it is never re-derived from scored data.
+    """
     rows: dict[int, dict] = {}
     with open(csv_path) as fh:
         for row in csv.DictReader(fh):
@@ -129,13 +135,22 @@ def load_pairs(csv_path: str, scored_only: bool) -> list[dict]:
                 "iters": int(row["iters"] or 0),
                 "order": int(row["order"]),
             }
-    out = []
+    out, dropped = [], {"void": 0, "incomplete": 0, "below_iteration_gate": 0}
     for pair in sorted(rows):
         rec = rows[pair]
-        if "void" in rec or "base" not in rec or "rel" not in rec:
+        if "void" in rec:
+            dropped["void"] += 1
+            continue
+        if "base" not in rec or "rel" not in rec:
+            dropped["incomplete"] += 1
+            continue
+        if min_iters and min(rec["base"]["iters"], rec["rel"]["iters"]) < min_iters:
+            # Void the PAIR, never one arm -- dropping one side destroys the
+            # pairing that cancels common-mode host drift.
+            dropped["below_iteration_gate"] += 1
             continue
         out.append(rec)
-    return out
+    return out, dropped
 
 
 def ratio_stats(pairs: list[dict], metric: str) -> dict:
@@ -161,7 +176,7 @@ def ratio_stats(pairs: list[dict], metric: str) -> dict:
 
 def register(args) -> int:
     """Derive the gate from CALIBRATION pairs only, before any scored rep."""
-    pairs = load_pairs(args.csv, scored_only=False)
+    pairs, _ = load_pairs(args.csv, scored_only=False)
     if len(pairs) < 2:
         print(f"calibration produced {len(pairs)} usable pairs; need >= 2", file=sys.stderr)
         return 3
@@ -212,7 +227,9 @@ def classify(st: dict, budget: float) -> str:
 
 def verdict(args) -> int:
     gate = json.load(open(args.gate))
-    pairs = load_pairs(args.csv, scored_only=True)
+    pairs, dropped = load_pairs(
+        args.csv, scored_only=True, min_iters=int(gate.get("void_gate_min_iterations", 0))
+    )
     budgets = gate["budgets"]
     per_metric, verdicts = {}, []
     for metric in ("p50", "p99"):
@@ -223,7 +240,15 @@ def verdict(args) -> int:
             # data already excludes the budget, which no amount of extra power
             # would undo.
             v = "FAIL" if v == "FAIL" else "INCONCLUSIVE"
-        per_metric[metric] = dict(st, budget=budgets[metric], verdict=v)
+        # Counterbalance check: the same ratio computed on the pairs that ran
+        # the candidate first and on those that ran the baseline first. If the
+        # two disagree, the number is position, not version.
+        by_order = {}
+        for first, label in ((2, "baseline_first"), (1, "candidate_first")):
+            subset = [p for p in pairs if p["base"]["order"] == first]
+            sub = ratio_stats(subset, metric)
+            by_order[label] = {"n": sub["n"], "ratio": sub["ratio"]}
+        per_metric[metric] = dict(st, budget=budgets[metric], verdict=v, by_order=by_order)
         verdicts.append(v)
     overall = "FAIL" if "FAIL" in verdicts else ("INCONCLUSIVE" if "INCONCLUSIVE" in verdicts else "PASS")
     out = {
@@ -232,6 +257,8 @@ def verdict(args) -> int:
         "verdict": overall,
         "pairs_scored": len(pairs),
         "pairs_registered": gate["pairs"],
+        "pairs_dropped": dropped,
+        "iteration_gate": gate.get("void_gate_min_iterations"),
         "gate_registered_utc": gate["registered_utc"],
         "decision_rule": gate["decision_rule"],
         "metrics": per_metric,
@@ -242,6 +269,10 @@ def verdict(args) -> int:
             json.dump(out, fh, indent=2)
             fh.write("\n")
     print(f"NFR.PERF.1 {overall}  ({len(pairs)}/{gate['pairs']} paired reps)")
+    print(
+        f"  pairs dropped: void={dropped['void']} incomplete={dropped['incomplete']} "
+        f"below-iteration-gate={dropped['below_iteration_gate']}"
+    )
     for metric in ("p50", "p99"):
         m = per_metric[metric]
         if m["ratio"] is None:
@@ -251,6 +282,10 @@ def verdict(args) -> int:
             f"  {metric.upper()}: ratio {m['ratio']:.4f} "
             f"[{m['lo']:.4f}, {m['hi']:.4f}] vs budget {1 + m['budget']:.2f} -> {m['verdict']}"
         )
+        cf = m["by_order"]["candidate_first"]
+        bf = m["by_order"]["baseline_first"]
+        fmt = lambda d: "n/a" if d["ratio"] is None else f"{d['ratio']:.4f} (n={d['n']})"  # noqa: E731
+        print(f"    order check: candidate-first {fmt(cf)}  baseline-first {fmt(bf)}")
     return 0
 
 

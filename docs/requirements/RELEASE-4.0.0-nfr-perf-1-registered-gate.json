@@ -1,0 +1,28 @@
+{
+  "registered_utc": "2026-09-21T10:10:21Z",
+  "criterion": "NFR.PERF.1",
+  "baseline": "v3.5.0 32f135a61fb50c20a044fb4c2347bc1cf8015d89",
+  "budgets": {
+    "p50": 0.05,
+    "p99": 0.1
+  },
+  "decision_rule": "For each metric, the paired rel/base ratio is aggregated in log space over pairs and a 95% interval is formed. FAIL if the interval's LOWER bound exceeds the budget. PASS if its UPPER bound is at or below the budget. Otherwise INCONCLUSIVE. The overall verdict is FAIL if either metric fails, else INCONCLUSIVE if either is inconclusive, else PASS.",
+  "pairs": 60,
+  "min_requests_per_group_per_rep": 1000,
+  "void_gate_min_iterations": 7278,
+  "calibration": {
+    "pairs_used": 4,
+    "derivation": {
+      "p50": {
+        "sd_log_calib": 0.031578296611535585,
+        "ratio_calib": 1.1091052523219251,
+        "n_required": 15
+      },
+      "p99": {
+        "sd_log_calib": 0.6061532140468867,
+        "ratio_calib": 0.914952975835438,
+        "n_required": 1399
+      }
+    }
+  }
+}

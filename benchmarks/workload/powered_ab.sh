@@ -21,10 +21,11 @@
 #     base first, so position is balanced inside a single CSV instead of being
 #     reconciled across two runs.
 #
-# Stopping rule: run at least MIN_PAIRS (derived: 27 for P50 against a 5%
-# budget at the measured ratio CV of 4.2%), then stop once the 95% halfwidth is
-# inside budget/3 on both metrics, up to MAX_PAIRS. Stopping is on PRECISION,
-# never on the verdict, so it does not shop for significance.
+# Rep count: registered by `--calibrate` from the calibration pairs -- enough
+# that the 95% halfwidth fits inside a third of the budget -- and floored at
+# MIN_PAIRS, capped at MAX_PAIRS. The scored run READS that count from the gate
+# file; it never re-derives it from the data it is scoring, and it never stops
+# early on the verdict, so it cannot shop for significance.
 set -uo pipefail
 
 WORKTREE="$HOME/perf-workload/arms/bisect"
@@ -46,7 +47,7 @@ PROTOCOL_VERSION="2025-06-18"
 RELREF="${RELREF:-origin/main}"
 
 CALIB_REPS=4          # per arm, discarded from scoring
-MIN_PAIRS=27          # derived; see header
+MIN_PAIRS=52          # floor from the pre-registration; see its Amendment 1.3
 MAX_PAIRS=60
 RUNROOT="${RUNROOT:-$HOME/perf-workload/results/perf1-v350-$(date +%Y%m%d)}"
 GATE_FILE="$RUNROOT/registered_gate.json"

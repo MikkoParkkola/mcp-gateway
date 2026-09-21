@@ -165,3 +165,46 @@ The workload change is the substantive one: the standing contract measures the M
 with no backends registered, which is a harsher test of gateway overhead but not a tool call
 through to a backend. The criterion says "tool-call latency through the gateway", so this run
 crosses the backend boundary the criterion names.
+
+## Amendment 1 — 2026-09-21, before any scored rep
+
+Legal because no scored rep has run: the scored pairs are numbered from 1000 and
+`reps.csv` at the time of writing contains only calibration pairs 1-4. Recorded as an
+amendment rather than folded into the text above, because silently rewriting a
+pre-registration is the exact move a pre-registration exists to prevent.
+
+### A1.1 — the iteration void gate was registered but never enforced
+
+`registered_gate.json` carries `void_gate_min_iterations`, and the harness header advertised
+it as a control, but nothing read it back. A control that does not execute is worse than no
+control, because it is quoted as though it did. The evaluator now applies it: a pair in which
+either arm delivered fewer iterations than the registered floor is dropped whole, and
+`verdict.json` reports the dropped count under `pairs_dropped.below_iteration_gate`.
+
+The floor is 90% of the lowest per-rep iteration count seen in calibration. The gate is
+almost uncoupled from what is being measured — an iteration is roughly 200 ms of scheduled
+sleep plus a fixed overhead, so a 9% latency regression moves the iteration count by well
+under 1%, while a rep that spent its time blocked on a busy host misses it by far more.
+
+Added to the void table above:
+
+| condition | reason recorded |
+|---|---|
+| either arm below the registered iteration floor | pair dropped, counted in `pairs_dropped` |
+
+### A1.2 — the counterbalance is now reported, not merely performed
+
+The harness alternates which arm runs first, and the CSV records the position, but nothing
+read that column. The verdict now reports the same paired ratio computed separately over the
+candidate-first pairs and the baseline-first pairs. If those two disagree materially, the
+number is position rather than version, and a reader can see that instead of taking the
+design on trust.
+
+### A1.3 — the rep-count floor is held at 52
+
+`--register` derives a rep count and takes the larger of it and a floor. The floor is set to
+**52** to match the `n ≥ 52` already committed in the body of this document at `f771556c`,
+which predates the existence of any gate file. Only the floor is involved: the budgets
+(5% P50, 10% P99) and the decision rule are untouched, and neither has been looked at against
+scored data. Raising a rep-count floor to match an already-committed document is conformance
+with the pre-registration, not a threshold chosen after the numbers.
