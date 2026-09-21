@@ -25,6 +25,8 @@ struct CachedMetadataState<T> {
     /// lands mid-fill voids that fill instead of being overwritten by it
     /// (MIK-7334.CATALOGUE.1, "changes and revocation").
     generation: u64,
+    /// Sticky: never cleared by `invalidate_if`.
+    ever_populated: bool,
 }
 
 impl<T> Default for CachedMetadataState<T> {
@@ -34,6 +36,7 @@ impl<T> Default for CachedMetadataState<T> {
             cached_at: None,
             in_flight: None,
             generation: 0,
+            ever_populated: false,
         }
     }
 }
@@ -98,6 +101,22 @@ impl<T> CachedMetadata<T> {
         }
         state.value = Some(value);
         state.cached_at = Some(Instant::now());
+        state.ever_populated = true;
+    }
+
+    /// Not `value.is_some()`: `invalidate_if` clears the value, so that would
+    /// report a backend enumerated a moment ago as never asked.
+    pub(crate) fn ever_populated(&self) -> bool {
+        self.state.read().ever_populated
+    }
+
+    /// One guard: read separately, a fetch landing between them publishes a lie.
+    pub(crate) fn with_cached_and_populated<R>(
+        &self,
+        map: impl FnOnce(Option<&Arc<T>>, bool) -> R,
+    ) -> R {
+        let state = self.state.read();
+        map(state.value.as_ref(), state.ever_populated)
     }
 
     /// Forget the cached value only if it still satisfies `discard`.

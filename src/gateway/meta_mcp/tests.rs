@@ -181,9 +181,6 @@ async fn invoke_tool_trace_id_is_accessible_inside_scope() {
 
 #[tokio::test]
 async fn trace_id_not_accessible_outside_scope() {
-    // GIVEN: no active scope
-    // WHEN: reading outside any with_trace_id scope
-    // THEN: current() returns None
     assert_eq!(trace::current(), None);
 }
 
@@ -1101,9 +1098,7 @@ async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
         allow_all_ctx(),
     ))
     .await;
-    // THEN: returns an error (not -32601 unknown tool)
-    // The response wraps the error as tool content (is_error=true) OR as RPC error
-    // Either way, there should not be a -32601 "Unknown tool" error
+
     if let Some(ref err) = response.error {
         assert_ne!(
             err.code, -32601,
@@ -1318,9 +1313,6 @@ fn initialize_without_session_id_succeeds_without_panic() {
 
 #[test]
 fn gateway_list_profiles_tool_appears_in_tools_list() {
-    // GIVEN: a MetaMcp instance with one routing profile configured (no stats,
-    // no webhooks, no reload). The profile tools are enumerated on that gate:
-    // with none configured they describe profiles that do not exist.
     let mut configs = std::collections::HashMap::new();
     configs.insert(
         "probe".to_string(),
@@ -1704,9 +1696,6 @@ async fn tools_call_surfaced_tool_on_missing_backend_returns_error() {
     ))
     .await;
 
-    // THEN: returns a backend-not-found error (not "Unknown tool" -32601)
-    // The proxy dispatch was reached (surfaced tool map hit) and the backend was absent
-    // which produces a BackendNotFound error, not a -32601.
     if let Some(err) = &resp.error {
         assert_ne!(err.code, -32601, "Should not be 'Unknown tool' error");
     } else {
@@ -1908,9 +1897,6 @@ fn revive_server_unregistered_backend_reports_breaker_not_open() {
 fn scan_tool_list_value_redacts_credentials_in_tool_descriptions() {
     use crate::security::firewall::{Firewall, FirewallConfig};
 
-    // GIVEN: a discovery surface whose tool description embeds a credential,
-    //        and a MetaMcp wired with a default (redaction-on) firewall.
-    // Build the token at runtime so repository secret scanners do not flag it.
     let token = format!("ghp_{}", "abcdefghijklmnopqrstuvwxyz1234567890");
     let mut surface = json!({
         "tools": [{
@@ -3796,10 +3782,6 @@ async fn an_unconfirmable_destructive_call_is_refused_and_marked() {
         panic!("a destructive call nobody can confirm is refused");
     };
 
-    // THEN: refused with -32001, and the message names the action rather than
-    // stopping at the generic prefix. The prefix alone was what both HTTP-level
-    // assertions targeted, which let the describer degrade to its fallback
-    // without anything going red.
     let error = refusal.error.expect("a refusal carries an error");
     assert_eq!(error.code, -32001);
     assert!(
@@ -3819,9 +3801,7 @@ async fn an_unconfirmable_destructive_call_is_refused_and_marked() {
 async fn a_non_destructive_call_is_not_judged_by_this_gate() {
     // GIVEN: the same unaskable transport, and a tool the gate does not govern
     let ctx = allow_all_ctx();
-    // WHEN/THEN: the gate declines to answer at all, so `Unavailable` refuses
-    // destructive calls specifically rather than refusing everything -- which a
-    // test asserting only the refusal above cannot tell apart.
+
     assert!(matches!(
         super::destructive_confirmation_gate(
             &RequestId::Number(1),
@@ -3837,11 +3817,6 @@ async fn a_non_destructive_call_is_not_judged_by_this_gate() {
 
 #[test]
 fn every_confirmation_refusal_is_marked_by_construction() {
-    // GIVEN: the operator-decline wording, the branch that needs a live
-    // elicitation session to reach and so has no end-to-end test here --
-    // building one proxy fixture to observe one boolean would be the heaviest
-    // thing in this file. What the branch owes is the marker, and the marker is
-    // no longer the branch's to remember.
     let refusal = super::confirmation_refusal_response(
         &RequestId::Number(7),
         "Operator declined: kill server 'brave'".to_string(),
@@ -6555,3 +6530,6 @@ fn every_pre_dispatch_failure_releases_the_bridged_idempotency_key() {
         BridgeError::BackendFailed { .. }
     ));
 }
+
+#[path = "list_servers_tools_known_tests.rs"]
+mod list_servers_tools_known;

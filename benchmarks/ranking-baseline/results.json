@@ -3,10 +3,10 @@
   "tool_inventory_size": 119,
   "corpus_size": 114,
   "candidate_pool_size": 119,
-  "overall_top1_hit_rate": 0.7456140350877193,
-  "overall_top3_hit_rate": 0.868421052631579,
-  "overall_top5_hit_rate": 0.9035087719298246,
-  "overall_mean_reciprocal_rank": 0.8172169567401698,
+  "overall_top1_hit_rate": 0.7807017543859649,
+  "overall_top3_hit_rate": 0.8859649122807017,
+  "overall_top5_hit_rate": 0.9122807017543859,
+  "overall_mean_reciprocal_rank": 0.8393064012367351,
   "by_derivation": {
     "abbreviation": {
       "n": 15,
@@ -28,9 +28,9 @@
     },
     "shared_prefix_ambiguous": {
       "n": 13,
-      "top1_hit_rate": 0.9230769230769231,
+      "top1_hit_rate": 1.0,
       "top3_hit_rate": 1.0,
-      "mean_reciprocal_rank": 0.9615384615384616
+      "mean_reciprocal_rank": 1.0
     },
     "tag_query": {
       "n": 20,
@@ -40,9 +40,9 @@
     },
     "typo": {
       "n": 12,
-      "top1_hit_rate": 0.5,
-      "top3_hit_rate": 0.6666666666666666,
-      "mean_reciprocal_rank": 0.6264297385620915
+      "top1_hit_rate": 0.75,
+      "top3_hit_rate": 0.8333333333333334,
+      "mean_reciprocal_rank": 0.7946127946127945
     }
   },
   "cases": [
@@ -1234,11 +1234,11 @@
         "bus_pull",
         "bus_subscribe"
       ],
-      "best_gold_rank": 2,
-      "top1_hit": false,
+      "best_gold_rank": 1,
+      "top1_hit": true,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 0.5
+      "reciprocal_rank": 1.0
     },
     {
       "id": "shared_prefix_ambiguous::calendar",
@@ -1477,11 +1477,11 @@
       "gold_tools": [
         "contacts_list"
       ],
-      "best_gold_rank": 4,
+      "best_gold_rank": 3,
       "top1_hit": false,
-      "top3_hit": false,
+      "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 0.25
+      "reciprocal_rank": 0.3333333333333333
     },
     {
       "id": "typo::github_create_issue",
@@ -1516,11 +1516,11 @@
       "gold_tools": [
         "hackernews_get_item"
       ],
-      "best_gold_rank": 2,
-      "top1_hit": false,
+      "best_gold_rank": 1,
+      "top1_hit": true,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 0.5
+      "reciprocal_rank": 1.0
     },
     {
       "id": "typo::jira_search",
@@ -1529,11 +1529,11 @@
       "gold_tools": [
         "jira_search"
       ],
-      "best_gold_rank": 12,
+      "best_gold_rank": 9,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.08333333333333333
+      "reciprocal_rank": 0.1111111111111111
     },
     {
       "id": "typo::linear_get_teams",
@@ -1542,11 +1542,11 @@
       "gold_tools": [
         "linear_get_teams"
       ],
-      "best_gold_rank": 2,
-      "top1_hit": false,
+      "best_gold_rank": 1,
+      "top1_hit": true,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 0.5
+      "reciprocal_rank": 1.0
     },
     {
       "id": "typo::notion_create_page",
@@ -1594,11 +1594,11 @@
       "gold_tools": [
         "video_create"
       ],
-      "best_gold_rank": 17,
+      "best_gold_rank": 11,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.058823529411764705
+      "reciprocal_rank": 0.09090909090909091
     },
     {
       "id": "typo::weather_current",
@@ -1607,11 +1607,11 @@
       "gold_tools": [
         "weather_current"
       ],
-      "best_gold_rank": 8,
-      "top1_hit": false,
-      "top3_hit": false,
-      "top5_hit": false,
-      "reciprocal_rank": 0.125
+      "best_gold_rank": 1,
+      "top1_hit": true,
+      "top3_hit": true,
+      "top5_hit": true,
+      "reciprocal_rank": 1.0
     }
   ]
 }
