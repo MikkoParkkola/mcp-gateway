@@ -1,0 +1,196 @@
+{
+  "artifact": "NFR.DEMO.1 corroboration run",
+  "purpose": "Reproduce the committed NFR.DEMO.1 recordings against a binary whose SOURCE REVISION is measured rather than assumed. The binary behind docs/release/nfr-demo-1-recordings.json carries build_sha_confidence=assumption and its bytes no longer exist on any machine here.",
+  "recorded_utc": "2026-09-21T21:01:28Z",
+  "revision_under_test": {
+    "gateway_version": "mcp-gateway 4.0.0",
+    "source_sha": "8ef7751c193dd05775a9dba534ed845fe49030ef",
+    "source_sha_provenance": "git archive of the named commit, so the peer working-tree edits present in the shared checkout are excluded by construction",
+    "binary_sha256": "a2deb96b0ae290b5cd9cae5f34c54dfacad5b864905ced8d29596a3edea9915f",
+    "build_sha_confidence": "measured",
+    "cargo_profile": "release",
+    "toolchain": "cargo 1.98.1 / rustc 1.98.1",
+    "host": "Linux 6.17.0-1014-nvidia aarch64 (spark)",
+    "note": "The crate embeds no commit SHA (no build.rs), so --version reports only 4.0.0. source_sha is external bookkeeping: the commit the archived tree was exported from."
+  },
+  "comparison": "Every row below was compared field-by-field (expected, actual, status) against the committed driver output in docs/release/demo/.",
+  "scenarios": [
+    {
+      "driver": "scripts/release/demo/5-error-budget.sh",
+      "criterion_phrase": "error-budget diagnosis/recovery",
+      "rows_match_committed": true,
+      "row_count": 8,
+      "all_pass": true,
+      "rows": [
+        {
+          "id": "S5.HEALTHY_CALL_SUCCEEDS",
+          "expected": "budget_ping ok present",
+          "actual": "budget_ping ok present",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.BUDGET_KILLED_THE_BACKEND",
+          "expected": "true",
+          "actual": "true",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.ERROR_RATE_AT_KILL",
+          "expected": "\"66.7%\"",
+          "actual": "\"66.7%\"",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.WINDOW_SUCCESSES_AT_KILL",
+          "expected": "1",
+          "actual": "1",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.WINDOW_FAILURES_AT_KILL",
+          "expected": "2",
+          "actual": "2",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.REFUSED_WHILE_KILLED",
+          "expected": "is currently disabled by operator kill switch present",
+          "actual": "is currently disabled by operator kill switch present",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.REVIVE_SAW_A_KILLED_SERVER",
+          "expected": "true",
+          "actual": "true",
+          "status": "PASS"
+        },
+        {
+          "id": "S5.CALL_SUCCEEDS_AFTER_REVIVE",
+          "expected": "budget_ping ok present",
+          "actual": "budget_ping ok present",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "driver": "scripts/release/demo/1-mixed-era.sh",
+      "criterion_phrase": "mixed-era interaction",
+      "rows_match_committed": true,
+      "row_count": 9,
+      "all_pass": true,
+      "rows": [
+        {
+          "id": "S1.MODERN_CALL_SUCCEEDS",
+          "expected": "modern_peer answered: mixed-era present",
+          "actual": "modern_peer answered: mixed-era present",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.LEGACY_CALL_SUCCEEDS",
+          "expected": "legacy_peer answered: mixed-era present",
+          "actual": "legacy_peer answered: mixed-era present",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.MODERN_ERA",
+          "expected": "modern",
+          "actual": "modern",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.MODERN_ERA_SOURCE",
+          "expected": "probed",
+          "actual": "probed",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.MODERN_ERA_EVIDENCE",
+          "expected": "discover_modern",
+          "actual": "discover_modern",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.LEGACY_ERA",
+          "expected": "legacy",
+          "actual": "legacy",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.LEGACY_ERA_SOURCE",
+          "expected": "probed",
+          "actual": "probed",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.LEGACY_ERA_EVIDENCE",
+          "expected": "discover_not_modern",
+          "actual": "discover_not_modern",
+          "status": "PASS"
+        },
+        {
+          "id": "S1.NEGOTIATED_VERSION_FOR_LEGACY_CLIENT",
+          "expected": "2025-06-18",
+          "actual": "2025-06-18",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "driver": "scripts/release/demo/3-personal-accounts.sh",
+      "criterion_phrase": "two personal accounts",
+      "rows_match_committed": true,
+      "row_count": 8,
+      "all_pass": true,
+      "rows": [
+        {
+          "id": "S3.ALICE_REACHES_HER_OWN",
+          "expected": "alice_notes answered: private present",
+          "actual": "alice_notes answered: private present",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.BOB_REACHES_HIS_OWN",
+          "expected": "bob_notes answered: private present",
+          "actual": "bob_notes answered: private present",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.ALICE_CANNOT_REACH_BOBS",
+          "expected": "absent",
+          "actual": "absent",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.BOB_CANNOT_REACH_ALICES",
+          "expected": "absent",
+          "actual": "absent",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.CATALOGUE_IS_NOT_ACCOUNT_SCOPED",
+          "expected": "alice_notes,bob_notes,gateway,personal_inbox",
+          "actual": "alice_notes,bob_notes,gateway,personal_inbox",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.CATALOGUE_LISTS_THE_UNINVOKABLE_BACKEND",
+          "expected": "personal_inbox present",
+          "actual": "personal_inbox present",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.PERSONAL_BACKEND_REFUSED",
+          "expected": "one user's token is never served to another present",
+          "actual": "one user's token is never served to another present",
+          "status": "PASS"
+        },
+        {
+          "id": "S3.PERSONAL_BACKEND_DID_NOT_ANSWER",
+          "expected": "absent",
+          "actual": "absent",
+          "status": "PASS"
+        }
+      ]
+    }
+  ]
+}

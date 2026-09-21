@@ -154,3 +154,40 @@ behind them is an **assumption**, not a measurement: this machine had too little
 free disk to build, so the binary was copied from a peer worktree's `target/debug`
 tree, and the crate embeds no commit SHA (no `build.rs`). `build_sha_confidence`
 carries that, and the gate requires the field.
+
+Those bytes are now **gone** — the `target/debug` tree they were copied from no
+longer exists. Without a source revision and without the binary, the rows above
+were, on their own, unreproducible.
+
+### Corroboration run — the same rows from a measured revision
+
+`docs/release/demo/corroboration-2026-09-21.json` closes that gap without
+disturbing the rows above. All three recorded drivers were re-run against a
+binary built from a **named commit**, and every row was compared field by field
+against the committed driver output:
+
+| | Original recording | Corroboration run |
+|---|---|---|
+| Source revision | assumption | `8ef7751c` — **measured** |
+| Binary | `6e38ee5f…` (no longer exists) | `a2deb96b…` |
+| Profile | debug | release |
+| Host | darwin | Linux aarch64 |
+| Rows | 25 PASS | **25 PASS, all identical** |
+
+The tree was exported with `git archive <sha>`, so the peer working-tree edits
+present in the shared checkout are excluded by construction rather than by
+promise. Reproduce it by building that commit and running the three drivers with
+`BIN=` set; matching rows are the check.
+
+Beyond provenance: the corroboration run changed build profile
+(debug→release), operating system and architecture (darwin→Linux aarch64) and
+toolchain **all at once**, and every row still matched. That rules out any
+*combination* of those flipping a row. It does not attribute per factor — they
+moved together, and the original binary's toolchain version is unknown. The
+error-budget arithmetic (`66.7%`, `successes: 1`, `failures: 2`) reproduced
+exactly, which is the strongest single signal that it is arithmetic from the
+config rather than a number copied out of one lucky run.
+
+It does **not** upgrade `revision_under_test` in the manifest. That block
+describes the bytes the committed transcripts came from, and rewriting it to
+describe a different binary would misdescribe them.
