@@ -250,11 +250,35 @@ across the CSV, no duplicate `rep,arm` rows, no VOID reps. Note the summariser p
 the first row's sha per arm, so the uniqueness check is a separate pass over the file
 rather than something the tool guarantees — worth folding into the script before reuse.
 
-**The P50 intervals are disjoint.** The release arm's interval lies entirely above the
-control's (0.6999 < 0.7140). That is a real observation and it is new information for the
-release owner, who ruled on the +6.07% component-bench figure. It is **not** yet
-attributable to code: the release arm held the first slot in every pair, and the
-reversed-order block is what would separate a code difference from a position effect.
+**The paired ratio, not the disjoint intervals, is the figure to read.** An earlier pass
+reported that the two P50 intervals are disjoint (0.6999 < 0.7140). That is true but it is
+the unpaired read of a paired design: the arms are interleaved within a rep, so comparing
+two independently-computed per-arm intervals throws away the pairing that the run was
+built to exploit. Keyed by arm, the per-rep ratio `p50_rel / p50_b` gives **1.0885, 95% CI
+[1.0726, 1.1125]**, with 18 of 20 reps above 1.0. P90 is 1.0622 [1.0403, 1.1252] and P95
+1.0938 [1.0493, 1.1296]. P99 is **1.0520 [0.9823, 1.0649]**, 14 of 20 above — the interval
+covers 1.0, so P99 remains the low-power null described below and the paired view does not
+rescue it.
+
+The ratio is defined on the arm, never on the slot position. That is what makes a
+reversed-order block comparable at all: a position-keyed ratio inverts silently when the
+order flips, and nothing in the output would mark it as inverted.
+
+This is **not** yet a code effect. The release arm held the first slot in every pair, so
+the forward ratio carries code and position together. Under multiplicative effects the
+reversed block yields the complementary combination, so the geometric mean of the two
+median ratios isolates the code effect and the square root of their quotient isolates the
+position effect. Until that block lands, 1.0885 is an upper bound on the code difference,
+and it is worth noting it is larger than the +6.07% component-bench figure the release
+owner ruled on.
+
+One disclosure about that block: the CSV schema carries no load column, so its contention
+detection is coarser than this run's. The excursion here was caught by watching load
+average from outside the harness, and the reversed block inherits the same external-only
+view rather than a per-rep record. It reuses the identical two binaries — the `rel` arm is
+pinned to the same sha rather than rebuilt from a branch name, and the summariser now
+rejects an arm whose reps span more than one sha, so a silently moved control fails the
+run instead of passing unnoticed.
 
 **P99 between the arms is a low-power null.** The intervals overlap heavily. This run
 cannot distinguish P99 between arms at this n — which is a statement about the run, not a
