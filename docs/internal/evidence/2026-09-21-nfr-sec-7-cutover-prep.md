@@ -39,8 +39,16 @@ input-sanitization: refused 400; legitimate request 200
 5 probed, 28 uncovered, 0 failing
 ```
 
-`/health` answered `{"status":"healthy","version":"4.0.0","backends":{"all_healthy":true,"count":32}}`.
-The 3.4.0 `servers.yaml` parses unchanged under 4.0.0 and all 32 backends came up.
+That block is an **excerpt**: the checker prints one line per manifest control, so the
+full transcript is 35 lines. The 28 omitted lines are the `uncovered` controls, each
+carrying its recorded reason.
+
+`/health` answered `{"status":"healthy","version":"4.0.0","backends":{"all_healthy":true,"count":32}}`,
+so the 3.4.0 `servers.yaml` parses unchanged under 4.0.0 and the gateway registered all
+32 backends. That is the limit of the claim: `all_healthy` is an aggregate of request
+outcomes, not a liveness probe of each backend, so it cannot distinguish a backend that
+is serving from one that has simply not been asked yet. Backend health under the **real**
+data directory is unobserved either way — this smoke ran against a throwaway one.
 
 The guard fires on the wire. This is the symptom the criterion names: the live
 3.4.0 install answers a `POST /mcp` carrying `Origin: http://drift-check.invalid`
@@ -57,7 +65,8 @@ it at the new build would make any unattended restart an unwatched cutover.
 ## What remains
 
 The criterion stays PARTIAL. Closing it needs steps 5-7 against the live install on
-`127.0.0.1:39401`, whose pass output is four lines in manifest order and exit 0.
-The smoke proves the binary runs on this machine, that the config parses, and that
-the guard refuses on the wire; it does not prove backend health under the real data
+`127.0.0.1:39401`, graded on exit 0, a `0 failing` tally, both guards reading
+`refused 403; legitimate request 200`, and no control regressing from probed to
+uncovered. The smoke proves the binary runs on this machine, that the config parses, and
+that the guard refuses on the wire; it does not prove backend health under the real data
 directory, which only step 7 observes.
