@@ -216,6 +216,8 @@ impl MetaMcp {
                 "running": status.running,
                 "transport": status.transport,
                 "tools_count": status.tools_cached,
+                // Consult this before reading tools_count == 0 as "empty".
+                "tools_known": status.tools_known,
                 "circuit_breaker": status.circuit_state,
                 "status": if killed { "disabled" } else { "active" }
             });
@@ -235,6 +237,7 @@ impl MetaMcp {
                 "running": true,
                 "transport": "capability",
                 "tools_count": status.capabilities_count,
+                "tools_known": true,
                 "circuit_breaker": "closed",
                 "status": if killed { "disabled" } else { "active" }
             }));

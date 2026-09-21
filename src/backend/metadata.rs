@@ -56,6 +56,21 @@ impl Backend {
             .with_cached(|tools| tools.map_or(0, |tools| tools.len()))
     }
 
+    /// `false` means "unknown", not "empty".
+    #[must_use]
+    pub fn cached_tools_known(&self) -> bool {
+        self.tools_cache.ever_populated()
+    }
+
+    /// Both under one guard; use wherever the two travel together.
+    #[must_use]
+    pub fn cached_tools_count_and_known(&self) -> (usize, bool) {
+        self.tools_cache
+            .with_cached_and_populated(|tools, populated| {
+                (tools.map_or(0, |tools| tools.len()), populated)
+            })
+    }
+
     /// Return the names of all cached tools (non-blocking, no network I/O).
     ///
     /// Returns an empty `Vec` when the cache is empty or has never been populated.

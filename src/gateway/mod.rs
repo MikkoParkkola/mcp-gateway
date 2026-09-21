@@ -12,6 +12,7 @@ mod meta_mcp;
 mod meta_mcp_helpers;
 mod meta_mcp_helpers_text;
 mod meta_mcp_tool_defs;
+mod meta_mcp_tool_total;
 mod middleware;
 pub mod oauth;
 // Crate-internal on purpose: the adapter is wired by `router` and by nothing

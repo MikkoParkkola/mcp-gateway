@@ -78,6 +78,52 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
     }
 }
 
+/// A per-backend npm cache, so backends sharing a command cannot tear one tree.
+#[must_use]
+pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
+    backend_name: &str,
+    command: &str,
+    mut backend_env: HashMap<String, String, S>,
+) -> HashMap<String, String, S> {
+    if !invokes_npm(command) || backend_env.contains_key("npm_config_cache") {
+        return backend_env;
+    }
+    let dir = crate::config_persistence::gateway_data_dir()
+        .join("pkg-cache")
+        .join(sanitize_cache_component(backend_name));
+    backend_env.insert(
+        "npm_config_cache".to_string(),
+        dir.to_string_lossy().into_owned(),
+    );
+    backend_env
+}
+
+fn invokes_npm(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .next()
+        .map(|program| program.rsplit('/').next().unwrap_or(program))
+        .is_some_and(|program| matches!(program, "npx" | "npm" | "pnpm" | "yarn" | "bunx"))
+}
+
+fn sanitize_cache_component(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "unnamed".to_string()
+    } else {
+        cleaned
+    }
+}
+
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
     /// Child process
@@ -778,6 +824,10 @@ impl Transport for StdioTransport {
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "stdio_cache_tests.rs"]
+mod cache_tests;
 
 #[cfg(test)]
 mod spawn_classification_tests {

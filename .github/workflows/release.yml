@@ -34,7 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Scan Rust dependencies against OSV
-        uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
+        uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
         with:
           scan-args: |-
             --config=.github/osv-scanner.toml
@@ -242,6 +242,13 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}${{ matrix.suffix }}
+          # These binaries are a handoff to the `release` job below, which
+          # downloads them and attaches them to the GitHub release; once that
+          # has happened the artifact copy is a duplicate of a release asset
+          # that is kept indefinitely. Without this the default 90 days applies
+          # and every build target's binary is stored twice for three months.
+          # ci.yml and docker.yml already set the same ceiling.
+          retention-days: 1
 
   release:
     needs: [build, verify]

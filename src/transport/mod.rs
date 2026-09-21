@@ -10,7 +10,7 @@ pub mod websocket;
 
 pub use self::command_split::{split_command, split_command_unix, split_command_windows};
 pub use self::http::HttpTransport;
-pub use self::stdio::StdioTransport;
+pub use self::stdio::{StdioTransport, isolated_package_manager_env};
 pub use self::websocket::McpFrame;
 
 use std::collections::HashSet;
