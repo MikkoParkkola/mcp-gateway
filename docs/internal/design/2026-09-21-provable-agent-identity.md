@@ -252,9 +252,9 @@ Table assumes `security.agent_identity.enabled = true`. When it is `false`, `val
 | 3 | no | yes | no | JWT `sub` | Accept. Allowlist checked against `sub`. |
 | 4 | no | yes | yes | JWT `sub` | Accept if the label is **consistent** with `sub`; **refuse** on contradiction (section 7). |
 | 5 | yes | no | no | mTLS subject | Accept. Allowlist checked against the mTLS subject. |
-| 6 | yes | no | yes | mTLS subject | **Run DECISION 7.1's ordered match.** Declared equals the subject → accept (arm 1). Per-principal entry covering this subject → the label must be in its set, else **refuse** (arm 2). Namespace waiver — the normal case for mTLS — → **accept, and audit `declared_label_mismatch` when the two differ** (arm 3): under a waiver the labels are incomparable, so the mismatch is a detection signal rather than a rejection. No entry of either kind → **refuse** (arm 4, the request-time backstop). |
+| 6 | yes | no | yes | mTLS subject | **Run DECISION 7.1's ordered match**, against the **selected** mTLS proven id — SAN URI else CN, per section 4 — never against the certificate subject generally. DECISION 7.1 states the outcomes and this row does not restate them; for orientation only, mTLS normally carries the namespace waiver, so the usual result is arm 3. |
 | 7 | yes | yes | no | **mTLS subject** (mTLS outranks JWT) | Accept. The JWT `sub` is recorded in audit as a secondary proof, never as the principal. |
-| 8 | yes | yes | yes | **mTLS subject** | Same rule as row 6 — DECISION 7.1's ordered match, run once against the mTLS subject. The JWT `sub` is audited as secondary proof, never compared against the label: one principal, one comparison. |
+| 8 | yes | yes | yes | **mTLS subject** | Same rule as row 6 — DECISION 7.1's ordered match, run once against the selected mTLS proven id. The JWT `sub` is audited as secondary proof, never compared against the label: one principal, one comparison. |
 
 Three properties this table has that the current code does not:
 
@@ -610,7 +610,7 @@ Per the C5 precedent, Tier 1 runs **red before green**: each is demonstrated fai
 
 Per the ruling, design review comes before any code. Order, from the `MIK-6746.IDENTITY.1` row (`criteria[19]`, tracked as MIK-7512):
 
-1. **Design review** — this document. **Rounds 1 through 5 are complete** (section 14). DECISION 3.1, 7.1, 7.2, 7.3, 9.1 and 10.1 need explicit sign-off, and so do the two **agent rulings** recorded in round 5 (F3, which keeps DECISION 3.1 against the ledger row's analysis prose, and F6, which downgrades an encryption-only-mTLS startup failure to a warning). 7.1 adds a mandatory operator config step, 9.1 narrows an existing grant behaviour, and 10.1 breaks existing deployments; all three are reasonable places for a reviewer to rule differently.
+1. **Design review** — this document. **Rounds 1 through 6 are complete** (section 14). DECISION 3.1, 7.1, 7.2, 7.3, 9.1 and 10.1 need explicit sign-off, and so do the two **agent rulings** recorded in round 5 (F3, which keeps DECISION 3.1 against the ledger row's analysis prose, and F6, which downgrades an encryption-only-mTLS startup failure to a warning). 7.1 adds a mandatory operator config step, 9.1 narrows an existing grant behaviour, and 10.1 breaks existing deployments; all three are reasonable places for a reviewer to rule differently.
 2. **Test review** — section 11 reviewed as a plan, including the red-before-green ordering and the positive rows added in round 1.
 3. **Failing tests** — Tier 1 written and demonstrated red against `HEAD`.
 4. **Implementation** — sixteen production sites from section 5, **plus five surfaces the review rounds added**: the identity-grant request path (DECISION 9.1, `handlers.rs:1448/1566/1597` → `identity_grants.rs:608`); the JWT-scope gate at `authorization.rs:206-214` that DECISION 7.3 funds; the `MetaMcpCallerContext` and `invoke.rs` ASI03 audit line that carry `agent_id` past the router (`src/gateway/meta_mcp/mod.rs:157`, `invoke.rs:1137`, `:1893-1915`); an identity audit event on the refusal arm (`handlers.rs:612-617`, `backend_handlers.rs:526`), which does not exist today; and **the durable task worker that section 5 puts in scope as the fourth past-the-router site** — `TaskIntentRequest` and `OwnedCallerContext` (`src/gateway/task_service/execution/context.rs:20`) gain separate proven and declared fields, the fill at `handlers/tasks.rs:171` stops flattening them into one `Option<String>`, the rebuild at `context.rs:123` carries both, and the recovery caller at `handlers/tasks.rs:295` authorizes on the proven pair while attributing to the declared label. Omitting the worker was the gap that made section 5's fourth site prose: it is the longest-lived copy of the caller, so a split that stops at the request boundary leaves the conflation intact one dispatch later. Tested at T23 (worker dispatch) and T24 (recovery). The repo gate fires here: `gitnexus_impact` on `extract_agent_identity` and `validate_agent_identity` before editing either, and `gitnexus_detect_changes` before committing.
@@ -631,7 +631,9 @@ The cheapest check that this design is wrong, with a pass/fail threshold, runnab
 
 This was verified by reading, not by running. Running it is the first task of the implementation stage.
 
-## 14. Design review round 1 — findings and disposition
+## 14. Design review rounds 1 through 6 — findings and disposition
+
+### Round 1 — two independent non-Claude reviewers
 
 Two independent non-Claude reviewers read this document at the design stage, before any
 code existed. Both returned **SHIP-WITH-FIXES**. Run records:
