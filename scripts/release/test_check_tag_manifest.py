@@ -1737,6 +1737,39 @@ class SmokeGateCoverage(unittest.TestCase):
             "default entrypoint is never exercised",
         )
 
+    def test_the_gate_publishes_a_port_no_other_process_can_hold(self):
+        # A fixed host port is answerable by whatever already holds it. Docker
+        # reports success for `-p 127.0.0.1:39401:39400` when a native process
+        # owns 39401 -- the container binds inside the VM and the host-side
+        # forward loses to the incumbent -- so the probe reaches the stranger
+        # and the leg passes while the image under test serves nobody. Observed
+        # on 39401 against a developer machine's own gateway, and the same
+        # collision voided a performance run before any rep. Letting Docker
+        # allocate the port makes attribution structural rather than assumed,
+        # and keeps two concurrent gate runs from fighting over one number.
+        published = [
+            spec
+            for line in re.findall(
+                r"^\s*(?:if\s+)?docker run\b.*$", self.folded, re.MULTILINE
+            )
+            for spec in re.findall(r"(?:-p|--publish)\s+\"?([^\"\s]+)\"?", line)
+        ]
+        self.assertTrue(published, "smoke-image.sh: no published port at all")
+        for spec in published:
+            self.assertRegex(
+                spec,
+                r"^(?:[\d.]+:)?:\d+$",
+                f"smoke-image.sh: publish spec {spec!r} pins a host port, so "
+                "any process already holding it can satisfy the MCP leg",
+            )
+        # An allocated port is only usable if the gate reads back which one.
+        self.assertRegex(
+            self.body,
+            r"docker port\b",
+            "smoke-image.sh: the published port is never read back, so the "
+            "probe cannot know where to reach the container",
+        )
+
     def test_the_gate_refuses_a_healthcheck_that_proves_nothing(self):
         # The gate's verdict IS the HEALTHCHECK, so a degenerate one -- `CMD
         # true`, or a probe aimed at a port nothing serves -- turns the whole
