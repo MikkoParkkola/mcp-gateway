@@ -203,10 +203,14 @@ grant reloads, and gives up nothing, because the only state the two paths genuin
 the epoch — **V** an `AtomicU64` mutated solely by `fetch_add` (`meta_mcp/mod.rs:1303`;
 `config_reload/mod.rs:315`), so concurrent bumps are monotone and over-invalidate at worst.
 
-**This deletes a worst case rather than documenting one.** Under the shared lock a revocation
-could wait behind `backend.stop()` on a slow stdio child (`apply_patch:947,958`) or return
-`Busy` from `lock_reload_within` (`:1634-1641`) because of an entirely unrelated config edit.
-Under a grants-only lock neither can happen.
+**This deletes a worst case rather than documenting one, and the worst case has a number.**
+Under the shared lock a revocation waits behind `backend.stop()` per modified backend
+(`apply_patch:947,958`) or returns `Busy` from `lock_reload_within` (`:1634-1641`) because of an
+entirely unrelated config edit. **A** Backend shutdown stages total ~45s per backend and run
+sequentially, so a config reload touching several backends can delay a **revocation** by
+minutes. (Reported by review; not measured here, and no cell in §3 bounds it — itself a reason
+to remove the dependency rather than characterise it.) Under a grants-only lock neither the
+wait nor the unrelated `Busy` can occur.
 
 **The publish-then-bump invariant is unaffected**, and this is worth stating because it looks
 like the kind of thing a narrower lock would weaken. It does not: the invariant is that the
@@ -356,13 +360,27 @@ corrupt file does not say "revoke grant X"; it says "I cannot tell you anything"
 into an all-grant revocation. Fail-closed here is not a conservative reading of the operator's
 intent; it is a fabricated one.
 
-**3. Fail-closed for grants means *denied*, not *granted*, so this is an availability call,
-not an authorization one.** **V** The field doc is explicit (`meta_mcp/mod.rs:566-568`):
-*"Empty by default. Public and shared tools still evaluate as allowed, but capabilities marked
-`personal` fail closed without matching caller, owner, and live grant evidence."* So dropping
-the store denies access. Nobody gains anything by a fail-open reload refusal; the cost is
-bounded to "the revocation has not landed yet", which is **the status quo before the reload**.
-Fail-open cannot be worse than not having built this.
+**3. The trade is a loud unbounded failure against a silent total one — not, as an earlier
+draft of this section claimed, "no authorization consequence at all".** That weaker claim was
+wrong; it is corrected here rather than quietly dropped.
+
+**V** Dropping the store denies rather than grants: *"Empty by default. Public and shared tools
+still evaluate as allowed, but capabilities marked `personal` fail closed without matching
+caller, owner, and live grant evidence"* (`meta_mcp/mod.rs:566-568`). **That does not make
+fail-open consequence-free.** A refused reload preserves the revoked grant's access
+**indefinitely** — not until the next attempt, but for as long as the file stays unreadable.
+And the `grants: []` escape hatch is no answer while storage is inaccessible, because writing
+it needs the same storage.
+
+| | Failure | Duration | Visibility |
+|---|---|---|---|
+| **Fail open** (chosen) | One revocation does not take effect | Unbounded — until the file is fixed | **Loud**: `Err` on the trigger, `error!`, refusal text (§D4) |
+| **Fail closed** | Every personal capability denied, every caller | Until the file is fixed | **Silent**: indistinguishable from a working gateway that has no grants |
+
+**Chosen because the outage is silent and the failed revocation is loud**, not because the
+failed revocation is harmless. An operator told their revocation did not land can pull the
+caller's credential, stop the backend, or shut the gateway down. An operator whose gateway
+quietly denies every personal capability learns it from users.
 
 **4. The codebase already ruled this way, in the module being reused.** **V**
 `reload_outcome_locked` refuses and mutates nothing on every bad candidate, with the standing
@@ -445,6 +463,39 @@ them, but they ask the operator for different things, so the trigger's error tex
 contention between two *grant* reloads, but did not remove it. Rendering it as a parse failure
 would send an operator to inspect a file that is perfectly fine.
 
+**Both steps are always rendered, on every path, including busy.** A trigger runs two
+independent steps (config, grants; §D1 reason 2), so its result carries **two** outcomes and
+neither short-circuits the other. Concretely: a config reload that refuses must still show what
+the grant step did, and a grant step that refuses — for any of the three reasons above — must
+still show what the config step did. The failure this prevents is the one the whole design is
+about: an operator reads a single refusal, concludes nothing happened, and does not learn that
+their revocation **did** land (or, worse, that it did not while the config change did).
+
+```
+reload: config refused — security.message_signing.key requires restart
+        grants applied — /etc/mcp-gateway/grants.yaml: 12 grants (-1 revoked)
+```
+
+**The message must not promise more than the MVP wires, and one entry point is easy to miss.**
+The text above says "next reload", which includes the **automatic** config reload. **V** The
+watcher does not share the `ReloadContext` that `server/mod.rs:1588-1597` wires into `MetaMcp`;
+`spawn_reload_task` constructs a second one (`config_reload/mod.rs:1218-1220`). A grant sink
+attached only to the first would leave revoked grants **active** across every automatic reload
+while the CLI told the operator otherwise — a silent failure of exactly the kind this design
+exists to remove.
+
+**The repo has already paid for this mistake once and left a note.** Immediately above that
+construction (`config_reload/mod.rs:1211-1216`):
+
+> The watcher runs the same reload transaction as the meta-tool and the admin UI, through the
+> same function (#397). It used to have a private copy of that transaction, which meant the
+> regression test covering the reload lock only ever exercised the other two entry points: an
+> edit that moved the lock here alone would not have failed a single test.
+
+**I** So the sink goes into `spawn_reload_task` in the same slice, and **the watcher entry
+point gets its own cell** rather than a shared helper exercised through the meta-tool only.
+That note is a description of how this fix gets silently half-applied.
+
 **Distinguishing applied from not-applied uses two surfaces that already exist**, so this adds
 no new reporting mechanism:
 
@@ -501,7 +552,23 @@ So, priced explicitly:
   wiring question, and it should be answered once for every file-driven event rather than
   invented here for one.
 
-State the auth-disabled gap in the operator docs rather than adding a fallback log. **I** A gateway with auth disabled treats every caller as an anonymous admin
+State the auth-disabled gap in the operator docs rather than adding a fallback log.
+
+**Resolved once, not in two places.** Review raised audit wiring against both the MVP list and
+the gold-plating table; the split above is the single answer — the tracing event is **in** MVP
+piece 5, the governance append is **out** and listed in gold-plating. Nothing is priced in both.
+
+**One acceptance condition belongs with it, because it is a correctness property rather than a
+reporting one: an audit-write failure must not silently undo or misreport an applied
+revocation.** The ordering that guarantees it: **publish first, record second.** A revocation
+that is in force but unlogged is a gap in the record; a revocation reported as applied but
+rolled back because its log write failed is a **live authorization difference** between what
+the operator was told and what the gateway enforces. So a failed `info!` or a failed audit
+append never reverts the store, never reverts the epoch, and never turns an applied outcome
+into a refusal — it degrades the *record*, and the outcome says so. **A** This is stated as an
+acceptance condition rather than given a cell, because the MVP record is a tracing macro and
+this repo has no harness that makes one fail; it becomes testable when the governance append
+lands, and that is the slice that should carry the cell. **I** A gateway with auth disabled treats every caller as an anonymous admin
 (`server/mod.rs:189-191`) — a private audit trail on that deployment would assert an
 accountability it does not have.
 
@@ -522,16 +589,18 @@ presented as tests. Proposed module: `src/gateway/meta_mcp/grant_reload_tests.rs
 |---|---|---|
 | **T1** | **A revocation never reaches the running process** — the bug. | Store with an active grant; `evaluate` allows. Write the file with `revoked_at` set. Trigger reload. → `evaluate` now denies for that subject/capability. |
 | **T2** | **A corrupt file drops live grants** (the fail-closed hole, §D3). | Populated live store. Overwrite the file with unparseable bytes. Trigger reload. → reload returns `Err`, **and** `identity_grant_rows()` is byte-identical to before, **and** `evaluate` still allows, **and** `policy_epoch()` is unchanged. |
-| **T2b** | **A refused reload flushes every caller's result cache** (§D3). Separate cell because T2's first three assertions can all pass while the epoch still moves — and the epoch is global, so the blast radius is every caller, not the one whose grant was edited. | The T2 setup, repeated three times against the still-corrupt file. → `policy_epoch()` is unchanged after each, and a key minted before the first attempt still hits the cache after the third. |
+| **T2b** | **A refused reload flushes every caller's result cache** (§D3). Separate cell because T2's first three assertions can all pass while the epoch still moves — and the epoch is global, so the blast radius is every caller, not the one whose grant was edited. | The T2 setup, repeated three times against the still-corrupt file. → after the third, **rebuild the cache key from the live epoch** and assert it still hits. Reusing the key captured before the first attempt would pass through epoch invalidation itself and prove nothing: the property under test is that the epoch did **not** move, so the key must be re-derived from it, not remembered. |
 | **T3** | **A torn read that is INVALID drops live grants.** Half the torn-file space; T3b is the other and more dangerous half. | Populated live store. Truncate mid-token so the result does not parse. Trigger reload. → same four assertions as T2. |
 | **T3b** | **A torn read that is VALID silently revokes everything** (§D3.1). **Red today**, and not via the refusal path — via the success path. | Populated live store. Truncate the file after the header, before any row — **V** which parses as `grants: []` (`identity_grants.rs:147-154`). → **The assertion is that this state is unreachable, not that the parser rejects it.** Drive the real CLI write path (`write_identity_grant_file`) and assert no observer can ever read a partial file: after piece 6 the path is either the old content or the complete new content, never a prefix. Asserting a parse rejection instead would pin the wrong layer and would break the legitimate revoke-all file. |
 | **T4** | **A missing or unreadable file drops live grants.** Distinct from T2: a vanished mount is not a corrupt one. | Populated live store. Delete the file. Trigger reload. → same four assertions as T2. |
 | **T5** | **"Revoke everything" is not expressible** — the escape hatch that keeps §D3 honest. | Populated live store. Write a valid file with `grants: []` and a correct `schema_version`. Trigger reload. → reload reports **applied**, store is empty, `evaluate` denies. Mirror-image of T2 on the same input shape; T2 and T5 fail in opposite directions, so neither passes vacuously. |
 | **T6** | **A refusal is indistinguishable from a success, or one refusal from another** (§D4). | The T2 setup → the error names the path and the parse failure, and is **not** an `Ok` reporting "no changes". Then, holding the grants lock, trigger a second reload → it returns the **busy** refusal, distinguishable from the parse refusal, and still publishes nothing. Both halves matter: the first stops a refusal reading as success, the second stops a retryable refusal reading as a broken file. |
 | **T7** | **The publisher forgets the epoch** — a stale response-cache entry outlives the grant change. | Read `policy_epoch()`. Apply a reload that genuinely changes the grants (T1's file). → epoch is strictly greater. Reuse `policy_epoch_tests.rs`'s key-builder assertion so the observable is a real cache miss, not just an integer. |
+| **T8b** | **A reordered file reads as a change.** Same global-epoch blast radius as T8, reached by a different route, and the cell that forces the comparison to be defined on normalised store contents rather than file bytes. | Live store populated. Rewrite the file with the **same grants in a different order**. Trigger reload. → outcome reads "no change" and `policy_epoch()` is unchanged. |
 | **T8** | **A no-op reload churns every caller's response cache.** **Red today**: `set_identity_grants` (`meta_mcp/mod.rs:1300-1307`) bumps unconditionally. This cell is what forces the `PartialEq` comparison, and why that comparison is MVP. | Read `policy_epoch()`. Trigger a reload against a file byte-identical to the live store. → epoch **unchanged**, and the outcome reads "no change". |
-| **T9** | **A config refusal holds a revocation hostage** (§D1 reason 2) — but only if the observable is the *ordering*, not the outcomes. | Config file edited so `reload_outcome_locked` refuses at its early `return Err` (`:1663`, the `security.message_signing` restart field), plus a grants file carrying a revocation. Trigger both through the one operator-facing entry point, under the shared lock. → the config reload returns `Err` **and** `evaluate` denies, **and** the grant publish is reached rather than skipped by that early return. **The third assertion is the test.** Asserting only the first two passes trivially the moment the two paths are separate functions, which proves nothing about sequencing; the catalogue review's §6.3 is this house rejecting exactly that. |
-| **T10** | **Two concurrent triggers lose a write** (§D1 reason 3). | Two reload triggers racing a two-revocation file sequence. → the final store matches the last file written, never an earlier one. **A** Deterministic only under the lock; without it this is the interleaving `apply_patch:902-910` describes. |
+| **T9** | **A config refusal holds a revocation hostage** (§D1 reason 2) — but only if the observable is the *ordering*, not the outcomes. | Config file edited so `reload_outcome_locked` refuses at its early `return Err` (`:1663`, the `security.message_signing` restart field), plus a grants file carrying a revocation. Trigger **one real operator-facing entry point** (`gateway_reload_config`), not the two steps called directly. → the config half returns `Err` **and** `evaluate` denies. Driving the real entry point is what makes the denial sufficient: it proves the grant step was reached through the same invocation that refused the config step, with no publisher instrumentation and no assertion about internal call order. Calling the two steps by hand would pass trivially once they are separate functions, which proves nothing about sequencing — the catalogue review's §6.3 is this house rejecting exactly that. |
+| **T10** | **Two concurrent triggers lose a write** (§D1 reason 3). | Two grant reloads driven against a two-revocation file sequence, **sequenced with barriers** so the interleaving is forced rather than hoped for: hold trigger A after its file read and before its publish, let trigger B read and publish the newer file, then release A. → the final store matches the **last file written**, never A's older snapshot. Without barriers this cell passes on a machine that happens not to interleave and proves nothing; with them it exposes stale publication deterministically. |
+| **T10b** | **A busy refusal is not inert.** The contract is not merely "returns busy" — it is that a busy reload changes **nothing** and that the retry then works. | Hold the grants mutex. Trigger a grant reload → busy refusal, **and** `identity_grant_rows()` unchanged, **and** `policy_epoch()` unchanged. Release, retry the same file → applies, `evaluate` denies. Asserting only the error string would let a busy path that half-published still pass. |
 | **T11** | **Expiry regressed** — the one liveness property that already works, and the cheapest thing for this change to break. | Grant with `expires_at` in the near future. Advance the clock input past it with **no reload at all**. → `evaluate` denies. Green before and after; it is a guard, and is labelled as one rather than counted as new coverage. |
 
 **Not tests, and not counted as any.** That the catalogue cache is untouched by this change
@@ -599,11 +668,11 @@ by decision, not by oversight**, and this design must not be widened to cover it
 |---|---|
 | 1. `MetaMcp.identity_grants` → `Arc<RwLock<…>>`; one shared publisher holding the write-then-bump-under-lock discipline (§D2). | Field type + `Arc::new` at **two** construction sites (`mod.rs:672,864`). Two readers compile unchanged (**V**, §D2). |
 | 2. `ReloadContext` gains the two `Arc`s and `reload_identity_grants()`, inside `lock_reload_within` (§D1). | One field pair, one function: read file → compare → publish or refuse. |
-| 3. The existing triggers call it — `gateway_reload_config` and the admin UI reload. | Call site each; both already hold a `ReloadContext`. |
-| 4. The no-op comparison (T8). **V** `IdentityGrant` and `IdentityGrantFile` both derive `PartialEq, Eq` (`identity_grants.rs:115,147`) and the store is a `BTreeMap`, so this compares the loaded rows against `identity_grant_rows()` — no new trait, no new helper. | One comparison. |
+| 3. The existing triggers call it — `gateway_reload_config`, the admin UI reload, **and the config file watcher**. | Call site each. The first two already hold the `ReloadContext` wired at `server/mod.rs:1588-1597`; **V the watcher builds its own** at `config_reload/mod.rs:1218-1220`, so the sink must be threaded into `spawn_reload_task` too — see §D4. This does **not** mean watching the grants file; it means an automatic *config* reload also refreshes grants. |
+| 4. The no-op comparison (T8), defined on **normalised store contents, not file bytes**. **V** `IdentityGrant` and `IdentityGrantFile` both derive `PartialEq, Eq` (`identity_grants.rs:115,147`), and `LocalIdentityGrantStore` is a `BTreeMap` keyed by grant id, so loading through `from_grants` normalises order for free: compare the **loaded store's** rows against `identity_grant_rows()`. Comparing bytes, or comparing the file's `Vec` order, would report a change whenever an operator reordered rows — bumping the **global** epoch and invalidating every caller's response cache for a no-op. No new trait, no new helper. | One comparison. |
 | 5. The CLI message and the grants line in `ReloadOutcome` (§D4). | Two strings, one shared print site (**V** both verbs route through `print_grant_result`, `commands/identity.rs:285`). |
 | 6. **Atomic grant-file write.** Replace `tokio::fs::write` (`commands/identity.rs:234`) with tmp+rename. | **V** Already implemented and `pub`: `write_config_text` (`src/config_persistence.rs:125`) → `write_yaml` (`:129`) does exclusive-scratch create, `write_all` + `sync_all`, `rename_with_retry` (`:147`), and removes the scratch file on any failure. Reuse it. Two notes: it is **sync** `std::fs` while `write_identity_grant_file` is `async`, so it wants `spawn_blocking` or a deliberate blocking call on the one-shot CLI path; and the grants file may be JSON **or** YAML (`is_json_path`), so the shared helper wants a neutral name — `write_yaml` is already a private one-liner under `write_config_text`, so exposing it as `write_text_atomic` is the whole change. |
-| T1–T12. | — |
+| T1–T11 plus T2b, T3b, T8b, T10b — **fifteen cells**. | — |
 
 Cutting piece 4 is the one cut that costs something real and invisible: every reload then
 invalidates every caller's response cache. Cutting piece 5 leaves the mechanism working and
