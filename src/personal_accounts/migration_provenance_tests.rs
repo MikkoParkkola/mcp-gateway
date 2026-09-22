@@ -82,13 +82,11 @@ fn provenance_of(store: &PersonalAccountStore, account: &AccountKey) -> Option<S
 ///
 /// This test does not describe the gap, it fails on it.
 ///
-/// Ignored so the reviewed design can land ahead of the implementation it
-/// specifies. Nothing about the gap has changed: run it with `--ignored` and it
-/// fails today, with the assertion message below. Remove this attribute in the
-/// commit that adds the provenance marker to the guarded commit path (design
-/// §6.1) — that commit is not complete until this test passes unignored.
+/// UN-IGNORED here, in the commit that closes the gap, which is the condition
+/// the `#[ignore]` named for itself. It was red for one reason only — the
+/// guarded commit had no way to express provenance — and the parameter below is
+/// that way.
 #[test]
-#[ignore = "red until the §6.1 provenance marker exists; un-ignore in that commit"]
 fn a_first_migration_commit_must_land_carrying_its_provenance_marker() {
     // GIVEN: an empty store, so this commit is a FIRST migration — no prior
     // entry exists for the carry-forward to copy a marker off.
@@ -103,7 +101,12 @@ fn a_first_migration_commit_must_land_carrying_its_provenance_marker() {
 
     // WHEN: migration commits it through the guarded primitive §7.1a chose.
     assert_eq!(
-        store.commit_grant_if_unchanged(&account, &ConsentExpectation::Absent, &record),
+        store.commit_grant_if_unchanged(
+            &account,
+            &ConsentExpectation::Absent,
+            &record,
+            Some(LEGACY_SOURCE_BASENAME)
+        ),
         Ok(GuardedCommit::Committed),
         "control: the guarded commit must succeed, or the assertion below is \
          about a grant that was never written"
@@ -114,8 +117,7 @@ fn a_first_migration_commit_must_land_carrying_its_provenance_marker() {
         provenance_of(&store, &account).as_deref(),
         Some(LEGACY_SOURCE_BASENAME),
         "a migrated grant must be distinguishable on disk from one the user \
-         consented to; today the guarded commit has no way to say so, which is \
-         the gap design §6.1 costs and §8.3 lists"
+         consented to, and the marker is what tells them apart"
     );
 }
 
@@ -132,7 +134,12 @@ fn a_grant_committed_outside_migration_must_stay_unmarked() {
     let account = alice();
 
     assert_eq!(
-        store.commit_grant_if_unchanged(&account, &ConsentExpectation::Absent, &super::grant()),
+        store.commit_grant_if_unchanged(
+            &account,
+            &ConsentExpectation::Absent,
+            &super::grant(),
+            None
+        ),
         Ok(GuardedCommit::Committed)
     );
 
@@ -147,34 +154,31 @@ fn a_grant_committed_outside_migration_must_stay_unmarked() {
 /// STORE.1 §6.2 claim 1 — the carry-forward already works, so the plumbing in
 /// §6.1 is needed only for the INITIAL set.
 ///
-/// Design §6.2 rests its keep-the-field decision partly on this, and it is the
-/// one part of §6 that can be proved against today's tree: a marker present on
-/// an entry survives the next durable write for that account. The marker is
-/// planted directly on the held authority rather than through a producer,
-/// because no producer exists — that absence is what F17 above is about.
+/// Design §6.2 rests its keep-the-field decision partly on this. The marker is
+/// now set by a REAL migration commit rather than planted on the held authority
+/// by hand, which the earlier version had to do because no producer existed.
+/// The hand-planting version could have passed against a carry-forward that
+/// only worked for values the test itself wrote; this one cannot.
 #[test]
 fn a_provenance_marker_already_on_an_entry_survives_the_next_commit() {
     let (_root, _settings, store) = empty_store();
     let account = alice();
-    let digest = account.digest().expect("fixture key digests");
 
+    // A migration commit, which is the only writer that sets the marker.
     assert_eq!(
-        store.commit_grant_if_unchanged(&account, &ConsentExpectation::Absent, &super::grant()),
+        store.commit_grant_if_unchanged(
+            &account,
+            &ConsentExpectation::Absent,
+            &super::grant(),
+            Some(LEGACY_SOURCE_BASENAME)
+        ),
         Ok(GuardedCommit::Committed)
     );
-
-    // Plant the marker on the live authority, standing in for the producer
-    // §6.1 has to add.
-    {
-        let mut authority = store.lock_authority();
-        authority
-            .as_mut()
-            .expect("an initialized store holds its authority")
-            .entries
-            .get_mut(&digest)
-            .expect("the account was just committed")
-            .legacy_migration = Some(LEGACY_SOURCE_BASENAME.to_owned());
-    }
+    assert_eq!(
+        provenance_of(&store, &account).as_deref(),
+        Some(LEGACY_SOURCE_BASENAME),
+        "control: the marker must be set before survival of it means anything"
+    );
 
     // A later durable write for the same account: a re-consent replacing the
     // grant, which is the shape §6.2 claims preserves the marker.
@@ -187,7 +191,7 @@ fn a_provenance_marker_already_on_an_entry_survives_the_next_commit() {
             .expect("the committed account reads back"),
     );
     assert_eq!(
-        store.commit_grant_if_unchanged(&account, &expected, &replacement),
+        store.commit_grant_if_unchanged(&account, &expected, &replacement, None),
         Ok(GuardedCommit::Committed),
         "control: the replacement must actually be written, or survival of the \
          marker is asserted about a write that never happened"
@@ -196,7 +200,8 @@ fn a_provenance_marker_already_on_an_entry_survives_the_next_commit() {
     assert_eq!(
         provenance_of(&store, &account).as_deref(),
         Some(LEGACY_SOURCE_BASENAME),
-        "commit.rs:285-299 carries the marker onto the replacement entry, so a \
-         migrated grant stays labelled across refresh and re-consent"
+        "the replacement passed `None`, and the carry-forward kept the marker: a \
+         migrated grant stays labelled across refresh and re-consent without \
+         every later writer having to know it was migrated"
     );
 }

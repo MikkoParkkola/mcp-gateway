@@ -253,6 +253,7 @@ fn stage_publication(
     digest: &str,
     account: &AccountKey,
     record: &GrantRecord,
+    provenance: Option<&str>,
 ) -> Result<(), ManifestRefusal> {
     let authority = slot
         .as_ref()
@@ -282,10 +283,17 @@ fn stage_publication(
         .commit_revision
         .checked_add(1)
         .ok_or(ManifestRefusal::Staged(AccountError::StorageUnavailable))?;
-    let legacy_migration = next
-        .entries
-        .get(digest)
-        .and_then(|entry| entry.legacy_migration.clone());
+    // Supplied by the writer, else carried forward from the entry being
+    // replaced. A FIRST migration has no prior entry, so the carry-forward
+    // alone yielded `None` for exactly the grant the marker exists to label
+    // (design 6.1). Only migration supplies a value; every other writer passes
+    // `None` and keeps whatever the account already carried, which is what
+    // keeps a migrated grant labelled across refresh and re-consent.
+    let legacy_migration = provenance.map(str::to_owned).or_else(|| {
+        next.entries
+            .get(digest)
+            .and_then(|entry| entry.legacy_migration.clone())
+    });
     next.entries.insert(
         digest.to_owned(),
         AuthorityEntry {
@@ -333,6 +341,10 @@ fn stage_publication(
 /// apart is what stops revoke and the reconnect fence reporting a capacity
 /// problem they cannot have.
 #[cfg(unix)]
+///
+/// No provenance parameter of its own: `refresh_tokens` is this function's only
+/// caller, and a refresh must CARRY a marker forward, never set one. Passing
+/// `None` is that rule expressed in one argument.
 fn publish(
     config: &StoreConfig,
     slot: &mut Option<Authority>,
@@ -340,7 +352,7 @@ fn publish(
     account: &AccountKey,
     record: &GrantRecord,
 ) -> Result<(), AccountError> {
-    stage_publication(config, slot, digest, account, record).map_err(|e| refusal_as_fault(&e))
+    stage_publication(config, slot, digest, account, record, None).map_err(|e| refusal_as_fault(&e))
 }
 
 /// Replace only the manifest, keeping the four version fields the entry already
@@ -392,6 +404,7 @@ pub(in crate::personal_accounts) fn commit_grant(
     slot: &mut Option<Authority>,
     account: &AccountKey,
     record: &GrantRecord,
+    provenance: Option<&str>,
 ) -> Result<(), AccountError> {
     let digest = account.digest()?;
     let authority = slot.as_ref().ok_or(AccountError::StorageUnavailable)?;
@@ -407,9 +420,11 @@ pub(in crate::personal_accounts) fn commit_grant(
     // slot the account already holds is not: the caller is asking for no room,
     // so freeing some would not help it, and `CapacityExhausted` would send it
     // to evict grants over what is a store fault.
-    stage_publication(config, slot, &digest, account, record).map_err(|refusal| match refusal {
-        ManifestRefusal::TooLarge if adds_entry => AccountError::CapacityExhausted,
-        other => refusal_as_fault(&other),
+    stage_publication(config, slot, &digest, account, record, provenance).map_err(|refusal| {
+        match refusal {
+            ManifestRefusal::TooLarge if adds_entry => AccountError::CapacityExhausted,
+            other => refusal_as_fault(&other),
+        }
     })
 }
 
@@ -595,6 +610,7 @@ pub(in crate::personal_accounts) fn commit_grant(
     _slot: &mut Option<Authority>,
     _account: &AccountKey,
     _record: &GrantRecord,
+    _provenance: Option<&str>,
 ) -> Result<(), AccountError> {
     Err(AccountError::InvalidConfiguration)
 }
