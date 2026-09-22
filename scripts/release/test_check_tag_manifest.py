@@ -1417,6 +1417,238 @@ class WorkflowWiring(unittest.TestCase):
             f"runs where the others skip: {sorted(set(conditions))}",
         )
 
+    def test_the_publish_sites_admit_one_cell_of_event_by_ref_by_input(self):
+        # A condition reading github.ref has a case space of events x refs x
+        # inputs, and a dispatch can be aimed at a tag ref — where a ref test
+        # alone is true. That cell is how a run asking to rehearse could
+        # promote, sign and list a real release, and no assertion above can
+        # see it: they all read text. These evaluate it.
+        #
+        # The release sites admit exactly one cell, a tag PUSH. The two jobs
+        # the rehearsal needs admit that cell plus a dispatch whose input is
+        # set, in either spelling — and nothing else, so a dispatch that
+        # leaves the input alone builds and publishes nothing.
+        events = ("push", "pull_request", "workflow_dispatch")
+        refs = ("refs/heads/docs/ranking-1-release-line", "refs/tags/v4.0.0")
+        values = (True, "true", False, "false", None)
+
+        def evaluate(condition, event, ref, value):
+            """`condition` under one cell, translated rather than interpreted.
+
+            `&&`, `||`, `==`, `!=` and `startsWith` mean the same thing in
+            both languages for these operands, and a string equals no boolean
+            in either. A dotted name Python cannot spell is bound first, and
+            `true` is rewritten only unquoted: inside `'true'` it is a string
+            the workflow compares against, not a literal.
+            """
+            body = re.sub(r"^[>|][-+]?\s*", "", condition.strip())
+            body = re.sub(r"^\$\{\{(.*)\}\}$", r"\1", body.strip())
+            body = body.replace(
+                "needs.docker-manifest.outputs.is_prerelease", "prerelease"
+            )
+            body = body.replace("github.event_name", "event")
+            body = body.replace("github.ref", "ref")
+            body = body.replace("inputs.rehearse_manifest", "value")
+            body = body.replace("&&", " and ").replace("||", " or ")
+            body = re.sub(r"(?<!')\btrue\b(?!')", "True", body)
+            return bool(
+                eval(  # noqa: S307 - restricted namespace, workflow-authored text
+                    body,
+                    {"__builtins__": {}},
+                    {
+                        "startsWith": lambda a, b: str(a).startswith(b),
+                        "event": event,
+                        "ref": ref,
+                        "value": value,
+                        # A stable release: the one classification that lets
+                        # the registry job through, so the cell under test is
+                        # the event and the ref rather than the channel.
+                        "prerelease": "false",
+                    },
+                )
+            )
+
+        rehearsable = ("docker-build", "docker-manifest")
+        sites = {f"{job} (job)": job_if("ci.yml", job) for job in rehearsable}
+        sites["publish-mcp-registry (job)"] = job_if("ci.yml", "publish-mcp-registry")
+        for job in rehearsable:
+            for block in steps("ci.yml", job):
+                named = [
+                    line.split(":", 1)[1].strip()
+                    for line in block
+                    if re.match(r"^\s+(?:- )?name:", line)
+                ]
+                for line in block:
+                    if re.match(r"^\s*(?:- )?if:", line):
+                        label = f"{job} -> {named[0] if named else block[0].strip()}"
+                        sites[label] = line.split(":", 1)[1].strip()
+        # Asserted before it is read: a site scan that found nothing would
+        # report this whole matrix as passing.
+        self.assertEqual(
+            len(sites),
+            12,
+            f"ci.yml: expected 12 publish-path conditions, read {sorted(sites)}",
+        )
+
+        for label, condition in sites.items():
+            for event in events:
+                for ref in refs:
+                    for value in values:
+                        release = event == "push" and ref.startswith("refs/tags/v")
+                        rehearse = event == "workflow_dispatch" and value in (
+                            True,
+                            "true",
+                        )
+                        want = release or (
+                            label.endswith("(job)")
+                            and not label.startswith("publish-mcp-registry")
+                            and rehearse
+                        )
+                        self.assertEqual(
+                            evaluate(condition, event, ref, value),
+                            want,
+                            f"ci.yml {label}: {event} on {ref} with "
+                            f"rehearse_manifest={value!r} should be {want}: "
+                            f"{condition}",
+                        )
+
+    def test_the_provenance_name_carries_no_rehearsal_suffix_on_a_tag(self):
+        # The staging name is the one thing the matrix above cannot see: it
+        # evaluates admission conditions, and this is the VALUE of an
+        # interpolated string. `A && '' || B` yields B whichever way A goes —
+        # the empty string is falsy — so the guard that was supposed to keep
+        # the release name unchanged appended the rehearsal suffix to it, and
+        # the release provenance index stopped being published at
+        # :sha-<GITHUB_SHA>. Evaluated per cell, because the defect is a
+        # coercion rather than a missing clause.
+        blocks = [
+            block
+            for block in steps("ci.yml", "docker-manifest")
+            if any("REHEARSAL_SUFFIX:" in line for line in block)
+        ]
+        self.assertEqual(
+            len(blocks),
+            1,
+            "ci.yml: expected exactly one step to bind REHEARSAL_SUFFIX",
+        )
+        block = blocks[0]
+        binding = next(
+            line.split(":", 1)[1].strip()
+            for line in block
+            if re.match(r"^\s+REHEARSAL_SUFFIX:", line)
+        )
+        # Named where it matters: an empty suffix proves nothing if the tag is
+        # composed from something else.
+        for marker in ("imagetools create", "imagetools inspect"):
+            self.assertTrue(
+                any(
+                    marker in line and ":sha-${GITHUB_SHA}${REHEARSAL_SUFFIX}" in line
+                    for line in block
+                ),
+                f"ci.yml: {marker} does not name sha-${{GITHUB_SHA}}${{REHEARSAL_SUFFIX}}",
+            )
+
+        def suffix(event, ref):
+            body = re.sub(r"^\$\{\{(.*)\}\}$", r"\1", binding.strip())
+            body = body.replace("github.event_name", "event")
+            body = body.replace("github.run_attempt", "attempt")
+            body = body.replace("github.run_id", "run_id")
+            body = body.replace("github.ref", "ref")
+            body = body.replace("&&", " and ").replace("||", " or ")
+            body = re.sub(r"!(?!=)", " not ", body)
+            return eval(  # noqa: S307 - restricted namespace, workflow-authored text
+                body,
+                {"__builtins__": {}},
+                {
+                    "startsWith": lambda a, b: str(a).startswith(b),
+                    "format": lambda spec, *args: re.sub(
+                        r"\{(\d+)\}", lambda m: str(args[int(m.group(1))]), spec
+                    ),
+                    "event": event,
+                    "ref": ref,
+                    "run_id": "42",
+                    "attempt": "1",
+                },
+            )
+
+        release = suffix("push", "refs/tags/v4.0.0")
+        self.assertEqual(
+            release,
+            "",
+            "ci.yml: a tag push stages under a name that is not "
+            f"sha-${{GITHUB_SHA}}: suffix {release!r}",
+        )
+        for event, ref in (
+            ("push", "refs/heads/topic"),
+            ("workflow_dispatch", "refs/heads/topic"),
+            ("workflow_dispatch", "refs/tags/v4.0.0"),
+        ):
+            value = suffix(event, ref)
+            # Every non-release cell gets a name of its own, run and attempt
+            # included: two rehearsals of one commit must not share a tag a
+            # release could read back mid-flight.
+            self.assertEqual(
+                value,
+                "-rehearsal-42-1",
+                f"ci.yml: {event} on {ref} shares the release staging name",
+            )
+
+    def test_every_release_sensitive_step_carries_the_push_guard(self):
+        # Inventoried by what a step DOES, not by the conditions present.
+        # Counting guards cannot see a publishing step added without one: the
+        # population has to come from the actions, and the guard is then the
+        # property asserted over it.
+        markers = (
+            re.compile(r"\bcosign\s+(?:sign|attest|verify)"),
+            re.compile(r"\bsyft\s"),
+            re.compile(r"scripts/release/check_tag_manifest\.py"),
+            re.compile(r"\$\{VERSION\}"),
+            re.compile(r"\bmcp-publisher\b"),
+            re.compile(r"^\s*uses:\s*sigstore/cosign-installer@"),
+            re.compile(r"^\s*uses:\s*anchore/sbom-action/"),
+        )
+        found = []
+        for job in ("docker-build", "docker-manifest", "publish-mcp-registry"):
+            for block in steps("ci.yml", job):
+                if not any(m.search(line) for line in block for m in markers):
+                    continue
+                named = [
+                    line.split(":", 1)[1].strip()
+                    for line in block
+                    if re.match(r"^\s+(?:- )?name:", line)
+                ]
+                label = f"{job} -> {named[0] if named else block[0].strip()}"
+                own = [
+                    line.split(":", 1)[1].strip()
+                    for line in block
+                    if re.match(r"^\s*(?:- )?if:", line)
+                ]
+                # A job-level condition covers its own steps, so the registry
+                # job's steps are guarded by the job. Everything inside the
+                # two rehearsable jobs has to carry it itself.
+                guard = own or (
+                    [job_if("ci.yml", job)] if job == "publish-mcp-registry" else []
+                )
+                found.append((label, guard))
+        self.assertGreaterEqual(
+            len(found),
+            9,
+            f"ci.yml: the release-sensitive inventory shrank to {sorted(f[0] for f in found)}",
+        )
+        for label, guard in found:
+            self.assertTrue(guard, f"ci.yml: {label} publishes with no condition")
+            for condition in guard:
+                self.assertIn(
+                    "github.event_name == 'push'",
+                    " ".join(condition.split()),
+                    f"ci.yml: {label} admits an event other than a push: {condition}",
+                )
+                self.assertIn(
+                    "refs/tags/v",
+                    condition,
+                    f"ci.yml: {label} is not scoped to a release tag: {condition}",
+                )
+
     def test_a_comment_is_stripped_and_a_quoted_hash_is_not(self):
         # Every assertion here reads uncommented text, so both directions are
         # load-bearing: a comment left in place satisfies an assertion the
