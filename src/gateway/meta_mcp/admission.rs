@@ -114,16 +114,17 @@ impl MetaMcp {
         representation: &Value,
         request_id: &RequestId,
     ) -> Result<SyncAdmission> {
-        let operation = json!({
-            "kind": "backend", "server": server, "tool": tool, "arguments": arguments,
-            "retry": retry.key_discriminator(),
-        });
         self.admit_operation(
             is_modern,
             verified_identity,
             credential_principal,
             retry,
-            &operation,
+            || {
+                json!({
+                    "kind": "backend", "server": server, "tool": tool, "arguments": arguments,
+                    "retry": retry.key_discriminator(),
+                })
+            },
             representation,
             self.read_only_target(server, tool),
             request_id,
@@ -137,7 +138,12 @@ impl MetaMcp {
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         credential_principal: Option<&str>,
         retry: &crate::protocol::mrtr::RetryFields,
-        operation: &Value,
+        // A THUNK, not a value. Building the operation envelope deep-copies
+        // `arguments`, and the two early returns below discard it: a call with
+        // no idempotency key resolves to `Unprotected` without ever reading it.
+        // Paying for that copy before the branch that decides whether it is
+        // needed is what this parameter exists to avoid (NFR.WORKLOAD.1).
+        operation: impl FnOnce() -> Value,
         representation: &Value,
         read_only: bool,
         request_id: &RequestId,
@@ -166,10 +172,11 @@ impl MetaMcp {
                     .map(str::to_owned)
             })
             .ok_or_else(|| Error::json_rpc(-32003, "A verified execution principal is required"))?;
+        let operation = operation();
         let request = Request {
             principal: &principal,
             key,
-            operation,
+            operation: &operation,
             representation,
             mode: Mode::Sync,
         };
@@ -317,7 +324,10 @@ impl MetaMcp {
             verified_identity,
             credential_principal,
             retry,
-            &operation,
+            // Already built above, because the playbook digest folds into it.
+            // Handed over as a thunk to match the parameter; the saving on this
+            // path is the callee's, not the caller's.
+            || operation,
             &self.meta_representation(tool_name, false, session),
             read_only,
             id,
