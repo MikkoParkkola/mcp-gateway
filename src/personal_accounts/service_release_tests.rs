@@ -296,6 +296,19 @@ fn a_lease_held_across_a_revoke_is_retired_and_cannot_be_reacquired() {
 /// scopes, same descriptor revision, same token revision, same authorization
 /// epoch — so a recheck comparing anything less than the whole lease serves the
 /// new grant's credential to the old holder.
+///
+/// "Cached credential" in the conjunct has a second, vault-layer sense this
+/// test does not exercise directly: `VaultStrategy::prepare`'s
+/// `cache_binding` (`vault.rs:311`) is the sole producer of the per-user pool
+/// key (`PoolKey::PerUser`, `backend/pool.rs:42-44`) downstream callers copy
+/// rather than re-derive, and it is built from `generation`,
+/// `authorization_epoch`, `token_revision` and `descriptor_revision`. A
+/// rotation or a revoke-then-reconsent therefore changes the key itself, so
+/// the previous grant's cache slot is unreachable rather than stale-but-hit —
+/// satisfied by construction, not by an eviction this suite would need to
+/// test. Checked as far as: `cache_binding` has one call site and its output
+/// is threaded through typed fields, not recomputed; not checked: whether
+/// every production path that populates that cache goes through it.
 #[test]
 fn reconsent_under_a_held_refresh_retires_the_cached_credential_and_the_rotation() {
     block_on(async {
