@@ -5,6 +5,29 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # NFR.SEC.7: what is left, and the exact steps that close it
 
+> **SUPERSEDED 2026-09-22. Do not follow the steps below. Use
+> [`docs/runbooks/nfr-sec-7-cutover.md`](../../runbooks/nfr-sec-7-cutover.md).**
+>
+> This document is kept for its evidence table, which is still accurate, and because it
+> is cited elsewhere. Its *procedure* is not, in three ways that each cost something:
+>
+> 1. **Step 5 destroys the rollback target.** `~/.local/bin/start-mcp-gateway` is a
+>    symlink into `3.4.0-f30539af/`. Editing "the two `typeset -r` lines" through it
+>    rewrites the *old* version's launcher, so the versioned directory this document
+>    promises is "left in place precisely so rollback stays available" is no longer
+>    pristine when you need it. The superseding runbook stages a separate launcher and
+>    moves the symlink — and says so at its own step 4: *"NOT `$EDITOR` on the symlink:
+>    that rewrites `$OLD` and destroys the rollback target."*
+> 2. **Step 1 builds from the wrong line.** `origin/main` is ~198 commits behind
+>    `origin/docs/ranking-1-release-line`, which is where the release work lives.
+> 3. **The acceptance condition is not sufficient on its own**, for the reason recorded
+>    in the superseding runbook's step 7 and expanded there: the drift checker probes an
+>    enumerated control set and cannot see a control merged outside `src/security/`.
+>
+> The claim in the last paragraph that closing this row takes "the release blocking
+> count to zero" is also false: `NFR.PKG.1` is a second baseline blocking row, so
+> closing this one takes the count from two to one.
+
 `NFR.SEC.7` is the last blocking row on the v4.0.0 line. Its second half — automatic
 detection of merged-versus-listening drift — has been MET since 2026-09-11. Its first
 half is not a code gap. Every build that has been probed carries the guard:
