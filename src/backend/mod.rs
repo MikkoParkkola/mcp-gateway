@@ -43,7 +43,8 @@ pub struct Backend {
     runtime_plan: Option<RuntimePlan>,
     /// Per-identity transport/session pool (MIK-6735). Always holds the
     /// canonical [`PoolKey::Shared`] slot; gains one [`PoolKey::PerUser`] slot
-    /// per caller identity when `session_mode = per_user`. Each slot carries its
+    /// per caller identity when identity propagation is configured, whatever
+    /// its `session_mode`. Each slot carries its
     /// own transport and start lock, so concurrent warm-start/client requests do
     /// not spawn duplicate connections for the same slot and distinct users
     /// never share a session (IDP.7).
