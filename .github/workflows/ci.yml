@@ -659,7 +659,15 @@ jobs:
           # and the inspect below — signing bytes whose children it never
           # recorded. Empty on a tag push, so the release name is unchanged;
           # the run id and attempt make each rehearsal's name its own.
-          REHEARSAL_SUFFIX: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) && '' || format('-rehearsal-{0}-{1}', github.run_id, github.run_attempt) }}
+          #
+          # The predicate is negated so the suffix sits in the true branch.
+          # `A && '' || B` returns B whichever way A goes, because the empty
+          # string is falsy — which appended the rehearsal suffix to release
+          # tags. An expression yields what its operands coerce to, so a
+          # falsy value never belongs in the left branch of `&& … || …`.
+          # scripts/release/test_check_tag_manifest.py evaluates all four
+          # cells and requires the empty one.
+          REHEARSAL_SUFFIX: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) && format('-rehearsal-{0}-{1}', github.run_id, github.run_attempt) || '' }}
         run: |
           set -euo pipefail
           IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
