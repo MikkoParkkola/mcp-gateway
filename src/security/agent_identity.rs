@@ -415,21 +415,34 @@ fn validate_without_proof(
 
 /// Is the declared label consistent with the principal that was proven?
 ///
-/// One ordered match; the first arm that fires decides.
+/// One ordered match; the first arm that fires decides. **The order is the
+/// control.** An earlier version of this comment listed the mTLS
+/// accept-and-audit arm *ahead* of the mapping arm — which is the ordering
+/// that made a per-principal mTLS entry unreachable in every configuration,
+/// described here as though it were the design. It is corrected rather than
+/// deleted, because the next reader needs to know the ordering is load-bearing
+/// and not incidental.
 ///
+/// 0. **Operator-listed under the hatch — accept and audit.** A `declared`
+///    allowlist entry is an explicit statement that this label may be
+///    presented. Refusing it as a contradiction would re-open the lockout one
+///    step past the allowlist, so proving more would still grant less.
 /// 1. **Exact match — accept.** A principal is always permitted to declare its
-///    own name: it is the one label that cannot be a lie, so it is a member of
-///    its own set by construction and never has to be listed. This arm is
-///    deliberately ahead of arm 2.
-/// 2. **mTLS — accept and audit.** An mTLS subject and a short label live in
-///    namespaces the gateway cannot compare without inventing an ordering, and
-///    an invented ordering later reads as a security guarantee. So the mismatch
-///    is a detection signal, not a refusal. Contradiction refusal for a *named*
-///    certificate subject is MIK-7529.
-/// 3. **Mapped, else refuse.** For a JWT principal the label namespace and the
-///    `client_id` namespace are the same kind of name, so a differing label is
-///    comparable. `principal_labels` is an opt-in widening; a principal with no
-///    entry may declare only its own name, which arm 1 already allowed.
+///    own name: the one label that cannot be a lie, so it is a member of its
+///    own set by construction and never has to be listed.
+/// 2. **Operator mapping decides, for EITHER proof source.** Ahead of the mTLS
+///    fallback deliberately. `principal_labels` is keyed by `(source, id)` and
+///    accepts both variants of [`ProofSource`], so an operator who can name a
+///    certificate subject gets the contradiction refusal the criterion
+///    promises. This arm is why the mTLS refusal path is live config rather
+///    than dead code.
+/// 3. **Unmapped mTLS — accept and audit.** A SAN URI and a short label live
+///    in namespaces the gateway cannot compare without inventing an ordering,
+///    and an invented ordering later reads as a security guarantee. The
+///    default, not the representability: the mismatch is a detection signal.
+/// 4. **Unmapped JWT — refuse.** The label namespace and the `client_id`
+///    namespace are the same kind of name, so a differing label is comparable,
+///    and a missing mapping is never read as permission.
 fn check_declared_label(
     proven: &ProvenPrincipal,
     declared: Option<&DeclaredLabel>,

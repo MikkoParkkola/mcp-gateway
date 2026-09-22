@@ -85,7 +85,7 @@ hit them and should not have to guess whether they were missed.
 | 3 | Authentication | `auth_middleware` — `src/gateway/auth.rs:894`, `:945` | a bearer token or API key | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 4 | Per-client rate limit | `client_preflight` — `src/gateway/auth.rs:956` | remaining budget in the client's window | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 5 | Client circuit breaker | `client_preflight` — `src/gateway/auth.rs:963` | a closed circuit for that client | **`tests/nfr_sec1_controls.rs:495`** — asserts 503 + `-32003` through `POST /mcp`. See *The fourth miscitation* |
-| 6 | Agent identity allowlist | `validate_agent_identity` — `src/security/agent_identity.rs:141`, called at `handlers.rs:504` | an `X-Agent-ID` that is present and known | **`tests/nfr_sec1_controls.rs`** — NEW |
+| 6 | Agent identity allowlist | `validate_agent_identity` — `src/security/agent_identity.rs:141`, called at `handlers.rs:504` | a caller whose agent identity is **proven** (mTLS subject or verified JWT `sub`) and named by `known_agents`. NOT an `X-Agent-ID` header: that is a declared label and cannot satisfy this control (MIK-6746.IDENTITY.1) | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 7 | Request body ceiling (10 MiB) | `handlers.rs:513` | a body within the ceiling | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 8 | JSON well-formedness | `handlers.rs:526` | parseable JSON | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 9 | Meta-MCP surface enabled | `handlers.rs:541` | the surface being enabled | **`tests/nfr_sec1_controls.rs`** — NEW |
