@@ -83,7 +83,7 @@
 849 src/mtls/cert_manager.rs
 848 tests/mik_7214_acs.rs
 840 src/personal_accounts/worker_tests.rs
-838 src/identity_grants.rs
+908 src/identity_grants.rs
 838 src/tool_registry.rs
 836 src/gateway/meta_mcp_helpers_chain_tests.rs
 832 src/personal_accounts/config.rs

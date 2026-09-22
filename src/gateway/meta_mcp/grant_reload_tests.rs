@@ -3,17 +3,14 @@
 //! `MIK-7334.CATALOGUE.1` revocation conjunct — the live grant-reload trigger.
 //!
 //! Cells from `docs/internal/design/2026-09-22-live-identity-grant-reload.md`
-//! §3 that are drivable today. T7, T8, T8b and T11 are here; the rest are not,
-//! and the reason is recorded rather than left to be rediscovered.
+//! §3 that are drivable today. T3b, T7, T8, T8b and T11 are here; the rest
+//! are not, and the reason is recorded rather than left to be rediscovered.
 //!
 //! WHY THE REST ARE ABSENT. T1/T2/T3/T4/T5/T6/T9/T10/T10b each need a piece
 //! this slice does not build: a refusal vocabulary surfaced to the operator
 //! (T2/T3/T4/T6), the busy-lock observable (T6/T10b), barriers that force an
 //! interleaving (T10), or the single real operator entry point driven end to
-//! end (T9). T3b is blocked on the atomic CLI write: it must drive
-//! `write_identity_grant_file`, a PRIVATE `async fn` in
-//! `src/commands/identity.rs`, and reaching it needs a visibility widening
-//! nobody has asked for.
+//! end (T9).
 //!
 //! WHERE THE NO-CHANGE COMPARISON LIVES, and why it is not in the publisher.
 //! T8/T8b were first written against `set_identity_grants`, because
@@ -211,8 +208,7 @@ async fn t8b_a_reordered_file_must_not_read_as_a_change() {
     );
 }
 
-// T11 — the guard, and labelled as one rather than counted as new coverage.
-//
+// T11 — the guard, and labelled as one rather than counted as new coverage.//
 // Goes red when expiry regressed: the one liveness property that already works
 // against in-memory data, and the cheapest thing for this change to break.
 // Time advances against the store with NO reload at all.
@@ -248,5 +244,84 @@ fn t11_guard_expiry_is_live_without_any_reload() {
             .evaluate(&request(Utc::now() + ChronoDuration::seconds(120)))
             .allowed,
         "T11: an elapsed expiry must deny with no reload at all"
+    );
+}
+
+// T3b — the torn read that is VALID, and the dangerous half.
+//
+// Goes red when an interrupted grant-file write can be observed as a SHORT
+// but well-formed file. `IdentityGrantFile` defaults both `schema_version`
+// and `grants`, and the schema check compares against the constant it
+// defaults to, so a write interrupted after the header parses cleanly as zero
+// grants — bit-for-bit the deliberate revoke-everything file. With a
+// truncating write, an interrupted `identity grant add` revokes EVERYTHING,
+// through the success path.
+//
+// THE ASSERTION IS THAT THE STATE IS UNREACHABLE, NOT THAT THE PARSER REJECTS
+// IT. A parse rejection would pin the wrong layer and would break the
+// legitimate `grants: []` escape hatch, which is the same bytes. No parser can
+// separate them; only the writer can, by never publishing a prefix.
+//
+// The observable is the destination's IDENTITY. A truncating write keeps the
+// inode and empties it in place, so a reader holding the path can see a
+// prefix. An atomic replace writes a scratch file, fsyncs it, and renames it
+// over the destination, so the inode CHANGES and every observer sees either
+// the whole old file or the whole new one. Deterministic: it goes red against
+// `tokio::fs::write` without needing a race to be lost.
+#[tokio::test]
+async fn t3b_a_grant_file_write_is_never_observable_as_a_valid_prefix() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("grants.json");
+    write_grants(&path, &[grant("g1", "alice", "cal")]);
+
+    // PREMISE, in this cell's own body: the destination exists and holds a
+    // row, so the write below really replaces real content.
+    let before = std::fs::metadata(&path).expect("seeded file").ino();
+    assert_eq!(
+        crate::identity_grants::read_identity_grants_file(&path)
+            .await
+            .expect("the seeded file parses")
+            .grants
+            .len(),
+        1,
+        "T3b premise: the destination must hold a row before it is replaced"
+    );
+
+    let file = crate::identity_grants::IdentityGrantFile::new(vec![
+        grant("g1", "alice", "cal"),
+        grant("g2", "bob", "mail"),
+    ]);
+    crate::identity_grants::write_identity_grants_file(&path, &file)
+        .await
+        .expect("the production writer replaces the grants file");
+
+    assert_ne!(
+        std::fs::metadata(&path).expect("replaced file").ino(),
+        before,
+        "T3b: the destination must be REPLACED by rename, not truncated in \
+         place; a truncating write is observable as a valid short file"
+    );
+    assert_eq!(
+        crate::identity_grants::read_identity_grants_file(&path)
+            .await
+            .expect("the replaced file parses")
+            .grants
+            .len(),
+        2,
+        "T3b: and the replacement must be the COMPLETE new content"
+    );
+
+    // No scratch debris beside the destination: a stranded partial grants file
+    // is its own hazard.
+    let strays: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("readdir")
+        .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+        .filter(|name| name != "grants.json")
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "T3b: the atomic write must leave no scratch file behind, found {strays:?}"
     );
 }

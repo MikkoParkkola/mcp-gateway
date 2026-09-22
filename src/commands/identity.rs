@@ -172,7 +172,7 @@ async fn upsert_local_grant(input: LocalGrantInput) -> Result<(PathBuf, Identity
         .grants
         .retain(|existing| existing.grant_id != grant.grant_id);
     grant_file.grants.push(grant.clone());
-    write_identity_grant_file(&path, &grant_file).await?;
+    mcp_gateway::identity_grants::write_identity_grants_file(&path, &grant_file).await?;
     Ok((path, grant))
 }
 
@@ -195,7 +195,7 @@ async fn revoke_local_grant(
 
     grant.revoked_at = Some(revoked_at);
     let updated = grant.clone();
-    write_identity_grant_file(&path, &grant_file).await?;
+    mcp_gateway::identity_grants::write_identity_grants_file(&path, &grant_file).await?;
     Ok((path, updated))
 }
 
@@ -205,38 +205,6 @@ async fn read_or_create_grant_file(path: &Path) -> Result<IdentityGrantFile, Str
         Err(_error) if !path.exists() => Ok(IdentityGrantFile::new(Vec::new())),
         Err(error) => Err(error),
     }
-}
-
-async fn write_identity_grant_file(
-    path: &Path,
-    grant_file: &IdentityGrantFile,
-) -> Result<(), String> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        tokio::fs::create_dir_all(parent).await.map_err(|error| {
-            format!(
-                "failed to create identity grants directory {}: {error}",
-                parent.display()
-            )
-        })?;
-    }
-
-    let content = if is_json_path(path) {
-        serde_json::to_string_pretty(grant_file)
-            .map_err(|error| format!("failed to serialize identity grants JSON: {error}"))?
-    } else {
-        serde_yaml::to_string(grant_file)
-            .map_err(|error| format!("failed to serialize identity grants YAML: {error}"))?
-    };
-
-    tokio::fs::write(path, content).await.map_err(|error| {
-        format!(
-            "failed to write identity grants file {}: {error}",
-            path.display()
-        )
-    })
 }
 
 fn print_grants(path: &Path, grants: &[IdentityGrant], format: OutputFormat) {
@@ -301,6 +269,14 @@ fn print_grant_result(action: &str, path: &Path, grant: &IdentityGrant, format: 
             println!("agent: {}", agent_summary(&grant.agent));
             println!("capability: {}", grant.capability);
             println!("scope: {:?}", grant.scope);
+            // Both verbs route through here, and BOTH have this gap: the CLI
+            // is a different process from the gateway, so it can only change
+            // the file. The ticket only ever named `revoke`, but an `add` that
+            // nobody reloads is just as inert.
+            println!(
+                "note: written to disk only. A running gateway applies this on \
+                 its next config reload."
+            );
         }
     }
 }
@@ -375,12 +351,6 @@ fn expand_home_path(path: &Path) -> PathBuf {
             .join(rest);
     }
     path.to_path_buf()
-}
-
-fn is_json_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
 }
 
 fn grant_status(grant: &IdentityGrant, now: DateTime<Utc>) -> &'static str {
