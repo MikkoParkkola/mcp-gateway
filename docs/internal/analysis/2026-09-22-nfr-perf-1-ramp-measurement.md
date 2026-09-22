@@ -800,10 +800,24 @@ Nothing smaller is distinguishable from noise.
 | `P4` | 92 | 1.1592 | idx69→92 | +5.84pp | **no** (just under) |
 | `REL` | 115 | 1.1237 | idx92→115 | −3.55pp | **no** |
 
-Ladder monotonicity: `rho(first-parent index, median ratio)` = **0.900** over
-the 5 measured points (the `spearman_rho` field of `analysis.json`; an
-independent recomputation gives 0.9276). This is **not** the load correlation
-of §6.3, and the two must not be confused — §6.3 records that near-miss.
+Ladder monotonicity: `rho(first-parent index, median ratio)` = **0.900**, the
+`spearman_rho` field of `analysis.json`.
+
+**Computed over the five measured ramp points only — `A`, `B`, `P3`, `P4`,
+`REL` — with the control `Aprime` excluded.** The control is not a ramp point.
+Including it would place a second observation at first-parent index 0 with a
+different y (1.0081 against `A`'s 1.0000), which manufactures an x-axis tie the
+design never contained *and* feeds the control's noise into a statistic meant to
+describe the ramp. A six-point version of this figure reads 0.9276 and is not a
+second estimate of the same quantity: it is an estimate of a quantity nobody
+asked for, so it is not recorded here.
+
+A rho with an unstated population is how that ambiguity arose in the first
+place. Every correlation in this report names the set it is computed over — see
+§6.3, where the same discipline applies to the load correlation.
+
+This is **not** the load correlation of §6.3, and the two must not be confused —
+§6.3 records that near-miss.
 
 **Exactly one segment is resolvable: idx27→69, at +8.42pp, carrying 68% of the
 total +12.37pp rise.** Everything else is inside the floor, including the
