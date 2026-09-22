@@ -13,6 +13,20 @@ on:
         "codex/v4-*",
         fix/mrtr2-continuation-handle,
       ]
+  # Rehearsal path for the container publish (NFR.PKG.1). docker-build and
+  # docker-manifest fire on a `v*` tag only, so their first execution would
+  # otherwise be the real release publish, and no probe tag can stand in:
+  # the tag/manifest gate refuses any tag the manifest version does not
+  # match. A dispatch with this input true runs both jobs up to the
+  # both-platforms assertion and stops before every release name, signature
+  # and registry listing. Default false: a dispatch that leaves it alone
+  # runs the same jobs as a branch push, which is none of them.
+  workflow_dispatch:
+    inputs:
+      rehearse_manifest:
+        description: Build both arches and assemble the provenance-tagged index, promoting no release tag
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -431,7 +445,15 @@ jobs:
     # guard resolves that one expression against the matrix entries below and
     # checks each image on its own (scripts/ci/check-hosted-runners.sh).
     runs-on: ${{ matrix.os }}
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Both spellings of the input are compared. A dispatch input arrives typed
+    # as a boolean in the `inputs` context and as the string "false" in the
+    # event payload, and a bare truthiness test on the string form is true —
+    # which would build and push on a dispatch that asked for nothing. Neither
+    # comparison matches false or "false", so the default case runs nothing.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v')
+      || (github.event_name == 'workflow_dispatch'
+      && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))
     # Each leg builds natively and starts its own image on its own architecture,
     # which is the only way an arm64 startup break is observable -- an amd64
     # runner starting an amd64 image says nothing about arm64 (NFR.PKG.1).
@@ -461,7 +483,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Scoped to tags because a rehearsal dispatch has no tag to check:
+      # GITHUB_REF_NAME is the dispatch branch there, which the gate rejects as
+      # unusable input. Nothing in this job reads its outputs — the build
+      # pushes by digest under no name — so the tag path is unchanged and the
+      # rehearsal reaches the build.
       - name: Extract tag
+        if: startsWith(github.ref, 'refs/tags/v')
         id: meta
         # This workflow cannot read release.yml's job outputs — it fires on the
         # same tag independently — so it runs the same gate itself. Publishing a
@@ -558,7 +586,13 @@ jobs:
   docker-manifest:
     name: Docker manifest list
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Same condition as docker-build, whose digests this job assembles. The
+    # steps below that promote, sign or list a release carry the tag scope
+    # themselves, so a rehearsal ends at the both-platforms assertion.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v')
+      || (github.event_name == 'workflow_dispatch'
+      && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))
     needs: docker-build
     # Read by publish-mcp-registry, which must not list a release candidate.
     outputs:
@@ -570,7 +604,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Scoped to tags: a rehearsal dispatch has no tag for the gate to check,
+      # and every step that reads these outputs is scoped the same way, so no
+      # release name is derived from an unchecked version.
       - name: Extract tag
+        if: startsWith(github.ref, 'refs/tags/v')
         id: meta
         run: python3 scripts/release/check_tag_manifest.py
 
@@ -645,19 +683,27 @@ jobs:
             esac
           done
 
+      # Everything below this line belongs to a release and is scoped to a tag
+      # push. A rehearsal dispatch ends at the assertion above: the index it
+      # built carries the provenance name only, and signing, attesting or
+      # naming it :VERSION is what a release does with an index nobody has
+      # asked for yet.
       - name: Install cosign
+        if: startsWith(github.ref, 'refs/tags/v')
         # cosign-release is pinned so flag behavior can't drift under a v3 default.
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v2.5.2
 
       - name: Install syft (SBOM)
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
 
       # The list and both children are signed. A client on arm64 resolves the
       # arm64 child, so signing only the list would leave what that client
       # actually runs unverifiable under a platform-specific reference.
       - name: Cosign keyless-sign the list and both children
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           LIST: ${{ steps.list.outputs.list }}
           AMD64: ${{ steps.list.outputs.amd64 }}
@@ -670,6 +716,7 @@ jobs:
           done
 
       - name: Generate + attest an SBOM (SPDX JSON) per published digest
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           LIST: ${{ steps.list.outputs.list }}
           AMD64: ${{ steps.list.outputs.amd64 }}
@@ -684,6 +731,7 @@ jobs:
           done
 
       - name: Verify the release signature + SBOM attestation
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           LIST: ${{ steps.list.outputs.list }}
           AMD64: ${{ steps.list.outputs.amd64 }}
@@ -714,6 +762,7 @@ jobs:
       # a child, but a single source with no annotations is copied rather than
       # composed. The step below is the runtime check on that distinction.
       - name: Publish the release tags (copy the verified index by digest)
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           LIST: ${{ steps.list.outputs.list }}
@@ -743,6 +792,7 @@ jobs:
       # an added annotation, a buildx that normalises — lands on a different
       # digest, and the release tag would then serve bytes no signature covers.
       - name: Assert the release tag resolves to the signed digest
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           LIST: ${{ steps.list.outputs.list }}
