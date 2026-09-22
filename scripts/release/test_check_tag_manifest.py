@@ -1509,15 +1509,20 @@ class WorkflowWiring(unittest.TestCase):
                     f"{workflow}: {block[0].strip()} builds the root image with "
                     "no target, so it builds the last stage in the file",
                 )
-            for command in commands(workflow):
-                if not re.search(r"docker\s+buildx\s+build(?![\w-])", command):
+            for block in steps(workflow):
+                text = "\n".join(block).replace("\n", " ")
+                if not re.search(r"docker\s+buildx\s+build(?![\w-])", text):
                     continue
-                if not re.search(r"(?:^|\s)\.\s*$", command.strip()):
+                if not re.search(r"\s\.\s*$", text.strip()):
                     continue
+                # Which stage, not merely that one is named: the variant's leg
+                # built from `runtime` is a `-full` tag serving the default
+                # image, which is the same defect spelled the other way round.
+                want = "runtime-full" if "full" in block[0].lower() else "runtime"
                 self.assertRegex(
-                    command.replace("\n", " "),
-                    r"--target\s+\S",
-                    f"{workflow}: a buildx build of the root image names no target",
+                    text,
+                    rf"--target\s+{re.escape(want)}(?:\s|$)",
+                    f"{workflow}: {block[0].strip()} does not build {want}",
                 )
 
     def test_the_branch_builder_still_refuses_to_push_on_a_tag(self):
@@ -1934,6 +1939,15 @@ class VariantGateCoverage(unittest.TestCase):
         ):
             self.assertRegex(self.body, probe, f"the variant gate never runs {label}")
 
+    def test_a_probe_that_fails_still_fails_the_step(self):
+        # `fail` without its `exit` prints an annotation and reports success,
+        # which turns every probe in the file into an advisory log line.
+        self.assertRegex(
+            self.body,
+            r"(?s)fail\(\)\s*\{.*?\bexit\s+[1-9]",
+            "the variant gate's fail() does not exit non-zero",
+        )
+
     def test_it_still_starts_the_image(self):
         self.assertRegex(
             self.body,
@@ -1992,6 +2006,39 @@ class SmokeGateCoverage(unittest.TestCase):
             any("--config" not in block for block in runs),
             "smoke-image.sh: every run injects a --config, so the image's own "
             "default entrypoint is never exercised",
+        )
+
+    def test_the_gate_publishes_a_port_no_other_process_can_hold(self):
+        # A fixed host port is answerable by whatever already holds it. Docker
+        # reports success for `-p 127.0.0.1:39401:39400` when a native process
+        # owns 39401 -- the container binds inside the VM and the host-side
+        # forward loses to the incumbent -- so the probe reaches the stranger
+        # and the leg passes while the image under test serves nobody. Observed
+        # on 39401 against a developer machine's own gateway, and the same
+        # collision voided a performance run before any rep. Letting Docker
+        # allocate the port makes attribution structural rather than assumed,
+        # and keeps two concurrent gate runs from fighting over one number.
+        published = [
+            spec
+            for line in re.findall(
+                r"^\s*(?:if\s+)?docker run\b.*$", self.folded, re.MULTILINE
+            )
+            for spec in re.findall(r"(?:-p|--publish)\s+\"?([^\"\s]+)\"?", line)
+        ]
+        self.assertTrue(published, "smoke-image.sh: no published port at all")
+        for spec in published:
+            self.assertRegex(
+                spec,
+                r"^(?:[\d.]+:)?:\d+$",
+                f"smoke-image.sh: publish spec {spec!r} pins a host port, so "
+                "any process already holding it can satisfy the MCP leg",
+            )
+        # An allocated port is only usable if the gate reads back which one.
+        self.assertRegex(
+            self.body,
+            r"docker port\b",
+            "smoke-image.sh: the published port is never read back, so the "
+            "probe cannot know where to reach the container",
         )
 
     def test_the_gate_refuses_a_healthcheck_that_proves_nothing(self):

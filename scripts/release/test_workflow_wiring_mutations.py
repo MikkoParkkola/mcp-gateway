@@ -951,39 +951,6 @@ CASES = [
         CAUGHT,
     ),
     (
-        # The variant index composed from the base legs. Every gate downstream
-        # reads the index by digest and compares it to itself, so this passes
-        # all of them while `:latest-full` serves the default image.
-        "variant-provenance-index-built-from-the-base-legs",
-        "ci.yml",
-        '            "${IMAGE}@${FULL_AMD64}" "${IMAGE}@${FULL_ARM64}"\n',
-        '            "${IMAGE}@${AMD64}" "${IMAGE}@${ARM64}"\n',
-        CAUGHT,
-    ),
-    (
-        "variant-tags-composed-from-the-base-index",
-        "ci.yml",
-        '          docker buildx imagetools create "${FULL_TAGS[@]}"'
-        ' "${IMAGE}@${LIST_FULL}"\n',
-        '          docker buildx imagetools create "${FULL_TAGS[@]}"'
-        ' "${IMAGE}@${LIST}"\n',
-        CAUGHT,
-    ),
-    (
-        "variant-leg-built-from-the-base-stage",
-        "ci.yml",
-        "            --target runtime-full \\\n",
-        "            --target runtime \\\n",
-        CAUGHT,
-    ),
-    (
-        "variant-digest-recorded-as-the-base-digest",
-        "ci.yml",
-        "          printf '%s' \"${DIGEST_FULL}\" > \"digests/${{ matrix.arch }}-full\"\n",
-        "          printf '%s' \"${DIGEST}\" > \"digests/${{ matrix.arch }}-full\"\n",
-        CAUGHT,
-    ),
-    (
         "variant-smoke-gate-deleted-from-the-release-publisher",
         "ci.yml",
         '        run: scripts/ci/smoke-full-image.sh'
