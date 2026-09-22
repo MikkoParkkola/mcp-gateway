@@ -498,7 +498,7 @@ impl PersonalAccountStore {
         let mut authority = self.lock_authority();
         #[cfg(test)]
         store_probe::entered(store_probe::StoreOp::CommitGrant, &self.config.store_dir);
-        storage::commit::commit_grant(&self.config, &mut authority, account, record)
+        storage::commit::commit_grant(&self.config, &mut authority, account, record, None)
     }
 
     /// Replace tokens only if the expected version still holds.
