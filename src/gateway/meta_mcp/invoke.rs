@@ -3072,7 +3072,34 @@ impl MetaMcp {
                     cache_binding: Some(cred.cache_binding),
                 })
             }
-            Err(e) => refuse(format!("credential minting failed: {e}")),
+            Err(e) => {
+                // The absence discriminant is carried, not flattened. `refuse`
+                // feeds `msg` straight into the `idp_refuse` transparency-log
+                // reason, so this branch is what lets that record tell "this
+                // caller never connected" from "this caller's grant was
+                // revoked" from "custody was busy" — the three used to arrive
+                // as one string differing only in prose.
+                //
+                // A DIAGNOSIS, NOT AN OFFER. No consent URL, no offer object,
+                // no actionable invitation: the gateway-brokered consent
+                // journey is deferred (ADR-008 Slice C, MIK-6745), and inviting
+                // a caller into a flow that cannot complete would be worse than
+                // a clean refusal.
+                //
+                // ponytail: the reason stays a string because
+                // `audit_identity_propagation` takes `Option<&str>`; a typed
+                // reason field is the upgrade path if the log ever needs to be
+                // queried by kind rather than grepped.
+                match &e {
+                    crate::identity_propagation::PropagationError::AccountNotConnected(_) => {
+                        // Passed through as-is: its Display already leads with
+                        // the distinguishing phrase, and re-prefixing it here
+                        // said "not connected" three times in one sentence.
+                        refuse(e.to_string())
+                    }
+                    other => refuse(format!("credential minting failed: {other}")),
+                }
+            }
         }
     }
 

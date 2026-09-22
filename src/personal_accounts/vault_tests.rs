@@ -447,3 +447,87 @@ fn the_sole_operator_authority_is_not_an_issuer_url() {
         "the audit trail tells the assertion apart from the proof"
     );
 }
+
+/// TEST: the absence discriminant survives the custody -> propagation boundary
+/// and stays distinct from every other refusal (`MIK-6745.JOURNEY.1`, carrier).
+///
+/// WHAT WOULD BE WRONG WITHOUT IT. `VaultStrategy::prepare` maps every
+/// `CustodyError` through one `PropagationError::Refuse(String)`. Absence,
+/// revocation, reconnect-required, a busy custody and a store failure arrive as
+/// the same variant differing only in interpolated prose, so no consumer can
+/// branch on them without substring matching — including the `idp_refuse`
+/// transparency-log record the direct backend route writes, which is the half
+/// that matters for audit integrity.
+///
+/// THE PAIR IS THE POINT. Asserting only that an absent grant refuses would
+/// pass for an implementation that refuses everyone identically — which is
+/// precisely the pre-fix behaviour. So absence and revocation are asserted to
+/// produce DIFFERENT discriminants, against the same fixture and backend.
+///
+/// ADMITTED-CASE CONTROL: `a_sole_operator_grant_is_leasable_end_to_end` above.
+/// It proves this same store, descriptor, backend and principal DO lease and
+/// release when a grant exists. Without that control green, every assertion
+/// here would pass vacuously against a strategy that refused everything.
+///
+/// NOT AN OFFER. This asserts a discriminant, not a consent URL. The gateway
+/// brokered consent journey is deferred (ADR-008 Slice C); nothing here
+/// promises a flow the gateway cannot complete.
+#[test]
+fn absence_is_distinguishable_from_revocation_at_the_propagation_boundary() {
+    // ABSENT: an initialized but empty store, so `lookup` ANSWERS "absent"
+    // rather than failing. A store that failed to open would refuse for a
+    // different reason and prove nothing about absence.
+    let absent_root = tempfile::TempDir::new().expect("root");
+    seed(absent_root.path(), &[]);
+    let absent = block_on(async {
+        let (vault, _) = strategy(absent_root.path(), true);
+        let principal = vault
+            .principal(CallerProof::Operator(CallerProvenance::Credential))
+            .expect("an asserted solo gateway mints for an authenticated caller");
+        vault
+            .prepare(principal, &backend())
+            .await
+            .expect_err("no grant is stored, so nothing can be leased")
+    });
+
+    // REVOKED: the same seeded grant the control leases, then tombstoned
+    // through the real store API. Not a fabricated error value.
+    let revoked_root = tempfile::TempDir::new().expect("root");
+    seed_sole_operator(revoked_root.path());
+    {
+        let store = PersonalAccountStore::open(store_config(revoked_root.path()))
+            .expect("the seeded store reopens");
+        store
+            .revoke(&key_for(Principal::SoleOperator))
+            .expect("the seeded grant revokes");
+    }
+    let revoked = block_on(async {
+        let (vault, _) = strategy(revoked_root.path(), true);
+        let principal = vault
+            .principal(CallerProof::Operator(CallerProvenance::Credential))
+            .expect("an asserted solo gateway mints for an authenticated caller");
+        vault
+            .prepare(principal, &backend())
+            .await
+            .expect_err("a revoked grant cannot be leased")
+    });
+
+    assert!(
+        matches!(absent, PropagationError::AccountNotConnected(_)),
+        "an absent grant must carry the absence discriminant across the custody \
+         boundary, not be flattened into a generic refusal: {absent:?}"
+    );
+    assert!(
+        !matches!(revoked, PropagationError::AccountNotConnected(_)),
+        "a revoked grant is not an absent one; reporting revocation as absence \
+         would invite a reconnect for a grant the user deliberately withdrew: \
+         {revoked:?}"
+    );
+    assert_ne!(
+        std::mem::discriminant(&absent),
+        std::mem::discriminant(&revoked),
+        "absence and revocation must differ by VARIANT, not only by the prose \
+         inside one shared variant — a string difference is not something a \
+         consumer or an audit record can branch on"
+    );
+}

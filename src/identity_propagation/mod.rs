@@ -127,10 +127,29 @@ impl std::fmt::Debug for PropagatedCredential {
 /// are fail-closed for a propagation-required backend; the distinction is for
 /// diagnostics, not for any silent-downgrade path.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PropagationError {
     /// A per-user credential could not be obtained for this identity/backend.
     /// The call MUST be refused — never downgraded to a shared credential.
     Refuse(String),
+    /// No grant exists for this principal and backend: the store answered, and
+    /// the answer was "absent".
+    ///
+    /// Distinct from [`Self::Refuse`] because absence is the one refusal a
+    /// *connect* would remedy, and because the tamper-evident `idp_refuse`
+    /// audit record must be able to tell "this caller never connected" from
+    /// "this caller's grant was revoked" from "custody was momentarily busy".
+    /// Collapsing those into one string is what this variant exists to stop.
+    ///
+    /// It is NOT an offer: it carries no consent URL and promises no flow. The
+    /// gateway-brokered consent journey is deferred (ADR-008 Slice C,
+    /// MIK-6745); surfacing an actionable invitation is a separate, unfunded
+    /// decision.
+    ///
+    /// Absence here means the store ANSWERED. A storage failure is never
+    /// reported as absence — see `AccountService::connected`, which keeps that
+    /// invariant at the boundary this variant is carried from.
+    AccountNotConnected(String),
     /// The propagation configuration is invalid (operator error).
     Misconfigured(String),
     /// The tamper-evident transparency-log audit write failed.
@@ -147,6 +166,10 @@ impl std::fmt::Display for PropagationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Refuse(m) => write!(f, "identity propagation refused (fail-closed): {m}"),
+            Self::AccountNotConnected(m) => write!(
+                f,
+                "identity propagation refused (fail-closed), no connected account: {m}"
+            ),
             Self::Misconfigured(m) => write!(f, "identity propagation misconfigured: {m}"),
             Self::AuditFailed(m) => write!(
                 f,

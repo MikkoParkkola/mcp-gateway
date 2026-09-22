@@ -17,9 +17,12 @@
 //! first. A revoked, superseded or reconnect-required account therefore fails
 //! at the boundary rather than after the token is already on the wire.
 //!
-//! NOTHING FALLS BACK. Every refusal below is `PropagationError::Refuse`, which
-//! the resolver turns into a closed request for a required backend. There is no
-//! path here that answers "no account" with the gateway's own credential.
+//! NOTHING FALLS BACK. Every refusal below is a `PropagationError` the resolver
+//! turns into a closed request for a required backend — `Refuse`, or
+//! `AccountNotConnected` for the one case the store answers "absent". There is
+//! no path here that answers "no account" with the gateway's own credential,
+//! and the absence variant is a diagnosis, not an offer: it carries no consent
+//! URL and promises no flow.
 //!
 //! ONE PRINCIPAL PER DEPLOYMENT, NOT PER REQUEST. A gateway whose configuration
 //! asserts a single user ([`Principal::SoleOperator`]) serves its stored grants
@@ -38,9 +41,42 @@ use crate::key_server::oidc::VerifiedIdentity;
 use super::AccountKey;
 use super::identity::{AccountDescriptor, Principal, account_key};
 use super::service::{
-    CredentialLease, CredentialReleaseObserver, RefreshProvider, ReleasedCredentials,
+    AccountServiceError, CredentialLease, CredentialReleaseObserver, RefreshProvider,
+    ReleasedCredentials,
 };
 use super::worker::{CustodyError, CustodyHandle};
+
+/// The ONE mapping from a custody refusal to a propagation refusal.
+///
+/// Every custody boundary in this file routes through here, on purpose. Three
+/// call sites each writing their own `map_err` is how the absence discriminant
+/// came to be preserved through `CustodyError::Account` and then destroyed one
+/// hop later: a per-site mapping only has to be forgotten once.
+///
+/// `context` keeps each boundary's existing wording for every refusal that
+/// stays a `Refuse`, so those messages are unchanged.
+///
+/// Absence drops the context deliberately. "Which custody call observed it" is
+/// not informative for a state the store simply does not hold — absence at
+/// refresh and absence at release are the same fact — and prepending
+/// "managed account is not usable" to "account is not connected" produced a
+/// message that said the same thing three times by the time it reached a
+/// caller. The variant names the state; the inner text is the remediation.
+///
+/// ONLY absence is lifted out of [`PropagationError::Refuse`]. Revocation,
+/// reconnect-required, a busy custody, a shutdown and a store failure stay
+/// `Refuse`, because none of them is remedied by connecting an account and
+/// reporting them as absence would invite the wrong action. In particular a
+/// store failure must never read as absence — `AccountService::connected`
+/// keeps that invariant upstream, and flattening it back here would undo it.
+fn refusal(context: &str, error: &CustodyError) -> PropagationError {
+    match error {
+        CustodyError::Account(AccountServiceError::ConnectOffer) => {
+            PropagationError::AccountNotConnected(error.to_string())
+        }
+        _ => PropagationError::Refuse(format!("{context}: {error}")),
+    }
+}
 
 /// The two custody operations a dispatch needs, object-safe.
 ///
@@ -204,17 +240,15 @@ impl VaultStrategy {
             .custody
             .refresh_if_expired(&account)
             .await
-            .map_err(|error| {
-                PropagationError::Refuse(format!("managed account is not usable: {error}"))
-            })?;
+            .map_err(|error| refusal("managed account is not usable", &error))?;
         let binding = cache_binding(&account, &lease)?;
         // The lease alone authorizes nothing. This is the recheck against
         // current durable state, and the only point a credential exists.
-        let credentials = self.custody.release(&lease).await.map_err(|error| {
-            PropagationError::Refuse(format!(
-                "managed account credential was not released: {error}"
-            ))
-        })?;
+        let credentials = self
+            .custody
+            .release(&lease)
+            .await
+            .map_err(|error| refusal("managed account credential was not released", &error))?;
 
         let credential = PropagatedCredential {
             headers: vec![(
@@ -260,9 +294,7 @@ impl VaultStrategy {
         // Bound to this statement: the released token is never bound to a name
         // that outlives the check it exists for (CWE-226).
         self.custody.release(lease).await.map_err(|error| {
-            PropagationError::Refuse(format!(
-                "managed account credential is no longer releasable: {error}"
-            ))
+            refusal("managed account credential is no longer releasable", &error)
         })?;
         Ok(())
     }
