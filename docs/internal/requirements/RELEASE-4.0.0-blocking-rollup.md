@@ -1582,9 +1582,16 @@ substitute for.
 **`NFR.PKG.1` — the manifest publish, and nothing else.** The cluster-O row above already
 narrows this to the two-platform manifest list; arm64 runtime is exercised and the
 `useradd -m` fix holds on both architectures. The remaining job is `docker-manifest`
-(`.github/workflows/ci.yml:557`), gated `if: startsWith(github.ref, 'refs/tags/v')`
-(`:560`). Its line citation has drifted since the cluster-O row was written, which quoted
-`ci.yml:402`; `:402` is now unrelated and the gate moved with the file. No dry-run route
+(`.github/workflows/ci.yml:591`), gated
+`(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))` (`:599`). Its
+line citation has now drifted **twice**: the cluster-O row quoted `ci.yml:402`, this
+paragraph then quoted `:557`/`:560`, and at this head `:557` is a comment about arm64 base
+layers while `:560` is a Trivy action pin. Re-derived here rather than carried forward,
+and the pattern is the point — a citation into a file this size is stale by default, so a
+reader who finds these numbers wrong should re-derive rather than assume the claim moved.
+The gate's `github.event_name == 'push'` conjunct is load-bearing and was previously
+omitted from this quotation: it is why a pull request cannot reach the publish.
+No dry-run route
 exists: `ci.yml`'s `on:` block is `push` (branches `[main]`, tags `["v*"]`) plus
 `pull_request`, and the file contains **no `workflow_dispatch`** — that trigger lives only
 in `release.yml:7`. So the job runs only on a `v*` tag push, which is also the publish to
