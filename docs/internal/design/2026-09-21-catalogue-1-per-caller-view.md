@@ -950,6 +950,14 @@ means a site opts in **by name**, and the ten that must not are untouched. The
 `!headers.is_empty()` test is copied verbatim from `backend_handlers.rs:836` so
 the two routes cannot drift on what the parameter means.
 
+**Where the headers come from.** One helper, `caller_credential_for(server,
+caller)`, is the single resolution point: it returns BOTH the headers (for the
+verdict above) and the `cache_binding` (for `pool_key_for`), so the isolation
+decision and the slot selection cannot disagree about who the caller is — §4.3's
+own **A**, discharged. It returns empty *without calling the resolver* when the
+caller carries no verified identity, which is what keeps §11.4's minting and
+audit-write cost off every deployment whose callers present none.
+
 **On the type.** **V** `resolve_propagation_credential` (`invoke.rs:2880-2884`)
 returns the flattened `(Vec<(String, String)>, Option<String>)` — headers and
 `cache_binding` — not the `PropagatedCredential` struct. That struct exists (**V**
