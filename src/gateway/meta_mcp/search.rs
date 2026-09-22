@@ -5,13 +5,9 @@
 //! Implements `gateway_search` (Code Mode), `gateway_execute` (Code Mode),
 //! `gateway_list_tools`, `gateway_search_tools`, and the chain executor.
 
-use std::sync::Arc;
-
 use serde_json::{Value, json};
-use tracing::debug;
 
 use crate::autotag;
-use crate::backend::Backend;
 use crate::projection::Role;
 use crate::protocol::Tool;
 use crate::ranking::json_to_search_result;
@@ -98,66 +94,6 @@ fn parse_role_filter(args: &Value) -> Result<Option<Role>> {
 }
 
 impl MetaMcp {
-    async fn backend_tools_for_discovery(
-        backend: &Arc<Backend>,
-        allow_empty_cache_fetch: bool,
-    ) -> Option<Arc<Vec<Tool>>> {
-        let tools = backend.get_cached_tools_snapshot();
-        if !tools.is_empty() {
-            Self::refresh_stale_backend_tools_in_background(backend);
-            return Some(tools);
-        }
-
-        if allow_empty_cache_fetch {
-            return match backend.get_tools_shared().await {
-                Ok(tools) if !tools.is_empty() => Some(tools),
-                Ok(_) => None,
-                Err(e) => {
-                    debug!(
-                        backend = %backend.name,
-                        error = %e,
-                        "On-demand backend tool-cache fill failed"
-                    );
-                    None
-                }
-            };
-        }
-
-        None
-    }
-
-    fn code_mode_backend_candidates(&self, query: &str) -> (Vec<Arc<Backend>>, bool) {
-        if let Some((server, _)) = query.split_once(':')
-            && !server.is_empty()
-            && !server.contains('*')
-            && !server.contains('?')
-        {
-            return self
-                .backends
-                .get(server)
-                .map_or_else(|| (Vec::new(), false), |backend| (vec![backend], true));
-        }
-
-        (self.backends.all(), false)
-    }
-
-    async fn refresh_stale_backend_tools(backend: Arc<Backend>) {
-        if let Err(e) = backend.get_tools_shared().await {
-            debug!(
-                backend = %backend.name,
-                error = %e,
-                "Background backend tool-cache refresh failed"
-            );
-        }
-    }
-
-    fn refresh_stale_backend_tools_in_background(backend: &Arc<Backend>) {
-        if !backend.has_cached_tools() {
-            let backend = Arc::clone(backend);
-            tokio::spawn(Self::refresh_stale_backend_tools(backend));
-        }
-    }
-
     /// The FSM workflow state every discovery entry point filters capabilities
     /// by: `code_mode_search` (`:378`), `list_tools_single_server` (`:581`),
     /// `list_tools` (`:645`) and `search_tools` (`:724`).
@@ -232,6 +168,7 @@ impl MetaMcp {
         options: CodeModeSearchOptions,
         matches: &mut Vec<Value>,
         all_tags: &mut Vec<String>,
+        caller: &super::MetaMcpCallerContext<'_>,
     ) {
         let (backends, allow_empty_cache_fetch) = self.code_mode_backend_candidates(query);
         for backend in backends {
@@ -242,12 +179,18 @@ impl MetaMcp {
             // backend's tool metadata via the static gateway OAuth token on a
             // multi-user gateway. Skip BEFORE backend_tools_for_discovery so the
             // guard precedes any network round-trip (fail-closed = omit).
-            if self.meta_route_isolation_refused(&backend) {
+            let (headers, binding) = self.caller_credential_for(&backend.name, caller).await;
+            if self.meta_route_isolation_refused_for_caller(&backend, &headers) {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Some(tools) =
-                Self::backend_tools_for_discovery(&backend, allow_empty_cache_fetch).await
+            if let Some(tools) = Self::backend_tools_for_discovery(
+                &backend,
+                allow_empty_cache_fetch,
+                binding.as_deref(),
+                &headers,
+            )
+            .await
             {
                 let enriched: Vec<_> = tools
                     .iter()
@@ -324,6 +267,7 @@ impl MetaMcp {
         profile: &RoutingProfile,
         matches: &mut Vec<Value>,
         all_tags: &mut Vec<String>,
+        caller: &super::MetaMcpCallerContext<'_>,
     ) {
         for backend in self.backends.all() {
             if !profile.backend_allowed(&backend.name) {
@@ -331,11 +275,15 @@ impl MetaMcp {
             }
             // INV-2 (MIK-6742): omit isolated backends from tool discovery on a
             // multi-user gateway (fail-closed = omit, not leak).
-            if self.meta_route_isolation_refused(&backend) {
+            let (headers, binding) = self.caller_credential_for(&backend.name, caller).await;
+            if self.meta_route_isolation_refused_for_caller(&backend, &headers) {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Some(tools) = Self::backend_tools_for_discovery(&backend, false).await {
+            if let Some(tools) =
+                Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
+                    .await
+            {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
@@ -376,6 +324,7 @@ impl MetaMcp {
         &self,
         args: &Value,
         session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let raw_query = extract_required_str(args, "query")?;
         let query = raw_query.to_lowercase();
@@ -403,6 +352,7 @@ impl MetaMcp {
             options,
             &mut matches,
             &mut all_tags,
+            caller,
         )
         .await;
 
@@ -641,6 +591,7 @@ impl MetaMcp {
         role_filter: Option<Role>,
         profile: &crate::routing_profile::RoutingProfile,
         session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let killed = self.kill_switch.is_killed(server);
 
@@ -680,13 +631,20 @@ impl MetaMcp {
         // INV-2 (MIK-6742): an isolated backend must be indistinguishable from
         // absent on a multi-user gateway; refuse rather than fetch its
         // tools/list with the static gateway OAuth token.
-        if self.meta_route_isolation_refused(&backend) {
+        // CREDENTIAL-AWARE (MIK-7334.CATALOGUE.1 R2): one resolution, used for
+        // both the verdict and the fetch below. Admissible HERE and not at the
+        // shared-credential sites because the fetch that follows runs over the
+        // slot this credential selected.
+        let (headers, binding) = self.caller_credential_for(server, caller).await;
+        if self.meta_route_isolation_refused_for_caller(&backend, &headers) {
             return Err(Error::BackendNotFound(server.to_string()));
         }
 
         let tools: Vec<_> = backend
-            .get_tools()
+            .get_tools_for_binding(binding.as_deref(), &headers)
             .await?
+            .as_ref()
+            .clone()
             .into_iter()
             .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
             .collect();
@@ -700,7 +658,12 @@ impl MetaMcp {
         Ok(out)
     }
 
-    pub(super) async fn list_tools(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+    pub(super) async fn list_tools(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> Result<Value> {
         let profile = self.active_profile(session_id);
         // Optional role filter (MIK-3532): None = all tools; Some(role) keeps
         // only tools whose effective role (explicit tag, else inferred) matches.
@@ -709,7 +672,7 @@ impl MetaMcp {
         // If server is specified, return tools from that single backend (existing behavior)
         if let Some(server) = extract_optional_str(args, "server") {
             return self
-                .list_tools_single_server(server, role_filter, &profile, session_id)
+                .list_tools_single_server(server, role_filter, &profile, session_id, caller)
                 .await;
         }
 
@@ -746,11 +709,15 @@ impl MetaMcp {
             }
             // INV-2 (MIK-6742): omit isolated backends from tool discovery on a
             // multi-user gateway (fail-closed = omit, not leak).
-            if self.meta_route_isolation_refused(&backend) {
+            let (headers, binding) = self.caller_credential_for(&backend.name, caller).await;
+            if self.meta_route_isolation_refused_for_caller(&backend, &headers) {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Some(tools) = Self::backend_tools_for_discovery(&backend, false).await {
+            if let Some(tools) =
+                Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
+                    .await
+            {
                 for tool in tools.iter() {
                     if !profile.tool_allowed(&tool.name) || !tool_matches_role(tool, role_filter) {
                         continue;
@@ -793,6 +760,7 @@ impl MetaMcp {
         &self,
         args: &Value,
         session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let query = extract_required_str(args, "query")?.to_lowercase();
         let limit = extract_search_limit(args);
@@ -812,7 +780,7 @@ impl MetaMcp {
             &mut matches,
             &mut all_tags,
         );
-        self.collect_search_backend_matches(&query, &profile, &mut matches, &mut all_tags)
+        self.collect_search_backend_matches(&query, &profile, &mut matches, &mut all_tags, caller)
             .await;
 
         let total_found = matches.len();

@@ -27,19 +27,6 @@ enum Attempts {
 }
 
 impl Backend {
-    /// Internal request without `ensure_started` (to avoid recursion)
-    pub(super) async fn request_internal(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<JsonRpcResponse> {
-        let transport = self
-            .shared_transport()
-            .ok_or_else(|| Error::BackendUnavailable(self.name.clone()))?;
-
-        transport.request(method, params).await
-    }
-
     /// Send a request to the backend
     ///
     /// # Errors
@@ -169,14 +156,20 @@ impl Backend {
     /// transport's session-expiry recovery uses, so the two resend sites cannot
     /// drift apart. Both halves come out of ONE derivation, so the retry policy
     /// and the recovery beneath it cannot disagree about one request.
+    ///
+    /// THE PERMITTED SET COMES OFF THE SLOT, not off the backend
+    /// (MIK-7334.CATALOGUE.1 R1). It is derived from that slot's `tools/list`,
+    /// so reading a backend-wide one here would let the identity whose fill ran
+    /// last decide whether THIS caller's non-idempotent call may be resent. The
+    /// caller already holds the `PooledEntry` it is dispatching over, so the
+    /// retry decision and the catalogue it rests on come from one object.
     fn resend_decision(
-        &self,
-        failsafe: &crate::failsafe::Failsafe,
+        entry: &super::pool::PooledEntry,
         method: &str,
         params: Option<&Value>,
     ) -> (ResendPermission, RetryPolicy) {
-        let permission = resend_permission(method, params, &self.resend_permitted.read());
-        let configured = &failsafe.retry_policy;
+        let permission = resend_permission(method, params, &entry.resend_permitted.read());
+        let configured = &entry.failsafe.retry_policy;
         let policy = match permission {
             ResendPermission::Permitted => configured.clone(),
             ResendPermission::Denied => RetryPolicy {
@@ -334,7 +327,7 @@ impl Backend {
         // attempt) can hand a borrow to each attempt's future without tying the
         // closure to the caller's borrow lifetime (MIK-6784).
         let identity_key = identity_key.map(str::to_string);
-        let (perm, policy) = self.resend_decision(&entry.failsafe, method, params.as_ref());
+        let (perm, policy) = Self::resend_decision(&entry, method, params.as_ref());
         let attempt = || {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();

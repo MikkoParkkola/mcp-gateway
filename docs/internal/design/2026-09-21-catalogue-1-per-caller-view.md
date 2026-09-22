@@ -104,7 +104,7 @@ Traced end to end. Every line below was read.
    identity parameter. Same for `list_tools_single_server` (`:~640`).
 3. **V** `src/gateway/meta_mcp/mod.rs:1182` — `meta_route_isolation_refused`
    omits an identity-bound backend fail-closed on a multi-user gateway, *before*
-   any cold-cache fetch. 15 call sites across 6 files (mod, protocol, resources,
+   any cold-cache fetch. **14** call sites across 6 files (mod, protocol, resources,
    search, spec_preview, surfaced). This is the shipped leak-stop.
 4. **V** `src/backend/metadata.rs:156` `get_tools_shared` →
    **V** `:116` `get_cached_list_shared` → **V**
@@ -139,11 +139,13 @@ operator ruled it is not the mode.
 
 ## 3. The design: move the caches into the pool slot
 
-**Move the four `CachedMetadata` fields off `Backend` and into `PooledEntry`.**
+**Move the four `CachedMetadata` fields off `Backend` and into `PooledEntry` —
+and `resend_permitted` with them. FIVE fields, not four (R1, §12).**
 
 That is the whole idea. `Backend::tools_cache` (and its three siblings) ceases
 to exist as a field. Every metadata read and fill goes through
-`pooled_entry(&key)` — the same lookup that already hands out the transport.
+`claim_pooled_entry(&key)` — the same lookup that already hands out the
+transport, in the variant that holds the slot against the evictor (R3, §3.1).
 
 **V** `src/backend/pool.rs:59-70` — `PooledEntry` already owns
 `transport`, `start_lock`, `last_used`, **and its own `Failsafe`**. The doc
@@ -173,20 +175,42 @@ The defence is not care. It is **the absence of a second path**:
   computation in the system. It already is, for transports.
 - `Backend` has no cache field left to read. A caller cannot reach a cache
   without first naming a `PoolKey`, because the cache is reachable only through
-  `pooled_entry(&key)` (**V** `src/backend/pool.rs:235`).
+  **`claim_pooled_entry(&key)`** (**V** `src/backend/pool.rs:253`) — **CORRECTED
+  2026-09-22 (R3)**. This document originally named `pooled_entry`
+  (**V** `pool.rs:235`), whose own doc says it *"hands back an entry the evictor
+  is still free to remove"* and sends callers who intend to USE the slot to
+  `claim_pooled_entry` instead. A metadata fill routed through the unclaimed
+  lookup races `evict_idle_per_user_entries`, which closes the transport under
+  the fetch. The safe variant already exists beside it and claims an in-flight
+  slot under the shard guard.
 - The bytes in slot *K*'s cache were fetched over slot *K*'s transport, because
   the fill closure and the cache live behind the same `Arc<PooledEntry>`.
 
-Key-divergence is not guarded against; it is **unrepresentable**. There is no
-expression in the resulting code that pairs one slot's cache with another
-slot's transport, because there is no way to obtain a cache except from a slot.
+**What this proves, stated at its real width — NARROWED 2026-09-22 (R3).** What
+co-location makes unrepresentable is **cache/transport divergence within a
+slot**: no expression pairs one slot's cache with another slot's transport,
+because a cache is obtainable only from a slot.
 
-**Falsifier, pass/fail:** after the change, `rg -n "tools_cache" src/` returns
-hits only inside `pool.rs` and `metadata.rs`'s slot-scoped accessors, and zero
-on `self.tools_cache` in `Backend` method bodies. If a single reader still
-reaches a cache without a `PoolKey` in hand, the proof is void and the design
-has failed — not degraded, failed. This is a grep, and it is the acceptance
-gate for the structural claim.
+It does **not** make key *selection* correct. §4.2.1 instructs the identity-free
+consumers to pass `PoolKey::Shared` explicitly, and once any call site may name a
+key, a caller-scoped site can name `Shared` too — and the compiler sees a
+well-typed call. The mitigation is to keep key construction out of call sites:
+the slot-scoped accessors call `pool_key_for` on the caller's binding internally,
+and `Shared` stays reachable only through the named `*_shared` helpers. That is a
+convention plus a narrow API, not a proof, and this document should not claim
+otherwise.
+
+**Falsifier, pass/fail — WIDENED 2026-09-22 (R1, §12).** After the change,
+`rg -n "tools_cache|resend_permitted" src/` returns hits only inside `pool.rs`
+and `metadata.rs`'s slot-scoped accessors, and zero on `self.tools_cache` or
+`self.resend_permitted` in `Backend` method bodies. If a single reader still
+reaches a cache — or a set derived from one — without a `PoolKey` in hand, the
+proof is void and the design has failed, not degraded.
+
+**The `resend_permitted` term is not decoration: the original one-term grep
+passed green while the bug was live** (§12). A falsifier that names only the
+field you already thought of tests your memory, not the property. Widen it
+again for any further field derived from a catalogue.
 
 **I** This also satisfies the cluster-g ruling by construction (§0.1): the key
 and the source are now the *same* granularity. Slot *K*'s cache holds bytes
@@ -232,12 +256,16 @@ Thread the identity that already exists to the place that already needs it:
 5. The answer lands in that slot's cache, because that is the only cache
    reachable from the slot (§3.1). The fill runs **through the slot**, so it
    cannot reach `shared_transport()` — see §9.3, a review-driven amendment.
-6. **BLOCKING (§9.2):** the `meta_route_isolation_refused` call sites must pass
-   the caller's real credential state into
-   `enforce_oauth_isolation_for`'s existing `has_per_user_credential` parameter
-   (**V** `src/gateway/meta_mcp/mod.rs:1104-1110`), instead of the hardcoded
-   `false` at **V** `:1183`. Without this the guard omits the backend from the
-   very callers steps 1-5 exist to serve, and the mode ships unreachable.
+6. **BLOCKING, RESOLVED 2026-09-22 (§9.2, §11) — READ §11 BEFORE TOUCHING A CALL
+   SITE.** The `meta_route_isolation_refused` call sites must carry the caller's
+   real credential state instead of the hardcoded `false` at **V**
+   `src/gateway/meta_mcp/mod.rs:1189`. **This is a per-site opt-in, NEVER a
+   sweep**: `has_per_user_credential = true` does not narrow
+   `enforce_oauth_isolation_for`, it returns `Ok(())` at **V** `:1116` before any
+   isolation arm is evaluated, so loosening it at a site whose next operation
+   still runs on the gateway's shared credential opens the leak ADR-008 INV-2
+   exists to deny. Only the four catalogue-path sites change, each together with
+   its own fetch becoming slot-scoped. §11 has the census and the signature.
 
 **I** Per-identity `tools/list` bytes are now real, so C0's set is non-empty and
 C1 has something to isolate. Today it does not.
@@ -438,7 +466,7 @@ stated reason, not merely pass afterwards:
 | **T2** | Interleave cold/hot: A cold-fills, B reads hot. B must miss A's entry and fill its own. | C1, C2 | Today B hits A's cache entry. |
 | **T3** | Accessor sweep: for each of `get_cached_tool`, `get_cached_tool_names`, `cached_tools_count`, `get_cached_tools_snapshot`, assert B's slot answers with B's tools. | C2 | **V** Today all four read the single `Backend` field (§4.2). Without T3 the fetch path is sealed and the accessors leak. |
 | **T4** | Revoke A's grant mid-fill; then revoke after a populated fill. Neither serves A's catalogue afterwards. | C4 | The mid-fill half passes today (**V** `tests.rs:1862`); the **populated-cache** half fails, because `invalidate_tools_cache` discards empty lists only (§4.4). |
-| **T5** | Guard: assert no MCP `tools/call` result cache exists. | C3 | Passes today by absence; exists so a future result cache cannot land unkeyed and silently regress C3. |
+| **T5** | ~~Assert no MCP `tools/call` result cache exists.~~ **WITHDRAWN 2026-09-22 — the premise was refuted by §4.3/§9.1 of this document and the row was never updated. Replaced by T5-R: assert `response_cache_key_for` (`support.rs:168`) produces different keys for two principals that differ only in identity, with the same-caller-stable half beside it.** | C3 | T5 as drafted fails immediately for the wrong reason, or gets "fixed" by deleting a result cache that must stay. T5-R goes red for a future cache that derives a principal and then drops it while assembling the key. |
 | **T6** | **Positive control** — invariant shared catalogue. Non-identity backend still single-flights to **one** fetch, `cached_tools_count() == 1`. | regression | **V** `get_tools_singleflight_coalesces_concurrent_requests` (`src/backend/tests.rs:683`) exists and passes; it must keep passing unchanged. |
 | **T7** | **Structural, two required greps (amended §9.3)** — (a) `Backend` exposes no cache reachable without a `PoolKey`; (b) `shared_transport()` has no caller inside any metadata fill path. | §3.1 | Grep (a) alone proves only the cache end of the pairing; review showed a fill on a PerUser slot could still call `shared_transport()` and pass it. Both, or the proof is of the wrong property. |
 | **T8** | **Provenance** — T1 asserts *which slot's transport* served each fetch, not merely that two fetches occurred. | C1, §3.1 | Field names prove naming; provenance proves isolation. Added on review. |
@@ -478,7 +506,9 @@ the implementation PR, because it is the exact trap this row fell into once.
 5. **Prompts/resources/resource-templates forgotten.** **V** The criterion says
    "cached metadata", not "tool catalogue", and there are four caches
    (`mod.rs:85,95,97,99`). **I** Moving only `tools_cache` would satisfy the
-   peer's summary and fail the criterion. All four move together.
+   peer's summary and fail the criterion. All four move together — **and so does
+   `resend_permitted`, which is derived from the tool catalogue and is the fifth
+   field (§12).**
 
 ---
 
@@ -593,9 +623,17 @@ backend omitted. My §3.2 claim that this helper is untouched was wrong.
 **The fix is small and the shape is already there:** `enforce_oauth_isolation_for`
 *takes* `has_per_user_credential` (**V** `:1104-1108`) — the parameter exists
 and other callers pass it meaningfully. The discovery call sites must pass the
-caller's real credential state instead of the constant. The 15 `meta_route_isolation_refused`
-sites become credential-aware, and the fail-closed answer is preserved exactly
-for the unresolved caller (§4.6 row 2).
+caller's real credential state instead of the constant.
+
+**CORRECTED 2026-09-22 (R2, §11), in two ways.** The count is **14**, not 15 —
+`mod.rs:1188` is the definition, not a call site, and `rg`'s 15 hits include it.
+And the sentence that followed here — *"the 15 sites become credential-aware"* —
+was wrong as a prescription and is withdrawn. `has_per_user_credential = true`
+short-circuits `enforce_oauth_isolation_for` at **V** `mod.rs:1116` rather than
+narrowing it, so applying it uniformly **disables** enforcement at the four sites
+that go on to fetch over the shared credential. Only the four catalogue-path
+sites change, each with its own fetch. §11.5 has the census; the fail-closed
+answer is preserved exactly for the unresolved caller (§4.6 row 2).
 
 **Design impact:** add to §4.1 as step 6. This is now the second blocking item
 alongside Q1.
@@ -766,3 +804,313 @@ one useful emission — the fifth accessor — is credited at §9.4 and moved th
 reader count up again. The count now stands at *at least* sixteen across five
 accessors, revised upward twice by other people's eyes; §4.2's whole argument is
 that no hand inventory here should be trusted, and that includes this one.
+
+---
+
+## 11. R2 — B1 resolved: a per-site opt-in, never a sweep
+
+Landed 2026-09-22 from the round-2 review
+(`2026-09-22-catalogue-1-design-review-round2.md`), which is where the full
+evidence sits. Line citations here are against release-line HEAD.
+
+### 11.1 The count is fourteen, not fifteen
+
+**V** `rg -n "meta_route_isolation_refused" src/` returns 15 hits; `mod.rs:1188`
+is the **definition**. §2 item 3 and §9.2 of this document both say 15. There are
+**14 call sites**.
+
+### 11.2 Why a sweep is a leak, not a smaller omission
+
+**V** `mod.rs:1114-1116`:
+
+```rust
+if !self.multi_user.load(std::sync::atomic::Ordering::Relaxed) || has_per_user_credential {
+    return Ok(());
+}
+```
+
+`has_per_user_credential = true` **short-circuits the whole function**. Every
+isolation arm below it is unreachable. §9.2's phrasing — *"the 15 sites become
+credential-aware"* — read as a mechanical edit therefore does not narrow
+enforcement, it disables it.
+
+**V** Four sites guard and then fetch on the **shared** credential:
+
+| Site | Enclosing fn | What runs after the guard |
+|---|---|---|
+| `protocol.rs:306` | `handle_logging_set_level` | `backend.request(...)` — the gateway's own credential |
+| `protocol.rs:158` | `handle_prompts_list` | `get_prompts_shared()` |
+| `resources.rs:293` | `handle_resources_list` | `get_resources_shared()` |
+| `resources.rs:517` | `find_resource_owner` | shared ownership scan |
+
+Loosening the guard there lets an authenticated caller drive the gateway's own
+backend login on behalf of nobody in particular.
+
+**This is the same defect class as the `VaultStrategy::principal` bug fixed in
+#661**, approached from the other side, and the pairing is worth holding in mind
+while implementing. There, a check existed and the decision never consulted it —
+the enforcement point matched `CallerProof::Operator(_)` and discarded the
+provenance. Here, a parameter *looks* like it refines a check and in fact turns
+it off. **Both are "the guard is present and the decision does not use it."** An
+implementer who internalises one will not reintroduce the other.
+
+### 11.3 What the parameter actually means
+
+Taken from the only caller that passes it meaningfully, not from prose. **V**
+`src/gateway/router/backend_handlers.rs:834-836`:
+
+```rust
+// A per-user credential was resolved above iff
+// `propagated_headers` is non-empty, so a per-user OAuth backend on a
+// multi-user gateway is refused rather than served the shared token.
+if isolation_guarded
+    && let Err(e) = state.meta_mcp
+        .enforce_oauth_isolation(&name, !propagated_headers.is_empty())
+```
+
+**"Identity propagation resolved non-empty per-user headers for THIS backend and
+THIS caller."** Per-backend, per-request. **Not** "the caller authenticated".
+
+**So `CallerProof` is the right identity input and is NOT this boolean.** **V**
+`src/identity_propagation/caller_proof.rs` (landed in #661) distinguishes
+`Verified`, `Operator(CallerProvenance)` and `Anonymous`. An
+`Operator(Credential)` caller presented a validated bearer token and holds **no
+per-backend binding**; wiring that into `has_per_user_credential` would serve
+every authenticated caller the gateway's personal OAuth backend. Use
+`CallerProof` to resolve *who* the caller is, then resolve the credential for the
+backend; never substitute the first for the second.
+
+### 11.4 Why the resolution cannot live inside the guard
+
+Two independently fatal facts:
+
+- **It is async.** **V** `src/gateway/meta_mcp/invoke.rs:2880`
+  `pub async fn resolve_propagation_credential`. Seven of the fourteen sites
+  cannot await — five sit in sync fns, two in sync `.filter()` closures inside
+  async fns.
+- **It mints and audits; it is not a predicate.** **V**
+  `resolve_caller_credential` (`invoke.rs:2936`) calls
+  `strategy.propagate(identity, &descriptor).await` (`:3043`) — a real token
+  exchange — then `Self::audit_minted_credential(...)?` (`:3059`), whose contract
+  is that a minted credential never reaches the caller without a durable audit
+  record. The refuse path writes `idp_refuse` records too (`:2962`).
+
+**I** `meta_route_isolation_refused` is evaluated per backend, in a loop over
+every registered backend, on ordinary discovery calls. Resolving inside it would
+mint N credentials and write N transparency-log entries per `tools/list`.
+
+### 11.5 The census, and the disposition of each site
+
+| # | Site | Enclosing fn | Ctx | Disposition |
+|---|---|---|---|---|
+| 1 | `mod.rs:1374` | `promoted_tools_for_session` | sync, closure | stays `false` |
+| 2 | `protocol.rs:158` | `handle_prompts_list` | sync closure in async fn | **stays `false`** — shared fetch |
+| 3 | `protocol.rs:306` | `handle_logging_set_level` | async | **stays `false`** — shared forward |
+| 4 | `resources.rs:293` | `handle_resources_list` | sync closure in async fn | **stays `false`** — shared fetch |
+| 5 | `resources.rs:395` | `handle_resources_templates_list` | async | stays `false` |
+| 6 | `resources.rs:517` | `find_resource_owner` | async | **stays `false`** — shared scan |
+| 7 | `search.rs:245` | `collect_code_mode_backend_matches` | async | **credential-aware** |
+| 8 | `search.rs:334` | `collect_search_backend_matches` | async | **credential-aware** |
+| 9 | `search.rs:683` | `list_tools_single_server` | async | **credential-aware** |
+| 10 | `search.rs:749` | `list_tools` | async | **credential-aware** |
+| 11 | `spec_preview.rs:92` | `collect_filtered_backend_tools` | sync | stays `false` |
+| 12 | `spec_preview.rs:185` | `resolve_tool_by_name` | sync, closure | stays `false` |
+| 13 | `spec_preview.rs:240` | `collect_all_cached_tool_names` | sync, closure | stays `false` (see §9.5) |
+| 14 | `surfaced.rs:142` | `resolve_surfaced_tool` | sync | stays `false` |
+
+**The decisive column is not awaitability — it is what the site does next.** Rows
+7-10 are the catalogue path §4.1 converts to a slot-scoped fetch, and they are
+the only rows that may change. The other ten keep `false` **by decision, not by
+drift**.
+
+### 11.6 The signature: an added sibling, not a changed one
+
+```rust
+// mod.rs:1188 — UNCHANGED, and now honestly named: the identity-free default.
+pub(crate) fn meta_route_isolation_refused(&self, backend: &Backend) -> bool {
+    self.enforce_oauth_isolation_for(backend, &backend.name, false).is_err()
+}
+
+// New. Used by rows 7-10 ONLY, each together with its slot-scoped fetch.
+pub(crate) fn meta_route_isolation_refused_for_caller(
+    &self,
+    backend: &Backend,
+    propagated_headers: &[(String, String)],
+) -> bool {
+    self.enforce_oauth_isolation_for(
+        backend, &backend.name,
+        !propagated_headers.is_empty(),
+    ).is_err()
+}
+```
+
+**I** A third `bool` parameter on the existing function would make all fourteen
+sites editable and one wrong edit invisible in the diff. A separate entry point
+means a site opts in **by name**, and the ten that must not are untouched. The
+`!headers.is_empty()` test is copied verbatim from `backend_handlers.rs:836` so
+the two routes cannot drift on what the parameter means.
+
+**Where the headers come from.** One helper, `caller_credential_for(server,
+caller)`, is the single resolution point: it returns BOTH the headers (for the
+verdict above) and the `cache_binding` (for `pool_key_for`), so the isolation
+decision and the slot selection cannot disagree about who the caller is — §4.3's
+own **A**, discharged. It returns empty *without calling the resolver* when the
+caller carries no verified identity, which is what keeps §11.4's minting and
+audit-write cost off every deployment whose callers present none.
+
+**On the type.** **V** `resolve_propagation_credential` (`invoke.rs:2880-2884`)
+returns the flattened `(Vec<(String, String)>, Option<String>)` — headers and
+`cache_binding` — not the `PropagatedCredential` struct. That struct exists (**V**
+`src/identity_propagation/mod.rs:86`, with a `headers` field) but is not the
+value in hand at the dispatch arm, so the signature takes the headers slice and
+needs no re-wrapping.
+
+### 11.7 The precondition this design did not state
+
+**Not one of the fourteen sites has a caller or a verified identity in scope
+today.** **V** `mod.rs:169` carries `verified_identity` on `CallerContext`;
+**V** `mod.rs:2139` destructures `caller` from `DispatchTarget`; **V** `:2171`
+passes it to `gateway_invoke`, while **V** `:2169` (`gateway_list_tools`) and
+**V** `:2170` (`gateway_search_tools`) drop it.
+
+So §4.1 step 1 is a **precondition for B1**, not a parallel task: the credential
+state is not merely unthreaded through the guard, it is absent at every call
+site. Thread the caller first, resolve once per request, then make rows 7-10
+credential-aware.
+
+### 11.8 The unidentified caller: omit, and say so to the operator
+
+**RULING CONFIRMED 2026-09-22.** An anonymous caller on a multi-user gateway
+sees a `required` per-user backend **omitted — indistinguishable from not
+configured**, which is what §4.6 row 2 and §7 Q1 already recorded. Now encoded as
+an assertion (`catalogue_per_caller_tests`, row 2 of the acceptance case), so it
+is defended rather than merely written down.
+
+The reasoning, recorded here so the next reader does not reopen it:
+
+- **Presence in a catalogue is itself disclosure.** Listing a backend an
+  anonymous caller cannot use still tells them it exists and that somebody holds
+  an identity for it — which providers the operator integrates with. That is the
+  same leak class as the sibling rows in this cluster.
+- **Omission is the only answer that offers no oracle.** Present-but-unusable is
+  a probe; present-with-an-error is a probe. Both teach the caller the backend
+  exists by refusing them. Only omission returns the same thing whether or not
+  the backend exists, which is what makes it fail-*closed* rather than
+  fail-*safe*.
+- **`required` governs routing, not visibility.** It decides whether a call fails
+  when no per-user credential can be minted. Reading it as "therefore always
+  visible" would let a routing flag decide a disclosure question — the same
+  one-value-two-questions defect §11.3 identifies in `has_per_user_credential`.
+- It is ADR-008 INV-2 applied to the same surface, so it is not a new position.
+
+**THE CONDITION: FAIL CLOSED TO THE CALLER, LOUD TO THE OPERATOR.**
+
+Silent omission is a support call with no thread to pull. A legitimate user who
+has not authenticated sees an empty catalogue and cannot distinguish *"I need to
+log in"* from *"this was never set up"* — and neither can whoever is supporting
+them.
+
+**V** Both `meta_route_isolation_refused` and
+`meta_route_isolation_refused_for_caller` reach the omission only through
+`enforce_oauth_isolation_for`, which emits a `warn!` **before** it returns the
+error (`mod.rs:1167-1180`). The helpers discard the error; they do not discard
+the log.
+
+**CORRECTED 2026-09-22 — this was half right, and the failing half was the one
+that mattered.** An earlier draft said "the message carries a `fix:` string, so
+it is diagnosable". There are **two** messages, with different audiences and
+different survival:
+
+| Channel | Carried | Survives the omission route? |
+|---|---|---|
+| `warn!` | `server`, `reason` — and now `fix` | **yes** |
+| `Error::json_rpc(-32001, …)` | `server`, `reason`, `Fix: {fix}` | **no** — the guard evaluates `.is_err()` and drops it |
+
+So `fix` reached only the channel that is thrown away on the exact path this
+section is about. The remedy was addressed to the caller, who is deliberately
+told nothing, and withheld from the party who has to act on it. **The repair is
+one line: `fix` is now a field on the `warn!` as well.** A value existing is not
+a value delivered — the question is which channel survives on the path in
+question, and that is not answerable by reading either the design or the diff.
+
+With that, the log line is self-sufficient: backend, reason **and** remedy, for
+whoever is debugging why their backend vanished.
+
+**Same shape as the STORE.1 ruling, and the pairing is the point.** There, the
+3.x credential migration must refuse **loudly** when a declared source file is
+absent rather than silently reporting nothing to migrate. Here, a backend
+vanishes from a caller's catalogue and the operator is told which one and why.
+**Silent to the untrusted party, loud to the trusted one** — an implementer who
+reads only "omit" will implement silence, which is why both halves are stated
+together.
+
+---
+
+## 12. R1 — five fields, not four: `resend_permitted` moves with the caches
+
+Landed 2026-09-22 from the round-2 review. Found by `gpt-review` and confirmed at
+source; the release owner verified it independently before approving it.
+
+### 12.1 The field
+
+**V** `src/backend/mod.rs:93` —
+`resend_permitted: parking_lot::RwLock<HashSet<String>>` sits **between** the
+four caches this design moves: `:85` `tools_cache`, then `resend_permitted`, then
+`:95` `resources_cache`, `:97` `resource_templates_cache`, `:99` `prompts_cache`.
+
+**V** It is **derived from the tool catalogue on every fill**.
+`src/backend/metadata.rs:176`, inside `get_tools_shared`'s fill closure:
+
+```rust
+*self.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
+```
+
+**V** It decides retry policy at dispatch. `src/backend/ops.rs:178`:
+`resend_permission(method, params, &self.resend_permitted.read())`. Its own doc
+at **V** `mod.rs:87-92` states the stakes: membership is *"the only thing that
+grants a `tools/call` permission to be resent"*.
+
+### 12.2 Why leaving it behind defeats the design
+
+**I** This is §0.1's error one level down. The cluster-g ruling forbids keying a
+set finer than the source it derives from; leaving `resend_permitted`
+backend-wide while `tools_cache` becomes per-identity does the mirror image —
+it leaves a derived set **coarser** than its source, shared across every identity
+that shares the backend.
+
+Concretely: identity B's catalogue fill overwrites the resend set that identity
+A's dispatch then reads. The failure is a **duplicate side effect on a
+non-idempotent tool**, authorised by another caller's catalogue. That is a worse
+outcome than a disclosure, and it arrives through a field nobody was looking at.
+
+### 12.3 Why the design's own proof could not have caught it
+
+This is the part worth remembering, because it bounds a claim this document
+leans on.
+
+§4.2's method — delete the fields, let the compiler enumerate the readers — is
+the strongest idea here, and §9.4 earns it three times over. But it enumerates
+**readers of the deleted fields**. `resend_permitted` is a **writer of derived
+state** on a field that was *not* being deleted, so:
+
+- the compiler reports nothing, because `Backend::resend_permitted` still exists
+  and its readers still compile;
+- §3.1's falsifier, `rg -n "tools_cache" src/`, returns clean, because the field
+  has a different name.
+
+**The proof and its falsifier both pass green while the bug is live.** §3.1's
+falsifier is widened accordingly, and the general lesson is recorded there: a
+falsifier naming only the fields you already thought of tests recall, not the
+property.
+
+### 12.4 What changes
+
+`resend_permitted` moves into `PooledEntry` beside the four caches. The fill at
+`metadata.rs:176` writes the slot's set; `ops.rs:178` reads the slot's set. The
+identity-free callers reach the `Shared` slot's set exactly as they reach the
+`Shared` slot's caches (§4.2.1), so single-tenant behaviour is unchanged.
+
+**A** The direct-route path (`set_resend_permitted`, **V** `metadata.rs:199`,
+currently `#[expect(dead_code)]` pending its caller) must write the same slot its
+own `tools/list` was served from when that caller lands. Flag at implementation;
+the `expect` marker already forces the conversation.

@@ -12,6 +12,7 @@ use parking_lot::RwLock;
 use tokio::sync::Mutex;
 
 use super::Backend;
+use super::cached_metadata::CachedMetadata;
 use crate::failsafe::Failsafe;
 use crate::transport::Transport;
 
@@ -76,6 +77,30 @@ pub(crate) struct PooledEntry {
     /// deadline has its transport closed mid-flight.
     pub(crate) in_flight: AtomicUsize,
     pub(crate) failsafe: Failsafe,
+    /// The four metadata caches, and the set derived from the first of them.
+    ///
+    /// CO-LOCATED WITH THE SLOT, NOT THE BACKEND (MIK-7334.CATALOGUE.1). A
+    /// backend-wide cache means one identity's catalogue is served to every
+    /// other identity sharing that backend — the same cross-tenant blast radius
+    /// the per-slot `failsafe` above was moved here to eliminate (MIK-6735 fix
+    /// 1), one rung further in. Because the cache and the transport now live
+    /// behind the same `Arc<PooledEntry>`, the bytes in slot K's cache were
+    /// fetched over slot K's transport, and no expression pairs one slot's cache
+    /// with another slot's transport.
+    pub(crate) tools_cache: CachedMetadata<Vec<crate::protocol::Tool>>,
+    /// Tools this slot's upstream declared resend-safe, as of its last
+    /// `tools/list`.
+    ///
+    /// DERIVED FROM `tools_cache`, SO IT LIVES WHERE `tools_cache` LIVES. Left
+    /// on `Backend` it would be a set coarser than its own source: one
+    /// identity's catalogue fill would decide another identity's retry policy,
+    /// and membership is the only thing that grants a `tools/call` permission to
+    /// be resent (ADR-012 A1). Absent means deny, so an unfilled slot denies
+    /// every resend, which is the safe direction.
+    pub(crate) resend_permitted: RwLock<std::collections::HashSet<String>>,
+    pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
+    pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
+    pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
 }
 
 /// RAII marker for one in-flight client request against a pool slot.
@@ -123,6 +148,16 @@ impl ActivityGuard {
             touch_on_drop,
         }
     }
+
+    /// The slot this lease holds.
+    ///
+    /// The metadata path reads its cache through this rather than looking the
+    /// slot up a second time, so the cache it fills and the transport it is
+    /// holding open are the same object by construction rather than by two
+    /// lookups agreeing (MIK-7334.CATALOGUE.1 §3.1).
+    pub(super) fn entry(&self) -> &Arc<PooledEntry> {
+        &self.entry
+    }
 }
 
 impl Drop for ActivityGuard {
@@ -146,6 +181,11 @@ impl PooledEntry {
             stopped_when_idle: std::sync::atomic::AtomicBool::new(false),
             in_flight: AtomicUsize::new(0),
             failsafe: Failsafe::new(name, failsafe_config),
+            tools_cache: CachedMetadata::new(),
+            resend_permitted: RwLock::default(),
+            resources_cache: CachedMetadata::new(),
+            resource_templates_cache: CachedMetadata::new(),
+            prompts_cache: CachedMetadata::new(),
         }
     }
 
@@ -434,7 +474,19 @@ impl Backend {
     /// the transport. Without a lease the reaper can take it in between, and the
     /// caller sees a spurious `BackendUnavailable` for a backend that is fine.
     pub(super) fn begin_internal_activity(&self) -> ActivityGuard {
-        ActivityGuard::adopt_claimed(self.claim_pooled_entry(&PoolKey::Shared), false)
+        self.begin_internal_activity_for(&PoolKey::Shared)
+    }
+
+    /// The slot-scoped form of [`Self::begin_internal_activity`].
+    ///
+    /// Claims `key`'s slot rather than the canonical one, so a per-identity
+    /// metadata fill holds open the transport it is actually fetching over. It
+    /// uses `claim_pooled_entry`, never `pooled_entry`: the unclaimed lookup
+    /// hands back an entry `evict_idle_per_user_entries` is still free to
+    /// remove, which would close the transport under the fetch
+    /// (MIK-7334.CATALOGUE.1 R3).
+    pub(super) fn begin_internal_activity_for(&self, key: &PoolKey) -> ActivityGuard {
+        ActivityGuard::adopt_claimed(self.claim_pooled_entry(key), false)
     }
 
     /// Stop this backend's process if it has been unused past

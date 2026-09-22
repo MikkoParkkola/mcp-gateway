@@ -12,9 +12,10 @@ use serde_json::{Value, json};
 use tokio::sync::Barrier;
 use tokio::time::sleep;
 
+use super::cached_metadata::CachedMetadata;
 use super::*;
 use crate::config::TransportConfig;
-use crate::protocol::{JsonRpcResponse, RequestId, ToolAnnotations, ToolsListResult};
+use crate::protocol::{JsonRpcResponse, RequestId, Tool, ToolAnnotations, ToolsListResult};
 use crate::transport::Transport;
 use crate::{Error, Result};
 
@@ -1668,11 +1669,10 @@ async fn row_10b_an_escalation_clears_the_count_it_acted_on() {
 // ── MIK-7334.CATALOGUE.1 ──────────────────────────────────────────────────
 //
 // A `session_mode = per_user` backend keeps one transport/session per caller
-// identity (`PoolKey::PerUser`, `pool.rs`), but the metadata path does not:
-// `get_cached_list_shared` fetches through `request_internal`, which reaches
-// for `shared_transport()` — the single `PoolKey::Shared` slot — and stores the
-// answer in one un-keyed `CachedMetadata`. So the catalogue one caller's fetch
-// materialises is the catalogue every later caller reads.
+// identity (`PoolKey::PerUser`, `pool.rs`), and since MIK-7334.CATALOGUE.1 its
+// metadata caches live on that same slot. What is fixed below is the OTHER
+// half: a reader that presents no identity still resolves `PoolKey::Shared`
+// and still shares one catalogue and one fetch with every other such reader.
 
 /// A backend whose upstream answers `tools/list` differently per identity.
 ///
@@ -1761,16 +1761,16 @@ fn per_user_backend(cache_ttl: Duration) -> Backend {
 /// THEN both are served the SAME single answer, because the metadata fetch
 /// carries no identity at all.
 ///
-/// This is the isolation argument, stated as the code actually holds it:
-/// `request_internal` reaches for `shared_transport()` (`PoolKey::Shared`) and
-/// passes no identity, so the cached catalogue is the gateway's own
-/// static-credential answer, not any caller's. One upstream fetch serving both
-/// callers is the proof — `PerIdentityTools` errors on a second fetch, so a
-/// second answer could not be served even if one were asked for.
+/// `get_tools()` carries no binding, so `pool_key_for` resolves
+/// `PoolKey::Shared` and both reads land on the canonical slot. One upstream
+/// fetch serving both is the proof — `PerIdentityTools` errors on a second
+/// fetch, so a second answer could not be served even if one were asked for.
 ///
-/// What this does NOT establish: that a per-identity catalogue is isolated.
-/// None is fetched anywhere in this codebase; delivering that mode is
-/// MIK-7334's remaining work, not a property of this cache.
+/// SINCE MIK-7334.CATALOGUE.1 THIS IS A CONTROL, NOT A GAP. Per-identity
+/// catalogues now exist, and this is what guarantees they were not bought by
+/// degrading the identity-free path: the IDP.5 promise that a caller with no
+/// binding sees byte-for-byte what it saw before. The per-identity side is
+/// asserted in `gateway::meta_mcp::catalogue_per_caller_tests`.
 #[tokio::test]
 async fn per_user_metadata_fetch_is_identity_free_and_shared() {
     let backend = Arc::new(per_user_backend(Duration::from_secs(60)));

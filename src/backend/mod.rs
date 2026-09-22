@@ -10,7 +10,6 @@ use dashmap::DashMap;
 use tokio::sync::Semaphore;
 
 use crate::config::BackendConfig;
-use crate::protocol::{Prompt, Resource, ResourceTemplate, Tool};
 use crate::runtime::RuntimePlan;
 
 mod annotations;
@@ -22,7 +21,6 @@ mod ops;
 mod pool;
 mod registry;
 
-use cached_metadata::CachedMetadata;
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
 #[cfg(not(test))]
@@ -82,21 +80,13 @@ pub struct Backend {
     /// already struggling to answer.
     probe_in_flight: std::sync::atomic::AtomicBool,
     /// Cached tools
-    tools_cache: CachedMetadata<Vec<Tool>>,
-    /// Tools this backend declared an explicit `readOnlyHint` or
-    /// `idempotentHint` of `true` for, as of the last `tools/list`.
-    ///
-    /// Membership is the only thing that grants a `tools/call` permission to
-    /// be resent (ADR-012 amendment A1). Absent means deny, so an empty set —
-    /// a backend that has not been discovered yet, or one that annotates
-    /// nothing — denies every resend, which is the safe direction.
-    resend_permitted: parking_lot::RwLock<std::collections::HashSet<String>>,
-    /// Cached resources
-    resources_cache: CachedMetadata<Vec<Resource>>,
-    /// Cached resource templates
-    resource_templates_cache: CachedMetadata<Vec<ResourceTemplate>>,
-    /// Cached prompts
-    prompts_cache: CachedMetadata<Vec<Prompt>>,
+    // The four metadata caches and the resend set derived from the first of
+    // them USED TO LIVE HERE. They are fields on `PooledEntry` now
+    // (MIK-7334.CATALOGUE.1): a backend-wide cache serves one identity's
+    // catalogue to every other identity sharing the backend, and a
+    // backend-wide resend set lets one identity's fill decide another's retry
+    // policy. Deleting them rather than adding a keyed path beside them is
+    // deliberate — it is what makes the compiler enumerate every reader.
     /// Cache TTL
     cache_ttl: Duration,
     /// Last used timestamp
@@ -252,3 +242,7 @@ pub(crate) struct CleanupState {
 mod pool_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "resend_isolation_tests.rs"]
+mod resend_isolation_tests;

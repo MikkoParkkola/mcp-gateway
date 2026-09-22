@@ -886,7 +886,7 @@ async fn gateway_search_includes_stale_non_empty_backend_cache() {
     let meta = MetaMcp::new(registry).with_code_mode(true);
 
     let result = meta
-        .code_mode_search(
+        .code_mode_search_anon(
             &json!({
                 "query": "search_flights",
                 "include_schema": false
@@ -900,7 +900,7 @@ async fn gateway_search_includes_stale_non_empty_backend_cache() {
     assert_eq!(result["matches"][0]["tool"], "stale_backend:search_flights");
 
     let by_server_glob = meta
-        .code_mode_search(
+        .code_mode_search_anon(
             &json!({
                 "query": "stale_backend:*",
                 "include_schema": false
@@ -947,7 +947,7 @@ async fn gateway_search_server_qualified_query_fills_empty_backend_cache() {
     let meta = MetaMcp::new(registry).with_code_mode(true);
 
     let result = meta
-        .code_mode_search(
+        .code_mode_search_anon(
             &json!({
                 "query": "trvl:*",
                 "include_schema": false
@@ -1006,7 +1006,7 @@ async fn code_mode_discovery_omits_oauth_isolated_backend_on_multi_user_gateway(
     meta.set_multi_user(true);
 
     let result = meta
-        .code_mode_search(
+        .code_mode_search_anon(
             &json!({ "query": "isomem:*", "include_schema": false }),
             None,
         )
@@ -4648,7 +4648,7 @@ async fn b10_a_successful_invoke_does_not_change_the_connections_tool_list() {
     // Production prefetches every backend's tools at startup; without a warm
     // cache `promoted_tools_for_session` silently omits the promoted entry and
     // the case could not fail whatever the promotion did.
-    meta.list_tools(&json!({"server": "mock"}), MODERN_SESSIONLESS)
+    meta.list_tools_anon(&json!({"server": "mock"}), MODERN_SESSIONLESS)
         .await
         .expect("the mock backend's tools must be fetchable");
 
@@ -5023,7 +5023,7 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
     let sess = Some("session-bearing");
 
     assert_eq!(
-        discovery_names(&meta.list_tools(&json!({}), sess).await.unwrap()),
+        discovery_names(&meta.list_tools_anon(&json!({}), sess).await.unwrap()),
         STAGED_DEFAULT_TOOLS,
         "the staged set in the default state is not what the cases pin"
     );
@@ -5044,7 +5044,7 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
     );
 
     assert_eq!(
-        discovery_names(&meta.list_tools(&json!({}), sess).await.unwrap()),
+        discovery_names(&meta.list_tools_anon(&json!({}), sess).await.unwrap()),
         STAGED_OTHER_STATE_TOOLS,
         "gateway_list_tools does not honour the FSM state, so the staging is \
          not what B-08/B-09 assume"
@@ -5052,7 +5052,7 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
     assert_eq!(
         discovery_names(
             &meta
-                .search_tools(&json!({"query": "staged"}), sess)
+                .search_tools_anon(&json!({"query": "staged"}), sess)
                 .await
                 .unwrap()
         ),
@@ -5062,7 +5062,7 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
     assert_eq!(
         discovery_names(
             &meta
-                .list_tools(&json!({"server": "staged"}), sess)
+                .list_tools_anon(&json!({"server": "staged"}), sess)
                 .await
                 .unwrap()
         ),
@@ -5092,25 +5092,25 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
 
     let list_before = discovery_names(
         &meta
-            .list_tools(&json!({}), MODERN_SESSIONLESS)
+            .list_tools_anon(&json!({}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
     let search_before = discovery_names(
         &meta
-            .search_tools(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .search_tools_anon(&json!({"query": "staged"}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
     let single_before = discovery_names(
         &meta
-            .list_tools(&json!({"server": "staged"}), MODERN_SESSIONLESS)
+            .list_tools_anon(&json!({"server": "staged"}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
     let code_mode_before = discovery_names(
         &meta
-            .code_mode_search(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .code_mode_search_anon(&json!({"query": "staged"}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
@@ -5141,25 +5141,25 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
 
     let list_after = discovery_names(
         &meta
-            .list_tools(&json!({}), MODERN_SESSIONLESS)
+            .list_tools_anon(&json!({}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
     let search_after = discovery_names(
         &meta
-            .search_tools(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .search_tools_anon(&json!({"query": "staged"}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
     let single_after = discovery_names(
         &meta
-            .list_tools(&json!({"server": "staged"}), MODERN_SESSIONLESS)
+            .list_tools_anon(&json!({"server": "staged"}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
     let code_mode_after = discovery_names(
         &meta
-            .code_mode_search(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .code_mode_search_anon(&json!({"query": "staged"}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
@@ -5232,25 +5232,25 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
     // Connection B, which has issued no state change of its own.
     let list = discovery_names(
         &meta
-            .list_tools(&json!({}), MODERN_SESSIONLESS)
+            .list_tools_anon(&json!({}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
     let search = discovery_names(
         &meta
-            .search_tools(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .search_tools_anon(&json!({"query": "staged"}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
     let single = discovery_names(
         &meta
-            .list_tools(&json!({"server": "staged"}), MODERN_SESSIONLESS)
+            .list_tools_anon(&json!({"server": "staged"}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );
     let code_mode = discovery_names(
         &meta
-            .code_mode_search(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .code_mode_search_anon(&json!({"query": "staged"}), MODERN_SESSIONLESS)
             .await
             .unwrap(),
     );

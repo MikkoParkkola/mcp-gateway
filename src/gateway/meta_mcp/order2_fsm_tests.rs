@@ -21,23 +21,30 @@ pub(super) fn assert_refusal(meta: &MetaMcp, response: &JsonRpcResponse) {
 }
 
 async fn assert_membership(meta: &MetaMcp, session: Option<&str>, expected: &[&str]) {
+    // The FSM decides membership, never the caller, so these read as the
+    // anonymous caller: an identity would add a second variable to a test that
+    // is about workflow state.
+    let caller = super::anonymous_caller();
     for (label, value) in [
-        ("list", meta.list_tools(&json!({}), session).await.unwrap()),
+        (
+            "list",
+            meta.list_tools(&json!({}), session, &caller).await.unwrap(),
+        ),
         (
             "single-server list",
-            meta.list_tools(&json!({"server": "staged"}), session)
+            meta.list_tools(&json!({"server": "staged"}), session, &caller)
                 .await
                 .unwrap(),
         ),
         (
             "search tools",
-            meta.search_tools(&json!({"query": "staged"}), session)
+            meta.search_tools(&json!({"query": "staged"}), session, &caller)
                 .await
                 .unwrap(),
         ),
         (
             "code-mode search",
-            meta.code_mode_search(&json!({"query": "staged"}), session)
+            meta.code_mode_search_anon(&json!({"query": "staged"}), session)
                 .await
                 .unwrap(),
         ),
