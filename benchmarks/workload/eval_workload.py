@@ -285,6 +285,27 @@ def spread(values):
     return (hi - lo) / lo if lo > 0 else float("inf")
 
 
+def paired_ratios(candidate, baseline):
+    """Per-rep candidate/baseline ratio, paired by REP INDEX.
+
+    The ratio is the quantity the budget bounds, and it is the only thing the
+    interleaved design can measure without carrying the machine along with it.
+    Scoring each cell's absolute values throws the pairing away: on 2026-09-21
+    one rep read p99 58.74 (A), 74.97 (B) and 33.90 (C) against a ~3.0 typical
+    -- one machine excursion, charged to all three cells at once, which is why
+    every unpaired half-width blew out together (A 9.45, B 11.85, C 5.19) while
+    the per-rep ratios stayed at 0.3135 and 0.3462, some 30x tighter.
+
+    Pairing is positional: reps[i] of both cells came from the same pass of the
+    measured loop. A non-positive denominator yields the inf sentinel rather
+    than a ZeroDivisionError, which would leave the process by a route that is
+    not one of the four verdicts.
+    """
+    return [
+        (c / b) if b > 0 else float("inf") for c, b in zip(candidate, baseline)
+    ]
+
+
 def jsonable(value):
     """Map the inf sentinel to null on the way out of the process.
 
@@ -363,6 +384,36 @@ def evaluate(run: Path) -> int:
         }
 
     a, b, c = (report["cells"][k] for k in LEGACY_CELLS)
+
+    # Paired scoring, REPORTED AND GATING NOTHING. The gate's stability check
+    # below still reads the unpaired per-cell widths, unchanged: swapping the
+    # number a gate decides on is a threshold decision, and a threshold chosen
+    # after seeing the data is not a threshold. Both comparisons are kept --
+    # C/A and C/B are different ratios (0.3135 and 0.3462 on the 2026-09-21
+    # run), and min() over the two cells does not pair coherently per rep.
+    # The limit these half-widths belong against is the EXISTING margin for
+    # their metric, P50_BUDGET - 1 = 0.05 and P99_BUDGET - 1 = 0.10: the
+    # budget bounds the ratio, so the ratio's interval is what has to resolve
+    # inside it. Adopting that comparison is an operator decision, not this
+    # evaluator's, and no new constant was introduced for it.
+    report["paired"] = {}
+    for base in ("A", "B"):
+        entry = {}
+        for name in ("p50", "p99"):
+            ratios = paired_ratios(
+                [r[name] for r in cells["C"]], [r[name] for r in cells[base]]
+            )
+            finite = all(math.isfinite(r) for r in ratios)
+            interval = median_interval(ratios) if finite else None
+            entry[name] = {
+                "per_rep_ratio": ratios,
+                "median": pooled(ratios) if finite else float("inf"),
+                "interval": list(interval) if interval else None,
+                "rel_half_width": (
+                    rel_half_width(ratios) if finite else float("inf")
+                ),
+            }
+        report["paired"][f"C_over_{base}"] = entry
 
     # 3.5.1 is the current upgrade source, 3.5.0 the frozen reference. Holding
     # the budget against whichever legacy arm is faster is the conservative
