@@ -1417,6 +1417,101 @@ class WorkflowWiring(unittest.TestCase):
             f"runs where the others skip: {sorted(set(conditions))}",
         )
 
+    def test_the_publish_sites_admit_one_cell_of_event_by_ref_by_input(self):
+        # A condition reading github.ref has a case space of events x refs x
+        # inputs, and a dispatch can be aimed at a tag ref — where a ref test
+        # alone is true. That cell is how a run asking to rehearse could
+        # promote, sign and list a real release, and no assertion above can
+        # see it: they all read text. These evaluate it.
+        #
+        # The release sites admit exactly one cell, a tag PUSH. The two jobs
+        # the rehearsal needs admit that cell plus a dispatch whose input is
+        # set, in either spelling — and nothing else, so a dispatch that
+        # leaves the input alone builds and publishes nothing.
+        events = ("push", "pull_request", "workflow_dispatch")
+        refs = ("refs/heads/docs/ranking-1-release-line", "refs/tags/v4.0.0")
+        values = (True, "true", False, "false", None)
+
+        def evaluate(condition, event, ref, value):
+            """`condition` under one cell, translated rather than interpreted.
+
+            `&&`, `||`, `==`, `!=` and `startsWith` mean the same thing in
+            both languages for these operands, and a string equals no boolean
+            in either. A dotted name Python cannot spell is bound first, and
+            `true` is rewritten only unquoted: inside `'true'` it is a string
+            the workflow compares against, not a literal.
+            """
+            body = re.sub(r"^[>|][-+]?\s*", "", condition.strip())
+            body = re.sub(r"^\$\{\{(.*)\}\}$", r"\1", body.strip())
+            body = body.replace(
+                "needs.docker-manifest.outputs.is_prerelease", "prerelease"
+            )
+            body = body.replace("github.event_name", "event")
+            body = body.replace("github.ref", "ref")
+            body = body.replace("inputs.rehearse_manifest", "value")
+            body = body.replace("&&", " and ").replace("||", " or ")
+            body = re.sub(r"(?<!')\btrue\b(?!')", "True", body)
+            return bool(
+                eval(  # noqa: S307 - restricted namespace, workflow-authored text
+                    body,
+                    {"__builtins__": {}},
+                    {
+                        "startsWith": lambda a, b: str(a).startswith(b),
+                        "event": event,
+                        "ref": ref,
+                        "value": value,
+                        # A stable release: the one classification that lets
+                        # the registry job through, so the cell under test is
+                        # the event and the ref rather than the channel.
+                        "prerelease": "false",
+                    },
+                )
+            )
+
+        rehearsable = ("docker-build", "docker-manifest")
+        sites = {f"{job} (job)": job_if("ci.yml", job) for job in rehearsable}
+        sites["publish-mcp-registry (job)"] = job_if("ci.yml", "publish-mcp-registry")
+        for job in rehearsable:
+            for block in steps("ci.yml", job):
+                named = [
+                    line.split(":", 1)[1].strip()
+                    for line in block
+                    if re.match(r"^\s+(?:- )?name:", line)
+                ]
+                for line in block:
+                    if re.match(r"^\s*(?:- )?if:", line):
+                        label = f"{job} -> {named[0] if named else block[0].strip()}"
+                        sites[label] = line.split(":", 1)[1].strip()
+        # Asserted before it is read: a site scan that found nothing would
+        # report this whole matrix as passing.
+        self.assertEqual(
+            len(sites),
+            12,
+            f"ci.yml: expected 12 publish-path conditions, read {sorted(sites)}",
+        )
+
+        for label, condition in sites.items():
+            for event in events:
+                for ref in refs:
+                    for value in values:
+                        release = event == "push" and ref.startswith("refs/tags/v")
+                        rehearse = event == "workflow_dispatch" and value in (
+                            True,
+                            "true",
+                        )
+                        want = release or (
+                            label.endswith("(job)")
+                            and not label.startswith("publish-mcp-registry")
+                            and rehearse
+                        )
+                        self.assertEqual(
+                            evaluate(condition, event, ref, value),
+                            want,
+                            f"ci.yml {label}: {event} on {ref} with "
+                            f"rehearse_manifest={value!r} should be {want}: "
+                            f"{condition}",
+                        )
+
     def test_a_comment_is_stripped_and_a_quoted_hash_is_not(self):
         # Every assertion here reads uncommented text, so both directions are
         # load-bearing: a comment left in place satisfies an assertion the

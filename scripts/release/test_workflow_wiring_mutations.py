@@ -107,7 +107,8 @@ CASES = [
         "sign-step-loses-its-digest-binding",
         "ci.yml",
         "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         "        env:\n"
         "          LIST: ${{ steps.list.outputs.list }}\n"
         "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
@@ -122,10 +123,12 @@ CASES = [
         "digest-rebound-to-a-tag",
         "ci.yml",
         "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         "        env:\n          LIST: ${{ steps.list.outputs.list }}\n",
         "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         "        env:\n          LIST: ${{ steps.meta.outputs.version }}\n",
         CAUGHT,
     ),
@@ -170,7 +173,8 @@ CASES = [
         "step-without-a-name-borrows-its-neighbours-digest",
         "ci.yml",
         "      - name: Generate + attest an SBOM (SPDX JSON) per published digest\n"
-        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         "        env:\n"
         "          LIST: ${{ steps.list.outputs.list }}\n"
         "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
@@ -315,7 +319,8 @@ CASES = [
         "heredoc-steps-line-hides-a-lost-digest-binding",
         "ci.yml",
         "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         "        env:\n"
         "          LIST: ${{ steps.list.outputs.list }}\n"
         "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
@@ -345,7 +350,8 @@ CASES = [
         "steps-key-in-a-heredoc-hides-the-signing-step",
         "ci.yml",
         "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         "        env:\n"
         "          LIST: ${{ steps.list.outputs.list }}\n"
         "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
@@ -402,9 +408,12 @@ CASES = [
         "digest-value-quoted",
         "ci.yml",
         "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         "        env:\n          LIST: ${{ steps.list.outputs.list }}\n",
         "      - name: Cosign keyless-sign the list and both children\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         '        env:\n          LIST: "${{ steps.list.outputs.list }}"\n',
         TOLERATED,
     ),
@@ -441,10 +450,12 @@ CASES = [
         "digest-expression-without-inner-spaces",
         "ci.yml",
         "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         "        env:\n          LIST: ${{ steps.list.outputs.list }}\n",
         "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         "        env:\n          LIST: ${{steps.list.outputs.list}}\n",
         TOLERATED,
     ),
@@ -617,7 +628,8 @@ CASES = [
         "digest-binding-printed-by-a-step-opening-with-env",
         "ci.yml",
         "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: startsWith(github.ref, 'refs/tags/v')\n"
+        "        if: github.event_name == 'push'"
+        " && startsWith(github.ref, 'refs/tags/v')\n"
         "        env:\n"
         "          LIST: ${{ steps.list.outputs.list }}\n"
         "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
@@ -809,7 +821,8 @@ CASES = [
         # verify-by-digest below passes anyway.
         "release-tag-created-before-signing",
         "ci.yml",
-        '          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}" \\\n',
+        '          docker buildx imagetools create'
+        ' --tag "${IMAGE}:sha-${GITHUB_SHA}${REHEARSAL_SUFFIX}" \\\n',
         '          docker buildx imagetools create --tag "${IMAGE}:${VERSION}" \\\n',
         CAUGHT,
     ),

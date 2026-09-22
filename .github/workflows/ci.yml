@@ -450,8 +450,13 @@ jobs:
     # event payload, and a bare truthiness test on the string form is true —
     # which would build and push on a dispatch that asked for nothing. Neither
     # comparison matches false or "false", so the default case runs nothing.
+    #
+    # The tag clause requires a push, because a dispatch can be aimed at a tag
+    # ref: on `refs/tags/v4.0.0` a ref test alone is true, and the release
+    # steps below would promote, sign and list a real release from a run that
+    # asked to rehearse. A release tag is only ever legitimate from a push.
     if: >-
-      startsWith(github.ref, 'refs/tags/v')
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
       || (github.event_name == 'workflow_dispatch'
       && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))
     # Each leg builds natively and starts its own image on its own architecture,
@@ -489,7 +494,7 @@ jobs:
       # pushes by digest under no name — so the tag path is unchanged and the
       # rehearsal reaches the build.
       - name: Extract tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         id: meta
         # This workflow cannot read release.yml's job outputs — it fires on the
         # same tag independently — so it runs the same gate itself. Publishing a
@@ -586,11 +591,12 @@ jobs:
   docker-manifest:
     name: Docker manifest list
     runs-on: ubuntu-latest
-    # Same condition as docker-build, whose digests this job assembles. The
-    # steps below that promote, sign or list a release carry the tag scope
-    # themselves, so a rehearsal ends at the both-platforms assertion.
+    # Same condition as docker-build, whose digests this job assembles, and
+    # the tag clause is scoped to a push for the same reason: a dispatch aimed
+    # at a tag ref must not admit the release steps. Those steps carry the
+    # clause themselves, so a rehearsal ends at the both-platforms assertion.
     if: >-
-      startsWith(github.ref, 'refs/tags/v')
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
       || (github.event_name == 'workflow_dispatch'
       && (inputs.rehearse_manifest == true || inputs.rehearse_manifest == 'true'))
     needs: docker-build
@@ -608,7 +614,7 @@ jobs:
       # and every step that reads these outputs is scoped the same way, so no
       # release name is derived from an unchecked version.
       - name: Extract tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         id: meta
         run: python3 scripts/release/check_tag_manifest.py
 
@@ -646,6 +652,14 @@ jobs:
       # no signature covers.
       - name: Create the manifest list under a provenance tag
         id: list
+        env:
+          # A rehearsal writes its own name. Both paths would otherwise stage
+          # under :sha-<GITHUB_SHA>, and a release run at the same commit
+          # could read back a concurrent rehearsal's index between the create
+          # and the inspect below — signing bytes whose children it never
+          # recorded. Empty on a tag push, so the release name is unchanged;
+          # the run id and attempt make each rehearsal's name its own.
+          REHEARSAL_SUFFIX: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) && '' || format('-rehearsal-{0}-{1}', github.run_id, github.run_attempt) }}
         run: |
           set -euo pipefail
           IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
@@ -655,10 +669,10 @@ jobs:
           # rather than failed, and a one-platform "list" published under the
           # release tag is the defect this job exists to prevent.
           test -n "${AMD64}" && test -n "${ARM64}"
-          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}" \
+          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}${REHEARSAL_SUFFIX}" \
             --annotation "index:io.modelcontextprotocol.server.name=io.github.MikkoParkkola/mcp-gateway" \
             "${IMAGE}@${AMD64}" "${IMAGE}@${ARM64}"
-          LIST="$(docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}" \
+          LIST="$(docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}${REHEARSAL_SUFFIX}" \
             --format '{{.Manifest.Digest}}')"
           docker buildx imagetools inspect "${IMAGE}@${LIST}"
           {
@@ -689,21 +703,21 @@ jobs:
       # naming it :VERSION is what a release does with an index nobody has
       # asked for yet.
       - name: Install cosign
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         # cosign-release is pinned so flag behavior can't drift under a v3 default.
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v2.5.2
 
       - name: Install syft (SBOM)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
 
       # The list and both children are signed. A client on arm64 resolves the
       # arm64 child, so signing only the list would leave what that client
       # actually runs unverifiable under a platform-specific reference.
       - name: Cosign keyless-sign the list and both children
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           LIST: ${{ steps.list.outputs.list }}
           AMD64: ${{ steps.list.outputs.amd64 }}
@@ -716,7 +730,7 @@ jobs:
           done
 
       - name: Generate + attest an SBOM (SPDX JSON) per published digest
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           LIST: ${{ steps.list.outputs.list }}
           AMD64: ${{ steps.list.outputs.amd64 }}
@@ -731,7 +745,7 @@ jobs:
           done
 
       - name: Verify the release signature + SBOM attestation
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           LIST: ${{ steps.list.outputs.list }}
           AMD64: ${{ steps.list.outputs.amd64 }}
@@ -762,7 +776,7 @@ jobs:
       # a child, but a single source with no annotations is copied rather than
       # composed. The step below is the runtime check on that distinction.
       - name: Publish the release tags (copy the verified index by digest)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           LIST: ${{ steps.list.outputs.list }}
@@ -792,7 +806,7 @@ jobs:
       # an added annotation, a buildx that normalises — lands on a different
       # digest, and the release tag would then serve bytes no signature covers.
       - name: Assert the release tag resolves to the signed digest
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           LIST: ${{ steps.list.outputs.list }}
@@ -817,7 +831,7 @@ jobs:
     # Skipped on a prerelease. The MCP Registry is a discovery surface where
     # nobody opts in to a version, so listing a release candidate there exposes
     # it to every client that browses the registry.
-    if: startsWith(github.ref, 'refs/tags/v') && needs.docker-manifest.outputs.is_prerelease != 'true'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.docker-manifest.outputs.is_prerelease != 'true'
     needs: docker-manifest
     runs-on: ubuntu-latest
     permissions:
