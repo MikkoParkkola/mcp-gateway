@@ -5463,14 +5463,14 @@ mod identity_propagation_enforcement_tests {
         );
     }
 
-    // IDP.1 end-to-end via Code Mode (gateway_execute): an authenticated caller
-    // invoking an identity-required backend through code_mode_execute reaches the
-    // backend WITH the per-user Bearer credential on the wire. Regression guard
-    // for the review finding that Code Mode dropped verified_identity.
+    // IDP.1 end-to-end via Code Mode (gateway_execute): an identified caller reaches an
+    // identity-required backend WITH its per-user Bearer credential on the wire.
+    // Regression guard for the review finding that Code Mode dropped verified_identity.
     #[tokio::test]
     async fn code_mode_execute_propagates_identity_to_backend() {
         let (m, captured) = meta_with_capturing_backend();
         let id = identity();
+        m.seed_caller_slot_for_test("mem", &id).await;
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
             task: None,
             signing: None,
@@ -5550,10 +5550,10 @@ mod identity_propagation_enforcement_tests {
     // would let the credential go on the wire with zero audit record.
     #[tokio::test]
     async fn required_mint_without_transparency_log_fails_closed() {
-        // Same required backend + strategy + capturing transport as the
-        // propagation-succeeds test, but with NO transparency log wired.
+        // The propagation-succeeds fixture with NO transparency log wired.
         let (m, captured) = meta_with_capturing_backend_no_log();
         let id = identity();
+        m.seed_caller_slot_for_test("mem", &id).await;
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
             task: None,
             signing: None,

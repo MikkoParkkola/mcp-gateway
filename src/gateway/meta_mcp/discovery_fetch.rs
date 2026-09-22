@@ -175,3 +175,38 @@ impl MetaMcp {
         }
     }
 }
+
+#[cfg(test)]
+impl MetaMcp {
+    /// Test-only: open the slot production resolves for `caller` on `server`
+    /// with the transport already seeded on the shared one.
+    ///
+    /// A propagating backend gives an identified caller its own slot whatever
+    /// its `session_mode` (`Backend::pool_key_for`), so a fixture that seeds
+    /// only the shared slot would send that caller to a slot with no wire. The
+    /// binding is `resolve_caller_credential`'s `cache_binding` — the function
+    /// dispatch calls — never a restated format, so a fixture cannot seed a slot
+    /// production would not select. A caller the resolver refuses gets no slot
+    /// here, which leaves a refusal test observing the very resolution it
+    /// asserts on.
+    ///
+    /// THE RESOLVE IS REAL: it mints, audits and — for an account-bound backend
+    /// — releases custody. Seed only backends whose test does not count those.
+    pub(crate) async fn seed_caller_slot_for_test(&self, server: &str, caller: &VerifiedIdentity) {
+        let Ok((_, Some(binding))) = self
+            .resolve_propagation_credential(server, Some(caller))
+            .await
+        else {
+            return;
+        };
+        let backend = self
+            .backends
+            .get(server)
+            .expect("seeded backend is registered");
+        let shared = backend
+            .pooled_transport_for_test(&crate::backend::PoolKey::Shared)
+            .expect("the shared slot is seeded first");
+        backend
+            .set_pooled_transport_for_test(&crate::backend::PoolKey::PerUser { binding }, shared);
+    }
+}
