@@ -843,7 +843,62 @@ where the expected version was never observed. Per-binary `--version` off the
 measurement path matches every label (§1.3.4). The trace cannot separate the
 three 4.0.0 arms from one another; that limit stands.
 
-## 4a. What the next run should start with
+### 4.8 The headline ratio is not stationary across the run
+
+Checked because load fell systematically — 21.57 early, then 7.88, 7.13, 6.35,
+6.50 in the last cycles — and a trend is not noise.
+
+| quantity | value |
+|---|---|
+| rho(cycle index, `REL/A`) within kept | **+0.482** |
+| rho(load1, `REL/A`) within kept | −0.281 |
+| kept first half, `REL/A` median | **1.1064** (mean load 8.71) |
+| kept second half, `REL/A` median | **1.1472** (mean load 7.24) |
+
+**`REL/A` rises about 4pp across the kept set**, and reads *higher* in the
+quieter late cycles. So the headline 1.1237 is a median over a non-stationary
+series, and the value depends on when in the night it was measured. Under lower
+load the apparent regression is **larger**, not smaller.
+
+This is a real qualification on Finding 1 and it points the same way as the
+DRIFTING settledness verdict (§4.3): the control drifted, the denominator
+drifted −25.4%, and the ratio drifted too. **The system was non-stationary, and
+"provisional" is the honest label for every ratio here.** It also means the
+lower bound of 1.1010 is the conservative end of a moving quantity rather than
+a stable estimate — which does not rescue the budget breach from being
+provisional, but does mean the breach is not an artefact of the quiet cycles.
+
+### 4.9 Pairing gain, measured
+
+The design rests on pairing, so its benefit is measured rather than assumed.
+Per-arm coefficient of variation across the 15 kept cycles, unpaired (the arm's
+own raw p50) against paired (its ratio to `A` in the same cycle):
+
+| arm | unpaired CV | paired CV | gain |
+|---|---|---|---|
+| `Aprime` | 7.49% | 4.72% | 1.59× |
+| `B` | 7.20% | 4.56% | 1.58× |
+| `P3` | 7.94% | 5.13% | 1.55× |
+| `P4` | 9.16% | 4.33% | 2.12× |
+| `REL` | 7.32% | 4.16% | 1.76× |
+
+`A` itself carries a 9.17% unpaired CV. **Pairing buys a 1.55–2.12× reduction
+on the P50** here.
+
+That matters because it does **not** hold universally. The `NFR.WORKLOAD.1`
+12-rep gate (§5.2) finds pairing marginally *worse* than unpaired for its p50 —
+cell `A` unpaired relative half-width 0.091 against paired `C/A` 0.1057 — while
+buying roughly 30× on p99. The difference between the two harnesses is the one
+this report is about: **that harness runs its cells in fixed order** (`for rep:
+for cell in A B C D E`), so `C` sits two slots after `A` in every rep and each
+ratio carries an uncancelled position term. This design rotates, so the term
+averages out and the pairing gain survives.
+
+So the sharper form of the lesson: pairing buys a great deal on tail statistics
+in any design, and buys something on medians **only if the ordering is
+randomised or rotated**. Under fixed ordering, a paired median can be worse
+than an unpaired one — the ratio carries two noise sources and gains nothing
+back.
 
 None of these were applied mid-flight: `n` is fixed in advance and a geometry
 change partway would split the kept set into two incomparable halves. They are
@@ -1001,6 +1056,56 @@ instrument-disagreement finding to report. Marginal agreement at a 0.07pp
 overlap is not strong corroboration either, which is why §5.2's decision to cut
 the cross-validation framing stands rather than being reinstated by this result.
 
+### 5.2a A third instrument: admitted as a fourth ladder point, with limits
+
+The `NFR.WORKLOAD.1` gating run `gating-2026-09-21-n12` reports a paired p50
+median ratio of **C/A = 1.0882** (and C/B = 1.0886), computed per rep from an
+interleaved design and then medianed — the same estimator family used here, not
+the invalid ratio-of-medians route §5.2 rejects.
+
+**The identity check passes on the denominator and fails on the numerator.**
+Verified from `.checkout_sha` on the measurement host:
+
+| cell | commit | is it this report's arm? |
+|---|---|---|
+| `A` | `32f135a6` | **yes — v3.5.0, the same baseline** |
+| `B` | `e138680a` | **yes — v3.5.1, the same arm** |
+| `C` | `dbd4deae` | **no** — first-parent index **99**, between `P4` (92) and `REL` (115) |
+
+So `C/A` is not a replication of `REL/A`; it is a **measurement of a different
+point on this report's own ladder**, against the same baseline. That makes it
+admissible where the powered run was not — the powered run divided by v3.5.1,
+the wrong baseline for this criterion, which is why §5.2 cut it.
+
+Placed on the ladder (idx0 1.0000, idx27 1.0166, idx69 1.1007, idx92 1.1592,
+**idx99 1.0882 external**, idx115 1.1237):
+
+- It sits **well above parity**, corroborating the post-idx69 elevation and
+  therefore Finding 2's step, from an independent harness on a different day.
+- It is **3.6pp below** this run's `REL/A`, inside the 6.13% floor — consistent.
+- It is **7.1pp below** this run's `P4`, marginally outside the floor. Given
+  `P4` is the ladder's high point and `idx92`→`idx115` already reads −3.55pp,
+  the external point is more consistent with `P4` being high than with a real
+  fall between 92 and 99.
+
+**One limit, and it is the limit this report exists to document.** That harness
+runs cells in **fixed order** (`for rep: for cell in A B C D E`), so `C` is two
+slots after `A` in every rep and its ratio carries an uncancelled position term
+(§1.3). Its p50 is therefore subject to exactly the effect rotation was adopted
+to remove — visible in its own numbers, where pairing fails to improve its p50
+(§4.9). It is corroboration of direction, not of magnitude.
+
+**Two independent findings from that run, which stand on their own:**
+
+- Its rep 2 is a **common-mode machine excursion** — p99 of A=58.74, B=74.97,
+  C=33.90 against ~3.0 typical, all cells elevated 10–25× together. That is
+  independent confirmation of §4a.6's cycle-10 observation, in a different
+  harness, arrived at without being looked for.
+- Its **paired p99 median ratio is 0.9789 — no p99 regression** — with paired
+  relative half-widths ~30× tighter than unpaired (C/A 0.3135 against A 9.45).
+  **This report makes no p99 claim**, so that is a corroborating negative on a
+  question left open here rather than a result of this run.
+
 ### 5.3 Findings
 
 Three separable results. **All three are provisional**, because the
@@ -1126,15 +1231,28 @@ both are withdrawn rather than quietly revised:
 
 **Withdrawn — "within-cycle drift tracks host load".** At n=9 this read
 `rho(load1, |Aprime/A − 1|) = 0.850` and was reported as promoting the
-mechanism from plausible to measured. **At n=18 it is 0.028 — no relationship
-at all.** The 0.850 was a small-sample artefact.
+mechanism from plausible to measured. **At n=18 it is +0.028 — no relationship
+at all**, and on the kept set alone it is **−0.315**, i.e. weakly the *opposite*
+sign. The 0.850 was a small-sample artefact.
 
 That has a consequence which cuts *in favour* of the run and must therefore be
 stated carefully rather than gratefully: if drift does not track load, then
 rule (c) is **not** preferentially excluding high-load cycles, so **the kept set
 is not load-biased** and the scope-boundary caveat built on that premise
 (earlier drafts of §1.3.1) was unnecessary. The exclusions confirm it directly —
-cycle 15 was excluded at load 7.13, among the *lowest* in the run. The
+cycle 15 was excluded at load 7.13, among the *lowest* in the run.
+
+**The direction claim survives the retraction, by a better route.** That rule
+(c) removed cycles which would have *understated* the effect does not need the
+load correlation at all — it is verifiable by inspection. The three excluded
+cycles read `REL/A` = **0.9946** (cycle 1), **1.0777** (cycle 7) and **1.0890**
+(cycle 15), all three **below** the kept median of 1.1237. Including them would
+have lowered the estimate. So rule (c) is demonstrably "we measured where the
+instrument could resolve" and not "we excluded what disagreed" — established
+from the per-cycle table in §4.4 rather than from a correlation that did not
+hold. Note the mean load of excluded cycles (14.08) does exceed the kept mean
+(7.92), but that is two cycles of three and, with rho ≈ 0 overall, is not a
+mechanism. The
 observation that cycle 1 at load 21.57 showed no regression remains true as a
 single observation, but with rho ≈ 0 it cannot be generalised to "high load
 destroys the signal".
