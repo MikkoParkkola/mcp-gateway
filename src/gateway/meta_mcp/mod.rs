@@ -2545,14 +2545,13 @@ pub(crate) fn publish_identity_grants(
     );
 }
 
-// MIK-7334.CATALOGUE.1 revocation conjunct — the grant-reload trigger cells.
-//
-// NOTE, and it is a finding rather than a style choice: the sibling file
-// `policy_epoch_tests.rs` has NO `mod` declaration anywhere in `src/`, so it
-// has never compiled and has never run. The live-identity-grant-reload design
-// cites it as proof that a pre-change response-cache entry cannot be served
-// after `set_identity_grants` — evidence that does not execute. Registering
-// this module explicitly so the same thing cannot happen to these cells.
+// NOTE, and it is a finding rather than a style choice: `policy_epoch_tests.rs`
+// once had no `mod` declaration anywhere in `src/`, so it never compiled while
+// the live-identity-grant-reload design cited it as proof that a pre-change
+// response-cache entry cannot be served after `set_identity_grants`. Declared
+// below now, and it discriminates: dropping the `fetch_add` in
+// `publish_identity_grants` reddens both cells. Registering this one explicitly
+// so the same cannot happen to these.
 #[cfg(test)]
 #[path = "grant_reload_tests.rs"]
 mod grant_reload_tests;
