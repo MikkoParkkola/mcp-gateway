@@ -3,14 +3,38 @@
 //! S10 crash durability and S13 replay refusal, across REAL process restarts.
 //!
 //! A store holds both directory locks for its lifetime, so every restart here
-//! is a separate process, never a dropped struct. The mid-commit case dies at a
-//! test-only checkpoint between the candidate's sync and the manifest
-//! replacement — the one window where a crash can leave a written candidate
-//! that no authority accepts. Planting such a file by hand afterwards would
-//! only re-test lookup; letting the writer die there tests the writer.
+//! is a separate process, never a dropped struct. Planting a half-written file
+//! by hand afterwards would only re-test lookup; letting the writer die tests
+//! the writer.
+//!
+//! The commit path has exactly ONE instant that changes the RESTART-VISIBLE
+//! answer: the authority rename at `commit.rs:224`. Every `boundary!` fires
+//! BEFORE the step it names, so a crash at any of the eight boundaries up to
+//! and including `ManifestRename` leaves the prior manifest in place; only the
+//! `ParentSync` check — spelled out at `commit.rs:231-237` because it needs
+//! the post-rename refusal category — runs after that rename, where the new
+//! generation is already what a restart reads back. `every_named_boundary`
+//! drives all nine and pins the single admissible generation for each, so
+//! neither class is argued, both are measured, and a boundary added on the far
+//! side of the rename cannot default into the wrong class.
+//!
+//! This harness kills the child process; it does not cut power. `rename(2)`
+//! is not durable until its parent directory is synced, so between
+//! `ManifestRename` and `ParentSync` a real power loss can still roll the
+//! rename back — a process kill cannot, because a completed rename is already
+//! visible to every reader on the same machine, crashed or not. Read
+//! `ParentSync`'s "durable" here as durable-under-process-restart; it is not
+//! power-loss durability evidence, and a future reader must not cite it as
+//! such or remove that fsync as redundant.
+//!
+//! `faults::ALL` is a maintained list, not compile-time derived from
+//! `Boundary`: adding a variant forces a compile error in every exhaustive
+//! match over `Boundary` (`Boundary::name`, this module's
+//! `admissible_after`), so a new boundary cannot silently misclassify, but it
+//! does not automatically add itself to `ALL` — that still needs a person.
 
 use super::commit::generation;
-use super::faults::Boundary;
+use super::faults::{self, Boundary};
 use super::probe::{self, Outcome};
 use super::{AccountLookup, PersonalAccountStore, alice, config, grant};
 use std::io::Write as _;
@@ -49,6 +73,9 @@ fn account_child() {
         "lookup" => match store.lookup(&key) {
             Ok(AccountLookup::Absent) => "absent".to_owned(),
             Ok(AccountLookup::Connected(record)) if record == grant() => "connected".to_owned(),
+            Ok(AccountLookup::Connected(record)) if record == generation(SECOND) => {
+                "connected_second".to_owned()
+            }
             Ok(AccountLookup::Revoked(_)) => "revoked".to_owned(),
             Ok(other) => format!("state:{other:?}"),
             Err(error) => format!("lookup:{error:?}"),
@@ -98,21 +125,44 @@ fn write_private(path: &Path, bytes: &[u8]) {
     file.write_all(bytes).unwrap();
 }
 
-/// Whether the child reported one of the two failures S10 permits after a
-/// crash: unavailable, or corrupt. Nothing else qualifies — `InvalidAccountKey`,
-/// `InvalidConfiguration` and `CapacityExhausted` are all wrong answers here,
-/// and a prefix match would have accepted every one of them.
-fn explicit_failure(outcome: &Outcome) -> bool {
-    matches!(
-        outcome,
-        Outcome::Answered { text, .. } if matches!(
-            text.as_str(),
-            "open:StorageUnavailable"
-                | "open:NotAuthentic"
-                | "lookup:StorageUnavailable"
-                | "lookup:NotAuthentic"
-        )
-    )
+/// The one post-restart answer a crash at `boundary` may leave.
+///
+/// `boundary!` is expanded before the step it names — the candidate's write,
+/// sync, rename and parent sync at `commit.rs:93-103`, the manifest's at
+/// `commit.rs:216-223` — so all of those die with the authority manifest
+/// untouched and the prior generation still the durable one. The candidate
+/// written for the second commit is named by nothing: `open` never scans the
+/// record directory (`storage.rs:405`) and `lookup` opens only the basename the
+/// manifest names (`storage.rs:594-600`), so an uncommitted candidate cannot
+/// produce a recovery failure — which is why this returns one exact answer and
+/// not an answer-or-error disjunction. `ParentSync` is the sole exception: its
+/// check at `commit.rs:231-237` runs AFTER `fs::rename` replaced the authority
+/// at `commit.rs:224`, so the new generation is already the only admissible one.
+///
+/// Exhaustive on purpose. A boundary added on the far side of that rename must
+/// not silently default into the prior-generation class; it must fail to
+/// compile until someone classifies it.
+fn admissible_after(boundary: Boundary) -> &'static str {
+    match boundary {
+        Boundary::RecordWrite
+        | Boundary::RecordSync
+        | Boundary::RecordRename
+        | Boundary::RecordParentSync
+        | Boundary::CommitCheckpoint
+        | Boundary::ManifestWrite
+        | Boundary::ManifestSync
+        | Boundary::ManifestRename => "connected",
+        Boundary::ParentSync => "connected_second",
+    }
+}
+
+/// Initialize a store and commit the first generation through a real child, so
+/// every case below starts from a durable prior generation nobody is holding.
+fn store_with_first_generation() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    PersonalAccountStore::initialize(config(root.path())).expect("offline initialization");
+    assert_eq!(drive(root.path(), "commit", None), answered("committed"));
+    root
 }
 
 #[test]
@@ -169,13 +219,62 @@ fn s10_a_crash_between_candidate_sync_and_manifest_replacement_keeps_the_prior_g
         "the crash happened after the candidate was written, so the window was real"
     );
 
-    // Restart. The prior generation, or an explicit failure. Never the
-    // uncommitted candidate, never absence, never silence.
-    let observed = drive(root.path(), "lookup", None);
-    assert!(
-        observed == answered("connected") || explicit_failure(&observed),
-        "after a mid-commit crash: the prior generation or an explicit failure, never {observed:?}"
+    // Restart. Exactly the prior generation. Never the uncommitted candidate,
+    // never absence, never silence — and never a failure either: nothing names
+    // the candidate, so there is no recovery step left to fail. A disjunction
+    // with "or an explicit failure" would have been satisfied by a startup that
+    // failed for a wholly unrelated reason.
+    assert_eq!(
+        drive(root.path(), "lookup", None),
+        answered("connected"),
+        "after a mid-commit crash the prior generation loads, with no failure arm"
     );
+}
+
+#[test]
+fn s10_a_restart_with_no_crash_injected_loads_the_generation_that_was_committed() {
+    let root = store_with_first_generation();
+    // Leg one, the control the crash cases need: a restart that was never
+    // interrupted still loads the prior generation, so "connected" after a
+    // crash is durability and not an artifact of the reading process.
+    assert_eq!(
+        drive(root.path(), "lookup", None),
+        answered("connected"),
+        "a healthy restart loads the generation the previous process committed"
+    );
+    // Leg two: the same second commit the crash cases interrupt DOES move the
+    // answer when it is allowed to finish. Without this, every "connected" above
+    // would also be satisfied by a `commit_second` that quietly did nothing.
+    assert_eq!(
+        drive(root.path(), "commit_second", None),
+        answered("committed_second")
+    );
+    assert_eq!(
+        drive(root.path(), "lookup", None),
+        answered("connected_second"),
+        "a completed second commit is the new durable answer across a restart"
+    );
+}
+
+#[test]
+fn s10_a_crash_at_every_named_boundary_leaves_exactly_one_admissible_generation() {
+    for boundary in faults::ALL {
+        let root = store_with_first_generation();
+        assert_eq!(
+            drive(root.path(), "commit_second", Some(boundary.name())),
+            Outcome::Died {
+                checkpoint: Some(boundary.name().to_owned()),
+            },
+            "the child must die AT {}, announced before it dies, not merely end",
+            boundary.name()
+        );
+        assert_eq!(
+            drive(root.path(), "lookup", None),
+            answered(admissible_after(boundary)),
+            "a crash at {} admits exactly one generation after restart",
+            boundary.name()
+        );
+    }
 }
 
 #[test]
