@@ -161,7 +161,7 @@ mode a fail-closed reload would manufacture.
 |---|---|---|---|---|
 | **(a) reuse `config_reload`** | One sink field, one call, one outcome line. Watcher, debounce, lock, refusal vocabulary and admin gating already exist. | **None new.** `gateway_reload_config` is already admin-gated (`ADMIN_META_TOOLS`, `router/authorization.rs:73-77`); no new route, port, signal or file handle. | Inherits the module's refuse-and-publish-nothing posture. Risk is *coupling* — §D1. | All. Pure Rust + `notify`, already shipped. |
 | **(b) SIGHUP** | New signal task, new shutdown interaction. | Low, but any process that can signal the gateway can force a re-read. | Signals are edge-triggered and coalesce; two revokes during one handler run read the file once — fine here (the file is the whole state), but it has no outcome channel: the operator gets a log line, not a result. | **Unix only.** **V** the repo handles exactly one signal today, `SignalKind::terminate()` at `src/gateway/server/support.rs:330`; **V (absence)** `rg "SIGHUP\|signal_hook\|unix::signal\|SignalKind" src/` finds no other. Windows is not a shipped target, but a signal-only design must say so, and it cannot be triggered from inside a container by an MCP client at all. |
-| **(c) filesystem watcher on the grants file** | Moderate. Needs directory-watch treatment (editors and `tokio::fs::write` replace rather than mutate) plus debounce. | Low. | **Torn reads.** **V** `tokio::fs::write` (`commands/identity.rs:234`) is truncate-then-write, so the watcher fires reliably *inside* the partial-file window. Every `grant add` becomes a reload attempt against a corrupt file. | All. |
+| **(c) filesystem watcher on the grants file** | Moderate. Needs directory-watch treatment (editors and `tokio::fs::write` replace rather than mutate) plus debounce. | Low. | **Torn reads, and not the benign kind.** **V** `tokio::fs::write` (`commands/identity.rs:234`) is truncate-then-write, so the watcher fires reliably *inside* the partial-file window. That window is **not** reliably a parse failure: a prefix ending after the header parses as zero grants (§D3.1), so the watcher would publish a silent revoke-all rather than hit the refusal. MVP piece 6 closes the window for our own writer; this row is why (c) still needs its own guard for writers that are not ours. | All. |
 | **(d) admin/control-plane route** | New route, new request shape, new RBAC wiring — **or none at all, because it exists**. | **V** `mutate_grant` (`src/gateway/ui/control_plane.rs:175`) already does admin-gated, mandatory-audit grant mutation via `apply_mutation` + `commit_grant_audited`. But it writes `ControlPlaneGrant` rows to the **control-plane store**, a different object from `LocalIdentityGrantStore`; **V** the identity-grant surface there is read-only projection (`control_plane_grant_from_identity`, `:685`). | Wiring the two grant worlds together is a merge-semantics design, not a reload design. | All. |
 
 ### D1 — Trigger: reuse `config_reload`, on a **separate grant path** under the same lock
@@ -172,8 +172,9 @@ Three reasons, from the source.
 
 **1. Every part except the read already exists, and (c) and (d) each buy one part at the
 price of a new failure class.** (b) is Unix-only and has no outcome channel. (c) buys
-zero-touch liveness and pays with a torn-read race that (a) does not have, because (a) is
-triggered by an operator act rather than by the write itself. (d) is not a reload trigger;
+zero-touch liveness and pays with a partial-file race that (a) does not have, because (a) is
+triggered by an operator act rather than by the write itself — and §D3.1 shows that race is
+not merely a failed parse but can be a silent revoke-all. (d) is not a reload trigger;
 it is a second grant store.
 
 **2. Grants are not part of `Config`, so they must not be sequenced behind the config patch.**
@@ -699,11 +700,13 @@ Recorded because a design that survives its own author unchanged is a finding.
 
 **5.1 It is operator-triggered, and the threat model for revocation usually is not.** A
 revocation that lands only when someone runs a reload is weaker than one that lands on write.
-Every argument in §D1 for (a) over (c) is about *torn reads and review surface*, not about
-(c) being the wrong end state. **(c) is the right end state**; this slice is the part of it
-that can ship reviewed. If a reviewer decides the gap between `revoke` and the next reload is
-unacceptable for the release, the answer is to pull the watcher forward and pay the atomicity
-decision now — not to argue this slice is sufficient.
+Every argument in §D1 for (a) over (c) is about *review surface*, not about (c) being the
+wrong end state. **(c) is the right end state**; this slice is the part of it that can ship
+reviewed — and it is now a **smaller** remaining step than when this was drafted, because MVP
+piece 6 pays the atomicity decision here rather than deferring it with the watcher. What (c)
+still owes is watcher mechanics plus a guard for partial files written by tools that are not
+ours (§2, option c). If a reviewer decides the gap between `revoke` and the next reload is
+unacceptable for the release, pull the watcher forward — do not argue this slice is sufficient.
 
 **5.2 The grants-only lock removes the stall but not contention, and I have not measured what
 remains.** §D1 reason 3 takes a grants-only mutex, so a revocation no longer waits on
