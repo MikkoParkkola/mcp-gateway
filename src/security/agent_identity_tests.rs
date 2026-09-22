@@ -383,6 +383,8 @@ fn an_unmapped_principal_declaring_nothing_is_accepted() {
 /// actually be signalled, or the ruling's audit promise is empty.
 #[test]
 fn an_mtls_mismatch_is_audited_not_refused() {
+    let mut config = cfg(true, true, &[]);
+    config.incomparable_proof_sources = vec![ProofSource::MutualTls];
     let identity = with_label(
         proven(
             "spiffe://cluster/ns/agents/sa/runner",
@@ -391,7 +393,7 @@ fn an_mtls_mismatch_is_audited_not_refused() {
         "runner",
     );
     assert_eq!(
-        validate_agent_identity(&identity, &cfg(true, true, &[])).expect("mTLS mismatch refused"),
+        validate_agent_identity(&identity, &config).expect("a waived mTLS mismatch was refused"),
         IdentityAudit::DeclaredLabelMismatch,
         "the mismatch was accepted but not signalled"
     );
@@ -453,14 +455,23 @@ fn a_named_mtls_subject_refuses_a_contradicting_label() {
         .expect_err("a mapped mTLS subject accepted a label outside its set");
 }
 
-/// The control for the row above, and the property RULING 2 settled: an mTLS
-/// subject the operator has NOT named keeps the incomparable default —
-/// accepted and audited, never refused. Without this row, the fix above would
-/// be indistinguishable from making every mTLS mismatch a refusal, which is
-/// the outage the incomparability ruling exists to prevent.
+/// The escape hatch the outage argument needs, now gated on the waiver the
+/// design always specified.
+///
+/// RENAMED from `..._keeps_the_incomparable_default`. That name asserted the
+/// widened behaviour as the guarantee: acceptance was never a default in any
+/// authority above the code. The ruling says a contradicting label "is a
+/// REFUSAL, not a silent override"; the design narrowed that to accepted
+/// **under a namespace waiver**; the implementation dropped the condition.
+/// Each step small, the composition inverting the ruling.
+///
+/// Without this row the refusal above would be indistinguishable from making
+/// every mTLS mismatch a refusal, which is the outage the waiver exists to
+/// prevent — so the escape is pinned, and pinned as an opt-in.
 #[test]
-fn an_unnamed_mtls_subject_keeps_the_incomparable_default() {
-    let config = cfg(true, true, &[]);
+fn a_waived_namespace_accepts_and_audits_a_mismatch() {
+    let mut config = cfg(true, true, &[]);
+    config.incomparable_proof_sources = vec![ProofSource::MutualTls];
     let identity = with_label(
         proven(
             "spiffe://cluster/ns/agents/sa/runner",
@@ -488,8 +499,12 @@ fn a_label_mapping_does_not_cross_proof_namespaces() {
     }];
 
     // An mTLS subject of the same name is NOT governed by the jwt entry, so it
-    // falls through to the incomparable default rather than borrowing the
-    // mapping's permission.
+    // falls through to the WAIVED arm rather than borrowing the mapping's
+    // permission — which is why this fixture has to declare the waiver on the
+    // next line. Acceptance is never a default: with the waiver omitted this
+    // caller is refused, which is what `an_unwaived_mtls_mismatch_is_refused_
+    // by_default` pins.
+    config.incomparable_proof_sources = vec![ProofSource::MutualTls];
     let identity = with_label(proven("runner", ProofSource::MutualTls), "billing");
     assert_eq!(
         validate_agent_identity(&identity, &config).expect("refused"),
@@ -636,4 +651,77 @@ fn the_hatch_arm_still_audits_a_genuinely_different_label() {
         IdentityAudit::DeclaredLabelMismatch,
         "a genuinely different label stopped being audited as a mismatch"
     );
+}
+
+/// The restored default, and the row the grade turns on.
+///
+/// The ruling is unqualified: *"A declared label CONTRADICTING a proven one is
+/// a REFUSAL, not a silent override."* With no waiver, an unmapped mTLS
+/// principal presenting a differing label is refused — the same as an unmapped
+/// JWT principal. Acceptance is an operator's opt-in, never the shipped
+/// behaviour.
+///
+/// This row is red against the implementation that merged as `fdc3f1c0`,
+/// which accepted unconditionally on proof source.
+#[test]
+fn an_unwaived_mtls_mismatch_is_refused_by_default() {
+    // No `incomparable_proof_sources`: the operator has claimed nothing.
+    let config = cfg(true, true, &[]);
+    let identity = with_label(
+        proven(
+            "spiffe://cluster/ns/agents/sa/runner",
+            ProofSource::MutualTls,
+        ),
+        "runner",
+    );
+
+    validate_agent_identity(&identity, &config).expect_err(
+        "an unwaived mTLS mismatch was accepted: the ruling says a contradicting \
+         label is a refusal, not a silent override, and acceptance without an \
+         operator waiver is that silent override",
+    );
+}
+
+/// A waiver is per-source: waiving one namespace must not waive the other.
+///
+/// Without this, `incomparable_proof_sources` could be implemented as a single
+/// boolean and pass every other row — which would let an operator waiving mTLS
+/// silently stop refusing JWT contradictions, the comparable case the ruling
+/// most clearly covers.
+#[test]
+fn waiving_one_namespace_does_not_waive_the_other() {
+    let mut config = cfg(true, true, &[]);
+    config.incomparable_proof_sources = vec![ProofSource::MutualTls];
+
+    let jwt = with_label(proven("svc-a", ProofSource::VerifiedJwtSubject), "svc-b");
+    validate_agent_identity(&jwt, &config)
+        .expect_err("waiving the mTLS namespace also waived the JWT namespace");
+}
+
+/// A named principal is still governed by its mapping even under a waiver.
+///
+/// The waiver says the *namespace* is incomparable, which is a claim about
+/// identifiers the operator cannot compare. It is not a claim about the
+/// subject they just wrote down: an explicit `principal_labels` row is a
+/// comparison the operator has made, so arm 2 still decides it. Without this
+/// row, a waiver would silently disable every mTLS mapping.
+#[test]
+fn a_waiver_does_not_disable_an_explicit_mapping() {
+    let mut config = cfg(true, true, &[]);
+    config.incomparable_proof_sources = vec![ProofSource::MutualTls];
+    config.principal_labels = vec![PrincipalLabels {
+        source: ProofSource::MutualTls,
+        id: "spiffe://cluster/ns/agents/sa/runner".to_string(),
+        labels: vec!["runner".to_string()],
+    }];
+    let identity = with_label(
+        proven(
+            "spiffe://cluster/ns/agents/sa/runner",
+            ProofSource::MutualTls,
+        ),
+        "billing",
+    );
+
+    validate_agent_identity(&identity, &config)
+        .expect_err("a namespace waiver overrode an explicit per-principal mapping");
 }
