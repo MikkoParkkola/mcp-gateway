@@ -24,7 +24,6 @@ use crate::personal_accounts::{
     GrantVersion, RefreshOutcome, StoreConfig,
 };
 #[cfg(unix)]
-use ring::rand::{SecureRandom as _, SystemRandom};
 #[cfg(unix)]
 use sha2::{Digest as _, Sha256};
 #[cfg(unix)]
@@ -60,16 +59,7 @@ macro_rules! boundary {
 /// A private scratch name inside the same directory, so the rename is atomic.
 #[cfg(unix)]
 fn scratch_name(name: &str) -> Result<String, AccountError> {
-    Ok(format!(".{name}.{}.tmp", random_hex()?))
-}
-
-#[cfg(unix)]
-fn random_hex() -> Result<String, AccountError> {
-    let mut bytes = [0_u8; 16];
-    SystemRandom::new()
-        .fill(&mut bytes)
-        .map_err(|_| AccountError::StorageUnavailable)?;
-    Ok(hex::encode(bytes))
+    Ok(format!(".{name}.{}.tmp", super::random_hex()?))
 }
 
 #[cfg(unix)]
@@ -272,7 +262,7 @@ fn stage_publication(
         .map_err(|_| ManifestRefusal::Staged(AccountError::StorageUnavailable))?;
     let basename = format!(
         "{digest}-{}.json",
-        random_hex().map_err(ManifestRefusal::Staged)?
+        super::random_hex().map_err(ManifestRefusal::Staged)?
     );
     let previous = authority
         .entries
