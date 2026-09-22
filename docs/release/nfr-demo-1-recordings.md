@@ -196,7 +196,9 @@ The gateway is pointed at the repository's own production catalogue
 `tests/mik_3274_ranking_3_baseline.rs` loads for ranking regression). No live
 backend, no credentials.
 
-Proven, the three claims design §Scenario 4 asks for, in one frame:
+Proven, the three claims
+[design §Scenario 4](../design/2026-09-17-nfr-demo-1-scenario-recordings.md#scenario-4--useful-large-catalogue-discovery)
+asks for, in one frame:
 
 - **Compact surface, large catalogue.** A client's `tools/list` is served 14
   tools, inside the shipped 9–17 band (`README.md:21`; lower bound from
