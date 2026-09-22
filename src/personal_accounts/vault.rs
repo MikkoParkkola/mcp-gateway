@@ -20,16 +20,23 @@
 //! NOTHING FALLS BACK. Every refusal below is `PropagationError::Refuse`, which
 //! the resolver turns into a closed request for a required backend. There is no
 //! path here that answers "no account" with the gateway's own credential.
+//!
+//! ONE PRINCIPAL PER DEPLOYMENT, NOT PER REQUEST. A gateway whose configuration
+//! asserts a single user ([`Principal::SoleOperator`]) serves its stored grants
+//! under one fixed principal; every other gateway needs a verified identity and
+//! refuses without one. Which of the two applies is decided once at install
+//! (`sole_operator`) and is never influenced by a request. The assertion is the
+//! operator's, not a proof: two humans sharing that machine share the grants.
 
 use std::sync::Arc;
 
 use crate::identity_propagation::{
-    BackendDescriptor, IdentityPropagation, PropagatedCredential, PropagationError,
+    BackendDescriptor, CallerProof, IdentityPropagation, PropagatedCredential, PropagationError,
 };
 use crate::key_server::oidc::VerifiedIdentity;
 
 use super::AccountKey;
-use super::identity::{AccountDescriptor, account_key};
+use super::identity::{AccountDescriptor, Principal, account_key};
 use super::service::{
     CredentialLease, CredentialReleaseObserver, RefreshProvider, ReleasedCredentials,
 };
@@ -81,14 +88,73 @@ where
 pub(crate) struct VaultStrategy {
     custody: Arc<dyn AccountCustody>,
     descriptor: AccountDescriptor,
+    /// Whether this deployment may fall back to the sole-operator principal
+    /// when a request carries no verified identity.
+    ///
+    /// A CONFIGURATION FACT, resolved ONCE at install from
+    /// [`AuthConfig::grants_single_user_principal`](crate::config::features::auth::AuthConfig::grants_single_user_principal)
+    /// and never re-decided per request. A per-request decision would be a
+    /// second place the mode could be computed, and the mode is a property of
+    /// the deployment, not of the caller — a caller must never be able to
+    /// influence which principal their credential is served under.
+    sole_operator: bool,
 }
 
 impl VaultStrategy {
     /// Bind one configured descriptor to the gateway's one custody.
-    pub(crate) fn new(custody: Arc<dyn AccountCustody>, descriptor: AccountDescriptor) -> Self {
+    ///
+    /// `sole_operator` is the operator's assertion, not a proof: see
+    /// [`Principal::SoleOperator`].
+    pub(crate) fn new(
+        custody: Arc<dyn AccountCustody>,
+        descriptor: AccountDescriptor,
+        sole_operator: bool,
+    ) -> Self {
         Self {
             custody,
             descriptor,
+            sole_operator,
+        }
+    }
+
+    /// Who this call is made as, or `None` when nothing proves or asserts a
+    /// principal.
+    ///
+    /// A verified identity always wins. The assertion is consulted ONLY in its
+    /// absence, so a deployment that later gains an identity provider changes
+    /// nothing about how a verified caller's accounts are addressed — and a
+    /// deployment that has one never reaches the second arm anyway, because the
+    /// predicate behind `sole_operator` is false whenever an `IdP` is configured.
+    ///
+    /// TWO CONDITIONS, BOTH REQUIRED, and they answer different questions. The
+    /// deployment must have asserted a single user (`sole_operator`, a
+    /// configuration fact), AND this request must have presented a credential
+    /// established it as the operator ([`CallerProof::Operator`], a request fact).
+    /// Dropping the second would hand the operator's stored OAuth grants to any
+    /// anonymous caller reaching a public path — which the shipped starter
+    /// configuration lists `/mcp` as.
+    ///
+    /// Public to the crate because the REST account registry needs the SAME
+    /// answer this strategy will mint under, for its audit subject and for the
+    /// actor the prepared credential is rechecked against. Asking here rather
+    /// than re-deriving it there keeps one answer.
+    pub(crate) fn principal<'a>(&self, caller: CallerProof<'a>) -> Option<Principal<'a>> {
+        match caller {
+            CallerProof::Verified(identity) => Some(Principal::Verified(identity)),
+            // BOTH conditions are checked HERE, not just in `CallerProof::new`.
+            // The variants are `pub(crate)`, so crate code can build
+            // `Operator(CallerProvenance::Anonymous)` without going through the
+            // constructor; matching `Operator(_)` would then mint the
+            // deployment principal for a caller nothing established. Carrying
+            // the provenance in the type only helps if the enforcement point
+            // reads it.
+            CallerProof::Operator(provenance) => (self.sole_operator
+                && provenance.establishes_the_operator())
+            .then_some(Principal::SoleOperator),
+            // Nothing validated. No assertion covers a caller the gateway never
+            // recognised, whatever the configuration says about how many humans
+            // are supposed to be behind it.
+            CallerProof::Anonymous => None,
         }
     }
 
@@ -112,7 +178,7 @@ impl VaultStrategy {
     /// superseded) or a refused release. Nothing here falls back.
     pub(crate) async fn prepare(
         &self,
-        identity: &VerifiedIdentity,
+        principal: Principal<'_>,
         backend: &BackendDescriptor,
     ) -> Result<(PropagatedCredential, CredentialLease), PropagationError> {
         // The installed descriptor and the backend's compiled propagation
@@ -128,9 +194,9 @@ impl VaultStrategy {
             )));
         }
 
-        // Verified issuer + verified subject + the CONFIGURED resource and
+        // The principal's authority + subject + the CONFIGURED resource and
         // issuer. No display name, no email, nothing from the request body.
-        let account = account_key(Some(identity), &self.descriptor).map_err(|error| {
+        let account = account_key(Some(principal), &self.descriptor).map_err(|error| {
             PropagationError::Refuse(format!("account identity binding refused: {error}"))
         })?;
 
@@ -233,12 +299,19 @@ impl IdentityPropagation for VaultStrategy {
     /// Unchanged behaviour for every existing consumer: [`Self::prepare`] with
     /// the lease dropped. The MCP route's credential, headers, binding, expiry
     /// and refusals are exactly what they were.
+    ///
+    /// The trait takes a verified identity, so this entry can only ever mint
+    /// under [`Principal::Verified`]. A sole-operator deployment reaches
+    /// [`Self::prepare`] through the REST account registry, which holds the
+    /// caller's identity as an `Option` and asks [`Self::principal`] for the
+    /// answer. Widening the trait is the 4.1 direction (design doc §4.3), not
+    /// this increment.
     async fn propagate(
         &self,
         identity: &VerifiedIdentity,
         backend: &BackendDescriptor,
     ) -> Result<PropagatedCredential, PropagationError> {
-        let (credential, _lease) = self.prepare(identity, backend).await?;
+        let (credential, _lease) = self.prepare(Principal::Verified(identity), backend).await?;
         Ok(credential)
     }
 }
@@ -255,3 +328,7 @@ fn authorization_value(credentials: &ReleasedCredentials) -> String {
 fn now_secs() -> i64 {
     chrono::Utc::now().timestamp()
 }
+
+#[cfg(test)]
+#[path = "vault_tests.rs"]
+mod vault_tests;

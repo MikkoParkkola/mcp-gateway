@@ -74,6 +74,23 @@ pub struct CapabilityExecutionContext {
     /// [`crate::identity_propagation::AccountStrategyRegistry::resolve`].
     // ci-allow-secret-debug: PreparedAccountCredential redacts header values; execution_context_debug_redacts_prepared_credential_headers verifies the enclosing formatter.
     pub(crate) account_credential: Option<Arc<PreparedAccountCredential>>,
+    /// How THIS request established its caller, apart from any verified
+    /// identity.
+    ///
+    /// A REQUEST FACT, and the only thing here that can stand for one. It
+    /// exists because a sole-operator deployment's stored OAuth grants are
+    /// served under a principal the CONFIGURATION asserts, and configuration
+    /// cannot see who is on the other end of a request: the shipped starter
+    /// config (`commands::generate_config`) sets `auth.enabled`,
+    /// `auth.single_user` AND lists `/mcp` under `public_paths`, so an
+    /// anonymous caller reaches tool dispatch on a default install. Without
+    /// this field that caller would be handed the operator's credentials.
+    ///
+    /// Crate-visible for the reason [`Self::account_credential`] is: an
+    /// embedder must not be able to assert how a request was established.
+    /// Defaults to `Anonymous`, so a construction site that does not know
+    /// refuses rather than mints.
+    pub(crate) caller_provenance: crate::identity_propagation::CallerProvenance,
 }
 
 impl PartialEq for CapabilityExecutionContext {
@@ -90,6 +107,11 @@ impl PartialEq for CapabilityExecutionContext {
             // headers are live token material and are never compared, logged
             // or ordered.
             && self.account_binding() == other.account_binding()
+            // Two contexts that would reach different accounts are not the same
+            // context. An anonymous request and an operator's differ in nothing
+            // else above, and treating them as equal would let one stand in for
+            // the other wherever this comparison decides reuse.
+            && self.caller_provenance == other.caller_provenance
     }
 }
 
@@ -103,6 +125,18 @@ fn verified_binding(identity: Option<&VerifiedIdentity>) -> Option<String> {
 }
 
 impl CapabilityExecutionContext {
+    /// What this request proved about its caller.
+    ///
+    /// The two facts this context carries, classified by the one classifier
+    /// ([`CallerProof::new`]) rather than re-read separately by each consumer.
+    /// The account registry asks this and nothing else about who is calling.
+    pub(crate) fn caller_proof(&self) -> crate::identity_propagation::CallerProof<'_> {
+        crate::identity_propagation::CallerProof::new(
+            self.verified_identity.as_deref(),
+            self.caller_provenance,
+        )
+    }
+
     /// Build a context with a verified caller identity.
     #[must_use]
     pub fn with_caller_identity(caller_identity: GrantSubject) -> Self {
@@ -115,6 +149,9 @@ impl CapabilityExecutionContext {
             cache_binding: None,
             verified_identity: None,
             account_credential: None,
+            // A `GrantSubject` is an authorization handle, not evidence that a
+            // credential validated on this request. Fail closed.
+            caller_provenance: crate::identity_propagation::CallerProvenance::Anonymous,
         }
     }
 
