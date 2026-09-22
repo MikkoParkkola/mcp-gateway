@@ -50,18 +50,33 @@ to the operator and should be run with no sessions open.
 
 That artifact was staged from the release-line tip as it stood at 10:45 on 2026-09-22.
 Seven commits later the tip is `fbc1567b`, and one of the seven is code: `#707`, which
-evicts a caller's pooled backend slot when their identity grant is revoked. Without it a
-revoked caller keeps serving traffic through the connection they already hold, so
-revocation does not take effect. That is a security control, and the staged binary does
-not contain it:
+evicts a caller's pooled backend slot when their identity grant is revoked. The staged
+binary does not contain it:
 
 ```
 $ git show 3ec43838:src/backend/pool.rs | rg -c evict_identity_slots
 0
 ```
 
-`NFR.SEC.7` reads *"the listening build carries every merged security control"*. Flipping
-to `3ec43838` would make that sentence false at the moment the row is graded MET.
+**What eviction is and is not, stated precisely, because the loose version of this claim
+is tempting and wrong.** It is NOT the barrier that stops a revoked caller making new
+calls: identity propagation resolves per request, and a revoked grant makes the store
+answer absent, which surfaces as `PropagationError::AccountNotConnected` — a variant
+whose own doc comment says it exists so the audit record "can tell absence from
+revocation from a busy custody". The call is refused before the pool is consulted. So
+the gateway does not serve a revoked caller either way.
+
+What eviction closes is the state revocation leaves behind: the pooled slot holds a live
+upstream transport minted under the now-revoked grant, together with that identity's
+cached metadata. Without eviction the backend-side session outlives the revocation, and
+identity-scoped cache entries survive it. That is a security control — it is the
+revocation half of `MIK-7334.CATALOGUE.1`, whose requirement reads "isolated by verified
+caller and authorization context, **including changes and revocation**" — but it is the
+session-teardown half, not the admission check.
+
+`NFR.SEC.7` reads *"the listening build carries every merged security control"*. On that
+wording the staged artifact is short one, and flipping to it makes the sentence false at
+the moment the row is graded MET.
 
 **The acceptance check is structurally blind to this gap**, which is why it needs saying
 here rather than being left to the gate. `security-controls.toml` derives its population
@@ -117,9 +132,21 @@ reports the pipe's status, not the checker's.
 The checker probes two controls; it does not enumerate the merged set. So confirm
 separately that the running process is executing the binary built from the recorded tip
 — compare the wrapper's `gateway_binary` path against the directory you created in step
-2 — and that the tip you built from is still the tip. If the release line moved while you
-were staging, step 1 starts again. A build that is one merge behind is exactly the
-condition this runbook was amended for, and nothing downstream will catch it.
+2.
+
+**The stopping rule, because "rebuild at the tip" does not terminate on its own.** The
+release line keeps moving, so a rule that re-stages on every new commit never lets the
+cutover finish. Re-stage only when a commit landed since staging that **changes
+compiled code** — that is, when
+
+```
+git diff --name-only <staged-sha>..origin/docs/ranking-1-release-line -- src/ Cargo.toml Cargo.lock
+```
+
+is non-empty. A docs-only or ledger-only commit changes nothing the binary carries and is
+not a reason to rebuild; that is exactly the difference between the seven commits above,
+six of which were documentation and one of which was `#707`. If that command is empty,
+the staged artifact is current for this criterion's purposes and the cutover proceeds.
 
 On both, flip `NFR.SEC.7` to MET in
 `docs/requirements/RELEASE-4.0.0-criteria-status.md` and its blocking cell to `no`.
