@@ -12,6 +12,8 @@
 //! field and no public constructor, so a caller-supplied string cannot be
 //! turned into an authorization input anywhere outside this module.
 
+use serde::{Deserialize, Serialize};
+
 // ── AgentIdentity ─────────────────────────────────────────────────────────────
 
 /// Resolved identity for the calling agent.
@@ -46,6 +48,13 @@ pub struct AgentIdentity {
 }
 
 /// A principal the request cryptographically established.
+///
+/// **Fields are private and there is no public constructor.** A public `id`
+/// would have left an indirect route to a forged [`ProvenAgentId`]: build an
+/// `AgentIdentity` with a hand-made `ProvenPrincipal` and call
+/// `proven_agent_id()`. Closing the wrapper while leaving that open would have
+/// been an artifact asserting a guarantee it does not enforce — the exact
+/// defect this module exists to remove.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProvenPrincipal {
     /// The principal's identifier: the selected mTLS subject, or the verified
@@ -57,9 +66,42 @@ pub struct ProvenPrincipal {
     /// `display_name` is a cosmetic label computed for audit logs and is
     /// deliberately unreachable from here — routing it into this field would
     /// make a human-readable string an allowlist key.
-    pub id: String,
+    id: String,
     /// What established it.
-    pub proof: ProofSource,
+    proof: ProofSource,
+}
+
+impl ProvenPrincipal {
+    /// Build one from an identifier the extractor has already established.
+    ///
+    /// `pub(super)` so only the resolution path can mint a principal. Every
+    /// call site is in `agent_identity.rs`, reachable only from inputs the
+    /// process verified: a TLS peer chain, or a `sub` from a token the
+    /// agent-auth middleware validated.
+    pub(super) fn new(id: String, proof: ProofSource) -> Self {
+        Self { id, proof }
+    }
+
+    /// The principal's identifier.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// What established it.
+    #[must_use]
+    pub fn proof(&self) -> ProofSource {
+        self.proof
+    }
+
+    /// Build one directly, for fixtures only. Absent from production builds.
+    #[cfg(test)]
+    pub(crate) fn for_test(id: &str, proof: ProofSource) -> Self {
+        Self {
+            id: id.to_string(),
+            proof,
+        }
+    }
 }
 
 /// Ordered by strength. Ranking is the discriminant order, not a call order.
@@ -67,11 +109,14 @@ pub struct ProvenPrincipal {
 /// `Ord` is derived so "rank by proof" is a comparison on the type rather than
 /// a hand-written chain a later edit can reorder. The defect this replaces was
 /// precisely a precedence encoded as statement order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ProofSource {
     /// Verified JWT `sub`, from a token `validate_agent_token` accepted.
+    #[serde(rename = "jwt")]
     VerifiedJwtSubject,
     /// mTLS client-certificate subject, from the TLS handshake.
+    #[serde(rename = "mtls")]
     MutualTls,
 }
 
@@ -211,7 +256,7 @@ impl AgentIdentity {
     /// The id authorization is allowed to read, if any.
     #[must_use]
     pub fn proven_id(&self) -> Option<&str> {
-        self.proven.as_ref().map(|p| p.id.as_str())
+        self.proven.as_ref().map(ProvenPrincipal::id)
     }
 
     /// The authorization-bearing id, in the type that authorization consumes.
@@ -221,7 +266,7 @@ impl AgentIdentity {
     /// label is a compile error rather than a code-review catch.
     #[must_use]
     pub fn proven_agent_id(&self) -> Option<ProvenAgentId<'_>> {
-        self.proven.as_ref().map(|p| ProvenAgentId(p.id.as_str()))
+        self.proven.as_ref().map(|p| ProvenAgentId(p.id()))
     }
 
     /// The caller-supplied tag, in the type that attribution consumes.

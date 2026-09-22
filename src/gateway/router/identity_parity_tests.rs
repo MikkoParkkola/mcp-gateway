@@ -21,7 +21,10 @@ async fn direct_route_refuses_a_declared_label_that_names_an_allowlisted_agent()
     let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
         enabled: true,
         require_id: true,
-        known_agents: vec!["known-agent".to_string()],
+        known_agents: vec![crate::security::KnownAgent {
+            source: crate::security::AgentSourceKey::Mtls,
+            id: "known-agent".to_string(),
+        }],
         ..Default::default()
     })
     .await;

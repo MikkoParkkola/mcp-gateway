@@ -3824,7 +3824,10 @@ async fn direct_route_rejects_an_agent_outside_the_allowlist() {
     let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
         enabled: true,
         require_id: true,
-        known_agents: vec!["known-agent".to_string()],
+        known_agents: vec![crate::security::KnownAgent {
+            source: crate::security::AgentSourceKey::Mtls,
+            id: "known-agent".to_string(),
+        }],
         ..Default::default()
     })
     .await;
@@ -3858,7 +3861,10 @@ async fn direct_route_rejects_an_unlisted_agent_even_when_id_is_optional() {
     let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
         enabled: true,
         require_id: false,
-        known_agents: vec!["known-agent".to_string()],
+        known_agents: vec![crate::security::KnownAgent {
+            source: crate::security::AgentSourceKey::Mtls,
+            id: "known-agent".to_string(),
+        }],
         ..Default::default()
     })
     .await;
@@ -3881,7 +3887,10 @@ async fn direct_route_admits_an_absent_agent_id_when_it_is_optional() {
     let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
         enabled: true,
         require_id: false,
-        known_agents: vec!["known-agent".to_string()],
+        known_agents: vec![crate::security::KnownAgent {
+            source: crate::security::AgentSourceKey::Mtls,
+            id: "known-agent".to_string(),
+        }],
         ..Default::default()
     })
     .await;
@@ -3921,7 +3930,10 @@ async fn direct_route_admits_an_allowlisted_agent() {
     let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
         enabled: true,
         require_id: true,
-        known_agents: vec!["known-agent".to_string()],
+        known_agents: vec![crate::security::KnownAgent {
+            source: crate::security::AgentSourceKey::Mtls,
+            id: "known-agent".to_string(),
+        }],
         ..Default::default()
     })
     .await;
