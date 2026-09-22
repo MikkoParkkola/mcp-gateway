@@ -184,8 +184,8 @@ impl TokenStorage {
         hex::encode(&hash[..8])
     }
 
-    /// Get the file path for a backend's tokens
-    fn token_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
+    /// Resolved token-file path. `pub(crate)` for the 3.x credential migration, which needs a path and not the naming scheme.
+    pub(crate) fn token_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
         let key = Self::storage_key(backend_name, resource_url);
         self.base_dir.join(format!("{key}_tokens.json"))
     }
