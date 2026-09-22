@@ -254,3 +254,7 @@ mod slot_eviction_tests;
 #[cfg(test)]
 #[path = "grant_reload_eviction_tests.rs"]
 mod grant_reload_eviction_tests;
+
+#[cfg(test)]
+#[path = "stateless_tools_slot_tests.rs"]
+mod stateless_tools_slot_tests;
