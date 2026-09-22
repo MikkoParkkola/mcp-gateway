@@ -107,7 +107,7 @@ const SOLE_OPERATOR_SUBJECT: &str = "sole-operator";
 ///   the issuer and subject are its answer.
 /// * [`Self::SoleOperator`] is an ASSERTION: the operator configured
 ///   `auth.single_user` on an authenticated gateway with no second credential
-///   and no IdP, and the gateway takes their word for it. If two humans share
+///   and no `IdP`, and the gateway takes their word for it. If two humans share
 ///   that machine's credential they share the stored OAuth grants, because the
 ///   gateway cannot tell them apart. That is already true of `single_user` for
 ///   request authorisation; this extends its reach to stored OAuth grants,

@@ -126,18 +126,6 @@ impl<'a> CallerProof<'a> {
         }
     }
 
-    /// Whether the request established its caller at all.
-    ///
-    /// A verified identity counts: the producers that build one
-    /// (`key_server::oidc`, `gateway::openwebui_adapter`) run only after a
-    /// token validated.
-    pub(crate) fn established(self) -> bool {
-        match self {
-            Self::Verified(_) | Self::Operator(_) => true,
-            Self::Anonymous => false,
-        }
-    }
-
     /// The provenance behind an operator-level caller, for a consumer that
     /// must tell a validated secret from a trusted transport.
     pub(crate) fn provenance(self) -> CallerProvenance {

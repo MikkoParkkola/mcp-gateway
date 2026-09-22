@@ -435,42 +435,7 @@ impl AccountStrategyRegistry {
             token_exchange_scope: installed.token_exchange_scope.clone(),
         };
 
-        // ONE mint, two shapes. A managed descriptor mints through
-        // `VaultStrategy::prepare` — the SAME body `propagate` runs — and keeps
-        // the lease, so the recheck below can be the real custody release. An
-        // external descriptor keeps the trait call, its published expiry and
-        // its behaviour unchanged; there is no lease to keep and none is
-        // invented.
-        let minted = match installed.managed.as_ref() {
-            Some(vault) => vault
-                .prepare(principal, &backend)
-                .await
-                .map(|(credential, lease)| {
-                    (
-                        credential,
-                        Some(ManagedLease {
-                            strategy: Arc::clone(vault),
-                            lease,
-                        }),
-                    )
-                }),
-            // An external strategy exchanges the CALLER'S OWN token, so it has
-            // nothing to mint from but a proof. `Self::principal` offers the
-            // sole-operator assertion only for a managed descriptor, so this is
-            // the verified arm by construction — and it refuses rather than
-            // assuming so, because a credential path should not rely on a
-            // property enforced somewhere else.
-            None => match principal.verified() {
-                Some(identity) => installed
-                    .strategy
-                    .propagate(identity, &backend)
-                    .await
-                    .map(|credential| (credential, None)),
-                None => Err(PropagationError::Refuse(
-                    "an external account descriptor mints only for a verified caller".to_string(),
-                )),
-            },
-        };
+        let minted = Self::mint(installed.as_ref(), principal, &backend).await;
         let (credential, managed) = match minted {
             Ok(minted) => minted,
             Err(error) => {
@@ -654,16 +619,57 @@ impl AccountStrategyRegistry {
         Ok(())
     }
 
+    /// ONE mint, two shapes. A managed descriptor mints through
+    /// `VaultStrategy::prepare` — the SAME body `propagate` runs — and keeps
+    /// the lease, so the caller's recheck can be the real custody release. An
+    /// external descriptor keeps the trait call and its behaviour unchanged;
+    /// there is no lease to keep and none is invented.
+    async fn mint(
+        installed: &InstalledAccount,
+        principal: Principal<'_>,
+        backend: &BackendDescriptor,
+    ) -> std::result::Result<(super::PropagatedCredential, Option<ManagedLease>), PropagationError>
+    {
+        match installed.managed.as_ref() {
+            Some(vault) => vault
+                .prepare(principal, backend)
+                .await
+                .map(|(credential, lease)| {
+                    (
+                        credential,
+                        Some(ManagedLease {
+                            strategy: Arc::clone(vault),
+                            lease,
+                        }),
+                    )
+                }),
+            // An external strategy exchanges the CALLER'S OWN token, so it has
+            // nothing to mint from but a proof. `Self::principal` offers the
+            // sole-operator assertion only for a managed descriptor, so this is
+            // the verified arm by construction — and it refuses rather than
+            // assuming so, because a credential path should not rely on a
+            // property enforced somewhere else.
+            None => match principal.verified() {
+                Some(identity) => installed
+                    .strategy
+                    .propagate(identity, backend)
+                    .await
+                    .map(|credential| (credential, None)),
+                None => Err(PropagationError::Refuse(
+                    "an external account descriptor mints only for a verified caller".to_string(),
+                )),
+            },
+        }
+    }
+
     /// Who a dispatch against this installation is made as, or `None` when
     /// nothing proves or asserts a principal.
     ///
-    /// ONE ANSWER, TWO ASKERS. [`Self::resolve`] mints under it and
+    /// ONE ANSWER, TWO ASKERS: [`Self::resolve`] mints under it and
     /// [`Self::revalidate`] rechecks against it, and a second derivation in
     /// either is how a credential minted for one principal comes to be
-    /// rechecked as another. It is also why the sole-operator assertion is
-    /// asked of the INSTALLED strategy rather than read from configuration
-    /// here: the strategy is what was installed before the gateway served, and
-    /// the registry has no business recomputing a deployment mode.
+    /// rechecked as another. The sole-operator assertion is asked of the
+    /// INSTALLED strategy rather than recomputed from configuration here.
     fn principal<'a>(
         installed: &InstalledAccount,
         caller: CallerProof<'a>,

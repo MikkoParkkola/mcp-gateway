@@ -124,7 +124,7 @@ impl VaultStrategy {
     /// absence, so a deployment that later gains an identity provider changes
     /// nothing about how a verified caller's accounts are addressed — and a
     /// deployment that has one never reaches the second arm anyway, because the
-    /// predicate behind `sole_operator` is false whenever an IdP is configured.
+    /// predicate behind `sole_operator` is false whenever an `IdP` is configured.
     ///
     /// TWO CONDITIONS, BOTH REQUIRED, and they answer different questions. The
     /// deployment must have asserted a single user (`sole_operator`, a

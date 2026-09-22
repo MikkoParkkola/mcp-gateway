@@ -29,7 +29,10 @@ fn an_empty_credential_principal_is_anonymous_not_authentication() {
         "an empty principal means no credential was presented"
     );
     assert!(
-        !CallerProof::new(None, CallerProvenance::classify(Some(""))).established(),
+        matches!(
+            CallerProof::new(None, CallerProvenance::classify(Some(""))),
+            CallerProof::Anonymous
+        ),
         "and it must not survive into an operator-level proof"
     );
 }
@@ -105,5 +108,8 @@ fn a_verified_identity_outranks_every_provenance() {
 #[test]
 fn the_default_provenance_is_anonymous() {
     assert_eq!(CallerProvenance::default(), CallerProvenance::Anonymous);
-    assert!(!CallerProof::new(None, CallerProvenance::default()).established());
+    assert!(matches!(
+        CallerProof::new(None, CallerProvenance::default()),
+        CallerProof::Anonymous
+    ));
 }
