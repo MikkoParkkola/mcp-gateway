@@ -310,7 +310,9 @@ async fn prompts_get_serves_a_compiled_shared_descriptor_on_a_multi_user_gateway
 async fn prompts_list_omits_a_personal_managed_backend_on_a_multi_user_gateway() {
     let (meta, calls) = meta_with(personal_managed_backend(), true);
 
-    let response = meta.handle_prompts_list(RequestId::Number(9), None).await;
+    let response = meta
+        .handle_prompts_list(RequestId::Number(9), None, None)
+        .await;
 
     assert!(
         !prompt_names(&response)
@@ -331,7 +333,9 @@ async fn prompts_list_includes_the_same_backend_on_a_single_user_gateway() {
     // empty catalogue or a failed fetch.
     let (meta, _calls) = meta_with(personal_managed_backend(), false);
 
-    let response = meta.handle_prompts_list(RequestId::Number(10), None).await;
+    let response = meta
+        .handle_prompts_list(RequestId::Number(10), None, None)
+        .await;
 
     assert!(
         prompt_names(&response).contains(&format!("isomem/{PROMPT}")),

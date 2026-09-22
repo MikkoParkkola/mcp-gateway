@@ -138,6 +138,11 @@ impl MetaMcp {
     /// clients always discover them first.  Backend prompts are namespaced as
     /// `"backend_name/original_name"` so `prompts/get` can route them correctly.
     ///
+    /// Per caller, on the same terms as `handle_resources_list`
+    /// (MIK-7334.CATALOGUE.1): `verified_identity` selects the pool slot each
+    /// backend's prompt catalogue is fetched from and cached on, and `None`
+    /// selects the shared slot as before.
+    ///
     /// # Panics
     ///
     /// Panics if `PromptsListResult` fails to serialize to JSON, which cannot
@@ -146,29 +151,37 @@ impl MetaMcp {
         &self,
         id: RequestId,
         _params: Option<&Value>,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> JsonRpcResponse {
         // Prepend gateway-owned meta-prompts (served inline, no backend required).
         let mut all_prompts: Vec<Prompt> = gateway_prompts().into();
 
         // Fetch all backends in parallel; skip ones that fail or time out.
-        let backends: Vec<_> = self
-            .backends
-            .all()
-            .iter()
-            .filter(|backend| !self.meta_route_isolation_refused(backend))
-            .cloned()
-            .collect();
-        let timeout = self.prompts_resources_fetch_timeout;
-        let results = join_all(backends.iter().map(|backend| async move {
-            match tokio::time::timeout(timeout, backend.get_prompts_shared()).await {
-                Ok(Ok(prompts)) => Ok(prompts.as_ref().clone()),
-                Ok(Err(e)) => Err(e),
-                Err(_elapsed) => Err(crate::Error::BackendTimeout(backend.name.clone())),
+        // The credential is resolved per backend BEFORE the fetch, and a
+        // backend the caller may not see is dropped here (fail-closed = omit).
+        let mut credentialed = Vec::new();
+        for backend in self.backends.all() {
+            if let Some(credential) = self
+                .catalogue_credential_for(&backend, verified_identity)
+                .await
+            {
+                credentialed.push((backend, credential));
             }
-        }))
+        }
+        let timeout = self.prompts_resources_fetch_timeout;
+        let results = join_all(credentialed.iter().map(
+            |(backend, (headers, binding))| async move {
+                let fetch = backend.get_prompts_for_binding(binding.as_deref(), headers);
+                match tokio::time::timeout(timeout, fetch).await {
+                    Ok(Ok(prompts)) => Ok(prompts.as_ref().clone()),
+                    Ok(Err(e)) => Err(e),
+                    Err(_elapsed) => Err(crate::Error::BackendTimeout(backend.name.clone())),
+                }
+            },
+        ))
         .await;
 
-        for (backend, prompts) in backends.iter().zip(results) {
+        for ((backend, _), prompts) in credentialed.iter().zip(results) {
             match prompts {
                 Ok(prompts) => {
                     for prompt in prompts {
@@ -554,7 +567,9 @@ mod tests {
         let m = MetaMcp::new(registry);
         m.set_multi_user(true);
 
-        let resp = m.handle_prompts_list(RequestId::Number(1), None).await;
+        let resp = m
+            .handle_prompts_list(RequestId::Number(1), None, None)
+            .await;
         assert!(
             resp.error.is_none(),
             "list must not error: {:?}",

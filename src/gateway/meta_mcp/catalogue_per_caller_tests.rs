@@ -625,3 +625,6 @@ async fn a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch()
          put a network round trip on the busiest path in the gateway"
     );
 }
+
+#[path = "catalogue_families_per_caller_tests.rs"]
+mod catalogue_families_per_caller_tests;

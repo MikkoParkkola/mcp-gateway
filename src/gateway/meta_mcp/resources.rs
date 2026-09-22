@@ -273,6 +273,12 @@ impl MetaMcp {
     /// so clients always discover them first without depending on any backend.
     /// All backend resource metadata is sanitized to prevent prompt injection.
     ///
+    /// PER CALLER (MIK-7334.CATALOGUE.1). `verified_identity` selects the pool
+    /// slot each backend's catalogue is fetched from and cached on, exactly as
+    /// `tools/list` does. `None` — every stdio caller, and every HTTP caller
+    /// that presented no identity — resolves to the shared slot, so
+    /// single-tenant behaviour is byte-for-byte unchanged (IDP.5).
+    ///
     /// # Panics
     ///
     /// Panics if `ResourcesListResult` fails to serialize to JSON, which cannot
@@ -281,29 +287,37 @@ impl MetaMcp {
         &self,
         id: RequestId,
         _params: Option<&Value>,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> JsonRpcResponse {
         // Prepend gateway-owned guides (served inline, no backend required).
         let mut all_resources: Vec<Resource> = guide_resources().into();
 
         // Fetch all backends in parallel; skip ones that fail or time out.
-        let backends: Vec<_> = self
-            .backends
-            .all()
-            .iter()
-            .filter(|backend| !self.meta_route_isolation_refused(backend))
-            .cloned()
-            .collect();
-        let timeout = self.prompts_resources_fetch_timeout;
-        let results = join_all(backends.iter().map(|backend| async move {
-            match tokio::time::timeout(timeout, backend.get_resources_shared()).await {
-                Ok(Ok(resources)) => Ok(resources.as_ref().clone()),
-                Ok(Err(e)) => Err(e),
-                Err(_elapsed) => Err(crate::Error::BackendTimeout(backend.name.clone())),
+        // The credential is resolved per backend BEFORE the fetch, and a
+        // backend the caller may not see is dropped here (fail-closed = omit).
+        let mut credentialed = Vec::new();
+        for backend in self.backends.all() {
+            if let Some(credential) = self
+                .catalogue_credential_for(&backend, verified_identity)
+                .await
+            {
+                credentialed.push((backend, credential));
             }
-        }))
+        }
+        let timeout = self.prompts_resources_fetch_timeout;
+        let results = join_all(credentialed.iter().map(
+            |(backend, (headers, binding))| async move {
+                let fetch = backend.get_resources_for_binding(binding.as_deref(), headers);
+                match tokio::time::timeout(timeout, fetch).await {
+                    Ok(Ok(resources)) => Ok(resources.as_ref().clone()),
+                    Ok(Err(e)) => Err(e),
+                    Err(_elapsed) => Err(crate::Error::BackendTimeout(backend.name.clone())),
+                }
+            },
+        ))
         .await;
 
-        for (backend, resources) in backends.iter().zip(results) {
+        for ((backend, _), resources) in credentialed.iter().zip(results) {
             match resources {
                 Ok(resources) => {
                     for resource in resources {
@@ -384,18 +398,27 @@ impl MetaMcp {
     }
 
     /// Handle `resources/templates/list` — aggregate templates from all backends.
+    ///
+    /// Per caller, on the same terms as [`Self::handle_resources_list`].
     pub async fn handle_resources_templates_list(
         &self,
         id: RequestId,
         _params: Option<&Value>,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> JsonRpcResponse {
         let mut all_templates: Vec<ResourceTemplate> = Vec::new();
 
         for backend in self.backends.all() {
-            if self.meta_route_isolation_refused(&backend) {
+            let Some((headers, binding)) = self
+                .catalogue_credential_for(&backend, verified_identity)
+                .await
+            else {
                 continue;
-            }
-            match backend.get_resource_templates_shared().await {
+            };
+            match backend
+                .get_resource_templates_for_binding(binding.as_deref(), &headers)
+                .await
+            {
                 Ok(templates) => {
                     all_templates.extend(templates.iter().cloned());
                 }

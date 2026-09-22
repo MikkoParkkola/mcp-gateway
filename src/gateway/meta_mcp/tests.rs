@@ -4237,7 +4237,9 @@ async fn prompts_list_includes_backend_prompts() {
     .await;
     let meta = meta_with_backend(&url, Duration::from_secs(5));
 
-    let resp = meta.handle_prompts_list(RequestId::Number(1), None).await;
+    let resp = meta
+        .handle_prompts_list(RequestId::Number(1), None, None)
+        .await;
     let prompts = resp.result.unwrap()["prompts"].as_array().unwrap().clone();
     let names: Vec<&str> = prompts
         .iter()
@@ -4261,7 +4263,9 @@ async fn prompts_list_skips_hung_backend_within_timeout() {
     let meta = meta_with_backend(&url, Duration::from_millis(100));
 
     let start = std::time::Instant::now();
-    let resp = meta.handle_prompts_list(RequestId::Number(1), None).await;
+    let resp = meta
+        .handle_prompts_list(RequestId::Number(1), None, None)
+        .await;
     let elapsed = start.elapsed();
 
     assert!(
@@ -4290,7 +4294,9 @@ async fn resources_list_skips_hung_backend_within_timeout() {
     let meta = meta_with_backend(&url, Duration::from_millis(100));
 
     let start = std::time::Instant::now();
-    let resp = meta.handle_resources_list(RequestId::Number(1), None).await;
+    let resp = meta
+        .handle_resources_list(RequestId::Number(1), None, None)
+        .await;
     let elapsed = start.elapsed();
 
     assert!(
@@ -4314,7 +4320,9 @@ async fn resources_list_includes_backend_resources() {
     .await;
     let meta = meta_with_backend(&url, Duration::from_secs(5));
 
-    let resp = meta.handle_resources_list(RequestId::Number(1), None).await;
+    let resp = meta
+        .handle_resources_list(RequestId::Number(1), None, None)
+        .await;
     let resources = resp.result.unwrap()["resources"]
         .as_array()
         .unwrap()
@@ -4372,7 +4380,9 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
     let meta = MetaMcp::new(registry).with_prompts_resources_fetch_timeout(Duration::from_secs(1));
 
     let start = std::time::Instant::now();
-    let resp = meta.handle_prompts_list(RequestId::Number(1), None).await;
+    let resp = meta
+        .handle_prompts_list(RequestId::Number(1), None, None)
+        .await;
     let elapsed = start.elapsed();
 
     assert!(

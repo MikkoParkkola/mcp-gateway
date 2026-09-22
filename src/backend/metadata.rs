@@ -151,8 +151,18 @@ impl Backend {
         self.get_cached_tools_snapshot_for(None)
     }
 
-    /// Fill or serve one metadata list ON A SPECIFIC POOL SLOT
+    /// Fill or serve one metadata list ON THE CALLER'S POOL SLOT
     /// (MIK-7334.CATALOGUE.1).
+    ///
+    /// TAKES A BINDING, NEVER A KEY, AND THAT IS THE GUARANTEE. All four
+    /// metadata families come through here, and none of them can name a slot:
+    /// the key is derived from `binding` by `pool_key_for`, the same
+    /// computation that selects the transport. An earlier revision took a
+    /// `&PoolKey`, and three of the four call sites passed the constant
+    /// `PoolKey::Shared` — so resources, templates and prompts were filled once
+    /// and answered to every caller. With the key derived here rather than
+    /// chosen there, per-family drift is a type error rather than a convention
+    /// each review has to re-verify.
     ///
     /// THE SLOT IS THE WHOLE POINT. `select` is handed the `PooledEntry` this
     /// fetch runs over, so the cache written and the transport written from are
@@ -164,9 +174,9 @@ impl Backend {
     /// `claim_pooled_entry` via `begin_internal_activity_for`, never the
     /// unclaimed `pooled_entry`: the reaper is otherwise free to remove the slot
     /// and close the transport mid-fetch (R3).
-    async fn get_cached_list_on<T, S, F>(
+    async fn get_cached_list_for<T, S, F>(
         &self,
-        key: &PoolKey,
+        binding: Option<&str>,
         select: S,
         method: &str,
         kind: &'static str,
@@ -177,21 +187,37 @@ impl Backend {
         S: Fn(&super::pool::PooledEntry) -> &CachedMetadata<Vec<T>>,
         F: Fn(Value) -> Result<Vec<T>>,
     {
-        let identity_key = match key {
-            PoolKey::PerUser { binding } => Some(binding.as_str()),
+        let key = self.pool_key_for(binding);
+        let identity_key = match &key {
+            PoolKey::PerUser { binding: slot } => Some(slot.as_str()),
             PoolKey::Shared => None,
         };
+        // MINTED HEADERS TRAVEL ONLY TO A SLOT THEIR OWNER HOLDS ALONE.
+        // `pool_key_for` grants a private slot to `(per_user, binding)` and
+        // nothing else, so a `stateless` backend — and a `per_user` one whose
+        // caller resolved no binding — lands on `PoolKey::Shared` while the
+        // resolver has still minted that caller a credential. Fetching under it
+        // would write ONE caller's private catalogue into the entry every caller
+        // reads, and serve it to all of them until TTL. Dropping the headers
+        // there restores the identity-free fill the shared slot had before,
+        // which is the documented `stateless` gap rather than a disclosure
+        // (IDP.5). Closing that gap properly needs an uncached path or a
+        // per-identity slot, and both are changes to `pool_key_for`.
+        let fetch_headers: &[(String, String)] = match identity_key {
+            Some(_) => extra_headers,
+            None => &[],
+        };
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
-        let lease = self.begin_internal_activity_for(key);
+        let lease = self.begin_internal_activity_for(&key);
         let entry = Arc::clone(lease.entry());
         select(&entry)
             .get_or_fetch_shared(self.cache_ttl, || async {
-                let transport = self.ensure_entry_started(key).await?;
+                let transport = self.ensure_entry_started(&key).await?;
                 let response = transport
                     .request_with_headers(
                         method,
                         None,
-                        extra_headers,
+                        fetch_headers,
                         identity_key,
                         // A `*/list` is in the side-effect-free allowlist
                         // (`transport::SIDE_EFFECT_FREE_METHODS`), so a retried
@@ -236,7 +262,10 @@ impl Backend {
     /// everything else collapses to `Shared`, so single-tenant behaviour is
     /// byte-for-byte unchanged (IDP.5). `extra_headers` are the same minted
     /// headers the slot's transport was opened with, so the catalogue is fetched
-    /// AS that caller rather than under the gateway's static credential.
+    /// AS that caller rather than under the gateway's static credential — on a
+    /// `PerUser` slot ONLY. Collapse to `Shared` and they are dropped: one cache
+    /// entry answers every caller, so a fetch made under one caller's
+    /// credential would hand that caller's catalogue to all of them.
     ///
     /// # Errors
     ///
@@ -246,9 +275,8 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Arc<Vec<Tool>>> {
-        let key = self.pool_key_for(binding);
-        self.get_cached_list_on(
-            &key,
+        self.get_cached_list_for(
+            binding,
             |entry| &entry.tools_cache,
             "tools/list",
             "tools",
@@ -259,7 +287,7 @@ impl Backend {
                 // and it always precedes a `tools/call` (ADR-012 A1). Written to
                 // THIS SLOT's set: a backend-wide one would let one identity's
                 // catalogue decide another identity's retry policy.
-                *self.pooled_entry(&key).resend_permitted.write() =
+                *self.tools_slot(binding).resend_permitted.write() =
                     prepare_tool_metadata(&self.name, &mut tools);
                 Ok(tools)
             },
@@ -319,18 +347,41 @@ impl Backend {
             .map(|tools| tools.as_ref().clone())
     }
 
-    /// Get cached resources (or fetch if needed) without cloning the cached list.
+    /// The resource catalogue the SHARED slot serves.
+    ///
+    /// For readers that hold no caller: startup prefetch, the operator UI, the
+    /// provider adapter and `find_resource_owner`, whose subsequent
+    /// `resources/read` runs over the shared transport too.
     ///
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the resources request fails.
     pub async fn get_resources_shared(&self) -> Result<Arc<Vec<Resource>>> {
-        self.get_cached_list_on(
-            &PoolKey::Shared,
+        self.get_resources_for_binding(None, &[]).await
+    }
+
+    /// The resource catalogue THIS CALLER's pool slot serves.
+    ///
+    /// Same contract as [`Self::get_tools_for_binding`]: `binding` is the
+    /// caller's `PropagatedCredential::cache_binding`, everything that is not a
+    /// `session_mode = per_user` backend with a binding collapses to the shared
+    /// slot, and `extra_headers` are the headers that slot's transport was
+    /// opened with — carried on a `PerUser` slot, dropped on the shared one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the resources request fails.
+    pub async fn get_resources_for_binding(
+        &self,
+        binding: Option<&str>,
+        extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<Resource>>> {
+        self.get_cached_list_for(
+            binding,
             |entry| &entry.resources_cache,
             "resources/list",
             "resources",
-            &[],
+            extra_headers,
             |result| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
         )
         .await
@@ -347,18 +398,31 @@ impl Backend {
             .map(|resources| resources.as_ref().clone())
     }
 
-    /// Get cached resource templates (or fetch if needed) without cloning the cache.
+    /// The resource-template catalogue the SHARED slot serves.
     ///
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the templates request fails.
     pub async fn get_resource_templates_shared(&self) -> Result<Arc<Vec<ResourceTemplate>>> {
-        self.get_cached_list_on(
-            &PoolKey::Shared,
+        self.get_resource_templates_for_binding(None, &[]).await
+    }
+
+    /// The resource-template catalogue THIS CALLER's pool slot serves.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the templates request fails.
+    pub async fn get_resource_templates_for_binding(
+        &self,
+        binding: Option<&str>,
+        extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<ResourceTemplate>>> {
+        self.get_cached_list_for(
+            binding,
             |entry| &entry.resource_templates_cache,
             "resources/templates/list",
             "resource_templates",
-            &[],
+            extra_headers,
             |result| {
                 Ok(
                     serde_json::from_value::<ResourcesTemplatesListResult>(result)?
@@ -380,18 +444,31 @@ impl Backend {
             .map(|templates| templates.as_ref().clone())
     }
 
-    /// Get cached prompts (or fetch if needed) without cloning the cached list.
+    /// The prompt catalogue the SHARED slot serves.
     ///
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the prompts request fails.
     pub async fn get_prompts_shared(&self) -> Result<Arc<Vec<Prompt>>> {
-        self.get_cached_list_on(
-            &PoolKey::Shared,
+        self.get_prompts_for_binding(None, &[]).await
+    }
+
+    /// The prompt catalogue THIS CALLER's pool slot serves.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the prompts request fails.
+    pub async fn get_prompts_for_binding(
+        &self,
+        binding: Option<&str>,
+        extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<Prompt>>> {
+        self.get_cached_list_for(
+            binding,
             |entry| &entry.prompts_cache,
             "prompts/list",
             "prompts",
-            &[],
+            extra_headers,
             |result| Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts),
         )
         .await

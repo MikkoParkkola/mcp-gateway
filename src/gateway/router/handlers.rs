@@ -1841,7 +1841,7 @@ async fn meta_mcp_dispatch(
         "resources/list" => {
             state
                 .meta_mcp
-                .handle_resources_list(id, params.as_ref())
+                .handle_resources_list(id, params.as_ref(), verified_identity.as_ref())
                 .await
         }
         "resources/read" => {
@@ -1857,7 +1857,7 @@ async fn meta_mcp_dispatch(
         "resources/templates/list" => {
             state
                 .meta_mcp
-                .handle_resources_templates_list(id, params.as_ref())
+                .handle_resources_templates_list(id, params.as_ref(), verified_identity.as_ref())
                 .await
         }
         "resources/subscribe" => {
@@ -1877,7 +1877,7 @@ async fn meta_mcp_dispatch(
         "prompts/list" => {
             state
                 .meta_mcp
-                .handle_prompts_list(id, params.as_ref())
+                .handle_prompts_list(id, params.as_ref(), verified_identity.as_ref())
                 .await
         }
         "prompts/get" => state.meta_mcp.handle_prompts_get(id, params.as_ref()).await,
