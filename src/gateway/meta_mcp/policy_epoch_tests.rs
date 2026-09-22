@@ -31,7 +31,7 @@ use crate::protocol::mrtr::RetryFields;
 /// Builds a cache key exactly as `invoke` does: read the epoch once into a
 /// local, then hand that local to the key builder.
 fn key_now(meta: &MetaMcp, retry: &RetryFields) -> String {
-    let policy_epoch = meta.policy_epoch().load(Ordering::Acquire);
+    let policy_epoch = meta.policy_epoch.load(Ordering::Acquire);
     response_cache_key_for(
         "srv",
         "tool",
@@ -87,7 +87,7 @@ fn the_epoch_the_accessor_hands_out_is_the_one_the_mutation_site_bumps() {
     // Guards the "two epochs" failure: a second allocation would leave the
     // criterion silently unmet with every test above still green.
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
-    let observed = meta.policy_epoch();
+    let observed = Arc::clone(&meta.policy_epoch);
     let start = observed.load(Ordering::Acquire);
 
     meta.set_identity_grants(LocalIdentityGrantStore::new());

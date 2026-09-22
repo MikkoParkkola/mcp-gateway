@@ -2685,3 +2685,7 @@ pub(super) fn identified_caller(
         ..anonymous_caller()
     }
 }
+
+#[cfg(test)]
+#[path = "policy_epoch_tests.rs"]
+mod policy_epoch_tests;
