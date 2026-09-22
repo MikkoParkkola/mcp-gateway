@@ -33,11 +33,15 @@ vacuously and neither of us notices.** Proposed enumeration:
 | **A3** | Revoke during a fill | "revoke a grant during a fill" |
 | **A4** | After revocation, the **catalogue** is not served | "check both catalogue …" |
 | **A5** | After revocation, **call results** are not served | "… and call results" |
+| **A6** | **Rotate** during a fill: the pre-rotation catalogue is never served under the successor grant | "rotate … a grant during a fill" |
 | **C0** | Invariant shared catalogue, unaffected throughout | "separate positive control" |
 
-**A** Rotation is folded into A3 as a variant rather than a sixth cell, on the
-reading that rotate and revoke exercise the same retirement path with different
-successor states. **Say if that should be its own cell.**
+**RATIFIED 2026-09-22: six cells plus the control.** An earlier draft folded
+rotation into A3 on the reading that both exercise the same retirement path. They
+do — and **cells are enumerated by failure mode, not by code path**. Revocation's
+only wrong behaviour is serving *anything*; rotation's is serving the
+*pre*-rotation catalogue *under* the successor grant, which no revocation cell can
+reach because it has nothing to mis-attribute to. §A6.
 
 ---
 
@@ -118,6 +122,46 @@ clearing unconditionally could erase a list another reader populated between one
 caller observing emptiness and acting on it, turning a backend that had just
 become discoverable invisible. Leave it; evict the slot.
 
+### 3.1 The second in-flight case: a late fill re-creates the slot
+
+**Verified at source, and it is the more dangerous direction of the two.**
+
+Eviction removes the entry from the pool map. It does **not** cancel a fetch
+already on the wire — **V** `cached_metadata.rs` says so outright: *"Deliberately
+does NOT cancel an in-flight fetch: that fetch is already going to the backend."*
+
+The chain that re-creates the slot, each link read:
+
+1. **V** the fill closure in `get_cached_list_on` calls
+   `self.ensure_entry_started(key).await?` **inside** the fetch;
+2. **V** `ensure_entry_started` (`lifecycle.rs:206,210`) opens with
+   `let entry = self.pooled_entry(key);`
+3. **V** `pooled_entry` → `pooled_entry_with` (`pool.rs:241,248`) resolves through
+   `self.pool.entry(key.clone()).or_insert_with(…)` — **it creates the entry when
+   absent.**
+
+**I** So a fill that was on the wire at revocation time re-inserts a pool entry
+for the revoked binding, moments after it was evicted, and starts a transport on
+it. The revocation returned `Ok(())`. The eviction genuinely happened. The slot
+is back.
+
+**This is the session's recurring shape at its sharpest: an operation that
+succeeded and an outcome that did not hold.** Nothing in the revoke path is
+wrong; the state simply does not survive the next few milliseconds.
+
+**A** Whether the re-created slot ends up *populated* or merely *live* depends on
+where the fill writes — the closure holds the `Arc<PooledEntry>` captured before
+eviction, so its bytes may land on the orphan rather than the new entry. **The
+plan deliberately does not assume which.** That is precisely why A3 asserts on
+observable state after the fill lands rather than on an internal: a live
+transport opened under a revoked credential fails `STORE.2`'s requirement that no
+old connection outlive a grant, whether or not a catalogue came with it.
+
+**I** The fix shape is a retirement marker the fill path consults, or a
+resolution that refuses to create a slot for a retired binding — but that is an
+implementation choice and this document is a test plan. What it fixes is pinned
+by the cell.
+
 ---
 
 ## 4. The plan
@@ -161,6 +205,7 @@ the per-construct no-op check reads as a matrix.
 | **Exercises** | **K2** |
 | **Inputs** | alpha's fill is on the wire; revocation lands; and a second variant where alpha has a `tools/call` in flight |
 | **Expect** | the fill's answer is never served afterwards, **and the revocation reports that it retired the slot** — a decline must not read as success |
+| **ORDERING, LOAD-BEARING** | assert on state **after the in-flight fill has landed**, never merely after the revoke returns. An A3 that checks immediately post-revoke is **green against exactly the implementation that fails** (§3.1) |
 | **Admitted case** | an **un-revoked** fill in the same shape **is** served afterwards |
 | **Traps carried** | (i) **V** `invalidate_if` (`cached_metadata.rs:141-146`) returns early on a populated slot, so the generation bump never runs — routing through it covers a cold start only; (ii) the in-flight decline of §3 |
 | **Status** | **new.** The cold-start half exists (`tests.rs:1817`) with its control shipped in #672; the **populated-slot** half is what this row adds. |
@@ -189,6 +234,55 @@ the per-construct no-op check reads as a matrix.
 | **Admitted case** | an identical call **without** an intervening revocation **does** hit cache; and beta's entries survive |
 | **Status** | **new** at this level. `policy_epoch_tests.rs:51` proves the epoch mechanism; this proves a revoke reaches it. |
 
+### A6 — rotation: the pre-rotation catalogue is not served under the successor grant
+
+> **Spec:** *"rotate/revoke a grant during a fill"* — the **rotate** half.
+> **V** `scope-update.md:32` names **two nouns**: *"including changes and
+> revocation"*. One row each.
+
+| | |
+|---|---|
+| **Exercises** | **K2**, and the successor path K2 alone cannot reach |
+| **Inputs** | alpha's slot populated under grant **G1**; a fill on the wire; rotation to **G2**; alpha reads |
+| **Expect** | alpha is served the **G2** catalogue, or nothing — **never the G1 catalogue presented as G2's** |
+| **Admitted case** | a read with **no** intervening rotation still hits cache, and beta is untouched |
+| **Status** | **new**, and it may be green at HEAD — see below |
+
+**RATIFIED 2026-09-22 as its own cell, not an A3 variant. Cells are enumerated
+by failure mode, and rotation's is not revocation's:**
+
+| | successor grant | the wrong behaviour |
+|---|---|---|
+| **revoke** (A3-A5) | none | serving **anything** |
+| **rotate** (A6) | exists | serving the **pre**-rotation catalogue **under the post**-rotation grant |
+
+**I** A construct that retires the slot correctly on revoke can still mis-serve
+on rotate, and **no revocation cell can reach that**: with nothing to
+mis-attribute *to*, the failure is unrepresentable in A3-A5. Folding rotation in
+would have left the clause tested by no cell.
+
+**The failure mode is worse than a leak, which is why it earns a row.** A refusal
+announces itself. A mis-attribution is the **right shape of answer under the
+wrong identity** — plausible, successful-looking, and detected only by someone
+who already knows what G2's catalogue should contain.
+
+#### A6 is a REGRESSION ROW if it is green at HEAD, not a falsifier
+
+**A** It may well pass already. If it does, the cell states **which construct
+makes it green** rather than being deleted as redundant:
+
+- **V** `discovery_fetch.rs` (#672) — a per-user slot past its TTL refetches
+  rather than serving stale, so a rotation that outlives the TTL self-corrects.
+- **V** `policy_epoch` — strands result-cache keys minted under superseded
+  grants (`policy_epoch_tests.rs:51`).
+
+**I** Neither is *rotate during a fill*, which is what `scope-tests.md:40`
+actually names: the TTL path self-corrects **eventually**, and the epoch never
+touches the metadata caches at all. So a rotation landing inside the TTL window,
+mid-fill, is covered by neither — and a cell that passes today while reddening if
+someone removed the construct behind it is doing real work. **A clause tested by
+no cell is the hole; a cell that is green for a named reason is not.**
+
 ### C0 — invariant shared catalogue
 
 > **Spec:** *"Invariant shared catalogue is a separate positive control."*
@@ -206,19 +300,34 @@ the per-construct no-op check reads as a matrix.
 
 | Substitution | Must redden | Must stay green |
 |---|---|---|
-| K1 revoke surface → no-op | **A5** | A1, A2, A3, A4, C0 |
-| K2 eviction → no-op | **A3, A4** | A1, A2, A5, C0 |
+| K1 revoke surface → no-op | **A5** | A1, A2, A3, A4, A6, C0 |
+| K2 eviction → no-op | **A3, A4, A6** | A1, A2, A5, C0 |
 | K2 evicts unconditionally, ignoring identity | **C0** | — |
 | K2 keeps the `in_flight == 0` predicate | **A3** in-flight variant | — |
+| **Retirement not consulted by the fill path** (§3.1) | **A3**, and only when its assertion runs **after** the fill lands | — |
+| Rotation retires nothing, successor read falls through to cache | **A6** | A3, A4, A5 |
 
 **I** Row 3 is the control on the control: a repair that retires every per-user
-slot on any revocation would satisfy A3–A5 and is not isolation.
+slot on any revocation would satisfy A3-A6 and is not isolation.
+
+**I** Row 5 is the one an ordinary reading of A3 misses entirely. The
+substitution leaves the revoke path correct and the eviction real — only the
+fill path stays unaware — so A3 reddens **only** if its assertion runs after the
+in-flight fill has landed. Ordered the other way, this row is green and the
+defect ships.
+
+**I** Row 6 is why A6 is not folded into A3: the substitution leaves every
+revocation cell green, because revocation has no successor to mis-attribute to.
 
 ---
 
 ## 6. Open, for the release owner
 
-**A** Does rotation need its own cell (§0)? Folded into A3 here.
+**RESOLVED 2026-09-22** — rotation is its own cell, A6. Enumerated by failure
+mode rather than code path; the deciding argument is that `scope-update.md:32`
+names two nouns, *"changes and revocation"*, and a construct checked against one
+noun with the conclusion written against both is how an invalidation mechanism
+covering results got reported as covering catalogues.
 
 **A** What is K1's surface — admin route, CLI, or an internal call from the
 account store? The plan grades behaviour and is deliberately silent on shape,
