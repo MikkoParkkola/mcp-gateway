@@ -1,6 +1,8 @@
 # MIK-6744.STORE.1 — 3.x credential migration path
 
-**Status**: design, pre-implementation. **Date**: 2026-09-21.
+**Status**: design, pre-implementation, **revised after a second review round
+(two live seats) on 2026-09-21** — see §12.3 for what changed and why.
+**Date**: 2026-09-21.
 **Source ref for every citation**: `origin/docs/ranking-1-release-line` @ `1d8b5668`.
 The shared checkout is behind that ref and carries a peer's uncommitted edits to
 `crash_tests.rs` and `service_release_tests.rs`; nothing below was read from the
@@ -27,6 +29,62 @@ Re-authenticating would have bought fresh grants and left no stale 3.x refresh
 tokens crossing a major version. The release owner weighed that and chose
 migration. Everything in §7 (fail-closed), §10 (security) and §9 (falsifiers)
 exists to buy down that specific cost.
+
+## 1.1 HARD DEPENDENCY: the `sole` identity tier, and what this row delivers without it
+
+**Escalated 2026-09-21 as its own decision. Stated here because it determines
+whether STORE.1 can satisfy the operator's second ruling at all, and a reader
+who reaches §5 without knowing it will design against the wrong target.**
+
+The operator's words: *"and there needs to be a solo upgrade path. all our
+current users are solo users."* A migrated credential is reachable only when
+its declared principal authenticates: `AccountKey.principal_authority` and
+`principal_subject` come from `VerifiedIdentity::issuer` and `::subject`
+(`identity.rs:85-86`), and a `VerifiedIdentity` has exactly **two** production
+producers — `key_server/oidc.rs:446` (a verified OIDC token) and
+`gateway/openwebui_adapter.rs:421` (OpenWebUI's forwarded identity). Every
+other construction in the tree is a test or a fixture (V, all 58 occurrences
+classified by `cfg(test)` context on 2026-09-21, not inherited from a prior
+count).
+
+A solo 3.x install has neither producer. So today, on this row alone:
+
+| | What a solo install gets |
+|---|---|
+| **Without the `sole` tier** | The migration runs, refuses nothing, and commits a grant that validates and is durable. The declared principal never authenticates, so no lease ever matches that `AccountKey`. The criterion's MIGRATED conjunct is satisfied on disk and **every current user gets nothing usable.** This is the same inertness §5.2(a) rejects the sentinel principal for — reached by a different route. |
+| **With the `sole` tier** | The operator declares the solo principal, migration commits under it, and a request on a single-user gateway resolves to that same principal and leases the migrated grant. This is the only configuration in which STORE.1 delivers the ruling. |
+
+**The tier is not in this row and must not be scoped into it.** It lives on
+`origin/design/proof-tiered-principals` (@ `7325697b`) as 431 lines of design
+plus a 15-line test-comment fix — **no implementation** (V). Its `sole` tier
+would mint `principal_authority = "local"` and a fixed subject from
+`auth.single_user: true`, which `upgrade.rs:144` already tells personal
+gateways to set.
+
+**Two binding consequences for this design:**
+
+1. **The declaration is not free-text for the solo case.** §5.3 takes
+   `principal_authority` and `principal_subject` from the operator verbatim.
+   Where the deployment is solo, those two values MUST equal what the `sole`
+   tier mints, or the migration recreates the inert-key failure with an
+   operator's typo instead of a designed sentinel. Migration must therefore
+   validate the declared pair against the tier's producer once that producer
+   exists, and refuse a solo declaration that does not match. Until it exists,
+   there is nothing to validate against.
+2. **No falsifier in §9 proves the solo case, and none can be written yet.**
+   F1 proves `lookup(key)` returns `Connected` — that the record is in the
+   store, not that anyone can reach it. The solo acceptance test is
+   *migrate, then authenticate as the solo principal, then lease* — and its
+   middle step has no API. It is recorded as **F21** and is expected to fail
+   to compile, not to fail an assertion, which is a different kind of red and
+   is not counted as coverage.
+
+**Until the `sole` tier decision lands, STORE.1's honest status is: the
+mechanism is buildable and reviewable, and its user-visible value is zero for
+the population the ruling names.** That is the decision being escalated, and it
+is recorded here rather than resolved.
+
+---
 
 ## 2. Citation corrections to the brief
 
@@ -430,7 +488,20 @@ Per declared backend, in order:
       (`oauth/storage.rs:295-313`) — a prior Dynamic Client Registration.
    c. `TokenInfo.client_id` (`oauth/storage.rs:45-46`).
 
-   Refuse the backend if all three miss, and refuse if two sources disagree.
+   Refuse the backend if all three miss. **Disagreement is resolved by
+   precedence, not by blanket refusal — corrected 2026-09-21 second review
+   round.** An install that used Dynamic Client Registration in 3.x and was
+   later given an operator `client_id` legitimately holds both, and they
+   legitimately differ: `restore_persisted_client_id` is a no-op once a
+   configured id is set (`client/mod.rs:425-428`), and
+   `drop_credentials_from_other_issuer` deliberately keeps a configured id
+   because "a configured client id belongs to the operator rather than to
+   an issuer" (`client/mod.rs:408-423`) (V). A blanket refusal would refuse
+   that install and force a re-authentication the row exists to avoid. So:
+   **(a) wins over (b) and (c)**, and a disagreement between (a) and either
+   of the others is reported, not refused. A disagreement between (b) and
+   (c) — two disk records that should agree — IS a refusal, because neither
+   has authority over the other.
    `GrantRecord.client_id` is a non-`Option` `String` (`mod.rs:148`) (V).
 
 ### 7.1b `client_id` recovery does not make the grant refreshable — a precondition does
@@ -510,14 +581,105 @@ below is chosen to satisfy it, and the right-hand column quotes it.
 | `access_token` | `TokenInfo.access_token` | non-empty, ≤ 65536 (`storage.rs:128-129`) |
 | `refresh_token` | `TokenInfo.refresh_token` | if `Some`, non-empty ≤ 65536 (`:130-133`) |
 | `token_type` | `TokenInfo.token_type` (3.x defaults `"Bearer"`, `oauth/storage.rs:25-26`, `:53-55`) | — |
-| `expires_at` | `TokenInfo.expires_at` (`Option<u64>`) → **`unwrap_or(0)`** | not validated. `0` reads as already expired, forcing a refresh on first use rather than handing out a token whose remaining lifetime the 3.x record never carried. Fail-closed by choice (I). |
-| `scopes` | `TokenInfo.scope` split on whitespace, sorted, deduped | strictly ascending: `scopes.windows(2).any(pair[0] >= pair[1])` rejects (`:138`) |
+| `expires_at` | **see §7.2a — `unwrap_or(0)` was wrong and is withdrawn** | not validated (`storage.rs`, no rule) |
+| `scopes` | `TokenInfo.scope` split on whitespace, sorted, deduped — **but an ABSENT `scope` is not an empty set; see §7.2a** | strictly ascending: `scopes.windows(2).any(pair[0] >= pair[1])` rejects (`:138`) |
 | `provider_account_id` | `None` | `Option`, unconstrained |
 | `client_id` | §7.1 step 2, else refuse | non-`Option` `String` (`mod.rs:148`) |
 | `generation` | `commit::random_hex()` — 16 random bytes, 32 hex chars (`commit.rs:67-73`) | `lower_hex(.., 32)` (`storage.rs:134`) ✓ exactly |
 | `token_revision` | `1` | `!= 0` (`:136`) |
 | `authorization_epoch` | `1` | `!= 0` (`:137`) |
 | `descriptor_revision` | **see §7.3 — open (A)** | `lower_hex(.., 64)` (`:135`) |
+
+### 7.2a Two seeds that can make a working 3.x grant STOP working — designed, not defaulted
+
+**Raised by design review 2026-09-21 (second round), confirmed at source, and
+this is the most serious class of defect in the row.** A migration that fails is
+recoverable: the 3.x file is untouched (§7.4) and the operator re-runs or
+re-authenticates. A migration that *succeeds* and leaves the user with a
+credential that worked before the upgrade and does not work after it is worse
+than never migrating at all, because it consumes the one outcome the operator
+ruled for and delivers the outcome the ruling was meant to avoid. The first
+draft of §7.2 shipped two of these, both by taking a default instead of making
+a decision.
+
+#### (a) `expires_at` — `unwrap_or(0)` kills an access-only grant
+
+**The mechanism, verified at source.** `AccountService` refreshes anything it
+finds expired (`service.rs:272-277`), and the refresh provider refuses outright
+when the record carries no refresh token:
+`current.refresh_token.as_deref().ok_or(ProviderRefreshError::Unavailable)?`
+(`provider.rs:307-311`) (V). So for a 3.x record with **no `expires_at` and no
+`refresh_token`**, seeding `expires_at = 0` produces a grant that is
+permanently expired and permanently unrefreshable. That same access token was
+usable in 3.x until its real expiry.
+
+The first draft called `0` "fail-closed by choice". It is fail-closed only for
+a record that *has* a refresh token; for one that does not, it is fail-dead.
+The rule was written against the refreshable case and never tested against the
+other.
+
+**Designed behaviour**, replacing `unwrap_or(0)`:
+
+| 3.x record | `expires_at` seed | Why |
+|---|---|---|
+| `expires_at` present | that value, verbatim | The record carries the real lifetime. Nothing is invented and nothing is discarded. |
+| absent, `refresh_token` present | `0` | The original intent, and correct here: expired-on-arrival forces one refresh before first use rather than handing out a token whose remaining life the record never stated. The refresh can succeed, so nothing is lost. |
+| absent, `refresh_token` absent | **refuse this backend** | There is no honest seed. `0` kills it; any positive value is a lifetime the gateway invented for a live credential. Refusal leaves the 3.x file in place and the operator re-authenticates once — the 4.0.0 behaviour they were already promised (`upgrade.rs:243-248`). |
+
+Refusal, not migration-with-a-warning: a grant that looks `Connected` and
+cannot work is the failure mode §7.1b already refuses for a descriptor with no
+`client_id`, and it is refused here for the same reason. The user is not
+prompted to re-authenticate, so nothing recovers them.
+
+#### (b) `scopes` — an absent `scope` becomes an empty set that refuses its own refresh
+
+**The mechanism, verified at source.** `AccountService::apply` weighs a refresh
+response's scope list against the stored one:
+
+```
+let mut scopes = rotated.scopes.unwrap_or_else(|| current.scopes.clone());
+...
+if scopes.iter().any(|scope| !current.scopes.contains(scope)) {
+    return Err(AccountServiceError::ScopeBroadeningRefused);
+}
+```
+
+(`service.rs:393-400`) (V). If `current.scopes` is **empty**, then every scope
+the authorization server names in its refresh response is a scope the stored
+grant does not contain, so the first refresh that reports any scope at all is
+rejected as broadening — a consent the user never gave. `TokenInfo.scope` is
+`Option<String>`, and a 3.x record that never recorded a scope is ordinary, so
+"split the scope string" silently produces the empty set for a real and common
+input.
+
+**Designed behaviour:**
+
+| 3.x record | `scopes` seed | Why |
+|---|---|---|
+| `scope` present | split, sorted, deduped as before | Unchanged; this was always right. |
+| `scope` absent, destination descriptor declares `scopes` | the descriptor's `scopes`, sorted and deduped | The operator has already declared what this backend is authorized for, and a refresh response matching that declaration is then not a broadening. This attributes scopes the record did not carry, so it is recorded as an attribution, not a recovery. |
+| `scope` absent, descriptor declares none | **refuse this backend** | Nothing names the grant's scopes, so any seed is invented and the empty set is actively harmful. |
+
+The middle row is the only place in this design that fills a `GrantRecord`
+field from the destination rather than the source, and it is doing so because
+the alternative is a grant that breaks on first refresh. It is narrower than
+it looks: §5.3a already requires the legacy and destination issuers to be
+equal, so the descriptor's scopes describe the same authorization server the
+credential came from.
+
+**Both refusals are per-backend**, in the same shape as §7.1 step 2's
+`client_id` refusal: the run continues, other declared backends still migrate,
+and the refused one reports why. §7.5's fail-closed property is unchanged,
+because a refused backend never reaches the commit.
+
+**Falsifiers** (join §9.5): F18 — a 3.x record with no `expires_at` and no
+`refresh_token` is refused, and `lookup` is `Absent`; F19 — a record with no
+`expires_at` but WITH a refresh token migrates and seeds `0`; F20 — a record
+with no `scope` against a descriptor declaring scopes migrates with the
+descriptor's scopes, and the same record against a descriptor declaring none
+is refused. Each pair is two-directional on purpose: F19 and F20's first leg
+are the positive controls that stop F18 and F20's second leg passing for a
+migration that refuses everything.
 
 ### 7.3 `descriptor_revision` has no producer — RULED, and the first spec was wrong
 
@@ -546,7 +708,7 @@ found, and no fence is needed. Hashing them into the revision therefore adds
 nothing the key does not already do — and leaves the revision blind to every
 change that keeps the key intact.
 
-**The concrete defect that spec would have shipped (I, mechanism verified):** an
+**The concrete defect that spec would have shipped (I, mechanism verified — but see the correction below: the remedy does not work either):** an
 operator widens `scopes` on an existing descriptor, read-only to read-write. The
 key is unchanged, so every stored grant still resolves. The revision is
 unchanged, so `commit.rs:433` never fences. Every user keeps a token carrying
@@ -596,20 +758,70 @@ onward) holds because the encoding is deterministic over unchanged inputs, and
 (`fence_tests.rs:162-182`) now holds for the changes that actually matter rather
 than only for a change that would have moved the key anyway.
 
-**The coupling condition is unchanged and still loud:** whatever
-MIK-6745/6746's consent journey computes for `descriptor_revision` must be the
-**same function**, not a reimplementation. If it computes a different value,
-`commit.rs:433` rejects every migrated grant at its first refresh and every
-migrated user is asked to reconnect — the outcome this row exists to prevent (I).
+#### THE FENCE THIS SECTION WAS WRITTEN FOR DOES NOT EXIST — corrected 2026-09-21, second review round
 
-**This no longer blocks implementation.** It blocks only on MIK-6745/6746 being
-bound to reuse the function rather than writing their own.
+**This correction is load-bearing and it invalidates the argument above, not
+just its field set.** The section justified its corrected field set with a
+worked example: an operator widens `scopes`, the `AccountKey` is unchanged so
+every stored grant still resolves, "the revision is unchanged, so
+`commit.rs:433` never fences". The remedy proposed was a better fingerprint.
+That remedy does not work, because **no site in the tree compares a live
+descriptor's fingerprint to a stored `descriptor_revision`** (V, every
+occurrence re-read):
 
-**This is the one item that should block implementation until settled**, because
-a wrong answer is not a bug that shows up in a test — it shows up as every
-migrated user being asked to reconnect, which is the outcome the whole row
-exists to avoid. Settling it needs an owner decision on MIK-6745/6746's
-descriptor-revision definition, not more reading.
+| Site | What it actually does |
+|---|---|
+| `commit.rs:295` | copies the field onto the replacement entry |
+| `commit.rs:433` | `record.descriptor_revision != expected.descriptor_revision` — **both supplied by the caller**; a caller-consistency check, not a config check |
+| `commit.rs:450-455` | compares the STORED entry to the version the caller captured — optimistic concurrency |
+| `commit.rs:514`, `:522`, `:564`, `:627` | the same shape for revoke / reconnect / repair |
+| `service.rs:79`, `:128`, `:183`, `:193` | field copies into `GrantVersion` / `CredentialLease` |
+| `storage.rs:135`, `:481` | format validators (`lower_hex(.., 64)`) |
+| `vault.rs:226-227` | renders the value into a propagation string |
+
+Every one is a copy, a validator, or a comparison of two values that both
+originate from stored records. The live `AccountDescriptor` is never
+fingerprinted and never compared. So a widened `scopes` is not fenced today,
+and **computing a perfect fingerprint at migration time does not fence it
+either** — the value would be correct and nothing would ever read it against
+the configuration it describes.
+
+**What the fence would actually require**, and it is not in this row: a
+comparison site on the read path — `AccountService` before release, or
+`GatewayRefreshProvider` before refresh — that computes the current
+descriptor's fingerprint and refuses, or marks reconnect-required, when it
+differs from the stored one. That is a new production behaviour with its own
+user-visible consequence (every affected user is asked to reconnect after a
+config edit), and it belongs to the consent journey that owns the read path,
+not to a one-time offline migration.
+
+#### What STORE.1 therefore does about `descriptor_revision`
+
+**RULED 2026-09-21: compute it.** That ruling stands and is implemented as
+specified above — the versioned length-prefixed encoding over the field set in
+the table, hex-encoded, 64 lowercase hex by construction. What changes is only
+the claim made for it:
+
+- **What it buys now**: a `GrantRecord` that validates (`storage.rs:135`), and
+  a value that is *ready* for a fence when one is built. Nothing else.
+- **What it does NOT buy**: any detection of a descriptor change. This section
+  previously implied otherwise, and a reader who believed it would conclude a
+  widened `scopes` is now caught. It is not.
+- **The coupling condition is unchanged and still loud**: whatever MIK-6745/6746
+  computes for `descriptor_revision` must be the **same function**, not a
+  reimplementation. If it computes a different value, `commit.rs:433` rejects
+  every migrated grant whose caller captured the other one, and every migrated
+  user is asked to reconnect — the outcome this row exists to prevent (I).
+
+**This does not block implementation.** It blocks only on MIK-6745/6746 being
+bound to reuse the function rather than writing their own. The pre-ruling
+paragraph that said the opposite — "this is the one item that should block
+implementation until settled" — was left behind when the ruling was folded in
+on 2026-09-21 and is **deleted**, not annotated: a design carrying both
+readings has no reading.
+
+**The missing comparison site is recorded as O7**, so the gap is owned rather
+than implied away.
 
 ### 7.4 Input 1 — NON-DESTRUCTIVE
 
@@ -628,6 +840,45 @@ write through `TokenStorage::save` under the 4.0.0 key.** The destination is
 `PersonalAccountStore` and nothing else. Re-keying the file would be a tempting
 convenience, and it would make the shipped notice false in the field the moment
 it landed, ahead of the retraction sequencing in §11.
+
+### 7.4a Are existing grants preserved or invalidated? — stated explicitly
+
+**Question 3 of the review mandate, and the first draft never answered it.**
+Both answers are here because "preserved" is true in one sense and false in
+another, and shipping only the flattering half is how an operator gets
+surprised.
+
+**Preserved, at the authorization server.** Migration performs no token
+request. It does not refresh, does not revoke, and does not present the
+credential anywhere. §5.3a requirement 3 refuses any migration whose legacy
+issuer differs from the destination descriptor's, so a migrated grant is only
+ever re-homed into the same authorization server that issued it. Nothing about
+the migration invalidates a live grant.
+
+**Preserved, on disk.** The 3.x file is opened read-only and never mutated
+(§7.4). After a successful migration the operator holds two references to one
+grant: the untouched 3.x file, and the sealed record in the per-principal
+store.
+
+**NOT preserved for rollback, once the migrated grant is used.** This is the
+part the first draft implied away. Many authorization servers rotate refresh
+tokens: the first refresh returns a new refresh token and retires the one
+presented. Because §7.2a(a) seeds `expires_at = 0` whenever the 3.x record
+carried no expiry, the *first use* of such a migrated grant triggers exactly
+that refresh. From then on the 3.x file is byte-identical and its refresh token
+is dead at the server. An operator who rolls back to 3.x after any migrated use
+finds a file that looks intact and a grant that no longer works.
+
+**Therefore:**
+
+- The retracted notice text (§11) must say that the 3.x files remain as a
+  record, **not** that they remain usable after migration. `upgrade.rs:243-248`
+  currently tells operators the stranded files "still hold usable refresh
+  tokens" — true today, and it stops being true for a migrated backend the
+  first time it refreshes. Commit 2's rewrite carries this or it ships a lie.
+- Rollback to 3.x is supported **before** first use of a migrated grant and is
+  not guaranteed after it. Stated, not engineered around: guaranteeing it would
+  mean never refreshing a migrated grant, which is the opposite of the row.
 
 ### 7.5 Input 2 — FAIL-CLOSED AND RESUMABLE
 
@@ -753,16 +1004,35 @@ for the opposite reason. An implementer who reads only the brief will try.
       | `commit.rs:390` `commit_grant` (unix) | add the provenance parameter |
       | `commit.rs:593` `commit_grant` (`cfg(not(unix))` shim, verified at source) | signature parity; body still returns `InvalidConfiguration` |
       | `commit.rs:250-256` `stage_publication` | accept it; replace the carry-forward at `:285-288` with "use the supplied value, else carry forward" |
+      | **`commit.rs:343`** — caller, inside `fn publish` (`commit.rs:336`) | **ADDED 2026-09-21 second review round.** `stage_publication` has TWO callers, not one; this is the second (V). Pass `None`. |
       | `consent.rs:75-80` `commit_grant_if_unchanged` | accept it and pass it through |
       | `consent.rs:81-87` (`cfg(not(unix))` arm) | signature parity |
       | **`consent.rs:102`** — caller | pass the migration's provenance |
       | **`mod.rs:501`** — caller, inside `PersonalAccountStore::commit_grant` (`mod.rs:493`, itself `expect(dead_code)` at `:486-492`) | pass `None`; stays dead |
 
-      These two are the **only** callers of `commit::commit_grant` in the tree
-      (V — every other hit is `PersonalAccountStore::commit_grant` or a test).
-      `refresh_tokens` (`commit.rs:417`), `revoke` (`:479`) and
-      `mark_reconnect_required` (`:510`) are separate functions and are **not**
-      touched.
+      `consent.rs:102` and `mod.rs:501` are the only callers of
+      `commit::commit_grant` (V — every other hit is
+      `PersonalAccountStore::commit_grant` or a test). **But the parameter does
+      not stop at `commit_grant`, and the first draft of this table said it
+      did.** `stage_publication` is reached from two directions:
+      `commit_grant` at `commit.rs:410`, and `publish` at `commit.rs:343`.
+      `publish` is itself called from `refresh_tokens` at `commit.rs:457` (V).
+
+      **Correction, and it matters because this table promised no compile-time
+      surprises:** the first draft stated that `refresh_tokens`
+      (`commit.rs:417`) is "**not** touched". That is false. Threading the
+      parameter through `stage_publication` breaks `publish`, and `publish` is
+      `refresh_tokens`'s durable write. `refresh_tokens` needs no new argument
+      of its own — a refresh must carry the marker forward, never set it, which
+      is exactly `None` plus the existing carry-forward (§6.2 claim 1) — but
+      `publish` must accept and pass the parameter, so the edit reaches it.
+      An implementer building from the first draft's list would have discovered
+      this from the compiler, which is the failure this table exists to prevent.
+
+      `revoke` (`:479`) and `mark_reconnect_required` (`:510`) write no record
+      and do not reach `stage_publication`; those two are genuinely untouched
+      (V).
+
 - [ ] **Source-path validation** before reading (§10.5): regular file, not a
       symlink, owned by the running user, mode `0600`.
 - [ ] **Parse-diagnostic sanitization** (§10.2): either a position-only wrapper
@@ -870,6 +1140,50 @@ falsifier, and it must run migration to completion first.
 F17 is deliberately listed as a falsifier that **fails today**. It is the
 cheapest proof that §6.1's gap is real rather than theoretical, and the cheapest
 guard that the plumbing actually landed.
+
+---
+
+### 9.6 Falsifiers added by the second review round (2026-09-21)
+
+| # | Claim | Falsifier | Joins |
+|---|---|---|---|
+| F18 | A 3.x record with no `expires_at` AND no `refresh_token` is refused, never committed permanently-dead | Seed such a record; assert refusal and `lookup` is `Absent` (§7.2a(a)) | `migration_tests.rs` |
+| F19 | A record with no `expires_at` but WITH a refresh token still migrates, seeding `0` | Seed such a record; assert `Connected` and `expires_at == 0`. **This is F18's positive control** — without it F18 passes for a migration that refuses everything | same |
+| F20 | An absent `scope` never becomes an empty scope set | Two legs: against a descriptor declaring `scopes`, assert `Connected` with the descriptor's scopes; against one declaring none, assert refusal and `Absent` (§7.2a(b)) | same |
+| F21 | **A solo install can actually USE a migrated credential** | Declare the solo principal, migrate, authenticate as that principal on a single-user gateway, assert the lease carries the migrated grant. **Expected to fail to COMPILE, not to fail an assertion**, until O8's `sole` tier exists (§1.1) — recorded so the gap is visible in the suite rather than only in prose, and explicitly not counted as coverage | blocked on O8 |
+
+### 9.7 The vacuity rule every negative falsifier above is now subject to
+
+**Both review seats raised this independently and it is accepted.** A falsifier
+that asserts only that something did NOT happen passes for a migration that
+does nothing at all, which is precisely the defect class this repo has caught
+twice in one week. Against a tree with no migration, **F2, F3, F4, F12 and F14
+as first drafted are vacuous**: "assert `lookup` is `Absent` and the 3.x file
+is byte-identical" is true of an empty function.
+
+**Rule, binding on the implementation of §9:** every negative falsifier must
+run a *proven-successful* migration first, in the same test, and assert that
+success — then assert the negative about a second backend, a second key, or a
+second run. Specifically:
+
+- **F2** (no declaration, no migration): migrate backend A successfully and
+  assert `Connected`, then assert backend B — seeded identically, declared
+  nowhere — is `Absent` and its file byte-identical. Without leg one, F2 proves
+  nothing, and §10.5's security argument rests on it.
+- **F3, F4** (never overwrite, never resurrect): assert the *positive* commit
+  or revoke landed first, then that migration left it alone.
+- **F12, F11b** (source untouched, never re-keyed): §9.4 already requires F11b
+  to run migration to completion; F12 must do the same.
+- **F14** (no secret in logs): asserting only that the sentinel is absent
+  passes when the parse was never attempted. It must additionally assert the
+  position-only refusal *appears* in the captured output, so the test fails if
+  the record was never read.
+
+F9's crash falsifier is **not** in this class: the existing harness already
+requires `Outcome::Died { checkpoint: Some(..) }` — the child announces the
+named boundary before dying — and a candidate-count delta proving the window
+was entered (`crash_tests.rs:144-179`) (V). A child that merely exited fails
+those assertions. The fault cannot fail to bite unnoticed.
 
 ---
 
@@ -1086,14 +1400,28 @@ sweeping for "migration is not supported" prose will find it and be tempted.
 | # | Item | Tag | What settles it |
 |---|---|---|---|
 | O1 | ~~**`descriptor_revision` has no producer** (§7.3). Blocks implementation.~~ **RULED 2026-09-21: it is a development gap to fix; STORE.1 defines the producer.** The proposed field set was ALSO wrong and is corrected in §7.3 — it hashed `provider`/`resource`/`issuer`, but `resource` and `oauth_issuer` are already in `AccountKey` (`mod.rs:49-53`), so it duplicated the key and was blind to a widened `scopes`. | V | Residual: MIK-6745/6746 must be bound to reuse the same function, not reimplement it. |
-| O2 | `random_hex` visibility widening (§8.2) | A | An explicit yes on `commit.rs:67` → `pub(super)`, per the standing rule on API visibility widening. |
+| O2 | `random_hex` visibility widening (§8.2) | A | An explicit yes on `commit.rs:67` → **`pub(in crate::personal_accounts)`**, per the standing rule on API visibility widening. **Corrected 2026-09-21 second review round:** this row previously said `pub(super)`, which §8.2 states in bold is NOT enough — the open-items table was re-introducing the exact trap §8.2 warns about. |
 | O3 | Whether a migrated grant is ever leasable in the deployment that receives it | V | **RULED 2026-09-21: there must be a solo upgrade path — "all our current users are solo users."** So this is not a precondition to check but a gap to close, and it is the one that decides whether this row delivers anything at all. A migrated grant is leased only when its declared principal authenticates, and `VerifiedIdentity` has exactly two production producers (`key_server/oidc.rs:446-452`, `gateway/openwebui_adapter.rs:421`) — `handlers.rs:2218` looks like a third and sits inside `#[cfg(test)]` opened at `:2177`. A solo 3.x install has neither, so today migration would satisfy MIGRATED and deliver nothing to **every existing user**. The answer is the single-user principal in `design/proof-tiered-principals`, which must land for this row to be worth building. |
 | O4 | `consent.rs:45-51` `expect` — stays or goes (§8.1) | A | Compile check during implementation; listed so it is checked rather than assumed. |
 | O5 | Issuer contradiction check granularity (§5.3a) — is comparing the `token_endpoint`'s **origin** to the attested issuer's origin the right test? Some providers host the token endpoint off the issuer origin. | A | A decision on whether to compare origins, require an exact operator-supplied endpoint, or treat a mismatch as a warning that requires a second attestation flag. Conservative default: refuse and make the operator override explicitly. |
 | O6 | Zeroization of `TokenInfo` / `GrantRecord` plaintext buffers (§10.1) | A | Out of scope for this row as scoped; it changes types every existing holder shares. Named so the security section's claim stays honest rather than implying erasure this design does not perform. |
+| O7 | **The `descriptor_revision` fence has no comparison site** (§7.3). Every occurrence in the tree is a copy, a validator, or a comparison of two stored-origin values; the live `AccountDescriptor` is never fingerprinted and never compared (V). Computing the value correctly at migration time therefore detects no descriptor change at all. | V | A decision on whether the read path (`AccountService` before release, or `GatewayRefreshProvider` before refresh) gains a live-fingerprint comparison, and which row owns it. It is **not** in STORE.1: it is a new production behaviour whose consequence is that every affected user is asked to reconnect after a config edit. |
+| O8 | **The `sole` identity tier** (§1.1). STORE.1 delivers zero user-visible value to a solo install without it, and that is the population the operator's ruling names. | V | Escalated 2026-09-21 as its own decision. `origin/design/proof-tiered-principals` @ `7325697b` is design-only, no implementation. §1.1 records both outcomes. |
 
-O1 and O3 gate a test plan being written against this document. O2, O4, O5 and
-O6 are answerable inside implementation or deferrable with the risk stated.
+**Gating, consolidated — this is the single authoritative list, and §7.3 no
+longer carries a competing one.**
+
+| Item | Gates | Owner |
+|---|---|---|
+| O8 (`sole` tier) | whether the row delivers anything to current users; and the solo falsifier F21 | escalated, owner decision |
+| O5 (issuer-check granularity) | F16's refusal assertion — a falsifier cannot be written against an undecided rule | owner decision; conservative default is refuse-with-explicit-override |
+| O2 (`random_hex` visibility) | one line of implementation | explicit yes, per the standing rule |
+| O7 (fence comparison site) | nothing in STORE.1 — recorded so the gap is owned, not implied away | a later row |
+| O4 (`consent.rs:45-51` `expect`) | nothing — a compile check during implementation | implementer |
+| O6 (zeroization) | nothing — out of scope, named so §10.1 stays honest | a later row |
+
+O1 is RULED and no longer gates. **O3 is superseded by §1.1 and O8**, which
+state both outcomes rather than leaving the question open.
 
 ### 12.1 Review findings accepted and folded in (2026-09-21)
 
@@ -1143,6 +1471,25 @@ reached independently before the review ran.
    `RefreshProvider` whose bootstrap does HTTP, which an offline migration must
    not need. This shrinks the blast radius to one attribute removal (§7.1a,
    §8.1).
+7. **Two seeds that could kill a working grant are designed, not defaulted**
+   (§7.2a). `expires_at` is preserved when present, seeded `0` only when a
+   refresh token exists to redeem it, and the backend is REFUSED when neither
+   is available. An absent `scope` takes the destination descriptor's scopes,
+   or the backend is refused — never the empty set, which refuses its own
+   first refresh. A successful migration that leaves a credential dead is
+   worse than no migration, and the first draft shipped two routes to it.
+8. **The `descriptor_revision` fence is not built, and the design now says so**
+   (§7.3, O7). The value is computed per the ruling; the claim that it detects
+   a descriptor change is withdrawn, because no site compares it to live
+   configuration. Ninety lines specifying a fence with no comparison site was
+   worse than an honest gap.
+9. **The `sole` identity tier is a named hard dependency** (§1.1, O8), with
+   both outcomes written down: without it the row satisfies MIGRATED on disk
+   and delivers nothing to any current user; with it, it delivers the ruling.
+   Escalated as its own decision rather than designed around here.
+10. **Grant preservation is stated in both directions** (§7.4a): nothing is
+    invalidated by the migration, and rollback to 3.x is not guaranteed after
+    a migrated grant's first refresh on a rotating server.
 6. **Notice retracted last**, in a second commit, with two tests changing rather
    than the one that is obvious (§11).
 
@@ -1178,3 +1525,54 @@ production producers only at `key_server/oidc.rs:446-452` and
 `gateway/openwebui_adapter.rs:421` — every other construction sits in a
 `#[cfg(test)]` module or fixture, including `gateway/router/handlers.rs:2218`,
 which is inside the `#[cfg(test)]` block opened at `:2177`.
+
+---
+
+### 12.3 Second review round — two live seats, 2026-09-21
+
+Both seats ran on the full document with a scope line on stdin. **Neither was
+dark**, which corrects a standing expectation: `gpt-review` has returned 0-byte
+output repeatedly in this environment, and did not here — it wrote 6.1 KB and
+its evidence line records read-only Git inspection against `1d8b5668` and tag
+`v3.5.1`. `kimi-review` wrote 9.1 KB and was explicit that it could **not**
+reach the repository, so every `V`-tagged citation it accepted on this
+document's own word; its findings are therefore document-internal by
+construction. Both returned **SHIP-WITH-FIXES**. Note this is a different pair
+from §12.2, where grok was dark and a substitute verifier stood in.
+
+Every finding below was re-verified at source before being applied. Findings
+are listed with which seat raised them, because a claim both seats reach
+independently and a claim one seat reaches are not the same evidence.
+
+| Finding | Raised by | Verified at | Where fixed |
+|---|---|---|---|
+| **The `descriptor_revision` fence has no comparison site anywhere**; computing the value detects no descriptor change | gpt | all 20 occurrences re-read: `commit.rs:295`, `:433`, `:450-455`, `:514`, `:522`, `:564`, `:627`; `service.rs:79`, `:128`, `:183`, `:193`; `storage.rs:135`, `:481`; `vault.rs:226-227` | §7.3 rewritten; O7 |
+| **`expires_at → unwrap_or(0)` kills an access-only grant** | gpt | `service.rs:272-277`, `provider.rs:307-311` | §7.2a(a); F18/F19 |
+| **An absent `scope` becomes an empty set that refuses its own refresh** | gpt | `service.rs:393-400` | §7.2a(b); F20 |
+| **§8.3's provenance list omits `stage_publication`'s second caller**, and its "`refresh_tokens` is not touched" is false | gpt | `commit.rs:250` (def), `:343` (in `publish`), `:410` (in `commit_grant`), `:457` (`refresh_tokens` → `publish`) | §8.3 table + correction |
+| **The solo path is unbound**: nothing ties the declared principal to the only identity that could lease the grant | both | `identity.rs:85-86`; two production `VerifiedIdentity` producers only (`key_server/oidc.rs:446`, `gateway/openwebui_adapter.rs:421`), all 58 occurrences classified by `cfg(test)` context | §1.1; O8; F21 |
+| **§7.3 contradicted itself** in adjacent paragraphs on whether the row is blocked | both | the document itself | §7.3 — the pre-ruling paragraph **deleted**, survivor named |
+| **O2 asked for `pub(super)`**, the exact visibility §8.2 states in bold is insufficient | both | §8.2 vs O2 | O2 corrected |
+| **Negative falsifiers are vacuous** without a positive control (F2, F3, F4, F12, F14) | both | the no-op hypothesis applied to each | §9.7, binding rule |
+| **O5 is open while §5.3a req 2 is mandatory and F16 pins it** | kimi | §5.3a vs O5 | O5 moved into the consolidated gating table |
+| **Grant preservation across the migration is never stated** (Q3), and a rotating server voids the 3.x token on first migrated refresh | kimi | §7.4 scopes its claim to a *failed* migration | §7.4a |
+| **§7.1 step 2's "refuse if two sources disagree" can refuse a legitimate install** — DCR first, operator `client_id` later, both present and legitimately different | kimi | `client/mod.rs:389-398`, `:425-428`; `drop_credentials_from_other_issuer` keeps a configured id across an issuer change | §7.1 precedence note |
+
+**Claims trimmed rather than adopted as stated:**
+
+- kimi framed the rotation point as contradicting §7.4's "leaves the user
+  exactly where they started". It does not: §7.4 scopes that sentence to a
+  **failed** migration. The real gap is that Q3 is unanswered, which is what
+  §7.4a fixes.
+- gpt's `expires_at` finding was stated as affecting access-only grants
+  generally. It affects only records with **no `expires_at`**; a present value
+  is preserved verbatim. The narrower statement is what §7.2a(a) encodes.
+
+**One finding was raised by this round's own author and withdrawn**: that
+`oauth::storage` being a private module (`oauth/mod.rs:18`) made `TokenStorage`
+unreachable from `personal_accounts`, requiring a fourth visibility widening
+§8.2 had missed. It is re-exported at `oauth/mod.rs:24`
+(`pub use storage::{TokenInfo, TokenStorage}`) and `personal_accounts/provider.rs`
+already uses it. §8.2 stands at one widening. Recorded because a withdrawn
+finding is evidence the others were checked.
+
