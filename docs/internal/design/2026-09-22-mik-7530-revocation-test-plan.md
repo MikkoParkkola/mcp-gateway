@@ -454,14 +454,147 @@ need not even run.
 changing, A3 and A4 on slot **identity** changing, and both on top of — never
 instead of — the behavioural assertion.
 
+
+## 4R. THE CELLS — v3, rewritten as rows
+
+**r2-r4 fixed findings in prose and left the rows unchanged. Three round-1
+findings survived that way: a revision that *discusses* a finding reads as closed
+to its author and is invisible to a reviewer checking rows.** Every fix below is
+a row edit — changed inputs, changed expectation, or a new row. Where a finding
+needs no row change that is stated in one line, as a claim that can be checked.
+
+**Test affordance required first.** **V** The only non-creating slot lookup is
+`pooled_transport_for_test` (`pool.rs:404`, `self.pool.get(key)`), which returns
+`Option<Arc<dyn Transport>>` — so `None` conflates **"no slot"** with **"slot
+present, no transport"**. Asserting slot *absence* needs an unambiguous
+non-creating predicate (`pool_contains_for_test(&PoolKey) -> bool`). Every
+`pooled_entry`-based inspection **creates the slot it is inspecting** and is
+disqualified.
+
+---
+
+### A3 — retirement during a fill
+
+> **Spec:** *"rotate/revoke a grant during a fill."*
+
+| | |
+|---|---|
+| **Exercises** | **K2**, triggered through **K1** |
+| **Value moved by** | **K1's runtime surface.** Never `set_identity_grants` from a test body, never a store write (§5.2) |
+| **Inputs** | alpha's slot warm; a `tools/list` **blocked** on a barrier; retirement through K1; barrier released **after** the successor is established |
+| **Sequencing** | pause → retire → establish successor → **release** → assert |
+| **Expect 1 — slot** | **non-creating** lookup reports the retired key **absent** after the fill completes |
+| **Expect 2 — resend** | the successor's `resend_permitted` is **unchanged** by the completion. **V** `metadata.rs:262` re-resolves the key at completion time, and **V** `ensure_entry_started` runs **before** the request reaches the wire, so both writes are live after retirement |
+| **Expect 3 — content** | the retired fill's catalogue is not served |
+| **Admitted case** | an **un-retired** fill in the same barrier shape **is** served, and its slot **is** present |
+| **NEW v3** | Expects 1 and 2 are new. **A recreated slot can be EMPTY and still wrong** — content assertions alone miss it, and an empty slot carrying obsolete resend permissions is the exact residue |
+| **Coverage correction** | **V** `tests.rs:1828` calls `backend.get_tools()` with **no caller binding** — shared path. It is **not** per-user coverage and is no longer cited as any |
+
+### A3b — cold-slot retirement, per-user binding **[NEW ROW v3]**
+
+> **Spec:** same clause; the cold half.
+
+| | |
+|---|---|
+| **Exercises** | **K2** via **K1** |
+| **Value moved by** | K1's surface |
+| **Inputs** | alpha resolves a **nonempty** binding; slot **cold** (never filled); retirement; alpha reads |
+| **Expect** | no slot is created for the retired binding, and no catalogue is served |
+| **Admitted case** | a **non**-retired cold binding fills normally on first read |
+| **Why a row** | r1-r4 claimed the cold case was covered by `tests.rs:1817`. It is not (above). Cold per-user retirement was untested and marked covered |
+
+---
+
+### A4 — the catalogue is not served after retirement
+
+> **Spec:** *"check both catalogue …"*
+
+| | |
+|---|---|
+| **Exercises** | **K2** via **K1** |
+| **Value moved by** | K1's surface |
+| **Inputs** | alpha's slot populated and **fresh**; beta's slot populated and **warm**; retirement of alpha through K1 |
+| **Expect 1 — behaviour** | alpha is served no catalogue from the retired slot |
+| **Expect 2 — mechanism** | alpha's **slot identity changes** (non-creating lookup: absent, or a distinct `PooledEntry`). Asserted **independently** of Expect 1 |
+| **Expect 3 — metadata breadth** | parameterized over **all four** caches — tools, resources, resource templates, prompts — each with **distinguishable** content |
+| **Bystander control** | **beta retains its slot AND its warm-cache fetch count is UNCHANGED** |
+| **Admitted case** | alpha's **re-consented** slot fills normally and returns the new content for all four caches |
+| **NEW v3** | Expect 2 separates eviction from refusal — **V** a retired caller resolves no credential, so `meta_route_isolation_refused` omits the backend and the read returns nothing **whether or not anything was retired**. Expect 1 alone is green against a retirement path that never runs |
+| **Mutant reassigned here** | **retire-all-per-user.** The fetch count is what does the work: retire-everything leaves beta authorized and able to refill, so "beta still served" is green against a slot **destroyed and silently rebuilt** |
+| **C0 reserved** | for mutants that disturb the **shared** slot, which **V** `pool.rs:302,310` says is never evicted — the reason C0 cannot catch the mutant above |
+
+---
+
+### A5 — call results after retirement
+
+> **Spec:** *"… and call results."*
+
+| | |
+|---|---|
+| **Exercises** | **K1** |
+| **Value moved by** | K1's surface |
+| **Inputs** | alpha's result cached under its principal; beta's result cached under **beta's**; retirement of alpha through K1 |
+| **Expect 1 — behaviour** | alpha's pre-retirement entry cannot be served |
+| **Expect 2 — mechanism** | the **response-cache key changes**, asserted directly, **independently** of Expect 1 |
+| **Bystander — CORRECTED v3** | beta's old entry **may become unreachable** — that is permitted. Beta must (a) remain **authorized**, (b) **refill successfully**, and (c) **subsequently hit its new cache entry** |
+| **Admitted case** | in a **no-retirement** scenario, an identical repeat call **hits cache** |
+| **WHY THE CORRECTION** | **V** `mod.rs:557-565` — *"mixed into **every** response-cache key. **One counter for this handler.**"* The epoch is handler-wide, so a correct implementation strands beta's keys too. r1-r4 required beta's **entry** to survive: unsatisfiable, and an implementer driving it green would have had to **break global invalidation**. Survival of **service**, plus a hit on the **refilled** entry, is satisfiable *and* discriminating — it fails an implementation that leaves beta permanently unable to cache |
+
+---
+
+### A6 — rotation: no pre-rotation data under the successor grant
+
+> **Spec:** *"rotate … a grant during a fill."* **V** `scope-update.md:32` names
+> two nouns — one row each.
+
+| | |
+|---|---|
+| **Exercises** | **K2 on rotation** via **K1** |
+| **Value moved by** | **K1's surface.** A test that rotates the grant itself proves the comparison notices a change and says nothing about production (§5.2) |
+| **Inputs** | alpha's slot warm under **G1**; a fill blocked on a barrier; rotation to **G2** through K1; barrier released after G2 is established |
+| **Distinguishability** | G1 and G2 serve **different tool names AND different schemas for a same-named tool**, so a stale *schema* under a fresh *name* is caught |
+| **Expect 1 — exclusion** | no G1 content is served under G2, across **all four** metadata caches |
+| **Expect 2 — ADMITTED SUCCESSOR** | after the race settles, a G2 read **SUCCEEDS** and returns **distinguishable G2 content** |
+| **Expect 3 — mechanism** | slot identity changed at rotation |
+| **NEW v3 — why Expect 2 is not optional** | without it, **an implementation that permanently refuses every rotated grant passes this row.** That is an **outage that grades green**. Exclusion-only assertions are satisfied by refusing everything, which is the same vacuity as an absence-only oracle, one layer up |
+| **Status** | **RED at HEAD.** **V** `cache_binding` is `(subject, audience)` and **V** `stable_actor_id` is `(issuer, subject)` — stable across rotation **by design**, so a rotation reuses the `PoolKey` and a fresh slot is served to the successor. No race required |
+
+### A7 — a call-result fill completing across a rotation **[NEW ROW v3]**
+
+> **Spec:** *"rotate … during a fill … and call results."* — the intersection r1-r4 left uncovered.
+
+| | |
+|---|---|
+| **Exercises** | **K1**, result path |
+| **Value moved by** | K1's surface |
+| **Inputs** | a G1 **call-result** fill blocked on a barrier; rotation to G2; barrier released |
+| **Expect** | an admitted **G2 call excludes the G1 result**, and G2's own call succeeds |
+| **Admitted case** | without rotation, the released fill **is** served and a repeat call hits cache |
+| **Why a row** | A3/A6 block a **`tools/list`** fill; A5 retires a **settled** result cache. A result fill *in flight across* a rotation is neither, and the criterion names both nouns in one clause |
+
+---
+
+### C0 — invariant shared catalogue
+
+| | |
+|---|---|
+| **Exercises** | both, negatively |
+| **Inputs** | a non-identity backend, present throughout every scenario above |
+| **Expect** | unaffected by any retirement; still single-flights to **one** fetch |
+| **Scope — CORRECTED v3** | reserved for mutants that disturb the **shared** slot. The retire-all-**per-user** mutant moved to A4's bystander control, because **V** `pool.rs:302,310` — the shared slot is never evicted, so C0 stays green against it |
+
 ---
 
 ## 5. Fail-fast, per construct
 
 | Substitution | Must redden | Must stay green |
 |---|---|---|
-| K1 revoke surface → no-op | **A3, A4, A5, A6** — all of them; **CORRECTED r4, see §5.2** | A1, A2, C0 |
-| K2 eviction → no-op | **A3, A4, A6** | A1, A2, A5, C0 |
+| K1 surface → no-op | **A3, A3b, A4, A5, A6, A7** — all of them; **CORRECTED r4, see §5.2** | A1, A2, C0 |
+| K2 retirement → no-op | **A3, A3b, A4, A6** | A1, A2, A5, A7, C0 |
+| **K2 retires but the recreated slot keeps its resend set** | **A3 Expect 2** only | A3 Expects 1 and 3 — which is why Expect 2 is separate |
+| **K2 fires on revoke but not rotation** | **A6, A7** | A3, A3b, A4, A5 |
+| **Rotation refuses every successor grant** (outage) | **A6 Expect 2** | A6 Expect 1 — exclusion passes for a gateway serving nobody |
+| **Retirement path never runs; refusal supplies the answer** | **A4 Expect 2, A5 Expect 2** | A4/A5 Expect 1 — the behavioural half is green either way |
 | K2 evicts unconditionally, ignoring identity | **A4's bystander control** — beta retains its slot **and its warm-cache fetch count** | C0 (it cannot redden; see §5.1) |
 | K2 keeps the `in_flight == 0` predicate | **A3** in-flight variant | — |
 | **Retirement not consulted by the fill path** (§3.1) | **A3**, and only when its assertion runs **after** the fill lands | — |
