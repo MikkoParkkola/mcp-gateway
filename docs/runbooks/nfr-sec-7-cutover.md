@@ -29,6 +29,43 @@ a binary swap plus a symlink flip.
 
 ## The artifact
 
+> **UPDATED 2026-09-22, LATER — `4.0.0-017c9338` is staged and is ALSO stale. Re-stage
+> before cutting over.** This is the third artifact in a row to go stale between staging
+> and cutover, so treat the staleness check as a step of the cutover rather than a
+> property of the staging.
+>
+> A third 4.0.0 directory now exists, `~/.local/libexec/mcp-gateway/4.0.0-017c9338/`,
+> staged at 14:13. It is the newest on disk and it is not the release candidate.
+> `017c9338` is `docs(pkg-1): evidence the container criterion from the first manifest
+> rehearsal` (#709, 13:42). Eight commits landed on the release line after it, and the
+> release-line head is `50d0cdf0` at 16:58.
+>
+> **What the staged tree is missing.** Eight files and 395 insertions under `src/`,
+> including `50d0cdf0` (#723), which defers construction of the admission operation
+> envelope past two early returns on the `tools/call` hot path. That is the fix
+> `NFR.WORKLOAD.1` is currently being measured against, so cutting over to this artifact
+> would put a build on the machine that the open performance row does not describe:
+>
+> ```
+> $ git show 017c9338:src/gateway/meta_mcp/admission.rs | rg -c "impl FnOnce"
+> 0
+> ```
+>
+> **Why this keeps happening, and the cheap defence.** A staged artifact records the
+> release line at one instant, and every merge after it widens the gap silently — nothing
+> on disk changes when the line moves, and the binaries carry no embedded commit, so the
+> directory name is the only provenance there is. The check costs one command and must be
+> run at cutover time, not at staging time:
+>
+> ```
+> $ git -C <repo> rev-parse --short origin/docs/ranking-1-release-line   # expected target
+> $ ls -dt ~/.local/libexec/mcp-gateway/4.0.0-*/ | head -1               # newest staged
+> ```
+>
+> If those disagree, re-stage. Do not reason about whether the intervening commits "look
+> like docs" — `017c9338` was eight commits behind and seven of them were documentation,
+> which is exactly the pattern that makes the eighth easy to miss.
+
 > **UPDATED 2026-09-22 — artifacts are now staged, and the newest one is already stale.**
 > The sweep below ("no macOS build carrying `5d25f104` exists on disk", "no candidate is
 > staged") was true on 2026-09-19 and is false now. Two 4.0.0 directories exist:
