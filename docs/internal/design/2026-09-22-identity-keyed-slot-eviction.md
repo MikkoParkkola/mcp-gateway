@@ -209,13 +209,53 @@ matches on `&self.subject == identity` (**V** `identity_grants.rs:231`) — the 
 operator-supplied string the reconstruction consumes — so a grant whose authority is wrong
 never authorized anyone in the first place.
 
-**The one real silent no-op, recorded rather than hidden. I** `grant_subject_from_verified_identity`
-falls back to `authority = "oidc"` when `identity.issuer` is blank (**V** `handlers.rs:73`),
-while `stable_actor_id` embeds the blank issuer as `oidc:0::…`. The two diverge, and
-eviction would match nothing while `covers` still matched. **A** An OIDC `iss` claim is not
-plausibly blank in a verified token, so this is a latent rather than live defect. Mitigation
-is a counter, not a mechanism: §E4 emits `evicted = 0` on a subject whose grant just changed,
-which is the tripwire.
+#### E1.1 — The reconstruction breaks on a normalised subject, and this is the design's worst defect
+
+**Raised in review, verified at source, and it makes the mechanism silently no-op for a whole
+class of callers.** The design as first written walked straight into this codebase's signature
+failure.
+
+**V** Grant construction normalises the subject; the pool binding does not.
+`grant_subject_from_verified_identity` routes the subject through `trimmed_non_empty`
+(`handlers.rs:72`), which does `value.trim()` **and** `trimmed.chars().take(HEADER_IDENTITY_MAX_LEN)`
+(`handlers.rs:121-127`), with **V** `HEADER_IDENTITY_MAX_LEN = 512` (`handlers.rs:51`).
+`stable_actor_id` (`key_server/oidc.rs:132-140`) length-prefixes `self.subject` **raw**.
+
+So for any verified subject with surrounding whitespace, or longer than 512 characters, the
+grant stores one string and the binding carries another. The reconstructed prefix matches
+nothing, `evict_identity_slots` returns `0`, and the reload reports success. **The criterion
+goes unmet for exactly those callers, silently** — the same shape as routing revocation
+through `Vec::is_empty`, one module over.
+
+**V, and it is worse than a length cutoff.** `.chars().take(512)` truncates by **characters**
+while `stable_actor_id` length-prefixes by `.len()`, which is **bytes**. For a multi-byte
+subject the two disagree on the length prefix as well as on the content, so the mismatch is
+not confined to subjects over the limit in the obvious sense.
+
+**The fix is not in the eviction API, and cannot be.** An API keyed on a string the grant
+never stored is unbuildable — this is the crux the brief named, arriving through the back
+door. Three parts, all outside `Backend`:
+
+1. **Preserve exact bytes at grant construction.** `grant_subject_from_verified_identity`
+   should reject-or-store the verified issuer and subject **unmodified**. `trimmed_non_empty`
+   is correct for *header*-sourced identity, which is untrusted operator input needing a
+   bound; a `VerifiedIdentity` came from a validated token and its bytes are already
+   constrained by the issuer. **I** Applying a header hygiene function to verified claims is
+   the actual bug, and it predates this design.
+2. **Reconcile grants already stored normalised.** A pure code fix leaves existing grant files
+   holding normalised subjects that no binding will ever match. **A** The migration is a
+   documented operator step (re-issue affected grants) rather than an automatic rewrite,
+   because the gateway cannot recover bytes the file no longer contains — it can only detect
+   that a stored subject differs from any live caller's. Piece 5's log is what surfaces it.
+3. **Cells C10a/C10b** (§3) pin the whitespace and over-512 cases.
+
+**The blank-issuer divergence is the same family and folds in here. V**
+`grant_subject_from_verified_identity` falls back to `authority = "oidc"` when
+`identity.issuer` is blank (`handlers.rs:73`) while `stable_actor_id` embeds the blank issuer
+as `oidc:0::…`. Part 1 does not fix it; it needs the fallback to refuse rather than
+substitute. **A** Lower priority — a blank `iss` in a verified token is implausible, where
+whitespace and long subjects are not.
+
 
 ### E2 — Who calls it, and what they hold at the moment of revocation
 
@@ -233,7 +273,14 @@ API needs and the CLI cannot supply — the CLI edits a file in a different proc
 (`:115`). So:
 
 > the affected subjects are the `subject` field of every grant row that is present in one
-> store and absent from the other, or present in both and unequal.
+> store and absent from the other, or present in both and unequal. **An unequal row
+> contributes BOTH its outgoing and its incoming subject.**
+
+**That last clause was missing in the first draft and both reviewers caught it.** A grant row
+whose `subject` is edited A→B under an **unchanged `grant_id`** is one unequal row. Taking
+only the incoming subject evicts B's slots and leaves **A's catalogue bytes live**, with no
+log line naming A — a reassignment that silently preserves the previous holder's view. Cell
+C11 pins it. The two-sided rule costs one extra `push` and closes it.
 
 That single rule covers both nouns the criterion names — a **revocation** changes
 `revoked_at`, a **rotation** changes `scope`/`tool`/`expires_at`/`agent`, and a removal or
@@ -327,11 +374,56 @@ under the already-published new grants (§E2 ordering). §3 C3 asserts the prope
 survives this — the post-eviction read reaches the backend — rather than asserting the key is
 absent, which is the assertion that would fail for the wrong reason.
 
-### E4 — What eviction drops: the caches immediately, the transport on drain
+#### E3.1 — The claim must travel with the entry, and today it does not
 
-**Decision: caches go with the slot, unconditionally. A live transport is not severed. A
-transport left behind by a busy eviction is closed by a bounded waiter, and that waiter is
-the first thing a reviewer can cut.**
+**Raised in review, verified at source, and it is the one place "remove unconditionally"
+genuinely costs something.** It does not refute the ruling; it adds a precondition.
+
+**V** `get_cached_list_on` claims one entry and then independently re-resolves another. The
+lease is taken at `metadata.rs:185` (`begin_internal_activity_for(key)` → `claim_pooled_entry`,
+incrementing `in_flight` on entry **E**), the cache written is `select(&entry)` on **E**
+(`:186-187`) — but the transport comes from `self.ensure_entry_started(key).await` at
+`:189`, which re-resolves the key through the **unclaimed** `pooled_entry` (**V**
+`lifecycle.rs:210`).
+
+**The code contradicts its own comment.** `metadata.rs:184` reads *"Resolve the slot ONCE and
+keep it for both the cache and the fetch"*, and `:157-162` insists *"the cache written and the
+transport written from are the same `Arc<PooledEntry>` — not two lookups that agree today."*
+Line `:189` is a second lookup. Today the gap is unreachable in practice: the only remover is
+the idle reaper, which also requires `last_used` past the TTL (**V** `pool.rs:352-353`), so a
+slot being actively fetched does not qualify. **An unconditional remove makes it reachable.**
+
+Two consequences, both real:
+
+- The fetch fills **E**'s cache over **E′**'s transport, breaking the co-location invariant
+  `pool.rs:80-89` exists to guarantee. The bytes land in a grave, so this wastes a fetch
+  rather than leaking across identities — but the invariant is the criterion's own.
+- **E′ carries `in_flight == 0` while its transport is actively in use.** A second eviction,
+  or the reaper, may then close it mid-fetch — precisely the harm `claim_pooled_entry` exists
+  to prevent (**V** `metadata.rs:164-166`).
+
+**Required with this design: `ensure_entry_started` returns the transport together with a
+claim on the entry it actually resolved, and the claim transfers across its retry loop
+(`lifecycle.rs:209`).** The caller then holds a lease on the entry it is really using.
+**A** This touches a shared function with callers beyond the metadata path
+(`lifecycle.rs:176`), so it wants upstream impact analysis before the edit — flagged here
+rather than assumed cheap. Cell C12 is the barrier: evict between the claim and the transport
+acquisition, and assert the fetch's transport is not closed under it.
+
+**And one ordering rule that must be written down, because the naive implementation is
+writable.** `in_flight` is incremented under the transport **read** guard
+(**V** `pool.rs:294-296`), so eviction must re-check it **after** taking the transport
+**write** guard, not before. A read-then-lock implementation reintroduces a TOCTOU the
+reaper's atomic `remove_if` never had — the removal is now unconditional, so the write guard
+is the only remaining mutual exclusion against a claim landing mid-eviction. `ActivityGuard`'s
+own comment states the discipline: *"the `RwLock` — not the atomic — is what makes the two
+mutually exclusive"* (**V** `pool.rs:113-121`).
+
+
+### E4 — What eviction drops: the caches immediately, the transport by ownership
+
+**Decision: caches go with the slot, unconditionally. A live transport is not severed, and it
+is not chased with a waiter either — dropping the last handle reaps it.**
 
 **The caches are free.** All four `CachedMetadata` fields plus `resend_permitted` live on
 `PooledEntry` (**V** `pool.rs:90-103`). Removing the entry drops them together — no per-cache
@@ -344,22 +436,39 @@ circuit breaker. **I**
 Acceptable: the alternative is carrying breaker state across an authorization change, and the
 slot is rare and operator-triggered.
 
-**Draining, ruled on.** The brief asks whether dropping a live transport is correct. It is
-not, and the design does not do it — §E3 step 2 only closes an idle one. But a transport left
-in an orphan is a genuine problem, not a shrug: **V** `PooledEntry` has no async `Drop`
-(`lifecycle.rs:269-272`), so nothing closes it. For an HTTP backend that is a socket until
-process teardown; for a **stdio** backend it is a child process. **I** Leaking a child process
-on every busy revocation is the kind of thing that is invisible in test and awful at 3am.
+**Draining, ruled on — and the first draft's justification for a waiter was wrong.** The brief
+asks whether dropping a live transport is correct. It is not, and the design does not do it —
+§E3 step 2 only closes an idle one. The first draft then argued that a transport left in an
+orphan leaks, citing the absent async `Drop` (**V** `lifecycle.rs:269-272`), and spent ~15
+lines on a bounded polling waiter to close it. **Review pushed back and the source agrees with
+review.**
 
-So: after a removal that could not close, spawn a bounded waiter — poll `in_flight` on the
-orphan, `close()` when it reaches zero, give up after a timeout and log. **A** ~15 lines, no
-new type, and it reuses the close the reaper already performs (**V** `pool.rs:356-359`).
-Bounded so a wedged request cannot hold a task forever.
+**V** Ownership already does this cleanup. `StdioTransport` spawns its reader task holding a
+**`Weak`** (`transport/stdio.rs:274`), and the comment above it states the consequence in its
+own voice (`stdio.rs:270-273`):
 
-**Recorded as the cheapest cut.** A reviewer who accepts the leak deletes the waiter and keeps
-a counter. The criterion does not depend on it — it is resource hygiene, not correctness, and
-the blast radius is bounded by the number of requests that identity had in flight at the
-instant of revocation.
+> With a `Weak`, dropping the last real handle drops the transport, which drops the `Child`,
+> which kills the process, which closes stdout, which ends this task. **Ownership does the
+> cleanup; nothing has to decide when it is safe.**
+
+`kill_on_drop(true)` is set at **V** `stdio.rs:219`. So when the last in-flight request
+finishes and drops its `Arc<PooledEntry>`, the transport drops, and the child is reaped. The
+"leaked child process" the waiter existed to prevent **does not occur**. The leak the comment
+at `stdio.rs:266-268` warns about is the *strong*-`Arc` design that was rejected.
+
+**Decision: no waiter. Cut from the MVP.** What an explicit `close()` still buys is **graceful
+session termination** — a clean MCP shutdown, an HTTP session teardown — which is a courtesy
+to the upstream, not resource hygiene for us. Those are different goals and the first draft
+conflated them. A revoked identity's orphaned transport terminating ungracefully when its last
+request finishes is acceptable; it is also, on the stdio path, indistinguishable from what
+happens when the process exits.
+
+**A** One line of follow-up instead: confirm the HTTP transport's refresh tasks abort on drop
+rather than assuming it, since the stdio argument does not transfer automatically. If that
+turns out false for HTTP, the waiter returns as HTTP-only — which is a smaller thing than the
+general waiter and a better-targeted one. **This is the ladder working: the platform already
+owned the problem, and ~15 lines came out.**
+
 
 ### E5 — PATH B (vault) is out of scope, and a test there proves nothing
 
@@ -410,14 +519,19 @@ absent" and "slot present, transport unstarted", so it cannot distinguish the tw
 fixture wants one more test-only one-liner beside it — `self.pool.get(key).is_some()` — and
 that is the whole addition. Where a cell can assert a positive property instead, it does.
 
-**Rule 2 — every cell asserts its premise before its conclusion.** Lifted from this house's
-own convention: **V** `docs/internal/design/2026-09-22-catalogue-1-design-review-round2.md:400-407`
+**Rule 2 — every cell asserts its premise before its conclusion, in its own body.** Lifted from
+this house's own convention: **V** `docs/internal/design/2026-09-22-catalogue-1-design-review-round2.md:400-407`
 — *"The asymmetry is the point, and it is why one-sided assertions were refused"* — the
 served-half assertion fires **first in the case body** so an empty gateway fails on the
-premise rather than passing on the conclusion, and the fixture asserts `has_cached_tools()`
-before any case runs. **V** The failure this prevents is recorded, not hypothetical:
-`2026-09-21-catalogue-1-per-caller-view.md:1157` — *"That case was also one-sided — both
-assertions were absences, so it held against a gateway caching nothing."*
+premise rather than passing on the conclusion. **V** The failure this prevents is recorded, not
+hypothetical: `2026-09-21-catalogue-1-per-caller-view.md:1157` — *"That case was also
+one-sided — both assertions were absences, so it held against a gateway caching nothing."*
+
+**In its own body is the operative phrase**, and the first draft got this wrong by leaning on
+a fixture-level check plus "C6 runs first". Rust guarantees no in-module test ordering and
+runs cases in parallel threads, so a control case cannot gate its siblings. Every cell carries
+its own premise assertion as explicit setup; C6 states the property standalone rather than
+guarding anything.
 
 Concretely, each eviction cell asserts **the target slot is populated** (non-zero tool count,
 read before the revocation) before it revokes anything.
@@ -429,11 +543,16 @@ read before the revocation) before it revokes anything.
 | **C1** | **A POPULATED per-user slot survives revocation** — the criterion's own case, and the one `is_empty` cannot reach. | Routing revocation through `invalidate_tools_cache` (`Vec::is_empty`, **V** `metadata.rs:60-68`). That passes its own predicate check and voids nothing on a warm cache. | PATH A binding for subject A on a `per_user` backend. Fill A's slot; **assert `cached_tools_count_for(Some(a)) > 0` first**. Revoke A's grant; reload. → the next `get_or_fetch` for A reaches the backend (fetch counter increments) and returns the post-revocation list, not the seeded one. |
 | **C2** | **An unaffected caller's slot is evicted too.** | "Evict all per-user slots on any grant reload" — the blunt hammer (§4 names it as the reviewer's cut). It passes C1 and fails only here. | Fill slots for A **and** B. Revoke A only; reload. → **positive assertion**: B's cached tool list is byte-identical afterwards and B's fetch counter did **not** increment. Not an absence. |
 | **C3** | **Eviction silently declines against a BUSY slot.** | Copying `evict_idle_per_user_entries`' predicate, `in_flight == 0` inside `remove_if` (**V** `pool.rs:351`). Green on C1 and C2, red only here — and there is no re-sweep behind a revocation to hide it. **This is not an edge case:** every catalogue fill holds an in-flight claim for its whole duration (**V** `metadata.rs:185` → `pool.rs:488-490` → `:296`, §1), so the wrong predicate declines during exactly the window a revocation races. | Fill A's slot. Hold an `ActivityGuard` on it (`in_flight > 0`). Revoke A; reload. → the post-eviction read for A reaches the backend. Deliberately **not** "the key is absent": a concurrent reader may legitimately recreate it (§E3), so key-absence would go red for the wrong reason. |
-| **C4** | **Token-exchange slots are missed.** | Exact subject+audience matching instead of a prefix. **V** the pool key on that path is the *widened* `exchange_cache_key` string (`token_exchange.rs:376,421`), so exact matching no-ops on exactly the backends where revocation matters most. | Seed a slot whose binding is the widened token-exchange string. **V** `exchange_cache_key` is private (`token_exchange.rs:114`, no `pub`), so the cell builds the string **literally in the test body** — `format!("{base}:{}:{endpoint}:{}:{scope}", endpoint.len(), scope.len())` — rather than calling it. That is deliberate: a cell that called the real function would go green on a refactor that changed both sides together, which is the drift this cell exists to catch. Revoke A; reload. → that slot is evicted. Red today **and** red against the obvious correct-looking implementation. |
+| **C4** | **Token-exchange slots are missed.** | Exact subject+audience matching instead of a prefix. **V** the pool key on that path is the *widened* `exchange_cache_key` string (`token_exchange.rs:376,421`), so exact matching no-ops on exactly the backends where revocation matters most. | Seed a slot by driving the **actual credential producer** — run `TokenExchangeStrategy::propagate` against a stubbed exchange endpoint and take `credential.cache_binding` as the `PoolKey` (**V** it is published there, `token_exchange.rs:421`). **Not a handwritten string**: the first draft built the widened binding literally in the test body, which cannot detect a production key-format change that leaves the fixture untouched — the cell would stay green while the thing it guards moved. Revoke A; reload. → that slot is evicted. Red today **and** red against exact subject+audience matching. |
 | **C5** | **A grant ROTATION does not evict** — the criterion names two nouns and this is the second. | Keying eviction on `revoked_at.is_some()` rather than on inequality. Passes C1 (revocation) and fails here. | Fill A's slot. **Narrow** A's grant scope — no `revoked_at`, binding unchanged (PATH A takes no grant input, **V** `mod.rs:316`). Reload. → A's slot is evicted. **This is the cell PATH B gets for free** (§E5): on the vault path the binding would have moved and the old slot would be unreachable without any eviction. Here it does not move, so a pass can only come from the mechanism. |
-| **C6** | **The gateway serves nobody** — the positive control, and the reason C1–C5 cannot pass vacuously. | Any change that degrades the single-tenant or unaffected-caller path to deliver "isolation". | No revocation at all. A populated PATH A slot and the `Shared` slot both serve their catalogues; `has_cached_tools()` is true. → **runs first in the module.** If this is red, every absence in C1–C5 is unearned and the suite reports the premise failure, not a pass. |
-| **C7** | **The prefix over-matches or under-matches.** | `contains` instead of `starts_with`; or dropping the trailing separator; or forgetting the length prefix. | Pure unit test beside `cache_binding` (**V** the existing neighbour `cache_binding_isolates_users_and_audiences`, `mod.rs:722-725`, asserts **inequality only**; `rg -uu -n "starts_with" src/identity_propagation/` → zero matches, so containment is unasserted today). → `identity_binding_prefix` for subject A matches `cache_binding(A, aud)` for every audience and every `exchange_cache_key` widening of it, and matches **no** binding for a subject that merely shares a byte prefix with A. |
+| **C6** | **The gateway serves nobody** — the positive control, and the reason C1–C5 cannot pass vacuously. | Any change that degrades the single-tenant or unaffected-caller path to deliver "isolation". | No revocation at all. A populated PATH A slot and the `Shared` slot both serve their catalogues; `has_cached_tools()` is true. **Not "runs first in the module"** — the first draft said that and it is unenforceable: Rust guarantees no in-module test order and runs cases in parallel threads. The vacuity guard is Rule 2's per-cell premise assertion, which every cell carries in its own body; C6 is the standalone statement of the same property, not a gate on the others. |
+| **C7** | **The prefix over-matches or under-matches.** | `contains` instead of `starts_with`; or dropping the trailing separator; or forgetting the length prefix. | **The first draft of this cell was vacuous and review caught it.** On ordinary fixtures a full `idp:{n}:{S}:` prefix occurs only at offset 0, where `contains` and `starts_with` agree — so the cell could not go red against the matcher its own row claims to kill. **The fixture must plant the collision:** give identity Y an audience whose bytes contain identity X's *complete* prefix at a nonzero offset (e.g. audience `https://h/idp:3:xyz:junk`). Then X's revocation evicts Y under `contains` and does not under `starts_with`. Reachable by configuration, not contrived — the audience is an operator-set string (**V** `mod.rs:459`). Plus the plain direction: X's prefix matches `cache_binding(X, aud)` for every audience and every widening of it. |
 | **C8** | **A non-issuer authority silently evicts something.** | Reconstructing a prefix for an `mtls` / `agent_oauth` / `trusted_header` grant and matching by accident. | Grant with authority `"mtls"`. → `identity_binding_prefix` returns `None`, the eviction loop skips it, and **no** slot is touched. Guards §E1's soundness argument rather than adding coverage; labelled as a guard. |
+| **C9** | **Only the first matching backend is evicted.** | A loop that `break`s on the first hit, or one that evicts per-subject rather than per-(subject, backend). **Passes C1–C8 undetected** — every other cell uses one backend, so this is the cheapest wrong implementation of §E2's nested loop and is currently invisible. | One subject with populated slots on **two** `per_user` backends. Revoke; reload. → **both** are evicted, asserted separately. |
+| **C10a** | **A subject with surrounding whitespace is never evicted** (§E1.1). | The shipped normalisation: `trimmed_non_empty` trims at grant construction (**V** `handlers.rs:72,121-127`) while `stable_actor_id` keeps raw bytes. | Verified subject `" alice "`. Fill its slot; revoke; reload. → evicted. **Red today** and red against any fix that changes only the eviction side. |
+| **C10b** | **A subject longer than 512 characters is never evicted** (§E1.1). | `.chars().take(HEADER_IDENTITY_MAX_LEN)` (**V** `handlers.rs:126`, `:51`). Distinct cell from C10a: a length cutoff and a trim fail on different inputs, and the char-vs-byte mismatch means a multi-byte subject diverges on the length prefix too. | Verified subject of 600 characters, and a second of 600 multi-byte characters. → both evicted. |
+| **C11** | **A subject reassigned under a stable `grant_id` leaves the previous holder served** (§E2). | Taking only the incoming subject from an unequal row. Passes C1 and C5. | Populated slots for A and B. Edit one grant row's `subject` A→B, `grant_id` unchanged. Reload. → **A's** slot is evicted (and B's), and the log names A. |
+| **C12** | **An eviction between the claim and the transport acquisition closes a live fetch's transport** (§E3.1). | Any implementation that leaves `ensure_entry_started` re-resolving the key unclaimed (**V** `metadata.rs:185` vs `:189`). | Barrier between `begin_internal_activity_for` and `ensure_entry_started`. Evict at the barrier, release. → the fetch completes and its transport was not closed under it. Unreachable today only because the reaper also gates on `last_used` (**V** `pool.rs:352-353`); the unconditional remove makes it reachable, so this cell is created by this design and must land with it. |
 
 **Not a test, and not counted as one.** That eviction reaches the caches at all is structural
 — they are fields on the removed `PooledEntry` (**V** `pool.rs:90-103`) — not a behaviour with
@@ -452,23 +571,27 @@ no live MCP backend. C7 and C8 are plain unit tests. Proposed module:
 **This is a new removal primitive on the request path of a release candidate**, so the MVP is
 sized to be cut rather than to be complete.
 
-### MVP — five pieces
+### MVP — six pieces
 
 | Piece | Size | Why it is not cuttable |
 |---|---|---|
 | 1. `pub(crate) fn identity_binding_prefix(&GrantSubject) -> Option<String>`, beside `cache_binding` (`identity_propagation/mod.rs:316`). | One function. Reuses `stable_actor_id` (**V** `key_server/oidc.rs:132`) rather than restating it. | It is the single place the two formulas meet. Duplicating them into `config_reload` is the failure `invoke.rs:3409-3412` warns about. |
 | 2. `Backend::evict_identity_slots(&self, prefix: &str) -> usize`, **`async`** — step 2 of §E3 calls `transport.close().await`, exactly as the reaper does at `pool.rs:358`. Collect matching `PerUser` keys, `pool.remove` each unconditionally, close the transport where `in_flight == 0`. | Mirrors `evict_idle_per_user_entries`' two-pass shape (**V** `pool.rs:326-381`) minus the idle predicate; the close is the same three lines (`pool.rs:356-359`). | The criterion. |
 | 3. The reload path's diff + loop (§E2), called **after** publish-and-bump. | One iterator over two `BTreeMap`s (**V** `IdentityGrant: PartialEq`, `identity_grants.rs:115`), one nested loop over `registry.all()` (**V** `registry.rs:260`). | Without a caller this is piece 2 sitting unreachable — the exact state `CATALOGUE.1` is already in. |
-| 4. The bounded drain waiter for a transport left behind by a busy eviction (§E4). | ~15 lines, one `tokio::spawn`, one timeout. | **The first thing a reviewer should consider cutting** — see below. Included because a stdio backend's orphan is a child process, not a socket. |
-| 5. One log line per reload: subjects considered, slots evicted, and `evicted = 0` called out. | One `info!`. | It is the only tripwire for §E1's blank-issuer divergence and for a prefix that silently matches nothing. |
-| C1–C8 (§3), plus the non-creating test probe. | — | — |
+| 4. **Preserve exact verified subject/issuer bytes at grant construction** (§E1.1), plus the operator migration note for grants already stored normalised. | Stop routing a `VerifiedIdentity`'s claims through `trimmed_non_empty` (**V** `handlers.rs:72`); keep it for header-sourced identity. One call site, one docs paragraph. | **Without this the whole mechanism silently no-ops** for any subject with whitespace or over 512 chars. It is outside `Backend` and outside the eviction API, and it is the single highest-value piece in the table. |
+| 5. One log line per reload, with **three distinct outcomes**: subjects skipped because `identity_binding_prefix` returned `None` (**named individually**), subjects considered whose eviction count was zero, and subjects evicted. | One `info!`. | The first draft conflated the first two, which defeats the tripwire: "skipped by construction" is expected, "matched nothing" is §E1.1 biting. They must not share a counter. |
+| 6. `ensure_entry_started` returns its transport with a claim on the entry it resolved (§E3.1), claim transferred across its retry loop. | One signature change, one `Arc` threaded. **A** Shared function — wants upstream impact analysis first (`lifecycle.rs:176` is another caller). | The unconditional remove creates the race; the design must not ship the race without the fix. |
+| C1–C12 (§3), plus the non-creating test probe. | — | — |
 
 ### The cut a reviewer can make, stated so they do not have to find it
 
 **Replace pieces 1 and 3 with "evict every `PerUser` slot on any applied grant reload."** It
 needs no binding derivation at all, is correct for **every** authority kind including the ones
-§E1 reasons away, and cannot suffer the blank-issuer divergence. It passes C1, C3, C4, C5,
-C6, and trivially C7/C8 (which become moot). It fails exactly one cell: **C2**.
+§E1 reasons away, and — **the argument got stronger during review** — it sidesteps §E1.1
+entirely. With no reconstruction there is no subject to normalise, so the whitespace and
+over-512 classes cannot arise, and piece 4 (the grant-construction fix and its migration)
+becomes optional rather than load-bearing. It passes C1, C3, C5, C6, C9, C10a, C10b, C11, C12,
+and trivially C4/C7/C8 (which become moot). It fails exactly one cell: **C2**.
 
 The price is the blast radius. Every per-user caller on every backend loses their transport
 and their catalogue because one unrelated grant changed, and re-establishing a transport is
@@ -517,18 +640,45 @@ reload fires, which is an operator action, not a file watch (**V** companion §D
 there as its own weakness). An operator who revokes and walks away has evicted nothing. Both
 documents inherit the same limitation and neither should be read as closing it.
 
-**3. `evicted = 0` is indistinguishable from "nothing to evict".** Piece 5 logs it, but a
-subject who simply had no live slot and a subject whose prefix silently matched nothing
-produce the same line. **A** Distinguishing them needs the index from weakness 1. The log is
-a tripwire, not a diagnostic.
+**3. `evicted = 0` is still ambiguous, even with the three-way log.** Piece 5 now separates
+"skipped because the authority is not issuer-shaped" from "considered, matched nothing", which
+closes the conflation review flagged. What it still cannot separate is **"considered, matched
+nothing because that caller had no live slot"** — the common, benign case — from
+**"considered, matched nothing because the stored subject diverges from the binding"** — §E1.1
+biting after the fix, on a grant file not yet reconciled. Both print `evicted = 0` on a
+subject that was considered. **A** Distinguishing them needs the index from weakness 1, or a
+one-off audit command that compares stored subjects against live bindings. The log is a
+tripwire, not a diagnostic, and after §E1.1 it is a tripwire that will fire benignly.
 
 **4. C2 rests on a fetch counter the fixture supplies.** "B did not refetch" is only as good
 as the fake transport's counting. **V** The existing per-caller fixtures already count fetches
 (`catalogue_per_caller_tests.rs`), so this reuses rather than invents — but if that counter is
 ever loosened, C2 degrades quietly toward the vacuous form §3.1 exists to forbid.
 
-**5. The criterion still needs both documents.** Stated again because it is the failure mode
+**5. §E2's publish-then-evict ordering is inferred, and nothing verifies it.** Raised in
+review as MEDIUM and accepted. The claim *"any refill races forward into the new policy"*
+assumes a catalogue fill consults the published grant store **at fetch time**. §E3 covers
+fills that claimed the **old** entry — those write into a grave. It does **not** cover a fill
+authorized before the publish that completes into a **fresh post-eviction slot**: that slot is
+live and reachable, and it would carry pre-reload bytes.
+
+**At implementation, verify where a fill reads grant scope.** If scope is read at fetch time,
+the ordering holds as written. If it is captured at authorization, the fix is to fold a
+grant-store version into the store condition beside `store_if_current`
+(**V** `cached_metadata.rs:97-105`) — the same generation discipline, one input wider. **I**
+The exposure is a **stale catalogue**, not privilege escalation: invocation stays
+authorization-gated on the live store (`invoke.rs:2663`), so a stale listing cannot be acted
+on. That bounds the severity but does not excuse leaving it unverified, which is why it is
+here and not in §E2's prose.
+
+**6. Two reviews ran static-only.** Their **V** markers are claims, not executions. The three
+findings that changed this design — subject normalisation (§E1.1), the claim/transport split
+(§E3.1), and the `Weak`-drop refutation of the drain waiter (§E4) — were re-verified at source
+before amendment and are marked **V** on that basis. The rest of their input is folded in as
+reasoning, not as evidence.
+
+**7. The criterion still needs both documents.** Stated again because it is the failure mode
 that burned two prior attempts: this design supplies eviction and assumes a trigger; the
 companion supplies a trigger and explicitly disclaims eviction (**V** its §4: *"`MIK-7334.CATALOGUE.1`
 does not close on this document"*). **`MIK-7334.CATALOGUE.1` does not close on this document
-either.** It closes when both land and C1–C8 are green.
+either.** It closes when both land and C1–C12 are green.
