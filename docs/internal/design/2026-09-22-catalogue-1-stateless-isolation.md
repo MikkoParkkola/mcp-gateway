@@ -808,3 +808,29 @@ widened arm. Checked directly instead, and none can flip:
 | `account_raw_vault_tests.rs` | zero assertions on `PoolKey`, `pool_key`, `fills_for`, `headers_for`, `cached` or `slot`; its own doc comment says it uses controls and negatives *"so a missing per-user pool slot can never be confused"* |
 
 Showing why they cannot flip is stronger than observing that they did not.
+
+### 13.7 §13.6 was closed over the wrong population — correction
+
+§13.6 above claims the fixture blast radius is closed, having checked four
+`stateless` fixtures and shown why none can flip. **The four were the four a reviewer
+named, not the four that exist.** V: `rg -c "SessionMode::Stateless" src/` returns
+**23 sites across 14 files**.
+
+Two of the unchecked ones are exactly the shape being widened: `account_rest_fixture.rs:222`
+and `account_resolver_gateway.rs:298`, both `required: true` with identified callers.
+Those are `(Some(_), Some(binding))` — the arm this design changes.
+
+The reasoning in §13.6 stands for the four it examined. What does not stand is the
+word "closed": a table that enumerates a subset and concludes about the whole is the
+same error as grading a criterion on the tests someone happened to cite.
+
+**Why this is worth recording rather than quietly fixing.** The population came from
+the finder — a reviewer's list — instead of from the tree. That is the identical
+mistake this row has produced twice already: a mutation table complete over the
+configurations its fixtures instantiate and silent on the one that broke, and a
+citation sweep that had to derive its population from the ledger rather than from the
+notes that quoted it. Here it was made while writing the section that claimed to close
+the gap, which is the most convincing place to make it.
+
+**What actually settles it:** the full-suite run on the implementation branch, not a
+hand enumeration. If those two fixtures flip, the run says so. A table cannot.
