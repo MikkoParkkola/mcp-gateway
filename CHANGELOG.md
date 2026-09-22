@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stable release, so a candidate is reachable only by its exact version. The
   default image is unchanged.
 
+- **`EXTRA_APT_PACKAGES` on the `-full` variant.** The entrypoint installs the
+  apt packages a deployment names — `iproute2` to route a backend's egress
+  through a tunnel, say — so needing one more than the image carries no longer
+  means forking it. Installing needs root, so the deployment asks with
+  `--user root` and the entrypoint drops back to the gateway user before
+  exec'ing it; the image still declares `USER gateway`, and with the variable
+  unset a container runs exactly as it did before.
+
+- **`/docker-entrypoint.d` on the `-full` variant.** Executable `*.sh` files in
+  that directory run, and `*.envsh` files are sourced, in name order, as the
+  container's user and before the gateway starts — so a deployment whose startup
+  needs a route, a key or a cache warm mounts its own steps instead of forking
+  the image. A file that is not executable is skipped with a message, and a
+  script that fails stops the container. nginx and postgres ship the same
+  convention.
+
   `docs/DEPLOYMENT.md` previously answered this case with "install Node.js in
   the image", which leaves each operator maintaining a private layer that
   nothing keeps in step with the gateway it fronts — and which fails silently
