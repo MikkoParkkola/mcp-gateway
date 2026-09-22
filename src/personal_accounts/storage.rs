@@ -40,6 +40,9 @@ pub(super) mod migration;
 #[path = "migration_source.rs"]
 pub(super) mod migration_source;
 
+#[path = "migration_revision.rs"]
+pub(super) mod migration_revision;
+
 const TOKEN_SCHEMA: &str = "personal_accounts.v1";
 const TOKEN_DOMAIN: &[u8] = b"mcp-gateway/account-token-aad/v1";
 const RECORD_BYTES: usize = 262_144;
@@ -340,6 +343,23 @@ fn claim_store(
         crate::fs_lock::ExclusiveFileLock::try_acquire(&config.authority_dir.join(LOCK_FILE))
             .map_err(|_| AccountError::StorageUnavailable)?;
     Ok((record_lock, authority_lock))
+}
+
+/// 16 random bytes, hex-encoded: 32 lowercase hex characters.
+///
+/// Lives in `storage` rather than in one of its children because BOTH children
+/// need it -- `commit` for scratch names and record basenames, `migration` for
+/// a `GrantRecord.generation` that satisfies `lower_hex(.., 32)`
+/// (`storage.rs:135`). A child module sees its ancestors' private items, so one
+/// helper here reaches both with no visibility widening anywhere, and there is
+/// one definition of the length rather than one per caller.
+#[cfg(unix)]
+pub(super) fn random_hex() -> Result<String, AccountError> {
+    let mut bytes = [0_u8; 16];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| AccountError::StorageUnavailable)?;
+    Ok(hex::encode(bytes))
 }
 
 #[cfg(unix)]
