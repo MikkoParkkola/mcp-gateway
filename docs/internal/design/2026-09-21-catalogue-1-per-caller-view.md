@@ -978,6 +978,55 @@ state is not merely unthreaded through the guard, it is absent at every call
 site. Thread the caller first, resolve once per request, then make rows 7-10
 credential-aware.
 
+### 11.8 The unidentified caller: omit, and say so to the operator
+
+**RULING CONFIRMED 2026-09-22.** An anonymous caller on a multi-user gateway
+sees a `required` per-user backend **omitted — indistinguishable from not
+configured**, which is what §4.6 row 2 and §7 Q1 already recorded. Now encoded as
+an assertion (`catalogue_per_caller_tests`, row 2 of the acceptance case), so it
+is defended rather than merely written down.
+
+The reasoning, recorded here so the next reader does not reopen it:
+
+- **Presence in a catalogue is itself disclosure.** Listing a backend an
+  anonymous caller cannot use still tells them it exists and that somebody holds
+  an identity for it — which providers the operator integrates with. That is the
+  same leak class as the sibling rows in this cluster.
+- **Omission is the only answer that offers no oracle.** Present-but-unusable is
+  a probe; present-with-an-error is a probe. Both teach the caller the backend
+  exists by refusing them. Only omission returns the same thing whether or not
+  the backend exists, which is what makes it fail-*closed* rather than
+  fail-*safe*.
+- **`required` governs routing, not visibility.** It decides whether a call fails
+  when no per-user credential can be minted. Reading it as "therefore always
+  visible" would let a routing flag decide a disclosure question — the same
+  one-value-two-questions defect §11.3 identifies in `has_per_user_credential`.
+- It is ADR-008 INV-2 applied to the same surface, so it is not a new position.
+
+**THE CONDITION: FAIL CLOSED TO THE CALLER, LOUD TO THE OPERATOR.**
+
+Silent omission is a support call with no thread to pull. A legitimate user who
+has not authenticated sees an empty catalogue and cannot distinguish *"I need to
+log in"* from *"this was never set up"* — and neither can whoever is supporting
+them.
+
+**V** This holds at HEAD by construction rather than by a new mechanism. Both
+`meta_route_isolation_refused` and `meta_route_isolation_refused_for_caller`
+reach the omission only through `enforce_oauth_isolation_for`, which emits a
+`warn!` naming the backend and the reason **before** it returns the error
+(`mod.rs:1167-1173`) — *"requires an end-user identity credential that this route
+cannot resolve"*, with a `fix:` string. The helpers discard the error; they do
+not discard the log. So the caller learns nothing and the operator gets a named,
+actionable line.
+
+**Same shape as the STORE.1 ruling, and the pairing is the point.** There, the
+3.x credential migration must refuse **loudly** when a declared source file is
+absent rather than silently reporting nothing to migrate. Here, a backend
+vanishes from a caller's catalogue and the operator is told which one and why.
+**Silent to the untrusted party, loud to the trusted one** — an implementer who
+reads only "omit" will implement silence, which is why both halves are stated
+together.
+
 ---
 
 ## 12. R1 — five fields, not four: `resend_permitted` moves with the caches

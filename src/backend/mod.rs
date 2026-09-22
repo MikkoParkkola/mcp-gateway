@@ -242,3 +242,7 @@ pub(crate) struct CleanupState {
 mod pool_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "resend_isolation_tests.rs"]
+mod resend_isolation_tests;

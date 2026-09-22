@@ -151,6 +151,14 @@ const STATIC_TOOL: &str = "gateway_static_ledger";
 /// record — so omitting it would make every case below pass for that reason
 /// rather than for the one under test.
 async fn per_identity_gateway() -> (MetaMcp, Arc<PerIdentityCatalogue>) {
+    per_identity_gateway_logging_to(None).await
+}
+
+/// The same fixture, optionally writing its transparency log to a known path so
+/// a case can count the records a request produced.
+async fn per_identity_gateway_logging_to(
+    log_path: Option<&str>,
+) -> (MetaMcp, Arc<PerIdentityCatalogue>) {
     let registry = Arc::new(BackendRegistry::new());
 
     let wire = Arc::new(PerIdentityCatalogue {
@@ -215,9 +223,15 @@ async fn per_identity_gateway() -> (MetaMcp, Arc<PerIdentityCatalogue>) {
     let mut meta = MetaMcp::new(registry)
         .with_profile_registry(ProfileRegistry::from_config(&configs, "open"));
 
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
+    let path = log_path.map_or_else(
+        || {
+            let file = tempfile::NamedTempFile::new().expect("tempfile");
+            let path = file.path().to_string_lossy().to_string();
+            std::mem::forget(file);
+            path
+        },
+        str::to_string,
+    );
     meta.enable_transparency_log(Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -347,5 +361,79 @@ async fn each_identity_sees_its_own_catalogue_and_no_one_elses() {
         seen,
         vec!["alpha@ledger".to_string(), "beta@ledger".to_string()],
         "the catalogue fetches did not carry one identity binding each"
+    );
+}
+
+/// Records the transparency log holds after `list_tools`, by action.
+fn audit_actions(path: &str) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|entry| {
+            entry
+                .pointer("/fields/action")
+                .or_else(|| entry.get("action"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// GIVEN a multi-user gateway with an identity-bound backend
+/// WHEN a caller carrying no verified identity lists tools
+/// THEN no credential is minted and no audit record is written; and WHEN an
+/// identified caller does the same, one is.
+///
+/// THIS GUARDS A COST, NOT A CORRECTNESS PROPERTY, AND THAT IS WHY IT EXISTS.
+/// `caller_credential_for` returns empty *without calling the resolver* when
+/// the caller has no verified identity. Dropping that short-circuit would still
+/// be correct — the resolver refuses and the guard omits the backend either way
+/// — so nothing else in this suite would go red. What it would do is mint once
+/// per identity-bound backend on every `tools/list` and write a durable
+/// transparency-log record for each, on every deployment whose callers present
+/// no identity. That is a silent, unbounded multiplication of an append-only
+/// audit log, and a refactor that reintroduces it should fail a test rather
+/// than be noticed in production disk usage.
+///
+/// Two-directional: the identified half must produce a record, or the
+/// anonymous half's "zero" passes against a gateway whose audit logging is
+/// simply broken.
+#[tokio::test]
+async fn an_unidentified_caller_mints_nothing_and_audits_nothing() {
+    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let path = file.path().to_string_lossy().to_string();
+    std::mem::forget(file);
+
+    let (meta, _wire) = per_identity_gateway_logging_to(Some(&path)).await;
+
+    let anonymous = listed_for(&meta, &super::anonymous_caller()).await;
+    let after_anonymous = audit_actions(&path);
+    assert!(
+        after_anonymous.is_empty(),
+        "an unidentified caller's discovery reached the credential resolver: \
+         {after_anonymous:?}. Every identity-bound backend would mint and audit \
+         once per `tools/list`, on every deployment whose callers present none"
+    );
+    assert!(
+        anonymous.contains(&SHARED_TOOL.to_string()),
+        "the anonymous caller's discovery did not run at all, so the assertion \
+         above holds for a request that never happened: {anonymous:?}"
+    );
+
+    let alpha_id = identity("alpha");
+    let alpha = listed_for(&meta, &super::identified_caller(&alpha_id)).await;
+    let after_alpha = audit_actions(&path);
+    assert!(
+        alpha.contains(&ALPHA_TOOL.to_string()),
+        "the identified caller was not served its own catalogue: {alpha:?}"
+    );
+    assert!(
+        after_alpha.iter().any(|action| action == "idp_mint"),
+        "an identified caller's catalogue fetch minted a credential without a \
+         durable audit record: {after_alpha:?}. A mint must never reach a caller \
+         unaudited, and without this the zero above proves only that nothing is \
+         ever logged"
     );
 }
