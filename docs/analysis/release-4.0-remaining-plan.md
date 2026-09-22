@@ -131,11 +131,22 @@ that is still moving is a check of nothing.
 
 ## Two decisions that are the operator's, not mine
 
-1. **`NFR.PKG.1`** — the multi-architecture image publish path is written
-   (`c8803f06`, #568) and has never executed, because only a version tag fires
-   it. It can be proven before 4.0.0 by cutting a release-candidate tag
-   (`v4.0.0-rc.1`), which publishes real images to the container registry. That
-   is an outward-facing publish, so it waits for a yes.
+1. **`NFR.PKG.1`** — **the release-candidate route recommended here does not work,
+   and it has been superseded. Do not cut `v4.0.0-rc.1` for this.** A release
+   candidate is a `v*` tag, and `release-criteria` sits in `docker-build`'s
+   `needs:` as "report-only off a tag, blocking on one" — so an `rc` tag grades
+   exactly like the final release and blocks before the container job ever runs.
+   The escape hatch this entry recommended was inside the thing it was escaping;
+   #608 recorded that from the other side and is closed.
+   What replaced it: `15003510` added `workflow_dispatch` to `ci.yml` with a
+   `rehearse_manifest` boolean (`:24-29`), and a dispatch is not a tag, so
+   `release-criteria` stays report-only and the chain completes. Run
+   35719597955 executed it on the release line on 2026-09-22 — both
+   architectures built, scanned and smoked green, and the manifest list asserted
+   both platforms, with no tag promoted. What is still operator-gated is
+   narrower than this entry claims: not the image, but the **publish** — the
+   release naming, the signature and the registry listing, which only the tag
+   produces.
 2. **`NFR.SEC.7`** — the listening install is `3.4.0-f30539af`, which predates
    the origin guard `5d25f104`. The first half of the criterion closes on a
    deployment of a build carrying the guard. Nothing in the tree can close it.
