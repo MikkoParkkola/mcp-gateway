@@ -1,17 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7543 — the tools catalogue on a `stateless` backend's shared slot.
+//! MIK-7334.CATALOGUE.1 — the tools catalogue on a `stateless` backend's slot.
 //!
 //! THE FAMILY THAT ACTUALLY LEAKED. The disclosure was live on `tools/list`,
-//! and the `stateless` cells that landed with the fix cover resources, resource
-//! templates and prompts only. They cannot be extended to a fourth family:
-//! `catalogue_families_per_caller_tests::listed_for` has exactly three match
-//! arms and panics on anything else, because tools is covered at this layer.
+//! and the `stateless` cells in `catalogue_families_per_caller_tests` cover
+//! resources, resource templates and prompts only. They cannot be extended to a
+//! fourth family: `catalogue_families_per_caller_tests::listed_for` has exactly
+//! three match arms and panics on anything else, because tools is covered here.
 //!
 //! So the pin belongs beside `tests::per_user_metadata_fetch_is_identity_free\
 //! _and_shared`, the control for the identity-free path. Own file because
 //! `tests.rs` is over the 800-line ceiling and may not grow; declared from
 //! `backend::mod` so the module is compiled rather than orphaned.
+//!
+//! THESE CELLS WERE INVERTED, NOT WRITTEN FRESH. Until `pool_key_for` granted a
+//! private slot to `(Some(_), Some(binding))`, this file asserted that a
+//! `stateless` fill carried NO identity and landed on the shared slot, and said
+//! so in its own doc comment. That was the documented gap; it is now the
+//! delivered mode, so the assertions flip. Each flip is the arm being widened
+//! and not a test made to pass — the identity-free rows below are kept for
+//! exactly that reason (IDP.5).
 
 use super::Backend;
 use crate::config::{BackendConfig, FailsafeConfig};
@@ -109,9 +117,18 @@ impl crate::transport::Transport for PerIdentityTools {
             .and_then(|s| self.per_identity.get(s).cloned())
             .unwrap_or_else(|| self.shared.clone());
 
+        // `readOnlyHint: true` on every answer, so the resend set this fill
+        // derives is non-empty whichever catalogue came back. An annotation
+        // present on only one identity's tools would let T-S8 pass because the
+        // OTHER identity had nothing to inherit, rather than because the set
+        // landed on the right slot.
         Ok(JsonRpcResponse::success(
             RequestId::Number(1),
-            json!({ "tools": [{ "name": tool, "inputSchema": { "type": "object" } }] }),
+            json!({ "tools": [{
+                "name": tool,
+                "inputSchema": { "type": "object" },
+                "annotations": { "readOnlyHint": true },
+            }] }),
         ))
     }
 
@@ -153,6 +170,29 @@ fn stateless_backend() -> Arc<Backend> {
     ))
 }
 
+/// The same backend with `wire` pre-opened on the shared slot AND on each
+/// identity's own slot.
+///
+/// ONE WIRE FOR EVERY SLOT, deliberately. It discriminates on the credential it
+/// is handed, so a catalogue that came back per-identity did so because the
+/// fill carried that identity — never because the fixture seeded each slot a
+/// different answer. Production opens these from config in
+/// `ensure_entry_started`; there is no real upstream here.
+fn wired(wire: &Arc<PerIdentityTools>) -> Arc<Backend> {
+    let backend = stateless_backend();
+    let clone = || Arc::clone(wire) as Arc<dyn crate::transport::Transport>;
+    backend.set_transport_for_test(clone());
+    for binding in ["alpha@ledger", "beta@ledger"] {
+        backend.set_pooled_transport_for_test(
+            &crate::backend::PoolKey::PerUser {
+                binding: binding.to_string(),
+            },
+            clone(),
+        );
+    }
+    backend
+}
+
 /// The credential the resolver mints for `subject`, shaped as the meta route
 /// hands it to `get_tools_for_binding`.
 fn minted(subject: &str) -> Vec<(String, String)> {
@@ -168,82 +208,148 @@ fn names(tools: &[Tool]) -> Vec<String> {
 
 /// GIVEN a `stateless` backend with identity propagation configured, whose
 /// upstream serves a different tool catalogue per credential
-/// WHEN caller A fills the tools catalogue and caller B then reads it
-/// THEN the one fetch that populated the shared slot carried NO identity
-/// headers, so B is served the static-credential catalogue and not A's.
+/// WHEN alpha fills, beta fills, and an identity-free caller reads
+/// THEN each fill ran on ITS OWN slot carrying ITS OWN minted credential, and
+/// the identity-free read still runs unkeyed on the shared slot.
 ///
-/// THE FAMILY THAT LEAKED, PINNED. `pool_key_for` hands a `stateless` backend
-/// `PoolKey::Shared` however well its caller identifies itself, while the
-/// resolver still mints that caller a credential — `cache_binding` is derived
-/// from subject and audience and never consults the session mode. Carry those
-/// minted headers into the fill and A's private catalogue is what every caller
-/// reads until TTL. Both callers pass a binding here, exactly as the meta route
-/// does, so the collapse to one slot is the production path and not a shortcut.
+/// THE FAMILY THAT LEAKED, PINNED — T-S1 for tools. `pool_key_for` grants a
+/// private slot to `(Some(_), Some(binding))`, so a `stateless` backend's
+/// identified caller now selects its own slot, and `get_cached_list_for` derives
+/// `identity_key` from that same `match` — which is what carries the minted
+/// headers past the #727 gate. Slot and credential move together or not at all.
 ///
-/// THE HEADER TRANSCRIPT IS THE ASSERTION AND IT IS FIRST. Items can coincide;
-/// a minted `Authorization` recorded on the fill that populated a slot every
-/// caller reads cannot. An items assertion placed ahead of it would fail first
-/// and the header check would never run.
+/// THE TRANSCRIPT IS THE ASSERTION AND IT IS FIRST. Items can coincide; a
+/// header list recorded against the slot the fill ran on cannot. An items
+/// assertion placed ahead of it would fail first and the transcript check would
+/// never run. Raw throughout — no sort, no dedup, no dropping of `None` —
+/// because count and multiplicity are exactly what a vacuous cell erases.
 ///
-/// This pins the documented `stateless` gap (IDP.5), NOT a per-caller
-/// `stateless` catalogue: serving one needs an uncached path or a per-identity
-/// slot, and both are changes to `pool_key_for`.
+/// ROW 3 IS NOT OPTIONAL. Without an identity-free read that still lands
+/// unkeyed on the shared slot, rows 1 and 2 pass against an implementation that
+/// bought isolation by blanking the single-tenant path (IDP.5).
 #[tokio::test]
-async fn a_stateless_tools_fill_carries_no_identity_onto_the_shared_slot() {
+async fn each_identity_fills_its_own_stateless_tools_slot() {
     let wire = PerIdentityTools::new();
-    let backend = stateless_backend();
-    backend.set_transport_for_test(Arc::clone(&wire) as Arc<dyn crate::transport::Transport>);
+    let backend = wired(&wire);
 
     let seen_by_a = backend
         .get_tools_for_binding(Some("alpha@ledger"), &minted("alpha"))
         .await
-        .expect("caller A fills the tools catalogue");
+        .expect("alpha fills its own tools catalogue");
     let seen_by_b = backend
         .get_tools_for_binding(Some("beta@ledger"), &minted("beta"))
         .await
-        .expect("caller B reads it");
+        .expect("beta fills its own tools catalogue");
+    let seen_by_none = backend
+        .get_tools_for_binding(None, &[])
+        .await
+        .expect("the identity-free caller still reads the shared slot");
 
-    // THE DISCRIMINATOR, FIRST. One fill, and it went upstream with no headers.
+    // THE DISCRIMINATOR, FIRST. Three reads, three fills, each carrying the
+    // credential of the caller whose slot it ran on.
     assert_eq!(
         wire.headers(),
-        vec![Vec::<(String, String)>::new()],
-        "the fill that populated the SHARED slot of a `stateless` backend \
-         carried the calling identity's minted credential upstream, so what \
-         every caller now reads is private to one of them"
+        vec![minted("alpha"), minted("beta"), Vec::new()],
+        "a `stateless` fill did not carry its own caller's minted credential \
+         upstream, so the catalogue it cached is not that caller's"
     );
-    // PROVENANCE: it really was the shared slot, not a private one.
+    // PROVENANCE: the slot each fill ran on, in order.
     assert_eq!(
         wire.slots(),
-        vec![None],
-        "a `stateless` backend must fill its one shared slot once, unkeyed"
+        vec![
+            Some("alpha@ledger".to_string()),
+            Some("beta@ledger".to_string()),
+            None,
+        ],
+        "a `stateless` backend must fill each identified caller's OWN slot and \
+         keep the identity-free read on the shared one"
     );
 
-    // THE DISCLOSURE. B reads the slot A filled.
-    assert!(
-        !names(&seen_by_b).contains(&ALPHA_TOOL.to_string()),
-        "caller B was served caller A's private tool catalogue out of the \
-         shared slot of a `stateless` backend: {:?}",
-        names(&seen_by_b)
-    );
-
-    // ANTI-VACUITY. Both callers ARE served the static-credential catalogue —
-    // what a `stateless` backend served before this branch existed. Without it
-    // the absence above holds against a backend that answered nobody at all.
+    // ROW 1 — the mode being built.
     assert_eq!(
         names(&seen_by_a),
-        vec![STATIC_TOOL.to_string()],
-        "caller A was not served the static-credential catalogue"
+        vec![ALPHA_TOOL.to_string()],
+        "alpha was not served its own tool catalogue"
     );
     assert_eq!(
         names(&seen_by_b),
-        vec![STATIC_TOOL.to_string()],
-        "caller B was served nothing, so the absence check above measures an \
-         empty answer rather than isolation"
+        vec![BETA_TOOL.to_string()],
+        "beta was not served its own tool catalogue"
     );
+
+    // ROW 2 — isolation, meaningful only because row 1 showed each caller was
+    // served something of its own.
     assert!(
         !names(&seen_by_a).contains(&BETA_TOOL.to_string())
-            && !names(&seen_by_b).contains(&BETA_TOOL.to_string()),
-        "the upstream stopped discriminating on the credential, so the fixture \
-         can no longer tell an identified fill from an unidentified one"
+            && !names(&seen_by_b).contains(&ALPHA_TOOL.to_string()),
+        "one `stateless` caller was served another's private tool catalogue: \
+         alpha={:?} beta={:?}",
+        names(&seen_by_a),
+        names(&seen_by_b)
+    );
+    assert!(
+        !names(&seen_by_a).contains(&STATIC_TOOL.to_string())
+            && !names(&seen_by_b).contains(&STATIC_TOOL.to_string()),
+        "an identified caller was served the gateway's static-credential \
+         catalogue under its own identity: alpha={:?} beta={:?}",
+        names(&seen_by_a),
+        names(&seen_by_b)
+    );
+
+    // ROW 3 — IDP.5, and the anti-vacuity guard. The identity-free caller keeps
+    // the static-credential catalogue it had before this arm widened.
+    assert_eq!(
+        names(&seen_by_none),
+        vec![STATIC_TOOL.to_string()],
+        "the identity-free caller lost the static-credential catalogue, so \
+         isolation was bought by blanking the shared path"
     );
 }
+
+/// GIVEN the same `stateless` backend
+/// WHEN a caller passes minted headers with NO binding
+/// THEN the fill records an EMPTY header list on the shared slot.
+///
+/// T-S10 — #727's header gate keeps a test that can fail it. Widening
+/// `pool_key_for` removes the last PRODUCTION path that reaches the gate:
+/// `PropagatedCredential::cache_binding` is a `String`, not an `Option`, and
+/// both places a `None` binding arises return empty headers with it. So the
+/// gate becomes defence-in-depth, and without this cell a mutant that deletes
+/// it passes every other cell in this file — the same fixture blind spot that
+/// let the original defect through a complete mutation table.
+#[tokio::test]
+async fn a_stateless_fill_without_a_binding_drops_minted_headers() {
+    let wire = PerIdentityTools::new();
+    let backend = wired(&wire);
+
+    let seen = backend
+        .get_tools_for_binding(None, &minted("alpha"))
+        .await
+        .expect("the unbound fill answers");
+
+    assert_eq!(
+        wire.headers(),
+        vec![Vec::<(String, String)>::new()],
+        "a fill with no binding carried a minted credential onto the SHARED \
+         slot, so one caller's catalogue is what every caller now reads"
+    );
+    assert_eq!(
+        wire.slots(),
+        vec![None],
+        "a fill with no binding must run on the shared slot"
+    );
+    assert_eq!(
+        names(&seen),
+        vec![STATIC_TOOL.to_string()],
+        "the unbound fill was answered under a caller's credential rather than \
+         the gateway's own"
+    );
+}
+
+/// The cells that pin what ELSE follows from the widened arm: the cache the
+/// slot now holds, the retry set derived from it, the revocation that must
+/// reach it, and the schema mirror that must read it. Own file so this one
+/// stays under the 800-line ceiling; declared here rather than from
+/// `backend::mod` so `super::` reaches this file's fixture.
+#[path = "stateless_slot_lifecycle_tests.rs"]
+mod stateless_slot_lifecycle_tests;

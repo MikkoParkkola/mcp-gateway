@@ -599,27 +599,38 @@ fn stateless_gateway() -> (MetaMcp, Arc<PerIdentityFamilies>) {
     (meta, wire)
 }
 
+/// The header list `PerIdentityMint` mints for `subject`.
+fn minted(subject: &str) -> Vec<(String, String)> {
+    vec![(
+        "Authorization".to_string(),
+        format!("Bearer minted-for-{subject}"),
+    )]
+}
+
 /// GIVEN a `stateless` backend with identity propagation configured, whose
 /// upstream serves a different catalogue per credential
 /// WHEN alpha lists `method` and beta then lists it
-/// THEN the one shared slot was filled by a fetch carrying NO headers, so beta
-/// is served the static-credential catalogue rather than alpha's private one.
+/// THEN each fill ran on ITS OWN slot carrying ITS OWN minted credential, and
+/// each caller is served its own catalogue and not the other's.
 ///
-/// THE CROSS-TENANT CASE, which a `per_user` fixture cannot reach.
-/// `pool_key_for` hands a `stateless` backend `PoolKey::Shared` for every
-/// caller, so alpha's fill and beta's read are one cache entry. Carry alpha's
-/// minted credential into that fill and alpha's private catalogue is what beta
-/// reads, until TTL.
+/// T-S1 — THE CROSS-TENANT CASE, which a `per_user` fixture cannot reach.
+/// `pool_key_for` now grants a private slot to `(Some(_), Some(binding))`, so a
+/// `stateless` backend's identified caller selects its own slot;
+/// `get_cached_list_for` derives `identity_key` from that same `match`, which is
+/// what carries the minted headers past #727's gate. Slot and credential move
+/// together or not at all.
 ///
-/// THE HEADER TRANSCRIPT IS THE ASSERTION, not the items. Two identities can
-/// coincidentally be served one list; a minted `Authorization` recorded on the
-/// fill that populated a shared slot cannot be explained away.
+/// THIS CELL WAS INVERTED, NOT WRITTEN FRESH. It previously asserted the
+/// transcript IS `vec![None]` with `vec![Vec::new()]` headers and said in its
+/// own doc comment that it pinned the documented gap. That gap is now the
+/// delivered mode. It is rewritten rather than deleted because it is the only
+/// cell that would catch a regression back to the shared fill.
 ///
-/// This pins the documented gap, NOT a per-caller `stateless` catalogue:
-/// serving one needs an uncached path or a per-identity slot, and
-/// `pool_key_for` carries a byte-for-byte single-tenant guarantee (IDP.5) that
-/// makes changing it a separate decision.
-async fn a_stateless_backend_fills_its_shared_slot_unidentified(method: &str) {
+/// THE TRANSCRIPT IS THE ASSERTION AND IT IS FIRST. Two identities can
+/// coincidentally be served one list; a minted `Authorization` recorded against
+/// the slot its fill ran on cannot. An items assertion ahead of it would fail
+/// first and the transcript check would never run.
+async fn each_identity_sees_its_own_stateless_family_catalogue(method: &str) {
     let (meta, wire) = stateless_gateway();
     let alpha_id = identity("alpha");
     let beta_id = identity("beta");
@@ -627,59 +638,68 @@ async fn a_stateless_backend_fills_its_shared_slot_unidentified(method: &str) {
     let alpha = listed_for(&meta, method, Some(&alpha_id)).await;
     let beta = listed_for(&meta, method, Some(&beta_id)).await;
 
-    // PROVENANCE, as a full transcript. Two reads produced exactly one fill, on
-    // the shared slot, and that fill went upstream carrying no headers at all.
-    // Unsorted and undeduplicated, with the `None` kept: it is the evidence the
-    // fill ran on the shared slot rather than a private one.
+    // PROVENANCE, as a full transcript, and FIRST. Two reads produced exactly
+    // two fills, each on its own caller's slot, each carrying that caller's own
+    // minted credential. Unsorted and undeduplicated: sorting hides a refetch
+    // and dropping `None` would hide a read that landed on the shared slot.
     assert_eq!(
         wire.fills_for(method),
-        vec![None],
-        "{method}: a `stateless` backend must fill its one shared slot once, \
-         unkeyed"
+        vec![
+            Some("alpha@ledger".to_string()),
+            Some("beta@ledger".to_string()),
+        ],
+        "{method}: a `stateless` backend's identified callers were not each \
+         filled on their own slot"
     );
     assert_eq!(
         wire.headers_for(method),
-        vec![Vec::<(String, String)>::new()],
-        "{method}: the fill that populated the SHARED slot carried the calling \
-         identity's minted credential upstream, so what every caller now reads \
-         is private to one of them"
+        vec![minted("alpha"), minted("beta")],
+        "{method}: a `stateless` fill did not carry its own caller's minted \
+         credential upstream, so the catalogue it cached is not that caller's"
     );
 
-    // THE DISCLOSURE. Beta reads the slot alpha filled.
+    // ROW 1 — the mode being built.
     assert!(
-        !serves(&beta, ALPHA_ITEM),
-        "{method}: beta was served alpha's private catalogue out of the shared \
-         slot of a `stateless` backend: {beta:?}"
+        serves(&alpha, ALPHA_ITEM),
+        "{method}: alpha was not served its own catalogue: {alpha:?}"
+    );
+    assert!(
+        serves(&beta, BETA_ITEM),
+        "{method}: beta was not served its own catalogue: {beta:?}"
     );
 
-    // WHAT EACH CALLER MUST SEE INSTEAD — the static-credential catalogue, which
-    // is what a `stateless` backend served before this branch. Doubles as the
-    // anti-vacuity guard: without it the absence check above passes against a
-    // gateway that answered nobody.
+    // ROW 2 — isolation, meaningful only because row 1 showed each caller was
+    // served something of its own.
     assert!(
-        serves(&alpha, STATIC_ITEM) && !serves(&alpha, ALPHA_ITEM),
-        "{method}: a `stateless` backend fetched its catalogue under the \
-         calling identity's own credential, and one shared slot then hands that \
-         result to everybody: {alpha:?}"
+        !serves(&alpha, BETA_ITEM) && !serves(&beta, ALPHA_ITEM),
+        "{method}: one `stateless` caller was served another's private \
+         catalogue: alpha={alpha:?} beta={beta:?}"
     );
     assert!(
-        serves(&beta, STATIC_ITEM),
-        "{method}: beta was served nothing, so the check above measures an empty \
-         answer rather than isolation: {beta:?}"
+        !serves(&alpha, STATIC_ITEM) && !serves(&beta, STATIC_ITEM),
+        "{method}: an identified caller on a `stateless` backend was served the \
+         gateway's static-credential catalogue under its own identity: \
+         alpha={alpha:?} beta={beta:?}"
     );
 }
 
 #[tokio::test]
-async fn a_stateless_backend_fills_shared_resources_unidentified() {
-    a_stateless_backend_fills_its_shared_slot_unidentified("resources/list").await;
+async fn each_identity_sees_its_own_stateless_resources() {
+    each_identity_sees_its_own_stateless_family_catalogue("resources/list").await;
 }
 
 #[tokio::test]
-async fn a_stateless_backend_fills_shared_resource_templates_unidentified() {
-    a_stateless_backend_fills_its_shared_slot_unidentified("resources/templates/list").await;
+async fn each_identity_sees_its_own_stateless_resource_templates() {
+    each_identity_sees_its_own_stateless_family_catalogue("resources/templates/list").await;
 }
 
 #[tokio::test]
-async fn a_stateless_backend_fills_shared_prompts_unidentified() {
-    a_stateless_backend_fills_its_shared_slot_unidentified("prompts/list").await;
+async fn each_identity_sees_its_own_stateless_prompts() {
+    each_identity_sees_its_own_stateless_family_catalogue("prompts/list").await;
 }
+
+/// The cells that need this file's `stateless` fixture but would push it over
+/// the 800-line ceiling. Declared here rather than from `meta_mcp::mod` so
+/// `super::` reaches `stateless_gateway`, `listed_for`, `serves` and `identity`.
+#[path = "catalogue_stateless_families_tests.rs"]
+mod catalogue_stateless_families_tests;
