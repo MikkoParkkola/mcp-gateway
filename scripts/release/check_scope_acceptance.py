@@ -7,6 +7,11 @@ Evidence existence is the agreed bar, not automatic proof of a test execution.
 Exit 0: valid plan (--check), or accepted release (--release/--publish-check).
 Exit 1: valid but incomplete release. Exit 2: invalid/unreadable contract.
 
+A criterion is met, pending, or waived. A waived row ships unmet by operator
+ruling: it does not block the tag, it names the resolved decision that
+authorised it in ``waived_by``, and it is counted and printed apart from met
+and pending so an accepted shortfall cannot read as finished work.
+
 --publish-check runs the same consistency checks as --check on every ref, and
 additionally requires completed acceptance when GITHUB_EVENT_NAME/GITHUB_REF
 (and, for workflow_dispatch, INPUT_TAG) show a tag push or manual dispatch
@@ -99,6 +104,24 @@ BLOCKED_ON = ("none", "operator", "external")
 # Anything but "none" is someone else's turn. Deriving the held set keeps a
 # blocker category added later from validating but staying invisible.
 HELD_ON = tuple(value for value in BLOCKED_ON if value != "none")
+# A criterion the operator accepted unmet. It does not block the tag, so the
+# two waiver fields are mandatory together and forbidden anywhere else: a row
+# that ships unmet has to name the ruling that let it, and say which kind of
+# residual it is, so the release record cannot read a measured shortfall and a
+# deferred measurement the same way.
+CRITERION_KEYS = frozenset(
+    {"id", "status", "stage", "blocked_on", "evidence", "note"}
+)
+WAIVER_KEYS = frozenset({"waived_by", "waiver_kind"})
+WAIVER_KINDS = ("measured", "deferred")
+# The criteria this release may ship unmet. Membership lives here, in reviewed
+# code with a test, so a second waiver cannot be introduced by editing the
+# ledger alone: turning a red gate green has to be a diff someone reviews.
+# The set is matched exactly against the waived rows, so it also fails when a
+# waiver is retired -- a ratchet, not a high-water mark. A stale entry would
+# otherwise sit here holding permission for a waiver nobody is taking, ready
+# to re-authorise it silently.
+APPROVED_WAIVERS = frozenset({"MIK-3274.RANKING.3"})
 
 
 def stage_burnup(criteria):
@@ -116,6 +139,90 @@ def stage_burnup(criteria):
         f"{stage} {counts[stage]}" for stage in STAGES
     )
     return line + (f"; held: {', '.join(held)}" if held else "; held: none")
+
+
+def waiver_errors(row, ident):
+    """Check the waiver fields against the row's own status.
+
+    The pair is mandatory on a waived row and forbidden elsewhere, so a stray
+    ``waived_by`` cannot sit on a pending row waiting to take effect the day
+    someone flips its status, and a waived row cannot ship without naming both
+    the ruling behind it and what kind of residual it leaves.
+    """
+    errors = []
+    if row["status"] == "waived":
+        if not isinstance(row.get("waived_by"), str) or not row["waived_by"].strip():
+            errors.append(
+                f"{ident}: a waived criterion needs waived_by naming the"
+                " authorising decision"
+            )
+        if row.get("waiver_kind") not in WAIVER_KINDS:
+            errors.append(
+                f"{ident}: waiver_kind must be one of {', '.join(WAIVER_KINDS)}"
+            )
+        return errors
+    return [
+        f"{ident}: {key} belongs only on a waived criterion"
+        for key in sorted(WAIVER_KEYS & set(row))
+    ]
+
+
+def names_criterion(text, ident):
+    """Is this criterion named in the text, on its own rather than inside another ID?
+
+    Containment is wrong: a ruling about MIK-3274.RANKING.31 would otherwise
+    authorise waiving MIK-3274.RANKING.3. IDs end in digits with an optional
+    letter suffix, so a following digit or letter means a different criterion,
+    while sentence punctuation after the ID is a genuine mention.
+    """
+    pattern = rf"(?<![0-9A-Za-z.\-]){re.escape(ident)}(?![0-9A-Za-z])"
+    return re.search(pattern, text) is not None
+
+
+def waiver_authority_errors(waived, decisions):
+    """Tie each waiver to a resolved ruling that names the criterion it waives.
+
+    The decision schema has no field for the criterion a ruling governs, nor
+    for the release it covers, and its key set is closed, so the operator's
+    mandatory ``selection`` text is the only place the link can be read.
+    Requiring the criterion to be named there on a token boundary stops a
+    waiver borrowing authority off an unrelated resolved decision or off a
+    longer ID that merely contains this one. It cannot establish that the
+    ruling authorised shipping unmet in this release; that residual is
+    printed beside every waiver rather than implied to be verified.
+    """
+    errors = []
+    for ident, authority in waived:
+        decision = decisions.get(authority)
+        if decision is None:
+            errors.append(f"{ident}: waived_by names no decision: {authority}")
+        elif decision.get("status") != "resolved":
+            errors.append(f"{ident}: waiver authority {authority} is not resolved")
+        elif not names_criterion(str(decision.get("selection", "")), ident):
+            errors.append(
+                f"{ident}: decision {authority} does not name this criterion"
+                " in the operator's selection"
+            )
+    return errors
+
+
+def waived_burnup(criteria):
+    """Split the verdicts three ways so no count hides an accepted shortfall."""
+    counts = {status: 0 for status in ("met", "waived", "pending")}
+    for row in criteria:
+        if isinstance(row, dict) and row.get("status") in counts:
+            counts[row["status"]] += 1
+    return " / ".join(f"{counts[status]} {status}" for status in counts)
+
+
+def waiver_lines(criteria):
+    """Name every accepted-unmet row with its ruling, so no waiver is silent."""
+    return [
+        f"  {row['id']} waived by {row.get('waived_by')}"
+        f" ({row.get('waiver_kind')})"
+        for row in criteria
+        if isinstance(row, dict) and row.get("status") == "waived"
+    ]
 
 
 def evidence_errors(root, evidence, label, required):
@@ -179,6 +286,7 @@ DECISION_NOTES = frozenset(
 def inspect_contract(root, document, data, baseline):
     """Return structural errors and pending obligations without conflating them."""
     errors, pending, blockers = [], [], []
+    waived, waived_ids = [], set()
     declared = ID.findall(document)
     approved_counts = re.findall(
         r"^Approved supplemental criteria: ([0-9]+)$", document, re.M
@@ -204,23 +312,18 @@ def inspect_contract(root, document, data, baseline):
         errors.append("criteria must be a list")
         criteria = []
     for position, row in enumerate(criteria, start=1):
-        if not isinstance(row, dict) or set(row) != {
-            "id",
-            "status",
-            "stage",
-            "blocked_on",
-            "evidence",
-            "note",
-        }:
-            # Name the offending row: the rest of its diagnostics are skipped, so
-            # without this the reader has to diff the whole ledger by hand.
-            named = isinstance(row, dict) and isinstance(row.get("id"), str)
-            label = row["id"] if named else f"criterion #{position}"
+        # Name the offending row: the rest of its diagnostics are skipped, so
+        # without this the reader has to diff the whole ledger by hand.
+        named = isinstance(row, dict) and isinstance(row.get("id"), str)
+        label = row["id"] if named else f"criterion #{position}"
+        if not isinstance(row, dict) or not CRITERION_KEYS <= set(row):
             errors.append(
                 f"{label}: each criterion needs id, status, stage, blocked_on,"
                 " evidence and note"
             )
             continue
+        for key in sorted(set(row) - CRITERION_KEYS - WAIVER_KEYS):
+            errors.append(f"{label}: {key} is not a criterion field")
         ident = row["id"]
         if not isinstance(ident, str):
             errors.append("criterion ID must be a string")
@@ -228,8 +331,15 @@ def inspect_contract(root, document, data, baseline):
         if ident in seen:
             errors.append(f"duplicate criterion: {ident}")
         seen.add(ident)
-        if row["status"] not in ("pending", "met"):
-            errors.append(f"{ident}: status must be pending or met")
+        if row["status"] not in ("pending", "met", "waived"):
+            errors.append(f"{ident}: status must be pending, met or waived")
+        elif row["status"] == "waived" and ident not in APPROVED_WAIVERS:
+            errors.append(f"{ident}: not an approved waiver for this release")
+        errors.extend(waiver_errors(row, ident))
+        if row["status"] == "waived" and isinstance(row.get("waived_by"), str):
+            waived.append((ident, row["waived_by"]))
+        if row["status"] == "waived":
+            waived_ids.add(ident)
         if row["stage"] not in STAGES:
             errors.append(f"{ident}: stage must be one of {', '.join(STAGES)}")
         elif (row["stage"] == "met") != (row["status"] == "met"):
@@ -255,9 +365,20 @@ def inspect_contract(root, document, data, baseline):
         errors.append(f"missing criterion verdict: {ident}")
     for ident in sorted(seen - set(declared)):
         errors.append(f"verdict without a requirement: {ident}")
+    # The other half of the exact match. Scoped to the criteria this ledger
+    # governs, so the approved set cannot keep holding permission for a waiver
+    # nobody is taking; dropping the row instead is caught just above as a
+    # missing verdict, since the requirements document still declares it.
+    for ident in sorted((APPROVED_WAIVERS & seen) - waived_ids):
+        errors.append(
+            f"{ident}: approved as a waiver but no longer waived; remove it"
+            " from APPROVED_WAIVERS in this change"
+        )
 
     decisions = data["decisions"]
-    decision_ids = set()
+    # Keyed by ID so a waiver can be resolved back to the ruling behind it,
+    # not just told that some decision by that name exists.
+    decision_ids = {}
     if not isinstance(decisions, list):
         errors.append("decisions must be a list")
         decisions = []
@@ -279,7 +400,7 @@ def inspect_contract(root, document, data, baseline):
             continue
         if ident in decision_ids:
             errors.append(f"duplicate decision: {ident}")
-        decision_ids.add(ident)
+        decision_ids[ident] = row
         if row["status"] not in ("pending", "resolved"):
             errors.append(f"{ident}: decision must be pending or resolved")
         if not isinstance(row["selection"], str):
@@ -295,8 +416,9 @@ def inspect_contract(root, document, data, baseline):
         )
         if row["status"] == "pending":
             pending.append(f"decision:{ident}")
-    if not REQUIRED_DECISIONS <= decision_ids:
+    if not REQUIRED_DECISIONS <= decision_ids.keys():
         errors.append("required decision set differs from the approved contract")
+    errors.extend(waiver_authority_errors(waived, decision_ids))
 
     rows, malformed = counter.rows(baseline)
     if malformed or not rows:
@@ -366,10 +488,19 @@ def main(argv=None):
         return 2
 
     print(
-        f"Scope contract consistent: {len(data['criteria'])} criteria; "
+        f"Scope contract consistent: {len(data['criteria'])} criteria "
+        f"({waived_burnup(data['criteria'])}); "
         f"{len(pending)} pending criteria/decisions; {len(blockers)} baseline blocking rows."
     )
     print("Stage burnup: " + stage_burnup(data["criteria"]))
+    waivers = waiver_lines(data["criteria"])
+    if waivers:
+        print(
+            "Accepted unmet by operator ruling:\n"
+            + "\n".join(waivers)
+            + "\n  Each ruling's scope -- shipping unmet, in this release -- is"
+            " asserted by the named ruling, not proved by this gate."
+        )
     if require_acceptance and (pending or blockers):
         print(
             "Release acceptance incomplete:\n  " + "\n  ".join(pending + blockers),

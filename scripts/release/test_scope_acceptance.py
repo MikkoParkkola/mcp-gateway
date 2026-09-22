@@ -83,6 +83,18 @@ class AcceptanceTests(unittest.TestCase):
                 }
             ],
         }
+        self.pristine = copy.deepcopy(self.data)
+
+    def approve_waiver(self, ident="GH462.CONFIG.1"):
+        """Treat the fixture's waiver as this release's approved one.
+
+        The approved set is a gate constant, so a test that wants a valid
+        waiver has to say which ID it is standing in for, exactly as a real
+        new waiver has to be added to the gate and reviewed.
+        """
+        patcher = mock.patch.object(gate, "APPROVED_WAIVERS", frozenset({ident}))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def inspect(self):
         return gate.inspect_contract(self.root, self.document, self.data, self.baseline)
@@ -330,6 +342,278 @@ class AcceptanceTests(unittest.TestCase):
         ):
             self.assertEqual(gate.main(["--release"]), 2)
 
+    # A waived criterion ships unmet by operator ruling. It must stay out of the
+    # pending set without becoming a way to retire any other blocking row, so
+    # every case below asserts the diagnostic or the surviving list, not just an
+    # exit code: --check returns 0 with pending work and would pass regardless.
+    def waive(self, **overrides):
+        """Accept the single criterion unmet under the ruling that authorises it."""
+        row = {
+            "status": "waived",
+            "stage": "graded",
+            "evidence": [],
+            "waived_by": "reference_personal_account_journey",
+            "waiver_kind": "deferred",
+        }
+        row.update(overrides)
+        self.data["criteria"][0].update(row)
+        self.data["decisions"][0]["selection"] = (
+            "GH462.CONFIG.1 ships unmet in this release by operator ruling."
+        )
+
+    def test_waived_criterion_is_accepted_and_excluded_from_pending(self):
+        self.waive()
+        self.approve_waiver()
+        self.assertEqual(self.inspect(), ([], [], []))
+        self.assertEqual(self.cli("--release"), 0)
+
+    def test_waived_criterion_is_reported_with_its_authority_and_kind(self):
+        self.waive()
+        self.approve_waiver()
+        self.assertEqual(self.cli("--release"), 0)
+        printed = self.stdout.getvalue()
+        self.assertIn("0 met / 1 waived / 0 pending", printed)
+        self.assertIn(
+            "GH462.CONFIG.1 waived by reference_personal_account_journey"
+            " (deferred)",
+            printed,
+        )
+
+    def test_waiver_authority_must_name_an_existing_decision(self):
+        self.waive(waived_by="no_such_ruling")
+        self.assertIn(
+            "GH462.CONFIG.1: waived_by names no decision: no_such_ruling",
+            self.inspect()[0],
+        )
+        self.assertEqual(self.cli("--release"), 2)
+
+    def test_waiver_authority_must_be_a_resolved_decision(self):
+        self.waive()
+        self.data["decisions"][0].update(status="pending", selection="", evidence=[])
+        self.assertIn(
+            "GH462.CONFIG.1: waiver authority reference_personal_account_journey"
+            " is not resolved",
+            self.inspect()[0],
+        )
+        self.assertEqual(self.cli("--release"), 2)
+
+    def test_waiver_authority_must_name_the_criterion_it_waives(self):
+        # The attack this closes: pointing a waiver at any resolved decision.
+        self.waive()
+        self.data["decisions"][0]["selection"] = "Operator-selected reference"
+        self.assertIn(
+            "GH462.CONFIG.1: decision reference_personal_account_journey does not"
+            " name this criterion in the operator's selection",
+            self.inspect()[0],
+        )
+        self.assertEqual(self.cli("--release"), 2)
+
+    def test_waived_criterion_without_an_authority_is_invalid(self):
+        self.waive()
+        del self.data["criteria"][0]["waived_by"]
+        self.assertIn(
+            "GH462.CONFIG.1: a waived criterion needs waived_by naming the"
+            " authorising decision",
+            self.inspect()[0],
+        )
+        self.assertEqual(self.cli("--release"), 2)
+
+    def test_waiver_fields_belong_only_on_a_waived_criterion(self):
+        baseline = copy.deepcopy(self.data)
+        for status, stage, evidence in (
+            ("met", "met", ["proof.md"]),
+            ("pending", "graded", []),
+        ):
+            for field in ("waived_by", "waiver_kind"):
+                with self.subTest(status=status, field=field):
+                    self.data = copy.deepcopy(baseline)
+                    self.waive()
+                    del self.data["criteria"][0][
+                        "waiver_kind" if field == "waived_by" else "waived_by"
+                    ]
+                    self.data["criteria"][0].update(
+                        status=status, stage=stage, evidence=evidence
+                    )
+                    self.assertIn(
+                        f"GH462.CONFIG.1: {field} belongs only on a waived criterion",
+                        self.inspect()[0],
+                    )
+                    self.assertEqual(self.cli("--release"), 2)
+
+    def test_waiver_kind_must_be_declared_and_known(self):
+        baseline = copy.deepcopy(self.data)
+        for kind in (None, "", "postponed", 7):
+            with self.subTest(kind=kind):
+                self.data = copy.deepcopy(baseline)
+                self.waive()
+                if kind is None:
+                    del self.data["criteria"][0]["waiver_kind"]
+                else:
+                    self.data["criteria"][0]["waiver_kind"] = kind
+                self.assertIn(
+                    "GH462.CONFIG.1: waiver_kind must be one of measured, deferred",
+                    self.inspect()[0],
+                )
+                self.assertEqual(self.cli("--release"), 2)
+
+    def test_waiver_authority_must_name_the_criterion_on_a_token_boundary(self):
+        # A longer ID containing this one is a different criterion. Containment
+        # would let a ruling about RANKING.31 authorise waiving RANKING.3.
+        for selection in (
+            "GH462.CONFIG.11 ships unmet in this release.",
+            "GH462.CONFIG.1a ships unmet in this release.",
+            "XGH462.CONFIG.1 ships unmet in this release.",
+            "GH462.CONFIG.10 and GH462.CONFIG.12 ship unmet.",
+        ):
+            with self.subTest(selection=selection):
+                self.data = copy.deepcopy(self.pristine)
+                self.waive()
+                self.data["decisions"][0]["selection"] = selection
+                self.assertIn(
+                    "GH462.CONFIG.1: decision reference_personal_account_journey"
+                    " does not name this criterion in the operator's selection",
+                    self.inspect()[0],
+                )
+                self.assertEqual(self.cli("--release"), 2)
+
+    def test_waiver_authority_accepts_the_criterion_beside_punctuation(self):
+        for selection in (
+            "GH462.CONFIG.1 ships unmet in this release.",
+            "Ships unmet: GH462.CONFIG.1.",
+            "Ships unmet (GH462.CONFIG.1) by ruling.",
+            "GH462.CONFIG.1, carried forward, ships unmet.",
+        ):
+            with self.subTest(selection=selection):
+                self.data = copy.deepcopy(self.pristine)
+                self.waive()
+                self.approve_waiver()
+                self.data["decisions"][0]["selection"] = selection
+                self.assertEqual(self.inspect(), ([], [], []))
+
+    def test_blank_or_non_string_waiver_authority_is_invalid(self):
+        for authority in ("", "   ", 7, None, ["ranking_3_ships_unmet"]):
+            with self.subTest(authority=authority):
+                self.data = copy.deepcopy(self.pristine)
+                self.waive(waived_by=authority)
+                self.assertIn(
+                    "GH462.CONFIG.1: a waived criterion needs waived_by naming the"
+                    " authorising decision",
+                    self.inspect()[0],
+                )
+                self.assertEqual(self.cli("--release"), 2)
+
+    def test_retiring_a_waiver_must_shrink_the_approved_set(self):
+        # A ratchet, not a high-water mark: the gate fails on the improvement
+        # so the approved set shrinks in the same reviewed change, and cannot
+        # keep holding permission to re-waive the row later.
+        self.approve_waiver()  # approved, but the fixture row is met
+        self.assertIn(
+            "GH462.CONFIG.1: approved as a waiver but no longer waived; remove it"
+            " from APPROVED_WAIVERS in this change",
+            self.inspect()[0],
+        )
+        self.assertEqual(self.cli("--release"), 2)
+        self.data["criteria"][0].update(status="pending", stage="graded", evidence=[])
+        self.assertIn(
+            "GH462.CONFIG.1: approved as a waiver but no longer waived; remove it"
+            " from APPROVED_WAIVERS in this change",
+            self.inspect()[0],
+        )
+
+    def test_only_an_approved_criterion_may_be_waived(self):
+        # The escape hatch this closes: a second waiver added by editing the
+        # ledger alone. The approved set lives in the gate, so widening it is a
+        # reviewed code change with a test, not a JSON edit.
+        self.waive()
+        self.assertIn(
+            "GH462.CONFIG.1: not an approved waiver for this release",
+            self.inspect()[0],
+        )
+        self.assertEqual(self.cli("--release"), 2)
+
+    def test_waiver_output_states_that_authority_is_human_reviewed(self):
+        # The gate proves a resolved decision names this criterion. It cannot
+        # prove the ruling authorised shipping unmet in this release, and must
+        # not let its own output imply otherwise.
+        self.waive()
+        self.approve_waiver()
+        self.assertEqual(self.cli("--release"), 0)
+        printed = self.stdout.getvalue()
+        self.assertIn("asserted by the named ruling, not proved by this gate", printed)
+
+    def test_a_refusal_or_wrong_release_ruling_is_a_stated_limit(self):
+        # Neither is machine-detectable: the decision schema has no field for
+        # the release a ruling covers or for what it authorises, and parsing
+        # prose for intent is a guard that cannot fail for the right reason.
+        # These are accepted, and the caveat above is what carries the risk.
+        for selection in (
+            "GH462.CONFIG.1 is REFUSED a waiver; it must be met before the tag.",
+            "GH462.CONFIG.1 ships unmet in 5.0.0, not in this release.",
+        ):
+            with self.subTest(selection=selection):
+                self.data = copy.deepcopy(self.pristine)
+                self.waive()
+                self.approve_waiver()
+                self.data["decisions"][0]["selection"] = selection
+                self.assertEqual(self.inspect(), ([], [], []))
+                self.assertEqual(self.cli("--release"), 0)
+                self.assertIn(
+                    "asserted by the named ruling, not proved by this gate",
+                    self.stdout.getvalue(),
+                )
+
+    def test_unknown_criterion_field_is_rejected(self):
+        # Admitting the waiver pair must not admit anything else. The row shape
+        # was an exact key set before, which refused every stray key on its own.
+        self.data["criteria"][0]["waived_because"] = "the operator said so"
+        self.assertIn(
+            "GH462.CONFIG.1: waived_because is not a criterion field",
+            self.inspect()[0],
+        )
+        self.assertEqual(self.cli("--release"), 2)
+
+    def test_waiver_does_not_suppress_a_baseline_blocking_row(self):
+        self.baseline = "| NFR.PERF.1 | latency | PARTIAL | yes |\n"
+        self.waive()
+        self.approve_waiver()
+        errors, pending, blockers = self.inspect()
+        self.assertEqual((errors, pending), ([], []))
+        self.assertEqual(blockers, ["NFR.PERF.1"])
+        self.assertEqual(self.cli("--release"), 1)
+
+    def test_waiver_does_not_suppress_another_pending_criterion(self):
+        self.document = (
+            "Approved supplemental criteria: 2\n"
+            "| GH462.CONFIG.1 | preserve invalid config | SAFETY |\n"
+            "| GH452.SESSION.1 | session ownership | SAFETY |\n"
+        )
+        self.data["criteria"].append(
+            {
+                "id": "GH452.SESSION.1",
+                "status": "pending",
+                "stage": "graded",
+                "blocked_on": "none",
+                "evidence": [],
+                "note": "Awaiting release acceptance evidence.",
+            }
+        )
+        self.waive()
+        self.approve_waiver()
+        errors, pending, _ = self.inspect()
+        self.assertEqual(errors, [])
+        self.assertEqual(pending, ["GH452.SESSION.1"])
+        self.assertEqual(self.cli("--release"), 1)
+
+    def test_ledger_without_waivers_keeps_its_prior_verdict(self):
+        self.assertEqual(self.inspect(), ([], [], []))
+        self.assertEqual(self.cli("--release"), 0)
+        self.assertIn("1 met / 0 waived / 0 pending", self.stdout.getvalue())
+        self.data["criteria"][0].update(status="pending", stage="proven", evidence=[])
+        errors, pending, blockers = self.inspect()
+        self.assertEqual((errors, pending, blockers), ([], ["GH462.CONFIG.1"], []))
+        self.assertEqual(self.cli("--check"), 0)
+        self.assertEqual(self.cli("--release"), 1)
+
 
 class PublishCheckTests(unittest.TestCase):
     """Subprocess regressions for --publish-check in a temp fixture repo.
@@ -353,7 +637,7 @@ class PublishCheckTests(unittest.TestCase):
         self._write_contract(pending=True)
         self._write_manifest("4.0.0")
 
-    def _write_contract(self, *, pending):
+    def _write_contract(self, *, pending, waived=False):
         document = (
             "Approved supplemental criteria: 1\n"
             "| GH462.CONFIG.1 | preserve invalid config | SAFETY |\n"
@@ -376,6 +660,25 @@ class PublishCheckTests(unittest.TestCase):
                 "evidence": ["proof.md"],
                 "note": "Reviewed byte-preservation result.",
             }
+        selection = "Operator-selected reference"
+        if waived:
+            # A subprocess cannot patch the gate's approved set, so this
+            # fixture uses the release's real approved waiver end to end.
+            document = (
+                "Approved supplemental criteria: 1\n"
+                "| MIK-3274.RANKING.3 | ranking baseline | PERF |\n"
+            )
+            criterion = {
+                "id": "MIK-3274.RANKING.3",
+                "status": "waived",
+                "stage": "graded",
+                "blocked_on": "none",
+                "evidence": [],
+                "note": "Ships unmet by operator ruling.",
+                "waived_by": "reference_personal_account_journey",
+                "waiver_kind": "measured",
+            }
+            selection = "MIK-3274.RANKING.3 ships unmet in this release."
         data = {
             "schema_version": 1,
             "criteria": [criterion],
@@ -383,7 +686,7 @@ class PublishCheckTests(unittest.TestCase):
                 {
                     "id": "reference_personal_account_journey",
                     "status": "resolved",
-                    "selection": "Operator-selected reference",
+                    "selection": selection,
                     "evidence": ["proof.md"],
                 }
             ],
@@ -424,7 +727,47 @@ class PublishCheckTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+        self.last = result
         return result.returncode
+
+    def test_tag_v4_0_0_waived_publish_is_accepted(self):
+        self._write_contract(pending=False, waived=True)
+        self.assertEqual(
+            self._publish_check(
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF="refs/tags/v4.0.0",
+            ),
+            0,
+            self.last.stderr,
+        )
+        self.assertIn("0 met / 1 waived / 0 pending", self.last.stdout)
+        self.assertIn(
+            "MIK-3274.RANKING.3 waived by reference_personal_account_journey"
+            " (measured)",
+            self.last.stdout,
+        )
+        self.assertIn(
+            "asserted by the named ruling, not proved by this gate",
+            self.last.stdout,
+        )
+
+    def test_tag_v4_0_0_waiver_with_a_dangling_authority_is_invalid(self):
+        self._write_contract(pending=False, waived=True)
+        status = self.root / gate.STATUS
+        status.write_text(
+            status.read_text().replace(
+                '"waived_by": "reference_personal_account_journey"',
+                '"waived_by": "absent_ruling"',
+            )
+        )
+        self.assertEqual(
+            self._publish_check(
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF="refs/tags/v4.0.0",
+            ),
+            2,
+        )
+        self.assertIn("waived_by names no decision", self.last.stderr)
 
     def test_tag_v4_0_0_pending_publish_is_incomplete(self):
         self.assertEqual(

@@ -380,15 +380,17 @@ class ContractInterfaceTests(unittest.TestCase):
         )
 
         self.data = copy.deepcopy(baseline)
-        self.data["criteria"][0]["status"] = "waived"
+        # "unmet" is the value a release owner reaches for and the contract
+        # still refuses: an accepted shortfall is "waived" plus its authority.
+        self.data["criteria"][0]["status"] = "unmet"
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assert_exact_diagnostic(
-            result.stderr, "GH462.CONFIG.1: status must be pending or met"
+            result.stderr, "GH462.CONFIG.1: status must be pending, met or waived"
         )
         self.assertNotIn(
-            "GH452.SESSION.1: status must be pending or met", result.stderr
+            "GH452.SESSION.1: status must be pending, met or waived", result.stderr
         )
 
         self.data = copy.deepcopy(baseline)
