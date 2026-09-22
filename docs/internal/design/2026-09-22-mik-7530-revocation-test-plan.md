@@ -519,13 +519,33 @@ to its author and is invisible to a reviewer checking rows.** Every fix below is
 a row edit — changed inputs, changed expectation, or a new row. Where a finding
 needs no row change that is stated in one line, as a claim that can be checked.
 
-**Test affordance required first.** **V** The only non-creating slot lookup is
-`pooled_transport_for_test` (`pool.rs:404`, `self.pool.get(key)`), which returns
-`Option<Arc<dyn Transport>>` — so `None` conflates **"no slot"** with **"slot
-present, no transport"**. Asserting slot *absence* needs an unambiguous
-non-creating predicate (`pool_contains_for_test(&PoolKey) -> bool`). Every
-`pooled_entry`-based inspection **creates the slot it is inspecting** and is
-disqualified.
+**Test affordance — IMPLEMENTATION ITEM, not a prerequisite (CORRECTED v5).**
+Asserting slot *absence* needs a non-creating, unambiguous predicate. **V** One
+line, in the shape the file already uses, alongside `pooled_transport_for_test`:
+
+```rust
+#[cfg(test)]
+pub(crate) fn pooled_slot_exists(&self, key: &PoolKey) -> bool {
+    self.pool.get(key).is_some()
+}
+```
+
+**V** `self.pool.get(key)` is **already** non-creating and already distinguishes
+"no slot" from "slot present" — it is the first line of
+`pooled_transport_for_test` (`pool.rs:404-407`). What loses the distinction is
+that helper's `.and_then(|entry| entry.value().transport.read().clone())`,
+collapsing a present-but-transportless slot into the same `None` as an absent
+one. **r4 read the signature, concluded no unambiguous lookup existed, and
+recorded a blocker — while the primitive it needed was line one of the body it
+was reading.** Judging a helper by its return type is the same class as judging a
+mechanism by its name (§2.1).
+
+`#[cfg(test)]`, `pub(crate)`, no production surface. It lands **with the
+implementation**; A3, A3b and A4 are not blocked on it.
+
+**Still disqualified:** every `pooled_entry`-based inspection, because it
+**creates the slot it is inspecting**. That is the input-path problem turned
+inside out — the observation manufactures the state it reports.
 
 ---
 
