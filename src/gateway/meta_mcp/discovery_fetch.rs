@@ -72,7 +72,7 @@ impl MetaMcp {
         let (headers, binding) = self
             .caller_credential_for_identity(&backend.name, verified_identity)
             .await;
-        if self.meta_route_isolation_refused_for_caller(backend, &headers) {
+        if self.meta_route_isolation_refused_for_caller(backend, binding.as_deref()) {
             return None;
         }
         Some((headers, binding))

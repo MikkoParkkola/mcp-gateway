@@ -1249,18 +1249,32 @@ impl MetaMcp {
     /// the identity-free helper; the three catalogue list handlers qualified
     /// once they began fetching on the caller's own slot.
     ///
-    /// The emptiness test is copied verbatim from the direct route
-    /// (`gateway::router::backend_handlers`, `enforce_oauth_isolation(&name,
-    /// !propagated_headers.is_empty())`) so the two routes cannot drift on what
-    /// the parameter means: a per-user credential was resolved for THIS backend
-    /// and THIS caller, never "the caller authenticated".
+    /// THE VERDICT IS DERIVED FROM THE SLOT, NOT FROM CREDENTIAL POSSESSION
+    /// (MIK-7544). An earlier revision read `!propagated_headers.is_empty()`,
+    /// copied from the direct route. The direct route forwards the headers it
+    /// tested; this one does not. `Backend::get_cached_list_for` drops them on
+    /// every slot but `PerUser`, so an isolated-OAuth backend configured
+    /// `stateless` was admitted as "credentialed caller" and then fetched under
+    /// the GATEWAY-HELD account, whose catalogue landed in the one entry every
+    /// caller reads. Asking `fetch_carries_caller_identity` — the same
+    /// `pool_key_for` derivation the fill uses for `identity_key` — makes guard
+    /// and fetch one decision that cannot disagree.
+    ///
+    /// The two routes therefore mean the same thing by the parameter and differ
+    /// only in how they earn it: a per-user credential that THIS fetch will
+    /// actually carry for THIS backend and THIS caller, never "the caller
+    /// authenticated".
     pub(crate) fn meta_route_isolation_refused_for_caller(
         &self,
         backend: &crate::backend::Backend,
-        propagated_headers: &[(String, String)],
+        binding: Option<&str>,
     ) -> bool {
-        self.enforce_oauth_isolation_for(backend, &backend.name, !propagated_headers.is_empty())
-            .is_err()
+        self.enforce_oauth_isolation_for(
+            backend,
+            &backend.name,
+            backend.fetch_carries_caller_identity(binding),
+        )
+        .is_err()
     }
 
     /// Attach a `TransitionTracker` for predictive tool prefetch.

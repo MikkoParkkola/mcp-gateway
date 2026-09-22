@@ -220,6 +220,23 @@ impl Backend {
         }
     }
 
+    /// Whether a metadata fetch made for `binding` will actually carry that
+    /// caller's minted credential upstream.
+    ///
+    /// THE ISOLATION VERDICT'S ONLY HONEST INPUT (MIK-7544). `get_cached_list_for`
+    /// drops the minted headers on every slot but `PerUser`, because one shared
+    /// entry answers every caller. A guard that asks "did the caller resolve a
+    /// credential?" therefore admits a `stateless` backend whose fetch then runs
+    /// under the gateway's own login — the gateway-account-to-every-caller leak.
+    /// Asking the slot instead makes verdict and fetch one derivation, exactly as
+    /// the fill's `identity_key` already is.
+    ///
+    /// A predicate rather than a widened `pool_key_for`: the question a gate has
+    /// is a boolean, and `PoolKey` matching stays inside `crate::backend`.
+    pub(crate) fn fetch_carries_caller_identity(&self, binding: Option<&str>) -> bool {
+        matches!(self.pool_key_for(binding), PoolKey::PerUser { .. })
+    }
+
     /// Fetch (or lazily create) the pooled entry for `key`, running `under_guard`
     /// before the `DashMap` shard guard is released.
     ///
