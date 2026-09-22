@@ -21,7 +21,7 @@ pub(crate) struct OwnedCallerContext {
     state: std::sync::Weak<AppState>,
     authorizer: OwnedRouterAuthorizer,
     api_key_name: Option<String>,
-    agent_id: Option<String>,
+    agent_id: Option<crate::security::OwnedProvenAgentId>,
     grant_subject: Option<GrantSubject>,
     verified_identity: Option<VerifiedIdentity>,
     /// The owner the durable task was admitted under, owned because the rebuilt
@@ -45,7 +45,7 @@ impl OwnedCallerContext {
         state: std::sync::Weak<AppState>,
         authorizer: OwnedRouterAuthorizer,
         api_key_name: Option<String>,
-        agent_id: Option<String>,
+        agent_id: Option<crate::security::OwnedProvenAgentId>,
         grant_subject: Option<GrantSubject>,
         verified_identity: Option<VerifiedIdentity>,
         credential_principal: String,
@@ -120,7 +120,11 @@ impl OwnedCallerContext {
             signing: None,
             authorizer,
             api_key_name: self.api_key_name.as_deref(),
-            agent_id: self.agent_id.as_deref(),
+            agent_id: self
+                .agent_id
+                .as_ref()
+                .map(crate::security::OwnedProvenAgentId::as_proven),
+            agent_declared: None,
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity.as_ref(),
             is_admin: self.is_admin,

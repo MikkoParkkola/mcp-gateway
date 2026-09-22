@@ -1045,7 +1045,10 @@ impl MetaMcp {
                 "Invalid tool name '{tool}': {reason}"
             )));
         }
-        self.check_attestation(args, caller.agent_id)?;
+        self.check_attestation(
+            args,
+            caller.agent_id.map(crate::security::ProvenAgentId::as_str),
+        )?;
         self.active_profile(session_id)
             .check(server, tool)
             .map_err(Error::Protocol)
@@ -1895,12 +1898,18 @@ impl MetaMcp {
 
         // === OWASP ASI03: per-agent identity audit log ===
         //
-        // Every tool invocation records the agent_id (or "anonymous") as a
-        // structured tracing field so audit tooling can correlate invocations
-        // back to the calling agent without post-processing.
-        let agent_label = agent_id.unwrap_or("anonymous");
+        // Proven and declared are recorded as DISTINCT fields, always. A record
+        // that collapses them cannot tell "agent-a proved it" from "someone
+        // said agent-a", which is the signal funded change 4 exists to create.
+        // `agent_id` keeps its name and its meaning tightens: it is now the
+        // proven principal only, never a caller-supplied tag.
+        let agent_label = agent_id.map_or("anonymous", |a| a.as_str());
+        let declared_label = caller
+            .agent_declared
+            .map(crate::security::DeclaredAgentLabel::as_str);
         tracing::info!(
             agent_id = %agent_label,
+            agent_declared = declared_label,
             server   = %server,
             tool     = %tool,
             trace_id = %trace_id,
@@ -1916,6 +1925,7 @@ impl MetaMcp {
             &serde_json::json!({
                 "message": "tool invoked",
                 "agent_id": agent_label,
+                "agent_declared": declared_label,
                 "server": server,
                 "tool": tool,
                 "trace_id": trace_id,
@@ -2634,14 +2644,14 @@ impl MetaMcp {
         cap_def: &crate::capability::CapabilityDefinition,
         tool: &str,
         api_key_name: Option<&str>,
-        agent_id: Option<&str>,
+        agent_id: Option<crate::security::ProvenAgentId<'_>>,
         caller_identity: Option<&GrantSubject>,
     ) -> Result<()> {
         let request = IdentityGrantRequest {
             identity: caller_identity
                 .cloned()
                 .or_else(|| Self::grant_subject_from_api_key(api_key_name)),
-            agent_id: agent_id.map(str::to_string),
+            agent_id: agent_id.map(|a| a.as_str().to_string()),
             capability: cap_def.name.clone(),
             tool: Some(tool.to_string()),
             scope: GrantScope::Execute,
@@ -2658,7 +2668,7 @@ impl MetaMcp {
         warn!(
             capability = %cap_def.name,
             tool,
-            agent_id = agent_id.unwrap_or("anonymous"),
+            agent_id = agent_id.map_or("anonymous", |a| a.as_str()),
             reason = ?evaluation.reason,
             "Identity grant denied personal capability dispatch"
         );
@@ -5267,6 +5277,7 @@ mod identity_propagation_enforcement_tests {
             verified_identity: None,
             api_key_name: None,
             agent_id: None,
+            agent_declared: None,
             grant_subject: None,
             is_admin: false,
             input_capabilities: declared,
@@ -5341,6 +5352,7 @@ mod identity_propagation_enforcement_tests {
             verified_identity: None,
             api_key_name: None,
             agent_id: None,
+            agent_declared: None,
             grant_subject: None,
             is_admin: false,
             input_capabilities: declared,
@@ -5421,6 +5433,7 @@ mod identity_propagation_enforcement_tests {
             verified_identity: None,
             api_key_name: None,
             agent_id: None,
+            agent_declared: None,
             grant_subject: None,
             is_admin: false,
             input_capabilities: declared,
@@ -5469,6 +5482,7 @@ mod identity_propagation_enforcement_tests {
             verified_identity: Some(&id),
             api_key_name: None,
             agent_id: None,
+            agent_declared: None,
             grant_subject: None,
             is_admin: false,
             input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -5506,6 +5520,7 @@ mod identity_propagation_enforcement_tests {
             authorizer: &ALLOW_ALL_INVOKE,
             api_key_name: None,
             agent_id: None,
+            agent_declared: None,
             grant_subject: None,
             verified_identity: None,
             is_admin: false,
@@ -5550,6 +5565,7 @@ mod identity_propagation_enforcement_tests {
             verified_identity: Some(&id),
             api_key_name: None,
             agent_id: None,
+            agent_declared: None,
             grant_subject: None,
             is_admin: false,
             input_capabilities: crate::protocol::meta::Declared::NONE,

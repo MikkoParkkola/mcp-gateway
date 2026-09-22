@@ -109,7 +109,7 @@ pub(super) struct TaskIntentRequest<'a> {
     /// Name of the API key the caller presented, if any.
     pub api_key_name: Option<&'a str>,
     /// Agent identifier the caller presented, if any.
-    pub agent_id: Option<&'a str>,
+    pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
     /// Grant subject the worker re-authorizes against.
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
     /// Whether the caller holds admin rights on this gateway.
@@ -168,7 +168,7 @@ pub(super) fn task_intent_for_call(
             Arc::downgrade(state),
             OwnedRouterAuthorizer::capture(req.client, req.oauth_agent_identity, req.cert_identity),
             req.api_key_name.map(str::to_owned),
-            req.agent_id.map(str::to_owned),
+            req.agent_id.map(crate::security::OwnedProvenAgentId::from),
             req.grant_subject,
             // No identity is invented for the auth-disabled caller: the owner
             // is a routing decision, and a fake VerifiedIdentity here would
@@ -208,7 +208,7 @@ pub(super) struct RecoveryCaller<'a> {
     pub oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     pub cert_identity: Option<&'a CertIdentity>,
     pub api_key_name: Option<&'a str>,
-    pub agent_id: Option<&'a str>,
+    pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
     pub verified_identity: Option<&'a VerifiedIdentity>,
     pub is_admin: bool,
@@ -293,6 +293,7 @@ async fn recover_from_upstream(
             authorizer,
             api_key_name: caller.api_key_name,
             agent_id: caller.agent_id,
+            agent_declared: None,
             grant_subject: caller.grant_subject.clone(),
             verified_identity: caller.verified_identity,
             is_admin: caller.is_admin,

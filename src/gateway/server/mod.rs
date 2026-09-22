@@ -3190,6 +3190,7 @@ impl Gateway {
             retry,
             api_key_name: None,
             agent_id: None,
+            agent_declared: None,
             grant_subject: None,
             verified_identity: None,
             // Same `RequestShape` the `initialize` arm advertises against.
@@ -3702,6 +3703,7 @@ fn stdio_caller_context<'a>(
         channel: &crate::gateway::input_bridge::NoClientChannel,
         api_key_name: None,
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         // stdio speaks to one process over two pipes and

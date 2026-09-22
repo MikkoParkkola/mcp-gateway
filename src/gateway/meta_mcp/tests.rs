@@ -26,7 +26,7 @@ static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::Allow
 /// so, and a test that does not stays on the plain form.
 fn allow_all_ctx_named<'a>(
     api_key_name: Option<&'a str>,
-    agent_id: Option<&'a str>,
+    agent_id: Option<crate::security::ProvenAgentId<'a>>,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
         signing: None,
@@ -37,6 +37,7 @@ fn allow_all_ctx_named<'a>(
         authorizer: &ALLOW_ALL,
         api_key_name,
         agent_id,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
@@ -67,6 +68,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
@@ -667,7 +669,10 @@ providers:
                 "arguments": {}
             }),
             Some("session-1"),
-            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            &allow_all_ctx_named(
+                Some("alice"),
+                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+            ),
         )
         .await;
 
@@ -779,7 +784,8 @@ providers:
                     protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
                     authorizer: &ALLOW_ALL,
                     api_key_name: Some("shared-api-key"),
-                    agent_id: Some("agent-1"),
+                    agent_id: Some(crate::security::ProvenAgentId::for_test("agent-1")),
+                    agent_declared: None,
                     grant_subject: Some(subject),
                     verified_identity: None,
                     is_admin: false,
@@ -834,7 +840,10 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
                 "arguments": {}
             }),
             Some("session-1"),
-            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            &allow_all_ctx_named(
+                Some("alice"),
+                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+            ),
         )
         .await
         .unwrap();
@@ -2201,7 +2210,10 @@ mod attestation_wiring {
         meta.invoke_tool(
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
-            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            &allow_all_ctx_named(
+                Some("alice"),
+                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+            ),
         )
         .await
         .unwrap()
@@ -3030,7 +3042,10 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         input_capabilities: declaring(&json!({"elicitation": {}})),
         verified_identity: Some(&NAMED_CALLER),
-        ..allow_all_ctx_named(Some("alice"), Some("agent-1"))
+        ..allow_all_ctx_named(
+            Some("alice"),
+            Some(crate::security::ProvenAgentId::for_test("agent-1")),
+        )
     };
     let result = meta
         .invoke_tool(
@@ -3149,7 +3164,10 @@ async fn an_enforced_transform_does_not_invent_a_continuation_handle() {
         .invoke_tool(
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
-            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            &allow_all_ctx_named(
+                Some("alice"),
+                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+            ),
         )
         .await
         .unwrap();
@@ -3227,7 +3245,10 @@ async fn an_enforced_transform_carries_an_unrecognized_result_type() {
         .invoke_tool(
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
-            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            &allow_all_ctx_named(
+                Some("alice"),
+                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+            ),
         )
         .await
         .unwrap();
@@ -3306,7 +3327,10 @@ async fn an_enforced_transform_carries_an_empty_result_type() {
         .invoke_tool(
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
-            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            &allow_all_ctx_named(
+                Some("alice"),
+                Some(crate::security::ProvenAgentId::for_test("agent-1")),
+            ),
         )
         .await
         .unwrap();
@@ -3396,7 +3420,10 @@ async fn an_enforced_transform_refuses_a_malformed_control_field() {
             .invoke_tool(
                 &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
                 Some("session-1"),
-                &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+                &allow_all_ctx_named(
+                    Some("alice"),
+                    Some(crate::security::ProvenAgentId::for_test("agent-1")),
+                ),
             )
             .await
             .unwrap();
@@ -3471,6 +3498,7 @@ fn allow_all_ctx_declaring(
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: Some(&NAMED_CALLER),
         is_admin: false,
@@ -4500,7 +4528,8 @@ providers:
 
 fn grant_ctx(agent_id: &'static str) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
-        agent_id: Some(agent_id),
+        agent_id: Some(crate::security::ProvenAgentId::for_test(agent_id)),
+        agent_declared: None,
         grant_subject: Some(crate::identity_grants::GrantSubject::new(
             "cloudflare_access",
             "user-123",

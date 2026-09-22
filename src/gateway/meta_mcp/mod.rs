@@ -160,8 +160,21 @@ pub struct MetaMcpCallerContext<'a> {
     pub authorizer: &'a (dyn crate::gateway::authz::ToolAuthorizer + Sync),
     /// Static or temporary API-key name, used for accounting and fallback grants.
     pub api_key_name: Option<&'a str>,
-    /// Optional caller agent identifier.
-    pub agent_id: Option<&'a str>,
+    /// The calling agent's PROVEN principal, for access decisions.
+    ///
+    /// A distinct type, not an `Option<&str>` beside a declared one: two
+    /// interchangeable string fields would leave the wrong value representable
+    /// at every call site. `ProvenAgentId` has no public constructor, so a
+    /// caller-supplied label cannot reach an authorization input without a
+    /// compile error.
+    pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
+    /// The calling agent's DECLARED tag, for audit and cost attribution only.
+    ///
+    /// Recorded alongside the proven principal and never instead of it: a
+    /// record that collapses them cannot distinguish "agent-a proved it" from
+    /// "someone said agent-a", which is the signal funded change 4 exists to
+    /// create.
+    pub agent_declared: Option<crate::security::DeclaredAgentLabel<'a>>,
     /// Verified caller subject for identity-grant evaluation.
     pub grant_subject: Option<GrantSubject>,
     /// Full verified end-user identity, when present. Carried (not collapsed to
@@ -252,6 +265,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             authorizer: self.authorizer,
             api_key_name: self.api_key_name,
             agent_id: self.agent_id,
+            agent_declared: None,
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity,
             is_admin: self.is_admin,
@@ -2644,6 +2658,7 @@ pub(super) fn anonymous_caller() -> MetaMcpCallerContext<'static> {
         authorizer: &crate::gateway::authz::AllowAll,
         api_key_name: None,
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: false,

@@ -80,6 +80,7 @@ fn context<'a>(policy: &'a MutablePolicy, retry: &'a RetryFields) -> MetaMcpCall
         authorizer: policy,
         api_key_name: Some("same-display-label"),
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
