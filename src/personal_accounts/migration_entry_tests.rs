@@ -247,8 +247,8 @@ fn a_declared_backend_with_no_3_x_file_refuses_loudly() {
 
     let shown = refusal.to_string();
     assert!(
-        shown.contains("legacy_backend_name"),
-        "the refusal must name the override that fixes a rename: {shown}"
+        shown.contains("--legacy-backend-name"),
+        "the refusal must name the override as the flag a user types: {shown}"
     );
     assert_eq!(
         fixture.lookup(),

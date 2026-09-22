@@ -46,7 +46,7 @@ pub(in crate::personal_accounts) enum SourceRefusal {
     /// file the user deleted. So the path is named, and so is the override.
     #[error(
         "no 3.x credential file at {path}; if this backend was renamed since 3.x, \
-         declare its former name as `legacy_backend_name`"
+         pass its former name as `--legacy-backend-name NAME`"
     )]
     Missing { path: String },
     /// The resolved path is not a regular file, or is a symbolic link.

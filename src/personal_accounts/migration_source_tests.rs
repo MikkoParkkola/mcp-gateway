@@ -72,8 +72,10 @@ fn an_absent_source_refuses_naming_the_path_and_the_override() {
         "the refusal must name the exact path it looked for: {shown}"
     );
     assert!(
-        shown.contains("legacy_backend_name"),
-        "the refusal must name the override that fixes a rename: {shown}"
+        shown.contains("--legacy-backend-name"),
+        "the refusal must name the override AS THE FLAG A USER TYPES. It named \
+         the config-key spelling until a real run showed the message, which is \
+         the surface change quietly downgrading the error: {shown}"
     );
 }
 
