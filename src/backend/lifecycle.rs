@@ -20,7 +20,7 @@ use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
-use crate::transport::{HttpTransport, StdioTransport, Transport};
+use crate::transport::{HttpTransport, StdioTransport, Transport, isolated_package_manager_env};
 use crate::{Error, Result};
 
 /// Consecutive unserved probe answers the gateway tolerates before it treats
@@ -381,7 +381,7 @@ impl Backend {
                 let launch = self.resolve_stdio_runtime_launch(command)?;
                 let transport = StdioTransport::new(
                     &launch.command,
-                    launch.env,
+                    isolated_package_manager_env(&self.name, &launch.command, launch.env),
                     cwd.clone(),
                     self.config.timeout,
                     protocol_version.clone(),

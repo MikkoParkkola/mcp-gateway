@@ -23,7 +23,7 @@ use crate::{Error, Result};
 // The individual builders are used via `super::*` in the tests sub-module.
 #[allow(unused_imports)]
 pub(crate) use super::meta_mcp_tool_defs::{
-    build_base_tools, build_code_mode_execute_tool, build_code_mode_search_tool,
+    ToolTotal, build_base_tools, build_code_mode_execute_tool, build_code_mode_search_tool,
     build_code_mode_tools, build_kill_server_tool, build_list_disabled_capabilities_tool,
     build_meta_tools, build_reload_capabilities_tool, build_reload_config_tool,
     build_revive_server_tool, build_set_state_tool, build_stats_tool, build_webhook_status_tool,
@@ -246,20 +246,21 @@ pub(crate) fn build_initialize_result(
 ///
 /// # Arguments
 ///
-/// * `tool_count`   — total number of tools currently cached across all backends
+/// * `tool_count`   — total tools across all backends, or `None` when any backend
+///   has yet to be enumerated (a cached count of `0` would otherwise read as "no tools")
 /// * `server_count` — number of registered backends (running or not)
 /// * `exposure`     — the meta-tool allow-list; only exposed tools are named
 ///
 /// # Examples
 ///
 /// ```ignore
-/// let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
+/// let preamble = build_discovery_preamble(Some(42), 3, &MetaToolExposure::expose_all());
 /// assert!(preamble.contains("42 tools"));
 /// assert!(preamble.contains("3 backends"));
 /// assert!(preamble.contains("FIRST"));
 /// ```
 pub(crate) fn build_discovery_preamble(
-    tool_count: usize,
+    tool_count: ToolTotal,
     server_count: usize,
     exposure: &MetaToolExposure,
 ) -> String {
@@ -268,8 +269,13 @@ pub(crate) fn build_discovery_preamble(
     // the existence of tools the allow-list hides - the same disclosure the
     // refusal path is worded to avoid - and would steer clients into calls the
     // gateway then refuses.
-    let mut out =
-        format!("This server manages {tool_count} tools across {server_count} backends.\n");
+    // The total is a cache reading, so it is a floor until every backend has been
+    // enumerated. Stating it as an exact count is what makes a cold gateway
+    // announce "0 tools across N backends" - the opposite of the truth.
+    let mut out = format!(
+        "This server manages {} across {server_count} backends.\n",
+        tool_count.phrase()
+    );
     let search = exposure.is_exposed("gateway_search_tools");
     let invoke = exposure.is_exposed("gateway_invoke");
     let list_tools = exposure.is_exposed("gateway_list_tools");
@@ -663,14 +669,14 @@ pub(crate) fn parse_tool_arguments(args: &Value) -> Result<Value> {
     Ok(arguments)
 }
 
-/// Build the stats response JSON from a snapshot.
-pub(crate) fn build_stats_response(snapshot: &StatsSnapshot) -> Value {
+pub(crate) fn build_stats_response(snapshot: &StatsSnapshot, tools_known: bool) -> Value {
     json!({
         "invocations": snapshot.invocations,
         "cache_hits": snapshot.cache_hits,
         "cache_hit_rate": format!("{:.1}%", snapshot.cache_hit_rate * 100.0),
         "tools_discovered": snapshot.tools_discovered,
         "tools_available": snapshot.tools_available,
+        "tools_known": tools_known,
         "top_tools": snapshot.top_tools,
         "total_cached_tokens": snapshot.total_cached_tokens,
         "cached_tokens_by_server": snapshot.cached_tokens_by_server

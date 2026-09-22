@@ -720,9 +720,60 @@ async fn get_tools_singleflight_coalesces_concurrent_requests() {
     assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
     assert!(backend.has_cached_tools());
     assert_eq!(backend.cached_tools_count(), 1);
+    assert!(backend.cached_tools_known());
     assert_eq!(
         backend.get_cached_tool("echo").map(|tool| tool.name),
         Some("echo".to_string())
+    );
+}
+
+#[tokio::test]
+async fn cached_tools_known_is_false_before_any_enumeration() {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+
+    assert_eq!(backend.cached_tools_count(), 0);
+    assert!(!backend.cached_tools_known());
+}
+
+/// The other half of the pair: enumerated, and genuinely empty.
+#[tokio::test]
+async fn cached_tools_known_is_true_for_an_enumerated_backend_with_no_tools() {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let response = JsonRpcResponse::success_serialized(
+        RequestId::Number(1),
+        ToolsListResult {
+            tools: Vec::new(),
+            next_cursor: None,
+        },
+    );
+    let transport = Arc::new(MockTransport::new(response, Duration::from_millis(0)));
+    let transport_dyn: Arc<dyn Transport> = transport.clone();
+    backend.set_transport_for_test(transport_dyn);
+
+    let tools = backend.get_tools().await.expect("enumeration succeeds");
+
+    assert!(tools.is_empty());
+    assert_eq!(backend.cached_tools_count(), 0);
+    assert!(
+        backend.cached_tools_known(),
+        "an empty answer is still an answer — the backend has been enumerated"
+    );
+
+    // Discarding an empty list must not un-enumerate the backend.
+    backend.invalidate_tools_cache();
+    assert!(
+        backend.cached_tools_known(),
+        "discarding the cached answer must not claim the backend was never asked"
     );
 }
 
@@ -746,104 +797,8 @@ async fn get_tools_does_not_cache_json_rpc_error_response() {
     assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
 }
 
-// --- MIK-7214.HEADER.8 — tools violating an `x-mcp-header` constraint are
-// excluded from `tools/list`, on the same tool-metadata path as the
-// destructive-annotation gate.
-
-fn tool_with_schema(name: &str, input_schema: serde_json::Value) -> Tool {
-    let mut tool = sample_tool(name);
-    tool.input_schema = input_schema;
-    tool
-}
-
-#[test]
-fn prepare_tool_metadata_keeps_a_well_formed_annotation() {
-    // GIVEN one tool whose `x-mcp-header` meets every constraint
-    let mut tools = vec![tool_with_schema(
-        "search",
-        json!({"type": "object", "properties": {
-            "tenant": {"type": "string", "x-mcp-header": "Tenant"}
-        }}),
-    )];
-
-    // WHEN the tool-metadata path filters the list
-    prepare_tool_metadata("beeper", &mut tools);
-
-    // THEN it survives
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].name, "search");
-}
-
-#[test]
-fn prepare_tool_metadata_drops_only_the_violating_tool() {
-    // GIVEN a valid tool beside one annotating a `number` property
-    let mut tools = vec![
-        tool_with_schema("keep", json!({"type": "object", "properties": {}})),
-        tool_with_schema(
-            "drop",
-            json!({"type": "object", "properties": {
-                "ratio": {"type": "number", "x-mcp-header": "Ratio"}
-            }}),
-        ),
-    ];
-
-    prepare_tool_metadata("beeper", &mut tools);
-
-    // THEN exclusion is per-tool, never per-backend
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].name, "keep");
-}
-
-#[test]
-fn prepare_tool_metadata_drops_a_crlf_injection_attempt() {
-    let mut tools = vec![tool_with_schema(
-        "inject",
-        json!({"type": "object", "properties": {
-            "tenant": {"type": "string", "x-mcp-header": "T\r\nX-Injected: 1"}
-        }}),
-    )];
-
-    prepare_tool_metadata("beeper", &mut tools);
-
-    assert!(
-        tools.is_empty(),
-        "a control character must exclude the tool"
-    );
-}
-
-#[test]
-fn prepare_tool_metadata_leaves_unannotated_tools_untouched() {
-    let mut tools = vec![sample_tool("plain"), sample_tool("also_plain")];
-
-    prepare_tool_metadata("beeper", &mut tools);
-
-    assert_eq!(tools.len(), 2);
-}
-
-#[test]
-fn prepare_tool_metadata_excludes_and_annotates_in_one_pass() {
-    // GIVEN a violating tool beside one that needs its hints inferred
-    let mut tools = vec![
-        tool_with_schema(
-            "bad",
-            json!({"type": "object", "properties": {
-                "tenant": {"type": "string", "x-mcp-header": "Tenant Id"}
-            }}),
-        ),
-        tool_with_schema("get_thing", json!({"type": "object"})),
-    ];
-
-    // WHEN the single tool-metadata entry point runs
-    prepare_tool_metadata("beeper", &mut tools);
-
-    // THEN both steps happened: neither caller can get one without the other
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].name, "get_thing");
-    assert_eq!(
-        tools[0].annotations.as_ref().and_then(|a| a.read_only_hint),
-        Some(true)
-    );
-}
+#[path = "prepare_tool_metadata_tests.rs"]
+mod prepare_tool_metadata_tests;
 
 /// Transport whose every request fails with a caller-supplied error, so a test
 /// can drive the real dispatch path and watch what it records.
