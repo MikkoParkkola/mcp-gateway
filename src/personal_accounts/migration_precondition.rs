@@ -24,7 +24,7 @@ use super::super::config::AccountDescriptor;
     all(not(test), not(kani)),
     expect(dead_code, reason = "MIK-6744.STORE.1 entry point not yet landed")
 )]
-pub(super) enum PreconditionRefusal {
+pub(in crate::personal_accounts) enum PreconditionRefusal {
     /// §5.3a requirement 3. The attested legacy issuer is not the destination's.
     ///
     /// The correct outcome is re-authentication, not migration: the credential

@@ -46,6 +46,9 @@ pub(super) mod migration_revision;
 #[path = "migration_precondition.rs"]
 pub(super) mod migration_precondition;
 
+#[path = "migration_entry.rs"]
+pub(super) mod migration_entry;
+
 const TOKEN_SCHEMA: &str = "personal_accounts.v1";
 const TOKEN_DOMAIN: &[u8] = b"mcp-gateway/account-token-aad/v1";
 const RECORD_BYTES: usize = 262_144;
