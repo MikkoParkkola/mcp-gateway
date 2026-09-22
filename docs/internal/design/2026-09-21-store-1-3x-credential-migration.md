@@ -1201,6 +1201,7 @@ for the opposite reason. An implementer who reads only the brief will try.
       | `consent.rs:81-87` (`cfg(not(unix))` arm) | signature parity |
       | **`consent.rs:102`** — caller | pass the migration's provenance |
       | **`mod.rs:501`** — caller, inside `PersonalAccountStore::commit_grant` (`mod.rs:493`, itself `expect(dead_code)` at `:486-492`) | pass `None`; stays dead |
+      | **`service.rs:350`** — caller, inside `AccountService::commit_grant_if` | **ADDED 2026-09-22, found by the compiler during implementation.** Pass `None`: a consent journey never sets the marker. A review seat had named this site alongside `publish` and only the `publish` half was folded in — the correction was one site short, and that was this document's error rather than the reviewer's miss. |
 
       `consent.rs:102` and `mod.rs:501` are the only callers of
       `commit::commit_grant` (V — every other hit is
