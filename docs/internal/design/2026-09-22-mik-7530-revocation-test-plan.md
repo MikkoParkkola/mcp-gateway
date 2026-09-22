@@ -198,7 +198,7 @@ the per-construct no-op check reads as a matrix.
 | **Exercises** | both, negatively |
 | **Inputs** | a non-identity backend, throughout every scenario above |
 | **Expect** | unaffected by any revocation; still single-flights to one fetch |
-| **Why** | catches the repair that retires more than it should — the shared slot is **V** never evicted (`pool.rs:322`) and must stay so |
+| **Why** | catches the repair that retires more than it should — the shared slot is **V** never evicted (`pool.rs:302`, and `:310` panics if it ever is) and must stay so |
 
 ---
 
@@ -224,3 +224,18 @@ slot on any revocation would satisfy A3–A5 and is not isolation.
 account store? The plan grades behaviour and is deliberately silent on shape,
 but **building** a surface is a different scope than **wiring** one, and
 `set_identity_grants` being `&self` means wiring is available.
+
+---
+
+## 7. Citation provenance
+
+**V** Every `file:line` above was read on this branch, whose base is
+`origin/docs/ranking-1-release-line` and which `git log HEAD..origin/…` confirms
+is **0 commits behind** tip `bd11e5dd`.
+
+Stated because the local branch of that name in the main checkout sits at
+`18f228ba`, **115 commits back** — it predates #666 and #672, so
+`cached_metadata.rs`'s early return and `pool.rs`'s eviction machinery do not
+look there the way this plan describes them. A reviewer resolving these
+citations against that ref would find the plan wrong about code it is right
+about. Resolve them against `origin/` by name.
