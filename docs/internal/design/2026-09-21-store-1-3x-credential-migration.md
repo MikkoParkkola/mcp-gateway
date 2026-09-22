@@ -75,9 +75,9 @@ gateways to set.
    F1 proves `lookup(key)` returns `Connected` — that the record is in the
    store, not that anyone can reach it. The solo acceptance test is
    *migrate, then authenticate as the solo principal, then lease* — and its
-   middle step has no API. It is recorded as **F21** and is expected to fail
-   to compile, not to fail an assertion, which is a different kind of red and
-   is not counted as coverage.
+   middle step has no API. It is recorded as **F21**, which is a
+   specification for a test rather than a test: nothing is written, because
+   there is no API to call. It is not counted as coverage.
 
 **Until the `sole` tier decision lands, STORE.1's honest status is: the
 mechanism is buildable and reviewable, and its user-visible value is zero for
@@ -660,6 +660,19 @@ input.
 | `scope` absent, destination descriptor declares `scopes` | the descriptor's `scopes`, sorted and deduped | The operator has already declared what this backend is authorized for, and a refresh response matching that declaration is then not a broadening. This attributes scopes the record did not carry, so it is recorded as an attribution, not a recovery. |
 | `scope` absent, descriptor declares none | **refuse this backend** | Nothing names the grant's scopes, so any seed is invented and the empty set is actively harmful. |
 
+**Two mechanical consequences of the middle row, named rather than
+discovered.** `AccountDescriptor.scopes` is `Option<Vec<String>>`
+(`config.rs:281`) (V) and carries no ordering contract, so it is sorted and
+deduped on the way in — `validate_record` demands STRICTLY ascending
+(`storage.rs:138`), and a descriptor declaring two scopes in declaration
+order, or the same scope twice, would otherwise produce a record that fails
+validation at commit. And if the operator declared MORE than the 3.x grant
+actually holds, the first refresh returns the narrower real set,
+`service.rs:404` sees `narrowed`, the authorization epoch bumps and every
+lease issued under the old one is retired. That is correct behaviour — a
+narrower authorization IS a different one — but it is a visible consequence
+of seeding from config, and it argues for declaring scopes conservatively.
+
 The middle row is the only place in this design that fills a `GrantRecord`
 field from the destination rather than the source, and it is doing so because
 the alternative is a grant that breaks on first refresh. It is narrower than
@@ -863,11 +876,18 @@ store.
 **NOT preserved for rollback, once the migrated grant is used.** This is the
 part the first draft implied away. Many authorization servers rotate refresh
 tokens: the first refresh returns a new refresh token and retires the one
-presented. Because §7.2a(a) seeds `expires_at = 0` whenever the 3.x record
-carried no expiry, the *first use* of such a migrated grant triggers exactly
-that refresh. From then on the 3.x file is byte-identical and its refresh token
-is dead at the server. An operator who rolls back to 3.x after any migrated use
-finds a file that looks intact and a grant that no longer works.
+presented. **This applies to the first refresh of ANY migrated grant that
+carries a refresh token**, whatever seeded its expiry — immediately for the
+§7.2a(a) middle case, which is expired on arrival by design, and at its real
+expiry for a grant whose `expires_at` was preserved. From that refresh on, the
+3.x file is byte-identical and the refresh token inside it is dead at the
+server. An operator who rolls back to 3.x afterwards finds a file that looks
+intact and a grant that no longer works.
+
+(An earlier draft of this paragraph tied the rotation window to
+`expires_at = 0` alone. That was the pre-§7.2a rule and it understated the
+population: rotation retires the 3.x token for every migrated backend that
+ever refreshes, not only the expired-on-arrival ones.)
 
 **Therefore:**
 
@@ -1150,7 +1170,7 @@ guard that the plumbing actually landed.
 | F18 | A 3.x record with no `expires_at` AND no `refresh_token` is refused, never committed permanently-dead | Seed such a record; assert refusal and `lookup` is `Absent` (§7.2a(a)) | `migration_tests.rs` |
 | F19 | A record with no `expires_at` but WITH a refresh token still migrates, seeding `0` | Seed such a record; assert `Connected` and `expires_at == 0`. **This is F18's positive control** — without it F18 passes for a migration that refuses everything | same |
 | F20 | An absent `scope` never becomes an empty scope set | Two legs: against a descriptor declaring `scopes`, assert `Connected` with the descriptor's scopes; against one declaring none, assert refusal and `Absent` (§7.2a(b)) | same |
-| F21 | **A solo install can actually USE a migrated credential** | Declare the solo principal, migrate, authenticate as that principal on a single-user gateway, assert the lease carries the migrated grant. **Expected to fail to COMPILE, not to fail an assertion**, until O8's `sole` tier exists (§1.1) — recorded so the gap is visible in the suite rather than only in prose, and explicitly not counted as coverage | blocked on O8 |
+| F21 | **A solo install can actually USE a migrated credential** | Declare the solo principal, migrate, authenticate as that principal on a single-user gateway, assert the lease carries the migrated grant. **SPECIFIED, NOT WRITTEN** — its middle step has no API, so this is a plan for a test rather than a test, and it cannot be written until O8's `sole` tier exists (§1.1). Recorded so the gap is visible in the suite rather than only in prose, and explicitly not counted as coverage | blocked on O8 |
 
 ### 9.7 The vacuity rule every negative falsifier above is now subject to
 
