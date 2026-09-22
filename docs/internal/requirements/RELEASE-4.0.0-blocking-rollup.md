@@ -1591,11 +1591,27 @@ and the pattern is the point — a citation into a file this size is stale by de
 reader who finds these numbers wrong should re-derive rather than assume the claim moved.
 The gate's `github.event_name == 'push'` conjunct is load-bearing and was previously
 omitted from this quotation: it is why a pull request cannot reach the publish.
-No dry-run route
-exists: `ci.yml`'s `on:` block is `push` (branches `[main]`, tags `["v*"]`) plus
-`pull_request`, and the file contains **no `workflow_dispatch`** — that trigger lives only
-in `release.yml:7`. So the job runs only on a `v*` tag push, which is also the publish to
-ghcr.io. Cutting the tag is the operator's call precisely because cutting it ships.
+
+**A dry-run route now exists, and this paragraph's claim that none does is retired.**
+`15003510` (2026-09-22) added `workflow_dispatch` to `ci.yml` with a `rehearse_manifest`
+boolean (`:24-29`). Both `docker-build` and `docker-manifest` now fire on
+`(push && v* tag) || (workflow_dispatch && rehearse_manifest)`. The input's own
+description states the boundary: *build both arches and assemble the provenance-tagged
+index, promoting no release tag*. So the two-platform manifest list — the one thing this
+row was reduced to, and the reason it read as closeable only by shipping — is now
+observable without cutting anything.
+
+What the retired claim said, kept because the correction is only legible against it: that
+`ci.yml`'s `on:` block was `push` plus `pull_request` with **no `workflow_dispatch`**, so
+the job ran only on a `v*` tag push, which is also the publish to ghcr.io. That was true
+when written and false within the day. A reader who takes it forward will conclude the row
+cannot be evidenced before the release, and will be wrong.
+
+The residual after a rehearsal is narrower than the row: a rehearsal pushes by **digest**
+and promotes no tag, so what it cannot establish is the release *naming*, signature and
+registry listing — deliberately, per the same comment. It establishes that both
+architectures build and that the index assembles, which is what "wired and unexercised"
+named.
 
 **What this means for the release.** Every criterion an engineer can discharge is
 discharged. The two that remain are gated on operator actions that *are* the cutover — a
