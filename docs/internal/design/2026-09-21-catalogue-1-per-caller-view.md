@@ -1219,8 +1219,30 @@ points:
    to post-4.0.0 backlog MIK-6744/6745/6746"*, and neither has a caller in
    `gateway/` or `commands/`.
 
-**I** So an invalidation hook would have to build its own trigger, which is
-MIK-6744/6745/6746's work rather than this row's. This is not a gap left in
+**CORRECTED 2026-09-22 — the attribution in this paragraph was wrong, and the
+way it was wrong is the point.** An earlier revision said the trigger "is
+MIK-6744/6745/6746's work rather than this row's", citing the `expect(dead_code)`
+reason string above. That string is not evidence of scope ownership:
+
+- **V** `git log -1 d47e1ae5` dates it **2026-09-12**, six days after the
+  2026-09-06 scope update pulled those tickets in, and its subject is
+  *"fix(personal-accounts): make dead_code expectations match the configs they
+  hold in"* — a **lint-alignment commit**, written to satisfy the compiler by
+  someone not making a scope decision.
+- **V** `RELEASE-4.0.0-scope-update.md:43-44` gives the clause a domain:
+  `STORE.2` requires *"Revocation and restart preserve credential isolation"* and
+  `JOURNEY.1` requires the journey complete *"connect, use, refresh, **revoke**"*.
+
+**I** Neither of those rows delivers a production revoke entry point —
+`STORE.2`'s remaining work is three specified tests, and `JOURNEY.1` was ruled
+down to carrier-fix-only with its offer surface deliberately unbuilt. So the
+trigger was **unowned**, not deferred. Now owned by **MIK-7530**.
+
+**The method of the error is worth more than the error.** `revoke` was traced to
+its callers and correctly found to have none; the *reason string* was never
+traced to its author. A string that describes intent, read as evidence of fact —
+the same shape as §11.2's parameter that disables the check it appears to refine,
+and §11.8's remedy delivered down the channel that is discarded. This is not a gap left in
 CATALOGUE.1; it is a gap the release's own sequencing creates. Recording it is
 the deliverable — whether it lands in 4.0.0 or becomes a container is a scope
 ruling, and narrowing a criterion until it is satisfied is not a grading
