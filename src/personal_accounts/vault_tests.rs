@@ -265,6 +265,53 @@ fn an_anonymous_caller_gets_no_principal_on_an_asserted_solo_gateway() {
     );
 }
 
+/// The two-condition rule is enforced AT THE ENFORCEMENT POINT, not only in the
+/// constructor.
+///
+/// `CallerProof`'s variants are `pub(crate)`, so any code in this crate can
+/// build `Operator(CallerProvenance::Anonymous)` without going through
+/// `CallerProof::new` — a state the classifier never produces and the
+/// constructor would refuse. If `principal` matched `Operator(_)` and discarded
+/// the provenance, that hand-built value would mint the deployment-wide
+/// principal for a caller nothing established, and the second of the two
+/// documented conditions would be convention rather than code.
+///
+/// Carrying the provenance in the type only helps if something reads it. This
+/// test is what makes the reading load-bearing: delete the
+/// `establishes_the_operator` call in `principal` and only this case goes red.
+#[test]
+fn a_hand_built_anonymous_operator_proof_mints_no_principal() {
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed_sole_operator(tmp.path());
+    let (vault, _) = strategy(tmp.path(), true);
+
+    // Control, and it must come first: on this same vault the two established
+    // provenances DO mint, so a `None` below is the provenance being refused
+    // and not the vault refusing everyone.
+    assert!(
+        vault
+            .principal(CallerProof::Operator(CallerProvenance::Credential))
+            .is_some(),
+        "control: a validated credential must still mint, or the assertion below \
+         passes for a vault that mints for nobody"
+    );
+    assert!(
+        vault
+            .principal(CallerProof::Operator(CallerProvenance::LocalTransport))
+            .is_some(),
+        "control: stdio must still mint -- it is the shipped solo transport"
+    );
+
+    assert!(
+        vault
+            .principal(CallerProof::Operator(CallerProvenance::Anonymous))
+            .is_none(),
+        "an Operator proof carrying no established provenance must mint nothing, \
+         however it was constructed: the enforcement point checks the request \
+         fact rather than trusting that the constructor already did"
+    );
+}
+
 /// stdio is admitted, and the type says WHY it is admitted.
 ///
 /// A stdio gateway is spawned by the person using it and serves exactly that

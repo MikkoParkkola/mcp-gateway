@@ -141,7 +141,16 @@ impl VaultStrategy {
     pub(crate) fn principal<'a>(&self, caller: CallerProof<'a>) -> Option<Principal<'a>> {
         match caller {
             CallerProof::Verified(identity) => Some(Principal::Verified(identity)),
-            CallerProof::Operator(_) => self.sole_operator.then_some(Principal::SoleOperator),
+            // BOTH conditions are checked HERE, not just in `CallerProof::new`.
+            // The variants are `pub(crate)`, so crate code can build
+            // `Operator(CallerProvenance::Anonymous)` without going through the
+            // constructor; matching `Operator(_)` would then mint the
+            // deployment principal for a caller nothing established. Carrying
+            // the provenance in the type only helps if the enforcement point
+            // reads it.
+            CallerProof::Operator(provenance) => (self.sole_operator
+                && provenance.establishes_the_operator())
+            .then_some(Principal::SoleOperator),
             // Nothing validated. No assertion covers a caller the gateway never
             // recognised, whatever the configuration says about how many humans
             // are supposed to be behind it.

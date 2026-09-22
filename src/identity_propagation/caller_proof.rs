@@ -55,11 +55,24 @@ impl CallerProvenance {
     /// `unused variable` warning naming the constant, which is a warning and not
     /// an error. A guard cannot degrade that way — an unresolved name is a hard
     /// error — so the stronger-failing form is the one used here.
+    ///
+    /// THE EMPTINESS TEST COMES FIRST. An anonymous caller carries `Some("")`,
+    /// so if `STDIO_CREDENTIAL_PRINCIPAL` were ever edited to the empty string,
+    /// a later emptiness check would classify every anonymous request as
+    /// `LocalTransport` — the same anonymous-as-operator defect the guard form
+    /// above exists to prevent, arriving through the constant instead of through
+    /// the pattern.
+    ///
+    /// `Some("")` is a PATTERN here while the constant above is a GUARD, and the
+    /// difference is not inconsistency: a string *literal* in pattern position
+    /// is always a literal. Only a bare *path* can silently resolve to a binding
+    /// instead of a comparison, which is the failure the constant is guarded
+    /// against.
     pub(crate) fn classify(credential_principal: Option<&str>) -> Self {
         match credential_principal {
+            Some("") | None => Self::Anonymous,
             Some(principal) if principal == STDIO_CREDENTIAL_PRINCIPAL => Self::LocalTransport,
-            Some(principal) if !principal.is_empty() => Self::Credential,
-            _ => Self::Anonymous,
+            Some(_) => Self::Credential,
         }
     }
 
@@ -69,7 +82,12 @@ impl CallerProvenance {
     /// every current user is a solo user and stdio is their transport, so
     /// excluding it would break the shipped case to satisfy a definition.
     /// Kept as one method so the policy lives in one place if that changes.
-    fn establishes_the_operator(self) -> bool {
+    ///
+    /// `pub(crate)` because the ENFORCEMENT POINT is in another module
+    /// (`personal_accounts::vault`), and a predicate the enforcement point
+    /// cannot call is a comment. Carrying the provenance in the type only helps
+    /// if something reads it.
+    pub(crate) fn establishes_the_operator(self) -> bool {
         match self {
             Self::LocalTransport | Self::Credential => true,
             Self::Anonymous => false,
