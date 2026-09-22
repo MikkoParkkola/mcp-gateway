@@ -33,7 +33,8 @@ pub mod tool_integrity;
 pub mod transparency_log;
 
 pub use agent_identity::{
-    AgentIdentity, AgentIdentityConfig, IdentitySource, extract_agent_identity,
+    AgentIdentity, AgentIdentityConfig, DeclaredLabel, DeclaredSource, IdentityAudit,
+    PrincipalLabels, ProofSource, ProvenPrincipal, extract_agent_identity, log_agent_identity,
     validate_agent_identity,
 };
 pub use data_flow::{

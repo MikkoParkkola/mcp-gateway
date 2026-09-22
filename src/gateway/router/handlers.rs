@@ -36,7 +36,9 @@ use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
-use crate::security::{extract_agent_identity, sanitize_json_value, validate_agent_identity};
+use crate::security::{
+    extract_agent_identity, log_agent_identity, sanitize_json_value, validate_agent_identity,
+};
 
 mod tasks;
 
@@ -587,20 +589,20 @@ async fn meta_mcp_dispatch(
         .cloned();
     let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
 
-    // === OWASP ASI03: per-agent identity extraction ===
+    // === OWASP ASI03: per-agent identity ===
     //
-    // Extract the caller's agent_id from: X-Agent-ID header, JWT claim, or query param.
-    // Enforcement (require_id / known_agents allowlist) is config-gated.
-    let bearer_token = http_request
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            v.strip_prefix("Bearer ")
-                .or_else(|| v.strip_prefix("bearer "))
-        });
+    // Resolve what the request PROVED (mTLS subject, verified JWT `sub`) from
+    // what it merely DECLARED (X-Agent-ID, agent_id query param). The bearer
+    // string is deliberately NOT passed: a payload decoded without checking the
+    // signature is the caller's own assertion, and the verified `sub` is
+    // already in extensions via `agent_auth_middleware`.
     let query_str = http_request.uri().query();
-    let agent_identity = extract_agent_identity(&headers, query_str, bearer_token);
+    let agent_identity = extract_agent_identity(
+        &headers,
+        query_str,
+        cert_identity.as_ref(),
+        oauth_agent_identity.as_ref().map(|a| a.client_id.as_str()),
+    );
 
     // Per-connection Code Mode override (issue #146 / RFC-0132).
     // Accepted value: ?codemode=search_and_execute
@@ -609,11 +611,22 @@ async fn meta_mcp_dispatch(
         q.split('&')
             .any(|pair| pair == "codemode=search_and_execute")
     });
-    if let Err(reason) =
-        validate_agent_identity(agent_identity.as_ref(), &state.agent_identity_config)
-    {
-        return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN)
-            .into_response();
+    // The refusal arm emits its own audit record. Before this change it
+    // returned silently, so a proved-A-claimed-B refusal left no trace on the
+    // one path an attacker is most likely to be on.
+    match validate_agent_identity(&agent_identity, &state.agent_identity_config) {
+        Ok(audit) => {
+            log_agent_identity(&agent_identity, audit, None);
+        }
+        Err(reason) => {
+            log_agent_identity(
+                &agent_identity,
+                crate::security::IdentityAudit::Clean,
+                Some(&reason),
+            );
+            return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN)
+                .into_response();
+        }
     }
 
     // Parse JSON body
@@ -1445,7 +1458,20 @@ async fn meta_mcp_dispatch(
             }
 
             let api_key_name = client.as_ref().map(|c| c.name.as_str());
-            let agent_id = agent_identity.as_ref().map(|a| a.id.as_str());
+            // Authorization reads the PROVEN principal. This value reaches
+            // `IdentityGrantRequest.agent_id` -> `GrantAgent::matches`, which
+            // is a bare string compare: before this change it carried the
+            // header-first conflated id, so a grant scoped to `agent-a` was
+            // satisfied by anyone sending `X-Agent-ID: agent-a`. That path has
+            // no `agent_identity.enabled` gate, so the escalation was reachable
+            // on shipped defaults.
+            //
+            // Cost attribution wants the caller's own tag instead
+            // (`AgentIdentity::attribution_id`). Routing the two apart needs
+            // separate fields on `MetaMcpCallerContext` and
+            // `TaskIntentRequest`; until those carry both, authorization
+            // correctness wins the single field.
+            let agent_id = agent_identity.proven_id();
             let grant_subject = caller_grant_subject(
                 verified_identity.as_ref(),
                 &headers,
@@ -1897,7 +1923,12 @@ async fn meta_mcp_dispatch(
                     oauth_agent_identity: oauth_agent_identity.as_ref(),
                     cert_identity: cert_identity.as_ref(),
                     api_key_name: client.as_ref().map(|client| client.name.as_str()),
-                    agent_id: agent_identity.as_ref().map(|agent| agent.id.as_str()),
+                    // Recovery is an AUTHORIZATION context, not an attribution
+                    // record: its own doc comment says it "checks
+                    // authorization only", and `signing: None` keeps
+                    // `check_invocation_policy` running on this read. So it
+                    // reads the proven principal, never the declared label.
+                    agent_id: agent_identity.proven_id(),
                     grant_subject: caller_grant_subject(
                         verified_identity.as_ref(),
                         &headers,
