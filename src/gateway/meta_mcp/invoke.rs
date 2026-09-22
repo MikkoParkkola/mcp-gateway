@@ -24,6 +24,7 @@ use crate::cost_accounting::suggestions;
 use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
 use crate::identity_grants::{GrantScope, GrantSubject, IdentityGrantRequest};
+use crate::identity_propagation::{CallerProof, CallerProvenance};
 use crate::playbook::PlaybookEngine;
 use crate::protocol::mrtr::{InputRequired, Refusal};
 use crate::provider::Transform as _;
@@ -853,7 +854,7 @@ struct BridgeDispatcher<'a> {
     want_full: bool,
     session_id: Option<&'a str>,
     caller_identity: Option<&'a GrantSubject>,
-    verified_identity: Option<&'a crate::key_server::oidc::VerifiedIdentity>,
+    caller_proof: CallerProof<'a>,
     headers: &'a [(String, String)],
     cache_binding: Option<&'a str>,
     account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
@@ -939,7 +940,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.want_full,
                 self.session_id,
                 self.caller_identity,
-                self.verified_identity,
+                self.caller_proof,
                 self.headers,
                 self.cache_binding,
                 self.account_credential.clone(),
@@ -1511,6 +1512,8 @@ impl MetaMcp {
         let agent_id = caller.agent_id;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
+        let provenance = CallerProvenance::classify(caller.credential_principal);
+        let caller_proof = CallerProof::new(verified_identity, provenance);
 
         // Capture once, before any authorization input is read. A bump after
         // this strands the insert under the epoch this call was authorized
@@ -1687,7 +1690,7 @@ impl MetaMcp {
         // is carried into dispatch and rechecked there; it is never minted
         // twice, and a refusal returns now, before any lookup.
         let account_credential = self
-            .resolve_capability_account_credential(server, tool, verified_identity)
+            .resolve_capability_account_credential(server, tool, caller_proof)
             .await?;
         // ONE binding for both cache layers and for the transport's session
         // partitioning. The MCP route's propagation binding when there is one,
@@ -1985,7 +1988,7 @@ impl MetaMcp {
             want_full,
             session_id,
             caller_identity,
-            verified_identity,
+            caller_proof,
             &caller_credential.headers,
             dispatch_binding.as_deref(),
             account_credential,
@@ -2183,7 +2186,7 @@ impl MetaMcp {
                     want_full,
                     session_id,
                     caller_identity,
-                    verified_identity,
+                    caller_proof,
                     headers: &caller_credential.headers,
                     cache_binding: dispatch_binding.as_deref(),
                     account_credential: bridge_account_credential,
@@ -3151,7 +3154,7 @@ impl MetaMcp {
         &self,
         server: &str,
         tool: &str,
-        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        caller: CallerProof<'_>,
     ) -> Result<Option<Arc<crate::identity_propagation::PreparedAccountCredential>>> {
         use crate::identity_propagation::AccountCredential;
 
@@ -3169,7 +3172,7 @@ impl MetaMcp {
         };
         match self
             .account_strategies
-            .resolve(account, &definition.auth.key, verified_identity)
+            .resolve(account, &definition.auth.key, caller)
             .await?
         {
             AccountCredential::Legacy => Ok(None),
@@ -3231,7 +3234,7 @@ impl MetaMcp {
         caller_identity: Option<&GrantSubject>,
         // The VERIFIED end-user identity, carried for the capability route
         // whose account boundary is inside the executor. Pass-through only.
-        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        caller_proof: CallerProof<'_>,
         propagated_headers: &[(String, String)],
         cache_binding: Option<&str>,
         // The capability route's account credential, resolved once above the
@@ -3256,7 +3259,7 @@ impl MetaMcp {
                 want_full,
                 session_id,
                 caller_identity,
-                verified_identity,
+                caller_proof,
                 propagated_headers,
                 cache_binding,
                 account_credential,
@@ -3349,11 +3352,9 @@ impl MetaMcp {
         // re-decides it — this is the value the call is made *with*, not the
         // one it is checked against.
         caller_identity: Option<&GrantSubject>,
-        // The VERIFIED end-user identity, carried for the capability route,
-        // whose account boundary is inside the executor rather than at the
-        // resolver above. Pass-through only: nothing here decides it, and the
-        // MCP route continues to use the credential already resolved.
-        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        // What the request PROVED about its caller, for the capability route
+        // whose account boundary is inside the executor. Pass-through only.
+        caller_proof: CallerProof<'_>,
         // Pre-resolved per-user propagation headers (empty = none). Resolved
         // once in `invoke_tool_traced` so the cache key and this dispatch share
         // one credential (MIK-6734); dispatch never mints.
@@ -3395,14 +3396,12 @@ impl MetaMcp {
                     protocol_revision: protocol_revision.map(str::to_owned),
                     routing_profile: Some(routing_profile.to_owned()),
                     cache_binding: identity_key.map(str::to_owned),
-                    // The ONLY source of a verified identity on this route is
-                    // `MetaMcpCallerContext::verified_identity`, which carries a
-                    // verified issuer AND subject. `caller_identity` above is a
-                    // `GrantSubject`: an authorization handle whose authority is
-                    // not an OAuth issuer, so an account key built from it would
-                    // bind a person the gateway never authenticated. It is
-                    // threaded here untouched and never synthesised.
-                    verified_identity: verified_identity.cloned().map(Arc::new),
+                    // Threaded untouched, never synthesised. `caller_identity`
+                    // above is a `GrantSubject` whose authority is not an OAuth
+                    // issuer, so a key built from it would bind a person the
+                    // gateway never authenticated.
+                    verified_identity: caller_proof.verified().cloned().map(Arc::new),
+                    caller_provenance: caller_proof.provenance(),
                     // Carried, not re-resolved: the executor rechecks it
                     // against the same registry before its own cache lookup
                     // and again before egress.

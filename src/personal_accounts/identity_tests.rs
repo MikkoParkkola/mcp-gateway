@@ -48,16 +48,19 @@ fn descriptor() -> AccountDescriptor {
 
 #[track_caller]
 fn digest_of(identity: &VerifiedIdentity, descriptor: &AccountDescriptor, what: &str) -> String {
-    refuse_scaffold(account_key(Some(identity), descriptor), what)
-        .expect(what)
-        .digest()
-        .expect("a constructed account key is well formed")
+    refuse_scaffold(
+        account_key(Some(Principal::Verified(identity)), descriptor),
+        what,
+    )
+    .expect(what)
+    .digest()
+    .expect("a constructed account key is well formed")
 }
 
 #[test]
 fn account_key_binds_verified_principal_and_configured_descriptor() {
     let key = refuse_scaffold(
-        account_key(Some(&identity()), &descriptor()),
+        account_key(Some(Principal::Verified(&identity())), &descriptor()),
         "positive binding",
     )
     .expect("a verified principal and a configured descriptor bind");

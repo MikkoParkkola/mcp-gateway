@@ -182,8 +182,13 @@ pub(super) fn key_descriptor(id: &str) -> AccountKeyDescriptor {
 
 /// The five-field key exactly as `identity::account_key` builds it.
 pub(super) fn account_key(subject: &str, id: &str) -> AccountKey {
-    crate::personal_accounts::identity::account_key(Some(&identity(subject)), &key_descriptor(id))
-        .expect("fixture principal and descriptor must bind")
+    crate::personal_accounts::identity::account_key(
+        Some(crate::personal_accounts::identity::Principal::Verified(
+            &identity(subject),
+        )),
+        &key_descriptor(id),
+    )
+    .expect("fixture principal and descriptor must bind")
 }
 
 /// The AUTHORITY-BEARING binding `vault::cache_binding` produces:
