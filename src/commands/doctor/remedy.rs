@@ -31,7 +31,7 @@ pub(super) fn missing_binary_remedy(bin: &str, in_container: bool) -> Option<Rem
     if in_container && loads_the_runtime(bin) {
         return Some(Remedy {
             hint: format!(
-                "this image carries no {bin} runtime; the -full variant of this tag does, e.g. {FULL_IMAGE}"
+                "this image carries no {bin} runtime; the -full image does, e.g. {FULL_IMAGE}"
             ),
             manual_fix: format!("docker pull {FULL_IMAGE}"),
         });
