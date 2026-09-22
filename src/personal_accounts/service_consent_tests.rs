@@ -392,7 +392,7 @@ fn the_guarded_store_entrypoint_fences_a_stale_expectation_without_writing() {
     let recording = witness::watch(&store);
     let mark = recording.mark();
     let outcome = refuse_guarded_scaffold(
-        store.commit_grant_if_unchanged(&alice(), &ConsentExpectation::Absent, &replacement),
+        store.commit_grant_if_unchanged(&alice(), &ConsentExpectation::Absent, &replacement, None),
         "stale guarded commit",
     )
     .expect("a stale expectation is an ordinary refusal, not a store failure");
@@ -456,7 +456,9 @@ fn a_competing_writer_cannot_land_between_the_comparison_and_the_commit() {
     let guarded = {
         let store = Arc::clone(&store);
         let record = guarded_record.clone();
-        std::thread::spawn(move || store.commit_grant_if_unchanged(&alice(), &captured, &record))
+        std::thread::spawn(move || {
+            store.commit_grant_if_unchanged(&alice(), &captured, &record, None)
+        })
     };
     // Parked INSIDE the acquisition. The guard is held from here until release.
     park.wait_entered();

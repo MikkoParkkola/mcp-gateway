@@ -278,20 +278,96 @@ would have to invent at least one of the two fields, which collapses into (a).
 **Migration runs only from an explicit operator declaration, and takes the
 principal from it verbatim.**
 
-The operator writes, per legacy backend being migrated, a block naming:
+**THE SURFACE IS COMMAND ARGUMENTS, NOT A CONFIG BLOCK — decided 2026-09-22.**
+An earlier draft of this section specified a `gateway.yaml` block, and that is
+recorded here as considered and rejected rather than quietly replaced. The
+reason it was rejected: **a migration runs once.** A config block for a
+one-time operation is a standing instruction for something that has already
+happened. It persists forever, it invites a later reader to wonder whether it
+still applies, and it is §6.2's dead-field hazard arriving as configuration
+instead of as code. An invocation with its arguments is also the better audit
+record of "this ran, with these inputs" than a file nobody revisits.
+
+It has a second effect worth naming: the declaration needs no line in
+`config.rs`, now or later, which takes that file's size ceiling off this row's
+critical path entirely.
+
+The shipped surface, per backend:
+
+| Argument | Required | Consumes |
+|---|---|---|
+| `--descriptor-id` | yes | selects the `accounts.descriptors` map key, which is the key's `backend_id` |
+| `--legacy-issuer` | yes | §5.3a's attestation; never defaulted from the descriptor |
+| `--legacy-backend-name` | no | override for a backend renamed since 3.x (§5.3c) |
+
+`principal_authority` and `principal_subject` are **not** arguments for the solo
+case: §5.3b takes them from `Principal::SoleOperator` through the same
+constructor the lease path uses. Where a future multi-user path declares them,
+they are validated against the tier's producer rather than consumed raw.
+
+The rejected config-block form named, for the record:
 
 | Declared field | Consumes | Why it must be declared |
 |---|---|---|
 | `principal_authority` | → `AccountKey.principal_authority` | The gateway has no verified source. A human asserts it. |
 | `principal_subject` | → `AccountKey.principal_subject` | Same. |
 | `descriptor_id` | → `AccountKey.backend_id` | `backend_id` is the `accounts.descriptors` **map key** (`identity.rs:38-39`), not the backend registry name (V). |
-| `legacy_backend_name` | → the 3.x filename hash | The 3.x file is hashed over the **registry** name (`oauth/storage.rs:178-185`); `config::AccountDescriptor` (`config.rs:255-292`, the whole struct) carries `mode`, `provider`, `resource`, `issuer`, the four endpoints, `client_id`, `client_secret_ref`, `redirect_uri`, `scopes`, `send_resource_parameter` and `external_strategy` — and **no legacy name** (V, verified across the full field list, not just the first three). Without this, migration cannot even find the file. |
+| `legacy_backend_name` | → the 3.x filename hash | **NO LONGER MANDATORY — derived, with this field kept as an optional override. Approved 2026-09-22; see §5.3c.** The 3.x file is hashed over the **registry** name (`oauth/storage.rs:178-185`), and `config::AccountDescriptor` (`config.rs:255-292`, the whole struct) carries no legacy name (V, verified across the full field list). But `BoundAccountBackend.backend` does — "Backend registry name (the `backends` map key)" (`config/account_bindings.rs:52`) — already compiled and already bound to the descriptor being declared. |
 
 `resource` and `oauth_issuer` are **not** declared as free text — they are read
 from the already-configured descriptor the `descriptor_id` names
 (`config.rs:261`, `:263`; bound the same way at `identity.rs:88-89`) (V). But
 taking the issuer from the destination descriptor is **not** by itself safe, and
 §5.3a is the part of this decision that earns the "sound" verdict.
+
+### 5.3c `legacy_backend_name` is derived, not declared — approved 2026-09-22
+
+**The principle, and it generalises past this field: do not ask for a fact the
+system already knows, because the restatement can disagree with reality and the
+disagreement is silent.** A mandatory `legacy_backend_name` creates a second
+source of truth for one fact where one source is authoritative and the other is
+hand-typed. That is not a validation problem a better error message fixes; it is
+a redundancy that should not exist.
+
+Deriving widens no intent. The operator already declares the descriptor and
+already binds it to a backend, so the intent is expressed; deriving only stops
+them from restating it. `BoundAccountBackend` carries the registry name beside
+the `descriptor_id` it is bound to (`config/account_bindings.rs:44-58`) (V).
+
+**The field survives as an OPTIONAL override, for one case only**: a backend
+renamed between 3.x and 4.0.0 has its 3.x file hashed under the old name while
+the binding carries the new one. Nothing in the tree records the old name, so
+that case genuinely needs a human. Absent the override, the derived name is
+used.
+
+#### 5.3c.1 The failure mode this does NOT fix, and the refusal that does
+
+**Deriving removes one cause and leaves the failure mode standing**, which is
+the more important half of this decision.
+
+A resolved filename that does not exist reads as **"nothing to migrate"**.
+Deriving removes the typo path into that. It does not remove the rename path,
+the moved-`$HOME` path, or a file the user deleted. All of those still land on a
+silent zero, and a silent zero surfaces to the user as every backend asking for
+re-authorisation — indistinguishable from the migration never having run at all.
+That is the one outcome that leaves nobody a thread to pull.
+
+**Requirement: a declared backend whose resolved 3.x source is absent must
+REFUSE, loudly, naming the exact path it looked for and the override field that
+fixes it.** Not succeed with zero records.
+
+**The distinction to key on is declaration presence, not file presence**, and
+§7.1/§10.5's no-false-positives argument already establishes it: nothing scans
+the credential directory, so a fresh install that declares no migration touches
+nothing and reports nothing, and that stays true. But a descriptor that *does*
+opt in, whose file is missing, is an explicit request to migrate something that
+is not there. Refusing it also puts the override in front of the renamer at the
+moment they need it, which beats documenting it somewhere they will not read.
+
+**Falsifier F22** (joins §9.6): a declared backend whose derived path names no
+existing file is refused, and the refusal names that path; and — the other
+direction — a store with no declaration at all is silent and commits nothing,
+which is F2's territory and must keep passing.
 
 ### 5.3a The issuer binding must be attested and contradiction-checked
 
@@ -395,6 +471,21 @@ Consequences, all improvements on the previous draft:
   to equal what the tier mints; with this route the migration does not even
   consume them for the solo case — it compares them and refuses a mismatch, so
   an operator typo is caught instead of silently addressing an empty room.
+
+#### There are TWO `AccountDescriptor` types, and this row needs both
+
+Recorded because an implementer reading this section alone reaches for the wrong
+one and learns it from the compiler (V, both read at source):
+
+| Type | Fields | What this row uses it for |
+|---|---|---|
+| `identity::AccountDescriptor` (`identity.rs:39-48`) | `descriptor_id`, `provider`, `resource: String`, `issuer: String` — four, and **no `scopes`, no `client_id`** | the argument `account_key` takes |
+| `config::AccountDescriptor` (`config.rs:255-292`) | the full declared surface; `resource` and `issuer` are `Option<String>` | §7.2a(b)'s scope fallback and §7.1b's `client_id` precondition |
+
+`compile_descriptor` (`config/account_bindings.rs:358-374`) is what turns one
+into the other, and it refuses a `personal_managed` descriptor missing either
+`resource` or `issuer` (`:361-368`) — which is why the narrow type's two fields
+are `String` rather than `Option<String>`.
 
 #### Three traps, each of which fails SILENTLY
 
@@ -647,9 +738,24 @@ Per declared backend, in order:
       (`oauth/storage.rs:295-313`) — a prior Dynamic Client Registration.
    c. `TokenInfo.client_id` (`oauth/storage.rs:45-46`).
 
-   Refuse the backend if all three miss. **Disagreement is resolved by
-   precedence, not by blanket refusal — corrected 2026-09-21 second review
-   round.** An install that used Dynamic Client Registration in 3.x and was
+   **AMENDMENT, 2026-09-22 — the blanket rule was wrong and is replaced.** The
+   first version of this step said "refuse if two sources disagree", which
+   reads as a safety property and is in fact the failure mode: it refuses a
+   LEGITIMATE install and forces exactly the re-authentication this row exists
+   to prevent. The install it breaks, concretely: a backend that used Dynamic
+   Client Registration in 3.x has a `_client.json`; an operator later sets a
+   `client_id` in configuration. Both are now present and they differ for good
+   reasons — `restore_persisted_client_id` is a no-op once a configured id is
+   set (`client/mod.rs:425-428`), and `drop_credentials_from_other_issuer`
+   deliberately keeps a configured id across an issuer change because it is
+   configuration rather than issuer state (`client/mod.rs:408-423`) (V). A
+   blanket refusal would refuse that install on evidence of nothing.
+
+   The counterexample is recorded beside the narrowed rule on purpose: a future
+   reader seeing only a narrowed rule will assume it was narrowed for
+   convenience.
+
+   **Disagreement is resolved by precedence, not by blanket refusal.** An install that used Dynamic Client Registration in 3.x and was
    later given an operator `client_id` legitimately holds both, and they
    legitimately differ: `restore_persisted_client_id` is a no-op once a
    configured id is set (`client/mod.rs:425-428`), and
@@ -1142,6 +1248,14 @@ worker wrappers stay dead. One removal, not three.
       names this very row, and its comment (`:63-70`) says it is written to
       self-delete the moment production wiring adds a real caller. This design
       is that caller.
+- [ ] `src/config/account_bindings.rs:44-51` — `expect(dead_code)` on
+      `BoundAccountBackend.backend` (`:52`). **Remove.** Its reason reads
+      "Provenance carried by `compile` so a compiled binding names the backend
+      it came from; every consumer reads `effective`, `mode` or `propagation`
+      instead. Delete if no consumer ever needs provenance." Per §5.3c,
+      migration IS that consumer: the registry name is what the 3.x filename
+      hashes. Same mechanism as `consent.rs:71-74` — a production caller makes
+      the expectation unfulfilled and `-D warnings` fails the build.
 - [ ] `src/personal_accounts/consent.rs:45-51` — `expect(dead_code)` on
       `GuardedCommitError::RuntimeNotImplemented`. **Verify, likely stays.**
       Predicate is `all(not(test), unix)`; the only producer is the
@@ -1201,6 +1315,7 @@ for the opposite reason. An implementer who reads only the brief will try.
       | `consent.rs:81-87` (`cfg(not(unix))` arm) | signature parity |
       | **`consent.rs:102`** — caller | pass the migration's provenance |
       | **`mod.rs:501`** — caller, inside `PersonalAccountStore::commit_grant` (`mod.rs:493`, itself `expect(dead_code)` at `:486-492`) | pass `None`; stays dead |
+      | **`service.rs:350`** — caller, inside `AccountService::commit_grant_if` | **ADDED 2026-09-22, found by the compiler during implementation.** Pass `None`: a consent journey never sets the marker. A review seat had named this site alongside `publish` and only the `publish` half was folded in — the correction was one site short, and that was this document's error rather than the reviewer's miss. |
 
       `consent.rs:102` and `mod.rs:501` are the only callers of
       `commit::commit_grant` (V — every other hit is
@@ -1624,10 +1739,10 @@ sweeping for "migration is not supported" prose will find it and be tempted.
 | # | Item | Tag | What settles it |
 |---|---|---|---|
 | O1 | ~~**`descriptor_revision` has no producer** (§7.3). Blocks implementation.~~ **RULED 2026-09-21: it is a development gap to fix; STORE.1 defines the producer.** The proposed field set was ALSO wrong and is corrected in §7.3 — it hashed `provider`/`resource`/`issuer`, but `resource` and `oauth_issuer` are already in `AccountKey` (`mod.rs:49-53`), so it duplicated the key and was blind to a widened `scopes`. | V | Residual: MIK-6745/6746 must be bound to reuse the same function, not reimplement it. |
-| O2 | `random_hex` visibility widening (§8.2) | A | An explicit yes on `commit.rs:67` → **`pub(in crate::personal_accounts)`**, per the standing rule on API visibility widening. **Corrected 2026-09-21 second review round:** this row previously said `pub(super)`, which §8.2 states in bold is NOT enough — the open-items table was re-introducing the exact trap §8.2 warns about. |
+| O2 | ~~`random_hex` visibility widening (§8.2)~~ **CLOSED 2026-09-22: no widening was needed.** The helper moved to `storage`, the shared parent of both `commit` and `migration`; a child sees its ancestors' private items, so neither `pub(super)` nor `pub(crate)` was taken, and `commit` delegates rather than holding a second copy. Zero widenings inside `personal_accounts`. One was taken outside it: `oauth::storage::token_path` → `pub(crate)`, approved, because that is a different module tree with no narrower route; `storage_key` stays private so the naming scheme is not exported. | V | An explicit yes on `commit.rs:67` → **`pub(in crate::personal_accounts)`**, per the standing rule on API visibility widening. **Corrected 2026-09-21 second review round:** this row previously said `pub(super)`, which §8.2 states in bold is NOT enough — the open-items table was re-introducing the exact trap §8.2 warns about. |
 | O3 | Whether a migrated grant is ever leasable in the deployment that receives it | V | **RULED 2026-09-21: there must be a solo upgrade path — "all our current users are solo users."** So this is not a precondition to check but a gap to close, and it is the one that decides whether this row delivers anything at all. A migrated grant is leased only when its declared principal authenticates, and `VerifiedIdentity` has exactly two production producers (`key_server/oidc.rs:446-452`, `gateway/openwebui_adapter.rs:421`) — `handlers.rs:2218` looks like a third and sits inside `#[cfg(test)]` opened at `:2177`. A solo 3.x install has neither, so today migration would satisfy MIGRATED and deliver nothing to **every existing user**. The answer is the single-user principal in `design/proof-tiered-principals`, which must land for this row to be worth building. |
 | O4 | `consent.rs:45-51` `expect` — stays or goes (§8.1) | A | Compile check during implementation; listed so it is checked rather than assumed. |
-| O5 | Issuer contradiction check granularity (§5.3a) — is comparing the `token_endpoint`'s **origin** to the attested issuer's origin the right test? Some providers host the token endpoint off the issuer origin. | A | A decision on whether to compare origins, require an exact operator-supplied endpoint, or treat a mismatch as a warning that requires a second attestation flag. Conservative default: refuse and make the operator override explicitly. |
+| O5 | **CLOSED 2026-09-22: origin comparison, conservative refusal.** Scheme, host and port — dropping the port would let a development credential migrate into a production descriptor, and an endpoint that does not parse refuses rather than reading as "nothing to contradict". An operator whose provider hosts the token endpoint off the issuer origin gets an explicit refusal naming both origins rather than a silent acceptance. Original question retained: issuer contradiction check granularity (§5.3a) — is comparing the `token_endpoint`'s **origin** to the attested issuer's origin the right test? Some providers host the token endpoint off the issuer origin. | A | A decision on whether to compare origins, require an exact operator-supplied endpoint, or treat a mismatch as a warning that requires a second attestation flag. Conservative default: refuse and make the operator override explicitly. |
 | O6 | Zeroization of `TokenInfo` / `GrantRecord` plaintext buffers (§10.1) | A | Out of scope for this row as scoped; it changes types every existing holder shares. Named so the security section's claim stays honest rather than implying erasure this design does not perform. |
 | O7 | **FILED AS MIK-7524** — **the `descriptor_revision` fence has no comparison site** (§7.3), and it is worse than this row first reported. Two further facts, verified at source: the ONLY function in the tree that produces a revision is a test fixture, `account_resolver_fixture.rs:131-134` returning `"0".repeat(64)`, and every grant in `fixtures/committed_grants.json` carries exactly those 64 zeros — in practice the field is a constant (V). `fence_tests.rs:163` and `:185` are a passing BOTH-DIRECTIONS pair that proves only that the comparison works: they move the value **by hand**, so they cannot detect that nothing moves it in production. A two-directional test is not automatically a real one — it must also be DRIVEN by the mechanism under test, which is the standard §9.7 applies to this row's own falsifiers. **One claim trimmed:** `commit.rs:627`'s `_descriptor_revision: &str` is not evidence that a live implementation discards the value — it is the `cfg(not(unix))` stub, where `_config`, `_slot` and `_account` are underscore-prefixed too and the body is `Err(InvalidConfiguration)`. That arm discards every parameter because it does nothing at all (V). Every occurrence in the tree is a copy, a validator, or a comparison of two stored-origin values; the live `AccountDescriptor` is never fingerprinted and never compared (V). Computing the value correctly at migration time therefore detects no descriptor change at all. | V | A decision on whether the read path (`AccountService` before release, or `GatewayRefreshProvider` before refresh) gains a live-fingerprint comparison, and which row owns it. It is **not** in STORE.1: it is a new production behaviour whose consequence is that every affected user is asked to reconnect after a config edit. |
 | O8 | **The `sole` identity tier — SEQUENCING, not a missing workstream** (§1.1, §5.3b). STORE.1 delivers zero user-visible value to a solo install until it lands. | V | IDENTITY.1 is in flight on `feat/single-user-principal` @ `d5597957` (agent worktree, not on `origin`). STORE.1 waits on it. What settles the RISK is §5.3b: the migration calls `account_key(Some(Principal::SoleOperator), descriptor)` rather than restating the five-field contract, so the two halves cannot disagree. Confirm the signature and both literals against the landed branch before writing code. |
@@ -1714,6 +1829,17 @@ reached independently before the review ran.
 10. **Grant preservation is stated in both directions** (§7.4a): nothing is
     invalidated by the migration, and rollback to 3.x is not guaranteed after
     a migrated grant's first refresh on a rotating server.
+12. **The declaration surface is COMMAND ARGUMENTS, not a `gateway.yaml`
+    block** (§5.3). A migration runs once, so a config block is a standing
+    instruction for something already done — §6.2's dead-field hazard arriving
+    as configuration. It also removes `config.rs` from this row's critical
+    path entirely.
+13. **The 3.x backend name is DERIVED from the compiled binding** (§5.3c), with
+    the argument surviving only as a rename override, because asking for a
+    fact the system already knows creates a second source of truth whose
+    disagreement with reality is silent. The absent-source refusal names that
+    override, since deriving removes the typo route into a silent zero but not
+    the rename, moved-home or deleted-file routes.
 11. **The solo `AccountKey` is not restated, it is CONSTRUCTED BY THE SAME
     CALL** (§5.3b). IDENTITY.1's `account_key` takes
     `Option<Principal<'_>>`, and `Principal::SoleOperator` needs no verified

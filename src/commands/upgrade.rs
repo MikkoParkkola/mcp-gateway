@@ -240,12 +240,16 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 /// carries every item: a release note that quietly loses one is worse than
 /// none, because the operator has already read it.
 const NOTICE_4_0_0_ITEMS: &[&str] = &[
-    "OAuth credentials are now stored per issuer. Stored tokens from 3.x are not \
-migrated: each OAuth backend re-authenticates once, on its next use. Expect one \
-authorization prompt per backend; no config change is needed. Your 3.x token \
-files are left untouched in `~/.mcp-gateway/oauth/` and are no longer read; \
-they still hold usable refresh tokens at mode 0600, so delete them once every \
-backend has re-authorized.",
+    "OAuth credentials are now stored per issuer, so 3.x tokens are no longer \
+read where they sit. By default each OAuth backend re-authenticates once, on \
+its next use: expect one authorization prompt per backend, and no config \
+change is needed. To keep a credential instead, run `mcp-gateway accounts \
+migrate-credentials --descriptor-id ID --legacy-issuer URL` per backend, which \
+is offline and refuses rather than guessing. Either way your 3.x token files \
+are left untouched in `~/.mcp-gateway/oauth/` at mode 0600. Delete them once \
+every backend has re-authorized or migrated AND been used successfully: a \
+migrated credential is still the same grant, so the first refresh against a \
+provider that rotates refresh tokens retires the copy in the old file.",
     "A malformed line in an `env_files` file now FAILS STARTUP instead of being \
 skipped silently. A typo that used to cost one missing variable now costs a \
 refused start, and says which line.",
@@ -605,6 +609,10 @@ fn print_upgrade_summary(old: SemVer, new: SemVer, _migrations: usize, dry_run: 
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[path = "upgrade_notice_tests.rs"]
+mod upgrade_notice_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1151,48 +1159,6 @@ mod tests {
         assert_eq!(stamp_after_second, "4.0.0");
         let content_after_second = std::fs::read_to_string(&yaml).unwrap();
         assert_eq!(content_after_second, original);
-    }
-
-    /// GH475.MIG.4 — the notice carries all five items, each named by the
-    /// action or removal it announces. Pinned so a later edit cannot quietly
-    /// drop one: an operator reads this once.
-    #[test]
-    fn notice_4_0_0_carries_all_five_items() {
-        assert_eq!(NOTICE_4_0_0_ITEMS.len(), 5);
-        let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
-        for expected in [
-            "re-authenticate",
-            "fails startup",
-            "2024-10-07",
-            "429",
-            "mcp-protocol-version",
-        ] {
-            assert!(
-                all.contains(expected),
-                "the 4.0.0 notice no longer mentions {expected}: {all}"
-            );
-        }
-    }
-
-    /// MIK-6744.STORE.1 — item 1 must also tell the operator what the upgrade
-    /// LEAVES BEHIND, not only what it stops reading.
-    ///
-    /// Not migrating 3.x tokens strands them: the files stay in the oauth
-    /// directory holding live refresh tokens, unreferenced, for as long as the
-    /// install lives. Their survival is asserted at source by
-    /// `legacy_single_user_record_is_not_reachable_under_the_4_0_0_issuer_key`
-    /// (`src/oauth/upgrade_path_tests.rs`). An operator told only "you will
-    /// re-authenticate" has no reason to go delete them, so the notice says so
-    /// and this pins that it keeps saying so.
-    #[test]
-    fn notice_4_0_0_discloses_the_stranded_3_x_token_files() {
-        let item_1 = NOTICE_4_0_0_ITEMS[0].to_ascii_lowercase();
-        for expected in ["~/.mcp-gateway/oauth/", "0600", "delete them"] {
-            assert!(
-                item_1.contains(expected),
-                "notice item 1 no longer tells the operator about {expected}: {item_1}"
-            );
-        }
     }
 
     /// GH475.MIG.1 / GH475.MIG.2 — upgrading from 3.9.0 advances the stamp and

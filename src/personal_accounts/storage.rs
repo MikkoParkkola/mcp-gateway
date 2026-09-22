@@ -28,6 +28,27 @@ use std::path::{Component, Path};
 #[path = "commit.rs"]
 pub(super) mod commit;
 
+// MIK-6744.STORE.1: the 3.x credential migration, which is a durable writer
+// into this store and so lives beside the other one. Declared here rather
+// than in `mod.rs` for the same reason `commit` is: `mod.rs` sits exactly at
+// its recorded size baseline, and a new declaration there fails the gate.
+#[path = "migration.rs"]
+pub(super) mod migration;
+
+// The 3.x source reader: its own file because the trust-boundary checks and
+// the position-only parse are a separate concern from field construction.
+#[path = "migration_source.rs"]
+pub(super) mod migration_source;
+
+#[path = "migration_revision.rs"]
+pub(super) mod migration_revision;
+
+#[path = "migration_precondition.rs"]
+pub(super) mod migration_precondition;
+
+#[path = "migration_entry.rs"]
+pub(super) mod migration_entry;
+
 const TOKEN_SCHEMA: &str = "personal_accounts.v1";
 const TOKEN_DOMAIN: &[u8] = b"mcp-gateway/account-token-aad/v1";
 const RECORD_BYTES: usize = 262_144;
@@ -328,6 +349,35 @@ fn claim_store(
         crate::fs_lock::ExclusiveFileLock::try_acquire(&config.authority_dir.join(LOCK_FILE))
             .map_err(|_| AccountError::StorageUnavailable)?;
     Ok((record_lock, authority_lock))
+}
+
+/// 16 random bytes, hex-encoded: 32 lowercase hex characters.
+///
+/// Lives in `storage` rather than in one of its children because BOTH children
+/// need it -- `commit` for scratch names and record basenames, `migration` for
+/// a `GrantRecord.generation` that satisfies `lower_hex(.., 32)`
+/// (`storage.rs:135`). A child module sees its ancestors' private items, so one
+/// helper here reaches both with no visibility widening anywhere, and there is
+/// one definition of the length rather than one per caller.
+/// No durable writers exist on this target, so no generation is ever spent.
+///
+/// The whole `commit` family already refuses here -- `commit_grant` returns
+/// `InvalidConfiguration` on a non-unix target -- and the migration reaches
+/// this before it reaches that refusal, so the answer is the same category one
+/// step earlier. Returning an error rather than a value keeps a platform with
+/// no durable store from minting identifiers for records it cannot write.
+#[cfg(not(unix))]
+pub(super) fn random_hex() -> Result<String, AccountError> {
+    Err(AccountError::InvalidConfiguration)
+}
+
+#[cfg(unix)]
+pub(super) fn random_hex() -> Result<String, AccountError> {
+    let mut bytes = [0_u8; 16];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| AccountError::StorageUnavailable)?;
+    Ok(hex::encode(bytes))
 }
 
 #[cfg(unix)]
