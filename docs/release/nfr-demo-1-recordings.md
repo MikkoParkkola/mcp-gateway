@@ -252,9 +252,9 @@ vacuously either: the restricted caller still receives five other Gmail matches,
 and `S4.OPEN_CALLER_SEES_THE_SAME_TOOL_AT_RANK_1` pins that the unrestricted
 caller has the forbidden tool at rank 1 on the same query.
 
-## Ruling 3 — what scenario 3 is not evidence for
+## Ruling 3 — what scenario 3 will not be evidence for
 
-Scenario 3 is recorded, and it uses a scripted provider fixture, so it proves
+When scenario 3 is recorded it will use a scripted provider fixture and will prove
 only the gateway's isolation enforcement. It is **not** a journey recording against
 a real identity provider and must not be reused as evidence for
 `MIK-6745.JOURNEY.1`. The constraint is carried in the manifest as a
