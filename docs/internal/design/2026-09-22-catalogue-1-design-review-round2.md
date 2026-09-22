@@ -326,11 +326,11 @@ pub(crate) fn meta_route_isolation_refused(&self, backend: &Backend) -> bool {
 pub(crate) fn meta_route_isolation_refused_for_caller(
     &self,
     backend: &Backend,
-    credential: Option<&PropagatedCredential>,
+    propagated_headers: &[(String, String)],
 ) -> bool {
     self.enforce_oauth_isolation_for(
         backend, &backend.name,
-        credential.is_some_and(|c| !c.headers.is_empty()),
+        !propagated_headers.is_empty(),
     ).is_err()
 }
 ```
@@ -342,10 +342,19 @@ into credential-awareness by **name**, and the twelve that must not are untouche
 by the diff. The `!headers.is_empty()` test is copied verbatim from
 `backend_handlers.rs:836` so the two routes cannot drift on what the parameter means.
 
-`PropagatedCredential` is resolved **once per request** by the dispatch arm
-(§4.1 step 1-2), not per backend and not inside the predicate — which is also what
-§4.3's own **A** asks for: one `PropagatedCredential`, two derivations, never two
-independent resolutions.
+**On the type.** **V** `resolve_propagation_credential` (`invoke.rs:2880-2884`)
+returns the *flattened* `(Vec<(String, String)>, Option<String>)` — headers and
+`cache_binding` — not the `PropagatedCredential` struct itself. **V** That struct
+does exist (`src/identity_propagation/mod.rs:86`) with a `headers:
+Vec<(String, String)>` field, and is what the strategy returns one layer down
+(`mod.rs:448`), but it is **not** the value in hand at the dispatch arm. The
+signature above takes the headers slice, so it consumes exactly what the resolver
+already hands back and needs no re-wrapping.
+
+Those headers are resolved **once per request** by the dispatch arm (§4.1 steps
+1-2), not per backend and not inside the predicate — which is also what §4.3's
+own **A** asks for: one resolution, two derivations (the isolation verdict and
+the `PoolKey`), never two independent resolutions of the caller's identity.
 
 ---
 

@@ -342,7 +342,7 @@ async fn identity_bound_backends_stay_refused_on_the_shared_credential_paths() {
     );
 }
 
-/// T5-R — the MCP result cache is keyed by caller, replacing design §5's T5.
+/// T5-R — the MCP result cache KEY separates callers, replacing design §5's T5.
 ///
 /// T5 as drafted asserted that no `tools/call` result cache exists and "passes
 /// today by absence". §4.3 and §9.1 of the same design establish the opposite
@@ -351,37 +351,68 @@ async fn identity_bound_backends_stay_refused_on_the_shared_credential_paths() {
 /// correction landed, so as written it fails for the wrong reason — or gets
 /// "fixed" by deleting a cache that must stay.
 ///
-/// Inverted to assert the property C3 actually rests on: two different callers
-/// cannot collide on one result key. Two-directional, because a key function
-/// that ignored every input would satisfy "A's key is not B's key" only if it
-/// also failed the same-caller-same-key half.
+/// Inverted to assert the property C3 actually rests on. It exercises
+/// `response_cache_key_for` (`support.rs:168`) itself rather than only the
+/// principal helper feeding it: a future cache that derives a correct principal
+/// and then DROPS it while assembling the key is exactly the regression this row
+/// exists to catch, and a principal-only assertion would pass straight through it.
+///
+/// Two-directional. The inequality alone is satisfied by a key function that
+/// mixes in something random per call — which would also mean the cache never
+/// hits — so the same-caller-same-key half runs beside it.
 #[test]
-fn result_cache_principals_separate_callers_and_keep_one_caller_stable() {
-    use super::support::caller_cache_principal;
+fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
+    use super::support::{caller_cache_principal, response_cache_key_for};
 
-    let alpha = caller_cache_principal(Some("alpha"), None, None)
-        .expect("a resolved cache binding must yield a principal");
-    let beta = caller_cache_principal(Some("beta"), None, None)
-        .expect("a resolved cache binding must yield a principal");
+    let retry = crate::protocol::mrtr::RetryFields::default();
+    let context = crate::cache::KeyContext {
+        routing_profile: "open",
+        protocol_revision: None,
+        policy_epoch: 1,
+    };
+    let key_for = |principal: Option<&str>| {
+        response_cache_key_for(
+            "hub",
+            "ledger_read",
+            &json!({ "account": "shared-argument" }),
+            "",
+            principal,
+            &retry,
+            context,
+        )
+    };
 
+    let alpha =
+        caller_cache_principal(Some("alpha"), None, None).expect("a binding is a principal");
+    let beta = caller_cache_principal(Some("beta"), None, None).expect("a binding is a principal");
     assert_ne!(
         alpha, beta,
-        "two identities collapsed to one result-cache principal, so one \
-         caller's cached tool results would be served to the other"
-    );
-    assert_eq!(
-        alpha,
-        caller_cache_principal(Some("alpha"), None, None).expect("stable"),
-        "one caller's principal is not stable across requests, so the result \
-         cache could never hit and the inequality above would pass vacuously"
-    );
-    assert!(
-        caller_cache_principal(None, None, None).is_none(),
-        "a caller with no resolvable identity minted a principal anyway"
+        "two identities collapsed to one cache principal before the key was even built"
     );
 
-    // Length-prefixed, so two bindings cannot collide by concatenation:
-    // `("ab", "c")` and `("a", "bc")` must not produce the same principal.
+    // Same server, same tool, same arguments, same authorization context — the
+    // ONLY difference is who is asking.
+    assert_ne!(
+        key_for(Some(&alpha)),
+        key_for(Some(&beta)),
+        "two callers share one result-cache key, so one caller's cached tool \
+         result is served to the other (C3)"
+    );
+    assert_eq!(
+        key_for(Some(&alpha)),
+        key_for(Some(&alpha)),
+        "one caller's key is not stable across requests: the cache could never \
+         hit, and the inequality above would hold for every pair regardless of \
+         whether the principal reaches the key at all"
+    );
+    assert_ne!(
+        key_for(Some(&alpha)),
+        key_for(None),
+        "an identified caller and an anonymous one share a key"
+    );
+
+    // Length-prefixed principals, so two bindings cannot collide by
+    // concatenation: `("ab", "c")` and `("a", "bc")` must stay distinct.
     assert_ne!(
         caller_cache_principal(Some("ab"), None, None),
         caller_cache_principal(Some("a"), None, None),
