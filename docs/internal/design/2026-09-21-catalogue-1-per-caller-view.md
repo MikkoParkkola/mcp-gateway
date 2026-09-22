@@ -1010,14 +1010,31 @@ has not authenticated sees an empty catalogue and cannot distinguish *"I need to
 log in"* from *"this was never set up"* — and neither can whoever is supporting
 them.
 
-**V** This holds at HEAD by construction rather than by a new mechanism. Both
-`meta_route_isolation_refused` and `meta_route_isolation_refused_for_caller`
-reach the omission only through `enforce_oauth_isolation_for`, which emits a
-`warn!` naming the backend and the reason **before** it returns the error
-(`mod.rs:1167-1173`) — *"requires an end-user identity credential that this route
-cannot resolve"*, with a `fix:` string. The helpers discard the error; they do
-not discard the log. So the caller learns nothing and the operator gets a named,
-actionable line.
+**V** Both `meta_route_isolation_refused` and
+`meta_route_isolation_refused_for_caller` reach the omission only through
+`enforce_oauth_isolation_for`, which emits a `warn!` **before** it returns the
+error (`mod.rs:1167-1180`). The helpers discard the error; they do not discard
+the log.
+
+**CORRECTED 2026-09-22 — this was half right, and the failing half was the one
+that mattered.** An earlier draft said "the message carries a `fix:` string, so
+it is diagnosable". There are **two** messages, with different audiences and
+different survival:
+
+| Channel | Carried | Survives the omission route? |
+|---|---|---|
+| `warn!` | `server`, `reason` — and now `fix` | **yes** |
+| `Error::json_rpc(-32001, …)` | `server`, `reason`, `Fix: {fix}` | **no** — the guard evaluates `.is_err()` and drops it |
+
+So `fix` reached only the channel that is thrown away on the exact path this
+section is about. The remedy was addressed to the caller, who is deliberately
+told nothing, and withheld from the party who has to act on it. **The repair is
+one line: `fix` is now a field on the `warn!` as well.** A value existing is not
+a value delivered — the question is which channel survives on the path in
+question, and that is not answerable by reading either the design or the diff.
+
+With that, the log line is self-sufficient: backend, reason **and** remedy, for
+whoever is debugging why their backend vanished.
 
 **Same shape as the STORE.1 ruling, and the pairing is the point.** There, the
 3.x credential migration must refuse **loudly** when a declared source file is

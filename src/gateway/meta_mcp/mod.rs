@@ -1165,9 +1165,17 @@ impl MetaMcp {
             return Ok(());
         };
 
+        // `fix` rides the log too, not only the JSON-RPC error below
+        // (MIK-7334.CATALOGUE.1 §11.8). The omission route -- every
+        // `meta_route_isolation_refused` call site -- evaluates this as
+        // `.is_err()` and DISCARDS the error, so the remedy would otherwise
+        // travel only in the channel that is thrown away on the one path where
+        // a caller is told nothing. Fail closed to the caller, and give whoever
+        // configured the backend a line they can act on without reading source.
         warn!(
             server = %server,
             reason,
+            fix,
             "refused: multi-user gateway would serve one user's personal backend \
              credential to another (ADR-008 INV-2)"
         );
