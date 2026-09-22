@@ -103,19 +103,18 @@ impl Backend {
     ///
     /// The strip runs on every method, so a caller-supplied `Mcp-Param-*`
     /// header can never reach a backend as though a schema had declared it —
-    /// the annotation is a server-side declaration, not a caller-supplied
-    /// parameter.
+    /// the annotation is a server-side declaration, never a caller parameter.
     ///
-    /// The schema is read from the tool cache without blocking: a `tools/call`
-    /// is always preceded by discovery, which populates it. A cold or expired
-    /// cache mirrors nothing rather than issuing a `tools/list` while this
-    /// request holds its semaphore permit, which a concurrency-limited backend
-    /// could not satisfy.
+    /// THE SCHEMA COMES OFF `identity_key`'S OWN SLOT (MIK-7334.CATALOGUE.1):
+    /// the shared one holds a catalogue this caller was never shown once a
+    /// `stateless` backend lists per caller. Read non-blocking — a cold cache
+    /// mirrors nothing rather than a `tools/list` under this request's permit.
     fn param_header_set(
         &self,
         method: &str,
         params: Option<&Value>,
         extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
     ) -> Vec<(String, String)> {
         let mut headers: Vec<(String, String)> = extra_headers
             .iter()
@@ -135,7 +134,7 @@ impl Backend {
         ) else {
             return headers;
         };
-        let Some(tool) = self.get_cached_tool(name) else {
+        let Some(tool) = self.get_cached_tool_for(identity_key, name) else {
             return headers;
         };
         headers.extend(mirror_headers(&tool.input_schema, arguments));
@@ -276,7 +275,8 @@ impl Backend {
         // dispatcher, because every tools/call — the MCP provider, meta-MCP
         // invoke, the router's direct backend route — funnels through this one
         // function, so a per-caller mirror would leave the siblings unmirrored.
-        let extra_headers = self.param_header_set(method, params.as_ref(), extra_headers);
+        let extra_headers =
+            self.param_header_set(method, params.as_ref(), extra_headers, identity_key);
 
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
         // review of commit bfd62b91). Each slot owns its own circuit breaker +

@@ -206,14 +206,27 @@ impl Backend {
 
     /// Derive the pool slot for a request carrying `identity_key`.
     ///
-    /// Only a `per_user` backend with a concrete caller identity gets its own
-    /// slot; every other case — no identity propagation, `stateless`, or
-    /// `per_user` without a resolved identity — collapses to the shared
-    /// canonical slot, preserving single-tenant behavior byte-for-byte (IDP.5).
+    /// A backend configured for identity propagation gets a private slot for
+    /// every caller that resolved a concrete binding, whatever its
+    /// `session_mode`. Everything else — no identity propagation at all, or a
+    /// propagating backend whose caller resolved no identity — collapses to the
+    /// shared canonical slot, preserving single-tenant behavior byte-for-byte
+    /// (IDP.5, which ADR-007 scopes to ABSENT propagation config).
+    ///
+    /// THE TWO IDENTITY-PROPAGATING ARMS ARE ONE ARM ON PURPOSE
+    /// (MIK-7334.CATALOGUE.1). `stateless` used to collapse here, so a caller
+    /// who had minted a credential still read the entry every caller reads and
+    /// `get_cached_list_for` dropped the minted headers on the way — the
+    /// catalogue was fetched under the gateway's own account and answered to
+    /// everybody. `stateless` is a permission to share one transport, not a
+    /// statement that the catalogue does not vary by caller (ADR-007 §84-93),
+    /// and declining a permitted share is wasteful rather than unsafe. Matching
+    /// on `Some(_)` also means no session mode added later can collapse here by
+    /// omission; what the arm must never lose is the `Some(binding)`, because a
+    /// mode without a caller would mint a slot named after nobody.
     pub(super) fn pool_key_for(&self, identity_key: Option<&str>) -> PoolKey {
-        use crate::identity_propagation::SessionMode;
         match (self.session_mode(), identity_key) {
-            (Some(SessionMode::PerUser), Some(binding)) => PoolKey::PerUser {
+            (Some(_), Some(binding)) => PoolKey::PerUser {
                 binding: binding.to_string(),
             },
             _ => PoolKey::Shared,

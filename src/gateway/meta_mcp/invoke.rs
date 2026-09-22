@@ -3501,10 +3501,10 @@ impl MetaMcp {
             .get(server)
             .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
 
-        // Eagerly check the cached tool list for a "did you mean?" hint.
-        // Only fires when the cache is populated and the tool is not found there.
-        // We still dispatch to the backend in case the cache is stale.
-        let cached_names = backend.get_cached_tool_names();
+        // A "did you mean?" hint off THIS CALLER'S slot (MIK-7334.CATALOGUE.1):
+        // the shared one holds a catalogue this caller was never shown once a
+        // `stateless` backend lists per caller. Stale-tolerant; we still dispatch.
+        let cached_names = backend.get_cached_tool_names_for(identity_key);
         let tool_is_cached = cached_names.iter().any(|n| n == tool);
 
         // Build request params. `_meta` is one object, so one writer owns it:
@@ -3600,7 +3600,7 @@ impl MetaMcp {
             .and_then(|entry| entry.tool.output_schema)
             .or_else(|| {
                 backend
-                    .get_cached_tool(tool)
+                    .get_cached_tool_for(identity_key, tool)
                     .and_then(|cached| cached.output_schema)
             });
 
@@ -5463,14 +5463,14 @@ mod identity_propagation_enforcement_tests {
         );
     }
 
-    // IDP.1 end-to-end via Code Mode (gateway_execute): an authenticated caller
-    // invoking an identity-required backend through code_mode_execute reaches the
-    // backend WITH the per-user Bearer credential on the wire. Regression guard
-    // for the review finding that Code Mode dropped verified_identity.
+    // IDP.1 end-to-end via Code Mode (gateway_execute): an identified caller reaches an
+    // identity-required backend WITH its per-user Bearer credential on the wire.
+    // Regression guard for the review finding that Code Mode dropped verified_identity.
     #[tokio::test]
     async fn code_mode_execute_propagates_identity_to_backend() {
         let (m, captured) = meta_with_capturing_backend();
         let id = identity();
+        m.seed_caller_slot_for_test("mem", &id).await;
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
             task: None,
             signing: None,
@@ -5550,10 +5550,10 @@ mod identity_propagation_enforcement_tests {
     // would let the credential go on the wire with zero audit record.
     #[tokio::test]
     async fn required_mint_without_transparency_log_fails_closed() {
-        // Same required backend + strategy + capturing transport as the
-        // propagation-succeeds test, but with NO transparency log wired.
+        // The propagation-succeeds fixture with NO transparency log wired.
         let (m, captured) = meta_with_capturing_backend_no_log();
         let id = identity();
+        m.seed_caller_slot_for_test("mem", &id).await;
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
             task: None,
             signing: None,

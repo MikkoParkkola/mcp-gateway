@@ -417,6 +417,7 @@ async fn mixed_external_and_managed_backends_select_their_own_strategy() {
     );
 
     let caller = identity("alice");
+    meta.seed_caller_slot_for_test("partner", &caller).await;
     Box::pin(execute(&meta, "partner", Some(&caller)))
         .await
         .expect("the external backend must still mint its assertion");

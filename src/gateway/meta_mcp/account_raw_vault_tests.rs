@@ -21,9 +21,10 @@
 //!
 //! NO custody, NO grant, NO per-backend strategy installed, NO direct mint: the
 //! real `code_mode_execute` -> `invoke_tool` -> `resolve_caller_credential`
-//! entry decides. Session mode is `Stateless` and the audience is identical for
-//! control and negatives, so a missing per-user pool slot can never be confused
-//! with a refusal.
+//! entry decides. The audience is identical for control and negatives, and each
+//! test opens the caller's slot onto the capturing wire through the resolver's
+//! own binding (`seed_caller_slot_for_test`), so a missing per-user pool slot
+//! can never be confused with a refusal.
 
 use super::*;
 
@@ -42,7 +43,8 @@ fn raw_cfg(strategy: PropagationStrategyKind, required: bool) -> IdentityPropaga
 }
 
 /// The SAME assembly for control and negatives: one raw registered backend, one
-/// shared stateless capturing transport, one durable transparency log, one
+/// capturing transport (seeded on the shared slot; each test opens the caller's
+/// slot onto it), one durable transparency log, one
 /// process-wide signed-assertion strategy. `compile` is deliberately not called.
 fn raw_gateway(idp: IdentityPropagationConfig) -> (MetaMcp, Arc<Dispatches>) {
     let config = fixture_config(&[(RAW_BACKEND, Bind::Propagation(idp))], &[]);
@@ -85,6 +87,7 @@ async fn raw_vault_backend_must_not_borrow_the_global_signed_assertion_strategy(
     // a matched `signed_assertion` backend REACHES the transport and carries a
     // minted assertion — not the backend's static header.
     let (meta, dispatches) = raw_gateway(raw_cfg(PropagationStrategyKind::SignedAssertion, true));
+    meta.seed_caller_slot_for_test(RAW_BACKEND, &alice).await;
     Box::pin(execute(&meta, RAW_BACKEND, Some(&alice)))
         .await
         .expect("a matched signed_assertion backend must still dispatch");
@@ -100,6 +103,7 @@ async fn raw_vault_backend_must_not_borrow_the_global_signed_assertion_strategy(
 
     for required in [true, false] {
         let (meta, dispatches) = raw_gateway(raw_cfg(PropagationStrategyKind::Vault, required));
+        meta.seed_caller_slot_for_test(RAW_BACKEND, &alice).await;
         let error = Box::pin(execute(&meta, RAW_BACKEND, Some(&alice)))
             .await
             .err()

@@ -185,7 +185,7 @@ impl Backend {
     ) -> Result<Arc<Vec<T>>>
     where
         S: Fn(&super::pool::PooledEntry) -> &CachedMetadata<Vec<T>>,
-        F: Fn(Value) -> Result<Vec<T>>,
+        F: Fn(Value, &super::pool::PooledEntry) -> Result<Vec<T>>,
     {
         let key = self.pool_key_for(binding);
         let identity_key = match &key {
@@ -193,16 +193,20 @@ impl Backend {
             PoolKey::Shared => None,
         };
         // MINTED HEADERS TRAVEL ONLY TO A SLOT THEIR OWNER HOLDS ALONE.
-        // `pool_key_for` grants a private slot to `(per_user, binding)` and
-        // nothing else, so a `stateless` backend — and a `per_user` one whose
-        // caller resolved no binding — lands on `PoolKey::Shared` while the
-        // resolver has still minted that caller a credential. Fetching under it
-        // would write ONE caller's private catalogue into the entry every caller
-        // reads, and serve it to all of them until TTL. Dropping the headers
-        // there restores the identity-free fill the shared slot had before,
-        // which is the documented `stateless` gap rather than a disclosure
-        // (IDP.5). Closing that gap properly needs an uncached path or a
-        // per-identity slot, and both are changes to `pool_key_for`.
+        // `pool_key_for` grants a private slot to a propagation-configured
+        // backend whose caller resolved a binding, and nothing else — so a
+        // caller with no resolved binding lands on `PoolKey::Shared` while the
+        // resolver may still have minted a credential for somebody. Fetching
+        // under it would write ONE caller's private catalogue into the entry
+        // every caller reads, and serve it to all of them until TTL. Dropping
+        // the headers there keeps the shared slot's fill identity-free (IDP.5).
+        //
+        // DEFENCE IN DEPTH AFTER MIK-7334.CATALOGUE.1, not a live guard: no
+        // production path now produces non-empty headers with a `None` binding
+        // — `PropagatedCredential::cache_binding` is a `String`, not an
+        // `Option`, and both sites where a `None` binding arises return empty
+        // headers with it. `stateless_tools_slot_tests` keeps a cell that fails
+        // if this is deleted, because every other cell would still pass.
         let fetch_headers: &[(String, String)] = match identity_key {
             Some(_) => extra_headers,
             None => &[],
@@ -229,7 +233,7 @@ impl Backend {
                     return Err(Error::json_rpc(error.code, error.message));
                 }
                 let items = if let Some(result) = response.result {
-                    parse(result)?
+                    parse(result, &entry)?
                 } else {
                     Vec::new()
                 };
@@ -257,10 +261,11 @@ impl Backend {
     /// The tool catalogue THIS CALLER's pool slot serves.
     ///
     /// `binding` is the caller's `PropagatedCredential::cache_binding`, and
-    /// `pool_key_for` turns it into a slot: `Some(binding)` on a
-    /// `session_mode = per_user` backend selects that identity's own slot;
-    /// everything else collapses to `Shared`, so single-tenant behaviour is
-    /// byte-for-byte unchanged (IDP.5). `extra_headers` are the same minted
+    /// `pool_key_for` turns it into a slot: `Some(binding)` on any
+    /// propagation-configured backend — `per_user` or `stateless` — selects that
+    /// identity's own slot; everything else collapses to `Shared`, so
+    /// single-tenant behaviour is byte-for-byte unchanged (IDP.5, which ADR-007
+    /// scopes to ABSENT propagation config). `extra_headers` are the same minted
     /// headers the slot's transport was opened with, so the catalogue is fetched
     /// AS that caller rather than under the gateway's static credential — on a
     /// `PerUser` slot ONLY. Collapse to `Shared` and they are dropped: one cache
@@ -281,14 +286,18 @@ impl Backend {
             "tools/list",
             "tools",
             extra_headers,
-            |result| {
+            |result, entry| {
                 let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
                 // Discovery is where the explicit annotations are still readable,
-                // and it always precedes a `tools/call` (ADR-012 A1). Written to
-                // THIS SLOT's set: a backend-wide one would let one identity's
-                // catalogue decide another identity's retry policy.
-                *self.tools_slot(binding).resend_permitted.write() =
-                    prepare_tool_metadata(&self.name, &mut tools);
+                // and it always precedes a `tools/call` (ADR-012 A1). Written
+                // THROUGH THE LEASE THIS FILL ALREADY HOLDS, not through a second
+                // `tools_slot(binding)` lookup: a revocation that removes the slot
+                // mid-fetch would otherwise resurrect the pre-revocation retry set
+                // on a freshly inserted empty one. Keeping C4 on one `Arc` closes
+                // it, and keeps the set on the slot whose catalogue derived it — a
+                // backend-wide one would let one identity's fill decide another
+                // identity's retry policy.
+                *entry.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
                 Ok(tools)
             },
         )
@@ -382,7 +391,7 @@ impl Backend {
             "resources/list",
             "resources",
             extra_headers,
-            |result| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
+            |result, _| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
         )
         .await
     }
@@ -423,7 +432,7 @@ impl Backend {
             "resources/templates/list",
             "resource_templates",
             extra_headers,
-            |result| {
+            |result, _| {
                 Ok(
                     serde_json::from_value::<ResourcesTemplatesListResult>(result)?
                         .resource_templates,
@@ -469,7 +478,7 @@ impl Backend {
             "prompts/list",
             "prompts",
             extra_headers,
-            |result| Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts),
+            |result, _| Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts),
         )
         .await
     }
