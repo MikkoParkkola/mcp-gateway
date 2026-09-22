@@ -551,3 +551,10 @@ mod fence;
 #[cfg(unix)]
 #[path = "crash_tests.rs"]
 mod crash;
+
+// MIK-6744.STORE.1 acceptance. Its own module: the 3.x credential migration is
+// a separate evidence packet from the durable-store primitives above, and
+// crash_tests.rs is held by another change.
+#[cfg(unix)]
+#[path = "migration_provenance_tests.rs"]
+mod migration_provenance;
