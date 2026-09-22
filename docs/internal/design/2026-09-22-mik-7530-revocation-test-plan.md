@@ -460,7 +460,7 @@ instead of — the behavioural assertion.
 
 | Substitution | Must redden | Must stay green |
 |---|---|---|
-| K1 revoke surface → no-op | **A5** | A1, A2, A3, A4, A6, C0 |
+| K1 revoke surface → no-op | **A3, A4, A5, A6** — all of them; **CORRECTED r4, see §5.2** | A1, A2, C0 |
 | K2 eviction → no-op | **A3, A4, A6** | A1, A2, A5, C0 |
 | K2 evicts unconditionally, ignoring identity | **A4's bystander control** — beta retains its slot **and its warm-cache fetch count** | C0 (it cannot redden; see §5.1) |
 | K2 keeps the `in_flight == 0` predicate | **A3** in-flight variant | — |
@@ -511,6 +511,73 @@ silently rebuilt".
 in no r1 cell, which is a hole exactly where the plan claims its fail-fast
 procedure matters most. **C0 is reserved for shared-slot eviction**, which is the
 mutant it can actually catch.
+
+
+### 5.2 CORRECTED r4 — the matrix required the vacuous input path
+
+**The rule this row breaks**, sharper than the two-directional rule this plan has
+been applying: *a two-directional test is not automatically a real one — it must
+also be **driven by the mechanism under test**. Pairing a refusal with an
+admitted case defends the **oracle**. It does nothing for a vacuous **input
+path**.*
+
+**V** The precedent is in this subsystem already. `descriptor_revision` has a
+schema slot, a width validator, a format check, comparison sites in three
+modules, and a both-directions test pair at `fence_tests.rs:163,185`. Both pass.
+The fence has never fired: the only producer in the tree is a fixture returning
+`"0".repeat(64)`, and `:163` hands `"b".repeat(64)` **straight to**
+`mark_reconnect_required`. **The test supplies the value the product never
+moves.**
+
+**r3's matrix did not merely permit that pattern here. It required it.** Row 1
+read:
+
+> `K1 revoke surface → no-op` | must redden **A5** | must stay green: A1, A2,
+> **A3, A4, A6**, C0
+
+**I** The only way A3, A4 and A6 can stay green while the revoke surface does
+nothing is if **the test triggers retirement by some other means** — writing a
+grant into the store directly, or calling `set_identity_grants` from the test
+body. That is the `fence_tests.rs` shape, mandated by the matrix, in three cells.
+
+**And there is no production path to fall back on.** **V**
+`set_identity_grants`'s only production caller is startup
+(`gateway/server/mod.rs:1239`); **V** grants are not on the config-reload path.
+**K1 is the production path.** A cell that retires by injection proves the
+comparison notices a changed grant and stays structurally blind to whether
+anything ever changes one.
+
+#### The corrected matrix, and the honest cost
+
+| Substitution | Must redden | Must stay green |
+|---|---|---|
+| **K1 → no-op** | **A3, A4, A5, A6** — all of them | A1, A2, C0 |
+| **K2 → no-op** | **A3, A4, A6** | A1, A2, **A5**, C0 |
+
+**I** K1's substitution no longer discriminates between cells, and **that is the
+truthful shape rather than a weakening.** K1 is the trigger every retirement cell
+depends on; a matrix showing it reddening one cell was describing a suite where
+three cells bypass it. The discrimination moves to **what each cell observes**
+(§4.8): K1's mechanism is the result-cache **key** changing, K2's is slot
+**identity** changing. `K2 → no-op` still separates cleanly — A5 stays green
+because the epoch advances and the key still changes.
+
+#### The standing question for every row
+
+**Who moves the value — the test, or the product?** If the answer is the test,
+the row cannot fail for the reason its name claims.
+
+| Cell | Value that must move | Moved by |
+|---|---|---|
+| A1, A2 | the upstream catalogue | **the upstream fixture** — legitimate; the upstream *is* the external system |
+| A3, A4, A5, A6 | the grant | **K1's surface.** Never `set_identity_grants` from a test body, never a direct store write |
+| C0 | nothing | — |
+
+**I** This is also the concrete answer to *"what evidence would make you doubt a
+green regression row"*: **if no production path can move the value, the row is
+green because nothing can move it, not because the behaviour is correct.** For
+A6 that question is already answered — A6 is red at HEAD — but the input-path
+exposure is independent of the oracle and would have survived the reclassification.
 
 ## 6. Open, for the release owner
 
