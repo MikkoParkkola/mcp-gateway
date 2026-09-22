@@ -112,11 +112,24 @@ fn a_recorded_endpoint_on_another_port_is_refused() {
 /// would turn a corrupt field into a silent pass, which is the shape of defect
 /// this row keeps finding.
 #[test]
-fn an_unparseable_recorded_endpoint_is_refused() {
+fn an_unparseable_recorded_endpoint_is_refused_without_echoing_it() {
+    const SENTINEL: &str = "SENTINEL-CREDENTIAL-PASTED-INTO-THE-WRONG-FIELD";
+    let refusal = check_issuer(ISSUER, ISSUER, Some(SENTINEL))
+        .expect_err("an unreadable endpoint must refuse");
     assert!(matches!(
-        check_issuer(ISSUER, ISSUER, Some("not a url")),
-        Err(PreconditionRefusal::IssuerContradicted { .. })
+        refusal,
+        PreconditionRefusal::IssuerUnreadable { .. }
     ));
+    // The field is a plain String in a hand-editable file, so it may hold
+    // anything -- including a credential someone pasted into the wrong key.
+    assert!(
+        !refusal.to_string().contains(SENTINEL),
+        "the refusal must not echo the field: {refusal}"
+    );
+    assert!(
+        !format!("{refusal:?}").contains(SENTINEL),
+        "nor may its Debug rendering, which is what a tracing field prints"
+    );
 }
 
 // ── §7.1 / §7.1b client id ───────────────────────────────────────────────────

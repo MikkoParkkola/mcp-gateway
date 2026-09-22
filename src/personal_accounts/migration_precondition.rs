@@ -47,6 +47,18 @@ pub(in crate::personal_accounts) enum PreconditionRefusal {
          origin {attested}"
     )]
     IssuerContradicted { attested: String, found: String },
+    /// The record's `token_endpoint` is not a URL at all.
+    ///
+    /// Refused rather than ignored: treating an unreadable field as "nothing to
+    /// contradict" turns a corrupt record into a silent pass. The value itself
+    /// is NOT carried -- the field is a plain `String` in a hand-editable file,
+    /// so it may hold anything, including a credential.
+    #[error(
+        "the 3.x record's token endpoint is not a readable URL, so it cannot be \
+         checked against the attested issuer origin {attested}; its value is not \
+         shown because that field may hold anything"
+    )]
+    IssuerUnreadable { attested: String },
     /// §7.1b. The destination cannot refresh what would be migrated into it.
     ///
     /// The refresh provider reads `descriptor.client_id`, never the record's,
@@ -88,10 +100,15 @@ pub(super) fn check_issuer(
     // different path, and some at a different subdomain — the conservative
     // default per O5 is to refuse an origin mismatch and let a rename be made
     // explicit, rather than to accept any endpoint the file happens to name.
+    // NEVER echo the raw field. A 3.x record is hand-editable and this value is
+    // whatever is in it: a credential accidentally pasted into `token_endpoint`
+    // would otherwise reach stderr and any `Debug` rendering. The same class the
+    // position-only parse wrapper exists for, in a field that wrapper does not
+    // cover -- an unparseable endpoint gets past serde because the field is a
+    // plain `String`.
     let (Some(found), Some(want)) = (origin(endpoint), origin(attested)) else {
-        return Err(PreconditionRefusal::IssuerContradicted {
+        return Err(PreconditionRefusal::IssuerUnreadable {
             attested: attested.to_owned(),
-            found: endpoint.to_owned(),
         });
     };
     if found != want {

@@ -96,6 +96,17 @@ fn migration_hint(error: &OfflineMigrationError) -> &'static str {
             "Add an `accounts` block naming store_dir, authority_dir and the key \
              references, then run `accounts init-store` before migrating into it."
         }
+        OfflineMigrationError::NoBoundBackend(_) => {
+            "The 3.x file is named after the BACKEND, not the descriptor, so a \
+             descriptor no backend uses has no file to find. Bind a backend to it \
+             under `backends.<name>.account`, or pass --legacy-backend-name with \
+             the 3.x registry name."
+        }
+        OfflineMigrationError::AmbiguousBackend { .. } => {
+            "Each of those backends has its own 3.x credential file, and guessing \
+             between them would migrate one backend's token under another's \
+             descriptor. Pass --legacy-backend-name with the one you mean."
+        }
         OfflineMigrationError::NoSuchDescriptor(_) => {
             "Name a descriptor declared under `accounts.descriptors` with mode \
              personal_managed. The id is the map key, not the backend registry name."
