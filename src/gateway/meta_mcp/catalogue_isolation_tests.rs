@@ -1,0 +1,390 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-7334.CATALOGUE.1 — a per-user backend's catalogue must reach its owner.
+//!
+//! The criterion (`RELEASE-4.0.0-scope-update.md:32`) reads: *"Supported
+//! identity-dependent backend catalogues, cached metadata and results are
+//! isolated by verified caller and authorization context."* Isolation quantifies
+//! over a set, and today that set is empty: on a multi-user gateway
+//! `meta_route_isolation_refused` omits every identity-bound backend from
+//! discovery, so nothing is isolated because nothing is served.
+//!
+//! The release owner declined the rescope that would have graded that MET
+//! (PR #604) and ruled BUILD. These cases are the acceptance edge of that
+//! ruling.
+//!
+//! EVERY CASE ASSERTS BOTH DIRECTIONS. A gateway that answers discovery with
+//! nothing at all satisfies "B must not see A's tools" perfectly, so the
+//! forbidden half alone grades an empty response as a pass. Each case therefore
+//! names a backend that MUST appear beside the one that MUST NOT, and the two
+//! are distinguishable by name.
+//!
+//! What is red here, and why: the OMITTED half passes today — that is the
+//! shipped leak-stop doing its job, and it must keep passing. The SERVED half
+//! fails, because a `per_user` backend is omitted from the very caller it
+//! belongs to. Reading the red output, the failing assertion is always the
+//! positive one.
+
+use super::MetaMcp;
+use crate::backend::{Backend, BackendRegistry};
+use crate::config::{BackendConfig, FailsafeConfig, OAuthConfig};
+use crate::identity_propagation::{
+    IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+};
+use crate::protocol::{JsonRpcResponse, RequestId, ToolsListResult};
+use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+/// The backend whose catalogue is identity-dependent: `session_mode = per_user`
+/// with propagation required. This is the set C0 quantifies over, and the one
+/// the criterion says must be isolated rather than withheld.
+const PER_USER_BACKEND: &str = "per_user_hub";
+const PER_USER_TOOL: &str = "per_user_ledger_read";
+
+/// A genuinely shared service backend. Its tools must stay visible on a
+/// multi-user gateway, so a change that achieves "isolation" by blanking
+/// discovery fails here instead of passing quietly.
+const SHARED_BACKEND: &str = "shared_hub";
+const SHARED_TOOL: &str = "shared_status_read";
+
+/// A backend behind ONE gateway-held OAuth login with no per-user binding.
+/// `oauth.enabled && !shared_account` is the first arm of
+/// `enforce_oauth_isolation_for` (`src/backend/ops.rs:106`). Nothing in this row
+/// makes that login per-caller, so it must STAY omitted on a multi-user gateway
+/// whatever the catalogue work does — it is the control that fails if the B1
+/// fix loosens the guard for every authenticated caller rather than only where
+/// the following fetch runs on that caller's own slot.
+const GATEWAY_OAUTH_BACKEND: &str = "gateway_oauth_hub";
+const GATEWAY_OAUTH_TOOL: &str = "gateway_oauth_secret_read";
+
+/// A transport answering one canned `tools/list`.
+struct CannedTools {
+    tools: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for CannedTools {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        assert_eq!(method, "tools/list", "fixture serves only tools/list");
+        Ok(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            ToolsListResult {
+                tools: self.tools.iter().map(|n| named_tool(n)).collect(),
+                next_cursor: None,
+            },
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+fn named_tool(name: &str) -> crate::protocol::Tool {
+    crate::protocol::Tool {
+        name: name.to_string(),
+        title: None,
+        description: Some(format!("{name} catalogue isolation fixture")),
+        input_schema: json!({ "type": "object" }),
+        output_schema: None,
+        annotations: None,
+        role: None,
+        projection: None,
+    }
+}
+
+/// A registered backend with a warm tool cache.
+///
+/// The cache is primed through `get_tools_shared` on purpose: it is the ONLY
+/// metadata fetch that exists at HEAD, and priming it is what makes the
+/// discovery paths reach a populated cache. A cold cache would contribute no
+/// names and would satisfy the absence half of every assertion below without
+/// any isolation having happened.
+async fn warm_backend(name: &str, tool: &str, config: BackendConfig) -> Arc<Backend> {
+    let backend = Arc::new(Backend::new(
+        name,
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(CannedTools {
+        tools: vec![tool.to_string()],
+    }));
+    backend
+        .get_tools_shared()
+        .await
+        .expect("fixture must prime its tool cache");
+    assert!(
+        backend.has_cached_tools(),
+        "premise: an unprimed cache contributes no names, which passes the \
+         omission assertions for the wrong reason"
+    );
+    backend
+}
+
+/// `session_mode = per_user`, propagation required — the identity-dependent
+/// catalogue. `pool_key_for` (`src/backend/pool.rs:173`) mints a `PerUser` slot
+/// only for this shape, so it is exactly C0's set.
+async fn per_user_backend() -> Arc<Backend> {
+    warm_backend(
+        PER_USER_BACKEND,
+        PER_USER_TOOL,
+        BackendConfig {
+            identity_propagation: Some(IdentityPropagationConfig {
+                strategy: PropagationStrategyKind::SignedAssertion,
+                audience: "ledger".to_string(),
+                required: true,
+                session_mode: SessionMode::PerUser,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+/// One gateway-held OAuth login, not blessed as a shared account.
+async fn gateway_oauth_backend() -> Arc<Backend> {
+    warm_backend(
+        GATEWAY_OAUTH_BACKEND,
+        GATEWAY_OAUTH_TOOL,
+        BackendConfig {
+            oauth: Some(OAuthConfig {
+                enabled: true,
+                shared_account: false,
+                scopes: vec![],
+                client_id: None,
+                client_secret: None,
+                callback_host: None,
+                callback_port: None,
+                callback_path: None,
+                token_refresh_buffer_secs: 300,
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+/// A gateway holding all three backends, warm.
+///
+/// `multi_user` is the axis under test: the same registry is asked the same
+/// question in both postures, so a difference in the answer is the guard and
+/// nothing else.
+async fn gateway(multi_user: bool) -> MetaMcp {
+    let registry = Arc::new(BackendRegistry::new());
+    for backend in [
+        per_user_backend().await,
+        warm_backend(SHARED_BACKEND, SHARED_TOOL, BackendConfig::default()).await,
+        gateway_oauth_backend().await,
+    ] {
+        assert!(
+            registry.register(backend),
+            "fixture backend failed to register"
+        );
+    }
+
+    let mut configs: HashMap<String, RoutingProfileConfig> = HashMap::new();
+    configs.insert(
+        "open".to_string(),
+        RoutingProfileConfig {
+            description: "denies nothing, so authorization cannot decide these cases".to_string(),
+            ..Default::default()
+        },
+    );
+
+    let meta = MetaMcp::new(registry)
+        .with_profile_registry(ProfileRegistry::from_config(&configs, "open"));
+    meta.set_multi_user(multi_user);
+    meta
+}
+
+/// Every tool name `gateway_list_tools` answers with.
+async fn listed_tool_names(meta: &MetaMcp) -> Vec<String> {
+    let response = meta
+        .list_tools(&json!({}), None)
+        .await
+        .expect("gateway_list_tools must answer");
+    response["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|t| t["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// GIVEN a multi-user gateway holding a `per_user` backend, a shared backend and
+/// a gateway-held-OAuth backend, all with warm catalogues
+/// WHEN discovery lists tools
+/// THEN the `per_user` backend's catalogue is served and the gateway-held-OAuth
+/// backend's is not.
+///
+/// RED TODAY on the served half: `meta_route_isolation_refused`
+/// (`src/gateway/meta_mcp/mod.rs:1188`) refuses the `per_user` backend
+/// unconditionally on a multi-user gateway, because it hardcodes
+/// `has_per_user_credential = false` at `:1189`. The omitted half passes today
+/// and must keep passing — it is the shipped leak-stop, and the B1 fix must not
+/// trade it away to make the served half green.
+#[tokio::test]
+async fn per_user_catalogue_is_served_while_the_shared_oauth_one_is_withheld() {
+    let names = listed_tool_names(&gateway(true).await).await;
+
+    assert!(
+        names.contains(&SHARED_TOOL.to_string()),
+        "a genuinely shared backend vanished from discovery: {names:?} — the \
+         other two assertions in this case would then be measuring an empty \
+         gateway rather than isolation"
+    );
+    assert!(
+        !names.contains(&GATEWAY_OAUTH_TOOL.to_string()),
+        "a backend behind ONE gateway-held OAuth login was disclosed on a \
+         multi-user gateway: {names:?} (ADR-008 INV-2)"
+    );
+    assert!(
+        names.contains(&PER_USER_TOOL.to_string()),
+        "a `session_mode = per_user` backend's catalogue never reached anyone: \
+         {names:?}. Withholding it stops the leak and leaves the criterion's \
+         quantified set empty — which is the rescope the release owner declined \
+         (PR #604). CATALOGUE.1 is BUILD."
+    );
+}
+
+/// GIVEN the same three backends on a SINGLE-user gateway
+/// WHEN discovery lists tools
+/// THEN all three catalogues are served.
+///
+/// GREEN TODAY, and it is the control that keeps the case above honest in both
+/// directions. It fails if per-caller catalogues are delivered by degrading the
+/// single-tenant path — the IDP.5 guarantee `pool_key_for` already makes for
+/// transports (`src/backend/pool.rs:169-171`) — and it proves the fixture's
+/// tools are discoverable at all, so the multi-user failure above is the guard
+/// and not an empty cache.
+#[tokio::test]
+async fn single_user_gateway_still_serves_every_catalogue() {
+    let names = listed_tool_names(&gateway(false).await).await;
+
+    for expected in [PER_USER_TOOL, SHARED_TOOL, GATEWAY_OAUTH_TOOL] {
+        assert!(
+            names.contains(&expected.to_string()),
+            "single-tenant discovery lost `{expected}`: {names:?} — isolation \
+             must not be bought by breaking the shared path"
+        );
+    }
+}
+
+/// T9 — the isolation guard stays fail-closed where the fetch after it is shared.
+///
+/// GREEN TODAY BY CONSTRUCTION, and that is its whole job. Design §9.2 says the
+/// `meta_route_isolation_refused` call sites "become credential-aware". Read as
+/// a mechanical sweep, that loosens the guard at sites whose NEXT operation
+/// still runs on the gateway's shared credential — `handle_logging_set_level`
+/// (`src/gateway/meta_mcp/protocol.rs:306`) guards, then forwards with
+/// `backend.request(...)`; `handle_prompts_list` (`protocol.rs:158`) and
+/// `handle_resources_list` (`resources.rs:293`) guard, then call the
+/// `*_shared` fetch.
+///
+/// `has_per_user_credential = true` does not narrow the guard, it
+/// short-circuits it: `enforce_oauth_isolation_for` returns `Ok(())` at
+/// `mod.rs:1116` before any arm is evaluated. So this case goes RED the day
+/// somebody implements B1 as the sweep rather than as a per-site opt-in, which
+/// is the only moment anyone would want to hear about it.
+///
+/// Two-directional: the genuinely shared backend must NOT be refused, so a
+/// change that fails the gateway closed for everything also fails here.
+#[tokio::test]
+async fn identity_bound_backends_stay_refused_on_the_shared_credential_paths() {
+    let meta = gateway(true).await;
+    let refused = |name: &str| {
+        let backend = meta
+            .backends
+            .get(name)
+            .unwrap_or_else(|| panic!("fixture backend `{name}` is registered"));
+        meta.meta_route_isolation_refused(&backend)
+    };
+
+    assert!(
+        refused(GATEWAY_OAUTH_BACKEND),
+        "a backend behind ONE gateway-held OAuth login stopped being refused on \
+         a multi-user gateway — the shared token is now reachable by any caller \
+         through the paths that forward it directly (ADR-008 INV-2)"
+    );
+    assert!(
+        refused(PER_USER_BACKEND),
+        "a `required` per-user backend stopped being refused on the routes that \
+         carry no identity. Credential-awareness belongs only where the fetch \
+         after the guard runs on the caller's OWN pool slot; the logging, \
+         prompts and resources paths forward on the SHARED credential"
+    );
+    assert!(
+        !refused(SHARED_BACKEND),
+        "a genuinely shared backend became refused — the guard is now failing \
+         closed on everything, which would make the assertions above pass for \
+         the wrong reason"
+    );
+}
+
+/// T5-R — the MCP result cache is keyed by caller, replacing design §5's T5.
+///
+/// T5 as drafted asserted that no `tools/call` result cache exists and "passes
+/// today by absence". §4.3 and §9.1 of the same design establish the opposite
+/// and cite it: `invoke.rs:1842-1855` (`cache.get`), `:2440` (`cache.set`),
+/// `:1794` (idempotency replay). The row was never updated after that
+/// correction landed, so as written it fails for the wrong reason — or gets
+/// "fixed" by deleting a cache that must stay.
+///
+/// Inverted to assert the property C3 actually rests on: two different callers
+/// cannot collide on one result key. Two-directional, because a key function
+/// that ignored every input would satisfy "A's key is not B's key" only if it
+/// also failed the same-caller-same-key half.
+#[test]
+fn result_cache_principals_separate_callers_and_keep_one_caller_stable() {
+    use super::support::caller_cache_principal;
+
+    let alpha = caller_cache_principal(Some("alpha"), None, None)
+        .expect("a resolved cache binding must yield a principal");
+    let beta = caller_cache_principal(Some("beta"), None, None)
+        .expect("a resolved cache binding must yield a principal");
+
+    assert_ne!(
+        alpha, beta,
+        "two identities collapsed to one result-cache principal, so one \
+         caller's cached tool results would be served to the other"
+    );
+    assert_eq!(
+        alpha,
+        caller_cache_principal(Some("alpha"), None, None).expect("stable"),
+        "one caller's principal is not stable across requests, so the result \
+         cache could never hit and the inequality above would pass vacuously"
+    );
+    assert!(
+        caller_cache_principal(None, None, None).is_none(),
+        "a caller with no resolvable identity minted a principal anyway"
+    );
+
+    // Length-prefixed, so two bindings cannot collide by concatenation:
+    // `("ab", "c")` and `("a", "bc")` must not produce the same principal.
+    assert_ne!(
+        caller_cache_principal(Some("ab"), None, None),
+        caller_cache_principal(Some("a"), None, None),
+        "principals are not collision-safe under concatenation"
+    );
+}

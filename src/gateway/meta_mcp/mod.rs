@@ -2501,3 +2501,7 @@ mod outbound_log_tests;
 #[cfg(test)]
 #[path = "surface_compaction_tests.rs"]
 mod surface_compaction_tests;
+
+#[cfg(test)]
+#[path = "catalogue_isolation_tests.rs"]
+mod catalogue_isolation_tests;
