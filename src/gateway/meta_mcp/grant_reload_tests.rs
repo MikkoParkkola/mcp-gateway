@@ -6,11 +6,12 @@
 //! §3 that are drivable today. T3b, T7, T8, T8b and T11 are here; the rest
 //! are not, and the reason is recorded rather than left to be rediscovered.
 //!
-//! WHY THE REST ARE ABSENT. T1/T2/T3/T4/T5/T6/T9/T10/T10b each need a piece
-//! this slice does not build: a refusal vocabulary surfaced to the operator
-//! (T2/T3/T4/T6), the busy-lock observable (T6/T10b), barriers that force an
-//! interleaving (T10), or the single real operator entry point driven end to
-//! end (T9).
+//! WHY THE REST ARE ABSENT. T1/T2/T3/T4/T5/T6/T10/T10b each need a piece this
+//! slice does not build: a refusal vocabulary surfaced to the operator
+//! (T2/T3/T4/T6), the busy-lock observable (T6/T10b), or barriers that force
+//! an interleaving (T10). T9 — the reload trigger driven end to end against a
+//! populated pool slot — is written, in `backend/slot_eviction_tests.rs`,
+//! beside the per-user slot fixtures it has to observe.
 //!
 //! WHERE THE NO-CHANGE COMPARISON LIVES, and why it is not in the publisher.
 //! T8/T8b were first written against `set_identity_grants`, because
