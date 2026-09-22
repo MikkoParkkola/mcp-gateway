@@ -37,10 +37,6 @@ use crate::personal_accounts::config::AccountDescriptor;
 /// disagreement is silent. It survives for the one case nothing records: a
 /// backend renamed between 3.x and 4.0.0, whose file is hashed under the old
 /// name.
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 command caller not yet landed")
-)]
 pub(in crate::personal_accounts) struct MigrationRequest<'a> {
     /// The four-field descriptor the account key is built from.
     pub(in crate::personal_accounts) key_descriptor: &'a identity::AccountDescriptor,
@@ -60,10 +56,6 @@ pub(in crate::personal_accounts) struct MigrationRequest<'a> {
 
 /// What happened to one declared backend.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 command caller not yet landed")
-)]
 pub(in crate::personal_accounts) enum MigrationOutcome {
     /// The grant was written. The 3.x file is untouched.
     Migrated,
@@ -97,10 +89,6 @@ pub(in crate::personal_accounts) enum MigrationRefusal {
 /// no credential material run before the file is read where they can, and the
 /// issuer contradiction check runs immediately after, so the window in which
 /// plaintext exists is as short as the checks allow.
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 command caller not yet landed")
-)]
 pub(in crate::personal_accounts) fn migrate_backend(
     store: &PersonalAccountStore,
     legacy: &TokenStorage,

@@ -35,10 +35,6 @@ use crate::oauth::TokenInfo;
 /// carries a token, a scope, or a fragment of file content. `Position` is the
 /// whole of what a parse failure reports (§10.2).
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 entry point not yet landed")
-)]
 pub(in crate::personal_accounts) enum SourceRefusal {
     /// Declared, but the resolved file is not there.
     ///
@@ -80,10 +76,6 @@ pub(in crate::personal_accounts) enum SourceRefusal {
 /// The order is deliberate: existence before privacy before parsing, so the
 /// most actionable refusal wins and no content is read from a path that failed
 /// its trust check.
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 entry point not yet landed")
-)]
 pub(in crate::personal_accounts) fn read_legacy_source(
     path: &Path,
 ) -> Result<TokenInfo, SourceRefusal> {

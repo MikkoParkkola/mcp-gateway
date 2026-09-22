@@ -98,7 +98,10 @@ pub use error::{Error, Result};
 // already applies to the `AccountsConfig` DTO. The store, the service and the
 // worker stay crate-private; this exposes one explicit, offline entry point so
 // the `accounts init-store` command can reach it without opening the module.
-pub use personal_accounts::{InitializedStore, OfflineInitError, initialize_store_offline};
+pub use personal_accounts::{
+    InitializedStore, MigratedCredential, OfflineInitError, OfflineMigrationError,
+    initialize_store_offline, migrate_legacy_credential_offline,
+};
 
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 

@@ -27,6 +27,9 @@ mod consent;
 // `AccountDescriptor` it binds. The store, the service and the worker stay
 // private, so a consumer cannot reach past custody to the records themselves.
 pub(crate) mod identity;
+// MIK-6744.STORE.1's offline command entry, a sibling of
+// `initialize_store_offline` and kept out of this file for its size.
+mod offline_migration;
 mod provider;
 mod service;
 mod storage;
@@ -428,6 +431,9 @@ pub(crate) use worker::{CustodyError, CustodyStartError};
 /// The managed-account dispatch strategy and the object-safe custody it runs
 /// against. The gateway installs one `VaultStrategy` per bound backend; both
 /// consumers reach it through the existing identity-propagation resolver.
+pub use offline_migration::{
+    MigratedCredential, OfflineMigrationError, migrate_legacy_credential_offline,
+};
 pub(crate) use vault::{AccountCustody, VaultStrategy};
 
 /// The one refresh provider a gateway runs: the real policy over the real

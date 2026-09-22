@@ -20,10 +20,6 @@ use super::super::config::AccountDescriptor;
 /// credentials, and none of the credential material is in scope here at all —
 /// these run before the record is read.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 entry point not yet landed")
-)]
 pub(in crate::personal_accounts) enum PreconditionRefusal {
     /// §5.3a requirement 3. The attested legacy issuer is not the destination's.
     ///
@@ -74,10 +70,6 @@ pub(in crate::personal_accounts) enum PreconditionRefusal {
 /// 3.x field rather than one 4.0.0 added, so a real record may carry it. When
 /// it is absent there is nothing to contradict and the equality check stands
 /// alone.
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 entry point not yet landed")
-)]
 pub(super) fn check_issuer(
     attested: &str,
     destination_issuer: &str,
@@ -132,10 +124,6 @@ fn origin(value: &str) -> Option<String> {
 /// later given an operator client id legitimately holds both, and they
 /// legitimately differ. A blanket refusal on disagreement would refuse that
 /// install and force the re-authentication this row exists to avoid.
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 entry point not yet landed")
-)]
 pub(super) fn recover_client_id(
     descriptor: &AccountDescriptor,
     registered: Option<&str>,
