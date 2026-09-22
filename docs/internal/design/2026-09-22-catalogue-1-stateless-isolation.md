@@ -712,3 +712,99 @@ The security property comes from the arm, not from a guard: once the key is
 private the headers are carried by the expression that already decides both, and
 the guard's stated precondition becomes true for `stateless` for the first time.
 
+
+---
+
+## 13. Independent review — both seats, and what survived
+
+Two non-Claude seats read this design before any code existed. `gpt-review` is over
+quota until 2026-09-26 and was not available; that is stated so the weight is not
+overread.
+
+| Seat | Verdict | Findings |
+|---|---|---|
+| grok | **SHIP** | none — five improvements |
+| kimi | **SHIP-WITH-FIXES** | one HIGH gated BEFORE-PRODUCTION, one LOW |
+
+grok's verdict line, verbatim: *"Candidate A keeps fetch, headers, and storage on one
+`pool_key_for` expression, so the #727 leak cannot recur, and the pinned IDP.5 arms are
+untouched."* It reached that by walking all four production callers of `pool_key_for`,
+the header gate, the `resend_permitted` write, the isolation guard, ADR-007, both
+eviction paths, the HTTP session buckets and the `stateless` harness.
+
+### 13.1 T-S4 pins a configuration the gateway refuses to load — BLOCKING for the test plan
+
+The sharpest finding, and it invalidates this design's headline cell as written.
+
+T-S4 names an OAuth backend paired with identity propagation. That pairing is
+**rejected at load** by `Config::validate` (`src/config/mod.rs:1005-1013`, the F3
+refusal) and again at `create_oauth_client`. A cell built on it cannot run, and a test
+plan whose central case is unloadable proves nothing about the invariant it claims to
+pin.
+
+**Correction:** target `identity_propagation.required = true` on the existing
+`stateless` fixture. That is the production shape the isolation guard actually refuses,
+and it loads.
+
+This is the same class as the defect this whole row keeps producing — a fixture that
+cannot reach the arm under test. It was caught here by a reviewer tracing the config
+validator rather than reading the cell.
+
+### 13.2 List and invoke will disagree after the arm widens
+
+`invoke.rs:3507,3603` and `ops.rs:138` still read the Shared catalogue. Once `stateless`
+lists per caller, a caller-only tool is listed from the caller's slot while its schema
+is read from the shared one — so param mirroring, output-schema checks and "did you
+mean" all consult the wrong catalogue.
+
+Today the two agree because both are Shared. Widening the arm breaks that agreement
+unless the binding is threaded through. MEDIUM cost, and it belongs in the
+implementation plan rather than after it. Related to the list/read coherence gap
+already tracked as MIK-7542, which is the same disagreement on the read path.
+
+### 13.3 `resend_permitted` should be written through the lease
+
+`metadata.rs:290-291` writes it via a second `tools_slot(binding)` lookup rather than
+onto the `PooledEntry` the fill already leased. A revocation that removes the slot
+mid-fetch can therefore resurrect the pre-revocation retry set on a freshly inserted
+empty slot. Keeping C4 on one `Arc` closes it. SMALL.
+
+### 13.4 Two cells do not yet discriminate
+
+T-S5 cites `catalogue_families_per_caller_tests.rs:655-659`, which is an **identified**
+alpha seeing `STATIC_ITEM` — the case T-S1 inverts. It needs its own unidentified
+caller, or T-S1 can be bought by dropping the identity-free Shared path, which is the
+failure the prior design's T6 exists to catch.
+
+T-S9 drives eviction with `PerIdentityMint`'s `{subject}@{audience}` string rather than
+the production `idp:{len}:{subject}:` prefix that `config_reload` passes to
+`evict_identity_slots` (`identity_propagation/mod.rs:356-372`). C4 must be proven on
+the prefix that actually ships.
+
+### 13.5 The uncapped slot count is a production gate, not a design defect
+
+kimi's HIGH: N identities times N propagation backends inside one 300-second idle
+window is unbounded at peak, so a burst of distinct verified identities could exhaust
+connections or memory and take the gateway down for every tenant.
+
+Its recommended shape matters more than the finding: alert on the already-gauged
+`mcp_backend_pool_slots`, and when a cap is eventually specified it must **refuse,
+never fall back to Shared**. A Shared fallback under pressure would recreate exactly
+the cross-tenant leak #727 closed — the mitigation that first suggests itself is the
+one that reopens the defect.
+
+Recorded here so that constraint is attached to the cap before anyone builds one.
+
+### 13.6 The fixture blast radius, closed with evidence rather than a scratch run
+
+kimi's LOW asked for the four other `stateless` fixtures to be run under a scratch
+widened arm. Checked directly instead, and none can flip:
+
+| Fixture | Why the widened arm cannot reach it |
+|---|---|
+| `create_oauth_client_refuses_identity_propagation_backends` | no identity passed; about client creation |
+| `backend_handler_discovery_method_fails_closed_for_required_propagation` | no identity, so `(Some(_), Some(binding))` cannot match |
+| `backend_handler_required_mint_without_route_audit_fails_closed_generically` | asserts an audit-failure path — HTTP 500, generic message, no leaked path — orthogonal to slot choice |
+| `account_raw_vault_tests.rs` | zero assertions on `PoolKey`, `pool_key`, `fills_for`, `headers_for`, `cached` or `slot`; its own doc comment says it uses controls and negatives *"so a missing per-user pool slot can never be confused"* |
+
+Showing why they cannot flip is stronger than observing that they did not.
