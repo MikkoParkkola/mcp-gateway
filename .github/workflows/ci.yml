@@ -440,6 +440,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check every test file is declared
         run: python3 scripts/dev/check-orphan-test-modules.py
+      # The resolver has already been wrong twice -- once directory-scoped,
+      # reporting 72 false orphans out of 113, and once name-matching, which
+      # let a declared `a/foo_tests.rs` answer for an orphaned `b/foo_tests.rs`.
+      # Five stems are duplicated in this tree, so that second hole was live.
+      # These pin both, and a guard that cannot fail is the thing it guards.
+      - name: Check the guard catches what it claims to
+        run: python3 scripts/dev/test_check_orphan_test_modules.py
 
   control-drift-probes:
     name: Control-drift probes (NFR.SEC.7)
