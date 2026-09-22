@@ -3826,7 +3826,7 @@ async fn direct_route_rejects_an_agent_outside_the_allowlist() {
         })
     .await;
     let response = create_router(state)
-        .oneshot(direct_route_call(Some("stranger")))
+        .oneshot(direct_route_call_proven("stranger", None))
         .await
         .unwrap();
 
@@ -3860,7 +3860,7 @@ async fn direct_route_rejects_an_unlisted_agent_even_when_id_is_optional() {
         })
     .await;
     let response = create_router(state)
-        .oneshot(direct_route_call(Some("stranger")))
+        .oneshot(direct_route_call_proven("stranger", None))
         .await
         .unwrap();
 
@@ -3890,6 +3890,51 @@ async fn direct_route_admits_an_absent_agent_id_when_it_is_optional() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// A direct-route call whose caller PROVED an mTLS identity.
+///
+/// The parity rows below were written when a header was the only way to supply
+/// an agent id, so they exercised a declared label and called it an agent. A
+/// proven principal has to arrive the way the handler actually reads one — out
+/// of request extensions, put there by the TLS layer — which is what this adds.
+fn direct_route_call_proven(
+    subject: &str,
+    declared: Option<&str>,
+) -> axum::http::Request<axum::body::Body> {
+    let mut request = direct_route_call(declared);
+    request
+        .extensions_mut()
+        .insert(crate::mtls::identity::CertIdentity {
+            common_name: Some(subject.to_string()),
+            display_name: "cosmetic".to_string(),
+            ..Default::default()
+        });
+    request
+}
+
+#[tokio::test]
+async fn direct_route_refuses_a_declared_label_that_names_an_allowlisted_agent() {
+    // Anchor: funded change 3. `known_agents` admits proven principals only, so
+    // a caller that merely sets the header cannot satisfy it — on this route as
+    // much as on /mcp. Before the split this request was admitted with 200.
+    let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
+        enabled: true,
+        require_id: true,
+        known_agents: vec!["known-agent".to_string()],
+        ..Default::default()
+    })
+    .await;
+    let response = create_router(state)
+        .oneshot(direct_route_call(Some("known-agent")))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "a self-declared label satisfied the allowlist on the direct route"
+    );
+}
+
 #[tokio::test]
 async fn direct_route_admits_an_allowlisted_agent() {
     // Control: the guard refuses the two rows above because of identity, not
@@ -3902,7 +3947,7 @@ async fn direct_route_admits_an_allowlisted_agent() {
         })
     .await;
     let response = create_router(state)
-        .oneshot(direct_route_call(Some("known-agent")))
+        .oneshot(direct_route_call_proven("known-agent", None))
         .await
         .unwrap();
 

@@ -595,236 +595,408 @@ pub fn log_agent_identity(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+
 #[cfg(test)]
 mod tests {
     use axum::http::HeaderMap;
 
     use super::*;
 
-    // ── extract_agent_identity ────────────────────────────────────────────────
+    fn cfg(enabled: bool, require_id: bool, known: &[&str]) -> AgentIdentityConfig {
+        AgentIdentityConfig {
+            enabled,
+            require_id,
+            known_agents: known.iter().map(|a| (*a).to_string()).collect(),
+            ..AgentIdentityConfig::default()
+        }
+    }
 
-    #[test]
-    fn extract_from_x_agent_id_header() {
-        // GIVEN: request with X-Agent-ID header
+    fn header(name: &str, value: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert("x-agent-id", "agent-abc-123".parse().unwrap());
-        // WHEN: extract identity
-        let identity = extract_agent_identity(&headers, None, None);
-        // THEN: identity is extracted from header
-        assert_eq!(
-            identity,
-            Some(AgentIdentity {
-                id: "agent-abc-123".to_string(),
-                source: IdentitySource::Header,
-            })
+        headers.insert(
+            axum::http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+            value.parse().expect("header value"),
+        );
+        headers
+    }
+
+    fn cert(san: &[&str], cn: Option<&str>) -> crate::mtls::identity::CertIdentity {
+        crate::mtls::identity::CertIdentity {
+            common_name: cn.map(String::from),
+            san_uris: san.iter().map(|s| (*s).to_string()).collect(),
+            // Deliberately set: the selection rule must never reach it.
+            display_name: "cosmetic-display-name".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn proven(id: &str, proof: ProofSource) -> AgentIdentity {
+        AgentIdentity {
+            proven: Some(ProvenPrincipal {
+                id: id.to_string(),
+                proof,
+            }),
+            ..AgentIdentity::default()
+        }
+    }
+
+    // ── Extraction: the declared label ────────────────────────────────────────
+
+    /// Anchor: funded change 1. A header value is a DECLARED label, never a
+    /// principal.
+    #[test]
+    fn header_yields_a_declared_label_and_no_proof() {
+        let identity = extract_agent_identity(&header("x-agent-id", "agent-abc-123"), None, None, None);
+        assert_eq!(identity.declared_id(), Some("agent-abc-123"));
+        assert_eq!(identity.declared.as_ref().map(|d| d.source), Some(DeclaredSource::Header));
+        assert!(
+            identity.proven.is_none(),
+            "a header must never produce a proven principal"
         );
     }
 
+    /// Anchor: funded change 1. `Default` is the no-knowledge state.
     #[test]
-    fn extract_no_agent_id_returns_none() {
-        // GIVEN: request with no agent identification
-        let headers = HeaderMap::new();
-        // WHEN: extract identity
-        let identity = extract_agent_identity(&headers, None, None);
-        // THEN: no identity
-        assert_eq!(identity, None);
+    fn nothing_presented_yields_the_default() {
+        let identity = extract_agent_identity(&HeaderMap::new(), None, None, None);
+        assert_eq!(identity, AgentIdentity::default());
     }
 
+    /// Anchor: funded change 1.
     #[test]
-    fn extract_from_query_param() {
-        // GIVEN: request with agent_id query parameter
-        let headers = HeaderMap::new();
-        // WHEN: extract identity from query string
-        let identity = extract_agent_identity(&headers, Some("agent_id=agent-q1&other=val"), None);
-        // THEN: identity extracted from query
+    fn query_param_yields_a_declared_label() {
+        let identity =
+            extract_agent_identity(&HeaderMap::new(), Some("agent_id=agent-q1&other=v"), None, None);
+        assert_eq!(identity.declared_id(), Some("agent-q1"));
         assert_eq!(
-            identity,
-            Some(AgentIdentity {
-                id: "agent-q1".to_string(),
-                source: IdentitySource::QueryParam,
-            })
+            identity.declared.as_ref().map(|d| d.source),
+            Some(DeclaredSource::QueryParam)
         );
     }
 
+    /// Ported unchanged: header over query is still the right order *within*
+    /// the declared label, which is now the only place that comparison lives.
     #[test]
-    fn extract_header_takes_precedence_over_query() {
-        // GIVEN: both header and query param set
-        let mut headers = HeaderMap::new();
-        headers.insert("x-agent-id", "header-agent".parse().unwrap());
-        // WHEN: extract identity
-        let identity = extract_agent_identity(&headers, Some("agent_id=query-agent"), None);
-        // THEN: header wins
-        let resolved = identity.unwrap();
-        assert_eq!(resolved.source, IdentitySource::Header);
-        assert_eq!(resolved.id, "header-agent");
+    fn header_takes_precedence_over_query_within_the_declared_label() {
+        let identity = extract_agent_identity(
+            &header("x-agent-id", "from-header"),
+            Some("agent_id=from-query"),
+            None,
+            None,
+        );
+        assert_eq!(identity.declared_id(), Some("from-header"));
     }
 
+    /// Ported: whitespace is absence.
     #[test]
-    fn extract_whitespace_only_header_returns_none() {
-        // GIVEN: X-Agent-ID header with only whitespace (trimmed to empty by our logic)
-        let mut headers = HeaderMap::new();
-        headers.insert("x-agent-id", "   ".parse().unwrap());
-        // WHEN: extract
-        let identity = extract_agent_identity(&headers, None, None);
-        // THEN: treated as absent (our extractor trims and rejects blank values)
-        assert_eq!(identity, None);
+    fn whitespace_only_header_is_absent() {
+        let identity = extract_agent_identity(&header("x-agent-id", "   "), None, None, None);
+        assert!(identity.declared.is_none());
     }
 
+    // ── Extraction: the proven rungs ──────────────────────────────────────────
+
+    /// **INVERTED, NOT PORTED.** The original
+    /// `extract_from_jwt_claim` built a token with `alg: none` and asserted it
+    /// resolved to an identity. It encoded the vulnerability as expected
+    /// behaviour, so a port that kept it green would keep the bug.
+    ///
+    /// Anchor: funded change 2. There is no unsigned rung. The signature is the
+    /// only thing that could make a token's claim proof, and this code no
+    /// longer has a parameter through which a raw token can arrive.
     #[test]
-    fn extract_from_jwt_claim() {
-        // GIVEN: a JWT with agent_id claim (header.payload.signature)
-        // payload = {"agent_id": "agent-jwt-1", "sub": "test"}
-        let payload = r#"{"agent_id":"agent-jwt-1","sub":"test"}"#;
-        let b64 = to_base64url(payload.as_bytes());
-        let token = format!("eyJhbGciOiJub25lIn0.{b64}.signature");
-        let headers = HeaderMap::new();
-        // WHEN: extract identity
-        let identity = extract_agent_identity(&headers, None, Some(&token));
-        // THEN: extracted from JWT claim
+    fn an_unsigned_bearer_token_proves_nothing() {
+        let payload = to_base64url(br#"{"agent_id":"agent-jwt-1","sub":"test"}"#);
+        let token = format!("eyJhbGciOiJub25lIn0.{payload}.signature");
+        let identity = extract_agent_identity(
+            &header("authorization", &format!("Bearer {token}")),
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             identity,
-            Some(AgentIdentity {
-                id: "agent-jwt-1".to_string(),
-                source: IdentitySource::JwtClaim,
-            })
+            AgentIdentity::default(),
+            "an unverified token payload produced an identity"
         );
     }
 
+    /// Anchor: funded change 2's middle rung. A `sub` the middleware verified
+    /// IS a proven principal.
     #[test]
-    fn extract_jwt_without_agent_id_claim() {
-        // GIVEN: JWT with no agent_id claim
-        let payload = r#"{"sub":"user","iat":1234567890}"#;
-        let b64 = to_base64url(payload.as_bytes());
-        let token = format!("eyJhbGciOiJub25lIn0.{b64}.sig");
-        let headers = HeaderMap::new();
-        // WHEN: extract
-        let identity = extract_agent_identity(&headers, None, Some(&token));
-        // THEN: none
-        assert_eq!(identity, None);
+    fn a_verified_subject_is_a_proven_principal() {
+        let identity = extract_agent_identity(&HeaderMap::new(), None, None, Some("svc-a"));
+        assert_eq!(identity.proven_id(), Some("svc-a"));
+        assert_eq!(
+            identity.proven.as_ref().map(|p| p.proof),
+            Some(ProofSource::VerifiedJwtSubject)
+        );
     }
 
-    // ── validate_agent_identity ───────────────────────────────────────────────
+    /// Anchor: the selection rule. First SAN URI wins.
+    #[test]
+    fn mtls_selects_the_first_san_uri() {
+        let c = cert(&["spiffe://cluster/ns/agents/sa/runner"], Some("runner"));
+        let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&c), None);
+        assert_eq!(identity.proven_id(), Some("spiffe://cluster/ns/agents/sa/runner"));
+        assert_eq!(
+            identity.proven.as_ref().map(|p| p.proof),
+            Some(ProofSource::MutualTls)
+        );
+    }
 
+    /// Anchor: the selection rule. CN is the fallback, not the first choice.
+    #[test]
+    fn mtls_falls_back_to_the_common_name() {
+        let identity =
+            extract_agent_identity(&HeaderMap::new(), None, Some(&cert(&[], Some("runner"))), None);
+        assert_eq!(identity.proven_id(), Some("runner"));
+    }
+
+    /// Anchor: the selection rule's total form, and T32's falsifier. An
+    /// unnameable certificate is NOT an identity, and `display_name` must not
+    /// be reachable — routing a cosmetic audit string here would make it an
+    /// allowlist key.
+    #[test]
+    fn an_unnameable_certificate_is_not_a_principal() {
+        let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&cert(&[], None)), None);
+        assert!(
+            identity.proven.is_none(),
+            "a certificate with no SAN URI and no CN produced a principal, which \
+             means the display_name fallback is reachable"
+        );
+    }
+
+    /// Anchor: funded change 2, rows 7-8. mTLS outranks a verified JWT, and the
+    /// JWT is kept as secondary proof rather than discarded — without that
+    /// field the promise to audit it is unimplementable.
+    #[test]
+    fn mtls_outranks_a_verified_jwt_and_the_jwt_is_kept() {
+        let c = cert(&["spiffe://cluster/a"], None);
+        let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&c), Some("svc-b"));
+        assert_eq!(identity.proven_id(), Some("spiffe://cluster/a"));
+        assert_eq!(
+            identity.secondary_proof.as_ref().map(|p| p.id.as_str()),
+            Some("svc-b")
+        );
+        assert_eq!(
+            identity.secondary_proof.as_ref().map(|p| p.proof),
+            Some(ProofSource::VerifiedJwtSubject)
+        );
+    }
+
+    /// Anchor: the structural guard. Ranking is a comparison on the type, so
+    /// `MutualTls` must sort above `VerifiedJwtSubject` — if a later edit
+    /// reorders the variants, this fails rather than silently inverting
+    /// precedence, which is exactly how the original defect was written.
+    #[test]
+    fn proof_source_ordering_is_the_ranking() {
+        assert!(ProofSource::MutualTls > ProofSource::VerifiedJwtSubject);
+    }
+
+    // ── Validation: no proof ──────────────────────────────────────────────────
+
+    /// Ported: the feature flag still exempts request-time enforcement.
     #[test]
     fn validate_passes_when_feature_disabled() {
-        // GIVEN: agent_identity.enabled = false
-        let config = AgentIdentityConfig {
-            enabled: false,
-            ..Default::default()
-        };
-        // WHEN: validate with no identity
-        // THEN: always passes
-        assert!(validate_agent_identity(None, &config).is_ok());
+        let identity = extract_agent_identity(&header("x-agent-id", "anything"), None, None, None);
+        assert!(validate_agent_identity(&identity, &cfg(false, true, &["other"])).is_ok());
     }
 
+    /// Ported: the row that deliberately does NOT flip. A non-empty
+    /// `known_agents` has never refused an unidentified caller.
     #[test]
-    fn validate_anonymous_allowed_when_require_id_false() {
-        // GIVEN: enabled, require_id = false
-        let config = AgentIdentityConfig {
-            enabled: true,
-            require_id: false,
-            ..Default::default()
-        };
-        // WHEN: no identity
-        // THEN: allowed (anonymous mode)
-        assert!(validate_agent_identity(None, &config).is_ok());
+    fn anonymous_is_accepted_even_with_a_non_empty_allowlist() {
+        let identity = AgentIdentity::default();
+        assert!(validate_agent_identity(&identity, &cfg(true, false, &["agent-allowed"])).is_ok());
     }
 
+    /// Ported: nothing presented at all, `require_id` on.
     #[test]
-    fn validate_rejects_when_require_id_and_no_identity() {
-        // GIVEN: enabled, require_id = true
-        let config = AgentIdentityConfig {
-            enabled: true,
-            require_id: true,
-            ..Default::default()
-        };
-        // WHEN: no identity provided
-        let result = validate_agent_identity(None, &config);
-        // THEN: rejected with descriptive error
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("require_id"));
+    fn require_id_refuses_a_caller_that_proved_nothing() {
+        let identity = AgentIdentity::default();
+        validate_agent_identity(&identity, &cfg(true, true, &[])).expect_err("require_id accepted nothing");
     }
 
+    /// **INVERTED, NOT PORTED.** The original
+    /// `validate_empty_known_agents_skips_allowlist_check` built a
+    /// header-sourced identity with `require_id: true` and asserted it PASSED,
+    /// on the stated grounds that an empty allowlist applies no filter. That is
+    /// not why it passed: it passed because a declared label satisfied
+    /// `require_id`, which is the vulnerability. The name described a different
+    /// mechanism from the one under test, so the row could not fail for its
+    /// stated reason.
+    ///
+    /// Anchor: funded change 3. A label is not an identity.
     #[test]
-    fn validate_known_agents_allowlist_passes_for_listed_agent() {
-        // GIVEN: known_agents allowlist with one entry
-        let config = AgentIdentityConfig {
-            enabled: true,
-            require_id: true,
-            known_agents: vec!["agent-allowed".to_string()],
-        };
-        let identity = AgentIdentity {
-            id: "agent-allowed".to_string(),
-            source: IdentitySource::Header,
-        };
-        // WHEN: validate known agent
-        // THEN: passes
-        assert!(validate_agent_identity(Some(&identity), &config).is_ok());
+    fn an_empty_allowlist_does_not_let_a_label_satisfy_require_id() {
+        let identity = extract_agent_identity(&header("x-agent-id", "any-agent"), None, None, None);
+        let reason = validate_agent_identity(&identity, &cfg(true, true, &[]))
+            .expect_err("a declared label satisfied require_id under an empty allowlist");
+        assert!(reason.contains("any-agent"), "refusal must name the label: {reason}");
     }
 
+    /// **INVERTED, NOT PORTED.** The original
+    /// `validate_known_agents_allowlist_passes_for_listed_agent` built
+    /// `AgentIdentity { id: "agent-allowed", source: IdentitySource::Header }`
+    /// and asserted the allowlist ACCEPTED it. Its name claims it tests that a
+    /// listed agent passes; what it actually pinned is that a self-declared
+    /// header value satisfies the allowlist — the defect this criterion exists
+    /// to remove.
+    ///
+    /// Anchor: funded change 3. An allowlist satisfied by self-declaration is
+    /// not a control.
     #[test]
-    fn validate_known_agents_allowlist_rejects_unknown_agent() {
-        // GIVEN: non-empty allowlist
-        let config = AgentIdentityConfig {
-            enabled: true,
-            require_id: true,
-            known_agents: vec!["agent-allowed".to_string()],
-        };
-        let identity = AgentIdentity {
-            id: "rogue-agent".to_string(),
-            source: IdentitySource::Header,
-        };
-        // WHEN: validate agent not in allowlist
-        let result = validate_agent_identity(Some(&identity), &config);
-        // THEN: rejected
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("rogue-agent"));
+    fn a_declared_label_never_satisfies_the_allowlist() {
+        let identity = extract_agent_identity(&header("x-agent-id", "agent-allowed"), None, None, None);
+        let reason = validate_agent_identity(&identity, &cfg(true, false, &["agent-allowed"]))
+            .expect_err("a declared label satisfied known_agents");
+        assert!(
+            reason.contains("proven"),
+            "refusal must name the proven-principal policy: {reason}"
+        );
     }
 
+    // ── Validation: proven principals ─────────────────────────────────────────
+
+    /// RE-ANCHORED. The original refusal row used a header-sourced identity, so
+    /// it passed for a reason its name did not give. Re-pointed at a PROVEN
+    /// principal, it now tests what it claims: the allowlist filters proof.
     #[test]
-    fn validate_empty_known_agents_skips_allowlist_check() {
-        // GIVEN: enabled, require_id = true, known_agents = []
-        let config = AgentIdentityConfig {
-            enabled: true,
-            require_id: true,
-            known_agents: vec![],
-        };
-        let identity = AgentIdentity {
-            id: "any-agent".to_string(),
-            source: IdentitySource::Header,
-        };
-        // WHEN: any agent ID is presented with empty allowlist
-        // THEN: passes (no filter applied)
-        assert!(validate_agent_identity(Some(&identity), &config).is_ok());
+    fn a_proven_principal_outside_the_allowlist_is_refused() {
+        let identity = proven("rogue-agent", ProofSource::VerifiedJwtSubject);
+        let reason = validate_agent_identity(&identity, &cfg(true, true, &["agent-allowed"]))
+            .expect_err("an unlisted proven principal was accepted");
+        assert!(reason.contains("rogue-agent"), "{reason}");
     }
 
-    // ── percent_decode ────────────────────────────────────────────────────────
+    /// The admitted case, without which the row above passes for an
+    /// implementation that refuses everyone.
+    #[test]
+    fn a_proven_principal_on_the_allowlist_is_accepted() {
+        let identity = proven("agent-allowed", ProofSource::VerifiedJwtSubject);
+        assert!(validate_agent_identity(&identity, &cfg(true, true, &["agent-allowed"])).is_ok());
+    }
+
+    // ── Validation: contradiction ─────────────────────────────────────────────
+
+    fn with_label(mut identity: AgentIdentity, label: &str) -> AgentIdentity {
+        identity.declared = Some(DeclaredLabel {
+            id: label.to_string(),
+            source: DeclaredSource::Header,
+        });
+        identity
+    }
+
+    /// Anchor: DECISION 7.1 arm 1, ahead of membership. A principal declaring
+    /// its own name declares the one label that cannot be a lie.
+    #[test]
+    fn a_principal_may_always_declare_its_own_name() {
+        let identity = with_label(proven("svc-a", ProofSource::VerifiedJwtSubject), "svc-a");
+        let mut config = cfg(true, true, &[]);
+        config.principal_labels = vec![PrincipalLabels {
+            id: "svc-a".to_string(),
+            labels: vec!["billing".to_string()],
+        }];
+        assert_eq!(
+            validate_agent_identity(&identity, &config).expect("own name refused"),
+            IdentityAudit::Clean,
+            "exact match must run ahead of mapping membership"
+        );
+    }
+
+    /// Anchor: funded change 2. A JWT principal declaring a label outside its
+    /// mapped set is a contradiction.
+    #[test]
+    fn a_mapped_principal_may_not_exceed_its_label_set() {
+        let identity = with_label(proven("svc-a", ProofSource::VerifiedJwtSubject), "invoicing");
+        let mut config = cfg(true, true, &[]);
+        config.principal_labels = vec![PrincipalLabels {
+            id: "svc-a".to_string(),
+            labels: vec!["billing".to_string()],
+        }];
+        let reason = validate_agent_identity(&identity, &config).expect_err("contradiction accepted");
+        assert!(reason.contains("invoicing") && reason.contains("svc-a"), "{reason}");
+    }
+
+    /// Anchor: RULING 3's default. No entry means the principal may declare
+    /// only its own name; a differing label is never read as "incomparable".
+    #[test]
+    fn an_unmapped_jwt_principal_refuses_a_differing_label() {
+        let identity = with_label(proven("svc-c", ProofSource::VerifiedJwtSubject), "something-else");
+        validate_agent_identity(&identity, &cfg(true, true, &[]))
+            .expect_err("a missing mapping was read as permission");
+    }
+
+    /// The control for the row above: the same unmapped principal, declaring
+    /// nothing, is accepted. Without it an unconditional backstop would refuse
+    /// every authenticated request in a deployment that owes no mapping.
+    #[test]
+    fn an_unmapped_principal_declaring_nothing_is_accepted() {
+        let identity = proven("svc-c", ProofSource::VerifiedJwtSubject);
+        assert!(validate_agent_identity(&identity, &cfg(true, true, &[])).is_ok());
+    }
+
+    /// Anchor: RULING 2. The mTLS label namespace is incomparable, so a
+    /// mismatch is a detection signal rather than a refusal — and it must
+    /// actually be signalled, or the ruling's audit promise is empty.
+    #[test]
+    fn an_mtls_mismatch_is_audited_not_refused() {
+        let identity = with_label(
+            proven("spiffe://cluster/ns/agents/sa/runner", ProofSource::MutualTls),
+            "runner",
+        );
+        assert_eq!(
+            validate_agent_identity(&identity, &cfg(true, true, &[])).expect("mTLS mismatch refused"),
+            IdentityAudit::DeclaredLabelMismatch,
+            "the mismatch was accepted but not signalled"
+        );
+    }
+
+    // ── Validation: the migration hatch ───────────────────────────────────────
+
+    /// Anchor: the operator ruling's migration clause.
+    #[test]
+    fn the_hatch_restores_declared_only_matching() {
+        let identity = extract_agent_identity(&header("x-agent-id", "agent-allowed"), None, None, None);
+        let mut config = cfg(true, true, &["agent-allowed"]);
+        config.allow_unverified_agent_identity = true;
+        assert!(validate_agent_identity(&identity, &config).is_ok());
+    }
+
+    /// Anchor: the hatch restores exactly one behaviour and NOT
+    /// header-over-proof. With it on, a contradiction is still a refusal.
+    #[test]
+    fn the_hatch_does_not_restore_header_over_proof() {
+        let identity = with_label(proven("svc-a", ProofSource::VerifiedJwtSubject), "svc-b");
+        let mut config = cfg(true, true, &[]);
+        config.allow_unverified_agent_identity = true;
+        validate_agent_identity(&identity, &config)
+            .expect_err("the hatch let a header contradict a proven principal");
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     #[test]
     fn percent_decode_handles_encoded_chars() {
-        assert_eq!(percent_decode("agent%2Dv2"), "agent-v2");
-        assert_eq!(percent_decode("plain"), "plain");
         assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("plain"), "plain");
     }
 
-    // ── test helpers ─────────────────────────────────────────────────────────
-
-    /// Minimal base64url encoder for test fixture construction.
     fn to_base64url(input: &[u8]) -> String {
-        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
         let mut out = String::new();
         for chunk in input.chunks(3) {
-            let b0 = chunk[0];
-            let b1 = *chunk.get(1).unwrap_or(&0);
-            let b2 = *chunk.get(2).unwrap_or(&0);
-            out.push(alphabet[((b0 >> 2) & 0x3F) as usize] as char);
-            out.push(alphabet[(((b0 & 3) << 4) | (b1 >> 4)) as usize] as char);
-            out.push(alphabet[(((b1 & 0xF) << 2) | (b2 >> 6)) as usize] as char);
-            out.push(alphabet[(b2 & 0x3F) as usize] as char);
+            let b = [
+                chunk[0],
+                chunk.get(1).copied().unwrap_or(0),
+                chunk.get(2).copied().unwrap_or(0),
+            ];
+            let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+            for i in 0..chunk.len() + 1 {
+                out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 0x3F) as usize]));
+            }
         }
-        // Strip padding and convert base64 → base64url
-        out.trim_end_matches('=')
-            .replace('+', "-")
-            .replace('/', "_")
+        out
     }
 }
