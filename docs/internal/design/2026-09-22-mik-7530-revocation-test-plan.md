@@ -162,6 +162,40 @@ resolution that refuses to create a slot for a retired binding — but that is a
 implementation choice and this document is a test plan. What it fixes is pinned
 by the cell.
 
+### 3.2 The rotation variant of the same race, and why it is worse
+
+**V** `cache_binding(subject_key, audience)` (`identity_propagation/mod.rs:316`)
+is derived from **subject and audience only** — nothing about the grant enters
+it. **I** So rotating a grant for the same user against the same backend yields
+**the same binding, the same `PoolKey`, and therefore the same slot.**
+
+That turns §3.1's late fill into a contamination rather than a resurrection:
+
+1. G1's fill is on the wire when rotation to G2 lands;
+2. the slot is retired and a successor established — **at the same key**;
+3. the G1 fill completes and writes **into the successor's slot**.
+
+**V** And it writes twice, through two independent paths in one closure:
+
+- the catalogue, via `get_or_fetch_shared` into the `Arc<PooledEntry>` captured
+  before retirement;
+- **V** `metadata.rs:262-263` — `*self.pooled_entry(&key).resend_permitted.write()
+  = prepare_tool_metadata(…)`, which resolves the key **fresh**, through
+  `or_insert_with`, at completion time.
+
+**I** The second is the sharper one and it was missed in r1. It does not write to
+the captured orphan; it looks the key up again and writes to **whatever slot
+holds that key now** — the successor's. So G1's retry permissions land on G2's
+slot, and **V** membership of that set is the only thing granting a `tools/call`
+permission to be resent (ADR-012 A1).
+
+**I** The outcome is the A6 failure mode arriving through the A3 race: the
+pre-rotation catalogue *and* its resend permissions served under the
+post-rotation grant, with every operation having succeeded. **Sequence the test
+explicitly** — pause `tools/list`, retire, establish the successor, *then*
+release the old fill — and assert the completion neither recreates the retired
+slot nor alters the successor's resend permissions.
+
 ---
 
 ## 4. The plan
@@ -208,7 +242,8 @@ the per-construct no-op check reads as a matrix.
 | **ORDERING, LOAD-BEARING** | assert on state **after the in-flight fill has landed**, never merely after the revoke returns. An A3 that checks immediately post-revoke is **green against exactly the implementation that fails** (§3.1) |
 | **Admitted case** | an **un-revoked** fill in the same shape **is** served afterwards |
 | **Traps carried** | (i) **V** `invalidate_if` (`cached_metadata.rs:141-146`) returns early on a populated slot, so the generation bump never runs — routing through it covers a cold start only; (ii) the in-flight decline of §3 |
-| **Status** | **new.** The cold-start half exists (`tests.rs:1817`) with its control shipped in #672; the **populated-slot** half is what this row adds. |
+| **Status** | **new, and r1 overstated existing coverage.** **V** `tests.rs:1817` drives shared `get_tools()` and `invalidate_tools_cache()` — the identity-free path — despite its `per_user_backend` fixture. It is **not** coverage of a per-user binding on a runtime retirement path. **Cold per-user eviction is untested**, and r1 marked it covered. |
+| **Sequencing** | pause `tools/list`; retire; establish the successor; **then** release the old fill; assert the completion neither recreates the retired slot nor alters the successor's `resend_permitted` (§3.2) |
 
 ### A4 — the catalogue is not served after revocation
 
@@ -231,8 +266,37 @@ the per-construct no-op check reads as a matrix.
 | **Exercises** | **K1** |
 | **Inputs** | alpha's result cached under its principal; revocation; alpha re-invokes |
 | **Expect** | the pre-revocation entry cannot be served — the epoch stranded its key |
-| **Admitted case** | an identical call **without** an intervening revocation **does** hit cache; and beta's entries survive |
+| **Admitted case** | an identical call **without** an intervening revocation **does** hit cache (that scenario only); and beta remains **authorized**, receiving correct results after any necessary refill |
+| **CORRECTED r2** | an earlier draft asserted "beta's entries survive" a revocation of alpha. **That is an inverted oracle** — see §4.5.1 |
 | **Status** | **new** at this level. `policy_epoch_tests.rs:51` proves the epoch mechanism; this proves a revoke reaches it. |
+
+#### 4.5.1 CORRECTED r2 — A5's positive control was an inverted oracle
+
+**V** `meta_mcp/mod.rs:557-565`:
+
+> *"Authorization-policy generation mixed into **every** response-cache key. **One
+> counter for this handler.**"* — `policy_epoch: Arc<AtomicU64>`
+
+**The epoch is global.** Any `set_identity_grants` bump strands *every* caller's
+result-cache keys, bystanders included. There is no per-identity epoch and the
+doc comment says so in as many words.
+
+**I** So the r1 admitted case — *"beta's entries survive"* — demanded behaviour a
+**correct implementation cannot produce**. An implementer driving it green would
+have to break global invalidation to get there: the control would have actively
+pushed the work toward a defect. That is worse than a vacuous assertion, because
+a vacuous one merely fails to catch; this one steers.
+
+**Restated:** beta remains **authorized** and receives **correct results after
+any necessary refill**. The cache-**hit** assertion is kept, but moved to the
+no-revocation scenario, which is the only place it is satisfiable.
+
+**I** Worth naming the class, because it is not the one this session has been
+hunting. Every other defect found today was *a value that exists and a decision
+that does not use it*. This is its mirror: **a decision that demands a value the
+system is designed never to produce.** A reviewer checking the assertion against
+current behaviour would call it a bug report; only checking it against the
+*mechanism* shows it is the test that is wrong.
 
 ### A6 — rotation: the pre-rotation catalogue is not served under the successor grant
 
@@ -245,6 +309,9 @@ the per-construct no-op check reads as a matrix.
 | **Exercises** | **K2**, and the successor path K2 alone cannot reach |
 | **Inputs** | alpha's slot populated under grant **G1**; a fill on the wire; rotation to **G2**; alpha reads |
 | **Expect** | alpha is served the **G2** catalogue, or nothing — **never the G1 catalogue presented as G2's** |
+| **Distinguishability** | G1 and G2 serve **different tool names AND different schemas** for a same-named tool, so a stale *schema* under a fresh *name* is caught too |
+| **Successor access** | after the old fill completes, the successor must **succeed** and receive **only** new data — not merely be denied old data |
+| **Mechanism** | **V** `cache_binding` is `(subject, audience)` only (`identity_propagation/mod.rs:316`), so a rotation reuses the **same `PoolKey`** — the successor inherits the retired slot's key, which is why contamination is representable at all (§3.2) |
 | **Admitted case** | a read with **no** intervening rotation still hits cache, and beta is untouched |
 | **Status** | **new**, and it may be green at HEAD — see below |
 
@@ -294,6 +361,51 @@ no cell is the hole; a cell that is green for a named reason is not.**
 | **Expect** | unaffected by any revocation; still single-flights to one fetch |
 | **Why** | catches the repair that retires more than it should — the shared slot is **V** never evicted (`pool.rs:302`, and `:310` panics if it ever is) and must stay so |
 
+### 4.7 CORRECTED r2 — all four metadata caches, not just tools
+
+r1 claimed metadata-cache coverage and specified observations only for **tools**
+and **call results**. **V** The criterion says *"cached metadata"*, and **V**
+`pool.rs` carries four caches on `PooledEntry` — `tools_cache`,
+`resources_cache`, `resource_templates_cache`, `prompts_cache` — plus
+`resend_permitted` derived from the first.
+
+**I** Resources, resource templates and prompts escaped every r1 cell. A
+retirement that drops only `tools_cache` would pass the whole suite while three
+caches survive retirement fully populated, and **V** #666's own §6 risk 5 names
+exactly this: *"Moving only `tools_cache` would satisfy the peer's summary and
+fail the criterion."* r1 reproduced the risk the design it descends from records.
+
+**Each of A3, A4 and A6 seeds and inspects all four**, each with its own admitted
+control — the successor read must return the **new** list for that cache, not
+merely fail to return the old one. `resend_permitted` is asserted separately
+because §3.2 shows it is written through a different path from the other four.
+
+### 4.8 CORRECTED r2 — observations that separate the mechanisms
+
+r1's matrix assigned independent outcomes without naming observations that tell
+the mechanisms apart, so a cell could pass through a mechanism other than the one
+it grades — and the fail-fast substitution would still look sound.
+
+Three ways a post-retirement read can return nothing, and they are **not**
+interchangeable:
+
+| Observation | Proves | Does **not** prove |
+|---|---|---|
+| authorization refusal | the guard fired | anything was retired |
+| result-cache key **changed** | the epoch advanced (**K1**) | the slot was evicted |
+| slot **identity** changed — a new `PooledEntry` | the slot was retired (**K2**) | the epoch moved |
+
+**I** Refusal alone is the trap: a revoked caller resolves no credential, so **V**
+`meta_route_isolation_refused` omits the backend and the read returns nothing
+**whether or not anything was retired**. Every revocation cell is green against a
+retirement path that does nothing at all — the strongest possible version of the
+"operation succeeded, outcome did not hold" defect, because here the operation
+need not even run.
+
+**So each cell asserts its own mechanism directly**: A5 on the cache **key**
+changing, A3 and A4 on slot **identity** changing, and both on top of — never
+instead of — the behavioural assertion.
+
 ---
 
 ## 5. Fail-fast, per construct
@@ -302,13 +414,14 @@ no cell is the hole; a cell that is green for a named reason is not.**
 |---|---|---|
 | K1 revoke surface → no-op | **A5** | A1, A2, A3, A4, A6, C0 |
 | K2 eviction → no-op | **A3, A4, A6** | A1, A2, A5, C0 |
-| K2 evicts unconditionally, ignoring identity | **C0** | — |
+| K2 evicts unconditionally, ignoring identity | **A4's bystander control** — beta retains its slot **and its warm-cache fetch count** | C0 (it cannot redden; see §5.1) |
 | K2 keeps the `in_flight == 0` predicate | **A3** in-flight variant | — |
 | **Retirement not consulted by the fill path** (§3.1) | **A3**, and only when its assertion runs **after** the fill lands | — |
 | Rotation retires nothing, successor read falls through to cache | **A6** | A3, A4, A5 |
 
 **I** Row 3 is the control on the control: a repair that retires every per-user
-slot on any revocation would satisfy A3-A6 and is not isolation.
+slot on any revocation would satisfy A3-A6 and is not isolation. **Its assignment
+was wrong in r1 — see §5.1.**
 
 **I** Row 5 is the one an ordinary reading of A3 misses entirely. The
 substitution leaves the revoke path correct and the eviction real — only the
@@ -320,6 +433,36 @@ defect ships.
 revocation cell green, because revocation has no successor to mis-attribute to.
 
 ---
+
+### 5.1 CORRECTED r2 — the retire-everything mutant was assigned to a cell that cannot catch it
+
+**V** `pool.rs:302-310` — the shared slot is *"Inserted at construction and **never
+evicted** (`evict_idle_per_user_entries` explicitly skips it)"*, and `:310` is
+literally `.expect("PoolKey::Shared is inserted at construction and never
+evicted")`.
+
+**I** So a mutant that retires **every per-user slot** on any revocation leaves
+the shared slot untouched, **C0 stays green, and the mutant is undetected.** The
+intent of r1's row 3 was right — retire-everything must be caught — and the
+assignment could not do it.
+
+**This document cited `pool.rs:302` and `:310` two sections earlier, as evidence
+for C0.** The same fact that makes C0 a sound control makes it unable to catch
+this mutant, and r1 used it for both. **A fact is not evidence until it is
+checked against the specific claim it is offered for** — reading it once and
+reusing the conclusion is how it went wrong.
+
+**Reassigned:** the mutant goes to **A4's bystander control** — beta retains its
+slot **and its warm-cache fetch count**. The second half is what does the work: a
+retire-everything implementation leaves beta *authorized* and *able to refill*,
+so an assertion that beta is merely "still served" is green against it. Only the
+fetch count separates "beta's slot survived" from "beta's slot was destroyed and
+silently rebuilt".
+
+**I** That discriminator — *a bystander's warm slot must not refetch* — existed
+in no r1 cell, which is a hole exactly where the plan claims its fail-fast
+procedure matters most. **C0 is reserved for shared-slot eviction**, which is the
+mutant it can actually catch.
 
 ## 6. Open, for the release owner
 
