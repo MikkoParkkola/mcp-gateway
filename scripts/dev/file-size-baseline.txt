@@ -1,17 +1,17 @@
 # Rust files over the 800-line ceiling, with the count when recorded.
 # The gate ratchets: a listed file may shrink, never grow, and nothing new
 # may cross. Delete a row once the file drops under the ceiling.
-# 92 files, 67167 lines of excess.
-6557 src/gateway/meta_mcp/tests.rs
-6281 src/gateway/meta_mcp/invoke.rs
+# 92 files, 66117 lines of excess.
+6535 src/gateway/meta_mcp/tests.rs
+6276 src/gateway/meta_mcp/invoke.rs
 5407 src/gateway/server/mod.rs
 3905 src/gateway/router/tests.rs
 2983 src/config_reload/tests.rs
 2854 src/transport/http/tests.rs
-2805 src/gateway/meta_mcp/mod.rs
+2672 src/gateway/meta_mcp/mod.rs
 2350 tests/mik_7272_task_1_acs.rs
 2327 src/config/mod.rs
-2289 src/gateway/router/handlers.rs
+2240 src/gateway/router/handlers.rs
 2226 src/config/tests.rs
 2192 src/backend/pool_tests.rs
 2136 tests/mik_7212_acs.rs
@@ -22,11 +22,11 @@
 2001 src/gateway/auth.rs
 1929 src/transport/http/mod.rs
 1894 src/commands/trust.rs
-1892 src/backend/tests.rs
+1890 src/backend/tests.rs
 1815 src/control_plane/store.rs
 1808 src/gateway/ui/control_plane.rs
-1760 tests/mik_7272_sub2b_acs.rs
 1644 src/security/firewall/mod.rs
+1617 tests/mik_7272_sub2b_acs.rs
 1603 src/protocol_revision_telemetry.rs
 1513 src/gateway/proxy.rs
 1464 src/capability/definition/tests.rs
@@ -37,7 +37,6 @@
 1412 src/gateway/meta_mcp/account_rest_tests.rs
 1407 src/capability/definition/mod.rs
 1397 tests/mik_7212_mrtr_component_acs.rs
-1391 src/transport/stdio.rs
 1370 src/gateway/meta_mcp/authz_tests.rs
 1357 src/capability/backend.rs
 1329 tests/security_tests.rs
@@ -47,9 +46,9 @@
 1277 src/oauth/client/mod.rs
 1272 tests/mik_7212_mrtr7_stdio_acs.rs
 1261 src/oauth/storage.rs
-1258 src/backend/lifecycle.rs
-1199 src/gateway/meta_mcp/search_ranking_authz_tests.rs
+1252 src/backend/lifecycle.rs
 1178 src/trust/lab.rs
+1177 src/gateway/meta_mcp/search_ranking_authz_tests.rs
 1170 src/gateway/streaming.rs
 1141 src/gateway/task_service/store.rs
 1138 tests/mik_7214_header_9_acs.rs
@@ -69,17 +68,17 @@
 996 src/idempotency/admission.rs
 981 tests/mik_7272_subscriptions_acs.rs
 976 src/identity_propagation/mod.rs
-975 src/ranking/mod.rs
+974 src/ranking/mod.rs
 967 src/gateway/meta_mcp_tool_defs.rs
 967 src/gateway/ui/backend_ops.rs
 954 src/commands/doctor.rs
 954 src/commands/protocol_import.rs
 952 src/discovery/shadow.rs
-949 src/gateway/meta_mcp/search.rs
 948 src/trust/mod.rs
-947 src/gateway/meta_mcp_helpers_tests.rs
-888 src/backend/ops.rs
+923 src/gateway/meta_mcp_helpers_tests.rs
+917 src/gateway/meta_mcp/search.rs
 878 src/personal_accounts/provider/provider_tests.rs
+862 src/transport/stdio.rs
 860 src/personal_accounts/mod.rs
 852 src/protocol/types.rs
 849 src/mtls/cert_manager.rs
@@ -93,4 +92,5 @@
 814 tests/gh462_config_preservation.rs
 807 src/gateway/router/origin_guard.rs
 807 src/gateway/ui/mod.rs
+806 src/backend/ops.rs
 804 src/cli/subcommands.rs
