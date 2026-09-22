@@ -8,7 +8,7 @@
 3946 src/gateway/router/tests.rs
 2983 src/config_reload/tests.rs
 2854 src/transport/http/tests.rs
-2687 src/gateway/meta_mcp/mod.rs
+2691 src/gateway/meta_mcp/mod.rs
 2350 tests/mik_7272_task_1_acs.rs
 2327 src/config/mod.rs
 2275 src/gateway/router/handlers.rs

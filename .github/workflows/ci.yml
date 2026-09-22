@@ -425,6 +425,29 @@ jobs:
       - name: Check the 800-line ceiling
         run: python3 scripts/dev/check-file-size.py
 
+  orphan-test-modules:
+    name: Orphan test modules (MIK-7538)
+    # A `*_tests.rs` that no module declares is in no compilation unit: never
+    # built, never run, and invisible to `cargo test`, which reports zero
+    # failures and exits zero for a file it cannot see. One such file was cited
+    # as proof of a cache-stranding behaviour in a release ledger, in two merged
+    # design documents and in three implementation briefs before anyone tried to
+    # run it. The sweep is tree-wide, not directory-scoped: a module may be
+    # declared from a sibling by `#[path = "..."]`, and a directory-scoped
+    # version of this check reported 72 false orphans.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check every test file is declared
+        run: python3 scripts/dev/check-orphan-test-modules.py
+      # The resolver has already been wrong twice -- once directory-scoped,
+      # reporting 72 false orphans out of 113, and once name-matching, which
+      # let a declared `a/foo_tests.rs` answer for an orphaned `b/foo_tests.rs`.
+      # Five stems are duplicated in this tree, so that second hole was live.
+      # These pin both, and a guard that cannot fail is the thing it guards.
+      - name: Check the guard catches what it claims to
+        run: python3 scripts/dev/test_check_orphan_test_modules.py
+
   control-drift-probes:
     name: Control-drift probes (NFR.SEC.7)
     # CI cannot detect drift — there is no listening install here, and by
