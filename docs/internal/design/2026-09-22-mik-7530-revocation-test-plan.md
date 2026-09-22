@@ -71,6 +71,62 @@ ready and nothing reaches it after boot.
 src/backend/` returns nothing. It strands **result-cache keys only**. That is why
 this is two constructs, not one.
 
+
+### 2.1 TWO FUNCTIONS, ONE NAME — the strategy axis every per-user cell needs
+
+**V** There are **two** `cache_binding` functions, and they disagree about
+rotation:
+
+| | inputs | rotation yields |
+|---|---|---|
+| **V** `identity_propagation/mod.rs:316`, produced at `:460` | `(subject_key, audience)` where **V** `subject_key = stable_actor_id` = `(issuer, subject)` | the **same** binding — nothing about the grant enters it |
+| **V** `personal_accounts/vault.rs:311`, produced at `:269` | `(account digest, lease.generation, authorization_epoch, token_revision, descriptor_revision)` | a **different** binding, **by design** — its doc says *"a re-authorized or rotated account produces a different binding, so a result cached for the previous grant is never served for the new one"* |
+
+**V** Both feed `PropagatedCredential::cache_binding`, and **V** `PoolKey::PerUser
+{ binding }` (`pool.rs:42-44`) takes whichever the configured strategy produced.
+
+**I So the rotation answer is strategy-scoped, and the two arms are opposite:**
+
+- **signed-assertion** — same binding → same `PoolKey` → a fresh slot is served
+  to the successor → **stale serve**
+- **vault** — different binding → different `PoolKey` → no stale serve is
+  representable
+
+**V** `SignedAssertion` is *"the reference strategy shipped in this slice"*
+(`mod.rs:207-209`), so the failing arm is the **shipped default**, not an exotic
+configuration. The finding survives; its scope does not.
+
+#### What this changes, beyond A6
+
+**I** The scoping propagates to every cell whose mechanism depends on **binding
+equality across a grant change**:
+
+| Cell | Strategy-scoped? | Why |
+|---|---|---|
+| **A6** (rotation) | **yes — needs both arms** | the binding decides whether a successor inherits the slot |
+| **A3 Expect 2** (§3.2 resend contamination) | **yes** | the late fill contaminates the **successor** only if it reuses the key; under vault it writes to the retired key's own slot |
+| **A7** (result fill across rotation) | **yes** | same |
+| **A3b, A4, A5** (revocation) | **no** | revocation has no successor binding to collide with, so binding equality is not in play |
+
+**A6's vault arm is the admitted case for free.** It discriminates a fix that
+makes the signed-assertion binding **grant-aware** from one that breaks the vault
+binding to match — two repairs that a single-arm cell cannot tell apart.
+
+#### The fixture already picked an arm by accident
+
+**V** The shipped `catalogue_per_caller_tests.rs` configures
+`PropagationStrategyKind::SignedAssertion` and installs a test strategy returning
+`format!("{subject_key}@{audience}")` — **grant-unaware**, i.e. signed-assertion
+shaped. **I** So the merged suite tests one arm and names neither. That is this
+finding's own defect standing in my own code, which is the argument for putting
+the strategy on every row rather than in a preamble.
+
+**The general form, because two functions with one name is the reliable way to
+make it:** a name is not an identifier of behaviour. `cache_binding` reads as one
+mechanism and is two, with opposite answers to the question this row asks — and
+nothing at the call site distinguishes them, because both produce a `String` into
+the same field.
+
 ---
 
 ## 2. The two constructs, and why one test cannot grade both
@@ -485,6 +541,7 @@ disqualified.
 | **Sequencing** | pause → retire → establish successor → **release** → assert |
 | **Expect 1 — slot** | **non-creating** lookup reports the retired key **absent** after the fill completes |
 | **Expect 2 — resend** | the successor's `resend_permitted` is **unchanged** by the completion. **V** `metadata.rs:262` re-resolves the key at completion time, and **V** `ensure_entry_started` runs **before** the request reaches the wire, so both writes are live after retirement |
+| **Expect 2 is STRATEGY-SCOPED (v4)** | it reaches the **successor** only when the binding is reused — **signed-assertion**. Under **vault** the late fill writes to the **retired** key's own slot, so the assertion becomes "no slot is recreated" and the contamination arm is not representable (§2.1) |
 | **Expect 3 — content** | the retired fill's catalogue is not served |
 | **Admitted case** | an **un-retired** fill in the same barrier shape **is** served, and its slot **is** present |
 | **NEW v3** | Expects 1 and 2 are new. **A recreated slot can be EMPTY and still wrong** — content assertions alone miss it, and an empty slot carrying obsolete resend permissions is the exact residue |
@@ -502,6 +559,7 @@ disqualified.
 | **Expect** | no slot is created for the retired binding, and no catalogue is served |
 | **Admitted case** | a **non**-retired cold binding fills normally on first read |
 | **Why a row** | r1-r4 claimed the cold case was covered by `tests.rs:1817`. It is not (above). Cold per-user retirement was untested and marked covered |
+| **Strategy (v4)** | **not scoped** — revocation has no successor binding to collide with, so both strategies answer alike. Stated rather than omitted: a cell that does not name its strategy is untestable as written |
 
 ---
 
@@ -557,7 +615,10 @@ disqualified.
 | **Expect 2 — ADMITTED SUCCESSOR** | after the race settles, a G2 read **SUCCEEDS** and returns **distinguishable G2 content** |
 | **Expect 3 — mechanism** | slot identity changed at rotation |
 | **NEW v3 — why Expect 2 is not optional** | without it, **an implementation that permanently refuses every rotated grant passes this row.** That is an **outage that grades green**. Exclusion-only assertions are satisfied by refusing everything, which is the same vacuity as an absence-only oracle, one layer up |
-| **Status** | **RED at HEAD.** **V** `cache_binding` is `(subject, audience)` and **V** `stable_actor_id` is `(issuer, subject)` — stable across rotation **by design**, so a rotation reuses the `PoolKey` and a fresh slot is served to the successor. No race required |
+| **STRATEGY — CORRECTED v4** | **Two arms, mandatory.** The rotation answer is strategy-scoped (§2.1) and the arms are opposite |
+| **Arm 1 — `SignedAssertion`** | **RED at HEAD.** **V** binding is `(subject, audience)`, **V** `subject_key = stable_actor_id = (issuer, subject)` — stable across rotation **by design**, so the successor inherits the `PoolKey` and a fresh slot is served to it. No race required. **V** This is *"the reference strategy shipped in this slice"* (`mod.rs:207-209`) — the failing arm is the **default** |
+| **Arm 2 — vault** | **GREEN at HEAD, and it is the admitted case for free.** **V** `vault.rs:311` mixes generation, authorization epoch, token revision and descriptor revision into the binding, so a rotation yields a **different** `PoolKey` and no stale serve is representable |
+| **What two arms buy** | they discriminate a fix that makes the signed-assertion binding **grant-aware** from one that **breaks the vault binding** to match. A single-arm cell cannot tell those repairs apart |
 
 ### A7 — a call-result fill completing across a rotation **[NEW ROW v3]**
 
@@ -570,6 +631,7 @@ disqualified.
 | **Inputs** | a G1 **call-result** fill blocked on a barrier; rotation to G2; barrier released |
 | **Expect** | an admitted **G2 call excludes the G1 result**, and G2's own call succeeds |
 | **Admitted case** | without rotation, the released fill **is** served and a repeat call hits cache |
+| **Strategy (v4)** | **both arms**, like A6 — a result fill crossing a rotation collides only when the binding is reused |
 | **Why a row** | A3/A6 block a **`tools/list`** fill; A5 retires a **settled** result cache. A result fill *in flight across* a rotation is neither, and the criterion names both nouns in one clause |
 
 ---
@@ -592,7 +654,9 @@ disqualified.
 | K1 surface → no-op | **A3, A3b, A4, A5, A6, A7** — all of them; **CORRECTED r4, see §5.2** | A1, A2, C0 |
 | K2 retirement → no-op | **A3, A3b, A4, A6** | A1, A2, A5, A7, C0 |
 | **K2 retires but the recreated slot keeps its resend set** | **A3 Expect 2** only | A3 Expects 1 and 3 — which is why Expect 2 is separate |
-| **K2 fires on revoke but not rotation** | **A6, A7** | A3, A3b, A4, A5 |
+| **K2 fires on revoke but not rotation** | **A6 arm 1, A7 arm 1** | A3, A3b, A4, A5, **A6 arm 2, A7 arm 2** |
+| **Fix makes the vault binding grant-BLIND to match signed-assertion** | **A6 arm 2, A7 arm 2** | A6 arm 1, A7 arm 1 — the repair that trades one arm for the other |
+| **Suite configures one strategy and names neither** | nothing — **and that is the point** | every cell. **V** The merged `catalogue_per_caller_tests.rs` is already in this state (§2.1) |
 | **Rotation refuses every successor grant** (outage) | **A6 Expect 2** | A6 Expect 1 — exclusion passes for a gateway serving nobody |
 | **Retirement path never runs; refusal supplies the answer** | **A4 Expect 2, A5 Expect 2** | A4/A5 Expect 1 — the behavioural half is green either way |
 | K2 evicts unconditionally, ignoring identity | **A4's bystander control** — beta retains its slot **and its warm-cache fetch count** | C0 (it cannot redden; see §5.1) |
