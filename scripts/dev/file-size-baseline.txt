@@ -67,7 +67,7 @@
 1005 src/ranking/tests.rs
 996 src/idempotency/admission.rs
 981 tests/mik_7272_subscriptions_acs.rs
-976 src/identity_propagation/mod.rs
+1180 src/identity_propagation/mod.rs
 974 src/ranking/mod.rs
 967 src/gateway/meta_mcp_tool_defs.rs
 967 src/gateway/ui/backend_ops.rs

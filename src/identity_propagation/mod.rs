@@ -328,24 +328,48 @@ fn cache_binding(subject_key: &str, audience: &str) -> String {
 /// The binding PREFIX a grant revocation evicts on, reconstructed from the
 /// grant subject (MIK-7530, `MIK-7334.CATALOGUE.1` revocation conjunct).
 ///
-/// UNIMPLEMENTED STUB. It returns `None` for every subject — the "matches
-/// nothing" wrong implementation the C7/C8/C10 cells exist to kill. Neutral
-/// value rather than `todo!()` so each cell fails on its own assertion.
+/// It lands HERE, beside [`cache_binding`], because this is the only place the
+/// two formulas may meet: restating either one in `config_reload` would bind a
+/// person the gateway never authenticated.
 ///
-/// The contract, from
-/// `docs/internal/design/2026-09-22-identity-keyed-slot-eviction.md` §E1:
-/// `Some(format!("idp:{}:{}:", key.len(), key))` where `key` is
-/// `VerifiedIdentity::stable_actor_id`'s encoding of (authority, subject);
-/// `None` when the authority is not issuer-shaped, so an `mtls` /
-/// `agent_oauth` / `trusted_header` grant skips rather than matches. It lands
-/// HERE, beside [`cache_binding`], because this is the only place the two
-/// formulas may meet.
+/// The prefix pins the subject and leaves the audience free
+/// (`docs/internal/design/2026-09-22-identity-keyed-slot-eviction.md` §E1).
+/// Leaving the audience free is not looseness: on the token-exchange path the
+/// pool key is [`token_exchange::exchange_cache_key`]'s *widened* string, so an
+/// exact match would silently evict nothing there. The length prefix makes the
+/// subject boundary unambiguous, so the prefix cannot reach into another
+/// subject either — C7 pins both directions.
+///
+/// `None` when the authority is not an issuer. The test is POSITIVE — the
+/// authority must parse as an absolute URL, which is what OIDC requires of
+/// `iss` — rather than a denylist of the three literal authorities
+/// `grant_subject_from_verified_identity`'s siblings set (`trusted_header`,
+/// `mtls`, `agent_oauth`). A denylist would admit every authority invented
+/// after it was written; a positive test refuses those by construction. The
+/// blank-issuer fallback (`"oidc"`) fails it too, which is correct: a blank
+/// `iss` reaches the binding as `oidc:0::…` and no reconstruction can match it.
+///
+/// Returning `None` loses nothing. A slot on this path only exists for a
+/// caller who had a `VerifiedIdentity`, whose grant subject therefore carries
+/// the issuer — so a non-issuer authority means no `idp:` slot exists to evict.
 #[allow(dead_code)] // no production caller until MVP piece 3 wires the reload loop
 pub(crate) fn identity_binding_prefix(
     subject: &crate::identity_grants::GrantSubject,
 ) -> Option<String> {
-    let _ = subject;
-    None
+    if !url::Url::parse(&subject.authority).is_ok_and(|url| url.has_host()) {
+        return None;
+    }
+    // Built through `stable_actor_id` rather than restated, so the two cannot
+    // drift: the pool binding is derived from that same method.
+    let subject_key = VerifiedIdentity {
+        subject: subject.subject.clone(),
+        email: String::new(),
+        name: None,
+        groups: Vec::new(),
+        issuer: subject.authority.clone(),
+    }
+    .stable_actor_id();
+    Some(format!("idp:{}:{subject_key}:", subject_key.len()))
 }
 
 /// Reference strategy: mint a short-lived gateway-signed JWT (ES256) asserting
