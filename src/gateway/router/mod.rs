@@ -32,6 +32,11 @@ pub(crate) use authorization::{
 };
 mod backend_handlers;
 mod handlers;
+// Re-exported rather than widening `mod handlers` itself, so exactly one item
+// becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the
+// production constructor instead of reimplementing it; see its doc comment.
+#[cfg(test)]
+pub(crate) use handlers::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
 mod origin_guard;
 

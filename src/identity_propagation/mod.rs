@@ -1039,18 +1039,18 @@ mod tests {
         identity(subject, issuer).stable_actor_id()
     }
 
-    /// The grant row an operator stores, built by the PRODUCTION constructor
-    /// path's own normalisation rules. C10a/C10b exist because that
-    /// normalisation and `stable_actor_id` disagree.
+    /// The grant row an operator stores, built by driving the PRODUCTION
+    /// constructor. C10a/C10b exist because its normalisation and
+    /// `stable_actor_id` disagree.
+    ///
+    /// IT CALLS PRODUCTION RATHER THAN MIRRORING IT. An earlier draft
+    /// reimplemented `grant_subject_from_verified_identity`'s trim-then-take-512
+    /// here, which made these cells structurally blind to the very fix they
+    /// exist to demand: a reimplementation reproduces whichever side its author
+    /// had in mind, so it can never observe the two sides diverging.
     fn oidc_grant_subject(issuer: &str, subject: &str) -> GrantSubject {
-        // Mirrors `grant_subject_from_verified_identity`
-        // (`gateway/router/handlers.rs:71-78`), which is private to that
-        // module: trim, then take 512 CHARS. The divergence from
-        // `stable_actor_id`'s raw, BYTE-length-prefixed encoding is the defect
-        // C10a/C10b pin, so the fixture must reproduce it rather than hide it.
-        let trimmed = subject.trim();
-        let stored: String = trimmed.chars().take(512).collect();
-        GrantSubject::new(issuer.to_string(), stored, None)
+        crate::gateway::grant_subject_from_verified_identity(&identity(subject, issuer))
+            .expect("a verified identity always yields a grant subject")
     }
 
     // C7 — the matcher cell. Goes red when the prefix over-matches or

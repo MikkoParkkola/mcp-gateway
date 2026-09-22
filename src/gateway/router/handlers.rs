@@ -68,7 +68,17 @@ fn caller_grant_subject(
         .or_else(|| oauth_agent_identity.and_then(grant_subject_from_oauth_agent))
 }
 
-fn grant_subject_from_verified_identity(identity: &VerifiedIdentity) -> Option<GrantSubject> {
+/// Build the grant subject an OIDC-verified caller is authorized as.
+///
+/// `pub(crate)` ON PURPOSE — do not narrow it back. The
+/// `MIK-7334.CATALOGUE.1` C10a/C10b cells drive THIS function, because the
+/// defect they pin is a disagreement between what it stores and what
+/// `VerifiedIdentity::stable_actor_id` puts in the pool binding:
+/// `trimmed_non_empty` trims and truncates by CHARACTERS, the binding
+/// length-prefixes raw BYTES. A fixture reimplementing this cannot catch that.
+pub(crate) fn grant_subject_from_verified_identity(
+    identity: &VerifiedIdentity,
+) -> Option<GrantSubject> {
     let subject = trimmed_non_empty(&identity.subject)?;
     let authority = trimmed_non_empty(&identity.issuer).unwrap_or_else(|| "oidc".to_string());
     let label = trimmed_non_empty(&identity.email)

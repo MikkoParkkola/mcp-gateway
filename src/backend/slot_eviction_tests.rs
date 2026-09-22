@@ -110,6 +110,19 @@ impl CountingUpstream {
     fn was_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
     }
+
+    /// Re-arm after an eviction closed this transport.
+    ///
+    /// NOT a softening of anything. Eviction correctly takes the slot's
+    /// transport with the slot (C12 asserts the removal; §E4 closes an IDLE
+    /// one), so after it the fixture's upstream is closed and unreachable — a
+    /// real backend re-establishes a transport on the next read, and this fake
+    /// one has to be told to. Without it the post-eviction read cannot be
+    /// served at all and the cell panics on setup instead of reaching its own
+    /// assertions.
+    fn reconnect(&self) {
+        self.closed.store(false, Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
@@ -239,6 +252,22 @@ async fn fill_slot(backend: &Backend, binding: &str) -> Arc<CountingUpstream> {
     upstream
 }
 
+/// Stand a transport back up on the slot an eviction emptied.
+///
+/// A HARNESS REPAIR, and it weakens nothing. The fill counter carries across,
+/// so `fills() > fills_before` keeps its exact meaning: this read reached the
+/// backend. A slot that SURVIVED the eviction still carries a warm
+/// `tools_cache`, and `get_cached_list_on` serves that without ever calling
+/// `ensure_entry_started` — so it never touches the re-installed transport.
+/// Every wrong implementation these cells name therefore still leaves the
+/// counter unmoved with `BEFORE` on the wire, which is the discrimination the
+/// cells exist for.
+fn rearm(backend: &Backend, binding: &str, upstream: &Arc<CountingUpstream>) {
+    upstream.reconnect();
+    backend
+        .set_pooled_transport_for_test(&slot(binding), Arc::clone(upstream) as Arc<dyn Transport>);
+}
+
 // C1 — the criterion's own case, and the one `Vec::is_empty` cannot reach.
 //
 // Goes red when a POPULATED per-user slot survives revocation. Kills routing
@@ -269,6 +298,7 @@ async fn c1_a_revoked_callers_populated_slot_does_not_survive() {
 
     upstream.revoke();
     backend.evict_identity_slots(&prefix).await;
+    rearm(&backend, &binding, &upstream);
 
     let served = backend
         .get_tools_for_binding(Some(&binding), &[])
@@ -365,6 +395,7 @@ async fn c3_eviction_does_not_decline_against_a_busy_slot() {
     upstream.revoke();
     backend.evict_identity_slots(&prefix).await;
     drop(claim);
+    rearm(&backend, &binding, &upstream);
 
     let served = backend
         .get_tools_for_binding(Some(&binding), &[])
@@ -459,6 +490,8 @@ async fn c9_every_backend_holding_the_subject_is_evicted() {
     // separately so an implementation that stops after the first goes red.
     first.evict_identity_slots(&prefix).await;
     second.evict_identity_slots(&prefix).await;
+    rearm(&first, &binding_a, &upstream_a);
+    rearm(&second, &binding_b, &upstream_b);
 
     first
         .get_tools_for_binding(Some(&binding_a), &[])

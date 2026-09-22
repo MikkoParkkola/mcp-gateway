@@ -22,6 +22,15 @@ mod openwebui_adapter;
 pub mod proxy;
 pub mod recovery;
 mod router;
+/// The one constructor that turns a verified identity into a grant subject,
+/// re-exported so the `MIK-7334.CATALOGUE.1` prefix cells can drive it WITHOUT
+/// `router` itself becoming crate-visible. Same shape as
+/// `STDIO_CREDENTIAL_PRINCIPAL` below. A fixture that reimplemented it could
+/// not observe the trim/truncate-versus-raw-bytes divergence it exists to pin.
+/// `#[cfg(test)]` because the cells are its only consumer today; MVP piece 3
+/// (the reload loop) is what gives it a production caller.
+#[cfg(test)]
+pub(crate) use router::grant_subject_from_verified_identity;
 pub(crate) mod search_disclosure;
 mod server;
 /// The one stdio admission identifier, re-exported so a consumer outside
