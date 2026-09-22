@@ -800,7 +800,10 @@ Nothing smaller is distinguishable from noise.
 | `P4` | 92 | 1.1592 | idx69→92 | +5.84pp | **no** (just under) |
 | `REL` | 115 | 1.1237 | idx92→115 | −3.55pp | **no** |
 
-Spearman rho(index, ratio) = 0.900 over 5 points.
+Ladder monotonicity: `rho(first-parent index, median ratio)` = **0.900** over
+the 5 measured points (the `spearman_rho` field of `analysis.json`; an
+independent recomputation gives 0.9276). This is **not** the load correlation
+of §6.3, and the two must not be confused — §6.3 records that near-miss.
 
 **Exactly one segment is resolvable: idx27→69, at +8.42pp, carrying 68% of the
 total +12.37pp rise.** Everything else is inside the floor, including the
@@ -1232,8 +1235,46 @@ both are withdrawn rather than quietly revised:
 **Withdrawn — "within-cycle drift tracks host load".** At n=9 this read
 `rho(load1, |Aprime/A − 1|) = 0.850` and was reported as promoting the
 mechanism from plausible to measured. **At n=18 it is +0.028 — no relationship
-at all**, and on the kept set alone it is **−0.315**, i.e. weakly the *opposite*
-sign. The 0.850 was a small-sample artefact.
+at all.**
+
+The provenance was checked rather than assumed, because a plausible alternative
+explanation existed: that 0.850 had been the `spearman_rho` field of
+`analysis.json`, which is **ladder monotonicity** — `rho(first-parent index,
+median ratio)` across the arms, +0.9276 at final `n` — quoted as though it were
+the load statistic. **It was not.** Recomputed from the committed `reps.csv`,
+the load correlation over the first 9 observed cycles reproduces at **exactly
++0.850**, and its decay is a genuine statistic collapsing as `n` grows:
+
+| observed cycles | `rho(load1, \|Aprime/A − 1\|)` |
+|---|---|
+| 9 | **+0.850** |
+| 10 | +0.867 |
+| 12 | +0.581 |
+| 18 | **+0.028** |
+
+So this is a real small-sample artefact, not a conflated quantity — and the
+distinction matters, because the two failure modes have different fixes. A
+conflated statistic is fixed by labelling; an artefact is fixed only by `n`.
+
+**Every rho in this report names the set it is over, because the sets
+disagree.** Over all 18 observed cycles the load correlation is **+0.028**; over
+the 15 kept cycles alone it is **≈ −0.31** (−0.315 here, −0.304 on an
+independent recomputation). "No relationship overall" and "mildly inverse among
+the kept" are different statements, and at n=15 the second is not significant.
+**No claim is made from it.**
+
+**Why the correlation vanishes is visible in the three exclusions, and this is
+a stronger answer than any single rho:**
+
+| cycle | load1 | `Aprime/A` | |
+|---|---|---|---|
+| 1 | 21.57 | 0.8971 | `Aprime` **faster** |
+| 7 | 13.53 | 0.8170 | `Aprime` **faster** |
+| 15 | 7.13 | 1.1079 | `Aprime` **slower** |
+
+**Opposite signs at opposite ends of the load range.** Rule (c) fires on the
+*magnitude* of drift, which occurs in both directions and at both high and low
+load — so the rule is not a load filter, and the kept set is not load-selected.
 
 That has a consequence which cuts *in favour* of the run and must therefore be
 stated carefully rather than gratefully: if drift does not track load, then
