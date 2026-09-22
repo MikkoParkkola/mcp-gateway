@@ -3501,10 +3501,10 @@ impl MetaMcp {
             .get(server)
             .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
 
-        // Eagerly check the cached tool list for a "did you mean?" hint.
-        // Only fires when the cache is populated and the tool is not found there.
-        // We still dispatch to the backend in case the cache is stale.
-        let cached_names = backend.get_cached_tool_names();
+        // A "did you mean?" hint off THIS CALLER'S slot (MIK-7334.CATALOGUE.1):
+        // the shared one holds a catalogue this caller was never shown once a
+        // `stateless` backend lists per caller. Stale-tolerant; we still dispatch.
+        let cached_names = backend.get_cached_tool_names_for(identity_key);
         let tool_is_cached = cached_names.iter().any(|n| n == tool);
 
         // Build request params. `_meta` is one object, so one writer owns it:
@@ -3600,7 +3600,7 @@ impl MetaMcp {
             .and_then(|entry| entry.tool.output_schema)
             .or_else(|| {
                 backend
-                    .get_cached_tool(tool)
+                    .get_cached_tool_for(identity_key, tool)
                     .and_then(|cached| cached.output_schema)
             });
 
