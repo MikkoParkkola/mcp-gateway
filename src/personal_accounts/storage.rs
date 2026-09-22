@@ -359,6 +359,18 @@ fn claim_store(
 /// (`storage.rs:135`). A child module sees its ancestors' private items, so one
 /// helper here reaches both with no visibility widening anywhere, and there is
 /// one definition of the length rather than one per caller.
+/// No durable writers exist on this target, so no generation is ever spent.
+///
+/// The whole `commit` family already refuses here -- `commit_grant` returns
+/// `InvalidConfiguration` on a non-unix target -- and the migration reaches
+/// this before it reaches that refusal, so the answer is the same category one
+/// step earlier. Returning an error rather than a value keeps a platform with
+/// no durable store from minting identifiers for records it cannot write.
+#[cfg(not(unix))]
+pub(super) fn random_hex() -> Result<String, AccountError> {
+    Err(AccountError::InvalidConfiguration)
+}
+
 #[cfg(unix)]
 pub(super) fn random_hex() -> Result<String, AccountError> {
     let mut bytes = [0_u8; 16];
