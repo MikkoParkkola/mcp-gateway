@@ -1,0 +1,121 @@
+cycles observed : 18
+cycles kept     : 15  [2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18]
+cycles excluded : 3
+    cycle 1: within-cycle drift: Aprime/A = 0.8971, |dev| > 0.1
+    cycle 7: within-cycle drift: Aprime/A = 0.8170, |dev| > 0.1
+    cycle 15: within-cycle drift: Aprime/A = 1.1079, |dev| > 0.1
+
+per-cycle Aprime/A (same bytes as A, measured at max slot separation):
+    cycle   1: 0.8971   [EXCLUDED]
+    cycle   2: 0.9499
+    cycle   3: 0.9568
+    cycle   4: 0.9887
+    cycle   5: 0.9953
+    cycle   6: 1.0081
+    cycle   7: 0.8170   [EXCLUDED]
+    cycle   8: 1.0160
+    cycle   9: 0.9990
+    cycle  10: 1.0455
+    cycle  11: 0.9476
+    cycle  12: 1.0703
+    cycle  13: 1.0643
+    cycle  14: 1.0196
+    cycle  15: 1.1079   [EXCLUDED]
+    cycle  16: 0.9074
+    cycle  17: 1.0526
+    cycle  18: 1.0339
+
+
+slot effect (median raw p50 by position within cycle, kept cycles):
+    slot 0: 0.6910 ms  (-1.1% vs run median)  n=15
+    slot 1: 0.6987 ms  (-0.0% vs run median)  n=15
+    slot 2: 0.6953 ms  (-0.5% vs run median)  n=15
+    slot 3: 0.7188 ms  (+2.9% vs run median)  n=15
+    slot 4: 0.6987 ms  (+0.0% vs run median)  n=15
+    slot 5: 0.6950 ms  (-0.5% vs run median)  n=15
+    slot spread (worst/best): 4.04%
+    arm x slot balance: UNEVEN over 15 kept cycles (needs a multiple of 6, all kept) -- CONFOUNDED with
+      arm effect; do not read the spread above as a position effect
+
+arm      fp_idx   n    median        lo        hi     cov     sd%   raw p50 median
+A             0  15    1.0000    1.0000    1.0000   0.965    0.00   0.6579 ms
+Aprime        0  15    1.0081    0.9568    1.0455   0.965    4.74   0.6401 ms
+B            27  15    1.0166    0.9602    1.0330   0.965    4.57   0.6478 ms
+P3           69  15    1.1007    1.0679    1.1518   0.965    5.69   0.7237 ms
+P4           92  15    1.1592    1.1133    1.1923   0.965    4.96   0.7150 ms
+REL         115  15    1.1237    1.1010    1.1521   0.965    4.71   0.7293 ms
+
+--- validity gates ---
+G1 self-vs-self  Aprime/A = 1.0081 [0.9568,1.0455] width 8.88pp -> PASS
+G2 endpoint      REL/A    = 1.1237 [1.1010,1.1521] -> reproduces a regression
+
+--- shape ---
+point ladder: idx0=1.0000  idx27=1.0166  idx69=1.1007  idx92=1.1592  idx115=1.1237
+Spearman rho(fp_index, median ratio) = 0.900  over 5 points
+  segment idx0->idx27: +1.66pp
+  segment idx27->idx69: +8.42pp
+  segment idx69->idx92: +5.84pp
+  segment idx92->idx115: -3.55pp
+largest segment idx27->idx69 carries 68% of the total +12.37pp
+
+--- power, from realised scatter ---
+realised paired SD: control Aprime/A = 4.74%, typical test arm = 4.83% (median over 4 arms)
+effect to resolve           n (k=1.16)  n (k=1.2533)
+1.0% (prior doc target)            483           564
+1.7% (per segment)                 167           195
+8.7% (total, endpoint)               6             7
+at the kept n=15, the resolvable effect is 6.13% (k=1.2533) -- anything smaller is INCONCLUSIVE, not absent
+
+secondary balance-exact subset (pre-registered: most recent multiple of 6): n=12 [5, 6, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18]
+
+arm      X/A      X/Aprime   delta
+B        1.0166   1.0076    -0.0090
+P3       1.1007   1.1141    +0.0134
+P4       1.1592   1.1432    -0.0160
+REL      1.1237   1.1136    -0.0101
+
+mechanism: Spearman rho(load1, |Aprime/A - 1|) = 0.028 over 18 cycles (all observed, not just kept)
+  positive => within-cycle drift tracks host load, so the kept set is load-biased
+  by construction and the reported ratios describe LOW-load conditions, not the box average
+
+--- control settledness (pre-registered rule) ---
+slope(Aprime/A vs cycle) = +0.00646/cycle  (tol +/-0.005)
+mean over final 6 cycles = 1.0309  (tol 1+/-0.02)
+verdict: DRIFTING -- control has not settled; ratios are provisional
+decomposition: A 0.7886 -> 0.5880 (-25.4%), Aprime 0.7075 -> 0.6079 (-14.1%)
+
+--- post-hoc: geometric-mean pooling, balance-exact subset (n=12) ---
+cancels a multiplicative position term exactly; median does not
+arm         median  geo-mean    delta
+A           1.0000    1.0000  +0.0000
+Aprime      1.0178    1.0122  -0.0056
+B           1.0283    1.0117  -0.0167
+P3          1.1343    1.1191  -0.0152
+P4          1.1593    1.1467  -0.0126
+REL         1.1298    1.1318  +0.0020
+
+per-cycle denominator and key ratios (kept cycles marked *):
+ cyc    A raw  load1  Aprime/A       B/A      P3/A      P4/A     REL/A
+  1    0.7886  21.57    0.8971    0.9656    1.0217    1.0028    0.9946
+  2*   0.7319  10.40    0.9499    0.9613    1.0679    1.1133    1.1521
+  3*   0.7210  10.53    0.9568    1.0130    1.0838    1.1157    1.1075
+  4*   0.7277   9.22    0.9887    0.9298    1.0327    1.1982    1.1010
+  5*   0.7230   8.62    0.9953    1.0166    1.1411    1.1609    1.0775
+  6*   0.6931   7.12    1.0081    1.0502    1.1408    1.2079    1.0523
+  7    0.7596  13.53    0.8170    0.9791    0.9103    1.0101    1.0777
+  8*   0.7190   7.71    1.0160    0.9602    1.1007    1.1519    1.1237
+  9*   0.7238   7.36    0.9990    0.9516    1.0859    1.0877    1.1064
+ 10*   0.6002  10.11    1.0455    1.0319    1.0938    1.1264    1.1212
+ 11*   0.6471   7.71    0.9476    0.9612    1.0285    1.0678    1.1358
+ 12*   0.5980   7.68    1.0703    1.0832    1.2020    1.1592    1.1494
+ 13*   0.5820   5.23    1.0643    1.0475    1.1568    1.2163    1.2505
+ 14*   0.5997   7.88    1.0196    1.0273    1.1278    1.1923    1.1449
+ 15    0.6045   7.13    1.1079    0.9527    1.2562    1.1317    1.0890
+ 16*   0.6579   6.45    0.9074    0.9582    1.0224    1.0620    1.0925
+ 17*   0.6061   6.35    1.0526    1.0330    1.1940    1.1593    1.1676
+ 18*   0.5880   6.50    1.0339    1.0294    1.1518    1.1819    1.1719
+     kept-cycle A spread: min 0.5820 max 0.7319 (25.8% range)
+
+--- sensitivity: two-sided rule (b) would drop no kept cycle ---
+
+wrote /home/mikko/perf-workload/results/ramp-v2/analysis.json
