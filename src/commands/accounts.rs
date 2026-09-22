@@ -13,8 +13,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use mcp_gateway::{
-    InitializedStore, OfflineInitError, cli::AccountsCommand, config::Config,
-    initialize_store_offline,
+    InitializedStore, MigratedCredential, OfflineInitError, OfflineMigrationError,
+    cli::AccountsCommand, config::Config, initialize_store_offline,
+    migrate_legacy_credential_offline,
 };
 
 /// Run `mcp-gateway accounts` subcommands.
@@ -24,7 +25,110 @@ use mcp_gateway::{
 pub fn run_accounts_command(cmd: &AccountsCommand, config_path: Option<&Path>) -> ExitCode {
     match cmd {
         AccountsCommand::InitStore => run_init_store(config_path),
+        AccountsCommand::MigrateCredentials {
+            descriptor_id,
+            legacy_issuer,
+            legacy_backend_name,
+        } => run_migrate_credentials(
+            config_path,
+            descriptor_id,
+            legacy_issuer,
+            legacy_backend_name.as_deref(),
+        ),
     }
+}
+
+/// Migrate one 3.x credential into the configured store.
+///
+/// Same configuration discipline as `init-store`: the file is named rather than
+/// discovered, and it is loaded through `load_evaluated` so the env overlay the
+/// key references resolve against is the one the config's own `env_files`
+/// produced.
+fn run_migrate_credentials(
+    config_path: Option<&Path>,
+    descriptor_id: &str,
+    legacy_issuer: &str,
+    legacy_backend_name: Option<&str>,
+) -> ExitCode {
+    let Some(path) = config_path else {
+        eprintln!(
+            "Error: accounts migrate-credentials needs an explicit configuration. \
+             Pass --config PATH naming the gateway config whose `accounts` block \
+             declares the store and the descriptor to migrate into."
+        );
+        return ExitCode::FAILURE;
+    };
+    let evaluated = match Config::load_evaluated(Some(path)) {
+        Ok(evaluated) => evaluated,
+        Err(error) => {
+            eprintln!(
+                "Error: cannot load configuration {}: {error}",
+                path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match migrate_legacy_credential_offline(
+        &evaluated.config,
+        &evaluated.overlay,
+        descriptor_id,
+        legacy_issuer,
+        legacy_backend_name,
+    ) {
+        Ok(report) => {
+            print_migrated(&report);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            eprintln!("{}", migration_hint(&error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Guidance per refusal, so a failure says what to do next rather than only
+/// what went wrong.
+fn migration_hint(error: &OfflineMigrationError) -> &'static str {
+    match error {
+        OfflineMigrationError::NotConfigured => {
+            "Add an `accounts` block naming store_dir, authority_dir and the key \
+             references, then run `accounts init-store` before migrating into it."
+        }
+        OfflineMigrationError::NoSuchDescriptor(_) => {
+            "Name a descriptor declared under `accounts.descriptors` with mode \
+             personal_managed. The id is the map key, not the backend registry name."
+        }
+        OfflineMigrationError::Configuration(_) => {
+            "Fix the `accounts` block. A personal_managed descriptor must declare \
+             both an explicit resource and an explicit issuer."
+        }
+        OfflineMigrationError::StoreUnavailable(_) => {
+            "The store must already exist and be openable: run `accounts init-store` \
+             first, and make sure no gateway is holding its locks."
+        }
+        OfflineMigrationError::Refused(_) => {
+            "Nothing was written and your 3.x file is untouched. The message above \
+             names what to change; a renamed backend needs --legacy-backend-name."
+        }
+    }
+}
+
+/// Paths and names only: no token, no scope and no account identity is printed.
+fn print_migrated(report: &MigratedCredential) {
+    if report.written {
+        println!("Migrated one 3.x credential into the account store.");
+    } else {
+        println!("Nothing to do: this account already holds a grant.");
+    }
+    println!("  descriptor_id: {}", report.descriptor_id);
+    println!("  source file:   {}", report.source);
+    println!();
+    println!(
+        "Your 3.x credential file was not modified, renamed or deleted. Keep it \
+         until the migrated backend has been used successfully."
+    );
 }
 
 /// Initialize an empty store for the selected configuration.

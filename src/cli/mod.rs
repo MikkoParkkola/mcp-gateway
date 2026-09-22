@@ -174,6 +174,41 @@ pub enum AccountsCommand {
         about = "Create an empty personal-account store from --config (offline)"
     )]
     InitStore,
+    /// Migrate one 3.x OAuth credential into the per-principal store.
+    ///
+    /// Offline and explicit. It opens an EXISTING store and never creates one,
+    /// reads one 3.x credential file, and performs one guarded write. The 3.x
+    /// file is never modified, renamed or deleted, so a refusal leaves the
+    /// deployment exactly where it started.
+    ///
+    /// Arguments rather than a config block on purpose: a migration runs once,
+    /// and a config block for a one-time operation is a standing instruction
+    /// for something that has already happened.
+    #[command(
+        name = "migrate-credentials",
+        about = "Migrate one 3.x OAuth credential into the account store (offline)"
+    )]
+    MigrateCredentials {
+        /// The `accounts.descriptors` map key to migrate into.
+        #[arg(long = "descriptor-id", value_name = "ID")]
+        descriptor_id: String,
+        /// The authorization server that issued the 3.x credential.
+        ///
+        /// Asserted, never defaulted from the descriptor: a 3.x record carries
+        /// no issuer, and silently adopting the destination's would re-home a
+        /// credential to a server that never issued it. It must equal the
+        /// descriptor's issuer, or the credential belongs elsewhere and the
+        /// answer is re-authorization rather than migration.
+        #[arg(long = "legacy-issuer", value_name = "URL")]
+        legacy_issuer: String,
+        /// The 3.x backend registry name, if this backend was renamed since.
+        ///
+        /// Derived from the descriptor id when absent. Only a rename needs it:
+        /// the 3.x file is hashed over the name the backend had then, and
+        /// nothing in the tree records a former name.
+        #[arg(long = "legacy-backend-name", value_name = "NAME")]
+        legacy_backend_name: Option<String>,
+    },
 }
 
 /// Top-level subcommands
