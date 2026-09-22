@@ -37,6 +37,15 @@ case "$REPS" in
 esac
 [[ "$REPS" -ge 6 ]] || { echo "void: WORKLOAD_REPS=$REPS is below the n>=6 median-interval floor" >&2; exit 3; }
 
+# The cell order is drawn per rep from this seed, which is recorded in
+# pins.json so the run can be reproduced by passing it back in. A run that
+# picks its own order and does not say which order it picked cannot be
+# replayed, and its position effects cannot be checked after the fact.
+SEED="${WORKLOAD_SEED:-$(date +%s)}"
+case "$SEED" in
+  ''|*[!0-9]*) echo "void: WORKLOAD_SEED must be a positive integer, got '$SEED'" >&2; exit 3 ;;
+esac
+
 REF_A="${REF_A:-v3.5.0}"
 REF_B="${REF_B:-v3.5.1}"
 REF_C="${REF_C:-HEAD}"
@@ -52,6 +61,23 @@ MODERN_PROTOCOL="2026-07-28"
 # cell -> ref port config client-protocol
 cell_ref()    { case "$1" in A) echo "$REF_A";; B) echo "$REF_B";; *) echo "$REF_C";; esac; }
 cell_port()   { case "$1" in A) echo 39420;; B) echo 39421;; C) echo 39422;; D) echo 39423;; E) echo 39424;; esac; }
+
+# rep number -> the cell order that rep runs, a FRESH PERMUTATION of all five
+# cells, deterministic in SEED. Not a rotation: under a rotation every cyclic
+# relationship is invariant -- each cell keeps the same predecessor and the
+# same distance to every other cell in every rep -- so a rotation randomises
+# nothing that a fixed order does not already fix. Under the old fixed order C
+# sat two slots after A in EVERY rep, and each cell's ratio therefore carried
+# an uncancelled position term; doubling the reps from 6 to 12 made A.p50's
+# half-width worse (0.059 -> 0.073), because more sampling cannot average out a
+# term that never varies. Shuffling slot and neighbour together is what makes
+# the per-rep pairing mean anything.
+cell_order() {
+  python3 -c 'import random,sys
+cells = ["A","B","C","D","E"]
+random.Random(f"{sys.argv[1]}:{sys.argv[2]}").shuffle(cells)
+print(" ".join(cells))' "$SEED" "$1"
+}
 # The gateway expands ${VAR} in a backend's `headers`, `env` and in
 # `capabilities.directories` -- NOT in `command` (src/config/mod.rs,
 # expand_env_vars). A ${WORKLOAD_FIXTURE} left in `command` would be passed to
@@ -310,9 +336,9 @@ do_measure() {
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \
     "$(cat "$ARMS_DIR/A/.checkout_sha")" "$(cat "$ARMS_DIR/B/.checkout_sha")" \
-    "$(cat "$ARMS_DIR/C/.checkout_sha")" "$REPS" "$(ncpu)" <<'PY'
+    "$(cat "$ARMS_DIR/C/.checkout_sha")" "$REPS" "$(ncpu)" "$SEED" <<'PY'
 import json, subprocess, sys
-path, digest, a, b, c, reps, ncpu = sys.argv[1:8]
+path, digest, a, b, c, reps, ncpu, seed = sys.argv[1:9]
 def ver(ref):
     out = subprocess.run(["git","show",f"{ref}:Cargo.toml"],capture_output=True,text=True).stdout
     for line in out.splitlines():
@@ -332,7 +358,7 @@ for cell in ("C","D","E"):
 # chosen after the numbers were seen.
 json.dump({"k6_image_digest": digest, "reps": list(range(1, int(reps) + 1)),
            "ncpu": int(ncpu), "load_envelope": {"max_load1": float(ncpu)},
-           "cells": cells},
+           "cell_order_seed": seed, "cells": cells},
           open(path,"w"), indent=2)
 PY
 
@@ -340,15 +366,28 @@ PY
   # a cell that skips it is measured on a colder page cache than its siblings.
   for cell in A B C D E; do run_rep "$cell" "${cell}0" "$run" warmup; done
 
-  # Measured, interleaved. Spark is shared, so the arms must see the same
-  # machine conditions rather than consecutive blocks of time. D and E are in
-  # this loop for that reason and no other: running them as a trailing block
-  # gave them a different machine. In the 2026-09-21 run the gated cells drew a
-  # window averaging loadavg 7 and the report-only pair, 35 minutes later, drew
-  # one averaging 3.4 -- which is the whole of why D and E looked untouched by
-  # an excursion that was never about which cells were gated.
+  # Measured, interleaved, and in a fresh order every rep. Spark is shared, so
+  # the arms must see the same machine conditions rather than consecutive
+  # blocks of time. D and E are in this loop for that reason and no other:
+  # running them as a trailing block gave them a different machine. In the
+  # 2026-09-21 run the gated cells drew a window averaging loadavg 7 and the
+  # report-only pair, 35 minutes later, drew one averaging 3.4 -- which is the
+  # whole of why D and E looked untouched by an excursion that was never about
+  # which cells were gated.
+  #
+  # The order within a rep is drawn from cell_order and WRITTEN DOWN as it is
+  # drawn. A declared order the loop then ignored would be invisible in a green
+  # run, so the file records the sequence this loop actually iterates.
+  # Truncated first: the run dir is only mkdir -p'd, so a second `measure`
+  # over the same dir would append a second set of reps and a reader taking
+  # line N as rep N would get the wrong order.
+  : > "$run/cell_order.jsonl"
   for n in $(seq 1 "$REPS"); do
-    for cell in A B C D E; do run_rep "$cell" "${cell}${n}" "$run" measured; done
+    read -r -a order <<< "$(cell_order "$n")"
+    joined="${order[*]}"
+    printf '{"rep": %s, "order": ["%s"]}\n' "$n" "${joined// /\", \"}" \
+      >> "$run/cell_order.jsonl"
+    for cell in "${order[@]}"; do run_rep "$cell" "${cell}${n}" "$run" measured; done
   done
 
   echo "[done] run dir $run"

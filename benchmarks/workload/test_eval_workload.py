@@ -686,7 +686,7 @@ def test_runner_declares_the_sample_it_runs():
         ).stdout.strip()
         proc = subprocess.run(
             [sys.executable, "-c", writer.group(1), str(out), DIGEST, head, head, head,
-             "6", str(NCPU)],
+             "6", str(NCPU), str(SEED)],
             capture_output=True, text=True, cwd=EVAL.parent.parent.parent,
         )
         assert proc.returncode == 0, f"runner pin writer failed: {proc.stderr}"
@@ -846,6 +846,228 @@ def test_every_cell_is_interleaved():
             f"cell loop `{loop.strip()}` does not span every cell {cells}; a cell "
             f"in its own block is measured on its own machine conditions"
         )
+    # The measured loop draws its cells from the per-rep permutation, so the
+    # literal list above is the warm-up's. There must be exactly one measured
+    # cell loop: a second one is the trailing block that gave D and E their own
+    # machine, whatever order it draws.
+    measured = re.findall(r'for cell in \S+; do run_rep [^\n]*measured', runner)
+    assert len(measured) == 1, (
+        f"expected one measured cell loop, found {len(measured)}: {measured}"
+    )
+
+
+def graded(latencies, **overrides):
+    """Grade a synthetic run and hand back (exit status, report)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp)
+        build(run, latencies, **overrides)
+        status = run_eval(run)
+        return status, json.loads((run / "verdict.json").read_text())
+
+
+# One rep in which EVERY cell is elevated together: the 2026-09-21 shape, where
+# a single machine excursion took tools-call p99 to 58.74 (A), 74.97 (B) and
+# 33.90 (C) against a ~3.0 typical. Sixfold here, on the flat fixture.
+COMMON_MODE = {f"{c}3": (60.0, 120.0) for c in CELLS}
+# The same size of excursion, on the candidate cell alone.
+CANDIDATE_ONLY = {"C3": (60.0, 120.0)}
+
+
+def test_common_mode_excursion_leaves_the_paired_ratio_stable():
+    """Every cell elevated in one rep: unpaired widths blow out, ratio does not.
+
+    This is the whole point of the paired figure. The cells are interleaved, so
+    a machine excursion moves numerator and denominator of the same rep
+    together and cancels in the ratio; scoring each cell's absolute values
+    instead charges the excursion to all three cells at once and reports a
+    width nobody can interpret.
+    """
+    _, report = graded(FLAT, jitter=COMMON_MODE)
+
+    for cell in ev.LEGACY_CELLS:
+        for stat in ("p50", "p99"):
+            width = report["cells"][cell][f"{stat}_rel_half_width"]
+            assert width > 0.10, (
+                f"the unpaired {cell}.{stat} width must show the excursion, "
+                f"got {width!r}"
+            )
+
+    for base in ("A", "B"):
+        for stat in ("p50", "p99"):
+            paired = report["paired"][f"C_over_{base}"][stat]
+            assert paired["rel_half_width"] == 0.0, (
+                f"a common-mode excursion must cancel in C/{base}.{stat}, got "
+                f"{paired['rel_half_width']!r}"
+            )
+            assert paired["median"] == 1.0, (
+                f"C/{base}.{stat} median moved to {paired['median']!r} on an "
+                f"excursion that hit both cells equally"
+            )
+
+
+def test_candidate_only_excursion_moves_the_paired_ratio():
+    """One cell elevated alone: the paired ratio must move.
+
+    Without this the paired figure would be a way to make an inconvenient gate
+    quiet -- a statistic that cancels everything, including a real regression
+    in the cell under test.
+    """
+    _, common = graded(FLAT, jitter=COMMON_MODE)
+    _, alone = graded(FLAT, jitter=CANDIDATE_ONLY)
+
+    for base in ("A", "B"):
+        for stat in ("p50", "p99"):
+            moved = alone["paired"][f"C_over_{base}"][stat]
+            flat = common["paired"][f"C_over_{base}"][stat]
+            assert moved["rel_half_width"] > 0.10, (
+                f"a candidate-only excursion must widen C/{base}.{stat}, got "
+                f"{moved['rel_half_width']!r}"
+            )
+            assert moved["rel_half_width"] > flat["rel_half_width"], (
+                f"C/{base}.{stat} is no wider under a one-cell excursion "
+                f"({moved['rel_half_width']!r}) than under a common-mode one "
+                f"({flat['rel_half_width']!r}); the figure cancels everything"
+            )
+            assert max(moved["per_rep_ratio"]) >= 5.0, (
+                f"the elevated rep must survive into C/{base}.{stat}'s series: "
+                f"{moved['per_rep_ratio']}"
+            )
+
+
+def test_paired_ratio_is_keyed_on_rep_index():
+    """The pairing is by rep index, not by rank within each cell.
+
+    A is elevated in rep 2 and C in rep 4. Paired by index that is two
+    excursions, one in each direction: a ~1/6 ratio at rep 2 and a ~6 at rep 4.
+    Pairing the cells' SORTED values instead lines the two excursions up with
+    each other and cancels both, reporting a flat series of 1.0 -- a shuffled
+    order would then change the answer, which is the defect this pins.
+    """
+    _, report = graded(FLAT, jitter={"A2": (60.0, 120.0), "C4": (60.0, 120.0)})
+    series = report["paired"]["C_over_A"]["p50"]["per_rep_ratio"]
+
+    assert len(series) == 6, series
+    assert math.isclose(series[1], 1 / 6, rel_tol=1e-9), (
+        f"rep 2 pairs C's 10.0 with A's elevated 60.0: {series}"
+    )
+    assert math.isclose(series[3], 6.0, rel_tol=1e-9), (
+        f"rep 4 pairs C's elevated 60.0 with A's 10.0: {series}"
+    )
+    # A value-ranked pairing produces this instead. Naming it makes the
+    # assertion above a discrimination rather than a spot check.
+    assert series != [1.0] * 6, (
+        "the series is flat, which is what pairing the cells' sorted values "
+        "gives; the pairing has stopped being by rep index"
+    )
+
+
+def test_runner_records_the_realised_cell_order():
+    """A fresh permutation per rep, recorded, seeded from the run's own pin.
+
+    Interleaving alone is not enough: the old loop ran A B C D E in that order
+    in EVERY rep, so cell C sat two slots after cell A forever and each cell's
+    ratio kept an uncancelled position term. Rotation does not fix it -- under
+    rotation every cell keeps the same predecessor and the same distance to
+    every other cell, so only a fresh permutation randomises slot and
+    neighbour together.
+
+    The helper is EXECUTED here rather than pattern-matched: a regex over the
+    loop text cannot tell a permutation from a rotation.
+    """
+    runner = (EVAL.parent / "run_workload.sh").read_text()
+    cells = sorted(ev.LEGACY_CELLS + ev.REPORT_ONLY_CELLS)
+
+    body = re.search(r"cell_order\(\) \{\n.*?python3 -c '(.*?)'", runner, re.S)
+    assert body, "could not locate the cell_order permutation helper"
+
+    def order(seed, rep):
+        proc = subprocess.run(
+            [sys.executable, "-c", body.group(1), str(seed), str(rep)],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, f"cell_order failed: {proc.stderr}"
+        return proc.stdout.split()
+
+    orders = [order(SEED, n) for n in range(1, 13)]
+    for n, got in enumerate(orders, 1):
+        assert sorted(got) == cells, (
+            f"rep {n} order {got} is not a permutation of {cells}; a cell left "
+            f"out of a rep is measured on its own machine conditions"
+        )
+    assert len({tuple(o) for o in orders}) > 1, (
+        f"every rep drew the same order {orders[0]}; a fixed order is the "
+        f"defect, and a rotation only looks different"
+    )
+    # Rotation check: under a rotation each cell's successor never changes.
+    successors = {
+        c: {o[(o.index(c) + 1) % len(o)] for o in orders} for c in cells
+    }
+    assert any(len(s) > 1 for s in successors.values()), (
+        f"no cell ever changes neighbour: {successors}. That is a rotation, "
+        f"which leaves every cyclic relationship invariant"
+    )
+    assert orders == [order(SEED, n) for n in range(1, 13)], (
+        "the same seed gave a different order; the run is not reproducible"
+    )
+
+    # The seed is recorded and the realised order is written per rep, or the
+    # order a run actually drew is unrecoverable from its artifacts.
+    assert '"cell_order_seed"' in runner, (
+        "run_workload.sh does not record the seed; a run whose seed is not in "
+        "its own output cannot be reproduced"
+    )
+    # The APPEND is what has to be asserted, not the filename: the loop also
+    # truncates the log before the reps, so a substring check for
+    # "cell_order.jsonl" is satisfied by the truncation alone and stays green
+    # with the writer deleted.
+    assert re.search(r'>>\s*"\$run/cell_order\.jsonl"', runner), (
+        "run_workload.sh does not append the realised per-rep order to "
+        "cell_order.jsonl; the order a run drew would be unrecoverable"
+    )
+    assert re.search(r'for cell in "\$\{order\[@\]\}"; do run_rep', runner), (
+        "the measured loop does not iterate the recorded permutation"
+    )
+
+
+def test_committed_fixture_unpaired_figures_are_unchanged():
+    """The archived run's unpaired numbers must survive paired scoring.
+
+    Provenance, not correctness: the paired figure is added BESIDE the numbers
+    the gate has been reporting, and the committed 2026-09-20c artifact is the
+    only record of what those were. Its p50, p99 and spreads are re-derived
+    from the archived per-rep values and compared against the archived cells.
+    """
+    archived = json.loads((ARCHIVE / "verdict.json").read_text())
+    pins = json.loads((ARCHIVE / "pins.json").read_text())
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp)
+        (run / "pins.json").write_text(json.dumps(pins))
+        for cell, reps in archived["per_rep"].items():
+            for rep in reps:
+                name = rep["rep"]
+                (run / f"{name}.summary.json").write_text(
+                    json.dumps(summary(rep["p50"], rep["p99"]))
+                )
+                (run / f"{name}.meta.json").write_text(json.dumps({
+                    "argv": ["mcp-gateway", "--port", "39420"],
+                    "checkout_sha": pins["cells"][cell]["checkout_sha"],
+                    "health_version": pins["cells"][cell]["health_version"],
+                    "k6_image_digest": pins["k6_image_digest"],
+                }))
+        run_eval(run)
+        report = json.loads((run / "verdict.json").read_text())
+
+    for cell, was in archived["cells"].items():
+        for stat in ("p50", "p99", "p50_spread", "p99_spread"):
+            assert report["cells"][cell][stat] == was[stat], (
+                f"{cell}.{stat} moved from the archived {was[stat]!r} to "
+                f"{report['cells'][cell][stat]!r}; paired scoring must not "
+                f"touch the unpaired figures"
+            )
+    assert report["verdict"] == archived["verdict"], (
+        f"the archived run regrades {report['verdict']}, not "
+        f"{archived['verdict']}"
+    )
 
 
 def check(name, fn):
@@ -973,6 +1195,22 @@ def main() -> None:
         test_malformed_reps_pin_voids_rather_than_falling_back,
     )
     check("gate/spread reported, never gating", test_spread_is_reported_but_never_gates)
+
+    print("paired scoring")
+    check(
+        "paired/common-mode excursion cancels",
+        test_common_mode_excursion_leaves_the_paired_ratio_stable,
+    )
+    check(
+        "paired/candidate-only excursion moves",
+        test_candidate_only_excursion_moves_the_paired_ratio,
+    )
+    check("paired/keyed on rep index", test_paired_ratio_is_keyed_on_rep_index)
+    check("paired/runner records realised order", test_runner_records_the_realised_cell_order)
+    check(
+        "paired/committed fixture unpaired figures unchanged",
+        test_committed_fixture_unpaired_figures_are_unchanged,
+    )
 
     if FAILURES:
         print(f"\nFAILED: {len(FAILURES)} stability-gate check(s): {', '.join(FAILURES)}")
