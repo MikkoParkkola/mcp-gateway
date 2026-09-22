@@ -78,7 +78,12 @@ this is two constructs, not one.
 | # | Construct | Retires | Existing machinery |
 |---|---|---|---|
 | **K1** | A runtime revoke surface reaching `set_identity_grants` | result-cache keys, via the policy epoch | the method exists and takes `&self`; nothing calls it after boot |
-| **K2** | **Identity-keyed** pool-slot eviction | the slot's transport **and** its five cache fields together | `evict_idle_per_user_entries` (`pool.rs:326`) evicts per-user slots but keys on an **idle TTL**, not an identity |
+| **K2** | **Identity-keyed** slot retirement, firing on **revocation AND rotation** | the slot's transport **and** its five cache fields together | `evict_idle_per_user_entries` (`pool.rs:326`) evicts per-user slots but keys on an **idle TTL**, not an identity |
+
+**CORRECTED r3** — r1 and r2 described K2 as a revocation construct. **V** A
+rotation reuses the same `PoolKey`, so a fresh slot survives it and serves the
+predecessor's catalogue under the successor's grant with no race involved. K2
+fires on both, and A6 is the cell that catches the narrower reading.
 
 **A single end-to-end "revoke, then nothing is served" case passes if either
 construct works and the other is dead.** So the fail-fast check runs
@@ -313,7 +318,7 @@ current behaviour would call it a bug report; only checking it against the
 | **Successor access** | after the old fill completes, the successor must **succeed** and receive **only** new data — not merely be denied old data |
 | **Mechanism** | **V** `cache_binding` is `(subject, audience)` only (`identity_propagation/mod.rs:316`), so a rotation reuses the **same `PoolKey`** — the successor inherits the retired slot's key, which is why contamination is representable at all (§3.2) |
 | **Admitted case** | a read with **no** intervening rotation still hits cache, and beta is untouched |
-| **Status** | **new**, and it may be green at HEAD — see below |
+| **Status** | **new, and RED at HEAD** — no race needed; see the correction below |
 
 **RATIFIED 2026-09-22 as its own cell, not an A3 variant. Cells are enumerated
 by failure mode, and rotation's is not revocation's:**
@@ -333,7 +338,50 @@ announces itself. A mis-attribution is the **right shape of answer under the
 wrong identity** — plausible, successful-looking, and detected only by someone
 who already knows what G2's catalogue should contain.
 
-#### A6 is a REGRESSION ROW if it is green at HEAD, not a falsifier
+#### CORRECTED r3 — A6 is RED at HEAD. It is a falsifier, not a regression row.
+
+**r1 and r2 both said A6 "may well be green at HEAD". Having been asked what
+evidence would make me doubt that, I looked for it and found it — the cell is
+red, for a mechanism this document already contains and had not applied to the
+steady state.**
+
+**V** `cache_binding(subject_key, audience)` (`identity_propagation/mod.rs:316`)
+where **V** `subject_key = identity.stable_actor_id()` (`:454`), and **V**
+`stable_actor_id` is `(issuer, subject)` (`key_server/oidc.rs:132-140`) — stable
+across a grant rotation **by design; that is what the name means**.
+
+So at HEAD, with nothing retiring the slot:
+
+1. alpha's slot is populated under **G1** and still fresh;
+2. rotation to **G2** lands; no construct retires anything;
+3. alpha reads — `caller_credential_for` resolves G2 and yields **the same
+   binding**, hence **the same `PoolKey`**;
+4. **V** `backend_tools_for_discovery` serves a fresh per-user slot from cache;
+5. alpha is served **G1's catalogue under G2's grant**.
+
+**I** No race is required. §3.2 established that a rotation reuses the key and I
+applied it only to the in-flight case; the steady state needs no in-flight fill
+at all. **A6 fails at HEAD in the simplest possible scenario.**
+
+**Consequence for scope:** K2 must fire on **rotation**, not only revocation.
+r1 and r2 both described K2 as a revocation construct. That was an
+under-specification, and A6 is what catches it.
+
+**The red window is bounded, which is why it was easy to miss.** #672's staleness
+refetch rescues a rotation that outlives the TTL, and the epoch rescues result
+keys. Neither touches a metadata cache still **fresh** at rotation time — which
+is exactly the case `scope-tests.md:40` names by saying *during a fill*, and the
+adjacent case it does not name.
+
+#### What would have kept this hidden
+
+Recorded because the question that surfaced it is reusable: **a regression row
+nobody can imagine failing is indistinguishable from a row that cannot fail.**
+r2 asserted A6 was probably green and listed two constructs as the reason. Both
+citations were true; neither was checked against **this cell's scenario**. That
+is §5.1's error again — a fact offered as evidence for a claim it was never
+checked against — committed twice in one document, the second time after writing
+the paragraph warning about it.
 
 **A** It may well pass already. If it does, the cell states **which construct
 makes it green** rather than being deleted as redundant:
@@ -417,7 +465,7 @@ instead of — the behavioural assertion.
 | K2 evicts unconditionally, ignoring identity | **A4's bystander control** — beta retains its slot **and its warm-cache fetch count** | C0 (it cannot redden; see §5.1) |
 | K2 keeps the `in_flight == 0` predicate | **A3** in-flight variant | — |
 | **Retirement not consulted by the fill path** (§3.1) | **A3**, and only when its assertion runs **after** the fill lands | — |
-| Rotation retires nothing, successor read falls through to cache | **A6** | A3, A4, A5 |
+| Rotation retires nothing, successor read falls through to cache | **A6** — **this is HEAD's behaviour**, so A6 must be red before implementation and green after | A3, A4, A5 |
 
 **I** Row 3 is the control on the control: a repair that retires every per-user
 slot on any revocation would satisfy A3-A6 and is not isolation. **Its assignment
