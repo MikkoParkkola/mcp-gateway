@@ -32,8 +32,11 @@ impl MetaMcp {
     /// nothing and audits nothing, exactly as before (IDP.5).
     ///
     /// A resolution failure is empty too, never an error: a caller who cannot
-    /// mint for this backend simply gets no per-user view of it, and the
-    /// identity-free guard then omits it. Discovery must not fail wholesale
+    /// mint for this backend simply gets no per-user view of it and falls back
+    /// to the identity-free one. That fallback is NOT omission for most
+    /// backends — the identity-free guard omits only a `required` backend, so a
+    /// failed mint against a non-`required` one degrades to the shared
+    /// catalogue rather than hiding it. Discovery must not fail wholesale
     /// because one backend out of many refused.
     pub(crate) async fn caller_credential_for_identity(
         &self,
