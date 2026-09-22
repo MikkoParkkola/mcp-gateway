@@ -430,10 +430,13 @@ missing workstream: `feat/single-user-principal` @ `d5597957`
 flight in an agent worktree and is not on `origin` (V — `git ls-remote` shows
 no such head; the branch resolves locally only).
 
-**Required before any STORE.1 code is written:** confirm against the landed
-IDENTITY.1 that (a) `Principal::SoleOperator` is reachable by a caller inside
-`personal_accounts`, (b) `account_key`'s signature is as read above, and (c)
-the two literals are unchanged. If IDENTITY.1 lands with a different shape,
+**Reachability is already settled (V, read on the branch):** `Principal` is
+`pub(crate)` (`identity.rs:116`) inside `pub(crate) mod identity` (`mod.rs:29`),
+so a migration module inside `personal_accounts` reaches it with no visibility
+widening — nothing to add to §8.2. **Required before any STORE.1 code is
+written:** re-confirm against the LANDED IDENTITY.1 that (a) that visibility
+survived review, (b) `account_key`'s signature is as read above, and (c) the
+two literals are unchanged. If IDENTITY.1 lands with a different shape,
 this section is the defect and it is one paragraph to fix — which is the whole
 reason it is written down before either half ships.
 
