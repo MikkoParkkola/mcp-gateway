@@ -27,7 +27,8 @@
 //! * `f3_control_extraction_ignores_a_token_without_the_claim`
 
 use mcp_gateway::security::{
-    AgentIdentity, AgentIdentityConfig, extract_agent_identity, validate_agent_identity,
+    AgentIdentity, AgentIdentityConfig, AgentSourceKey, KnownAgent, extract_agent_identity,
+    validate_agent_identity,
 };
 
 use axum::http::HeaderMap;
@@ -54,7 +55,13 @@ fn allowlist_only(agents: &[&str]) -> AgentIdentityConfig {
     AgentIdentityConfig {
         enabled: true,
         require_id: false,
-        known_agents: agents.iter().map(|a| (*a).to_string()).collect(),
+        known_agents: agents
+            .iter()
+            .map(|a| KnownAgent {
+                source: AgentSourceKey::Jwt,
+                id: (*a).to_string(),
+            })
+            .collect(),
         ..AgentIdentityConfig::default()
     }
 }

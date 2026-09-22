@@ -33,9 +33,10 @@ pub mod tool_integrity;
 pub mod transparency_log;
 
 pub use agent_identity::{
-    AgentIdentity, AgentIdentityConfig, DeclaredAgentLabel, DeclaredLabel, DeclaredSource,
-    IdentityAudit, OwnedProvenAgentId, PrincipalLabels, ProofSource, ProvenAgentId,
-    ProvenPrincipal, extract_agent_identity, log_agent_identity, validate_agent_identity,
+    AgentIdentity, AgentIdentityConfig, AgentSourceKey, DeclaredAgentLabel, DeclaredLabel,
+    DeclaredSource, IdentityAudit, KnownAgent, OwnedProvenAgentId, PrincipalLabels, ProofSource,
+    ProvenAgentId, ProvenPrincipal, extract_agent_identity, log_agent_identity,
+    validate_agent_identity,
 };
 pub use data_flow::{
     DataFlowRecord, DataFlowTracer, SanitizationRecord, ToolCategory, audit_sanitization,

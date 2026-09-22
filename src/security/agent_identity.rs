@@ -58,13 +58,20 @@ pub struct AgentIdentityConfig {
     /// When `true`, requests without a resolvable `agent_id` are rejected.
     /// Only meaningful when `enabled = true`.  Default: `false`.
     pub require_id: bool,
-    /// Optional allowlist of accepted agent IDs.
+    /// Allowlist of accepted **proven principals**, keyed by `(source, id)`.
     ///
-    /// When non-empty, any resolved `agent_id` outside this list is rejected —
-    /// independently of `require_id`, which governs only the absent-ID case.
-    /// When empty the allowlist check is skipped entirely.
+    /// Keyed by the pair, never the bare identifier. An mTLS subject and a JWT
+    /// `sub` that happen to stringify the same are **not** the same principal:
+    /// string equality across two namespaces is a coincidence, never an
+    /// identity. Both namespaces are live in one deployment — a verified JWT
+    /// can ride behind an mTLS certificate — so a bare-identifier allowlist
+    /// lets whichever namespace is easier to obtain inherit the other's
+    /// access.
+    ///
+    /// A bare-string entry is a **load error** naming the source it must
+    /// declare, never a silently widened match.
     #[serde(default)]
-    pub known_agents: Vec<String>,
+    pub known_agents: Vec<KnownAgent>,
     /// Restore the pre-4.0.0 behaviour in which a caller-supplied label may
     /// satisfy `require_id` and `known_agents`.  Default: `false`.
     ///
@@ -84,10 +91,56 @@ pub struct AgentIdentityConfig {
     pub principal_labels: Vec<PrincipalLabels>,
 }
 
+/// One allowlist entry: a proof source and the identifier it admits.
+///
+/// Deserialized from `{ source = "mtls" | "jwt" | "declared", id = "..." }`.
+/// The three-valued key is deliberately **not** [`ProofSource`], which has two
+/// variants because only two things constitute proof. `Declared` exists solely
+/// so the migration hatch has something to match against, and it is a load
+/// error unless `allow_unverified_agent_identity` is set — an operator cannot
+/// reach declared-label matching without also setting the flag that warns
+/// about it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnownAgent {
+    /// Which namespace the identifier belongs to.
+    pub source: AgentSourceKey,
+    /// The identifier, within that namespace.
+    pub id: String,
+}
+
+/// The namespace an allowlist entry names.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentSourceKey {
+    /// An mTLS client-certificate subject.
+    Mtls,
+    /// A verified JWT `sub`.
+    Jwt,
+    /// A caller-supplied label. Reachable only under the migration hatch, and
+    /// unrepresentable anywhere authorization reads proof.
+    Declared,
+}
+
+impl AgentSourceKey {
+    /// Does this key name the namespace a proven principal came from?
+    fn matches(self, proof: ProofSource) -> bool {
+        matches!(
+            (self, proof),
+            (Self::Mtls, ProofSource::MutualTls) | (Self::Jwt, ProofSource::VerifiedJwtSubject)
+        )
+    }
+}
+
 /// The declared labels one proven principal may present.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrincipalLabels {
-    /// The verified JWT `sub` this entry governs.
+    /// Which namespace [`Self::id`] belongs to.
+    ///
+    /// Present for the same reason `known_agents` is keyed by a pair: an mTLS
+    /// subject and a JWT `sub` that stringify the same are two principals, and
+    /// an entry naming one must not widen the other.
+    pub source: ProofSource,
+    /// The proven principal this entry governs.
     pub id: String,
     /// Labels this principal may declare in addition to its own id.
     #[serde(default)]
@@ -124,23 +177,17 @@ pub fn extract_agent_identity(
     // of a caller-supplied string here, which is the whole point.
     let mtls = cert_identity
         .and_then(select_mtls_subject)
-        .map(|id| ProvenPrincipal {
-            id,
-            proof: ProofSource::MutualTls,
-        });
+        .map(|id| ProvenPrincipal::new(id, ProofSource::MutualTls));
     let jwt = verified_jwt_subject
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| ProvenPrincipal {
-            id: s.to_string(),
-            proof: ProofSource::VerifiedJwtSubject,
-        });
+        .map(|s| ProvenPrincipal::new(s.to_string(), ProofSource::VerifiedJwtSubject));
 
     // Rank by the type, not by position: swapping these two bindings must not
     // change the outcome, which is what `ProofSource: Ord` buys.
     let (proven, secondary_proof) = match (mtls, jwt) {
         (Some(a), Some(b)) => {
-            if a.proof >= b.proof {
+            if a.proof() >= b.proof() {
                 (Some(a), Some(b))
             } else {
                 (Some(b), Some(a))
@@ -223,13 +270,25 @@ pub fn validate_agent_identity(
         return validate_without_proof(identity, config);
     };
 
-    // The allowlist is a PROVEN-PRINCIPAL allowlist. The declared label is not
-    // consulted, so self-declared membership is unrepresentable.
-    if !config.known_agents.is_empty() && !config.known_agents.contains(&proven.id) {
+    // The allowlist is a PROVEN-PRINCIPAL allowlist, keyed by the PAIR.
+    //
+    // Two conflations, not one. The declared label is not consulted, so
+    // self-declared membership is unrepresentable — and the proof source is
+    // part of the key, so one proven namespace cannot inherit another's
+    // membership by stringifying the same. An mTLS CN of `runner` and a JWT
+    // `sub` of `runner` are two principals, and both namespaces are live in a
+    // single deployment.
+    if !config.known_agents.is_empty()
+        && !config
+            .known_agents
+            .iter()
+            .any(|entry| entry.source.matches(proven.proof()) && entry.id == proven.id())
+    {
         return Err(format!(
             "Agent '{}' (proven via {}) is not in the known_agents allowlist, which admits \
-             proven principals only",
-            proven.id, proven.proof
+             proven principals only and matches on the (source, id) pair",
+            proven.id(),
+            proven.proof()
         ));
     }
 
@@ -259,10 +318,19 @@ fn validate_without_proof(
     if config.allow_unverified_agent_identity {
         // Legacy behaviour, reachable only by explicit opt-in: the declared
         // label may satisfy both controls. It still never outranks a proven
-        // principal — that path is not reached from here.
-        if !config.known_agents.is_empty() && !config.known_agents.contains(&declared.id) {
+        // principal — that path is not reached from here. And it matches only
+        // a `declared` entry: turning the hatch on does not re-point an
+        // `mtls` or `jwt` row at self-declaration, so an operator restoring
+        // legacy behaviour re-declares those entries and the config records
+        // which ones they are.
+        if !config.known_agents.is_empty()
+            && !config
+                .known_agents
+                .iter()
+                .any(|entry| entry.source == AgentSourceKey::Declared && entry.id == declared.id)
+        {
             return Err(format!(
-                "Agent label '{}' is not in the known_agents allowlist",
+                "Agent label '{}' is not in the known_agents allowlist as a declared entry",
                 declared.id
             ));
         }
@@ -316,32 +384,62 @@ fn check_declared_label(
         return Ok(IdentityAudit::Clean);
     };
 
-    // Arm 1.
-    if declared.id == proven.id {
+    // Arm 1 — a principal may always declare its own name. The one label that
+    // cannot be a lie, so it is a member of its own set by construction.
+    if declared.id == proven.id() {
         return Ok(IdentityAudit::Clean);
     }
 
-    // Arm 2.
-    if proven.proof == ProofSource::MutualTls {
+    // Arm 2 — an operator-written mapping decides, for EITHER proof source.
+    //
+    // This runs ahead of the mTLS fallback deliberately. With the order
+    // reversed, an mTLS principal short-circuited to "accepted and audited"
+    // before the mapping was consulted, which made a per-principal entry for a
+    // certificate subject unreachable in every configuration — the criterion
+    // says a contradicting label "is refused rather than silently applied",
+    // and for mTLS callers it never was. An operator who can name a subject
+    // can now get that refusal; one who cannot keeps the incomparable default
+    // below.
+    if let Some(entry) = config
+        .principal_labels
+        .iter()
+        .find(|entry| entry.source == proven.proof() && entry.id == proven.id())
+    {
+        if entry.labels.iter().any(|label| label == &declared.id) {
+            return Ok(IdentityAudit::Clean);
+        }
+        return Err(contradiction(declared, proven));
+    }
+
+    // Arm 3 — unmapped mTLS: the namespaces are incomparable, so the mismatch
+    // is a detection signal rather than a refusal. A SAN URI and a short label
+    // cannot be compared without inventing an ordering, and an invented
+    // ordering later reads as a security guarantee.
+    if proven.proof() == ProofSource::MutualTls {
         return Ok(IdentityAudit::DeclaredLabelMismatch);
     }
 
-    // Arm 3.
-    let permitted = config
-        .principal_labels
-        .iter()
-        .find(|entry| entry.id == proven.id)
-        .is_some_and(|entry| entry.labels.contains(&declared.id));
-    if permitted {
-        return Ok(IdentityAudit::Clean);
-    }
+    // Arm 4 — unmapped JWT: the label namespace and the `client_id` namespace
+    // are the same kind of name, so a differing label is comparable, and a
+    // missing mapping is never read as permission.
+    Err(contradiction(declared, proven))
+}
 
-    Err(format!(
+/// The refusal a contradicting declared label earns.
+///
+/// The caller-supplied value is rendered inside single quotes and is the only
+/// untrusted text here; it reaches an operator log and a JSON-RPC error
+/// message, never a shell or a query.
+fn contradiction(declared: &DeclaredLabel, proven: &ProvenPrincipal) -> String {
+    format!(
         "Request rejected: the declared agent label '{}' (via {}) contradicts the proven \
-         principal '{}' (via {}). Add '{}' to agent_identity.principal_labels for '{}' if this \
-         caller is entitled to declare it.",
-        declared.id, declared.source, proven.id, proven.proof, declared.id, proven.id
-    ))
+         principal '{}' (via {}). Add it to agent_identity.principal_labels for that principal \
+         if this caller is entitled to declare it.",
+        declared.id,
+        declared.source,
+        proven.id(),
+        proven.proof()
+    )
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -411,12 +509,12 @@ fn hex_digit(b: u8) -> Option<u8> {
 /// Shared by both dispatch routes so the field set cannot drift between them.
 pub fn log_agent_identity(identity: &AgentIdentity, audit: IdentityAudit, refusal: Option<&str>) {
     let proven = identity.proven_id();
-    let proof = identity.proven.as_ref().map(|p| p.proof.to_string());
-    let secondary = identity.secondary_proof.as_ref().map(|p| p.id.as_str());
+    let proof = identity.proven.as_ref().map(|p| p.proof().to_string());
+    let secondary = identity.secondary_proof.as_ref().map(ProvenPrincipal::id);
     let secondary_proof = identity
         .secondary_proof
         .as_ref()
-        .map(|p| p.proof.to_string());
+        .map(|p| p.proof().to_string());
     let declared = identity.declared_id();
     let declared_source = identity.declared.as_ref().map(|d| d.source.to_string());
 

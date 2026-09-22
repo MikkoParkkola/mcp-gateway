@@ -12,7 +12,13 @@ fn cfg(enabled: bool, require_id: bool, known: &[&str]) -> AgentIdentityConfig {
     AgentIdentityConfig {
         enabled,
         require_id,
-        known_agents: known.iter().map(|a| (*a).to_string()).collect(),
+        known_agents: known
+            .iter()
+            .map(|a| KnownAgent {
+                source: AgentSourceKey::Jwt,
+                id: (*a).to_string(),
+            })
+            .collect(),
         ..AgentIdentityConfig::default()
     }
 }
@@ -38,10 +44,7 @@ fn cert(san: &[&str], cn: Option<&str>) -> crate::mtls::identity::CertIdentity {
 
 fn proven(id: &str, proof: ProofSource) -> AgentIdentity {
     AgentIdentity {
-        proven: Some(ProvenPrincipal {
-            id: id.to_string(),
-            proof,
-        }),
+        proven: Some(ProvenPrincipal::for_test(id, proof)),
         ..AgentIdentity::default()
     }
 }
@@ -141,7 +144,7 @@ fn a_verified_subject_is_a_proven_principal() {
     let identity = extract_agent_identity(&HeaderMap::new(), None, None, Some("svc-a"));
     assert_eq!(identity.proven_id(), Some("svc-a"));
     assert_eq!(
-        identity.proven.as_ref().map(|p| p.proof),
+        identity.proven.as_ref().map(ProvenPrincipal::proof),
         Some(ProofSource::VerifiedJwtSubject)
     );
 }
@@ -156,7 +159,7 @@ fn mtls_selects_the_first_san_uri() {
         Some("spiffe://cluster/ns/agents/sa/runner")
     );
     assert_eq!(
-        identity.proven.as_ref().map(|p| p.proof),
+        identity.proven.as_ref().map(ProvenPrincipal::proof),
         Some(ProofSource::MutualTls)
     );
 }
@@ -196,11 +199,14 @@ fn mtls_outranks_a_verified_jwt_and_the_jwt_is_kept() {
     let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&c), Some("svc-b"));
     assert_eq!(identity.proven_id(), Some("spiffe://cluster/a"));
     assert_eq!(
-        identity.secondary_proof.as_ref().map(|p| p.id.as_str()),
+        identity.secondary_proof.as_ref().map(ProvenPrincipal::id),
         Some("svc-b")
     );
     assert_eq!(
-        identity.secondary_proof.as_ref().map(|p| p.proof),
+        identity
+            .secondary_proof
+            .as_ref()
+            .map(ProvenPrincipal::proof),
         Some(ProofSource::VerifiedJwtSubject)
     );
 }
@@ -319,6 +325,7 @@ fn a_principal_may_always_declare_its_own_name() {
     let identity = with_label(proven("svc-a", ProofSource::VerifiedJwtSubject), "svc-a");
     let mut config = cfg(true, true, &[]);
     config.principal_labels = vec![PrincipalLabels {
+        source: ProofSource::VerifiedJwtSubject,
         id: "svc-a".to_string(),
         labels: vec!["billing".to_string()],
     }];
@@ -339,6 +346,7 @@ fn a_mapped_principal_may_not_exceed_its_label_set() {
     );
     let mut config = cfg(true, true, &[]);
     config.principal_labels = vec![PrincipalLabels {
+        source: ProofSource::VerifiedJwtSubject,
         id: "svc-a".to_string(),
         labels: vec!["billing".to_string()],
     }];
@@ -389,15 +397,140 @@ fn an_mtls_mismatch_is_audited_not_refused() {
     );
 }
 
+/// The CRITICAL from the focused review on #681: the allowlist was keyed on
+/// the identifier string alone, so an mTLS subject and a JWT `sub` that
+/// stringify the same were one entry. Both namespaces are live in a single
+/// deployment — a verified JWT rides behind an mTLS certificate — so whichever
+/// is easier to obtain inherited the other's access.
+///
+/// Same shape as the STORE.1 defect: two namespaces compared as if they were
+/// one.
+#[test]
+fn an_allowlist_entry_does_not_cross_proof_namespaces() {
+    // GIVEN: the allowlist admits the mTLS subject `runner`
+    let mut config = cfg(true, true, &[]);
+    config.known_agents = vec![KnownAgent {
+        source: AgentSourceKey::Mtls,
+        id: "runner".to_string(),
+    }];
+
+    // WHEN: a caller proves a JWT `sub` that stringifies identically
+    let jwt = proven("runner", ProofSource::VerifiedJwtSubject);
+
+    // THEN: refused. String equality across two namespaces is a coincidence,
+    // never an identity.
+    validate_agent_identity(&jwt, &config)
+        .expect_err("a jwt `sub` inherited an mtls subject's allowlist membership");
+
+    // CONTROL: the principal the entry actually names is still admitted, so
+    // this row cannot pass for an implementation that refuses everyone.
+    let mtls = proven("runner", ProofSource::MutualTls);
+    validate_agent_identity(&mtls, &config).expect("the named mTLS subject was refused");
+}
+
+/// The MEDIUM from the same review: the mTLS arm short-circuited ahead of the
+/// operator mapping, so a per-principal entry for a certificate subject was
+/// unreachable in every configuration. The criterion says a contradicting
+/// label "is refused rather than silently applied"; for mTLS callers it never
+/// was.
+#[test]
+fn a_named_mtls_subject_refuses_a_contradicting_label() {
+    let mut config = cfg(true, true, &[]);
+    config.principal_labels = vec![PrincipalLabels {
+        source: ProofSource::MutualTls,
+        id: "spiffe://cluster/ns/agents/sa/runner".to_string(),
+        labels: vec!["runner".to_string()],
+    }];
+    let identity = with_label(
+        proven(
+            "spiffe://cluster/ns/agents/sa/runner",
+            ProofSource::MutualTls,
+        ),
+        "billing",
+    );
+
+    validate_agent_identity(&identity, &config)
+        .expect_err("a mapped mTLS subject accepted a label outside its set");
+}
+
+/// The control for the row above, and the property RULING 2 settled: an mTLS
+/// subject the operator has NOT named keeps the incomparable default —
+/// accepted and audited, never refused. Without this row, the fix above would
+/// be indistinguishable from making every mTLS mismatch a refusal, which is
+/// the outage the incomparability ruling exists to prevent.
+#[test]
+fn an_unnamed_mtls_subject_keeps_the_incomparable_default() {
+    let config = cfg(true, true, &[]);
+    let identity = with_label(
+        proven(
+            "spiffe://cluster/ns/agents/sa/runner",
+            ProofSource::MutualTls,
+        ),
+        "runner",
+    );
+
+    assert_eq!(
+        validate_agent_identity(&identity, &config).expect("an unnamed mTLS subject was refused"),
+        IdentityAudit::DeclaredLabelMismatch,
+        "the mismatch was accepted but not signalled"
+    );
+}
+
+/// A `principal_labels` entry naming one namespace must not widen the other,
+/// for the same reason the allowlist is keyed by a pair.
+#[test]
+fn a_label_mapping_does_not_cross_proof_namespaces() {
+    let mut config = cfg(true, true, &[]);
+    config.principal_labels = vec![PrincipalLabels {
+        source: ProofSource::VerifiedJwtSubject,
+        id: "runner".to_string(),
+        labels: vec!["billing".to_string()],
+    }];
+
+    // An mTLS subject of the same name is NOT governed by the jwt entry, so it
+    // falls through to the incomparable default rather than borrowing the
+    // mapping's permission.
+    let identity = with_label(proven("runner", ProofSource::MutualTls), "billing");
+    assert_eq!(
+        validate_agent_identity(&identity, &config).expect("refused"),
+        IdentityAudit::DeclaredLabelMismatch,
+        "an mTLS subject was governed by a jwt-keyed mapping"
+    );
+}
+
 // ── Validation: the migration hatch ───────────────────────────────────────
 
 /// Anchor: the operator ruling's migration clause.
 #[test]
 fn the_hatch_restores_declared_only_matching() {
     let identity = extract_agent_identity(&header("x-agent-id", "agent-allowed"), None, None, None);
-    let mut config = cfg(true, true, &["agent-allowed"]);
+    let mut config = cfg(true, true, &[]);
     config.allow_unverified_agent_identity = true;
+    config.known_agents = vec![KnownAgent {
+        source: AgentSourceKey::Declared,
+        id: "agent-allowed".to_string(),
+    }];
     assert!(validate_agent_identity(&identity, &config).is_ok());
+}
+
+/// The other half of the hatch, and the half that makes the row above worth
+/// having: turning the flag on adds a `declared` source, it does NOT re-point
+/// proven-principal entries at self-declaration.
+///
+/// Without this, the row above stays green while the escalation it exists to
+/// pin is wide open — an operator who set `{source = "jwt", id = "svc-a"}`
+/// and then enabled the hatch would find a bare header satisfying it.
+#[test]
+fn the_hatch_does_not_re_point_a_proven_entry_at_self_declaration() {
+    let identity = extract_agent_identity(&header("x-agent-id", "svc-a"), None, None, None);
+    let mut config = cfg(true, true, &[]);
+    config.allow_unverified_agent_identity = true;
+    config.known_agents = vec![KnownAgent {
+        source: AgentSourceKey::Jwt,
+        id: "svc-a".to_string(),
+    }];
+    validate_agent_identity(&identity, &config)
+        .expect_err("a declared label matched a jwt-keyed allowlist entry under the hatch");
 }
 
 /// Anchor: the hatch restores exactly one behaviour and NOT
