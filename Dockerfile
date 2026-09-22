@@ -1,7 +1,7 @@
 # =============================================================================
 # MCP Gateway - Multi-stage Docker Build
 # =============================================================================
-# Build:  docker build -t mcp-gateway:latest .
+# Build:  docker build --target runtime -t mcp-gateway:latest .
 # Run:    docker run -p 127.0.0.1:39400:39400 \
 #           -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
 #           -v ./gateway.yaml:/config.yaml:ro mcp-gateway:latest \
@@ -42,7 +42,7 @@ RUN touch src/main.rs && cargo build --release
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime
 # ---------------------------------------------------------------------------
-FROM debian:trixie-slim
+FROM debian:trixie-slim AS runtime
 
 LABEL io.modelcontextprotocol.server.name="io.github.MikkoParkkola/mcp-gateway"
 
@@ -94,3 +94,55 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 
 ENTRYPOINT ["mcp-gateway"]
 CMD ["--config", "/config.yaml"]
+
+# ---------------------------------------------------------------------------
+# Stage 3: Runtime + stdio backend runtimes (`:latest-full`)
+# ---------------------------------------------------------------------------
+FROM runtime AS runtime-full
+
+ARG APT_CACHE_BUST=local
+
+USER root
+
+RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    gnupg \
+    openssh-client \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource-setup.sh \
+    && bash /tmp/nodesource-setup.sh \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -f /tmp/nodesource-setup.sh \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version | grep -q '^v24\.' \
+    && npm --version >/dev/null
+
+# NodeSource ships whichever npm it bundled that day; the pin makes the tree
+# scanned below a version this repo chose. Do not "simplify" it away.
+RUN npm install -g npm@12.0.2 \
+    && test "$(npm --version)" = "12.0.2"
+
+# npm protects its own vendored tree; these are unpacked over it, not installed.
+RUN cd /tmp && mkdir npm-patch && cd npm-patch \
+    && for spec in brace-expansion@5.0.9 ip-address@10.3.1 tar@7.5.21; do \
+         name="${spec%@*}"; ver="${spec##*@}"; \
+         dest="/usr/lib/node_modules/npm/node_modules/${name}"; \
+         npm pack --silent "${spec}" >/dev/null || exit 1; \
+         rm -rf "${dest}"; \
+         mkdir -p "${dest}"; \
+         tar -xzf "${name}-${ver}.tgz" -C "${dest}" --strip-components=1 || exit 1; \
+         got="$(node -p "require('${dest}/package.json').version")"; \
+         test "${got}" = "${ver}" || { echo "npm patch failed: ${name} is ${got}, wanted ${ver}" >&2; exit 1; }; \
+       done \
+    && cd / && rm -rf /tmp/npm-patch
+
+RUN curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh \
+    && env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh \
+    && rm -f /tmp/uv-install.sh
+
+RUN mkdir -p /home/gateway/.cache/uv /home/gateway/.npm && \
+    chown -R gateway:gateway /home/gateway/.cache /home/gateway/.npm
+
+USER gateway

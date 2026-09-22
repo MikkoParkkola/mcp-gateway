@@ -498,6 +498,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          target: runtime
           platforms: ${{ matrix.platform }}
           provenance: false
           sbom: false
@@ -537,20 +538,58 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: scripts/ci/smoke-image.sh "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
 
-      - name: Record the digest for the manifest job
+      - name: Build and push the full variant by digest (no tag)
+        id: build_full
+        run: |
+          set -euo pipefail
+          META="${RUNNER_TEMP}/full-build-meta.json"
+          docker buildx build \
+            --target runtime-full \
+            --platform "${{ matrix.platform }}" \
+            --provenance=false --sbom=false \
+            --metadata-file "${META}" \
+            --build-arg "APT_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}" \
+            --cache-from "type=gha,scope=docker-${{ matrix.arch }}" \
+            --cache-from "type=gha,scope=docker-full-${{ matrix.arch }}" \
+            --cache-to "type=gha,mode=max,scope=docker-full-${{ matrix.arch }}" \
+            --output "type=image,name=ghcr.io/mikkoparkkola/mcp-gateway,push-by-digest=true,name-canonical=true,push=true" \
+            .
+          DIGEST="$(jq -r '."containerimage.digest"' "${META}")"
+          test -n "${DIGEST}" && test "${DIGEST}" != "null"
+          echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
+
+      - name: Trivy the full variant (same gate as the default image)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mikkoparkkola/mcp-gateway@${{ steps.build_full.outputs.digest }}
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+
+      - name: Smoke test the full variant (it must spawn npx and uvx)
+        env:
+          DIGEST: ${{ steps.build_full.outputs.digest }}
+        run: scripts/ci/smoke-full-image.sh "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+
+      - name: Record the digests for the manifest job
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST_FULL: ${{ steps.build_full.outputs.digest }}
         run: |
           set -euo pipefail
           mkdir -p digests
           printf '%s' "${DIGEST}" > "digests/${{ matrix.arch }}"
+          printf '%s' "${DIGEST_FULL}" > "digests/${{ matrix.arch }}-full"
           test -s "digests/${{ matrix.arch }}"
+          test -s "digests/${{ matrix.arch }}-full"
 
-      - name: Upload the digest
+      - name: Upload the digests
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: image-digest-${{ matrix.arch }}
-          path: digests/${{ matrix.arch }}
+          name: image-digests-${{ matrix.arch }}
+          path: digests/
           retention-days: 1
           if-no-files-found: error
 
@@ -585,7 +624,7 @@ jobs:
       - name: Download the leg digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: image-digest-*
+          pattern: image-digests-*
           merge-multiple: true
           path: digests
 
@@ -622,27 +661,47 @@ jobs:
           LIST="$(docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}" \
             --format '{{.Manifest.Digest}}')"
           docker buildx imagetools inspect "${IMAGE}@${LIST}"
+          FULL_AMD64="$(cat digests/amd64-full)"
+          FULL_ARM64="$(cat digests/arm64-full)"
+          for value in "${FULL_AMD64}" "${FULL_ARM64}"; do test -n "${value}"; done
+          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}-full" \
+            --annotation "index:io.modelcontextprotocol.server.name=io.github.MikkoParkkola/mcp-gateway" \
+            "${IMAGE}@${FULL_AMD64}" "${IMAGE}@${FULL_ARM64}"
+          LIST_FULL="$(docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}-full" \
+            --format '{{.Manifest.Digest}}')"
+          docker buildx imagetools inspect "${IMAGE}@${LIST_FULL}"
           {
             printf 'list=%s\n' "${LIST}"
             printf 'amd64=%s\n' "${AMD64}"
             printf 'arm64=%s\n' "${ARM64}"
+            printf 'list_full=%s\n' "${LIST_FULL}"
+            printf 'amd64_full=%s\n' "${FULL_AMD64}"
+            printf 'arm64_full=%s\n' "${FULL_ARM64}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Assert the list carries both platforms
         env:
           LIST: ${{ steps.list.outputs.list }}
+          LIST_FULL: ${{ steps.list.outputs.list_full }}
         run: |
           set -euo pipefail
-          PLATFORMS="$(docker buildx imagetools inspect \
-            "ghcr.io/mikkoparkkola/mcp-gateway@${LIST}" \
-            --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')"
-          echo "published platforms: ${PLATFORMS}"
-          for want in linux/amd64 linux/arm64; do
-            case " ${PLATFORMS} " in
-              *" ${want} "*) ;;
-              *) echo "::error::${want} missing from the published manifest list"; exit 1 ;;
-            esac
-          done
+          assert_both() {
+            local digest="$1" label="$2"
+            local platforms
+            platforms="$(docker buildx imagetools inspect \
+              "ghcr.io/mikkoparkkola/mcp-gateway@${digest}" \
+              --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')"
+            echo "${label} platforms: ${platforms}"
+            for want in linux/amd64 linux/arm64; do
+              case " ${platforms} " in
+                *" ${want} "*) ;;
+                *) echo "::error::${want} missing from the ${label} manifest list"; exit 1 ;;
+              esac
+            done
+          }
+          assert_both "${LIST}" "default"
+          test -n "${LIST_FULL}"
+          assert_both "${LIST_FULL}" "full"
 
       - name: Install cosign
         # cosign-release is pinned so flag behavior can't drift under a v3 default.
@@ -661,10 +720,13 @@ jobs:
           LIST: ${{ steps.list.outputs.list }}
           AMD64: ${{ steps.list.outputs.amd64 }}
           ARM64: ${{ steps.list.outputs.arm64 }}
+          LIST_FULL: ${{ steps.list.outputs.list_full }}
+          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}
+          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}
         run: |
           set -euo pipefail
           IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
-          for d in "${LIST}" "${AMD64}" "${ARM64}"; do
+          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do
             cosign sign --yes "${IMAGE}@${d}"
           done
 
@@ -673,10 +735,13 @@ jobs:
           LIST: ${{ steps.list.outputs.list }}
           AMD64: ${{ steps.list.outputs.amd64 }}
           ARM64: ${{ steps.list.outputs.arm64 }}
+          LIST_FULL: ${{ steps.list.outputs.list_full }}
+          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}
+          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}
         run: |
           set -euo pipefail
           IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
-          for d in "${LIST}" "${AMD64}" "${ARM64}"; do
+          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do
             syft "${IMAGE}@${d}" -o spdx-json > sbom.spdx.json
             test -s sbom.spdx.json
             cosign attest --yes --predicate sbom.spdx.json --type spdxjson "${IMAGE}@${d}"
@@ -690,10 +755,13 @@ jobs:
           # Exact signer identity: THIS workflow file at the pushed tag ref, so a
           # different workflow with OIDC cannot satisfy the check.
           IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml@${{ github.ref }}
+          LIST_FULL: ${{ steps.list.outputs.list_full }}
+          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}
+          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}
         run: |
           set -euo pipefail
           IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
-          for d in "${LIST}" "${AMD64}" "${ARM64}"; do
+          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do
             cosign verify \
               --certificate-identity "${IDENTITY}" \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
@@ -738,6 +806,15 @@ jobs:
           fi
           docker buildx imagetools create "${TAGS[@]}" "${IMAGE}@${LIST}"
 
+          LIST_FULL="${{ steps.list.outputs.list_full }}"
+          test -n "${LIST_FULL}"
+          FULL_TAGS=()
+          for t in "${TAGS[@]}"; do
+            [ "${t}" = "--tag" ] && continue
+            FULL_TAGS+=(--tag "${t}-full")
+          done
+          docker buildx imagetools create "${FULL_TAGS[@]}" "${IMAGE}@${LIST_FULL}"
+
       # The falsifier for the invariant above. A copy that rewrote the index —
       # an added annotation, a buildx that normalises — lands on a different
       # digest, and the release tag would then serve bytes no signature covers.
@@ -745,15 +822,20 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           LIST: ${{ steps.list.outputs.list }}
+          LIST_FULL: ${{ steps.list.outputs.list_full }}
         run: |
           set -euo pipefail
           IMAGE=ghcr.io/mikkoparkkola/mcp-gateway
-          PUBLISHED="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
-            --format '{{.Manifest.Digest}}')"
-          if [ "${PUBLISHED}" != "${LIST}" ]; then
-            echo "::error::${IMAGE}:${VERSION} resolves to ${PUBLISHED}, not the signed ${LIST}"
-            exit 1
-          fi
+          for pair in "${VERSION}|${LIST}" "${VERSION}-full|${LIST_FULL}"; do
+            TAG="${pair%%|*}"
+            WANT="${pair#*|}"
+            PUBLISHED="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" \
+              --format '{{.Manifest.Digest}}')"
+            if [ "${PUBLISHED}" != "${WANT}" ]; then
+              echo "::error::${IMAGE}:${TAG} resolves to ${PUBLISHED}, not the signed ${WANT}"
+              exit 1
+            fi
+          done
 
   # Moved here from docker.yml with the tag push it depends on: this job rewrites
   # server.json to name ghcr.io/mikkoparkkola/mcp-gateway:VERSION and the MCP

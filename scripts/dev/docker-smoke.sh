@@ -14,7 +14,7 @@ build_image="${MCP_GATEWAY_DOCKER_BUILD:-1}"
 bin="${MCP_GATEWAY_BIN:-$repo_root/target/debug/mcp-gateway}"
 
 if [[ "$build_image" != "0" ]]; then
-  docker build -t "$image" "$repo_root"
+  docker build --target runtime -t "$image" "$repo_root"
 fi
 
 if [[ ! -x "$bin" ]]; then

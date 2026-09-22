@@ -53,7 +53,7 @@ scripts/dev/service-template-smoke.sh
 
 ```bash
 mcp-gateway init --profile local
-docker build -t mcp-gateway:latest .
+docker build --target runtime -t mcp-gateway:latest .
 # Linux bind mounts: prepare a dedicated owner-only copy for container UID 1001.
 install -m 600 gateway.yaml gateway.container.yaml
 sudo chown 1001:1001 gateway.container.yaml
@@ -87,6 +87,8 @@ on macOS and Windows.
 ```yaml
 services:
   mcp-gateway:
+    # `:latest-full` instead if any backend is declared `npx`/`uvx` — those
+    # spawn a runtime this tag does not carry. See below.
     image: ghcr.io/mikkoparkkola/mcp-gateway:latest
     restart: unless-stopped
     command: ["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]
@@ -108,7 +110,45 @@ services:
         limits: { memory: 512M, cpus: "1.0" }
 ```
 
-Stdio backends spawn child processes. If those backends use `npx`, install Node.js in the image or run them as HTTP sidecar containers.
+Stdio backends spawn child processes. If those backends use `npx` or `uvx`,
+either use the `-full` image variant or run them as HTTP sidecar containers.
+
+The default image is the gateway binary and libc. The `-full` variant adds the
+runtimes a stdio backend shells out to — Node.js 24, `uv`, `git` and
+`openssh-client` (for `git+https://` and `git+ssh://` package specs). It also
+leaves `curl` behind, which the builds above it use, and picks up `python3` as
+a hard dependency of the NodeSource package; neither is there to be spawned.
+`pnpm`, `yarn` and `bunx` are not installed: a backend naming one of those
+needs a layer of its own.
+
+```bash
+docker pull ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
+
+Node 24 rather than Debian's packaged 20.19.2, because the floors stdio
+backends declare sit above it — `@sentry/mcp-server` wants `>=22.13`,
+`outline-mcp-server` wants `>=24`, and 20.x is past end of life — and npm only
+warns (`EBADENGINE`) when a floor is not met, so the mismatch surfaces as a
+backend that fails at spawn rather than at install.
+
+`git+ssh://` package specs need more than the client: mount the key and a
+`known_hosts`, or set `GIT_SSH_COMMAND` in that backend's `env:` to name the
+key and disable host-key checking. A spawned backend inherits only `PATH`,
+`HOME` and `TMPDIR` from the gateway, so `SSH_AUTH_SOCK` never reaches it —
+an agent-held key will not be used.
+
+The variant exists because nothing else keeps that toolchain in step with the
+gateway: a hand-written layer is fixed at the moment someone wrote it, and
+nothing tells them when it has fallen behind the image it fronts. The release
+publishes `latest-full`, `<version>-full` and `<major>.<minor>-full`, each
+naming the same commit as the tag it mirrors, and `sha-<commit>-full` — the
+provenance tag its manifest list is composed under, the same one the default
+image carries, which is what lets the list be signed before any release name
+exists. As on the default image, `latest-full` and `<major>.<minor>-full` move
+only for a stable release. A push to a branch builds, scans and smoke-tests the
+variant but publishes nothing for it: there is no `<branch>-full`, and
+`--target runtime-full` builds the variant from any commit in one command. It
+costs nothing if you carry no such backend; the default tag is smaller.
 
 ### Container Verification
 
