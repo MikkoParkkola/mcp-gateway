@@ -110,6 +110,7 @@ pub(in crate::personal_accounts) fn migrate_backend(
         request.descriptor,
         request.registered_client_id,
         token.client_id.as_deref(),
+        token.client_secret.as_deref(),
     )?;
 
     let generation = super::random_hex().map_err(|_| MigrationRefusal::Store)?;

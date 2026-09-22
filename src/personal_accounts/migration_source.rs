@@ -82,18 +82,35 @@ pub(in crate::personal_accounts) fn read_legacy_source(
     let shown = path.display().to_string();
     // `symlink_metadata` does NOT follow the link, which is the whole point:
     // `metadata` would report the TARGET's type and mode and call a planted
-    // symlink a private regular file.
+    // symlink a private regular file. This check is cheap and it decides
+    // whether to open at all.
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return Err(SourceRefusal::Missing { path: shown });
     };
-    if !meta.is_file() {
+    if !meta.is_file() || !privately_owned(&meta) {
         return Err(SourceRefusal::NotPrivate { path: shown });
     }
-    if !privately_owned(&meta) {
-        return Err(SourceRefusal::NotPrivate { path: shown });
-    }
-    let bytes = std::fs::read_to_string(path).map_err(|_| SourceRefusal::NotPrivate {
+    // OPEN ONCE, THEN VALIDATE AND READ THE SAME HANDLE. Checking a path and
+    // then reopening it leaves a window in which the two are different files:
+    // the path can be replaced between the two calls, so the checks would
+    // describe one file and the bytes come from another. That matters only if
+    // the private-directory precondition is already violated, which is exactly
+    // when a defence has to hold. The re-check below is against the OPEN
+    // handle's own metadata, which no rename can change.
+    let mut file = std::fs::File::open(path).map_err(|_| SourceRefusal::NotPrivate {
         path: shown.clone(),
+    })?;
+    let opened = file.metadata().map_err(|_| SourceRefusal::NotPrivate {
+        path: shown.clone(),
+    })?;
+    if !opened.is_file() || !privately_owned(&opened) {
+        return Err(SourceRefusal::NotPrivate { path: shown });
+    }
+    let mut bytes = String::new();
+    std::io::Read::read_to_string(&mut file, &mut bytes).map_err(|_| {
+        SourceRefusal::NotPrivate {
+            path: shown.clone(),
+        }
     })?;
     serde_json::from_str(&bytes).map_err(|error| SourceRefusal::Unparseable {
         path: shown,

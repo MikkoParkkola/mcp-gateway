@@ -73,6 +73,22 @@ pub(in crate::personal_accounts) enum PreconditionRefusal {
     /// another, so a mismatch is a re-authorization, not a migration.
     #[error("the 3.x record's client_id does not match this descriptor's registered client")]
     ClientIdMismatch,
+    /// The 3.x record is a confidential client and the destination has no
+    /// secret to present in its place.
+    ///
+    /// The record's own `client_secret` is NOT carried into the store: the
+    /// store has no field for it, and the refresh provider reads
+    /// `descriptor.client_secret_ref` instead (`provider.rs:326-331`).
+    /// Migrating anyway produces an account that reads `Connected` and fails
+    /// its first refresh -- a migration that appears to work and breaks later,
+    /// which is the silent loss this row exists to prevent, delayed rather
+    /// than avoided.
+    #[error(
+        "the 3.x credential was issued to a confidential client, and this descriptor \
+         declares no client_secret_ref to present in its place; add one, or \
+         re-authorize this backend instead of migrating it"
+    )]
+    ClientSecretUnavailable,
 }
 
 /// §5.3a — the attested issuer must equal the destination's and must not be
@@ -145,12 +161,22 @@ pub(super) fn recover_client_id(
     descriptor: &AccountDescriptor,
     registered: Option<&str>,
     recorded: Option<&str>,
+    recorded_secret: Option<&str>,
 ) -> Result<String, PreconditionRefusal> {
     // The destination must be able to refresh, whatever is recovered: the
     // provider reads THIS field and refuses without it.
     let Some(configured) = descriptor.client_id.as_deref() else {
         return Err(PreconditionRefusal::DescriptorCannotRefresh);
     };
+    // A confidential client's secret does not travel. The store has no field
+    // for it and the provider takes it from the descriptor, so a record that
+    // carried one needs the destination to carry one too -- otherwise the
+    // grant lands looking healthy and fails its first refresh.
+    if recorded_secret.is_some_and(|secret| !secret.is_empty())
+        && descriptor.client_secret_ref.is_none()
+    {
+        return Err(PreconditionRefusal::ClientSecretUnavailable);
+    }
     // Operator config wins. A disagreement with either disk source is reported
     // by the caller, not refused here.
     for source in [registered, recorded].into_iter().flatten() {

@@ -119,9 +119,18 @@ fn migration_hint(error: &OfflineMigrationError) -> &'static str {
             "The store must already exist and be openable: run `accounts init-store` \
              first, and make sure no gateway is holding its locks."
         }
+        // Deliberately does NOT claim the store was untouched. `Refused`
+        // carries every per-backend outcome, including a storage failure after
+        // the authority manifest was replaced -- telling an operator deciding
+        // whether to retry that nothing was written would be a false account of
+        // their store's state. What IS true unconditionally is the source: the
+        // 3.x file is opened read-only on every path.
         OfflineMigrationError::Refused(_) => {
-            "Nothing was written and your 3.x file is untouched. The message above \
-             names what to change; a renamed backend needs --legacy-backend-name."
+            "Your 3.x credential file is untouched -- it is never written on any \
+             path. The message above names what to change; a renamed backend \
+             needs --legacy-backend-name. If it reports a storage failure, \
+             re-run this command: it reports what the store actually holds \
+             rather than assuming."
         }
     }
 }

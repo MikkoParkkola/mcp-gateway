@@ -141,7 +141,8 @@ fn an_agreeing_client_id_is_recovered() {
         recover_client_id(
             &descriptor(Some("client-abc")),
             Some("client-abc"),
-            Some("client-abc")
+            Some("client-abc"),
+            None
         ),
         Ok("client-abc".to_owned())
     );
@@ -155,7 +156,12 @@ fn an_agreeing_client_id_is_recovered() {
 #[test]
 fn a_descriptor_with_no_client_id_is_refused() {
     assert_eq!(
-        recover_client_id(&descriptor(None), Some("client-abc"), Some("client-abc")),
+        recover_client_id(
+            &descriptor(None),
+            Some("client-abc"),
+            Some("client-abc"),
+            None
+        ),
         Err(PreconditionRefusal::DescriptorCannotRefresh)
     );
 }
@@ -167,7 +173,12 @@ fn a_descriptor_with_no_client_id_is_refused() {
 #[test]
 fn a_record_naming_a_different_client_is_refused() {
     assert_eq!(
-        recover_client_id(&descriptor(Some("client-abc")), None, Some("client-other")),
+        recover_client_id(
+            &descriptor(Some("client-abc")),
+            None,
+            Some("client-other"),
+            None
+        ),
         Err(PreconditionRefusal::ClientIdMismatch)
     );
 }
@@ -187,6 +198,7 @@ fn a_stale_dynamic_registration_does_not_refuse_an_operator_configured_client() 
         recover_client_id(
             &descriptor(Some("client-configured")),
             Some("client-registered-in-3x"),
+            None,
             None
         ),
         Ok("client-configured".to_owned()),
@@ -200,7 +212,72 @@ fn a_stale_dynamic_registration_does_not_refuse_an_operator_configured_client() 
 #[test]
 fn no_disk_sources_at_all_still_recovers_from_config() {
     assert_eq!(
-        recover_client_id(&descriptor(Some("client-abc")), None, None),
+        recover_client_id(&descriptor(Some("client-abc")), None, None, None),
+        Ok("client-abc".to_owned())
+    );
+}
+
+// ── the confidential-client precondition ─────────────────────────────────────
+
+/// A confidential-client record with no destination secret is REFUSED.
+///
+/// The record's own `client_secret` does not travel: the store has no field for
+/// it, and the refresh provider reads `descriptor.client_secret_ref`. Migrating
+/// anyway lands a grant that reads `Connected` and fails its first refresh --
+/// the silent loss this row exists to prevent, delayed rather than avoided,
+/// and with nobody prompted because nothing thinks anything is wrong.
+#[test]
+fn a_confidential_record_without_a_destination_secret_is_refused() {
+    assert_eq!(
+        recover_client_id(
+            &descriptor(Some("client-abc")),
+            None,
+            Some("client-abc"),
+            Some("legacy-client-secret")
+        ),
+        Err(PreconditionRefusal::ClientSecretUnavailable)
+    );
+}
+
+/// POSITIVE CONTROL: the same record migrates when the destination declares a
+/// secret reference to present in its place.
+#[test]
+fn a_confidential_record_migrates_when_the_destination_declares_a_secret() {
+    let mut confidential = descriptor(Some("client-abc"));
+    confidential.client_secret_ref = Some("env:BACKEND_SECRET".to_owned());
+    assert_eq!(
+        recover_client_id(
+            &confidential,
+            None,
+            Some("client-abc"),
+            Some("legacy-client-secret")
+        ),
+        Ok("client-abc".to_owned())
+    );
+}
+
+/// THE OTHER DIRECTION: a public client is unaffected.
+///
+/// Without this the refusal above passes for a rule that refuses every record,
+/// which would block every ordinary install from migrating.
+#[test]
+fn a_public_client_record_is_unaffected_by_the_secret_precondition() {
+    assert_eq!(
+        recover_client_id(
+            &descriptor(Some("client-abc")),
+            None,
+            Some("client-abc"),
+            None
+        ),
+        Ok("client-abc".to_owned())
+    );
+}
+
+/// An empty secret string is not a secret.
+#[test]
+fn an_empty_recorded_secret_does_not_trigger_the_refusal() {
+    assert_eq!(
+        recover_client_id(&descriptor(Some("client-abc")), None, None, Some("")),
         Ok("client-abc".to_owned())
     );
 }
