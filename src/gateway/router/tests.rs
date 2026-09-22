@@ -3746,7 +3746,7 @@ mod openwebui_adapter;
 /// are checked in `meta_mcp_dispatch` for `/mcp`; the direct `/mcp/{name}`
 /// route reaches the same backends, so a guard missing there is an allowlist
 /// a client bypasses by changing the path.
-async fn direct_route_state_with_identity(
+pub(super) async fn direct_route_state_with_identity(
     config: crate::config::AgentIdentityConfig,
 ) -> (Arc<AppState>, tempfile::TempDir) {
     let backend = Arc::new(Backend::new(
@@ -3766,7 +3766,7 @@ async fn direct_route_state_with_identity(
     (state, store_dir)
 }
 
-fn direct_route_call(agent_id: Option<&str>) -> axum::http::Request<axum::body::Body> {
+pub(super) fn direct_route_call(agent_id: Option<&str>) -> axum::http::Request<axum::body::Body> {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp/demo")
@@ -3912,30 +3912,6 @@ fn direct_route_call_proven(
             ..Default::default()
         });
     request
-}
-
-#[tokio::test]
-async fn direct_route_refuses_a_declared_label_that_names_an_allowlisted_agent() {
-    // Anchor: funded change 3. `known_agents` admits proven principals only, so
-    // a caller that merely sets the header cannot satisfy it — on this route as
-    // much as on /mcp. Before the split this request was admitted with 200.
-    let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
-        enabled: true,
-        require_id: true,
-        known_agents: vec!["known-agent".to_string()],
-        ..Default::default()
-    })
-    .await;
-    let response = create_router(state)
-        .oneshot(direct_route_call(Some("known-agent")))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        response.status(),
-        StatusCode::FORBIDDEN,
-        "a self-declared label satisfied the allowlist on the direct route"
-    );
 }
 
 #[tokio::test]

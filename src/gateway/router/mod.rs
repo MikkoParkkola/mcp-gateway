@@ -46,6 +46,8 @@ pub fn is_loopback_bind(host: &str) -> bool {
 mod well_known;
 
 #[cfg(test)]
+mod identity_parity_tests;
+#[cfg(test)]
 mod tests;
 
 /// Shared application state
