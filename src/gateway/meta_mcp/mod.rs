@@ -566,7 +566,7 @@ pub struct MetaMcp {
     /// Empty by default. Public and shared tools still evaluate as allowed, but
     /// capabilities marked `personal` fail closed without matching caller,
     /// owner, and live grant evidence.
-    pub(super) identity_grants: RwLock<LocalIdentityGrantStore>,
+    pub(super) identity_grants: Arc<RwLock<LocalIdentityGrantStore>>,
 
     /// Authorization-policy generation mixed into every response-cache key.
     ///
@@ -669,7 +669,7 @@ impl MetaMcp {
             response_contract: None,
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
-            identity_grants: RwLock::new(LocalIdentityGrantStore::new()),
+            identity_grants: Arc::new(RwLock::new(LocalIdentityGrantStore::new())),
             policy_epoch: Arc::new(AtomicU64::new(0)),
             caller_identity_header_trust: CallerIdentityHeaderTrust::Disabled,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
@@ -861,7 +861,7 @@ impl MetaMcp {
     /// Attach a local identity grant store for personal capability dispatch.
     #[must_use]
     pub fn with_identity_grants(mut self, grants: LocalIdentityGrantStore) -> Self {
-        self.identity_grants = RwLock::new(grants);
+        self.identity_grants = Arc::new(RwLock::new(grants));
         self
     }
 
@@ -1297,14 +1297,31 @@ impl MetaMcp {
     /// advances with `Release` while that lock is still held, so a reader that
     /// observes the new epoch cannot still see the old grants. Bump-then-write
     /// is the 4.g race on the writer side.
+    ///
+    /// UNCONDITIONAL by contract. Whether a publish is worth making at all is
+    /// the CALLER's question, and the reload path answers it by comparing
+    /// normalised store contents before it gets here (T8/T8b). Moving that
+    /// comparison into this function would red
+    /// `policy_epoch_tests`, whose cells publish an empty store into an empty
+    /// one and require the epoch to move: to them the publish IS the event.
     pub fn set_identity_grants(&self, grants: LocalIdentityGrantStore) {
-        let mut lock = self.identity_grants.write();
-        *lock = grants;
-        let prev = self.policy_epoch.fetch_add(1, Ordering::Release);
-        debug_assert!(
-            self.policy_epoch.load(Ordering::Relaxed) > prev,
-            "policy epoch must be monotonic; a reset reuses keys minted under superseded grants"
-        );
+        publish_identity_grants(&self.identity_grants, &self.policy_epoch, grants);
+    }
+
+    /// The shared grant sink and its epoch, for a publisher outside `MetaMcp`.
+    ///
+    /// Handed out as `Arc`s rather than reached through a `Weak<MetaMcp>`
+    /// because an upgrade that fails is a revocation silently lost — the defect
+    /// class this whole conjunct exists to remove, reintroduced at the sink.
+    /// A publisher holding these two cannot fail to find its target.
+    #[must_use]
+    pub(crate) fn identity_grant_sink(
+        &self,
+    ) -> (Arc<RwLock<LocalIdentityGrantStore>>, Arc<AtomicU64>) {
+        (
+            Arc::clone(&self.identity_grants),
+            Arc::clone(&self.policy_epoch),
+        )
     }
 
     /// Snapshot all identity-grant rows for read-only projection (e.g. the
@@ -2504,6 +2521,29 @@ mod account_rest_tests;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+/// Publish a grant store and advance the policy epoch, in that order, under
+/// the store's write lock.
+///
+/// THE ONE PLACE THAT ORDERING LIVES. `MetaMcp::set_identity_grants` and
+/// `ReloadContext::reload_identity_grants` both route through here rather than
+/// each spelling out write-then-bump: duplicating four lines at a second site
+/// is how the `Release` gets dropped in a later edit, and the failure is
+/// silent — a reader observing the new epoch while still seeing the old
+/// grants.
+pub(crate) fn publish_identity_grants(
+    sink: &RwLock<LocalIdentityGrantStore>,
+    epoch: &AtomicU64,
+    grants: LocalIdentityGrantStore,
+) {
+    let mut lock = sink.write();
+    *lock = grants;
+    let prev = epoch.fetch_add(1, Ordering::Release);
+    debug_assert!(
+        epoch.load(Ordering::Relaxed) > prev,
+        "policy epoch must be monotonic; a reset reuses keys minted under superseded grants"
+    );
+}
 
 // MIK-7334.CATALOGUE.1 revocation conjunct — the grant-reload trigger cells.
 //

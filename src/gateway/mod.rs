@@ -9,6 +9,11 @@ mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+/// The one write-then-bump-under-lock grant publisher, re-exported so the
+/// reload path can share it WITHOUT `meta_mcp` itself becoming crate-visible.
+/// Same shape as `STDIO_CREDENTIAL_PRINCIPAL`. A second copy of those four
+/// lines is how the `Release` ordering gets dropped in a later edit.
+pub(crate) use meta_mcp::publish_identity_grants;
 mod meta_mcp_helpers;
 mod meta_mcp_helpers_text;
 mod meta_mcp_tool_defs;

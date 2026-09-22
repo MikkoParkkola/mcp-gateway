@@ -352,7 +352,7 @@ fn cache_binding(subject_key: &str, audience: &str) -> String {
 /// Returning `None` loses nothing. A slot on this path only exists for a
 /// caller who had a `VerifiedIdentity`, whose grant subject therefore carries
 /// the issuer — so a non-issuer authority means no `idp:` slot exists to evict.
-#[allow(dead_code)] // no production caller until MVP piece 3 wires the reload loop
+#[must_use]
 pub(crate) fn identity_binding_prefix(
     subject: &crate::identity_grants::GrantSubject,
 ) -> Option<String> {

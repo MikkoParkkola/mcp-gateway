@@ -160,6 +160,26 @@ fn expand_home_path(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// The grant sink a reload publishes into, or `None` when grants are off.
+///
+/// Rebuilt from config at the `ReloadContext` sites rather than threaded out
+/// of `build_meta_mcp`: the path is `config.security.identity_grants.path`
+/// either way, and `expand_home_path` is the same resolution startup used.
+fn identity_grant_sink_for(
+    config: &crate::config::IdentityGrantsConfig,
+    meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
+) -> Option<Arc<crate::config_reload::IdentityGrantSink>> {
+    if !config.enabled {
+        return None;
+    }
+    let (store, epoch) = meta_mcp.identity_grant_sink();
+    Some(Arc::new(crate::config_reload::IdentityGrantSink::new(
+        store,
+        epoch,
+        expand_home_path(&config.path),
+    )))
+}
+
 async fn load_configured_identity_grants(
     config: &crate::config::IdentityGrantsConfig,
 ) -> Result<Option<(PathBuf, crate::identity_grants::LocalIdentityGrantStore)>> {
@@ -1592,7 +1612,11 @@ impl Gateway {
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
                 )
-                .with_env(Arc::clone(&self.env)),
+                .with_env(Arc::clone(&self.env))
+                .with_identity_grant_sink_opt(identity_grant_sink_for(
+                    &self.config.security.identity_grants,
+                    &meta_mcp,
+                )),
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
@@ -2312,7 +2336,11 @@ impl Gateway {
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
                 )
-                .with_env(Arc::clone(&self.env)),
+                .with_env(Arc::clone(&self.env))
+                .with_identity_grant_sink_opt(identity_grant_sink_for(
+                    &self.config.security.identity_grants,
+                    &meta_mcp,
+                )),
             );
             meta_mcp.set_reload_context(reload_ctx);
         }

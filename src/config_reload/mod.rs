@@ -56,11 +56,14 @@ use serde::Serialize;
 use serde_json::Value;
 use tracing::{info, warn};
 
+use std::fmt::Write as _;
+
 use crate::Result;
 use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
 use crate::config::{
     BackendConfig, Config, EnvOverlay, LiveEnv, ResolvedEnvFiles, RuntimeConfig, ServerConfig,
 };
+use crate::identity_grants::{GrantSubject, IdentityGrant, LocalIdentityGrantStore};
 
 // ============================================================================
 // Public types
@@ -1437,6 +1440,98 @@ pub struct ReloadContext {
     /// again, because `~` resolved once, at startup, and resolving it a second
     /// time can silently open a different file.
     env: Arc<LiveEnv>,
+    /// The live grant store, its epoch, and the file they are reloaded from.
+    ///
+    /// `None` when no grants file is configured, which is every deployment
+    /// that never wrote one — the reload step then reports nothing rather
+    /// than inventing an empty store and revoking everything.
+    identity_grants: Option<Arc<IdentityGrantSink>>,
+}
+
+/// The publish target for a grant reload, plus the lock that serializes it.
+///
+/// GRANTS GET THEIR OWN LOCK, not `lock_reload_within`. That was settled in
+/// review: `apply_patch`'s interleaving hazard is backend double-registration,
+/// and grants register no backends, so a grant reload can neither cause it nor
+/// suffer it. Keeping the shared lock would instead put a revocation behind
+/// `backend.stop()` per modified backend — sequential, tens of seconds each —
+/// for an entirely unrelated config edit. Serializing grant reloads against
+/// each other is still required: two triggers can interleave read-file and
+/// publish, the older file wins, and a revocation is silently lost.
+#[derive(Debug)]
+pub struct IdentityGrantSink {
+    store: Arc<parking_lot::RwLock<LocalIdentityGrantStore>>,
+    epoch: Arc<std::sync::atomic::AtomicU64>,
+    path: PathBuf,
+    lock: tokio::sync::Mutex<()>,
+}
+
+impl IdentityGrantSink {
+    /// Wrap the live store, its epoch and the file they reload from.
+    #[must_use]
+    pub fn new(
+        store: Arc<parking_lot::RwLock<LocalIdentityGrantStore>>,
+        epoch: Arc<std::sync::atomic::AtomicU64>,
+        path: PathBuf,
+    ) -> Self {
+        Self {
+            store,
+            epoch,
+            path,
+            lock: tokio::sync::Mutex::new(()),
+        }
+    }
+}
+
+/// The subjects whose authorization changed between two grant snapshots.
+///
+/// A row present in one snapshot and absent from the other, or present in both
+/// and unequal, contributes a subject. **An unequal row contributes BOTH its
+/// outgoing and its incoming subject**, and that clause is the whole reason
+/// this is a function rather than a one-line iterator. A grant whose `subject`
+/// is edited A→B under an UNCHANGED `grant_id` is one unequal row: taking only
+/// the incoming subject evicts B's slots and leaves A's catalogue bytes live,
+/// with no log line naming A — a reassignment that silently preserves the
+/// previous holder's view.
+///
+/// One rule covers both nouns the criterion names: a revocation changes
+/// `revoked_at`, a rotation changes `scope`/`tool`/`expires_at`/`agent`, and a
+/// removal or addition is a presence difference.
+fn changed_grant_subjects(
+    outgoing: &[IdentityGrant],
+    incoming: &[IdentityGrant],
+) -> Vec<GrantSubject> {
+    use std::collections::BTreeMap;
+
+    let by_id = |rows: &[IdentityGrant]| {
+        rows.iter()
+            .map(|row| (row.grant_id.clone(), row.clone()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let (before, after) = (by_id(outgoing), by_id(incoming));
+
+    let mut subjects: Vec<GrantSubject> = Vec::new();
+    let mut push = |subject: &GrantSubject| {
+        if !subjects.contains(subject) {
+            subjects.push(subject.clone());
+        }
+    };
+    for (id, old) in &before {
+        match after.get(id) {
+            None => push(&old.subject),
+            Some(new) if new != old => {
+                push(&old.subject);
+                push(&new.subject);
+            }
+            Some(_) => {}
+        }
+    }
+    for (id, new) in &after {
+        if !before.contains_key(id) {
+            push(&new.subject);
+        }
+    }
+    subjects
 }
 
 impl ReloadContext {
@@ -1462,6 +1557,31 @@ impl ReloadContext {
                 Arc::new(EnvOverlay::none()),
                 ResolvedEnvFiles::default(),
             )),
+            identity_grants: None,
+        }
+    }
+
+    /// Attach the grant sink a reload publishes into.
+    ///
+    /// Without it `reload_identity_grants` is inert and says so; with it the
+    /// same operator trigger that reloads config also makes a revocation live
+    /// on the running process.
+    #[must_use]
+    pub fn with_identity_grant_sink(mut self, sink: Arc<IdentityGrantSink>) -> Self {
+        self.identity_grants = Some(sink);
+        self
+    }
+
+    /// [`Self::with_identity_grant_sink`] for a caller that may have none.
+    ///
+    /// `None` when grants are disabled: the reload step then reports nothing,
+    /// rather than reading a file that does not exist, failing open on it, and
+    /// printing a refusal on every reload of a gateway that never used grants.
+    #[must_use]
+    pub fn with_identity_grant_sink_opt(self, sink: Option<Arc<IdentityGrantSink>>) -> Self {
+        match sink {
+            Some(sink) => self.with_identity_grant_sink(sink),
+            None => self,
         }
     }
 
@@ -1505,13 +1625,29 @@ impl ReloadContext {
     ///
     /// Returns an error string if the config file cannot be read or parsed.
     pub async fn reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
+        // Grants FIRST, and on their own lock. Two reasons, both settled in
+        // review: a config refusal must not hold a revocation hostage, and a
+        // revocation must not queue behind `backend.stop()` for an unrelated
+        // config edit. Its result is folded into `changes` below rather than
+        // short-circuiting, so neither step's refusal refuses the other.
+        let grants = self.reload_identity_grants().await;
+
         // Serializes the whole reload transaction (#397) - read, diff, apply,
         // publish. All four concurrent entry points land here: the
         // `gateway_reload_config` meta-tool, the admin UI reload, every admin UI
         // backend edit, and the config-file watcher. See `apply_patch` for why
         // the lock cannot live one level down.
         let _reload_guard = self.registry.lock_reload().await;
-        self.reload_outcome_locked().await
+        let mut outcome = self.reload_outcome_locked().await?;
+        match grants {
+            Some(Ok(line)) => write!(outcome.changes, "; {line}").ok(),
+            // A refusal is reported, not swallowed: the config half succeeded,
+            // and an operator who is told only that reads a lost revocation as
+            // a success.
+            Some(Err(reason)) => write!(outcome.changes, "; {reason}").ok(),
+            None => None,
+        };
+        Ok(outcome)
     }
 
     /// Write `config` to `path`, then reload, with both steps under one lock.
@@ -1638,6 +1774,101 @@ impl ReloadContext {
         tokio::time::timeout(wait, self.registry.lock_reload())
             .await
             .map_err(|_| ConfigWriteError::Busy)
+    }
+
+    /// Reload the identity-grant file, publish it, and evict the pool slots
+    /// whose grants changed.
+    ///
+    /// ITS OWN STEP, ITS OWN OUTCOME, ITS OWN LOCK. A revocation's validity has
+    /// nothing to do with config hygiene, so an operator mid-way through
+    /// enabling message signing must not hold one hostage: neither step's
+    /// refusal refuses the other. Returns `None` when no grants file is
+    /// configured.
+    ///
+    /// FAIL OPEN. An unreadable or unparseable file keeps the live store and
+    /// publishes nothing — dropping live grants because a file was briefly
+    /// unmountable would turn a read error into a mass revocation. A file that
+    /// is VALID with zero grants is applied, because "revoke everything" has to
+    /// stay expressible or fail-open becomes a hole.
+    ///
+    /// NO-CHANGE IS DEFINED ON NORMALISED STORE CONTENTS, never file bytes.
+    /// `LocalIdentityGrantStore` is a `BTreeMap` keyed by grant id, so loading
+    /// normalises row order for free — but only if the comparison happens on
+    /// the LOADED store. Comparing bytes, or the file's `Vec` order, reports a
+    /// change whenever an operator reorders rows, and the epoch is global: one
+    /// bump strands every caller's result cache, not just the edited one.
+    ///
+    /// PUBLISH FIRST, EVICT SECOND. The reverse order leaves a window where a
+    /// slot is evicted, a concurrent request refills it against the old grants
+    /// still in the store, and the refilled catalogue is stale again — an
+    /// eviction that ran and achieved nothing.
+    pub async fn reload_identity_grants(&self) -> Option<std::result::Result<String, String>> {
+        let sink = self.identity_grants.as_ref()?;
+        let _grants_guard = sink.lock.lock().await;
+
+        let file = match crate::identity_grants::read_identity_grants_file(&sink.path).await {
+            Ok(file) => file,
+            Err(reason) => {
+                warn!(
+                    path = %sink.path.display(),
+                    %reason,
+                    "Identity-grant reload refused; the live grants still apply"
+                );
+                return Some(Err(format!(
+                    "identity grants not reloaded from {}: {reason}",
+                    sink.path.display()
+                )));
+            }
+        };
+
+        let incoming = LocalIdentityGrantStore::from_grants(file.grants);
+        let outgoing: Vec<_> = sink.store.read().values().cloned().collect();
+        let incoming_rows: Vec<_> = incoming.values().cloned().collect();
+        if outgoing == incoming_rows {
+            return Some(Ok("identity grants unchanged".to_string()));
+        }
+
+        let subjects = changed_grant_subjects(&outgoing, &incoming_rows);
+        crate::gateway::publish_identity_grants(&sink.store, &sink.epoch, incoming);
+
+        // Three distinct outcomes, and they must not share a counter:
+        // "skipped by construction" is expected for a non-issuer authority,
+        // while "considered, matched nothing" is the reconstruction failing to
+        // find a live slot — benign when the caller had none, and the only
+        // tripwire for a stored subject that diverges from its binding.
+        let mut skipped: Vec<String> = Vec::new();
+        let mut evicted = 0usize;
+        let mut matched_nothing = 0usize;
+        for subject in subjects {
+            let Some(prefix) = crate::identity_propagation::identity_binding_prefix(&subject)
+            else {
+                // Skipped, never fallen through to a match: no `idp:` slot can
+                // exist for a grant whose authority is not an issuer.
+                skipped.push(subject.authority.clone());
+                continue;
+            };
+            let mut hit = 0usize;
+            for backend in self.registry.all() {
+                hit += backend.evict_identity_slots(&prefix).await;
+            }
+            if hit == 0 {
+                matched_nothing += 1;
+            }
+            evicted += hit;
+        }
+
+        info!(
+            path = %sink.path.display(),
+            rows = incoming_rows.len(),
+            slots_evicted = evicted,
+            subjects_matching_no_slot = matched_nothing,
+            subjects_skipped = ?skipped,
+            "Identity grants reloaded"
+        );
+        Some(Ok(format!(
+            "identity grants reloaded ({} rows, {evicted} pool slots evicted)",
+            incoming_rows.len()
+        )))
     }
 
     /// The reload transaction itself. The caller must already hold the reload
