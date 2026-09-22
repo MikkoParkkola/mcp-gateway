@@ -85,8 +85,20 @@ pub struct AgentIdentityConfig {
     ///
     /// Opt-in widening, not a mandatory census: a principal with no entry may
     /// declare only its own id, which is the one label that cannot be a lie.
-    /// Keyed by the verified JWT `sub` (the registered `client_id`) — the mTLS
-    /// namespace is incomparable and is never keyed here.
+    ///
+    /// Keyed by `(source, id)`, and **both proof sources may be keyed here** —
+    /// an earlier version of this doc said the mTLS namespace "is never keyed
+    /// here", which contradicted the implementation and made the mTLS refusal
+    /// path dead config: an operator reading it would never write the row that
+    /// enables it.
+    ///
+    /// What is true of mTLS is the *default*, not the representability: an
+    /// mTLS subject with no entry keeps the incomparable default, accepted and
+    /// audited rather than refused, because a SAN URI and a short label cannot
+    /// be compared without inventing an ordering. An operator who *can* name a
+    /// subject writes a row for it and gets the contradiction refusal. The id
+    /// must be the **selected** proven id — first SAN URI, else CN — never a
+    /// DN fragment: `id = "CN=runner"` mints a row that can never match.
     #[serde(default)]
     pub principal_labels: Vec<PrincipalLabels>,
 }
@@ -164,8 +176,18 @@ pub struct PrincipalLabels {
 ///
 /// The mTLS subject is selected here rather than by the caller so the selection
 /// rule lives in one place: first SAN URI, else CN, else no mTLS principal.
+/// **Crate-private by design.** The `verified_jwt_subject` parameter is a raw
+/// `&str`, so a public version of this function would mint a
+/// `ProvenPrincipal` from any string an external caller chose — bypassing the
+/// private constructor entirely. Making the constructor private while leaving
+/// the public function that calls it open would close one door and leave the
+/// next one ajar, which is the shape this module has already had to fix twice.
+///
+/// The contract, not the call site, is what binds an external caller: "this
+/// gateway never passes a caller-supplied string here" is true of the two
+/// router sites and says nothing about anyone else.
 #[must_use]
-pub fn extract_agent_identity(
+pub(crate) fn extract_agent_identity(
     headers: &axum::http::HeaderMap,
     query: Option<&str>,
     cert_identity: Option<&crate::mtls::identity::CertIdentity>,
@@ -258,7 +280,7 @@ pub enum IdentityAudit {
 ///
 /// Returns the refusal reason, which always names the policy that refused so an
 /// unrelated 403 cannot be mistaken for this guard.
-pub fn validate_agent_identity(
+pub(crate) fn validate_agent_identity(
     identity: &AgentIdentity,
     config: &AgentIdentityConfig,
 ) -> Result<IdentityAudit, String> {
@@ -278,21 +300,52 @@ pub fn validate_agent_identity(
     // membership by stringifying the same. An mTLS CN of `runner` and a JWT
     // `sub` of `runner` are two principals, and both namespaces are live in a
     // single deployment.
-    if !config.known_agents.is_empty()
-        && !config
-            .known_agents
-            .iter()
-            .any(|entry| entry.source.matches(proven.proof()) && entry.id == proven.id())
-    {
-        return Err(format!(
-            "Agent '{}' (proven via {}) is not in the known_agents allowlist, which admits \
-             proven principals only and matches on the (source, id) pair",
-            proven.id(),
-            proven.proof()
-        ));
+    if !config.known_agents.is_empty() && !admits_proven(&config.known_agents, proven) {
+        // The hatch fall-through, and it exists because the alternative is
+        // perverse. `AgentSourceKey::Declared` matches no `ProofSource`, so
+        // without this a caller presenting BOTH proof and a matching declared
+        // label fails the pair check and never reaches the declared-entry
+        // match — which lives only in the no-proof path. During the very
+        // migration the hatch exists to smooth, presenting STRONGER proof
+        // would reduce your access relative to presenting none.
+        let hatch_admits = config.allow_unverified_agent_identity
+            && identity
+                .declared
+                .as_ref()
+                .is_some_and(|declared| admits_declared(&config.known_agents, &declared.id));
+        if !hatch_admits {
+            return Err(format!(
+                "Agent {} (proven via {}) is not in the known_agents allowlist, which admits \
+                 proven principals only and matches on the (source, id) pair",
+                quoted(proven.id()),
+                proven.proof()
+            ));
+        }
     }
 
     check_declared_label(proven, identity.declared.as_ref(), config)
+}
+
+/// Does the allowlist name this proven principal, by the `(source, id)` pair?
+///
+/// One predicate, used by every allowlist that keys on a proven principal, so
+/// the two cannot drift apart: a fix applied to one and not the other is a
+/// finding class this codebase has already produced more than once.
+fn admits_proven(entries: &[KnownAgent], proven: &ProvenPrincipal) -> bool {
+    entries
+        .iter()
+        .any(|entry| entry.source.matches(proven.proof()) && entry.id == proven.id())
+}
+
+/// Does the allowlist name this caller-supplied label as a `declared` entry?
+///
+/// Reachable only under `allow_unverified_agent_identity`. A declared label
+/// never matches an `mtls` or `jwt` row even with the hatch on, so turning the
+/// flag on does not re-point proven-principal entries at self-declaration.
+fn admits_declared(entries: &[KnownAgent], label: &str) -> bool {
+    entries
+        .iter()
+        .any(|entry| entry.source == AgentSourceKey::Declared && entry.id == label)
 }
 
 /// The no-proof rows. A label is not an identity.
@@ -330,8 +383,8 @@ fn validate_without_proof(
                 .any(|entry| entry.source == AgentSourceKey::Declared && entry.id == declared.id)
         {
             return Err(format!(
-                "Agent label '{}' is not in the known_agents allowlist as a declared entry",
-                declared.id
+                "Agent label {} is not in the known_agents allowlist as a declared entry",
+                quoted(&declared.id)
             ));
         }
         return Ok(IdentityAudit::Clean);
@@ -339,18 +392,20 @@ fn validate_without_proof(
 
     if config.require_id {
         return Err(format!(
-            "Request rejected: agent_identity.require_id is true and '{}' was only declared (via \
+            "Request rejected: agent_identity.require_id is true and {} was only declared (via \
              {}), not proven. A declared label carries no privilege; set \
              agent_identity.allow_unverified_agent_identity to restore the legacy behaviour.",
-            declared.id, declared.source
+            quoted(&declared.id),
+            declared.source
         ));
     }
     if !config.known_agents.is_empty() {
         return Err(format!(
-            "Agent '{}' was only declared (via {}) and cannot satisfy the known_agents allowlist, \
+            "Agent {} was only declared (via {}) and cannot satisfy the known_agents allowlist, \
              which admits proven principals only. An allowlist satisfied by self-declaration is \
              not a control.",
-            declared.id, declared.source
+            quoted(&declared.id),
+            declared.source
         ));
     }
 
@@ -383,6 +438,20 @@ fn check_declared_label(
     let Some(declared) = declared else {
         return Ok(IdentityAudit::Clean);
     };
+
+    // Arm 0 — the operator wrote this label down.
+    //
+    // Under the migration hatch, a `declared` allowlist entry is an explicit
+    // operator statement that this label may be presented. Refusing it as a
+    // contradiction would re-open the lockout one step past the allowlist:
+    // the hatch would admit the caller and the contradiction rule would then
+    // refuse it, so proving more would still grant less. The mismatch is
+    // audited rather than ignored, because it is still a proved-A-claimed-B
+    // signal and change 4 asks for it to be detectable.
+    if config.allow_unverified_agent_identity && admits_declared(&config.known_agents, &declared.id)
+    {
+        return Ok(IdentityAudit::DeclaredLabelMismatch);
+    }
 
     // Arm 1 — a principal may always declare its own name. The one label that
     // cannot be a lie, so it is a member of its own set by construction.
@@ -425,6 +494,19 @@ fn check_declared_label(
     Err(contradiction(declared, proven))
 }
 
+/// Render a caller-supplied value safely for a refusal message.
+///
+/// The refusal string reaches an operator's log and the identity audit record.
+/// A raw `X-Agent-ID` carrying a newline can therefore forge a log line inside
+/// the audit trail — which is worse than leaking the label, because the record
+/// this criterion exists to make trustworthy is the thing being falsified.
+///
+/// `escape_debug` renders control characters as escapes and leaves ordinary
+/// text readable, so an operator still sees the label they configured.
+fn quoted(value: &str) -> String {
+    format!("'{}'", value.escape_debug())
+}
+
 /// The refusal a contradicting declared label earns.
 ///
 /// The caller-supplied value is rendered inside single quotes and is the only
@@ -432,12 +514,12 @@ fn check_declared_label(
 /// message, never a shell or a query.
 fn contradiction(declared: &DeclaredLabel, proven: &ProvenPrincipal) -> String {
     format!(
-        "Request rejected: the declared agent label '{}' (via {}) contradicts the proven \
-         principal '{}' (via {}). Add it to agent_identity.principal_labels for that principal \
+        "Request rejected: the declared agent label {} (via {}) contradicts the proven \
+         principal {} (via {}). Add it to agent_identity.principal_labels for that principal \
          if this caller is entitled to declare it.",
-        declared.id,
+        quoted(&declared.id),
         declared.source,
-        proven.id(),
+        quoted(proven.id()),
         proven.proof()
     )
 }
@@ -507,7 +589,11 @@ fn hex_digit(b: u8) -> Option<u8> {
 /// is the path an attacker is least likely to be on.
 ///
 /// Shared by both dispatch routes so the field set cannot drift between them.
-pub fn log_agent_identity(identity: &AgentIdentity, audit: IdentityAudit, refusal: Option<&str>) {
+pub(crate) fn log_agent_identity(
+    identity: &AgentIdentity,
+    audit: IdentityAudit,
+    refusal: Option<&str>,
+) {
     let proven = identity.proven_id();
     let proof = identity.proven.as_ref().map(|p| p.proof().to_string());
     let secondary = identity.secondary_proof.as_ref().map(ProvenPrincipal::id);
@@ -573,3 +659,7 @@ pub use principal::{
 #[cfg(test)]
 #[path = "agent_identity_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "agent_identity_falsifier_tests.rs"]
+mod falsifier_tests;

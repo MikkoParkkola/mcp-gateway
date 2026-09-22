@@ -1,90 +1,38 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
-//! MIK-7512 / `MIK-6746.IDENTITY.1` — falsifiers for provable agent identity.
+//! The MIK-7512 falsifiers, in their own file.
 //!
-//! Design: `docs/internal/design/2026-09-21-provable-agent-identity.md` plus the
-//! 2026-09-22 revision. Every test below names the **funded change** it derives
-//! from before its inputs, so a reviewer can check the assertion against the
-//! specification and not only against the code.
-//!
-//! These are the **baseline-compatible** rows: their assertions are expressible
-//! against today's types, so their red is interpretable — it says the current
-//! code does the wrong thing, not merely that a field is missing. The rows that
-//! need the split type (F1, F2's refusal half, F6, F7) arrive with it; they are
-//! listed in the design and are NOT stubbed here, because a test that cannot
-//! fail for the right reason is not evidence.
-//!
-//! RED AT `cfea18b8` — expected failures before implementation:
-//!
-//! * `f4a_declared_label_must_not_satisfy_known_agents`
-//! * `f4b_declared_label_must_not_satisfy_require_id`
-//! * `f3_unsigned_bearer_must_not_be_proven`
-//!
-//! Green at `cfea18b8` and must stay green (controls):
-//!
-//! * `f4_control_anonymous_caller_is_still_accepted`
-//! * `f3_control_extraction_ignores_a_token_without_the_claim`
-
-use mcp_gateway::security::{
-    AgentIdentity, AgentIdentityConfig, AgentSourceKey, KnownAgent, extract_agent_identity,
-    validate_agent_identity,
-};
+//! Split from the module's unit tests because the combined file crossed the
+//! 800-line ceiling, and a new offender cannot be baselined away. The seam
+//! is the one that was already there: these five were integration tests
+//! until the resolution path went crate-private, and they carry their own
+//! red-before-green provenance, which the rows beside them do not.
 
 use axum::http::HeaderMap;
 
-/// An `Authorization: Bearer <token>` header and nothing else.
-fn bearer_header(token: &str) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "authorization",
-        format!("Bearer {token}").parse().expect("header value"),
-    );
-    headers
-}
+use super::tests::{cfg, header, proven, to_base64url};
+use super::*;
 
-/// `X-Agent-ID: <value>` and nothing else.
-fn declared_header(value: &str) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert("x-agent-id", value.parse().expect("header value"));
-    headers
-}
-
-/// Config with the feature on, an allowlist, and `require_id` off.
-fn allowlist_only(agents: &[&str]) -> AgentIdentityConfig {
-    AgentIdentityConfig {
-        enabled: true,
-        require_id: false,
-        known_agents: agents
-            .iter()
-            .map(|a| KnownAgent {
-                source: AgentSourceKey::Jwt,
-                id: (*a).to_string(),
-            })
-            .collect(),
-        ..AgentIdentityConfig::default()
-    }
-}
-
-/// Base64url without padding, as a JWT payload segment is encoded.
-fn to_base64url(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            chunk.get(1).copied().unwrap_or(0),
-            chunk.get(2).copied().unwrap_or(0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        let take = chunk.len() + 1;
-        for i in 0..take {
-            let shift = 18 - 6 * i;
-            out.push(char::from(ALPHABET[((n >> shift) & 0x3F) as usize]));
-        }
-    }
-    out
-}
+// ── MIK-7512 falsifiers, moved in-crate ───────────────────────────────────
+//
+// These five were integration tests while the resolution path was public.
+// Making it crate-private closed the extractor route a review found — an
+// external caller could mint a `ProvenPrincipal` by passing any string as
+// `verified_jwt_subject` — and the falsifiers moved with the API they test.
+//
+// Their provenance is the reason the file kept them rather than folding them
+// into the rows above. Demonstrated RED before any implementation existed, at
+// `cfea18b8`, each for its stated reason:
+//
+// * `f4a_declared_label_must_not_satisfy_known_agents` — the allowlist
+//   compared the conflated id and never read the source
+// * `f4b_declared_label_must_not_satisfy_require_id` — a label satisfied
+//   `require_id`
+// * `f3_unsigned_bearer_must_not_be_proven` — an `alg: none` token resolved
+//   to an identity
+//
+// Both controls were green throughout, which is what makes those three reds
+// evidence rather than an artifact of refusing everything.
 
 // ── F4 — funded change 3 ──────────────────────────────────────────────────────
 //
@@ -101,8 +49,8 @@ fn to_base64url(bytes: &[u8]) -> String {
 #[test]
 fn f4a_declared_label_must_not_satisfy_known_agents() {
     // GIVEN: an allowlist naming `agent-allowed`, and a caller that merely says so
-    let config = allowlist_only(&["agent-allowed"]);
-    let headers = declared_header("agent-allowed");
+    let config = cfg(true, false, &["agent-allowed"]);
+    let headers = header("x-agent-id", "agent-allowed");
 
     // WHEN: the identity is extracted and validated, as both routes do
     let identity = extract_agent_identity(&headers, None, None, None);
@@ -129,13 +77,8 @@ fn f4a_declared_label_must_not_satisfy_known_agents() {
 #[test]
 fn f4b_declared_label_must_not_satisfy_require_id() {
     // GIVEN: require_id on, no allowlist, and a caller that only declares a label
-    let config = AgentIdentityConfig {
-        enabled: true,
-        require_id: true,
-        known_agents: Vec::new(),
-        ..AgentIdentityConfig::default()
-    };
-    let headers = declared_header("some-agent");
+    let config = cfg(true, true, &[]);
+    let headers = header("x-agent-id", "some-agent");
 
     // WHEN: extract then validate
     let identity = extract_agent_identity(&headers, None, None, None);
@@ -159,7 +102,7 @@ fn f4b_declared_label_must_not_satisfy_require_id() {
 #[test]
 fn f4_control_anonymous_caller_is_still_accepted() {
     // GIVEN: a non-empty allowlist, require_id off, and a caller presenting nothing
-    let config = allowlist_only(&["agent-allowed"]);
+    let config = cfg(true, false, &["agent-allowed"]);
     let headers = HeaderMap::new();
 
     // WHEN: extract then validate
@@ -198,13 +141,13 @@ fn f4_control_anonymous_caller_is_still_accepted() {
 #[test]
 fn f3_unsigned_bearer_must_not_be_proven() {
     // GIVEN: an allowlist, and a token nobody signed that claims to be on it
-    let config = allowlist_only(&["svc-a"]);
+    let config = cfg(true, false, &["svc-a"]);
     let payload = to_base64url(br#"{"agent_id":"svc-a","sub":"whoever"}"#);
     let token = format!("eyJhbGciOiJub25lIn0.{payload}.not-a-signature");
     // The ONLY way a caller can present a token to this path. There is no
     // longer a bearer parameter to pass one through, which is itself the point:
     // the unsigned decode was deleted, not hardened.
-    let headers = bearer_header(&token);
+    let headers = header("authorization", &format!("Bearer {token}"));
 
     // WHEN: extract then validate, exactly as the dispatch routes do.
     // No cert and no verified `sub`: this caller proved nothing.
@@ -235,7 +178,7 @@ fn f3_control_extraction_ignores_a_token_without_the_claim() {
     // GIVEN: a token with no agent_id claim
     let payload = to_base64url(br#"{"sub":"user","iat":1234567890}"#);
     let token = format!("eyJhbGciOiJub25lIn0.{payload}.sig");
-    let headers = bearer_header(&token);
+    let headers = header("authorization", &format!("Bearer {token}"));
 
     // WHEN: extract
     let identity = extract_agent_identity(&headers, None, None, None);
@@ -245,5 +188,98 @@ fn f3_control_extraction_ignores_a_token_without_the_claim() {
         identity,
         AgentIdentity::default(),
         "an identity was synthesised from a bearer token the gateway never verified"
+    );
+}
+
+/// The HIGH from the second focused review: the migration hatch locked out
+/// callers who HAD proven themselves.
+///
+/// `AgentSourceKey::Declared` matches no `ProofSource`, so a caller presenting
+/// both proof and a matching declared label failed the pair check and never
+/// reached the declared-entry match — which lived only in the no-proof path.
+/// The result was perverse in exactly the window the hatch exists to smooth:
+/// **presenting stronger proof reduced your access relative to presenting
+/// none.**
+#[test]
+fn the_hatch_does_not_lock_out_a_caller_who_also_proved_itself() {
+    let mut config = cfg(true, true, &[]);
+    config.allow_unverified_agent_identity = true;
+    config.known_agents = vec![KnownAgent {
+        source: AgentSourceKey::Declared,
+        id: "legacy-agent".to_string(),
+    }];
+
+    // A caller that proves nothing and declares the listed label is admitted.
+    let unproven = extract_agent_identity(&header("x-agent-id", "legacy-agent"), None, None, None);
+    validate_agent_identity(&unproven, &config).expect("the unproven caller was refused");
+
+    // The SAME caller, now also presenting proof, must not be worse off.
+    let mut proven_too = proven("svc-a", ProofSource::VerifiedJwtSubject);
+    proven_too.declared = Some(DeclaredLabel {
+        id: "legacy-agent".to_string(),
+        source: DeclaredSource::Header,
+    });
+    validate_agent_identity(&proven_too, &config).expect(
+        "a caller that proved itself was refused where the same caller presenting NO proof \
+         was admitted: proving more must never grant less",
+    );
+}
+
+/// The control for the row above, so the fall-through cannot become a blanket
+/// accept: with the hatch on, a proven principal outside the allowlist and
+/// carrying a label that is ALSO not listed is still refused.
+#[test]
+fn the_hatch_fall_through_still_requires_a_listed_label() {
+    let mut config = cfg(true, true, &[]);
+    config.allow_unverified_agent_identity = true;
+    config.known_agents = vec![KnownAgent {
+        source: AgentSourceKey::Declared,
+        id: "legacy-agent".to_string(),
+    }];
+
+    let mut identity = proven("svc-a", ProofSource::VerifiedJwtSubject);
+    identity.declared = Some(DeclaredLabel {
+        id: "not-listed".to_string(),
+        source: DeclaredSource::Header,
+    });
+    validate_agent_identity(&identity, &config)
+        .expect_err("the hatch fall-through admitted an unlisted label");
+}
+
+/// The LOW-but-concrete from the same review: a caller-controlled label was
+/// interpolated raw into refusal strings, which reach the operator log and the
+/// identity audit record. A crafted `X-Agent-ID` carrying a newline could
+/// forge a log line INSIDE the audit trail — falsifying the very record this
+/// criterion exists to make trustworthy, which is worse than leaking a label.
+#[test]
+fn a_crafted_label_cannot_forge_a_line_in_the_audit_trail() {
+    let config = cfg(true, true, &[]);
+    // NOT via `X-Agent-ID`: axum refuses a header value carrying a raw
+    // newline, so that vector does not exist. The query parameter does, and
+    // it is the worse one to spot, because `percent_decode` turns `%0A` into
+    // a real newline AFTER the transport has done its validation.
+    let identity = extract_agent_identity(
+        &HeaderMap::new(),
+        Some("agent_id=evil%0Aagent_proven=admin%20agent_proof=mtls"),
+        None,
+        None,
+    );
+    assert!(
+        identity.declared_id().is_some_and(|d| d.contains('\n')),
+        "the fixture must actually deliver a newline, or the assertion below is vacuous"
+    );
+
+    let reason = validate_agent_identity(&identity, &config)
+        .expect_err("a declared-only label satisfied require_id");
+
+    assert!(
+        !reason.contains('\n'),
+        "the refusal carried a raw newline, so a caller can inject a line into \
+         the audit trail: {reason:?}"
+    );
+    assert!(
+        reason.contains("\\n"),
+        "the newline should be rendered as an escape, not dropped — an operator \
+         must still see what was sent: {reason:?}"
     );
 }

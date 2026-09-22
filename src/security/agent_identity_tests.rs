@@ -8,7 +8,7 @@ use axum::http::HeaderMap;
 
 use super::*;
 
-fn cfg(enabled: bool, require_id: bool, known: &[&str]) -> AgentIdentityConfig {
+pub(super) fn cfg(enabled: bool, require_id: bool, known: &[&str]) -> AgentIdentityConfig {
     AgentIdentityConfig {
         enabled,
         require_id,
@@ -23,7 +23,7 @@ fn cfg(enabled: bool, require_id: bool, known: &[&str]) -> AgentIdentityConfig {
     }
 }
 
-fn header(name: &str, value: &str) -> HeaderMap {
+pub(super) fn header(name: &str, value: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         axum::http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
@@ -42,7 +42,7 @@ fn cert(san: &[&str], cn: Option<&str>) -> crate::mtls::identity::CertIdentity {
     }
 }
 
-fn proven(id: &str, proof: ProofSource) -> AgentIdentity {
+pub(super) fn proven(id: &str, proof: ProofSource) -> AgentIdentity {
     AgentIdentity {
         proven: Some(ProvenPrincipal::for_test(id, proof)),
         ..AgentIdentity::default()
@@ -552,7 +552,7 @@ fn percent_decode_handles_encoded_chars() {
     assert_eq!(percent_decode("plain"), "plain");
 }
 
-fn to_base64url(input: &[u8]) -> String {
+pub(super) fn to_base64url(input: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::new();
     for chunk in input.chunks(3) {
