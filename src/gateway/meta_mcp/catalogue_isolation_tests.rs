@@ -95,6 +95,56 @@ impl crate::transport::Transport for CannedTools {
     }
 }
 
+/// A transport that answers `tools/list` and RECORDS every other method that
+/// reaches it, so a test can assert a backend was never forwarded to.
+struct RecordingTools {
+    tools: Vec<String>,
+    seen: parking_lot::Mutex<Vec<String>>,
+}
+
+impl RecordingTools {
+    fn new(tools: &[&str]) -> Self {
+        Self {
+            tools: tools.iter().map(|t| (*t).to_string()).collect(),
+            seen: parking_lot::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn forwarded(&self, method: &str) -> bool {
+        self.seen.lock().iter().any(|m| m == method)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for RecordingTools {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        self.seen.lock().push(method.to_string());
+        Ok(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            ToolsListResult {
+                tools: self.tools.iter().map(|n| named_tool(n)).collect(),
+                next_cursor: None,
+            },
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
 fn named_tool(name: &str) -> crate::protocol::Tool {
     crate::protocol::Tool {
         name: name.to_string(),
@@ -411,11 +461,109 @@ fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
         "an identified caller and an anonymous one share a key"
     );
 
-    // Length-prefixed principals, so two bindings cannot collide by
-    // concatenation: `("ab", "c")` and `("a", "bc")` must stay distinct.
+    // Length-prefixed, so two identities cannot collide by concatenation.
+    //
+    // The single-field `idp:` arm cannot express that collision — two bindings
+    // that differ at all produce different strings whatever the format is, so
+    // asserting on it would be vacuous. The two-field `grant:` arm is where a
+    // naive `format!("grant:{authority}:{subject}")` WOULD collide, and it is
+    // the arm the length prefixes exist for. Caught by review of this test:
+    // the first draft asserted the vacuous version.
+    let grant = |authority: &str, subject: &str| {
+        caller_cache_principal(
+            None,
+            None,
+            Some(&crate::identity_grants::GrantSubject {
+                authority: authority.to_string(),
+                subject: subject.to_string(),
+                label: None,
+            }),
+        )
+    };
     assert_ne!(
-        caller_cache_principal(Some("ab"), None, None),
-        caller_cache_principal(Some("a"), None, None),
-        "principals are not collision-safe under concatenation"
+        grant("ab", "c"),
+        grant("a", "bc"),
+        "two distinct identities collide into one principal under naive \
+         concatenation, so one caller's cached results are served to the other"
     );
+}
+
+/// T9b — the behavioural half of T9: no request actually REACHES an
+/// identity-bound backend on a shared-credential route.
+///
+/// T9 asserts the guard helper still refuses. That is necessary and not
+/// sufficient: it stays green if someone removes the
+/// `meta_route_isolation_refused` call from `handle_logging_set_level`
+/// altogether rather than loosening the helper. Raised by review of this suite,
+/// and correct — a control that tests the helper cannot catch a regression in
+/// the caller.
+///
+/// So this drives the real handler and watches the wire. `logging/setLevel` is
+/// the sharpest of the three shared-credential routes (`protocol.rs:306`)
+/// because it forwards with `backend.request(...)` — the gateway's own
+/// credential — on behalf of whoever asked.
+///
+/// Two-directional: the genuinely shared backend MUST receive the forward, so a
+/// change that simply stops forwarding to everyone fails here instead of
+/// passing as though it had achieved isolation.
+#[tokio::test]
+async fn shared_credential_routes_never_reach_an_identity_bound_backend() {
+    let registry = Arc::new(BackendRegistry::new());
+    let mut wires = Vec::new();
+
+    for (name, tool, config) in [
+        (SHARED_BACKEND, SHARED_TOOL, BackendConfig::default()),
+        (
+            PER_USER_BACKEND,
+            PER_USER_TOOL,
+            BackendConfig {
+                identity_propagation: Some(IdentityPropagationConfig {
+                    strategy: PropagationStrategyKind::SignedAssertion,
+                    audience: "ledger".to_string(),
+                    required: true,
+                    session_mode: SessionMode::PerUser,
+                    token_exchange_endpoint: None,
+                    token_exchange_scope: None,
+                }),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let backend = Arc::new(Backend::new(
+            name,
+            config,
+            &FailsafeConfig::default(),
+            Duration::from_secs(300),
+        ));
+        let wire = Arc::new(RecordingTools::new(&[tool]));
+        backend.set_transport_for_test(Arc::clone(&wire) as Arc<dyn crate::transport::Transport>);
+        backend.get_tools_shared().await.expect("prime the cache");
+        assert!(registry.register(backend), "fixture registration");
+        wires.push((name, wire));
+    }
+
+    let meta = MetaMcp::new(registry);
+    meta.set_multi_user(true);
+    meta.handle_logging_set_level(RequestId::Number(7), Some(&json!({ "level": "debug" })))
+        .await;
+
+    for (name, wire) in wires {
+        let forwarded = wire.forwarded("logging/setLevel");
+        if name == SHARED_BACKEND {
+            assert!(
+                forwarded,
+                "a genuinely shared backend never received the forward, so the \
+                 assertion below would hold for a gateway that forwards to \
+                 nobody rather than for one that isolates"
+            );
+        } else {
+            assert!(
+                !forwarded,
+                "`logging/setLevel` reached an identity-bound backend over the \
+                 gateway's OWN credential on a multi-user gateway — an \
+                 arbitrary caller is now operating another account's backend \
+                 session (ADR-008 INV-2, `protocol.rs:306`)"
+            );
+        }
+    }
 }

@@ -414,11 +414,17 @@ guarantee **V** `pool_key_for` already makes for transports
 ### 4.3 T5-R — replacing the stale row
 
 T5 asserted the absence of a result cache that **V** exists at
-`invoke.rs:1842-1855`, `:2440`, `:1794`. Inverted to assert the property §4.3
-actually relies on: that `response_cache_key_for` (**V** `support.rs:168`)
-carries the caller principal **and** the `KeyContext` (`routing_profile`,
-`protocol_revision`, `policy_epoch`). A future result cache added without a
-principal in its key then fails this row instead of silently regressing C3.
+`invoke.rs:1842-1855`, `:2440`, `:1794`. Inverted to assert the property the
+design's §4.3 actually relies on.
+
+It calls `response_cache_key_for` (**V** `support.rs:168`) itself, twice, with
+the same server, tool, arguments and `KeyContext` and **only the principal
+differing**, and asserts the two keys differ. A principal-only assertion would
+not have been enough: a future cache that derives a correct principal and then
+drops it while assembling the key would pass one, and that is precisely the
+regression this row exists to catch. The same-caller-same-key half runs beside
+it, because a key that mixed in something per-call would satisfy the inequality
+while meaning the cache never hits.
 
 ### 4.4 T9 — new, locking §2.1's decision
 
@@ -561,3 +567,66 @@ fields (**V** `metadata.rs`, that commit) and lands it as a stub returning the
 shared catalogue. That is design §6 risk 2 exactly — the keyed path added beside
 the old field, which is the one shortcut that reintroduces the whole bug class.
 Take its transport fixtures; leave its signature.
+
+---
+
+## 8. The tests, reviewed as tests
+
+The mandate is explicit that this is a second step and not a formality: *"a test
+suite can encode an inverted oracle and pass forever."* Both seats were re-run on
+the suite itself, with the verbatim red output appended so the reviewer could
+judge red-for-the-right-reason rather than take it on trust.
+
+| Seat | Status | Verdict |
+|---|---|---|
+| `kimi-review` | LIVE — 2.6K | SHIP-WITH-FIXES, one MEDIUM |
+| `gpt-review` | LIVE — 1.7K | SHIP-WITH-FIXES, two MEDIUM |
+
+**They agreed on the defect, and it was mine.** Both found the concatenation
+clause in T5-R vacuous: it compared `caller_cache_principal(Some("ab"), ...)`
+with `caller_cache_principal(Some("a"), ...)`, two values that differ under ANY
+encoding, so it could not detect the collision its own message named. A test that
+cannot fail, inside a suite written to refuse tests that cannot fail.
+
+**Fixed, and neither reviewer's exact prescription would have compiled.** Both
+proposed passing two strings to `caller_cache_principal`; **V** its second
+parameter is a `VerifiedIdentity`, not a string (`support.rs:145-148`). The
+two-field concatenation lives on the **`grant:`** arm (**V** `support.rs:159-165`,
+which length-prefixes both `authority` and `subject`), so the repaired clause
+builds two `GrantSubject` values — `("ab", "c")` against `("a", "bc")` — the pair
+a naive unprefixed join would collapse into one principal. The finding was right;
+its fix needed the source the reviewer did not have.
+
+**One further finding accepted, from `gpt-review`:** T9 asserts the guard helper
+still refuses, which stays green if someone deletes the guard CALL from
+`handle_logging_set_level` rather than loosening the helper. A control that tests
+the callee cannot catch a regression in the caller. **T9b** was added: it drives
+the real handler with a recording transport and asserts `logging/setLevel`
+reaches the shared backend and never reaches the identity-bound one — the
+behavioural half, two-directional like the rest.
+
+**What both seats confirmed, having been asked the inversion question directly:**
+no oracle is inverted; the shared-tool presence assertion runs first, so a
+blanked-discovery "fix" goes red rather than passing quietly; the `warm_backend`
+premise assertion blocks a cold-cache false pass; and the red case is red for the
+stated reason. `gpt-review` reached that by reading the production guard,
+discovery and cache-key helpers; `kimi-review` again stated plainly that it had
+no repository and judged on internal consistency and the appended run.
+
+**Recorded limitation, from `kimi-review`:** T9 binds to
+`meta_route_isolation_refused`'s current signature. If B1's implementation
+changes it, T9 becomes a compile error rather than a red assertion. It still
+fails loudly, by a different mechanism. Noted rather than designed around — a
+compile error at that call site is exactly the conversation the change should
+force.
+
+### 8.1 Final state of the suite
+
+5 cases: **1 red** (the acceptance case), **4 green controls**. Format check
+clean, lint check clean at `-D warnings`, and neither file-size gate moved —
+`scripts/ci/check-loc-ceiling.sh` still reports 57 production files at the 57
+ceiling, `scripts/dev/check-file-size.py` exits 0, and no baseline was raised.
+
+```
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 5043 filtered out
+```
