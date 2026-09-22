@@ -1,6 +1,13 @@
 # NFR.PERF.1 — where the P50 regression comes from: a ramp measurement
 
-**Date:** 2026-09-22 · **Host:** Spark (20 cores, aarch64) · **Status:** RESULTS PENDING
+**Date:** 2026-09-22 · **Host:** Spark (20 cores, aarch64) · **Status:** COMPLETE — 18 cycles, 15 kept, 108 reps
+
+**Headline:** a P50 regression is reproduced against **v3.5.0**, the baseline
+`NFR.PERF.1` actually names, at **1.1237 [1.1010, 1.1521]** (k=4, 96.5% coverage,
+n=15) — excluding both 1.0 and the 5% budget. The rise is a **step in a
+42-commit window**, not a ramp. **All numbers are provisional**: the
+pre-registered settledness rule returned DRIFTING. Per-commit attribution
+costs n≈195 against n≈7 for the endpoint and is retired on this host.
 
 Supersedes the attribution attempt in
 `2026-09-21-nfr-perf-1-bisect-resolution.md`. That bisect's verdict is an
@@ -492,6 +499,31 @@ interval appears anywhere in this report.
 | 12 | [x₍₃₎, x₍₁₀₎] | 96.1% |
 | 15 | [x₍₄₎, x₍₁₂₎] | 96.5% |
 
+**The interval's *structure* matters as much as its width, and it changed
+during this run.** At n≤8 the only order statistic reaching 95% coverage is
+k=1 — the **full observed range**. An interval that is the min-max of the
+sample cannot fail to contain anything in the sample, so a bound derived from
+it is close to unfalsifiable.
+
+Concretely, for `REL/A`:
+
+| n | interval | k | coverage | budget (1.05) |
+|---|---|---|---|---|
+| 7 | [1.0523, 1.1521] | **1 — min-max** | 98.4% | cleared by 0.2pp |
+| 9 | [1.0775, 1.1358] | **2 — sub-range** | 96.1% | cleared by 2.8pp |
+
+Only the n=9 form is a claim that could have failed and did not. Interim
+statements made at n=7 about the budget being excluded were **premature**, and
+a reader comparing interim numbers against the final should trust the later one
+for that reason rather than because it is later.
+
+This is the same principle applied for the third time in three directions —
+**a wide interval excludes nothing**, whether the reading it fails to exclude
+is unfavourable (§6.2), favourable to the measurement author (§5.2), or
+favourable to the coordinator (this note). Any quotation of these intervals
+should carry its `k` and coverage, because a bare pair of bounds invites the
+question this note answers.
+
 ### 1.5 Choice of n
 
 **n = 18, and the structural reason outranks the power reason.**
@@ -657,7 +689,135 @@ Everything below was verified, not assumed:
 
 ## 4. Results
 
-*(pending — filled from `ramp/analysis.json`)*
+**18 cycles observed, 15 kept, 108 reps.** Raw data is committed alongside this
+report at `docs/internal/evidence/nfr-perf-1-ramp-2026-09-22/`:
+`reps.csv` (per-rep), `analysis.json`, `analysis.txt` (full analyzer output),
+and `reps-v1-slotbug.csv` (the killed first attempt, retained as evidence for
+§1.3). Source paths on the measurement host: `~/perf-workload/results/ramp-v2/`
+and `~/perf-workload/results/ramp-v1-slotbug/`.
+
+### 4.1 Exclusions
+
+Three cycles excluded, **all three by pre-registered rule (c)** (within-cycle
+drift, `|Aprime/A − 1| > 0.10`): cycle 1 at 0.8971, cycle 7 at 0.8170, cycle 15
+at 1.1079. Realised exclusion rate **16.7%**, against the ~30% the design
+budgeted for. The n≥9 target was therefore **met with margin** — 9 kept cycles
+arrived at cycle 12, with six cycles still to run — rather than reached exactly.
+
+Rule (b) excluded nothing. The **two-sided sensitivity** (§4a.6) also drops no
+kept cycle, so the disclosed one-sidedness of rule (b) changed no number here.
+
+### 4.2 Validity gates
+
+| gate | value | interval | k | coverage | verdict |
+|---|---|---|---|---|---|
+| **G1** `Aprime/A` | 1.0081 | [0.9568, 1.0455] | 4 | 96.5% | **PASS** — brackets 1.0, width 8.88pp |
+| **G2** `REL/A` | 1.1237 | [1.1010, 1.1521] | 4 | 96.5% | **regression reproduced** — excludes 1.0 |
+
+G1 passing must be cited with §5.1's caveat attached.
+
+### 4.3 Pre-registered settledness verdict: DRIFTING
+
+| statistic | value | tolerance | pass |
+|---|---|---|---|
+| slope of `Aprime/A` on cycle index | **+0.00646**/cycle | ±0.005 | no |
+| mean over final 6 cycles | **1.0309** | 1 ± 0.02 | no |
+
+**Verdict: DRIFTING — the control did not settle, and every ratio in this
+section is therefore provisional.** Both statistics fail, not one marginally,
+so this is not a borderline call.
+
+The decomposition shows why, and the magnitude is the point: across the run
+`A` drifted **−25.4%** (0.7886 → 0.5880) and `Aprime` **−14.1%**. The host got
+dramatically faster overnight as load fell. **Absolute latencies from this host
+are worthless; only within-cycle ratios mean anything** — which is what the
+design is built on, and the drift figure is the justification rather than an
+embarrassment.
+
+### 4.4 Per-cycle series
+
+Printed in full because an INCONCLUSIVE verdict should be readable off the data
+rather than taken on trust (`*` = kept):
+
+| cyc | `A` raw | load1 | `A'/A` | `B/A` | `P3/A` | `P4/A` | `REL/A` |
+|---|---|---|---|---|---|---|---|
+| 1 | 0.7886 | 21.57 | 0.8971 | 0.9656 | 1.0217 | 1.0028 | 0.9946 |
+| 2* | 0.7319 | 10.40 | 0.9499 | 0.9613 | 1.0679 | 1.1133 | 1.1521 |
+| 3* | 0.7210 | 10.53 | 0.9568 | 1.0130 | 1.0838 | 1.1157 | 1.1075 |
+| 4* | 0.7277 | 9.22 | 0.9887 | 0.9298 | 1.0327 | 1.1982 | 1.1010 |
+| 5* | 0.7230 | 8.62 | 0.9953 | 1.0166 | 1.1411 | 1.1609 | 1.0775 |
+| 6* | 0.6931 | 7.12 | 1.0081 | 1.0502 | 1.1408 | 1.2079 | 1.0523 |
+| 7 | 0.7596 | 13.53 | 0.8170 | 0.9791 | 0.9103 | 1.0101 | 1.0777 |
+| 8* | 0.7190 | 7.71 | 1.0160 | 0.9602 | 1.1007 | 1.1519 | 1.1237 |
+| 9* | 0.7238 | 7.36 | 0.9990 | 0.9516 | 1.0859 | 1.0877 | 1.1064 |
+| 10* | 0.6002 | 10.11 | 1.0455 | 1.0319 | 1.0938 | 1.1264 | 1.1212 |
+| 11* | 0.6471 | 7.71 | 0.9476 | 0.9612 | 1.0285 | 1.0678 | 1.1358 |
+| 12* | 0.5980 | 7.68 | 1.0703 | 1.0832 | 1.2020 | 1.1592 | 1.1494 |
+| 13* | 0.5820 | 5.23 | 1.0643 | 1.0475 | 1.1568 | 1.2163 | 1.2505 |
+| 14* | 0.5997 | 7.88 | 1.0196 | 1.0273 | 1.1278 | 1.1923 | 1.1449 |
+| 15 | 0.6045 | 7.13 | 1.1079 | 0.9527 | 1.2562 | 1.1317 | 1.0890 |
+| 16* | 0.6579 | 6.45 | 0.9074 | 0.9582 | 1.0224 | 1.0620 | 1.0925 |
+| 17* | 0.6061 | 6.35 | 1.0526 | 1.0330 | 1.1940 | 1.1593 | 1.1676 |
+| 18* | 0.5880 | 6.50 | 1.0339 | 1.0294 | 1.1518 | 1.1819 | 1.1719 |
+
+Kept-cycle `A` spread: 0.5820 to 0.7319, a **25.8% range** — the drift of §4.3
+seen directly in the denominator.
+
+### 4.5 The ladder, against the noise floor
+
+**Resolvable effect at n=15: 6.13%** (`2 · 1.96 · CV · 1.2533 / √n`, CV 4.83%).
+Nothing smaller is distinguishable from noise.
+
+| point | idx | `X/A` | segment | delta | clears 6.13% floor? |
+|---|---|---|---|---|---|
+| `A` | 0 | 1.0000 | — | — | — |
+| `B` | 27 | 1.0166 | idx0→27 | +1.66pp | **no** |
+| `P3` | 69 | 1.1007 | idx27→69 | **+8.42pp** | **YES** |
+| `P4` | 92 | 1.1592 | idx69→92 | +5.84pp | **no** (just under) |
+| `REL` | 115 | 1.1237 | idx92→115 | −3.55pp | **no** |
+
+Spearman rho(index, ratio) = 0.900 over 5 points.
+
+**Exactly one segment is resolvable: idx27→69, at +8.42pp, carrying 68% of the
+total +12.37pp rise.** Everything else is inside the floor, including the
+negative idx92→115 segment — so the non-monotonicity (`P4` above `REL`) is
+**not** a resolvable finding and needs no explanation beyond noise.
+
+### 4.6 Position cross-check
+
+Median against geometric mean on the pre-registered balance-exact subset
+(n=12, most recent multiple of 6):
+
+| arm | median | geo-mean | delta |
+|---|---|---|---|
+| `Aprime` | 1.0178 | 1.0122 | −0.56pp |
+| `B` | 1.0283 | 1.0117 | −1.67pp |
+| `P3` | 1.1343 | 1.1191 | −1.52pp |
+| `P4` | 1.1593 | 1.1467 | −1.26pp |
+| `REL` | 1.1298 | 1.1318 | +0.20pp |
+
+**Gaps are now material — up to 1.67pp, against ≤0.24pp at n=6.** That is the
+magnitude the position model predicts (±1.7%), so an earlier claim that this
+cross-check "reads clean" no longer holds at final `n` and is withdrawn.
+
+But the **signs do not match the model**. It predicts median bias +1.68% for
+`B` (k=1), −1.64% for `P3` (k=2), +1.69% for `P4` (k=4), −1.65% for `REL`
+(k=5) — so geo-mean should sit *below* median for `B` and `P4` and *above* it
+for `P3` and `REL`. Observed: below for `B` ✓, below for `P4` ✓, below for
+`P3` ✗, marginally above for `REL` ✓. Two of four, with `P3` clearly wrong.
+
+So the gaps are better read as **sampling difference between two estimators at
+n=12 than as a confirmed position term**. What matters for the conclusion is
+that both estimators agree on the shape: `B` lowest, `P4` highest, `P3` and
+`REL` between them and ~1pp apart, which is inside the floor and flips order
+between estimators accordingly.
+
+### 4.7 Arm identity
+
+**73 of 108 reps carry `/health` version-trace coverage; 0 mismatches** — no rep
+where the expected version was never observed. Per-binary `--version` off the
+measurement path matches every label (§1.3.4). The trace cannot separate the
+three 4.0.0 arms from one another; that limit stands.
 
 ## 4a. What the next run should start with
 
@@ -752,9 +912,6 @@ order.
 
 ## 5. Verdict
 
-*(numbers pending final `n`; the structural caveats below are fixed and apply
-whatever the numbers come out as)*
-
 ### 5.1 What G1 passing does and does not certify
 
 **If G1 passes, it must be cited with this caveat attached, in the same
@@ -812,9 +969,76 @@ drift measured in `A` (−8.2% across the run). A moving denominator moves the
 ratio. `REL/A` does not inherit that problem for the criterion question, because
 `A` *is* the named baseline and is measured in the same cycle as its numerator.
 
+**Resolved at final `n`.** `REL/B = 1.1385, interval [1.0866, 1.1816]`, k=4,
+coverage 96.5%, n=15 — now a genuine sub-range rather than the min-max it was
+at n=7. The powered run's **1.0873 sits just inside the lower bound of 1.0866**,
+by 0.07pp. So the two instruments **marginally agree** and there is no
+instrument-disagreement finding to report. Marginal agreement at a 0.07pp
+overlap is not strong corroboration either, which is why §5.2's decision to cut
+the cross-validation framing stands rather than being reinstated by this result.
+
 ### 5.3 Findings
 
-*(pending)*
+Three separable results. **All three are provisional**, because the
+pre-registered settledness rule returned DRIFTING (§4.3).
+
+**Finding 1 — a P50 regression is reproduced against the baseline the criterion
+names, and the 5% budget is excluded.**
+
+`REL/A = 1.1237`, interval **[1.1010, 1.1521]**, k=4, realised coverage 96.5%,
+n=15, against **v3.5.0** (`32f135a6`).
+
+This is the first end-to-end measurement of this criterion against its own
+named baseline; every prior run used v3.5.1, which is why the row has sat
+PARTIAL. The interval's lower bound of 1.1010 excludes **1.0** and also
+excludes the **1.05 budget, by 5.1pp**. A budget breach against the named
+baseline, with the budget outside a falsifiable interval, is what this row has
+never had.
+
+**Finding 2 — the rise is a step localised to a 42-commit window, not a ramp.**
+
+Exactly one segment clears the 6.13% noise floor: **idx27→69, at +8.42pp,
+carrying 68% of the total +12.37pp**. The other three segments (+1.66, +5.84,
+−3.55pp) are all inside the floor and carry no claim.
+
+That window is 42 commits, is the heaviest in the run (107,746 `src` lines
+added, §1.2), and **straddles the 4.0.0 version boundary at index 39**. It is
+not a culprit commit and this design cannot produce one.
+
+**Finding 3 — per-commit attribution is retired on this host, and that is the
+answer to the question that prompted the exercise.**
+
+From realised scatter (CV 4.83%), using the prior analysis's own formula
+`n = (1.96·CV·k/(effect/2))²` with the asymptotic `k = 1.2533`:
+
+| effect to resolve | required n |
+|---|---|
+| 8.7% (endpoint) | **7** |
+| 1.7% (per segment) | **195** |
+| 1.0% (prior analysis's target) | **564** |
+
+**The endpoint costs 7 cycles; per-segment attribution costs 195.** A factor of
+~28 in cost, on a host that yields ~6 cycles an hour under contention. This is
+why the 2026-09-21 bisect could not have worked at any threshold, and why it
+should not be re-attempted here rather than merely not re-attempted now.
+
+**Question 3 — does the regression predate 4.0.0? INCONCLUSIVE.**
+
+`B/A = 1.0166`, interval **[0.9602, 1.0330]**, k=4, coverage 96.5%, n=15.
+
+The interval **brackets 1.0**, so this measurement **cannot distinguish** v3.5.1
+from v3.5.0. That is not the same claim as "the regression does not predate
+4.0.0", and the distinction is load-bearing: resolving question 3 needs ~1.6%
+and this run resolves 6.13%, roughly four times too coarse.
+
+Worth recording precisely because it is a near-miss rather than a hit: the
+point estimate of **1.0166 lands almost exactly on the 1.016 registered in
+§1.7 before the run reported.** A registered prediction matching to 0.06pp is
+striking, and it is still not evidence — the interval brackets 1.0, so the
+measurement cannot tell 1.0166 from 1.0000. **A point estimate agreeing with a
+prediction inside an interval that admits the null is a coincidence until the
+interval narrows.** Finding 2's step, whose *location* is resolvable, is the
+route to answering question 3 — see §4a.4.
 
 ## 6. Honest limits
 
@@ -858,6 +1082,50 @@ wrong person is a small wrong fact in a document whose whole argument is that
 its facts are checked.**
 
 ### 6.2 What the sample size can and cannot exclude
+
+**Resolvable effect at n=15: 6.13%.** Anything smaller is INCONCLUSIVE, never
+absent. A wide interval excludes nothing.
+
+| question | effect needed | resolved? |
+|---|---|---|
+| self-versus-self control | — | yes, it *is* G1 |
+| is `REL` slower than v3.5.0 at all | ~12% | **yes** |
+| does `REL` breach the 5% budget | ~5% | **yes**, budget excluded by 5.1pp |
+| which segment carries the rise | ~6% | **one** segment only (idx27→69) |
+| does the regression predate 4.0.0 | ~1.6% | **no** — INCONCLUSIVE |
+| which commit | ~1.7% | **no**, and not reachable at n≤195 |
+
+### 6.3 Two of this report's own claims did not survive final `n`
+
+Both were stated with more confidence than the data ultimately supported, and
+both are withdrawn rather than quietly revised:
+
+**Withdrawn — "within-cycle drift tracks host load".** At n=9 this read
+`rho(load1, |Aprime/A − 1|) = 0.850` and was reported as promoting the
+mechanism from plausible to measured. **At n=18 it is 0.028 — no relationship
+at all.** The 0.850 was a small-sample artefact.
+
+That has a consequence which cuts *in favour* of the run and must therefore be
+stated carefully rather than gratefully: if drift does not track load, then
+rule (c) is **not** preferentially excluding high-load cycles, so **the kept set
+is not load-biased** and the scope-boundary caveat built on that premise
+(earlier drafts of §1.3.1) was unnecessary. The exclusions confirm it directly —
+cycle 15 was excluded at load 7.13, among the *lowest* in the run. The
+observation that cycle 1 at load 21.57 showed no regression remains true as a
+single observation, but with rho ≈ 0 it cannot be generalised to "high load
+destroys the signal".
+
+**Withdrawn — "the position cross-check reads clean".** True at n=6 (gaps
+≤0.24pp), false at final `n` (gaps to 1.67pp, §4.6). The gaps are the magnitude
+the position model predicts, though their signs do not match it, so they are
+read as estimator sampling difference rather than a confirmed position term.
+Either way the earlier reassurance was premature.
+
+The pattern in both is the same, and it is the same pattern as the interval
+structure in §1.4: **a statistic computed at small `n` can be confidently
+wrong, and confidence at n=6 or n=9 is not evidence about n=18.** Three
+separate claims in this exercise were overturned by more data from the same
+run.
 
 *(interval values pending; the framing below was fixed before results existed)*
 
