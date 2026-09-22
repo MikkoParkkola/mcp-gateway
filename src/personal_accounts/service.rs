@@ -345,9 +345,12 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
         expected: &ConsentExpectation,
         record: &GrantRecord,
     ) -> Result<(), AccountServiceError> {
+        // `None`: a consent journey never sets the migration marker. Only the
+        // 3.x migration supplies one, and it commits through the store directly
+        // rather than through this service (design 7.1a).
         match self
             .store
-            .commit_grant_if_unchanged(account, expected, record)
+            .commit_grant_if_unchanged(account, expected, record, None)
         {
             Ok(GuardedCommit::Committed) => Ok(()),
             Ok(GuardedCommit::Fenced) => Err(AccountServiceError::StaleConsentFenced),

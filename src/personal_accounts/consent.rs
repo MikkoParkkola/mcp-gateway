@@ -77,12 +77,13 @@ impl PersonalAccountStore {
         account: &AccountKey,
         expected: &ConsentExpectation,
         record: &GrantRecord,
+        provenance: Option<&str>,
     ) -> Result<GuardedCommit, GuardedCommitError> {
         #[cfg(not(unix))]
         {
             // No durable writers exist on this target, so there is no guarded
             // commit to perform — and none to pretend to.
-            let _ = (account, expected, record);
+            let _ = (account, expected, record, provenance);
             Err(GuardedCommitError::RuntimeNotImplemented)
         }
         #[cfg(unix)]
@@ -99,7 +100,13 @@ impl PersonalAccountStore {
                 return Ok(GuardedCommit::Fenced);
             }
             // Still holding the same guard the comparison ran under.
-            super::storage::commit::commit_grant(&self.config, &mut authority, account, record)?;
+            super::storage::commit::commit_grant(
+                &self.config,
+                &mut authority,
+                account,
+                record,
+                provenance,
+            )?;
             Ok(GuardedCommit::Committed)
         }
     }
