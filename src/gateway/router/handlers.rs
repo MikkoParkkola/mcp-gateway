@@ -68,13 +68,42 @@ fn caller_grant_subject(
         .or_else(|| oauth_agent_identity.and_then(grant_subject_from_oauth_agent))
 }
 
-fn grant_subject_from_verified_identity(identity: &VerifiedIdentity) -> Option<GrantSubject> {
-    let subject = trimmed_non_empty(&identity.subject)?;
-    let authority = trimmed_non_empty(&identity.issuer).unwrap_or_else(|| "oidc".to_string());
+/// Build the grant subject an OIDC-verified caller is authorized as.
+///
+/// `pub(crate)` ON PURPOSE — do not narrow it back. The
+/// `MIK-7334.CATALOGUE.1` C10a/C10b cells drive THIS function.
+///
+/// THE ISSUER AND SUBJECT ARE STORED RAW, and that is the whole point.
+/// `trimmed_non_empty` is correct for HEADER-sourced identity — untrusted
+/// operator input that needs a bound — and wrong here: a `VerifiedIdentity`
+/// came from a validated token, and these exact bytes are what
+/// `VerifiedIdentity::stable_actor_id` length-prefixes into the per-user pool
+/// binding. Trimming, or truncating to 512 CHARACTERS against a BYTE length
+/// prefix, made the stored subject differ from the one in the binding, so a
+/// revocation reconstructed nothing, evicted nothing, and reported success.
+/// Applying header hygiene to verified claims was the defect; it predates the
+/// eviction work.
+///
+/// A blank issuer or subject now REFUSES rather than substituting `"oidc"`:
+/// a substituted authority can never match a binding that carries the blank
+/// issuer as `oidc:0::…`, so the substitution only ever produced a grant that
+/// authorized nobody and could not be revoked.
+pub(crate) fn grant_subject_from_verified_identity(
+    identity: &VerifiedIdentity,
+) -> Option<GrantSubject> {
+    if identity.subject.is_empty() || identity.issuer.is_empty() {
+        return None;
+    }
+    // The label is operator-facing display text, never a key, so it keeps the
+    // hygiene bound.
     let label = trimmed_non_empty(&identity.email)
         .or_else(|| identity.name.as_deref().and_then(trimmed_non_empty));
 
-    Some(GrantSubject::new(authority, subject, label))
+    Some(GrantSubject::new(
+        identity.issuer.clone(),
+        identity.subject.clone(),
+        label,
+    ))
 }
 
 fn grant_subject_from_trusted_headers(headers: &HeaderMap) -> Option<GrantSubject> {

@@ -126,6 +126,28 @@ pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
     write_yaml(path, yaml)
 }
 
+/// Replace `path` with `text` atomically: exclusive scratch, `sync_all`, rename.
+///
+/// The neutral-named door onto the same mechanism as [`write_config_text`],
+/// for files that are neither config nor YAML. The identity-grants file needs
+/// it for a reason stronger than credential hygiene: `IdentityGrantFile`
+/// defaults BOTH `schema_version` and `grants`, and the schema check compares
+/// against the constant it defaults to, so a write interrupted after the
+/// header parses cleanly as ZERO GRANTS — bit-for-bit the deliberate
+/// revoke-everything file. With a truncating write, an interrupted
+/// `identity grant add` therefore revokes everything, through the SUCCESS
+/// path. Fail-open cannot catch it (the file is valid, just short) and no
+/// parser can either, because "zero grants was meant" and "the writer died
+/// after the header" are the same bytes. Only the writer knows, so only the
+/// writer can fix it.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be created or replaced.
+pub fn write_text_atomic(path: &Path, text: &str) -> Result<(), String> {
+    write_yaml(path, text)
+}
+
 fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     let (mut file, tmp_path) = create_scratch_exclusive(path, next_scratch_seed())?;
 

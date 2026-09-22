@@ -688,4 +688,51 @@ mod tests {
             "a different scope must never reuse another scope's cached token"
         );
     }
+
+    // ------------------------------------------------------------------
+    // C4 — MIK-7334.CATALOGUE.1 revocation conjunct, token-exchange half.
+    //
+    // WHY IT LIVES HERE AND NOT IN `src/backend/slot_eviction_tests.rs`.
+    // `exchange_cache_key` is a private `fn` in this module, so the widened
+    // key is unreachable from `src/backend/`. The design asks the cell to seed
+    // its slot by driving `TokenExchangeStrategy::propagate` against a stubbed
+    // exchange endpoint and taking `credential.cache_binding` — but this repo
+    // has no security-token-service mock: `propagate` posts to a live
+    // `token_exchange_endpoint` over HTTP and nothing in the crate stands one
+    // up. Calling the production `exchange_cache_key` directly discharges the
+    // design's ACTUAL objection to the first draft — a handwritten widened
+    // string cannot detect a production key-format change that leaves the
+    // fixture untouched — at a fraction of the cost. Recorded as a deliberate
+    // downgrade, not a silent one.
+    // ------------------------------------------------------------------
+
+    use crate::identity_grants::GrantSubject;
+
+    // C4a — goes red when token-exchange slots are missed. Kills exact
+    // subject+audience matching, which no-ops on exactly the backends where a
+    // revocation matters most: on this path the POOL KEY ITSELF is the widened
+    // string, not PATH A's binding.
+    #[test]
+    fn c4a_the_subject_prefix_matches_the_widened_exchange_key() {
+        let subject_key = "oidc:11:https://idp:5:alice";
+        let prefix = crate::identity_propagation::identity_binding_prefix(&GrantSubject::new(
+            "https://idp".to_string(),
+            "alice".to_string(),
+            None,
+        ))
+        .expect("C4a premise: an issuer-shaped subject yields a prefix");
+
+        // The PRODUCTION widening, so a key-format change goes red here.
+        let widened = exchange_cache_key(
+            subject_key,
+            "https://mail.internal",
+            "https://sts-a/token",
+            "read",
+        );
+        assert!(
+            widened.starts_with(&prefix),
+            "C4a: the prefix must match the WIDENED exchange key; exact \
+             subject+audience matching silently no-ops on this path"
+        );
+    }
 }

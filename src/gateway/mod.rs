@@ -9,6 +9,11 @@ mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+/// The one write-then-bump-under-lock grant publisher, re-exported so the
+/// reload path can share it WITHOUT `meta_mcp` itself becoming crate-visible.
+/// Same shape as `STDIO_CREDENTIAL_PRINCIPAL`. A second copy of those four
+/// lines is how the `Release` ordering gets dropped in a later edit.
+pub(crate) use meta_mcp::publish_identity_grants;
 mod meta_mcp_helpers;
 mod meta_mcp_helpers_text;
 mod meta_mcp_tool_defs;
@@ -22,6 +27,15 @@ mod openwebui_adapter;
 pub mod proxy;
 pub mod recovery;
 mod router;
+/// The one constructor that turns a verified identity into a grant subject,
+/// re-exported so the `MIK-7334.CATALOGUE.1` prefix cells can drive it WITHOUT
+/// `router` itself becoming crate-visible. Same shape as
+/// `STDIO_CREDENTIAL_PRINCIPAL` below. A fixture that reimplemented it could
+/// not observe the trim/truncate-versus-raw-bytes divergence it exists to pin.
+/// `#[cfg(test)]` because the cells are its only consumer today; MVP piece 3
+/// (the reload loop) is what gives it a production caller.
+#[cfg(test)]
+pub(crate) use router::grant_subject_from_verified_identity;
 pub(crate) mod search_disclosure;
 mod server;
 /// The one stdio admission identifier, re-exported so a consumer outside

@@ -202,6 +202,76 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
     Ok(file)
 }
 
+/// Replace the identity-grants file at `path` atomically.
+///
+/// LIVES BESIDE ITS READER ON PURPOSE. It used to sit in the CLI's own module,
+/// which put the reader and the writer of one file format in two different
+/// crates and left the writer untestable from the library. The format's two
+/// halves belong together.
+///
+/// NOT `tokio::fs::write`, and that is a correctness requirement rather than
+/// hygiene. A truncating write is observable mid-flight, and a grants file
+/// truncated after its header still PARSES — as zero grants, because
+/// [`IdentityGrantFile`] defaults both fields and the schema check compares
+/// against the very constant it defaults to. Those are bit-for-bit the
+/// deliberate revoke-everything file, so an interrupted `identity grant add`
+/// would revoke every grant, through the SUCCESS path, where neither the
+/// fail-open ruling nor any parser can see it. Only the writer can prevent
+/// it, by never publishing a prefix.
+///
+/// `write_text_atomic` is sync `std::fs` while this is async, so it goes
+/// through `spawn_blocking` rather than blocking the runtime: the CLI is
+/// one-shot, but this is a shared helper now, and a blocking call inside an
+/// async fn is exactly what gets reused somewhere it stalls a reactor.
+///
+/// # Errors
+///
+/// Returns an error if the directory cannot be created, the grants cannot be
+/// serialized, or the file cannot be replaced.
+pub async fn write_identity_grants_file(
+    path: &Path,
+    grant_file: &IdentityGrantFile,
+) -> Result<(), String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            format!(
+                "failed to create identity grants directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    // JSON or YAML by extension, matching what the reader accepts. The atomic
+    // replace below is byte-agnostic, so one writer covers both.
+    let content = if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        serde_json::to_string_pretty(grant_file)
+            .map_err(|error| format!("failed to serialize identity grants JSON: {error}"))?
+    } else {
+        serde_yaml::to_string(grant_file)
+            .map_err(|error| format!("failed to serialize identity grants YAML: {error}"))?
+    };
+
+    let target = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        crate::config_persistence::write_text_atomic(&target, &content)
+    })
+    .await
+    .map_err(|error| format!("identity grants writer did not run: {error}"))?
+    .map_err(|error| {
+        format!(
+            "failed to write identity grants file {}: {error}",
+            path.display()
+        )
+    })
+}
+
 /// Load local identity grants from a JSON or YAML file.
 ///
 /// # Errors

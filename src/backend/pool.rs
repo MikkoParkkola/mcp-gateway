@@ -319,6 +319,99 @@ impl Backend {
             .and_then(|entry| entry.value().transport.read().clone())
     }
 
+    /// Drop every per-user slot whose binding starts with `binding_prefix`,
+    /// and with each slot its transport and all four metadata caches
+    /// (MIK-7530, `MIK-7334.CATALOGUE.1` revocation conjunct). Returns the
+    /// number of slots removed.
+    ///
+    /// `starts_with`, never `contains`: the audience is an operator-set string
+    /// and can carry another subject's complete prefix at a nonzero offset, so
+    /// containment would let one caller's revocation evict another's slot (C7).
+    ///
+    /// REMOVAL IS UNCONDITIONAL AND IS THE ATOMIC POINT; the CLOSE is
+    /// conditional. [`Backend::evict_idle_per_user_entries`] conflates the two
+    /// because for the reaper they have the same answer, and copying its
+    /// `in_flight == 0` predicate into the `remove_if` here would be the
+    /// `Vec::is_empty` trap one rung over: every catalogue fill holds an
+    /// in-flight claim for the whole duration of its fetch, so the predicate
+    /// would decline during exactly the window a revocation races — and unlike
+    /// the reaper, which re-sweeps every 60s, a revocation fires once.
+    ///
+    /// Removal alone harms nothing: an orphaned `PooledEntry` is a state
+    /// `ensure_entry_started` already detects by `Arc::ptr_eq` and recovers
+    /// from. A request already on the transport holds its own `Arc` and
+    /// finishes — it was authorized before the revocation landed, on a
+    /// connection opened before it. A fill still on the wire writes into the
+    /// orphan's cache, which nobody can reach.
+    ///
+    /// `in_flight` is incremented under the transport READ guard
+    /// (`claim_pooled_entry`), so it is re-checked here under the transport
+    /// WRITE guard. Reading it before taking that guard would reintroduce a
+    /// TOCTOU the reaper's atomic `remove_if` never had: with the removal now
+    /// unconditional, the write guard is the only remaining mutual exclusion
+    /// against a claim landing mid-eviction.
+    pub async fn evict_identity_slots(&self, binding_prefix: &str) -> usize {
+        // First pass: collect matching keys without holding a shard guard
+        // across the async close(), mirroring the reaper's two-pass shape.
+        let candidates: Vec<PoolKey> = self
+            .pool
+            .iter()
+            .filter(|entry| match entry.key() {
+                PoolKey::PerUser { binding } => binding.starts_with(binding_prefix),
+                // Never the shared slot: it backs init, metadata and
+                // single-tenant traffic, and a grant revocation is per-identity.
+                PoolKey::Shared => false,
+            })
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        let mut evicted = 0;
+        for key in candidates {
+            let Some((_, entry)) = self.pool.remove(&key) else {
+                // A concurrent reaper or eviction took it first; it is gone
+                // either way, which is what this call is for.
+                continue;
+            };
+            evicted += 1;
+
+            let idle_transport = {
+                let mut transport = entry.transport.write();
+                if entry.in_flight.load(Ordering::SeqCst) == 0 {
+                    transport.take()
+                } else {
+                    // Busy. Leave the transport on the orphan: ownership reaps
+                    // it when the last in-flight request drops its `Arc`.
+                    None
+                }
+            };
+            if let Some(transport) = idle_transport {
+                let _ = transport.close().await;
+            }
+        }
+
+        if evicted > 0 {
+            tracing::info!(
+                backend = %self.name,
+                evicted,
+                live_slots = self.pool.len(),
+                "Identity-keyed slot eviction removed per-user slots"
+            );
+        }
+        evicted
+    }
+
+    /// Test-only: whether the pool currently maps `key`, WITHOUT creating it.
+    ///
+    /// §3.1 Rule 1: every cache accessor routes through `tools_slot` →
+    /// `pooled_entry` → `or_insert_with`, so it creates the slot it then
+    /// reports empty. `pooled_transport_for_test` does not create, but answers
+    /// `None` for both "slot absent" and "slot present, transport unstarted".
+    /// This is the one probe that distinguishes them.
+    #[cfg(test)]
+    pub(crate) fn pool_has_slot_for_test(&self, key: &PoolKey) -> bool {
+        self.pool.get(key).is_some()
+    }
+
     /// Idle-evict per-user pool slots whose last use predates `idle_ttl`,
     /// closing their transports. The canonical [`PoolKey::Shared`] slot is never
     /// evicted (it backs init, metadata, and single-tenant traffic). Returns the
