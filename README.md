@@ -83,6 +83,8 @@ Your agent will install the binary, run the setup wizard, import your existing M
 | **cargo-binstall** | `cargo binstall mcp-gateway` |
 | **Direct binary download (Windows x64)** | Download `mcp-gateway-windows-x86_64.exe` from the [latest release](https://github.com/MikkoParkkola/mcp-gateway/releases/latest) |
 | **Docker** | `docker run -p 127.0.0.1:39400:39400 -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400` |
+| **Docker, `npx`/`uvx` backends** | Same, with `:latest-full` — the default image carries no Node or `uv`, so a stdio backend that shells out to either cannot spawn. See [Docker Deployment](docs/DEPLOYMENT.md#docker-deployment). |
+
 
 On Linux, the image runs as UID/GID 1001. Make an owner-only deployment copy
 instead of changing ownership on your working config: `install -m 600

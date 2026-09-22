@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A `-full` image variant carrying the runtimes stdio backends spawn.**
+  `ghcr.io/mikkoparkkola/mcp-gateway:latest-full` adds Node.js 24, `uv`, `git`
+  and `openssh-client` to the default image, and carries `curl` and a `python3`
+  that NodeSource depends on. It does not carry `pnpm`, `yarn` or `bunx`.
+  Node comes from NodeSource rather than the distribution, whose 20.19.2 is
+  below the floor stdio backends declare. The release publishes `latest-full`, `<version>-full` and
+  `<major>.<minor>-full` alongside the tags they mirror, plus the
+  `sha-<commit>-full` provenance tag the list is composed under; as on the
+  default image, `latest-full` and `<major>.<minor>-full` move only for a
+  stable release, so a candidate is reachable only by its exact version. The
+  default image is unchanged.
+
+  `docs/DEPLOYMENT.md` previously answered this case with "install Node.js in
+  the image", which leaves each operator maintaining a private layer that
+  nothing keeps in step with the gateway it fronts — and which fails silently
+  when it falls behind, because a stale runtime is only visible when a backend
+  that needs it stops starting.
+
 ### Fixed
 
 - **Two backends running the same command no longer share a package cache.**

@@ -10,10 +10,10 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # Busts the runtime stage's apt layer once per run. Both builds below read
+  # Busts the runtime stage's apt layer once per run. Every build below reads
   # this same value, so the push build still restores the layers the scan build
   # wrote and trivy clears the image that actually ships. Defined here rather
-  # than inline so the two cannot drift apart.
+  # than inline so they cannot drift apart.
   APT_CACHE_BUST: ${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
@@ -162,6 +162,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          target: runtime
           load: true
           platforms: ${{ matrix.platform }}
           # IMAGE_NAME = github.repository carries the original-case owner
@@ -197,6 +198,33 @@ jobs:
       - name: Smoke test the image (it must start and report healthy)
         run: scripts/ci/smoke-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
 
+      - name: Build the full variant for its smoke test
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --target runtime-full \
+            --platform "${{ matrix.platform }}" \
+            --tag "${REGISTRY}/mikkoparkkola/mcp-gateway:scan-full" \
+            --build-arg "APT_CACHE_BUST=${APT_CACHE_BUST}" \
+            --cache-from "type=gha,scope=docker-yml-${{ matrix.arch }}" \
+            --cache-from "type=gha,scope=docker-yml-full-${{ matrix.arch }}" \
+            --cache-to "type=gha,mode=max,scope=docker-yml-full-${{ matrix.arch }}" \
+            --output "type=docker" \
+            .
+
+      - name: Trivy the full variant (same gate as the default image)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan-full
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+
+      - name: Smoke test the full variant (it must spawn npx and uvx)
+        run: scripts/ci/smoke-full-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan-full"
+
       # Push by digest with no tag; `manifest` below creates the branch and sha
       # tags over both legs' digests. Nothing is resolvable by name until it
       # does, so a single-arch image can never answer a `docker pull`.
@@ -204,7 +232,7 @@ jobs:
       # The publish condition is unchanged from when this was one tagged push:
       # main yes, tags no (ci.yml publishes the release manifest list), PRs no.
       # It is repeated on the digest steps below and on `manifest`'s job-level
-      # `if:`; a job-level `if:` cannot read a step or an env alias, so the four
+      # `if:`; a job-level `if:` cannot read a step or an env alias, so all four
       # sites carry the literal expression and must agree.
       #
       # provenance/sbom off: build-push-action v7 attaches a provenance
@@ -217,6 +245,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          target: runtime
           platforms: ${{ matrix.platform }}
           provenance: false
           sbom: false
@@ -376,11 +405,11 @@ jobs:
           set -euo pipefail
           PLATFORMS="$(docker buildx imagetools inspect "${REF}" \
             --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')"
-          echo "published platforms: ${PLATFORMS}"
+          echo "base platforms: ${PLATFORMS}"
           for want in linux/amd64 linux/arm64; do
             case " ${PLATFORMS} " in
               *" ${want} "*) ;;
-              *) echo "::error::${want} missing from the published manifest list"; exit 1 ;;
+              *) echo "::error::${want} missing from the manifest list"; exit 1 ;;
             esac
           done
 

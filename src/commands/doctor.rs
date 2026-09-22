@@ -26,6 +26,7 @@ use mcp_gateway::{
 use serde_json::{Value, json};
 
 mod health;
+mod remedy;
 mod shadow;
 
 use health::check_port_and_gateway_runtime;
@@ -488,22 +489,15 @@ fn check_stdio_backend(name: &str, transport: &TransportConfig) -> Option<CheckR
     if found {
         Some(CheckResult::pass(label, format!("'{bin}' found")).with_category("backend_stdio"))
     } else {
+        let remedy = remedy::missing_binary_remedy(bin, remedy::runs_in_a_container());
         Some(
             CheckResult::fail(label, format!("'{bin}' not found in PATH"))
                 .with_category("backend_stdio")
-                .with_hint(format!(
-                    "Install the command: {}",
-                    if bin == "npx" {
-                        "install Node.js from https://nodejs.org"
-                    } else {
-                        "check your PATH"
-                    }
+                .with_hint(remedy.as_ref().map_or_else(
+                    || "Install the command: check your PATH".to_string(),
+                    |remedy| remedy.hint.clone(),
                 ))
-                .with_manual_fix(if bin == "npx" {
-                    "install Node.js from https://nodejs.org".to_string()
-                } else {
-                    format!("which {bin}")
-                }),
+                .with_manual_fix(remedy.map_or_else(|| format!("which {bin}"), |r| r.manual_fix)),
         )
     }
 }
