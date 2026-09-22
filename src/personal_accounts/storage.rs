@@ -35,6 +35,11 @@ pub(super) mod commit;
 #[path = "migration.rs"]
 pub(super) mod migration;
 
+// The 3.x source reader: its own file because the trust-boundary checks and
+// the position-only parse are a separate concern from field construction.
+#[path = "migration_source.rs"]
+pub(super) mod migration_source;
+
 const TOKEN_SCHEMA: &str = "personal_accounts.v1";
 const TOKEN_DOMAIN: &[u8] = b"mcp-gateway/account-token-aad/v1";
 const RECORD_BYTES: usize = 262_144;

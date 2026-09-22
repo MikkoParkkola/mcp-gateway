@@ -285,13 +285,62 @@ The operator writes, per legacy backend being migrated, a block naming:
 | `principal_authority` | → `AccountKey.principal_authority` | The gateway has no verified source. A human asserts it. |
 | `principal_subject` | → `AccountKey.principal_subject` | Same. |
 | `descriptor_id` | → `AccountKey.backend_id` | `backend_id` is the `accounts.descriptors` **map key** (`identity.rs:38-39`), not the backend registry name (V). |
-| `legacy_backend_name` | → the 3.x filename hash | The 3.x file is hashed over the **registry** name (`oauth/storage.rs:178-185`); `config::AccountDescriptor` (`config.rs:255-292`, the whole struct) carries `mode`, `provider`, `resource`, `issuer`, the four endpoints, `client_id`, `client_secret_ref`, `redirect_uri`, `scopes`, `send_resource_parameter` and `external_strategy` — and **no legacy name** (V, verified across the full field list, not just the first three). Without this, migration cannot even find the file. |
+| `legacy_backend_name` | → the 3.x filename hash | **NO LONGER MANDATORY — derived, with this field kept as an optional override. Approved 2026-09-22; see §5.3c.** The 3.x file is hashed over the **registry** name (`oauth/storage.rs:178-185`), and `config::AccountDescriptor` (`config.rs:255-292`, the whole struct) carries no legacy name (V, verified across the full field list). But `BoundAccountBackend.backend` does — "Backend registry name (the `backends` map key)" (`config/account_bindings.rs:52`) — already compiled and already bound to the descriptor being declared. |
 
 `resource` and `oauth_issuer` are **not** declared as free text — they are read
 from the already-configured descriptor the `descriptor_id` names
 (`config.rs:261`, `:263`; bound the same way at `identity.rs:88-89`) (V). But
 taking the issuer from the destination descriptor is **not** by itself safe, and
 §5.3a is the part of this decision that earns the "sound" verdict.
+
+### 5.3c `legacy_backend_name` is derived, not declared — approved 2026-09-22
+
+**The principle, and it generalises past this field: do not ask for a fact the
+system already knows, because the restatement can disagree with reality and the
+disagreement is silent.** A mandatory `legacy_backend_name` creates a second
+source of truth for one fact where one source is authoritative and the other is
+hand-typed. That is not a validation problem a better error message fixes; it is
+a redundancy that should not exist.
+
+Deriving widens no intent. The operator already declares the descriptor and
+already binds it to a backend, so the intent is expressed; deriving only stops
+them from restating it. `BoundAccountBackend` carries the registry name beside
+the `descriptor_id` it is bound to (`config/account_bindings.rs:44-58`) (V).
+
+**The field survives as an OPTIONAL override, for one case only**: a backend
+renamed between 3.x and 4.0.0 has its 3.x file hashed under the old name while
+the binding carries the new one. Nothing in the tree records the old name, so
+that case genuinely needs a human. Absent the override, the derived name is
+used.
+
+#### 5.3c.1 The failure mode this does NOT fix, and the refusal that does
+
+**Deriving removes one cause and leaves the failure mode standing**, which is
+the more important half of this decision.
+
+A resolved filename that does not exist reads as **"nothing to migrate"**.
+Deriving removes the typo path into that. It does not remove the rename path,
+the moved-`$HOME` path, or a file the user deleted. All of those still land on a
+silent zero, and a silent zero surfaces to the user as every backend asking for
+re-authorisation — indistinguishable from the migration never having run at all.
+That is the one outcome that leaves nobody a thread to pull.
+
+**Requirement: a declared backend whose resolved 3.x source is absent must
+REFUSE, loudly, naming the exact path it looked for and the override field that
+fixes it.** Not succeed with zero records.
+
+**The distinction to key on is declaration presence, not file presence**, and
+§7.1/§10.5's no-false-positives argument already establishes it: nothing scans
+the credential directory, so a fresh install that declares no migration touches
+nothing and reports nothing, and that stays true. But a descriptor that *does*
+opt in, whose file is missing, is an explicit request to migrate something that
+is not there. Refusing it also puts the override in front of the renamer at the
+moment they need it, which beats documenting it somewhere they will not read.
+
+**Falsifier F22** (joins §9.6): a declared backend whose derived path names no
+existing file is refused, and the refusal names that path; and — the other
+direction — a store with no declaration at all is silent and commits nothing,
+which is F2's territory and must keep passing.
 
 ### 5.3a The issuer binding must be attested and contradiction-checked
 
@@ -395,6 +444,21 @@ Consequences, all improvements on the previous draft:
   to equal what the tier mints; with this route the migration does not even
   consume them for the solo case — it compares them and refuses a mismatch, so
   an operator typo is caught instead of silently addressing an empty room.
+
+#### There are TWO `AccountDescriptor` types, and this row needs both
+
+Recorded because an implementer reading this section alone reaches for the wrong
+one and learns it from the compiler (V, both read at source):
+
+| Type | Fields | What this row uses it for |
+|---|---|---|
+| `identity::AccountDescriptor` (`identity.rs:39-48`) | `descriptor_id`, `provider`, `resource: String`, `issuer: String` — four, and **no `scopes`, no `client_id`** | the argument `account_key` takes |
+| `config::AccountDescriptor` (`config.rs:255-292`) | the full declared surface; `resource` and `issuer` are `Option<String>` | §7.2a(b)'s scope fallback and §7.1b's `client_id` precondition |
+
+`compile_descriptor` (`config/account_bindings.rs:358-374`) is what turns one
+into the other, and it refuses a `personal_managed` descriptor missing either
+`resource` or `issuer` (`:361-368`) — which is why the narrow type's two fields
+are `String` rather than `Option<String>`.
 
 #### Three traps, each of which fails SILENTLY
 
@@ -1142,6 +1206,14 @@ worker wrappers stay dead. One removal, not three.
       names this very row, and its comment (`:63-70`) says it is written to
       self-delete the moment production wiring adds a real caller. This design
       is that caller.
+- [ ] `src/config/account_bindings.rs:44-51` — `expect(dead_code)` on
+      `BoundAccountBackend.backend` (`:52`). **Remove.** Its reason reads
+      "Provenance carried by `compile` so a compiled binding names the backend
+      it came from; every consumer reads `effective`, `mode` or `propagation`
+      instead. Delete if no consumer ever needs provenance." Per §5.3c,
+      migration IS that consumer: the registry name is what the 3.x filename
+      hashes. Same mechanism as `consent.rs:71-74` — a production caller makes
+      the expectation unfulfilled and `-D warnings` fails the build.
 - [ ] `src/personal_accounts/consent.rs:45-51` — `expect(dead_code)` on
       `GuardedCommitError::RuntimeNotImplemented`. **Verify, likely stays.**
       Predicate is `all(not(test), unix)`; the only producer is the
