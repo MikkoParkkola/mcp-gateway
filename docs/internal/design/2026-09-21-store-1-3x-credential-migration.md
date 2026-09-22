@@ -54,12 +54,20 @@ A solo 3.x install has neither producer. So today, on this row alone:
 | **Without the `sole` tier** | The migration runs, refuses nothing, and commits a grant that validates and is durable. The declared principal never authenticates, so no lease ever matches that `AccountKey`. The criterion's MIGRATED conjunct is satisfied on disk and **every current user gets nothing usable.** This is the same inertness §5.2(a) rejects the sentinel principal for — reached by a different route. |
 | **With the `sole` tier** | The operator declares the solo principal, migration commits under it, and a request on a single-user gateway resolves to that same principal and leases the migrated grant. This is the only configuration in which STORE.1 delivers the ruling. |
 
-**The tier is not in this row and must not be scoped into it.** It lives on
-`origin/design/proof-tiered-principals` (@ `7325697b`) as 431 lines of design
-plus a 15-line test-comment fix — **no implementation** (V). Its `sole` tier
-would mint `principal_authority = "local"` and a fixed subject from
-`auth.single_user: true`, which `upgrade.rs:144` already tells personal
-gateways to set.
+**The tier is not in this row and must not be scoped into it — but it is being
+BUILT, so this is a sequencing dependency, not a missing workstream.**
+Corrected 2026-09-21: the design lives on `origin/design/proof-tiered-principals`
+(@ `7325697b`) as 431 lines plus a 15-line test-comment fix, and the
+**implementation** is on `feat/single-user-principal` @ `d5597957`, in flight
+in an agent worktree and not yet on `origin` (V — read at source; the earlier
+"no implementation" reading was true of what `origin` showed and is not true
+of the tree). STORE.1 waits on it landing. §5.3b pins the contract between
+the two halves. Its `sole` tier
+mints `principal_authority = "mcp-gateway-single-user"` and
+`principal_subject = "sole-operator"` — exact literals, read at source, and
+the full five-field contract is §5.3b. (An earlier draft of this paragraph
+said `"local"`, taken from the design rather than the implementation. It is
+wrong; see §5.3b.)
 
 **Two binding consequences for this design:**
 
@@ -311,6 +319,124 @@ comment "a descriptor that has since been pointed elsewhere is a different
 authorization, not this one" (V). The provider already enforces this rule at
 refresh time; migration must not create records that trip it.
 
+### 5.3b THE SOLO `AccountKey` CONTRACT — verified against IDENTITY.1, and the migration must not restate it
+
+**This section exists because two agents are building the two halves of one
+address with no sight of each other.** STORE.1 writes a grant at an
+`AccountKey`; IDENTITY.1 (`feat/single-user-principal`) mints the principal
+that looks it up. `AccountKey::digest()` is the lookup address and there is no
+fuzzy match — `sha256_hex(encode_fields(b"mcp-gateway/account-key/v1", [five
+fields]))`, big-endian `u32` length prefix per field (`mod.rs:58-79`,
+`storage.rs:51-58`) (V). **One differing byte in any field is a different
+digest and an unreachable record**, and `VaultStrategy::prepare` refuses. Five
+fields is five chances to disagree.
+
+#### The contract, read at source on `feat/single-user-principal` @ `d5597957`
+
+Not taken from a relay. Every row below was read on that branch (V):
+
+| Field | Value for a solo caller | Source |
+|---|---|---|
+| `principal_authority` | `"mcp-gateway-single-user"` | `SOLE_OPERATOR_AUTHORITY`, `identity.rs:85` |
+| `principal_subject` | `"sole-operator"` | `SOLE_OPERATOR_SUBJECT`, `identity.rs:89` |
+| `backend_id` | `descriptor.descriptor_id` | `identity.rs:201` |
+| `resource` | `descriptor.resource` | `identity.rs:202` |
+| `oauth_issuer` | `descriptor.issuer` | `identity.rs:203` |
+
+All five are `String`, never `Option<String>` (`mod.rs:49-53`), and
+`AccountKey::fields()` refuses any value that is empty or over 4096 bytes
+(`mod.rs:64-79`) (V). **"Not applicable" is not representable**, so there is no
+partial key and no sentinel for a field the migration cannot source.
+
+#### THE DECISION THIS SECTION CHANGES: do not restate the contract — call it
+
+**The earlier design (§5.4 item 2) accepted a real cost: migration builds its
+`AccountKey` outside `account_key()`, giving up the single-auditable-site
+property, because `account_key` required a `VerifiedIdentity` that migration
+does not have. On IDENTITY.1 that is no longer true.** Its signature is now
+`account_key(principal: Option<Principal<'_>>, descriptor: &AccountDescriptor)`
+(`identity.rs:186-210`), and `Principal::SoleOperator` is an arm requiring no
+verified identity at all. `Principal::parts()` (`identity.rs:136-141`) is
+documented as "the ONE place an arm's fields are read … so the two can never
+disagree about who a principal is".
+
+**So a solo migration calls `account_key(Some(Principal::SoleOperator),
+descriptor)` and does not construct an `AccountKey` at all.** That is not a
+convenience. It is the difference between two documents agreeing about five
+strings and two code paths being unable to disagree, because they are one call.
+A restated contract drifts the first time either side edits a literal; a shared
+constructor cannot.
+
+Consequences, all improvements on the previous draft:
+
+- **§5.4 item 2's accepted cost is withdrawn for the solo path.** The
+  single-diff-site property `identity.rs:73-75` protects is kept, not traded.
+  The bypass survives only for a multi-user operator-declared principal, which
+  has no `Principal` arm — and that is the case §1.1 says is not the population
+  the ruling names.
+- **§8.3's "build its `AccountKey` at exactly one site" construct is retired
+  for the solo path** and replaced by "call `account_key`". The comment
+  pointing at `identity.rs:73-75` is still required wherever the multi-user
+  bypass remains.
+- **The solo declaration's `principal_authority` / `principal_subject` become
+  validation inputs rather than key inputs.** §1.1 requires the declared pair
+  to equal what the tier mints; with this route the migration does not even
+  consume them for the solo case — it compares them and refuses a mismatch, so
+  an operator typo is caught instead of silently addressing an empty room.
+
+#### Three traps, each of which fails SILENTLY
+
+Flagged by the IDENTITY.1 implementer and confirmed at source. Every one
+produces a well-formed key at the wrong address, which is why none of them
+shows up as an error.
+
+1. **`oauth_issuer` is the DOWNSTREAM OAuth provider, not the inbound identity
+   provider.** It is `descriptor.issuer` from config — `https://accounts.google.com`
+   and the like. `AccountDescriptor`'s own doc distinguishes the "exact trusted
+   downstream OAuth issuer" from the inbound IdP. Both are called "the issuer"
+   in speech, both are non-empty, and writing the gateway's own issuer yields a
+   valid key nothing looks up. §5.3a already attests this field for an
+   independent reason, which helps: the attested `legacy_issuer` must equal
+   `descriptor.issuer`, and that is the same value this field takes.
+2. **`backend_id` is the `accounts.descriptors` MAP KEY, not the backend
+   registry name.** `identity.rs`'s header says so explicitly: "NOT the backend
+   registry id". A backend registered as `gdrive` under descriptor key
+   `google-workspace-personal` yields the latter. §5.3 already declares
+   `descriptor_id` and `legacy_backend_name` as two separate fields for exactly
+   this reason — the 3.x filename hashes the registry name, the key takes the
+   map key — and this trap is the failure that happens when an implementer
+   decides they are the same thing.
+3. **The two principal literals are exact, case-sensitive, and unadorned.** No
+   prefix, suffix, separator or length prefix. The length-prefixing visible in
+   `Principal::stable_actor_id` (`identity.rs:164-175`) happens **downstream of
+   the key** and must never be applied to these fields.
+
+#### The literal `"local"` is wrong and is corrected here
+
+An earlier draft of §1.1 wrote `principal_authority = "local"`, taken from the
+`proof-tiered-principals` design. **The implementation chose
+`"mcp-gateway-single-user"`, and that is now the contract.** `"local"` is
+already four other things in this tree (`cli/mod.rs:104`, `:245`,
+`gateway/ui/backend_ops.rs:679`, `identity_grants_tests.rs:12,16`), and every
+`principal_authority` in the tree is URL-shaped or namespaced. Corrected in
+§1.1. **If any later draft of this document reintroduces `"local"`, it is a
+defect, not a preference.**
+
+#### Sequencing, and what must be confirmed before code
+
+STORE.1 **waits on IDENTITY.1 landing.** This is a sequencing dependency, not a
+missing workstream: `feat/single-user-principal` @ `d5597957`
+("feat(accounts): mint a single-user principal for solo deployments") is in
+flight in an agent worktree and is not on `origin` (V — `git ls-remote` shows
+no such head; the branch resolves locally only).
+
+**Required before any STORE.1 code is written:** confirm against the landed
+IDENTITY.1 that (a) `Principal::SoleOperator` is reachable by a caller inside
+`personal_accounts`, (b) `account_key`'s signature is as read above, and (c)
+the two literals are unchanged. If IDENTITY.1 lands with a different shape,
+this section is the defect and it is one paragraph to fix — which is the whole
+reason it is written down before either half ships.
+
 ### 5.4 What makes the pick safe
 
 1. **It does not violate the doctrine, it respects its shape.** `identity.rs`
@@ -393,6 +519,16 @@ semantics a migration provenance marker needs.
 file's basename on the grant it commits — **and this requires provenance
 plumbing that does not exist today.** §6.1 is that cost, stated up front rather
 than discovered in implementation.
+
+**The marker's SHAPE is a second instance of §5.3b's contract problem, and it
+is now shared.** IDENTITY.1 reported reserving no field to tell a migrated
+grant from a freshly authorised one; this row's `legacy_migration` is that
+field. Two agents inventing two markers for one distinction is the same
+failure as two agents inventing two key shapes, one severity lower. **This
+design owns the field** — it already exists at `mod.rs:207` with a working
+carry-forward — and its value is the 3.x source file's basename. IDENTITY.1
+should read it, not add a parallel one. Agreed before either half ships, not
+after.
 
 ### 6.1 The plumbing the decision requires — confirmed gap
 
@@ -1199,6 +1335,17 @@ second run. Specifically:
   position-only refusal *appears* in the captured output, so the test fails if
   the record was never read.
 
+**The structural reason so many of these are vacuous today: the store has no
+production writer at all.** Nothing outside `src/personal_accounts/` and its
+test fixtures calls `commit_grant` or `commit_grant_if`; the internal
+forwarding exists but no consent entry point populates the store (§4) (V,
+independently confirmed by the IDENTITY.1 implementer). So every negative
+assertion about the store's contents is true of an empty store, and stays
+true until this migration becomes the first writer. That is not a reason to
+drop the negative falsifiers — it is exactly why each one needs the positive
+control above, and why a green run of §9 before implementation means
+nothing.
+
 F9's crash falsifier is **not** in this class: the existing harness already
 requires `Outcome::Died { checkpoint: Some(..) }` — the child announces the
 named boundary before dying — and a candidate-count delta proving the window
@@ -1373,6 +1520,15 @@ product lie in the other direction.
 
 ### 11.1 Commit order
 
+**Ownership, stated because it was queried:** the notice change is in THIS
+row's scope, not a follow-up's. `NOTICE_4_0_0_ITEMS[0]` tells operators
+"Stored tokens from 3.x are not migrated: each OAuth backend re-authenticates
+once" (`upgrade.rs:243-248`). A shipping STORE.1 is what makes that false, in
+the same release, so STORE.1 retracts it. §7.4a adds a second reason the text
+cannot survive unedited: it also promises the stranded files "still hold
+usable refresh tokens", which stops being true for a migrated backend the
+first time it refreshes against a rotating server.
+
 **Commit 1 — mechanism, notice untouched.** Everything in §7, §8 and §9 lands.
 `NOTICE_4_0_0_ITEMS` is not edited. Both notice tests stay green unmodified. The
 migration exists but the notice does not yet claim it, which is the safe
@@ -1426,7 +1582,7 @@ sweeping for "migration is not supported" prose will find it and be tempted.
 | O5 | Issuer contradiction check granularity (§5.3a) — is comparing the `token_endpoint`'s **origin** to the attested issuer's origin the right test? Some providers host the token endpoint off the issuer origin. | A | A decision on whether to compare origins, require an exact operator-supplied endpoint, or treat a mismatch as a warning that requires a second attestation flag. Conservative default: refuse and make the operator override explicitly. |
 | O6 | Zeroization of `TokenInfo` / `GrantRecord` plaintext buffers (§10.1) | A | Out of scope for this row as scoped; it changes types every existing holder shares. Named so the security section's claim stays honest rather than implying erasure this design does not perform. |
 | O7 | **The `descriptor_revision` fence has no comparison site** (§7.3). Every occurrence in the tree is a copy, a validator, or a comparison of two stored-origin values; the live `AccountDescriptor` is never fingerprinted and never compared (V). Computing the value correctly at migration time therefore detects no descriptor change at all. | V | A decision on whether the read path (`AccountService` before release, or `GatewayRefreshProvider` before refresh) gains a live-fingerprint comparison, and which row owns it. It is **not** in STORE.1: it is a new production behaviour whose consequence is that every affected user is asked to reconnect after a config edit. |
-| O8 | **The `sole` identity tier** (§1.1). STORE.1 delivers zero user-visible value to a solo install without it, and that is the population the operator's ruling names. | V | Escalated 2026-09-21 as its own decision. `origin/design/proof-tiered-principals` @ `7325697b` is design-only, no implementation. §1.1 records both outcomes. |
+| O8 | **The `sole` identity tier — SEQUENCING, not a missing workstream** (§1.1, §5.3b). STORE.1 delivers zero user-visible value to a solo install until it lands. | V | IDENTITY.1 is in flight on `feat/single-user-principal` @ `d5597957` (agent worktree, not on `origin`). STORE.1 waits on it. What settles the RISK is §5.3b: the migration calls `account_key(Some(Principal::SoleOperator), descriptor)` rather than restating the five-field contract, so the two halves cannot disagree. Confirm the signature and both literals against the landed branch before writing code. |
 
 **Gating, consolidated — this is the single authoritative list, and §7.3 no
 longer carries a competing one.**
@@ -1510,6 +1666,14 @@ reached independently before the review ran.
 10. **Grant preservation is stated in both directions** (§7.4a): nothing is
     invalidated by the migration, and rollback to 3.x is not guaranteed after
     a migrated grant's first refresh on a rotating server.
+11. **The solo `AccountKey` is not restated, it is CONSTRUCTED BY THE SAME
+    CALL** (§5.3b). IDENTITY.1's `account_key` takes
+    `Option<Principal<'_>>`, and `Principal::SoleOperator` needs no verified
+    identity — so a solo migration calls it rather than building a key from
+    five strings copied out of another branch. This withdraws §5.4 item 2's
+    accepted cost for the solo path: the single-auditable-construction-site
+    property is kept, not traded. Two documents agreeing about five literals
+    drift; one shared constructor cannot.
 6. **Notice retracted last**, in a second commit, with two tests changing rather
    than the one that is obvious (§11).
 
@@ -1596,3 +1760,31 @@ unreachable from `personal_accounts`, requiring a fourth visibility widening
 already uses it. §8.2 stands at one widening. Recorded because a withdrawn
 finding is evidence the others were checked.
 
+---
+
+### 12.4 Third round — the cross-agent contract, 2026-09-21
+
+Not a reviewer pass. IDENTITY.1's implementer and this row are building the two
+halves of one address without sight of each other, and the lead relayed their
+half. **Everything relayed was re-read at source on `feat/single-user-principal`
+@ `d5597957` before being written down here** — a relayed contract is a claim,
+not evidence, and this is the one document a wrong literal would silently
+poison.
+
+| Relayed | Verified at | Outcome |
+|---|---|---|
+| `SOLE_OPERATOR_AUTHORITY = "mcp-gateway-single-user"` | `identity.rs:85` | confirmed |
+| `SOLE_OPERATOR_SUBJECT = "sole-operator"` | `identity.rs:89` | confirmed |
+| the other three fields come straight from the descriptor | `identity.rs:201-203` | confirmed |
+| all five fields `String`, empty or >4096 refused | `mod.rs:49-53`, `:64-79` | confirmed |
+| digest is the address, no fuzzy match | `mod.rs:58-62`, `storage.rs:51-58` | confirmed |
+| `"local"` is wrong | four existing uses in-tree | §1.1 corrected |
+| IDENTITY.1 is in flight, not absent | branch resolves locally, absent from `origin` | §1.1, O8 corrected |
+
+**One thing the relay did not contain, found by reading the branch:**
+`account_key` no longer takes `Option<&VerifiedIdentity>` — it takes
+`Option<Principal<'_>>` (`identity.rs:186-210`). That makes §5.4 item 2's
+accepted cost avoidable for the solo path, and turns the contract question from
+"do our two statements match?" into "call the same function". It is the
+strongest available answer to the divergence risk, and it was reachable only by
+reading the other branch rather than trusting the summary of it.
