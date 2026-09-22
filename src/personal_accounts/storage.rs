@@ -28,6 +28,13 @@ use std::path::{Component, Path};
 #[path = "commit.rs"]
 pub(super) mod commit;
 
+// MIK-6744.STORE.1: the 3.x credential migration, which is a durable writer
+// into this store and so lives beside the other one. Declared here rather
+// than in `mod.rs` for the same reason `commit` is: `mod.rs` sits exactly at
+// its recorded size baseline, and a new declaration there fails the gate.
+#[path = "migration.rs"]
+pub(super) mod migration;
+
 const TOKEN_SCHEMA: &str = "personal_accounts.v1";
 const TOKEN_DOMAIN: &[u8] = b"mcp-gateway/account-token-aad/v1";
 const RECORD_BYTES: usize = 262_144;
