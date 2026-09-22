@@ -834,10 +834,28 @@ that the discipline is real rather than decorative.
 | 3 | G1 is structurally blind to median position bias, because `Aprime` sits at `k = NARM/2`, the one distance where that bias vanishes (§5.1) | Stated as a **verdict-level** caveat, not an appendix note. Covered by the geometric-mean cross-check, which reads clean (≤0.24pp). |
 
 Three further errors were made and corrected *during* the exercise, and are
-recorded in place rather than tidied away: the control's adjacency to its
-baseline (§1.3), a retracted slot-0 claim made while the analyzer's own
-CONFOUNDED warning was printing (§1.3.2), and a cross-validation framing that
-rested on the median non-identity it was itself documenting (§5.2).
+recorded in place rather than tidied away:
+
+- **The control was adjacent to its own baseline** under rotation (§1.3) —
+  measurement author's error, endorsed by the coordinator, caught by the
+  measurement author from the run's own slot table.
+- **A slot-0 claim was made and retracted** (§1.3.2) while the analyzer's own
+  CONFOUNDED warning was printing at the time — measurement author's error
+  entirely. *A guard that fires and is ignored is a different failure from a
+  guard that never fires, and only one of them is fixed by writing more
+  guards.*
+- **A cross-validation was derived via the median non-identity this document
+  itself documents** (§5.2) — the coordinator's derivation, computing
+  `(REL/A)/(B/A)` and recommending it as the report's lead. Caught on direct
+  recomputation, which gave 1.1627 against the 1.1187 the invalid route
+  produced; the framing was then cut rather than downgraded. The measurement
+  author's lesser part: an intermediate draft **kept a weakened version** in
+  §5.2 instead of cutting it, which invites a reader to lean on it anyway.
+
+The attribution is spelled out because this ledger exists so a reader can judge
+whether the method's self-correction is real, and **an entry filed against the
+wrong person is a small wrong fact in a document whose whole argument is that
+its facts are checked.**
 
 ### 6.2 What the sample size can and cannot exclude
 
