@@ -568,3 +568,72 @@ pub(super) fn to_base64url(input: &[u8]) -> String {
     }
     out
 }
+
+/// The LOW from the final review: the hatch arm sat ahead of the exact-match
+/// arm, so a caller declaring **its own true identity** — with that name also
+/// listed as a `declared` entry — was recorded as `DeclaredLabelMismatch`.
+///
+/// A false positive in the exact record funded change 4 requires. A mismatch
+/// signal that fires on non-mismatches degrades the thing the clause exists to
+/// produce, and this row fails if the arms are ever reordered back.
+#[test]
+fn a_principal_declaring_its_own_name_is_never_audited_as_a_mismatch() {
+    let mut config = cfg(true, true, &[]);
+    config.allow_unverified_agent_identity = true;
+    config.known_agents = vec![
+        KnownAgent {
+            source: AgentSourceKey::Jwt,
+            id: "svc-a".to_string(),
+        },
+        // The caller's own name ALSO listed as a declared entry — the
+        // combination that made the hatch arm fire on a truthful label.
+        KnownAgent {
+            source: AgentSourceKey::Declared,
+            id: "svc-a".to_string(),
+        },
+    ];
+
+    let mut identity = proven("svc-a", ProofSource::VerifiedJwtSubject);
+    identity.declared = Some(DeclaredLabel {
+        id: "svc-a".to_string(),
+        source: DeclaredSource::Header,
+    });
+
+    assert_eq!(
+        validate_agent_identity(&identity, &config).expect("a truthful label was refused"),
+        IdentityAudit::Clean,
+        "a principal declaring its own name was audited as a mismatch: the label \
+         that cannot be a lie was recorded as one"
+    );
+}
+
+/// The control: with the arms in this order the hatch arm must still fire for
+/// a label that genuinely differs. Without this, the reorder above would be
+/// indistinguishable from deleting the hatch arm.
+#[test]
+fn the_hatch_arm_still_audits_a_genuinely_different_label() {
+    let mut config = cfg(true, true, &[]);
+    config.allow_unverified_agent_identity = true;
+    config.known_agents = vec![
+        KnownAgent {
+            source: AgentSourceKey::Jwt,
+            id: "svc-a".to_string(),
+        },
+        KnownAgent {
+            source: AgentSourceKey::Declared,
+            id: "legacy-name".to_string(),
+        },
+    ];
+
+    let mut identity = proven("svc-a", ProofSource::VerifiedJwtSubject);
+    identity.declared = Some(DeclaredLabel {
+        id: "legacy-name".to_string(),
+        source: DeclaredSource::Header,
+    });
+
+    assert_eq!(
+        validate_agent_identity(&identity, &config).expect("the operator-listed label was refused"),
+        IdentityAudit::DeclaredLabelMismatch,
+        "a genuinely different label stopped being audited as a mismatch"
+    );
+}

@@ -423,13 +423,17 @@ fn validate_without_proof(
 /// deleted, because the next reader needs to know the ordering is load-bearing
 /// and not incidental.
 ///
+/// 1. **Exact match — accept.** A principal is always permitted to declare its
+///    own name: the one label that cannot be a lie, so it is a member of its
+///    own set by construction and never has to be listed. **First**, ahead of
+///    every arm that can emit a mismatch — an earlier order put the hatch arm
+///    above it and recorded a caller naming itself as a mismatch, a false
+///    positive in the record the criterion requires.
 /// 0. **Operator-listed under the hatch — accept and audit.** A `declared`
 ///    allowlist entry is an explicit statement that this label may be
 ///    presented. Refusing it as a contradiction would re-open the lockout one
-///    step past the allowlist, so proving more would still grant less.
-/// 1. **Exact match — accept.** A principal is always permitted to declare its
-///    own name: the one label that cannot be a lie, so it is a member of its
-///    own set by construction and never has to be listed.
+///    step past the allowlist, so proving more would still grant less. Reached
+///    only when the label genuinely differs from the proven id.
 /// 2. **Operator mapping decides, for EITHER proof source.** Ahead of the mTLS
 ///    fallback deliberately. `principal_labels` is keyed by `(source, id)` and
 ///    accepts both variants of [`ProofSource`], so an operator who can name a
@@ -452,6 +456,20 @@ fn check_declared_label(
         return Ok(IdentityAudit::Clean);
     };
 
+    // Arm 1 — a principal may always declare its own name. The one label that
+    // cannot be a lie, so it is a member of its own set by construction.
+    //
+    // FIRST, ahead of every arm that can emit a mismatch. An earlier order put
+    // the hatch arm above this one, so a caller declaring its own true
+    // identity — with that name also listed as a `declared` entry — was
+    // recorded as `DeclaredLabelMismatch`. That is a false positive in the
+    // exact record the criterion requires, and a mismatch signal that fires on
+    // non-mismatches degrades the thing the clause exists to produce. Exact
+    // equality can never be a lie, so deciding it first weakens nothing below.
+    if declared.id == proven.id() {
+        return Ok(IdentityAudit::Clean);
+    }
+
     // Arm 0 — the operator wrote this label down.
     //
     // Under the migration hatch, a `declared` allowlist entry is an explicit
@@ -459,17 +477,12 @@ fn check_declared_label(
     // contradiction would re-open the lockout one step past the allowlist:
     // the hatch would admit the caller and the contradiction rule would then
     // refuse it, so proving more would still grant less. The mismatch is
-    // audited rather than ignored, because it is still a proved-A-claimed-B
-    // signal and change 4 asks for it to be detectable.
+    // audited rather than ignored, because by this point the label genuinely
+    // differs from the proven id — which is what makes it a real
+    // proved-A-claimed-B signal rather than a caller naming itself.
     if config.allow_unverified_agent_identity && admits_declared(&config.known_agents, &declared.id)
     {
         return Ok(IdentityAudit::DeclaredLabelMismatch);
-    }
-
-    // Arm 1 — a principal may always declare its own name. The one label that
-    // cannot be a lie, so it is a member of its own set by construction.
-    if declared.id == proven.id() {
-        return Ok(IdentityAudit::Clean);
     }
 
     // Arm 2 — an operator-written mapping decides, for EITHER proof source.
