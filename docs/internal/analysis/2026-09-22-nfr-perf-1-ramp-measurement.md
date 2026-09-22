@@ -101,15 +101,22 @@ alongside its ratio:
 | segment | commits | `src/**.rs` lines +/− | `Cargo.lock` commits |
 |---|---|---|---|
 | idx0→27 (v3.5.0 → v3.5.1) | 27 | 2,792 / 240 | 6 |
-| idx27→46 | 19 | 36,954 / 1,968 | 3 |
-| idx46→69 | 23 | 70,792 / 2,955 | 6 |
+| **idx27→69 (measured)** | **42** | **107,746 / 4,923** | **9** |
+| — idx27→46 *(unmeasured split)* | 19 | 36,954 / 1,968 | 3 |
+| — idx46→69 *(unmeasured split)* | 23 | 70,792 / 2,955 | 6 |
 | idx69→92 | 23 | 7,024 / 1,259 | **0** |
 | idx92→115 | 23 | 1,706 / 837 | 4 |
 
-Two things fall out of this table before any measurement:
+**Four segments are measured**, not five: `P2` at index 46 is unmeasurable
+(§1.8), so idx27→46 and idx46→69 merge into the single 42-commit idx27→69
+segment. The two sub-rows are kept indented because the split is what a
+replacement arm would restore (§4a.5), not because either was measured. The
+per-segment ratios are in §4.5; this table is the weight to read them against.
 
-- **Segment idx46→69 carries 25× the source churn of idx0→27 for a comparable
-  commit count.** A "ramp" that is really one heavy segment plus three light
+Three things fall out before any measurement:
+
+- **The merged idx27→69 segment carries 39× the source churn of idx0→27** for
+  1.6× the commit count. A "ramp" that is really one heavy segment plus light
   ones is a step wearing a ramp's clothes, and only this column distinguishes
   them.
 - **idx69→92 is the one window with zero dependency churn.** It is therefore
@@ -117,6 +124,9 @@ Two things fall out of this table before any measurement:
   than to a dependency bump. Everywhere else, source and lockfile move
   together and a step landing there implies a *dependency* bisect, which is a
   different investigation from a source one.
+- **The measured step lands in the segment with both the heaviest churn and 9
+  lock changes** (§4.5, Finding 2), so it cannot be attributed to source rather
+  than dependencies without the follow-up in §4a.
 
 ### 1.3 What the interleaving buys, and what it does not
 
@@ -403,13 +413,19 @@ not after taking medians** — `median(x/z) ≠ median(x/y)/median(y/z)`. Ratios
 are pooled per cycle by design, so the algebraic identity is *expected* to fail
 on pooled values. It is not an arithmetic error.
 
-What the drift *does* track is **load**: position cost runs ~10% at load 21.6
-and ~1% at load 7.1. Same mechanism as the 29% artefact above, measured as a
-dose-response rather than a single anecdote, and what rule (c) was written to
-catch.
+What the drift *appeared* to track in the first six cycles is **load**:
+position cost ran ~10% at load 21.6 and ~1% at load 7.1, which looked like a
+dose-response version of the 29% artefact above.
 
-**The consequence is a scope boundary, not a bias — and the direction matters.**
-Rule (c) excludes cycles by within-cycle drift, drift scales with load, so the
+> **That reading does not survive the full sample and is withdrawn — see §6.3.**
+> It was drawn from cycles 1–6; across all 18, the correlation between host load
+> and within-cycle drift is **0.028**, i.e. none. The dose-response is recorded
+> here because the narrative it produced shaped intermediate decisions, not
+> because it holds.
+
+**The consequence — also withdrawn at final `n`, and recorded because the
+reasoning was load-bearing while it stood (§6.3).** The argument ran: rule (c)
+excludes cycles by within-cycle drift, drift scales with load, so the
 rule preferentially excludes high-load cycles. The kept set is therefore
 low-load by construction.
 
@@ -434,8 +450,16 @@ will ask about directly:
 What the run therefore answers is: **is there a code regression, measured where
 the environment is quiet enough to see one.** What it does not answer is **what
 latency a user sees under load** — a capacity question needing a different
-design, which nobody asked. `rho(load1, |Aprime/A − 1|)` is reported to size
-that boundary rather than to confess to it.
+design, which nobody asked.
+
+**At final `n` this whole passage is moot, and in the run's favour.** With
+`rho(load1, |Aprime/A − 1|) = 0.028`, rule (c) is not selecting on load in
+either direction, so the kept set is **not** load-biased and there is no scope
+boundary to size. Cycle 15 was excluded at load 7.13, among the lowest in the
+run, which shows it directly. The argument above is left standing because it
+governed intermediate decisions and because **a caveat that turned out to be
+unnecessary is still worth showing the working for** — a reader should be able
+to see that the favourable resolution was not assumed.
 
 Cycles 2–3 sit inside the 0.10 tolerance and are **kept**, so they bias
 `Aprime/A` low. That is left in rather than trimmed: selecting a post-transient
