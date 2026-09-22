@@ -373,8 +373,7 @@ impl Backend {
     ///
     /// Same contract as [`Self::get_tools_for_binding`]: `binding` is the
     /// caller's `PropagatedCredential::cache_binding`, everything that is not a
-    /// `session_mode = per_user` backend with a binding collapses to the shared
-    /// slot, and `extra_headers` are the headers that slot's transport was
+    /// propagating backend with a binding collapses to the shared slot, and `extra_headers` are the headers that slot's transport was
     /// opened with — carried on a `PerUser` slot, dropped on the shared one.
     ///
     /// # Errors

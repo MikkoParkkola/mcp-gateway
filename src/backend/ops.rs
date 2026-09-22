@@ -284,11 +284,11 @@ impl Backend {
         // must be known before the `can_proceed()` check runs -- gating on a
         // single backend-wide `Failsafe` let one caller identity's outage trip
         // the breaker for every other identity sharing the backend, the exact
-        // cross-tenant blast radius this pool exists to eliminate. A non-per-
-        // user backend, or a per-user backend request without a resolved
-        // identity, collapses to the shared canonical slot (IDP.5); a per-user
-        // request gets its own transport/session/failsafe so users never
-        // collide (IDP.7).
+        // cross-tenant blast radius this pool exists to eliminate. A backend
+        // without identity propagation, or a propagating request without a
+        // resolved identity, collapses to the shared canonical slot (IDP.5); an
+        // identified request gets its own transport/session/failsafe so users
+        // never collide (IDP.7).
         let key = self.pool_key_for(identity_key);
         let entry = self.pooled_entry(&key);
 
@@ -474,7 +474,7 @@ impl Backend {
     }
 
     /// Send a notification to the backend via the canonical shared slot's
-    /// session (non-per-user backends; single-tenant behavior unchanged).
+    /// session (callers without a private slot; single-tenant behavior unchanged).
     ///
     /// # Errors
     ///

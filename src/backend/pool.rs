@@ -29,15 +29,16 @@ pub(crate) fn now_unix_secs() -> u64 {
 ///
 /// A backend always owns the canonical [`PoolKey::Shared`] slot — the
 /// single-tenant default that also backs init, metadata, and canonical traffic.
-/// When `identity_propagation.session_mode = per_user` is configured and a
+/// When `identity_propagation` is configured (either `session_mode`) and a
 /// caller identity is present, the backend additionally owns one
 /// [`PoolKey::PerUser`] slot per stable identity binding, so two distinct users
 /// never share a backend transport or its upstream MCP session (IDP.7).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum PoolKey {
-    /// The canonical single-tenant slot. Every non-per-user backend, and every
-    /// per-user backend request that lacks a resolved identity, collapses here
-    /// so single-tenant behavior is preserved byte-for-byte (IDP.5).
+    /// The canonical single-tenant slot. Every backend without identity
+    /// propagation, and every propagating request that lacks a resolved
+    /// identity, collapses here so single-tenant behavior is preserved
+    /// byte-for-byte (IDP.5).
     Shared,
     /// A per-user slot keyed by the caller's stable identity binding
     /// (`PropagatedCredential::cache_binding`, MIK-6784).
@@ -55,8 +56,8 @@ pub(crate) enum PoolKey {
 /// enough tripped the breaker for every OTHER identity sharing the same
 /// backend too — the exact cross-tenant blast radius the per-user pool
 /// exists to eliminate. Each slot now fails independently: the Shared slot
-/// keeps its own failsafe (behavior for non-per-user backends is byte-for-
-/// byte unchanged), and each `PerUser` slot gets a fresh one the moment it is
+/// keeps its own failsafe (behavior for backends without identity
+/// propagation is byte-for-byte unchanged), and each `PerUser` slot gets a fresh one the moment it is
 /// first created.
 pub(crate) struct PooledEntry {
     pub(crate) transport: RwLock<Option<Arc<dyn Transport>>>,
