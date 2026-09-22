@@ -21,6 +21,18 @@ opposite in two places (`mod.rs:779`, `upgrade.rs:243`); the operator ruled the
 product wrong and the criterion stands. Migrate-versus-rewrite is closed and is
 not reopened here.
 
+**Verification note, 2026-09-21 — appended, and the ruling above is NOT
+edited.** A record of what was believed when a decision was taken is not
+drift, and rewriting it to match later findings destroys the audit trail. But
+subsequent source verification narrowed the retraction target: only
+`upgrade.rs:243-248` says something the criterion contradicts.
+`mod.rs:778-779` is the doc comment on `OfflineInitError::Refused` and
+describes what **`initialize`** refuses; it is unrelated to this row and is
+never retracted (§7.4, §11.3) (V). Both reviewer seats flagged the apparent
+conflict between this section and those two; this note is the reconciliation.
+**RULED: the ruling's framing stands as said, the note records what checking
+found.**
+
 The overruled concern is carried forward as a constraint, not an objection: a
 migration decrypts 3.x credentials and re-seals them into the per-principal
 store, and that is a credential-handling path that exists only to run once.
@@ -505,6 +517,14 @@ residual risk is the operator's own typo, and it is accepted here rather than
 engineered away, because engineering it away requires a verified principal that
 by construction does not exist at migration time.
 
+**Revisit when O8 resolves — not before (RULED 2026-09-21).** Once the `sole`
+tier lands, a solo deployment has exactly ONE legitimate principal, so a
+mistyped subject stops being undetectable: §5.3b compares the declaration to
+what `Principal::SoleOperator` mints and refuses a mismatch. At that point
+this section accepts a residual broader than the design still needs. It is
+genuinely undecidable until the tier exists, so it is left standing with this
+pointer rather than pre-emptively narrowed.
+
 ---
 
 ## 6. INPUT 3 — `legacy_migration` becomes the real path. It is not deleted.
@@ -981,6 +1001,19 @@ than implied away.
 store this command creates" is a safety property about **`initialize`**, and it
 stays true: this migration does not run through `initialize`, it runs against an
 already-initialized store.
+
+**The edge case, recorded so it is not re-litigated (RULED 2026-09-21).** An
+operator can run `initialize` and then run migration, so credentials do end
+up in a store that command created — just not *by* that command. That does
+not reopen the invariant, and the sibling error variant is what settles it:
+`OfflineInitError::NotConfigured` states the concern as *"Initializing a
+store the deployment never asked for would create custody state nothing
+opens"* (`mod.rs:768-771`) (V). The thing guarded against is **orphaned
+custody state** — state with no opener. A migration into an already-initialized
+store, against an explicit operator declaration naming the principal that
+opens it, is precisely state that HAS an opener. An error variant's doc
+describes what that command refuses to do, and the invariant constrains the
+command's own behaviour, not the store's later contents.
 
 The non-destructive property this design owes is narrower and absolute: the 3.x
 source is opened read-only and never mutated, truncated, renamed or deleted. A
@@ -1523,6 +1556,18 @@ product lie in the other direction.
 
 ### 11.1 Commit order
 
+**TWO false statements, not one — corrected 2026-09-21.** Item 1 carries two
+claims and a shipping STORE.1 breaks both, in the same release:
+
+| Claim in `NOTICE_4_0_0_ITEMS[0]` | Why it stops being true |
+|---|---|
+| "Stored tokens from 3.x are **not migrated**: each OAuth backend re-authenticates once" | STORE.1 migrates them. Found on the IDENTITY.1 side. |
+| the stranded files "**still hold usable refresh tokens** at mode 0600, so delete them once every backend has re-authorized" | True today. False for a migrated backend after its first refresh against a rotating authorization server (§7.4a). |
+
+The second is the one an implementer misses, because it reads as incidental
+detail rather than a promise. Commit 2's rewrite carries **both** or it
+replaces one false sentence with another.
+
 **Ownership, stated because it was queried:** the notice change is in THIS
 row's scope, not a follow-up's. `NOTICE_4_0_0_ITEMS[0]` tells operators
 "Stored tokens from 3.x are not migrated: each OAuth backend re-authenticates
@@ -1584,7 +1629,7 @@ sweeping for "migration is not supported" prose will find it and be tempted.
 | O4 | `consent.rs:45-51` `expect` — stays or goes (§8.1) | A | Compile check during implementation; listed so it is checked rather than assumed. |
 | O5 | Issuer contradiction check granularity (§5.3a) — is comparing the `token_endpoint`'s **origin** to the attested issuer's origin the right test? Some providers host the token endpoint off the issuer origin. | A | A decision on whether to compare origins, require an exact operator-supplied endpoint, or treat a mismatch as a warning that requires a second attestation flag. Conservative default: refuse and make the operator override explicitly. |
 | O6 | Zeroization of `TokenInfo` / `GrantRecord` plaintext buffers (§10.1) | A | Out of scope for this row as scoped; it changes types every existing holder shares. Named so the security section's claim stays honest rather than implying erasure this design does not perform. |
-| O7 | **The `descriptor_revision` fence has no comparison site** (§7.3). Every occurrence in the tree is a copy, a validator, or a comparison of two stored-origin values; the live `AccountDescriptor` is never fingerprinted and never compared (V). Computing the value correctly at migration time therefore detects no descriptor change at all. | V | A decision on whether the read path (`AccountService` before release, or `GatewayRefreshProvider` before refresh) gains a live-fingerprint comparison, and which row owns it. It is **not** in STORE.1: it is a new production behaviour whose consequence is that every affected user is asked to reconnect after a config edit. |
+| O7 | **FILED AS MIK-7524** — **the `descriptor_revision` fence has no comparison site** (§7.3), and it is worse than this row first reported. Two further facts, verified at source: the ONLY function in the tree that produces a revision is a test fixture, `account_resolver_fixture.rs:131-134` returning `"0".repeat(64)`, and every grant in `fixtures/committed_grants.json` carries exactly those 64 zeros — in practice the field is a constant (V). `fence_tests.rs:163` and `:185` are a passing BOTH-DIRECTIONS pair that proves only that the comparison works: they move the value **by hand**, so they cannot detect that nothing moves it in production. A two-directional test is not automatically a real one — it must also be DRIVEN by the mechanism under test, which is the standard §9.7 applies to this row's own falsifiers. **One claim trimmed:** `commit.rs:627`'s `_descriptor_revision: &str` is not evidence that a live implementation discards the value — it is the `cfg(not(unix))` stub, where `_config`, `_slot` and `_account` are underscore-prefixed too and the body is `Err(InvalidConfiguration)`. That arm discards every parameter because it does nothing at all (V). Every occurrence in the tree is a copy, a validator, or a comparison of two stored-origin values; the live `AccountDescriptor` is never fingerprinted and never compared (V). Computing the value correctly at migration time therefore detects no descriptor change at all. | V | A decision on whether the read path (`AccountService` before release, or `GatewayRefreshProvider` before refresh) gains a live-fingerprint comparison, and which row owns it. It is **not** in STORE.1: it is a new production behaviour whose consequence is that every affected user is asked to reconnect after a config edit. |
 | O8 | **The `sole` identity tier — SEQUENCING, not a missing workstream** (§1.1, §5.3b). STORE.1 delivers zero user-visible value to a solo install until it lands. | V | IDENTITY.1 is in flight on `feat/single-user-principal` @ `d5597957` (agent worktree, not on `origin`). STORE.1 waits on it. What settles the RISK is §5.3b: the migration calls `account_key(Some(Principal::SoleOperator), descriptor)` rather than restating the five-field contract, so the two halves cannot disagree. Confirm the signature and both literals against the landed branch before writing code. |
 
 **Gating, consolidated — this is the single authoritative list, and §7.3 no
