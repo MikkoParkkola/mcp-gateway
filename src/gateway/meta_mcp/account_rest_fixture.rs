@@ -623,6 +623,7 @@ fn caller(verified_identity: Option<&VerifiedIdentity>) -> MetaMcpCallerContext<
         verified_identity,
         api_key_name: None,
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,

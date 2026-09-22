@@ -2695,6 +2695,7 @@ async fn run_step_with_identity(
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: client.admin,
@@ -2912,6 +2913,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
@@ -3335,6 +3337,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
@@ -3743,7 +3746,7 @@ mod openwebui_adapter;
 /// are checked in `meta_mcp_dispatch` for `/mcp`; the direct `/mcp/{name}`
 /// route reaches the same backends, so a guard missing there is an allowlist
 /// a client bypasses by changing the path.
-async fn direct_route_state_with_identity(
+pub(super) async fn direct_route_state_with_identity(
     config: crate::config::AgentIdentityConfig,
 ) -> (Arc<AppState>, tempfile::TempDir) {
     let backend = Arc::new(Backend::new(
@@ -3763,7 +3766,7 @@ async fn direct_route_state_with_identity(
     (state, store_dir)
 }
 
-fn direct_route_call(agent_id: Option<&str>) -> axum::http::Request<axum::body::Body> {
+pub(super) fn direct_route_call(agent_id: Option<&str>) -> axum::http::Request<axum::body::Body> {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp/demo")
@@ -3790,6 +3793,7 @@ async fn direct_route_rejects_a_missing_agent_id_when_require_id_is_set() {
         enabled: true,
         require_id: true,
         known_agents: vec![],
+        ..Default::default()
     })
     .await;
     let response = create_router(state)
@@ -3820,11 +3824,15 @@ async fn direct_route_rejects_an_agent_outside_the_allowlist() {
     let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
         enabled: true,
         require_id: true,
-        known_agents: vec!["known-agent".to_string()],
+        known_agents: vec![crate::security::KnownAgent {
+            source: crate::security::AgentSourceKey::Mtls,
+            id: "known-agent".to_string(),
+        }],
+        ..Default::default()
     })
     .await;
     let response = create_router(state)
-        .oneshot(direct_route_call(Some("stranger")))
+        .oneshot(direct_route_call_proven("stranger", None))
         .await
         .unwrap();
 
@@ -3853,11 +3861,15 @@ async fn direct_route_rejects_an_unlisted_agent_even_when_id_is_optional() {
     let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
         enabled: true,
         require_id: false,
-        known_agents: vec!["known-agent".to_string()],
+        known_agents: vec![crate::security::KnownAgent {
+            source: crate::security::AgentSourceKey::Mtls,
+            id: "known-agent".to_string(),
+        }],
+        ..Default::default()
     })
     .await;
     let response = create_router(state)
-        .oneshot(direct_route_call(Some("stranger")))
+        .oneshot(direct_route_call_proven("stranger", None))
         .await
         .unwrap();
 
@@ -3875,7 +3887,11 @@ async fn direct_route_admits_an_absent_agent_id_when_it_is_optional() {
     let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
         enabled: true,
         require_id: false,
-        known_agents: vec!["known-agent".to_string()],
+        known_agents: vec![crate::security::KnownAgent {
+            source: crate::security::AgentSourceKey::Mtls,
+            id: "known-agent".to_string(),
+        }],
+        ..Default::default()
     })
     .await;
     let response = create_router(state)
@@ -3886,6 +3902,27 @@ async fn direct_route_admits_an_absent_agent_id_when_it_is_optional() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// A direct-route call whose caller PROVED an mTLS identity.
+///
+/// The parity rows below were written when a header was the only way to supply
+/// an agent id, so they exercised a declared label and called it an agent. A
+/// proven principal has to arrive the way the handler actually reads one — out
+/// of request extensions, put there by the TLS layer — which is what this adds.
+fn direct_route_call_proven(
+    subject: &str,
+    declared: Option<&str>,
+) -> axum::http::Request<axum::body::Body> {
+    let mut request = direct_route_call(declared);
+    request
+        .extensions_mut()
+        .insert(crate::mtls::identity::CertIdentity {
+            common_name: Some(subject.to_string()),
+            display_name: "cosmetic".to_string(),
+            ..Default::default()
+        });
+    request
+}
+
 #[tokio::test]
 async fn direct_route_admits_an_allowlisted_agent() {
     // Control: the guard refuses the two rows above because of identity, not
@@ -3893,11 +3930,15 @@ async fn direct_route_admits_an_allowlisted_agent() {
     let (state, _store) = direct_route_state_with_identity(crate::config::AgentIdentityConfig {
         enabled: true,
         require_id: true,
-        known_agents: vec!["known-agent".to_string()],
+        known_agents: vec![crate::security::KnownAgent {
+            source: crate::security::AgentSourceKey::Mtls,
+            id: "known-agent".to_string(),
+        }],
+        ..Default::default()
     })
     .await;
     let response = create_router(state)
-        .oneshot(direct_route_call(Some("known-agent")))
+        .oneshot(direct_route_call_proven("known-agent", None))
         .await
         .unwrap();
 

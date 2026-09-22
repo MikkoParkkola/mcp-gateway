@@ -96,11 +96,19 @@ reason = "tripping the breaker means driving repeated backend failures against a
 
 [[control]]
 id = "agent-identity-allowlist"
-description = "an absent or unknown X-Agent-ID is refused"
+description = "a caller that proved no agent identity is refused under require_id, and a proven principal outside known_agents is refused"
 authority = "nfr-sec1:6"
 source = "src/security/agent_identity.rs"
 probe = "none"
 reason = "config-gated on `agent_identity.require_id` / `known_agents`; enforcement is off by default, so absence on the wire is not drift"
+
+[[control]]
+id = "agent-identity-proof-rank"
+description = "a declared agent label never outranks a proven principal, and a label contradicting one is refused rather than applied"
+authority = "nfr-sec1:6"
+source = "src/security/agent_identity/principal.rs"
+probe = "none"
+reason = "the guarantee is structural, not observable on the wire: `ProvenAgentId` has a private field and no public constructor, so a caller-supplied string cannot become an authorization input at all. Its absence shows up as a compile failure in this tree, never as a request that behaves differently, so there is nothing for a probe to listen for"
 
 [[control]]
 id = "request-body-ceiling"

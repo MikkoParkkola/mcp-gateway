@@ -33,8 +33,15 @@ pub mod tool_integrity;
 pub mod transparency_log;
 
 pub use agent_identity::{
-    AgentIdentity, AgentIdentityConfig, IdentitySource, extract_agent_identity,
-    validate_agent_identity,
+    AgentIdentity, AgentIdentityConfig, AgentSourceKey, DeclaredAgentLabel, DeclaredLabel,
+    DeclaredSource, IdentityAudit, KnownAgent, OwnedProvenAgentId, PrincipalLabels, ProofSource,
+    ProvenAgentId, ProvenPrincipal,
+};
+// The resolution path is crate-private: its `verified_jwt_subject` parameter is
+// a raw `&str`, so a public extractor would mint a proven principal from any
+// string an external caller chose, bypassing the private constructor.
+pub(crate) use agent_identity::{
+    extract_agent_identity, log_agent_identity, validate_agent_identity,
 };
 pub use data_flow::{
     DataFlowRecord, DataFlowTracer, SanitizationRecord, ToolCategory, audit_sanitization,

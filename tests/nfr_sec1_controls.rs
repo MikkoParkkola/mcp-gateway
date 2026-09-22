@@ -86,14 +86,38 @@ async fn control_6_a_modern_request_without_an_agent_id_is_refused() {
     let (status, body) = post(&app, modern("tools/list", json!({})), &[]).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"]["code"], -32600, "body: {body}");
-    // Falsifier: the same frame carrying an agent ID is served.
-    let (served, _) = post(
+    // Falsifier: the same frame from a caller that PROVED an identity is
+    // served, so the refusal above cannot pass for an implementation that
+    // refuses everyone.
+    //
+    // CHANGED under MIK-6746.IDENTITY.1. This previously served the frame on a
+    // bare `X-Agent-ID` header, which asserted that a caller who can set one
+    // header satisfies `require_id` -- the exact defect that criterion exists
+    // to remove, encoded here as the control. The falsifier's PURPOSE was
+    // right and is kept; only its mechanism changes, from a declared label to
+    // a proven principal.
+    let (served, _) = post_proven(&app, modern("tools/list", json!({})), "agent-1", &[]).await;
+    assert_eq!(
+        served,
+        StatusCode::OK,
+        "a caller that proved an identity must be served under require_id"
+    );
+
+    // And the negative that the old falsifier's mechanism now occupies: a
+    // declared-only label does NOT satisfy require_id. Without this row the
+    // change above would be indistinguishable from dropping the falsifier.
+    let (declared_only, _) = post(
         &app,
         modern("tools/list", json!({})),
         &[("x-agent-id", "agent-1")],
     )
     .await;
-    assert_eq!(served, StatusCode::OK);
+    assert_eq!(
+        declared_only,
+        StatusCode::FORBIDDEN,
+        "a declared label satisfied require_id: an allowlist satisfied by \
+         self-declaration is not a control"
+    );
 }
 
 // ============================================================================

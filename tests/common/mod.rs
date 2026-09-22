@@ -191,6 +191,57 @@ pub async fn post(
     )
 }
 
+/// POST to `/mcp` as a caller that has PROVEN an agent identity.
+///
+/// The proof arrives the way the handler actually reads one — a `CertIdentity`
+/// in request extensions, put there by the TLS layer — not as a header. That
+/// distinction is the whole of `MIK-6746.IDENTITY.1`: `X-Agent-ID` is a
+/// declared label and cannot satisfy an identity control, so a test that
+/// serves a request on one is asserting the defect rather than the guarantee.
+pub async fn post_proven(
+    state: &Arc<AppState>,
+    body: Value,
+    subject: &str,
+    extra: &[(&str, &str)],
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28");
+    if let Some(m) = body.get("method").and_then(Value::as_str) {
+        builder = builder.header("mcp-method", m);
+    }
+    if let Some(n) = body.pointer("/params/name").and_then(Value::as_str) {
+        builder = builder.header("mcp-name", n);
+    }
+    for (name, value) in extra {
+        builder = builder.header(*name, *value);
+    }
+    let mut request = builder
+        .body(Body::from(serde_json::to_vec(&body).expect("body")))
+        .expect("request");
+    request
+        .extensions_mut()
+        .insert(mcp_gateway::mtls::identity::CertIdentity {
+            common_name: Some(subject.to_string()),
+            display_name: "cosmetic".to_string(),
+            ..Default::default()
+        });
+    let response = create_router(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .expect("router must answer");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body must read");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
 /// POST a body that is not necessarily JSON.
 ///
 /// Rows 7 and 8 refuse *before* the body is parsed, so there is nothing to

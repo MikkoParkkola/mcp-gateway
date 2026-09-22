@@ -507,23 +507,24 @@ pub(super) async fn backend_handler(
     // the same check has to run here: without it the allowlist is bypassable
     // by choosing the /mcp/{name} URL. Checked before the body is read, which
     // is where the meta route checks it too.
-    let bearer_token = inbound_headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            v.strip_prefix("Bearer ")
-                .or_else(|| v.strip_prefix("bearer "))
-        });
     let agent_identity = crate::security::extract_agent_identity(
         &inbound_headers,
         request.uri().query(),
-        bearer_token,
+        cert_identity.as_ref(),
+        oauth_agent_identity.as_ref().map(|a| a.client_id.as_str()),
     );
-    if let Err(reason) = crate::security::validate_agent_identity(
-        agent_identity.as_ref(),
-        &state.agent_identity_config,
-    ) {
-        return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN);
+    match crate::security::validate_agent_identity(&agent_identity, &state.agent_identity_config) {
+        Ok(audit) => {
+            crate::security::log_agent_identity(&agent_identity, audit, None);
+        }
+        Err(reason) => {
+            crate::security::log_agent_identity(
+                &agent_identity,
+                crate::security::IdentityAudit::Clean,
+                Some(&reason),
+            );
+            return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN);
+        }
     }
 
     // Check backend access if auth is enabled

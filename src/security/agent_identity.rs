@@ -7,25 +7,43 @@
 //! of which agent is calling.  This module provides identity *plumbing*: extraction,
 //! optional enforcement, and structured audit logging.  Full IAM is out of scope.
 //!
-//! # Extraction precedence
+//! # Proof outranks assertion
 //!
-//! 1. `X-Agent-ID` HTTP header (preferred — explicit, simple to set in any client).
-//! 2. `agent_id` JWT claim in the `Authorization: Bearer <jwt>` token (when the
-//!    token is a decodable JWT; unsigned/opaque tokens are silently skipped).
-//! 3. `agent_id` query parameter (lowest precedence; convenient for debugging).
+//! Three inputs, two kinds. The **proven** principal is whichever of these the
+//! request established, ranked by [`ProofSource`]'s `Ord` and not by the order
+//! anything is checked in:
+//!
+//! 1. mTLS client-certificate subject — first SAN URI, else CN, else no mTLS
+//!    principal at all.
+//! 2. Verified JWT `sub`, taken from a token the agent-auth middleware already
+//!    validated against registered key material.
+//!
+//! The **declared** label is the `X-Agent-ID` header, else the `agent_id` query
+//! parameter. It is telemetry and cost attribution only. It can never become
+//! the principal, never satisfy `require_id`, and never satisfy `known_agents`
+//! — an allowlist satisfied by self-declaration is not a control.
+//!
+//! There is deliberately no unsigned-token rung. A base64 decode of a JWT
+//! payload with no signature check is not proof of anything; it is the caller's
+//! own assertion in a format that looks authoritative, which is worse than an
+//! unadorned header because it reads as verified.
 //!
 //! # Configuration
 //!
 //! ```yaml
 //! security:
 //!   agent_identity:
-//!     enabled: false       # opt-in; extraction is a no-op when false
-//!     require_id: false    # when true, requests without an agent_id are rejected
-//!     known_agents: []     # optional allowlist of accepted agent IDs
+//!     enabled: false       # opt-in; enforcement is a no-op when false
+//!     require_id: false    # when true, requests that prove no agent are rejected
+//!     known_agents: []     # optional allowlist of accepted PROVEN principals
+//!     allow_unverified_agent_identity: false  # legacy: a label may satisfy the above
+//!     principal_labels: []                    # opt-in: extra labels a principal may declare
 //! ```
 //!
-//! When `known_agents` is non-empty and `require_id` is true, only listed agents
-//! are accepted.  When `known_agents` is empty the allowlist check is skipped.
+//! `known_agents` is a **proven-principal** allowlist: when non-empty, a proven
+//! principal outside the list is rejected, independently of `require_id`, which
+//! governs only the no-proof case. An anonymous caller is unaffected by a
+//! non-empty `known_agents` — that has never been a refusal and is not one now.
 
 use serde::{Deserialize, Serialize};
 
@@ -40,132 +58,496 @@ pub struct AgentIdentityConfig {
     /// When `true`, requests without a resolvable `agent_id` are rejected.
     /// Only meaningful when `enabled = true`.  Default: `false`.
     pub require_id: bool,
-    /// Optional allowlist of accepted agent IDs.
+    /// Allowlist of accepted **proven principals**, keyed by `(source, id)`.
     ///
-    /// When non-empty, any resolved `agent_id` outside this list is rejected —
-    /// independently of `require_id`, which governs only the absent-ID case.
-    /// When empty the allowlist check is skipped entirely.
+    /// Keyed by the pair, never the bare identifier. An mTLS subject and a JWT
+    /// `sub` that happen to stringify the same are **not** the same principal:
+    /// string equality across two namespaces is a coincidence, never an
+    /// identity. Both namespaces are live in one deployment — a verified JWT
+    /// can ride behind an mTLS certificate — so a bare-identifier allowlist
+    /// lets whichever namespace is easier to obtain inherit the other's
+    /// access.
+    ///
+    /// A bare-string entry is a **load error** naming the source it must
+    /// declare, never a silently widened match.
     #[serde(default)]
-    pub known_agents: Vec<String>,
+    pub known_agents: Vec<KnownAgent>,
+    /// Restore the pre-4.0.0 behaviour in which a caller-supplied label may
+    /// satisfy `require_id` and `known_agents`.  Default: `false`.
+    ///
+    /// The gateway warns at startup when this is set, naming the control it
+    /// weakens.  It restores exactly one behaviour and **not**
+    /// header-over-proof: with this set a declared label still never outranks a
+    /// proven principal, and a contradiction is still a refusal.
+    #[serde(default)]
+    pub allow_unverified_agent_identity: bool,
+    /// Labels a proven principal is permitted to declare, beyond its own name.
+    ///
+    /// Opt-in widening, not a mandatory census: a principal with no entry may
+    /// declare only its own id, which is the one label that cannot be a lie.
+    ///
+    /// Keyed by `(source, id)`, and **both proof sources may be keyed here** —
+    /// an earlier version of this doc said the mTLS namespace "is never keyed
+    /// here", which contradicted the implementation and made the mTLS refusal
+    /// path dead config: an operator reading it would never write the row that
+    /// enables it.
+    ///
+    /// What is true of mTLS is the *default*, not the representability: an
+    /// mTLS subject with no entry keeps the incomparable default, accepted and
+    /// audited rather than refused, because a SAN URI and a short label cannot
+    /// be compared without inventing an ordering. An operator who *can* name a
+    /// subject writes a row for it and gets the contradiction refusal. The id
+    /// must be the **selected** proven id — first SAN URI, else CN — never a
+    /// DN fragment: `id = "CN=runner"` mints a row that can never match.
+    #[serde(default)]
+    pub principal_labels: Vec<PrincipalLabels>,
 }
 
-// ── AgentIdentity ─────────────────────────────────────────────────────────────
-
-/// Resolved identity for the calling agent.
+/// One allowlist entry: a proof source and the identifier it admits.
 ///
-/// Extracted from one of: `X-Agent-ID` header, JWT `agent_id` claim, or
-/// `agent_id` query parameter.  Carried as request extension through the
-/// dispatch pipeline and recorded in every tool-invocation audit log entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentIdentity {
-    /// Caller-supplied agent identifier (not authenticated — treat as a label,
-    /// not a security principal, unless combined with mTLS or JWT verification).
+/// Deserialized from `{ source = "mtls" | "jwt" | "declared", id = "..." }`.
+/// The three-valued key is deliberately **not** [`ProofSource`], which has two
+/// variants because only two things constitute proof. `Declared` exists solely
+/// so the migration hatch has something to match against, and it is a load
+/// error unless `allow_unverified_agent_identity` is set — an operator cannot
+/// reach declared-label matching without also setting the flag that warns
+/// about it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnownAgent {
+    /// Which namespace the identifier belongs to.
+    pub source: AgentSourceKey,
+    /// The identifier, within that namespace.
     pub id: String,
-    /// Source from which the identity was extracted (for audit traceability).
-    pub source: IdentitySource,
 }
 
-/// Origin of the extracted agent identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IdentitySource {
-    /// Extracted from the `X-Agent-ID` HTTP header.
-    Header,
-    /// Extracted from the `agent_id` claim in a JWT bearer token.
-    JwtClaim,
-    /// Extracted from the `agent_id` query parameter.
-    QueryParam,
+/// The namespace an allowlist entry names.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentSourceKey {
+    /// An mTLS client-certificate subject.
+    Mtls,
+    /// A verified JWT `sub`.
+    Jwt,
+    /// A caller-supplied label. Reachable only under the migration hatch, and
+    /// unrepresentable anywhere authorization reads proof.
+    Declared,
 }
 
-impl std::fmt::Display for IdentitySource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Header => f.write_str("header"),
-            Self::JwtClaim => f.write_str("jwt_claim"),
-            Self::QueryParam => f.write_str("query_param"),
-        }
+impl AgentSourceKey {
+    /// Does this key name the namespace a proven principal came from?
+    fn matches(self, proof: ProofSource) -> bool {
+        matches!(
+            (self, proof),
+            (Self::Mtls, ProofSource::MutualTls) | (Self::Jwt, ProofSource::VerifiedJwtSubject)
+        )
     }
+}
+
+/// The declared labels one proven principal may present.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrincipalLabels {
+    /// Which namespace [`Self::id`] belongs to.
+    ///
+    /// Present for the same reason `known_agents` is keyed by a pair: an mTLS
+    /// subject and a JWT `sub` that stringify the same are two principals, and
+    /// an entry naming one must not widen the other.
+    pub source: ProofSource,
+    /// The proven principal this entry governs.
+    pub id: String,
+    /// Labels this principal may declare in addition to its own id.
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 // ── Extraction ────────────────────────────────────────────────────────────────
 
-/// Extract an agent identity from the request's HTTP headers and optional query string.
+/// Resolve the calling agent's identity from what the request proved and what
+/// it merely claimed.
 ///
-/// Returns `None` when no agent identity is present.  Extraction order:
-/// 1. `X-Agent-ID` header
-/// 2. `agent_id` JWT claim (unsigned decode only — no signature verification here)
-/// 3. `agent_id` query parameter
+/// Always returns a value: "no identity at all" is `AgentIdentity::default()`,
+/// which removes the `Option<Option<..>>` awkwardness at the call sites and
+/// makes the refusal logic a total match.
 ///
-/// Empty strings are treated as absent.
+/// # Ranking
+///
+/// Proof outranks assertion, and stronger proof outranks weaker, by
+/// [`ProofSource`]'s `Ord` rather than by the order these branches are written
+/// in. The declared label never becomes the principal.
+///
+/// The mTLS subject is selected here rather than by the caller so the selection
+/// rule lives in one place: first SAN URI, else CN, else no mTLS principal.
+/// **Crate-private by design.** The `verified_jwt_subject` parameter is a raw
+/// `&str`, so a public version of this function would mint a
+/// `ProvenPrincipal` from any string an external caller chose — bypassing the
+/// private constructor entirely. Making the constructor private while leaving
+/// the public function that calls it open would close one door and leave the
+/// next one ajar, which is the shape this module has already had to fix twice.
+///
+/// The contract, not the call site, is what binds an external caller: "this
+/// gateway never passes a caller-supplied string here" is true of the two
+/// router sites and says nothing about anyone else.
 #[must_use]
-pub fn extract_agent_identity(
+pub(crate) fn extract_agent_identity(
     headers: &axum::http::HeaderMap,
     query: Option<&str>,
-    bearer_token: Option<&str>,
-) -> Option<AgentIdentity> {
-    // 1. X-Agent-ID header (highest precedence)
-    if let Some(id) = extract_from_header(headers) {
-        return Some(AgentIdentity {
-            id,
-            source: IdentitySource::Header,
-        });
-    }
+    cert_identity: Option<&crate::mtls::identity::CertIdentity>,
+    verified_jwt_subject: Option<&str>,
+) -> AgentIdentity {
+    // Proven rungs. Both inputs are already verified: `cert_identity` comes
+    // from the TLS handshake's peer chain, and `verified_jwt_subject` is the
+    // `sub` of a token `validate_agent_token` accepted. Neither is parsed out
+    // of a caller-supplied string here, which is the whole point.
+    let mtls = cert_identity
+        .and_then(select_mtls_subject)
+        .map(|id| ProvenPrincipal::new(id, ProofSource::MutualTls));
+    let jwt = verified_jwt_subject
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| ProvenPrincipal::new(s.to_string(), ProofSource::VerifiedJwtSubject));
 
-    // 2. JWT claim (no-op on opaque tokens)
-    if let Some(id) = bearer_token.and_then(extract_jwt_agent_id) {
-        return Some(AgentIdentity {
-            id,
-            source: IdentitySource::JwtClaim,
-        });
-    }
+    // Rank by the type, not by position: swapping these two bindings must not
+    // change the outcome, which is what `ProofSource: Ord` buys.
+    let (proven, secondary_proof) = match (mtls, jwt) {
+        (Some(a), Some(b)) => {
+            if a.proof() >= b.proof() {
+                (Some(a), Some(b))
+            } else {
+                (Some(b), Some(a))
+            }
+        }
+        (Some(only), None) | (None, Some(only)) => (Some(only), None),
+        (None, None) => (None, None),
+    };
 
-    // 3. Query parameter (lowest precedence)
-    if let Some(id) = query.and_then(extract_from_query) {
-        return Some(AgentIdentity {
+    // Declared label: header first, then query. That order is still correct
+    // *within* the declared label, which is the only place it now applies.
+    let declared = extract_from_header(headers)
+        .map(|id| DeclaredLabel {
             id,
-            source: IdentitySource::QueryParam,
+            source: DeclaredSource::Header,
+        })
+        .or_else(|| {
+            query.and_then(extract_from_query).map(|id| DeclaredLabel {
+                id,
+                source: DeclaredSource::QueryParam,
+            })
         });
-    }
 
-    None
+    AgentIdentity {
+        proven,
+        secondary_proof,
+        declared,
+    }
 }
 
-/// Validate an optional identity against the config.
+/// The mTLS principal a certificate resolves to, if any.
 ///
-/// Returns `Ok(())` when:
-/// - `config.enabled` is `false` (feature disabled — pass-through).
-/// - Identity is present and (if `known_agents` is non-empty) is in the allowlist.
-/// - `require_id` is `false` and identity is absent.
+/// Total and fixed: first SAN URI, else CN, else `None`. A certificate carrying
+/// neither is not an mTLS identity, and such a request falls to the other rungs
+/// rather than acquiring a synthesised name. `display_name` is deliberately not
+/// consulted — it is a cosmetic audit label, and an unnameable certificate must
+/// not silently become an allowlist key.
+fn select_mtls_subject(cert: &crate::mtls::identity::CertIdentity) -> Option<String> {
+    cert.san_uris
+        .iter()
+        .map(String::as_str)
+        .chain(cert.common_name.as_deref())
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// Outcome of a successful validation, for the caller's audit record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityAudit {
+    /// Nothing to report beyond the identity itself.
+    Clean,
+    /// A proven principal and a declared label are both present and differ, in
+    /// a namespace the gateway cannot compare (mTLS). Accepted deliberately;
+    /// emitted so a proved-A-claimed-B mismatch is alertable rather than
+    /// invisible. This is the detection half of funded change 4.
+    DeclaredLabelMismatch,
+}
+
+/// Validate a resolved identity against the config.
 ///
-/// Returns `Err(reason)` when:
-/// - `require_id` is `true` and no identity was extracted.
-/// - `known_agents` is non-empty and the identity is not in the list.
-pub fn validate_agent_identity(
-    identity: Option<&AgentIdentity>,
+/// Authorization reads [`AgentIdentity::proven`] only. A declared label can
+/// never satisfy `require_id` or `known_agents` — unless
+/// `allow_unverified_agent_identity` is set, which restores the legacy
+/// behaviour and nothing else.
+///
+/// # Errors
+///
+/// Returns the refusal reason, which always names the policy that refused so an
+/// unrelated 403 cannot be mistaken for this guard.
+pub(crate) fn validate_agent_identity(
+    identity: &AgentIdentity,
     config: &AgentIdentityConfig,
-) -> Result<(), String> {
+) -> Result<IdentityAudit, String> {
     if !config.enabled {
-        return Ok(());
+        return Ok(IdentityAudit::Clean);
     }
 
-    let Some(identity) = identity else {
+    let Some(proven) = identity.proven.as_ref() else {
+        return validate_without_proof(identity, config);
+    };
+
+    // The allowlist is a PROVEN-PRINCIPAL allowlist, keyed by the PAIR.
+    //
+    // Two conflations, not one. The declared label is not consulted, so
+    // self-declared membership is unrepresentable — and the proof source is
+    // part of the key, so one proven namespace cannot inherit another's
+    // membership by stringifying the same. An mTLS CN of `runner` and a JWT
+    // `sub` of `runner` are two principals, and both namespaces are live in a
+    // single deployment.
+    if !config.known_agents.is_empty() && !admits_proven(&config.known_agents, proven) {
+        // The hatch fall-through, and it exists because the alternative is
+        // perverse. `AgentSourceKey::Declared` matches no `ProofSource`, so
+        // without this a caller presenting BOTH proof and a matching declared
+        // label fails the pair check and never reaches the declared-entry
+        // match — which lives only in the no-proof path. During the very
+        // migration the hatch exists to smooth, presenting STRONGER proof
+        // would reduce your access relative to presenting none.
+        let hatch_admits = config.allow_unverified_agent_identity
+            && identity
+                .declared
+                .as_ref()
+                .is_some_and(|declared| admits_declared(&config.known_agents, &declared.id));
+        if !hatch_admits {
+            return Err(format!(
+                "Agent {} (proven via {}) is not in the known_agents allowlist, which admits \
+                 proven principals only and matches on the (source, id) pair",
+                quoted(proven.id()),
+                proven.proof()
+            ));
+        }
+    }
+
+    check_declared_label(proven, identity.declared.as_ref(), config)
+}
+
+/// Does the allowlist name this proven principal, by the `(source, id)` pair?
+///
+/// One predicate, used by every allowlist that keys on a proven principal, so
+/// the two cannot drift apart: a fix applied to one and not the other is a
+/// finding class this codebase has already produced more than once.
+fn admits_proven(entries: &[KnownAgent], proven: &ProvenPrincipal) -> bool {
+    entries
+        .iter()
+        .any(|entry| entry.source.matches(proven.proof()) && entry.id == proven.id())
+}
+
+/// Does the allowlist name this caller-supplied label as a `declared` entry?
+///
+/// Reachable only under `allow_unverified_agent_identity`. A declared label
+/// never matches an `mtls` or `jwt` row even with the hatch on, so turning the
+/// flag on does not re-point proven-principal entries at self-declaration.
+fn admits_declared(entries: &[KnownAgent], label: &str) -> bool {
+    entries
+        .iter()
+        .any(|entry| entry.source == AgentSourceKey::Declared && entry.id == label)
+}
+
+/// The no-proof rows. A label is not an identity.
+fn validate_without_proof(
+    identity: &AgentIdentity,
+    config: &AgentIdentityConfig,
+) -> Result<IdentityAudit, String> {
+    let Some(declared) = identity.declared.as_ref() else {
+        // Nothing at all. `require_id` refuses; a non-empty `known_agents`
+        // deliberately does NOT — it has never refused an unidentified caller
+        // and this change does not start.
         if config.require_id {
             return Err(
-                "Request rejected: agent_identity.require_id is true but no agent ID was \
-                 provided. Set the X-Agent-ID header."
+                "Request rejected: agent_identity.require_id is true but the request proved no \
+                 agent identity. Present a client certificate or a validated agent token; the \
+                 X-Agent-ID header is a label and cannot satisfy this policy."
                     .to_string(),
             );
         }
-        return Ok(());
+        return Ok(IdentityAudit::Clean);
     };
 
-    if !config.known_agents.is_empty() && !config.known_agents.contains(&identity.id) {
+    if config.allow_unverified_agent_identity {
+        // Legacy behaviour, reachable only by explicit opt-in: the declared
+        // label may satisfy both controls. It still never outranks a proven
+        // principal — that path is not reached from here. And it matches only
+        // a `declared` entry: turning the hatch on does not re-point an
+        // `mtls` or `jwt` row at self-declaration, so an operator restoring
+        // legacy behaviour re-declares those entries and the config records
+        // which ones they are.
+        if !config.known_agents.is_empty()
+            && !config
+                .known_agents
+                .iter()
+                .any(|entry| entry.source == AgentSourceKey::Declared && entry.id == declared.id)
+        {
+            return Err(format!(
+                "Agent label {} is not in the known_agents allowlist as a declared entry",
+                quoted(&declared.id)
+            ));
+        }
+        return Ok(IdentityAudit::Clean);
+    }
+
+    if config.require_id {
         return Err(format!(
-            "Agent '{}' is not in the known_agents allowlist",
-            identity.id
+            "Request rejected: agent_identity.require_id is true and {} was only declared (via \
+             {}), not proven. A declared label carries no privilege; set \
+             agent_identity.allow_unverified_agent_identity to restore the legacy behaviour.",
+            quoted(&declared.id),
+            declared.source
+        ));
+    }
+    if !config.known_agents.is_empty() {
+        return Err(format!(
+            "Agent {} was only declared (via {}) and cannot satisfy the known_agents allowlist, \
+             which admits proven principals only. An allowlist satisfied by self-declaration is \
+             not a control.",
+            quoted(&declared.id),
+            declared.source
         ));
     }
 
-    Ok(())
+    // No control is engaged; the label is recorded as telemetry only.
+    Ok(IdentityAudit::Clean)
+}
+
+/// Is the declared label consistent with the principal that was proven?
+///
+/// One ordered match; the first arm that fires decides. **The order is the
+/// control.** An earlier version of this comment listed the mTLS
+/// accept-and-audit arm *ahead* of the mapping arm — which is the ordering
+/// that made a per-principal mTLS entry unreachable in every configuration,
+/// described here as though it were the design. It is corrected rather than
+/// deleted, because the next reader needs to know the ordering is load-bearing
+/// and not incidental.
+///
+/// 1. **Exact match — accept.** A principal is always permitted to declare its
+///    own name: the one label that cannot be a lie, so it is a member of its
+///    own set by construction and never has to be listed. **First**, ahead of
+///    every arm that can emit a mismatch — an earlier order put the hatch arm
+///    above it and recorded a caller naming itself as a mismatch, a false
+///    positive in the record the criterion requires.
+/// 0. **Operator-listed under the hatch — accept and audit.** A `declared`
+///    allowlist entry is an explicit statement that this label may be
+///    presented. Refusing it as a contradiction would re-open the lockout one
+///    step past the allowlist, so proving more would still grant less. Reached
+///    only when the label genuinely differs from the proven id.
+/// 2. **Operator mapping decides, for EITHER proof source.** Ahead of the mTLS
+///    fallback deliberately. `principal_labels` is keyed by `(source, id)` and
+///    accepts both variants of [`ProofSource`], so an operator who can name a
+///    certificate subject gets the contradiction refusal the criterion
+///    promises. This arm is why the mTLS refusal path is live config rather
+///    than dead code.
+/// 3. **Unmapped mTLS — accept and audit.** A SAN URI and a short label live
+///    in namespaces the gateway cannot compare without inventing an ordering,
+///    and an invented ordering later reads as a security guarantee. The
+///    default, not the representability: the mismatch is a detection signal.
+/// 4. **Unmapped JWT — refuse.** The label namespace and the `client_id`
+///    namespace are the same kind of name, so a differing label is comparable,
+///    and a missing mapping is never read as permission.
+fn check_declared_label(
+    proven: &ProvenPrincipal,
+    declared: Option<&DeclaredLabel>,
+    config: &AgentIdentityConfig,
+) -> Result<IdentityAudit, String> {
+    let Some(declared) = declared else {
+        return Ok(IdentityAudit::Clean);
+    };
+
+    // Arm 1 — a principal may always declare its own name. The one label that
+    // cannot be a lie, so it is a member of its own set by construction.
+    //
+    // FIRST, ahead of every arm that can emit a mismatch. An earlier order put
+    // the hatch arm above this one, so a caller declaring its own true
+    // identity — with that name also listed as a `declared` entry — was
+    // recorded as `DeclaredLabelMismatch`. That is a false positive in the
+    // exact record the criterion requires, and a mismatch signal that fires on
+    // non-mismatches degrades the thing the clause exists to produce. Exact
+    // equality can never be a lie, so deciding it first weakens nothing below.
+    if declared.id == proven.id() {
+        return Ok(IdentityAudit::Clean);
+    }
+
+    // Arm 0 — the operator wrote this label down.
+    //
+    // Under the migration hatch, a `declared` allowlist entry is an explicit
+    // operator statement that this label may be presented. Refusing it as a
+    // contradiction would re-open the lockout one step past the allowlist:
+    // the hatch would admit the caller and the contradiction rule would then
+    // refuse it, so proving more would still grant less. The mismatch is
+    // audited rather than ignored, because by this point the label genuinely
+    // differs from the proven id — which is what makes it a real
+    // proved-A-claimed-B signal rather than a caller naming itself.
+    if config.allow_unverified_agent_identity && admits_declared(&config.known_agents, &declared.id)
+    {
+        return Ok(IdentityAudit::DeclaredLabelMismatch);
+    }
+
+    // Arm 2 — an operator-written mapping decides, for EITHER proof source.
+    //
+    // This runs ahead of the mTLS fallback deliberately. With the order
+    // reversed, an mTLS principal short-circuited to "accepted and audited"
+    // before the mapping was consulted, which made a per-principal entry for a
+    // certificate subject unreachable in every configuration — the criterion
+    // says a contradicting label "is refused rather than silently applied",
+    // and for mTLS callers it never was. An operator who can name a subject
+    // can now get that refusal; one who cannot keeps the incomparable default
+    // below.
+    if let Some(entry) = config
+        .principal_labels
+        .iter()
+        .find(|entry| entry.source == proven.proof() && entry.id == proven.id())
+    {
+        if entry.labels.iter().any(|label| label == &declared.id) {
+            return Ok(IdentityAudit::Clean);
+        }
+        return Err(contradiction(declared, proven));
+    }
+
+    // Arm 3 — unmapped mTLS: the namespaces are incomparable, so the mismatch
+    // is a detection signal rather than a refusal. A SAN URI and a short label
+    // cannot be compared without inventing an ordering, and an invented
+    // ordering later reads as a security guarantee.
+    if proven.proof() == ProofSource::MutualTls {
+        return Ok(IdentityAudit::DeclaredLabelMismatch);
+    }
+
+    // Arm 4 — unmapped JWT: the label namespace and the `client_id` namespace
+    // are the same kind of name, so a differing label is comparable, and a
+    // missing mapping is never read as permission.
+    Err(contradiction(declared, proven))
+}
+
+/// Render a caller-supplied value safely for a refusal message.
+///
+/// The refusal string reaches an operator's log and the identity audit record.
+/// A raw `X-Agent-ID` carrying a newline can therefore forge a log line inside
+/// the audit trail — which is worse than leaking the label, because the record
+/// this criterion exists to make trustworthy is the thing being falsified.
+///
+/// `escape_debug` renders control characters as escapes and leaves ordinary
+/// text readable, so an operator still sees the label they configured.
+fn quoted(value: &str) -> String {
+    format!("'{}'", value.escape_debug())
+}
+
+/// The refusal a contradicting declared label earns.
+///
+/// The caller-supplied value is rendered inside single quotes and is the only
+/// untrusted text here; it reaches an operator log and a JSON-RPC error
+/// message, never a shell or a query.
+fn contradiction(declared: &DeclaredLabel, proven: &ProvenPrincipal) -> String {
+    format!(
+        "Request rejected: the declared agent label {} (via {}) contradicts the proven \
+         principal {} (via {}). Add it to agent_identity.principal_labels for that principal \
+         if this caller is entitled to declare it.",
+        quoted(&declared.id),
+        declared.source,
+        quoted(proven.id()),
+        proven.proof()
+    )
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -179,22 +561,6 @@ fn extract_from_header(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(String::from)
 }
 
-/// Decode a JWT payload without verifying the signature and extract `agent_id`.
-///
-/// This is intentionally unsigned-only: identity is extracted for *audit*,
-/// not for authorization.  Cryptographic verification is left to the JWT
-/// middleware layer (key server / OAuth) which runs before this code.
-fn extract_jwt_agent_id(token: &str) -> Option<String> {
-    // JWT structure: header.payload.signature — payload is base64url(JSON)
-    let payload_b64 = token.split('.').nth(1)?;
-    let decoded = base64_url_decode(payload_b64)?;
-    let json: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
-    json.get("agent_id")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-}
-
 fn extract_from_query(query: &str) -> Option<String> {
     query
         .split('&')
@@ -204,57 +570,6 @@ fn extract_from_query(query: &str) -> Option<String> {
         })
         .filter(|s| !s.is_empty())
         .map(percent_decode)
-}
-
-/// Minimal base64url decoder (no padding required — standard JWT payloads omit it).
-fn base64_url_decode(input: &str) -> Option<Vec<u8>> {
-    use std::collections::VecDeque;
-
-    // Convert base64url → base64 standard
-    let mut b64: String = input.replace('-', "+").replace('_', "/");
-    // Re-add padding
-    match b64.len() % 4 {
-        2 => b64.push_str("=="),
-        3 => b64.push('='),
-        _ => {}
-    }
-
-    // Manual base64 decode to avoid adding a dependency
-    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    #[allow(clippy::cast_possible_truncation)] // alphabet has exactly 64 entries; i ≤ 63 < u8::MAX
-    let decode_table: [u8; 256] = {
-        let mut t = [0xFFu8; 256];
-        for (i, &c) in alphabet.iter().enumerate() {
-            t[c as usize] = i as u8;
-        }
-        t['=' as usize] = 0;
-        t
-    };
-
-    let bytes = b64.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
-    let mut buf = VecDeque::new();
-
-    for &byte in bytes {
-        let val = decode_table[byte as usize];
-        if val == 0xFF {
-            return None; // invalid character
-        }
-        buf.push_back(val);
-        if buf.len() == 4 {
-            let (b0, b1, b2, b3) = (
-                buf.pop_front().unwrap(),
-                buf.pop_front().unwrap(),
-                buf.pop_front().unwrap(),
-                buf.pop_front().unwrap(),
-            );
-            out.push((b0 << 2) | (b1 >> 4));
-            out.push((b1 << 4) | (b2 >> 2));
-            out.push((b2 << 6) | b3);
-        }
-    }
-
-    Some(out)
 }
 
 /// Percent-decode a query parameter value (`%XX` sequences only; `+` kept as-is).
@@ -286,238 +601,91 @@ fn hex_digit(b: u8) -> Option<u8> {
     }
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// ── Audit ─────────────────────────────────────────────────────────────────────
+
+/// Emit the ASI03 identity audit record for one request.
+///
+/// Records proven and declared as **distinct fields**, always. A record that
+/// collapses them cannot distinguish "agent-a proved it" from "someone said
+/// agent-a", which is the property this whole module exists to create.
+///
+/// `refusal` is `Some` on the refusal arm. Both call sites pass it, because
+/// before this existed a contradiction refusal returned a 403 and left no audit
+/// trace at all — putting the detection signal only on the accept path, which
+/// is the path an attacker is least likely to be on.
+///
+/// Shared by both dispatch routes so the field set cannot drift between them.
+pub(crate) fn log_agent_identity(
+    identity: &AgentIdentity,
+    audit: IdentityAudit,
+    refusal: Option<&str>,
+) {
+    let proven = identity.proven_id();
+    let proof = identity.proven.as_ref().map(|p| p.proof().to_string());
+    let secondary = identity.secondary_proof.as_ref().map(ProvenPrincipal::id);
+    let secondary_proof = identity
+        .secondary_proof
+        .as_ref()
+        .map(|p| p.proof().to_string());
+    let declared = identity.declared_id();
+    let declared_source = identity.declared.as_ref().map(|d| d.source.to_string());
+
+    if let Some(reason) = refusal {
+        tracing::warn!(
+            agent_proven = proven,
+            agent_proof = proof.as_deref(),
+            agent_secondary_proof = secondary,
+            agent_secondary_proof_source = secondary_proof.as_deref(),
+            agent_declared = declared,
+            agent_declared_source = declared_source.as_deref(),
+            refused = true,
+            reason = reason,
+            "agent identity refused"
+        );
+        return;
+    }
+
+    let mismatch = audit == IdentityAudit::DeclaredLabelMismatch;
+    if mismatch {
+        // The ruling's "turning the vulnerability into detection": a proven
+        // principal and a label that differ, in a namespace the operator has
+        // been told is incomparable. Accepted, and alertable.
+        tracing::warn!(
+            agent_proven = proven,
+            agent_proof = proof.as_deref(),
+            agent_secondary_proof = secondary,
+            agent_secondary_proof_source = secondary_proof.as_deref(),
+            agent_declared = declared,
+            agent_declared_source = declared_source.as_deref(),
+            declared_label_mismatch = true,
+            "agent declared a label that differs from its proven principal"
+        );
+        return;
+    }
+
+    tracing::debug!(
+        agent_proven = proven,
+        agent_proof = proof.as_deref(),
+        agent_secondary_proof = secondary,
+        agent_secondary_proof_source = secondary_proof.as_deref(),
+        agent_declared = declared,
+        agent_declared_source = declared_source.as_deref(),
+        declared_label_mismatch = false,
+        "agent identity resolved"
+    );
+}
+
+mod principal;
+
+pub use principal::{
+    AgentIdentity, DeclaredAgentLabel, DeclaredLabel, DeclaredSource, OwnedProvenAgentId,
+    ProofSource, ProvenAgentId, ProvenPrincipal,
+};
 
 #[cfg(test)]
-mod tests {
-    use axum::http::HeaderMap;
+#[path = "agent_identity_tests.rs"]
+mod tests;
 
-    use super::*;
-
-    // ── extract_agent_identity ────────────────────────────────────────────────
-
-    #[test]
-    fn extract_from_x_agent_id_header() {
-        // GIVEN: request with X-Agent-ID header
-        let mut headers = HeaderMap::new();
-        headers.insert("x-agent-id", "agent-abc-123".parse().unwrap());
-        // WHEN: extract identity
-        let identity = extract_agent_identity(&headers, None, None);
-        // THEN: identity is extracted from header
-        assert_eq!(
-            identity,
-            Some(AgentIdentity {
-                id: "agent-abc-123".to_string(),
-                source: IdentitySource::Header,
-            })
-        );
-    }
-
-    #[test]
-    fn extract_no_agent_id_returns_none() {
-        // GIVEN: request with no agent identification
-        let headers = HeaderMap::new();
-        // WHEN: extract identity
-        let identity = extract_agent_identity(&headers, None, None);
-        // THEN: no identity
-        assert_eq!(identity, None);
-    }
-
-    #[test]
-    fn extract_from_query_param() {
-        // GIVEN: request with agent_id query parameter
-        let headers = HeaderMap::new();
-        // WHEN: extract identity from query string
-        let identity = extract_agent_identity(&headers, Some("agent_id=agent-q1&other=val"), None);
-        // THEN: identity extracted from query
-        assert_eq!(
-            identity,
-            Some(AgentIdentity {
-                id: "agent-q1".to_string(),
-                source: IdentitySource::QueryParam,
-            })
-        );
-    }
-
-    #[test]
-    fn extract_header_takes_precedence_over_query() {
-        // GIVEN: both header and query param set
-        let mut headers = HeaderMap::new();
-        headers.insert("x-agent-id", "header-agent".parse().unwrap());
-        // WHEN: extract identity
-        let identity = extract_agent_identity(&headers, Some("agent_id=query-agent"), None);
-        // THEN: header wins
-        let resolved = identity.unwrap();
-        assert_eq!(resolved.source, IdentitySource::Header);
-        assert_eq!(resolved.id, "header-agent");
-    }
-
-    #[test]
-    fn extract_whitespace_only_header_returns_none() {
-        // GIVEN: X-Agent-ID header with only whitespace (trimmed to empty by our logic)
-        let mut headers = HeaderMap::new();
-        headers.insert("x-agent-id", "   ".parse().unwrap());
-        // WHEN: extract
-        let identity = extract_agent_identity(&headers, None, None);
-        // THEN: treated as absent (our extractor trims and rejects blank values)
-        assert_eq!(identity, None);
-    }
-
-    #[test]
-    fn extract_from_jwt_claim() {
-        // GIVEN: a JWT with agent_id claim (header.payload.signature)
-        // payload = {"agent_id": "agent-jwt-1", "sub": "test"}
-        let payload = r#"{"agent_id":"agent-jwt-1","sub":"test"}"#;
-        let b64 = to_base64url(payload.as_bytes());
-        let token = format!("eyJhbGciOiJub25lIn0.{b64}.signature");
-        let headers = HeaderMap::new();
-        // WHEN: extract identity
-        let identity = extract_agent_identity(&headers, None, Some(&token));
-        // THEN: extracted from JWT claim
-        assert_eq!(
-            identity,
-            Some(AgentIdentity {
-                id: "agent-jwt-1".to_string(),
-                source: IdentitySource::JwtClaim,
-            })
-        );
-    }
-
-    #[test]
-    fn extract_jwt_without_agent_id_claim() {
-        // GIVEN: JWT with no agent_id claim
-        let payload = r#"{"sub":"user","iat":1234567890}"#;
-        let b64 = to_base64url(payload.as_bytes());
-        let token = format!("eyJhbGciOiJub25lIn0.{b64}.sig");
-        let headers = HeaderMap::new();
-        // WHEN: extract
-        let identity = extract_agent_identity(&headers, None, Some(&token));
-        // THEN: none
-        assert_eq!(identity, None);
-    }
-
-    // ── validate_agent_identity ───────────────────────────────────────────────
-
-    #[test]
-    fn validate_passes_when_feature_disabled() {
-        // GIVEN: agent_identity.enabled = false
-        let config = AgentIdentityConfig {
-            enabled: false,
-            ..Default::default()
-        };
-        // WHEN: validate with no identity
-        // THEN: always passes
-        assert!(validate_agent_identity(None, &config).is_ok());
-    }
-
-    #[test]
-    fn validate_anonymous_allowed_when_require_id_false() {
-        // GIVEN: enabled, require_id = false
-        let config = AgentIdentityConfig {
-            enabled: true,
-            require_id: false,
-            ..Default::default()
-        };
-        // WHEN: no identity
-        // THEN: allowed (anonymous mode)
-        assert!(validate_agent_identity(None, &config).is_ok());
-    }
-
-    #[test]
-    fn validate_rejects_when_require_id_and_no_identity() {
-        // GIVEN: enabled, require_id = true
-        let config = AgentIdentityConfig {
-            enabled: true,
-            require_id: true,
-            ..Default::default()
-        };
-        // WHEN: no identity provided
-        let result = validate_agent_identity(None, &config);
-        // THEN: rejected with descriptive error
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("require_id"));
-    }
-
-    #[test]
-    fn validate_known_agents_allowlist_passes_for_listed_agent() {
-        // GIVEN: known_agents allowlist with one entry
-        let config = AgentIdentityConfig {
-            enabled: true,
-            require_id: true,
-            known_agents: vec!["agent-allowed".to_string()],
-        };
-        let identity = AgentIdentity {
-            id: "agent-allowed".to_string(),
-            source: IdentitySource::Header,
-        };
-        // WHEN: validate known agent
-        // THEN: passes
-        assert!(validate_agent_identity(Some(&identity), &config).is_ok());
-    }
-
-    #[test]
-    fn validate_known_agents_allowlist_rejects_unknown_agent() {
-        // GIVEN: non-empty allowlist
-        let config = AgentIdentityConfig {
-            enabled: true,
-            require_id: true,
-            known_agents: vec!["agent-allowed".to_string()],
-        };
-        let identity = AgentIdentity {
-            id: "rogue-agent".to_string(),
-            source: IdentitySource::Header,
-        };
-        // WHEN: validate agent not in allowlist
-        let result = validate_agent_identity(Some(&identity), &config);
-        // THEN: rejected
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("rogue-agent"));
-    }
-
-    #[test]
-    fn validate_empty_known_agents_skips_allowlist_check() {
-        // GIVEN: enabled, require_id = true, known_agents = []
-        let config = AgentIdentityConfig {
-            enabled: true,
-            require_id: true,
-            known_agents: vec![],
-        };
-        let identity = AgentIdentity {
-            id: "any-agent".to_string(),
-            source: IdentitySource::Header,
-        };
-        // WHEN: any agent ID is presented with empty allowlist
-        // THEN: passes (no filter applied)
-        assert!(validate_agent_identity(Some(&identity), &config).is_ok());
-    }
-
-    // ── percent_decode ────────────────────────────────────────────────────────
-
-    #[test]
-    fn percent_decode_handles_encoded_chars() {
-        assert_eq!(percent_decode("agent%2Dv2"), "agent-v2");
-        assert_eq!(percent_decode("plain"), "plain");
-        assert_eq!(percent_decode("a%20b"), "a b");
-    }
-
-    // ── test helpers ─────────────────────────────────────────────────────────
-
-    /// Minimal base64url encoder for test fixture construction.
-    fn to_base64url(input: &[u8]) -> String {
-        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        for chunk in input.chunks(3) {
-            let b0 = chunk[0];
-            let b1 = *chunk.get(1).unwrap_or(&0);
-            let b2 = *chunk.get(2).unwrap_or(&0);
-            out.push(alphabet[((b0 >> 2) & 0x3F) as usize] as char);
-            out.push(alphabet[(((b0 & 3) << 4) | (b1 >> 4)) as usize] as char);
-            out.push(alphabet[(((b1 & 0xF) << 2) | (b2 >> 6)) as usize] as char);
-            out.push(alphabet[(b2 & 0x3F) as usize] as char);
-        }
-        // Strip padding and convert base64 → base64url
-        out.trim_end_matches('=')
-            .replace('+', "-")
-            .replace('/', "_")
-    }
-}
+#[cfg(test)]
+#[path = "agent_identity_falsifier_tests.rs"]
+mod falsifier_tests;
