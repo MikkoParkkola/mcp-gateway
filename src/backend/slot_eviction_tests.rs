@@ -562,3 +562,75 @@ async fn c12_eviction_removes_a_busy_slot_without_closing_its_transport() {
     );
     drop(claim);
 }
+
+// C13 — kills the MATCHER, where C7 kills the FORMULA. Do not collapse the two.
+//
+// Goes red when `evict_identity_slots` matches by containment instead of by
+// prefix. C7 asserts that a poisoned audience does not `starts_with` another
+// subject's prefix — a property of `cache_binding`, checked in the test body.
+// Nothing there drives the matcher, so with the filter set to
+// `binding.contains(prefix)` C7 and all six sibling cells stay GREEN while one
+// caller's revocation silently evicts another's slot. That gap survived two
+// review rounds because the amendment that created C7's planted collision
+// looked exactly like the fix for the defect that was reported.
+//
+// The collision is reachable by configuration, not contrived: the audience is
+// an operator-set string, so an audience carrying another subject's complete
+// prefix at a nonzero offset is a value an operator can type.
+//
+// TWO-SIDED, so it cannot pass vacuously. The B half alone is green against a
+// no-op evictor; the A half asserts the revocation really landed. Key-absence
+// is sound HERE because this cell has no concurrent reader to recreate the
+// slot, and it is read through the non-creating probe.
+#[tokio::test]
+async fn c13_a_poisoned_audience_does_not_let_one_revocation_reach_another_caller() {
+    let backend = per_user_backend("c13_hub");
+    let (alice, alice_prefix) = binding_and_prefix("alice", AUDIENCE).await;
+    // B's audience carries A's COMPLETE prefix, at a nonzero offset.
+    let poisoned_audience = format!("https://h/{alice_prefix}junk");
+    let (bob, _) = binding_and_prefix("bob", &poisoned_audience).await;
+
+    assert!(
+        bob.contains(&alice_prefix),
+        "C13 premise: the fixture must actually plant the collision in the \
+         POOL KEY, otherwise this cell cannot discriminate `contains` from \
+         `starts_with` and passes vacuously"
+    );
+    assert!(
+        !bob.starts_with(&alice_prefix),
+        "C13 premise: the planted collision must be at a nonzero offset"
+    );
+
+    let alice_upstream = fill_slot(&backend, &alice).await;
+    let bob_upstream = fill_slot(&backend, &bob).await;
+    assert!(
+        backend.cached_tools_count_for(Some(&alice)) > 0
+            && backend.cached_tools_count_for(Some(&bob)) > 0,
+        "C13 premise: both slots must be populated before the revocation"
+    );
+    let bob_before = backend.get_cached_tool_names_for(Some(&bob));
+    let bob_fills_before = bob_upstream.fills();
+
+    alice_upstream.revoke();
+    bob_upstream.revoke();
+    backend.evict_identity_slots(&alice_prefix).await;
+
+    // A half: the revocation landed. Without this the B half is green against
+    // an evictor that does nothing at all.
+    assert!(
+        !backend.pool_has_slot_for_test(&slot(&alice)),
+        "C13: the revoked caller's own slot must be evicted"
+    );
+    // B half: and it stopped there. Under `contains` B is evicted too, so its
+    // upstream now serves AFTER and both assertions below fail.
+    assert_eq!(
+        backend.get_cached_tool_names_for(Some(&bob)),
+        bob_before,
+        "C13: a mid-string prefix match must not evict an unrelated caller"
+    );
+    assert_eq!(
+        bob_upstream.fills(),
+        bob_fills_before,
+        "C13: the unrelated caller must not be forced to refetch"
+    );
+}
