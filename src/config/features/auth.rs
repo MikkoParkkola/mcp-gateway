@@ -98,6 +98,35 @@ impl AuthConfig {
         let hard_multi_user = self.api_keys.len() > 1 || has_oidc;
         hard_multi_user || !self.single_user
     }
+
+    /// MIK-6744 (STORE.1, open item O3): may this gateway mint the sole-operator
+    /// principal that a solo deployment's stored OAuth grants are keyed to?
+    ///
+    /// NECESSARY, NEVER SUFFICIENT. This answers a question about the
+    /// DEPLOYMENT. Whether a given request may be served under that principal
+    /// also needs a fact about the REQUEST — that a credential validated — and
+    /// configuration cannot see it. The shipped starter config
+    /// (`commands::generate_config`) sets `enabled` and `single_user` AND lists
+    /// `/mcp` under `public_paths`, so this returns `true` on a default install
+    /// that also serves anonymous callers. The request-side half lives in
+    /// `identity_propagation::CallerProof`.
+    ///
+    /// DELIBERATELY NOT `!implies_multi_user(has_oidc)`. That predicate asks
+    /// "could more than one principal be behind this auth?" and answers `false`
+    /// when authentication is switched off entirely, because with no auth
+    /// boundary the isolation question is moot. Negating it reads "exactly one
+    /// user is present", which is the opposite of what an unauthenticated
+    /// gateway means, and would hand the stored OAuth grants to anyone who can
+    /// reach the port. Absence of authentication is not the presence of one
+    /// user. Stated positively here so the enabled term cannot be lost.
+    ///
+    /// Consistent with ADR-008 INV-2's fail-closed reasoning rather than
+    /// competing with it: `single_user` is the operator's ASSERTION, and more
+    /// than one API key or any OIDC issuer overrides it, exactly as there.
+    #[must_use]
+    pub fn grants_single_user_principal(&self, has_oidc: bool) -> bool {
+        self.enabled && self.single_user && self.api_keys.len() <= 1 && !has_oidc
+    }
 }
 
 impl AuthConfig {
@@ -379,6 +408,145 @@ mod multi_user_tests {
             cfg.implies_multi_user(true),
             "any OIDC issuer means many end users"
         );
+    }
+}
+
+/// MIK-6744 (STORE.1 / O3): the sole-operator principal's own predicate.
+///
+/// Separate module from `multi_user_tests` on purpose. These are not the same
+/// question asked twice: `implies_multi_user` asks "could more than one human be
+/// behind this auth?", and this asks "is exactly one human proven to be?". The
+/// auth-disabled case below is where the two answers differ, and it is the whole
+/// reason this predicate is not a negation of that one.
+#[cfg(test)]
+mod single_user_principal_tests {
+    use super::*;
+
+    fn api_key(name: &str) -> ApiKeyConfig {
+        ApiKeyConfig {
+            key: format!("k-{name}"),
+            name: name.to_string(),
+            rate_limit: 0,
+            backends: Vec::new(),
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+        }
+    }
+
+    /// The population this exists for: a 3.x personal gateway that took the
+    /// upgrade advice at `commands/upgrade.rs:144` and set `single_user: true`.
+    fn solo() -> AuthConfig {
+        AuthConfig {
+            enabled: true,
+            bearer_token: Some("the-operator's-own-token".to_string()),
+            single_user: true,
+            ..AuthConfig::default()
+        }
+    }
+
+    #[test]
+    fn asserted_solo_gateway_may_mint_the_principal() {
+        assert!(
+            solo().grants_single_user_principal(false),
+            "enabled auth + the operator's explicit assertion + no second credential is the \
+             whole positive case"
+        );
+    }
+
+    #[test]
+    fn one_api_key_still_mints_the_principal() {
+        // `<= 1`, not `== 1`: a bearer-only gateway and a one-key gateway are
+        // the same deployment shape, and the operator asserted both are one
+        // person. Neither has a second credential to hand to anyone.
+        let cfg = AuthConfig {
+            api_keys: vec![api_key("me")],
+            ..solo()
+        };
+        assert!(cfg.grants_single_user_principal(false));
+    }
+
+    /// THE SECURITY CASE. This is the defect §4.1a of the design doc records:
+    /// `implies_multi_user` returns `false` when auth is switched off, because
+    /// with no auth boundary the per-user isolation question is moot. Its
+    /// negation therefore reads "one user is present", which is the opposite of
+    /// what an unauthenticated gateway means. Minting here would hand the stored
+    /// OAuth grants to any anonymous caller that can reach the port.
+    #[test]
+    fn disabled_auth_never_mints_the_principal() {
+        let cfg = AuthConfig {
+            enabled: false,
+            ..solo()
+        };
+        assert!(
+            !cfg.grants_single_user_principal(false),
+            "absence of authentication is not the presence of one user"
+        );
+        assert!(
+            !AuthConfig::default().grants_single_user_principal(false),
+            "the shipped default mints nothing"
+        );
+    }
+
+    #[test]
+    fn two_api_keys_never_mint_the_principal() {
+        let cfg = AuthConfig {
+            api_keys: vec![api_key("laptop"), api_key("phone")],
+            ..solo()
+        };
+        assert!(
+            !cfg.grants_single_user_principal(false),
+            "a second credential can be handed to a second human; the assertion is overridden"
+        );
+    }
+
+    #[test]
+    fn any_identity_provider_never_mints_the_principal() {
+        assert!(
+            !solo().grants_single_user_principal(true),
+            "an IdP means real per-user principals exist and the assertion is overridden"
+        );
+    }
+
+    /// Without the operator saying so, nothing is asserted and nothing is minted
+    /// — the same fail-closed default `single_user` already carries (ADR-008
+    /// INV-2).
+    #[test]
+    fn unasserted_auth_never_mints_the_principal() {
+        let cfg = AuthConfig {
+            single_user: false,
+            ..solo()
+        };
+        assert!(!cfg.grants_single_user_principal(false));
+    }
+
+    /// An OIDC issuer is the only authority a real `VerifiedIdentity` can carry
+    /// (`key_server/oidc.rs`), and this predicate is false whenever one is
+    /// configured. So the sole-operator authority and the OIDC issuer namespace
+    /// never coexist in one deployment.
+    ///
+    /// Structural, not enforced: nothing validates that `principal_authority` is
+    /// a URL (design doc §3), so this is a consequence of the configuration
+    /// rather than a rule the code checks. Recorded as such rather than
+    /// presented as a boundary.
+    #[test]
+    fn the_two_authority_namespaces_never_coexist() {
+        for enabled in [true, false] {
+            for single_user in [true, false] {
+                for keys in 0..3 {
+                    let cfg = AuthConfig {
+                        enabled,
+                        single_user,
+                        api_keys: (0..keys).map(|i| api_key(&i.to_string())).collect(),
+                        ..AuthConfig::default()
+                    };
+                    assert!(
+                        !cfg.grants_single_user_principal(true),
+                        "no configuration with an IdP may also mint the sole-operator principal"
+                    );
+                }
+            }
+        }
     }
 }
 

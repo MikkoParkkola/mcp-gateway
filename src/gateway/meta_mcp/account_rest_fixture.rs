@@ -486,7 +486,11 @@ pub(super) async fn prepared_caching_context(
 ) -> CapabilityExecutionContext {
     let verified = Arc::new(identity(subject));
     match registry
-        .resolve(account, key, Some(verified.as_ref()))
+        .resolve(
+            account,
+            key,
+            crate::identity_propagation::CallerProof::Verified(verified.as_ref()),
+        )
         .await
         .expect("the account must resolve while the grant is still current")
     {

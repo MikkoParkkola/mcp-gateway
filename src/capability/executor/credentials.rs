@@ -53,12 +53,12 @@ impl CapabilityExecutor {
         if let Some(prepared) = context.account_credential.as_deref() {
             Self::assert_prepared_matches(prepared, auth, account)?;
             registry
-                .revalidate(prepared, context.verified_identity.as_deref())
+                .revalidate(prepared, context.caller_proof())
                 .await?;
             return Ok(Some(prepared.headers().to_vec()));
         }
         match registry
-            .resolve(account, &auth.key, context.verified_identity.as_deref())
+            .resolve(account, &auth.key, context.caller_proof())
             .await?
         {
             AccountCredential::Legacy => Ok(None),
@@ -110,14 +110,14 @@ impl CapabilityExecutor {
         if let Some(prepared) = context.account_credential.clone() {
             Self::assert_prepared_matches(&prepared, auth, account)?;
             registry
-                .revalidate(&prepared, context.verified_identity.as_deref())
+                .revalidate(&prepared, context.caller_proof())
                 .await?;
             context.cache_binding = Some(prepared.cache_binding().to_owned());
             return Ok(context);
         }
 
         match registry
-            .resolve(account, &auth.key, context.verified_identity.as_deref())
+            .resolve(account, &auth.key, context.caller_proof())
             .await?
         {
             // A `shared` descriptor is not an account credential at all: the

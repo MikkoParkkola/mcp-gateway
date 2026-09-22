@@ -46,11 +46,13 @@ use crate::gateway::oauth::GatewayKeyPair;
 use crate::key_server::oidc::VerifiedIdentity;
 
 mod account_strategies;
+mod caller_proof;
 mod token_exchange;
 
 pub(crate) use account_strategies::{
     AccountCredential, AccountStrategyRegistry, InstalledAccount, PreparedAccountCredential,
 };
+pub(crate) use caller_proof::{CallerProof, CallerProvenance};
 pub use token_exchange::TokenExchangeStrategy;
 
 #[cfg(test)]
@@ -508,12 +510,10 @@ pub(crate) fn ensure_transport_carries_identity_headers(
 /// (`stable_actor_id`) so the two audit trails describe the same actor under the
 /// same id. `"unauthenticated"` covers the non-`required` path, where a
 /// mint/refuse decision can be reached with no verified identity.
-pub(crate) fn audit_subject(
-    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-) -> String {
+pub(crate) fn audit_subject(verified_identity: Option<&VerifiedIdentity>) -> String {
     verified_identity.map_or_else(
         || "unauthenticated".to_string(),
-        crate::key_server::oidc::VerifiedIdentity::stable_actor_id,
+        VerifiedIdentity::stable_actor_id,
     )
 }
 

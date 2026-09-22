@@ -66,8 +66,52 @@ pub(crate) fn install_account_strategies(
     let registry = meta_mcp.account_strategies();
     declare_account_descriptors(config, &registry);
 
+    // THE DEPLOYMENT'S MODE, decided ONCE here and handed to every managed
+    // strategy. A gateway that authenticates, was explicitly declared
+    // single-user, holds no second API key, has no identity provider and runs
+    // no identity adapter serves its stored OAuth grants under one fixed
+    // principal — otherwise a solo install has no principal at all and its
+    // per-user credential store is unreachable (MIK-6744.STORE.1, open item O3).
+    //
+    // THE ADAPTER TERM IS NOT IN THE PREDICATE, deliberately.
+    // `grants_single_user_principal` is an `AuthConfig` method and
+    // `accounts.adapters` is not auth configuration, so the predicate cannot
+    // see it. It matters for the same reason the OIDC term does: an adapter
+    // (`gateway::openwebui_adapter`) is the product's OTHER `VerifiedIdentity`
+    // producer, configured independently of any OIDC issuer, and a deployment
+    // running one serves real per-user principals. Worse, a caller holding the
+    // adapter's own credential but omitting the assertion header authenticates
+    // and carries no identity — exactly the shape that would otherwise fall
+    // through to the sole-operator principal.
+    //
+    // An ASSERTION, not a proof: two humans sharing this machine's credential
+    // share the stored grants, because nothing here can tell them apart. That
+    // is already true of `auth.single_user` for request authorisation; this
+    // extends its reach to stored OAuth grants.
+    let has_identity_adapter = config
+        .accounts
+        .as_ref()
+        .is_some_and(|accounts| !accounts.adapters.is_empty());
+    let sole_operator = config
+        .auth
+        .grants_single_user_principal(!config.key_server.oidc.is_empty())
+        && !has_identity_adapter;
+    if sole_operator {
+        tracing::info!(
+            "auth.single_user is asserted: managed accounts are served under one fixed \
+             sole-operator principal, to callers this gateway authenticates. Anyone holding \
+             this gateway's credential holds its stored OAuth grants."
+        );
+    }
+
     for compiled in compile_descriptors(config)? {
-        install_descriptor(&compiled, custody, gateway_key_pair, &registry);
+        install_descriptor(
+            &compiled,
+            custody,
+            gateway_key_pair,
+            &registry,
+            sole_operator,
+        );
     }
 
     for (name, bound) in compile(config)? {
@@ -128,6 +172,7 @@ fn install_descriptor(
     custody: Option<&Arc<dyn AccountCustody>>,
     gateway_key_pair: &Arc<GatewayKeyPair>,
     registry: &AccountStrategyRegistry,
+    sole_operator: bool,
 ) {
     let id = compiled.descriptor_id.as_str();
     let Some(propagation) = compiled.propagation.as_ref() else {
@@ -154,7 +199,7 @@ fn install_descriptor(
             // the same handle, the same service, the same store the gateway
             // claimed its locks with at startup.
             let erased: Arc<dyn AccountCustody> = Arc::clone(custody);
-            let vault = Arc::new(VaultStrategy::new(erased, descriptor));
+            let vault = Arc::new(VaultStrategy::new(erased, descriptor, sole_operator));
             managed = Some(Arc::clone(&vault));
             vault
         }

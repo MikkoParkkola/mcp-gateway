@@ -34,9 +34,12 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use super::{BackendDescriptor, IdentityPropagation, audit_identity_propagation, audit_subject};
-use crate::key_server::oidc::VerifiedIdentity;
+use super::{
+    BackendDescriptor, CallerProof, IdentityPropagation, PropagationError,
+    audit_identity_propagation, audit_subject,
+};
 use crate::personal_accounts::config::DescriptorMode;
+use crate::personal_accounts::identity::Principal;
 use crate::security::TransparencyLogger;
 use crate::{Error, Result};
 
@@ -392,20 +395,23 @@ impl AccountStrategyRegistry {
         &self,
         descriptor_id: &str,
         auth_key: &str,
-        identity: Option<&VerifiedIdentity>,
+        caller: CallerProof<'_>,
     ) -> Result<AccountCredential> {
         let Some(installed) = self.declared_installed(descriptor_id, auth_key)? else {
             return Ok(AccountCredential::Legacy);
         };
 
         let logger = self.audit.read().clone();
-        let subject_id = audit_subject(identity);
         let audience = installed.audience.as_str();
 
-        let Some(identity) = identity else {
+        // WHO THIS CALL IS MADE AS. A verified identity where one exists; the
+        // deployment's own sole-operator assertion where a managed descriptor's
+        // strategy was installed under it. An external descriptor is unchanged:
+        // it has no assertion to consult and still needs a verified caller.
+        let Some(principal) = Self::principal(installed.as_ref(), caller) else {
             Self::audit_refusal(
                 logger.as_deref(),
-                &subject_id,
+                &audit_subject(caller.verified()),
                 descriptor_id,
                 audience,
                 "the request carries no verified end-user identity",
@@ -416,6 +422,9 @@ impl AccountStrategyRegistry {
                  gateway-held credential for '{auth_key}'."
             )));
         };
+        // The principal that will actually be minted under, so a sole-operator
+        // release is audited as the sole operator rather than as "unauthenticated".
+        let subject_id = principal.stable_actor_id();
 
         let backend = BackendDescriptor {
             // The descriptor id is the logical backend id of the account key,
@@ -434,7 +443,7 @@ impl AccountStrategyRegistry {
         // invented.
         let minted = match installed.managed.as_ref() {
             Some(vault) => vault
-                .prepare(identity, &backend)
+                .prepare(principal, &backend)
                 .await
                 .map(|(credential, lease)| {
                     (
@@ -445,11 +454,22 @@ impl AccountStrategyRegistry {
                         }),
                     )
                 }),
-            None => installed
-                .strategy
-                .propagate(identity, &backend)
-                .await
-                .map(|credential| (credential, None)),
+            // An external strategy exchanges the CALLER'S OWN token, so it has
+            // nothing to mint from but a proof. `Self::principal` offers the
+            // sole-operator assertion only for a managed descriptor, so this is
+            // the verified arm by construction — and it refuses rather than
+            // assuming so, because a credential path should not rely on a
+            // property enforced somewhere else.
+            None => match principal.verified() {
+                Some(identity) => installed
+                    .strategy
+                    .propagate(identity, &backend)
+                    .await
+                    .map(|credential| (credential, None)),
+                None => Err(PropagationError::Refuse(
+                    "an external account descriptor mints only for a verified caller".to_string(),
+                )),
+            },
         };
         let (credential, managed) = match minted {
             Ok(minted) => minted,
@@ -509,7 +529,7 @@ impl AccountStrategyRegistry {
             PreparedAccountCredential {
                 descriptor_id: descriptor_id.to_string(),
                 auth_key: auth_key.to_string(),
-                actor_id: identity.stable_actor_id(),
+                actor_id: subject_id,
                 audience: installed.audience.clone(),
                 // The strategy's own values, copied. Never re-derived, never
                 // widened and never rounded.
@@ -561,7 +581,7 @@ impl AccountStrategyRegistry {
     pub(crate) async fn revalidate(
         &self,
         prepared: &PreparedAccountCredential,
-        identity: Option<&VerifiedIdentity>,
+        caller: CallerProof<'_>,
     ) -> Result<()> {
         let descriptor_id = prepared.descriptor_id.as_str();
         let refuse = |reason: &str| {
@@ -593,16 +613,20 @@ impl AccountStrategyRegistry {
         if !Arc::ptr_eq(&installed.strategy, &prepared.strategy) {
             return refuse("the installed strategy was replaced after the credential was minted");
         }
-        let Some(identity) = identity else {
+        // The SAME question `resolve` asked, asked the same way: the registry
+        // as it stands NOW decides who this call is made as. A descriptor whose
+        // managed install was replaced by one with a different sole-operator
+        // setting therefore fails the actor comparison below rather than being
+        // rechecked as though nothing changed.
+        let Some(principal) = Self::principal(installed.as_ref(), caller) else {
             return refuse("the request carries no verified end-user identity");
         };
-        if identity.stable_actor_id() != prepared.actor_id {
-            return refuse("it was minted for a different verified caller");
+        if principal.stable_actor_id() != prepared.actor_id {
+            return refuse("it was minted for a different caller");
         }
         if !prepared.published_lifetime_open(chrono::Utc::now().timestamp()) {
             return refuse("its published lifetime has run out");
         }
-
         // THE DURABLE HALF. Last, because the checks above are cheap and this
         // one takes the store's authority lock; first in importance, because it
         // is the only one that can see a revocation committed since the mint.
@@ -628,6 +652,28 @@ impl AccountStrategyRegistry {
             }
         }
         Ok(())
+    }
+
+    /// Who a dispatch against this installation is made as, or `None` when
+    /// nothing proves or asserts a principal.
+    ///
+    /// ONE ANSWER, TWO ASKERS. [`Self::resolve`] mints under it and
+    /// [`Self::revalidate`] rechecks against it, and a second derivation in
+    /// either is how a credential minted for one principal comes to be
+    /// rechecked as another. It is also why the sole-operator assertion is
+    /// asked of the INSTALLED strategy rather than read from configuration
+    /// here: the strategy is what was installed before the gateway served, and
+    /// the registry has no business recomputing a deployment mode.
+    fn principal<'a>(
+        installed: &InstalledAccount,
+        caller: CallerProof<'a>,
+    ) -> Option<Principal<'a>> {
+        match installed.managed.as_ref() {
+            Some(vault) => vault.principal(caller),
+            // No managed custody, no assertion to consult: an external
+            // descriptor has always needed a verified caller and still does.
+            None => caller.verified().map(Principal::Verified),
+        }
     }
 
     /// Record a refusal. The request is already being refused, so an audit-write
@@ -667,7 +713,7 @@ mod lifetime_tests {
     impl IdentityPropagation for NeverMints {
         async fn propagate(
             &self,
-            _identity: &VerifiedIdentity,
+            _identity: &crate::key_server::oidc::VerifiedIdentity,
             _backend: &BackendDescriptor,
         ) -> std::result::Result<super::super::PropagatedCredential, super::super::PropagationError>
         {

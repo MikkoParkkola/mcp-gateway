@@ -23,6 +23,11 @@ pub mod recovery;
 mod router;
 pub(crate) mod search_disclosure;
 mod server;
+/// The one stdio admission identifier, re-exported so a consumer outside
+/// `gateway` can name it WITHOUT `server` itself becoming crate-visible.
+/// `identity_propagation::caller_proof` classifies it as a trusted transport
+/// rather than a presented secret, and must compare against this exact value.
+pub(crate) use server::STDIO_CREDENTIAL_PRINCIPAL;
 pub mod session_lifecycle;
 pub mod state;
 pub mod streaming;
