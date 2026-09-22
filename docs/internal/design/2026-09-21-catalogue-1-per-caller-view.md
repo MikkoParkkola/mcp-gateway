@@ -366,7 +366,8 @@ is*. Confirm at implementation that both resolve from the one
 
 ### 4.4 C4 — changes and revocation
 
-**V** Half exists. `CachedMetadataState::generation`
+**V** The COLD-START half exists — see §12.5.1, which corrects this paragraph's
+claim after audit. `CachedMetadataState::generation`
 (`src/backend/cached_metadata.rs:22-27`) is documented against this very
 criterion — *"an invalidation that lands mid-fill voids that fill instead of
 being overwritten by it (MIK-7334.CATALOGUE.1, 'changes and revocation')"* — and
@@ -1114,3 +1115,113 @@ identity-free callers reach the `Shared` slot's set exactly as they reach the
 currently `#[expect(dead_code)]` pending its caller) must write the same slot its
 own `tools/list` was served from when that caller lands. Flag at implementation;
 the `expect` marker already forces the conversation.
+
+### 12.5 C4 audited — what "changes and revocation" actually covers
+
+**AUDIT 2026-09-22, after #666 merged.** C4 is a conjunct, not a flourish, and it
+had not been graded against named constructs. Four cells, two verified gaps.
+
+| Cell | Verdict | Construct |
+|---|---|---|
+| Changes — shared catalogue | **MET** | TTL via `refresh_stale_backend_tools_in_background` (`discovery_fetch.rs`) |
+| Changes — per-user catalogue | **MET as of this change** | freshness check before the early return, §12.6 |
+| Changes / revocation — results | **MET** | `policy_epoch`, `mod.rs:565`, bumped at `:1289`, keyed at `invoke.rs:1855` |
+| Revocation — catalogue caches | **NOT MET**, and not buildable in 4.0.0 | none; §12.7 |
+
+#### 12.5.1 CORRECTION — §4.4's "half exists" overstates it
+
+§4.4 says *"Half exists"* of revocation, crediting `CachedMetadataState::generation`
+and `store_if_current`. **V** The accurate statement is **the cold-start half
+exists**, and the difference is exactly the case this row was created to produce.
+
+**V** `cached_metadata.rs:141-146` — `invalidate_if` returns **early** when the
+slot holds a populated value the predicate does not discard:
+
+```rust
+if state.value.as_ref().is_some_and(|v| !discard(v)) {
+    // ... a fill already on the wire is still welcome to replace it.
+    return;
+}
+```
+
+The generation bump is **below** that return. So against a **warm** cache
+`invalidate_tools_cache` (predicate `Vec::is_empty`) does not discard, does not
+bump the generation, and voids nothing. `revocation_during_a_fill_is_not_served_afterwards`
+(**V** `tests.rs:1817`) passes because the fill is still on the wire and
+`state.value` is `None` at the moment of invalidation — a cold slot.
+
+Once a per-caller catalogue is populated — the entire point of C0-C2 — that
+mechanism is a no-op. Credit it for what it does: it stops a revocation racing a
+**first** fill, not a revocation against a warm one.
+
+**V** That case was also one-sided — both assertions were absences, so it held
+against a gateway caching nothing. Its admitted-case control,
+`a_fill_that_is_not_revoked_mid_flight_is_served_afterwards` (`tests.rs`), is
+identical to it but for the `invalidate_tools_cache` call, so the two differ by
+exactly the mechanism under test.
+
+#### 12.6 Gap 2, fixed — a populated per-user slot was never refreshed
+
+**V** `backend_tools_for_discovery` returned **any** non-empty snapshot without
+consulting the TTL, and the background refresher is deliberately
+`binding.is_none()`-only because it holds no credential. So a per-user slot past
+its TTL served its first answer indefinitely on the discovery path — while the
+invoke path refreshed correctly through `get_or_fetch_shared(self.cache_ttl, …)`.
+**One caller, one backend, two views**, which is a correctness defect rather than
+a freshness preference.
+
+**And the doc comment asserted the opposite.** It read *"A stale per-user slot
+refreshes inline on the read below instead, which is the credentialed path"* —
+while the early return above it meant that read was never reached. Documentation
+that reads as enforcement is worse than none: a reviewer sees the sentence and
+stops looking. §9.6 had recorded the limitation with exactly that named fix; the
+comment describing the fix shipped and the fix did not.
+
+**The repair is asymmetric on purpose**, and the asymmetry is the whole design:
+
+- **Shared** — serve the snapshot, refresh behind it. Unchanged. Something else
+  always refreshes this slot, so a stale read costs one interval and no caller
+  waits.
+- **Per-user** — serve from cache only while **fresh**; an aged-out slot falls
+  through to the credentialed refetch. Nothing else will ever refresh it.
+
+**Two tests, and the pair discriminates in both directions** — this is the
+condition the repair was approved under:
+
+| Case | Catches |
+|---|---|
+| `a_per_user_slot_past_its_ttl_is_refetched_not_served_stale` | the bug: reverting the freshness check serves `catalogue_before_change` and the fetch count stays at 1 |
+| `a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch` | the lazy fix: deleting the early return outright makes the first case pass and puts a synchronous round trip on the busiest path |
+
+**I** Verified by reverting each way: the first goes red without the fix while
+the control stays green, and the control goes red for the delete-it-all variant
+while the first passes. Neither alone is sufficient, which is why both exist.
+
+#### 12.7 Gap 1, NOT built — there is no revocation event to hook
+
+**Recorded rather than repaired, on an explicit scope call.** Four verified
+points:
+
+1. **V** `invalidate_tools_cache` (`metadata.rs:60`) calls
+   `invalidate_if(Vec::is_empty)` — it discards an **empty** list only, so it is
+   a silent no-op on any populated cache and cannot serve as the hook. Its one
+   production caller is `warmstart.rs:546`, a warm-start empty-list re-confirm.
+2. **V** The generation bump is conditional (§12.5.1), so even the mid-fill
+   mechanism does not reach a warm slot.
+3. **V** §4.4's prescribed wiring — revoke → evict `PoolKey::PerUser` — was never
+   built. `evict_idle_per_user_entries`' only caller is
+   `gateway/server/mod.rs:3621`, the **time-driven** idle reaper. Nothing
+   event-driven exists.
+4. **V, and this is the reframing:** there is no revocation event to hook.
+   `PersonalAccountStore::revoke` (`personal_accounts/mod.rs:525`) and
+   `PersonalAccountService::invalidate` (`service.rs:327`) are both
+   `#[expect(dead_code)]` with the reason *"per-user OAuth scaffolding, deferred
+   to post-4.0.0 backlog MIK-6744/6745/6746"*, and neither has a caller in
+   `gateway/` or `commands/`.
+
+**I** So an invalidation hook would have to build its own trigger, which is
+MIK-6744/6745/6746's work rather than this row's. This is not a gap left in
+CATALOGUE.1; it is a gap the release's own sequencing creates. Recording it is
+the deliverable — whether it lands in 4.0.0 or becomes a container is a scope
+ruling, and narrowing a criterion until it is satisfied is not a grading
+decision.

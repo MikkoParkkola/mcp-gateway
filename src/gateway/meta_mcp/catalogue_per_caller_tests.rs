@@ -437,3 +437,191 @@ async fn an_unidentified_caller_mints_nothing_and_audits_nothing() {
          ever logged"
     );
 }
+
+/// An upstream whose catalogue CHANGES between fetches, counting each one.
+///
+/// The change is what makes staleness observable: a slot that refetched serves
+/// the new name, a slot that did not serves the old one. A counter alone could
+/// not tell a refetch from a cache hit that happened to return the same list.
+struct ChangingCatalogue {
+    fetches: std::sync::atomic::AtomicUsize,
+}
+
+impl ChangingCatalogue {
+    const FIRST: &'static str = "catalogue_before_change";
+    const SECOND: &'static str = "catalogue_after_change";
+
+    fn count(&self) -> usize {
+        self.fetches.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for ChangingCatalogue {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+        self.request_with_headers(
+            method,
+            params,
+            &[],
+            None,
+            crate::transport::ResendPermission::Permitted,
+        )
+        .await
+    }
+
+    async fn request_with_headers(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+        _extra_headers: &[(String, String)],
+        _identity_key: Option<&str>,
+        _resend: crate::transport::ResendPermission,
+    ) -> crate::Result<JsonRpcResponse> {
+        assert_eq!(method, "tools/list", "fixture serves only tools/list");
+        let nth = self
+            .fetches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let name = if nth == 0 { Self::FIRST } else { Self::SECOND };
+        Ok(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            ToolsListResult {
+                tools: vec![named_tool(name)],
+                next_cursor: None,
+            },
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A `per_user` backend with a TTL short enough to expire inside a test.
+fn expiring_backend(ttl: Duration) -> (Arc<Backend>, Arc<ChangingCatalogue>) {
+    let backend = Arc::new(Backend::new(
+        "expiring_hub",
+        BackendConfig {
+            identity_propagation: Some(IdentityPropagationConfig {
+                strategy: PropagationStrategyKind::SignedAssertion,
+                audience: "ledger".to_string(),
+                required: true,
+                session_mode: SessionMode::PerUser,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
+            }),
+            ..Default::default()
+        },
+        &FailsafeConfig::default(),
+        ttl,
+    ));
+    let wire = Arc::new(ChangingCatalogue {
+        fetches: std::sync::atomic::AtomicUsize::new(0),
+    });
+    backend.set_transport_for_test(Arc::clone(&wire) as Arc<dyn crate::transport::Transport>);
+    backend.set_pooled_transport_for_test(
+        &crate::backend::PoolKey::PerUser {
+            binding: "alpha".to_string(),
+        },
+        Arc::clone(&wire) as Arc<dyn crate::transport::Transport>,
+    );
+    (backend, wire)
+}
+
+/// GIVEN a per-user slot whose catalogue has been populated and has since aged
+/// past its TTL, and whose upstream now answers differently
+/// WHEN discovery reads it again
+/// THEN the caller is served the CHANGED catalogue, not the pre-change one.
+///
+/// This is C4's *changes* half on the path that needed it. Nothing refreshes a
+/// per-user slot on its own — the background refresher holds no credential and
+/// is deliberately shared-only — so before this, a populated per-user slot
+/// served its first answer forever, while the invoke path refreshed on TTL
+/// through `get_or_fetch_shared`. One caller, one backend, two views.
+///
+/// RED before the freshness check: `backend_tools_for_discovery` returned any
+/// non-empty snapshot without consulting the TTL, so the second read was served
+/// `catalogue_before_change` from cache and the fetch count stayed at 1.
+#[tokio::test]
+async fn a_per_user_slot_past_its_ttl_is_refetched_not_served_stale() {
+    let (backend, wire) = expiring_backend(Duration::from_millis(30));
+    let headers = [("Authorization".to_string(), "Bearer alpha".to_string())];
+
+    let first = MetaMcp::backend_tools_for_discovery(&backend, true, Some("alpha"), &headers)
+        .await
+        .expect("first read fills the slot");
+    assert_eq!(
+        first.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+        vec![ChangingCatalogue::FIRST],
+        "premise: the first read must populate the slot, or the second read \
+         below is measuring a cold fill rather than a stale one"
+    );
+
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    let second = MetaMcp::backend_tools_for_discovery(&backend, true, Some("alpha"), &headers)
+        .await
+        .expect("second read");
+    assert_eq!(
+        second.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+        vec![ChangingCatalogue::SECOND],
+        "a per-user slot past its TTL served its pre-change catalogue. Nothing \
+         else will ever refresh that slot, so the caller is pinned to the view \
+         its first read happened to see — while `gateway_invoke` refreshes on \
+         TTL and disagrees with it"
+    );
+    assert_eq!(wire.count(), 2, "the stale read did not reach the upstream");
+}
+
+/// GIVEN a SHARED slot in the same aged-out state
+/// WHEN discovery reads it again
+/// THEN the cached snapshot is served without a synchronous refetch.
+///
+/// THE CONTROL, AND THE CONDITION ON THE FIX ABOVE. Deleting the early return
+/// outright would make the case above pass and would also make every shared
+/// discovery read refetch inline — trading a staleness bug on the rarely-taken
+/// path for a fetch storm on the one that carries the traffic. The shared path
+/// is asymmetric on purpose: something else always refreshes it, so a stale
+/// read costs one interval and no caller waits.
+///
+/// Asserted on the fetch COUNT rather than the names, because the background
+/// refresh this path spawns may or may not have landed by the time the
+/// assertion runs; what must not happen is the read blocking on a fetch itself.
+#[tokio::test]
+async fn a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch() {
+    let (backend, wire) = expiring_backend(Duration::from_millis(30));
+
+    let first = MetaMcp::backend_tools_for_discovery(&backend, true, None, &[])
+        .await
+        .expect("first read fills the shared slot");
+    assert_eq!(
+        first.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+        vec![ChangingCatalogue::FIRST],
+        "premise: the shared slot must be populated for this to measure anything"
+    );
+    let after_fill = wire.count();
+
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    let second = MetaMcp::backend_tools_for_discovery(&backend, true, None, &[])
+        .await
+        .expect("second read");
+    assert!(
+        !second.is_empty(),
+        "the shared path stopped serving its cached snapshot: {second:?}"
+    );
+    assert_eq!(
+        wire.count(),
+        after_fill,
+        "the shared discovery read fetched inline. Its snapshot is served while \
+         a background task refreshes behind it, and making it synchronous would \
+         put a network round trip on the busiest path in the gateway"
+    );
+}

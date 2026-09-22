@@ -1845,3 +1845,46 @@ async fn revocation_during_a_fill_is_not_served_afterwards() {
         "a revoked identity's tool schema is still resolvable"
     );
 }
+
+/// GIVEN the same backend and the same in-flight fill
+/// WHEN NO revocation lands while it is on the wire
+/// THEN the fill IS served afterwards.
+///
+/// THE ADMITTED-CASE CONTROL for
+/// [`revocation_during_a_fill_is_not_served_afterwards`], whose assertions are
+/// both absences and so hold against a gateway that caches nothing at all —
+/// load-bearing evidence for the revocation half of MIK-7334.CATALOGUE.1.
+/// Identical to it but for the `invalidate_tools_cache` call, so the two differ
+/// by exactly the mechanism under test.
+#[tokio::test]
+async fn a_fill_that_is_not_revoked_mid_flight_is_served_afterwards() {
+    let backend = Arc::new(per_user_backend(Duration::from_secs(60)));
+    let transport = Arc::new(PerIdentityTools::new(
+        &["kept_tool"],
+        Duration::from_millis(50),
+    ));
+    let transport_dyn: Arc<dyn Transport> = transport.clone();
+    backend.set_transport_for_test(transport_dyn);
+
+    let filling = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.get_tools().await })
+    };
+
+    // The revoking case invalidates here; this one does not.
+    sleep(Duration::from_millis(10)).await;
+
+    let _ = filling.await.expect("fill task");
+
+    assert!(
+        backend
+            .get_cached_tool_names()
+            .contains(&"kept_tool".to_string()),
+        "an un-revoked fill was dropped, so the revoking case above proves only \
+         that this cache never serves anything"
+    );
+    assert!(
+        backend.get_cached_tool("kept_tool").is_some(),
+        "an un-revoked fill's tool schema is not resolvable"
+    );
+}
