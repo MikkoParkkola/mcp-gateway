@@ -271,7 +271,7 @@ CASES = [
         # loop stays green because it checks what was signed.
         "sign-loop-drops-the-platform-children",
         "ci.yml",
-        '          for d in "${LIST}" "${AMD64}" "${ARM64}"; do\n'
+        '          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do\n'
         '            cosign sign',
         '          for d in "${LIST}"; do\n            cosign sign',
         CAUGHT,
@@ -315,6 +315,9 @@ CASES = [
         "          LIST: ${{ steps.list.outputs.list }}\n"
         "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
         "          ARM64: ${{ steps.list.outputs.arm64 }}\n"
+        "          LIST_FULL: ${{ steps.list.outputs.list_full }}\n"
+        "          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}\n"
+        "          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}\n"
         "        run: |\n",
         "      - name: Cosign keyless-sign the list and both children\n"
         "        run: |\n          cat <<'YAML'\n          steps:\n          YAML\n",
@@ -612,6 +615,9 @@ CASES = [
         "          LIST: ${{ steps.list.outputs.list }}\n"
         "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
         "          ARM64: ${{ steps.list.outputs.arm64 }}\n"
+        "          LIST_FULL: ${{ steps.list.outputs.list_full }}\n"
+        "          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}\n"
+        "          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}\n"
         "        run: |\n",
         "      - env:\n          NOTE: none\n        run: |\n"
         "          LIST: ${{ steps.list.outputs.list }}\n",
@@ -809,8 +815,8 @@ CASES = [
         # only the step order says the tag existed unsigned first.
         "release-tag-copied-before-signing-as-well",
         "ci.yml",
-        '          echo "published platforms: ${PLATFORMS}"\n',
-        '          echo "published platforms: ${PLATFORMS}"\n'
+        '          echo "${label} platforms: ${platforms}"\n',
+        '          echo "${label} platforms: ${platforms}"\n'
         '          docker buildx imagetools create "${TAGS[@]}" "${IMAGE}@${LIST}"\n',
         CAUGHT,
     ),
@@ -908,6 +914,105 @@ CASES = [
         "ci.yml",
         '        run: scripts/ci/smoke-image.sh'
         ' "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "",
+        CAUGHT,
+    ),
+    (
+        # The variant index built from the base legs. Every gate downstream
+        # reads the index by digest and compares it to itself, so this passes
+        # all of them while `:latest-full` serves the default image.
+        "variant-provenance-index-built-from-the-base-legs",
+        "ci.yml",
+        '            "${IMAGE}@${FULL_AMD64}" "${IMAGE}@${FULL_ARM64}"\n',
+        '            "${IMAGE}@${AMD64}" "${IMAGE}@${ARM64}"\n',
+        CAUGHT,
+    ),
+    (
+        "variant-tags-composed-from-the-base-index",
+        "ci.yml",
+        '          docker buildx imagetools create "${FULL_TAGS[@]}"'
+        ' "${IMAGE}@${LIST_FULL}"\n',
+        '          docker buildx imagetools create "${FULL_TAGS[@]}"'
+        ' "${IMAGE}@${LIST}"\n',
+        CAUGHT,
+    ),
+    (
+        "variant-leg-built-from-the-base-stage",
+        "ci.yml",
+        "            --target runtime-full \\\n",
+        "            --target runtime \\\n",
+        CAUGHT,
+    ),
+    (
+        "variant-digest-recorded-as-the-base-digest",
+        "ci.yml",
+        "          printf '%s' \"${DIGEST_FULL}\" > \"digests/${{ matrix.arch }}-full\"\n",
+        "          printf '%s' \"${DIGEST}\" > \"digests/${{ matrix.arch }}-full\"\n",
+        CAUGHT,
+    ),
+    (
+        # The variant index composed from the base legs. Every gate downstream
+        # reads the index by digest and compares it to itself, so this passes
+        # all of them while `:latest-full` serves the default image.
+        "variant-provenance-index-built-from-the-base-legs",
+        "ci.yml",
+        '            "${IMAGE}@${FULL_AMD64}" "${IMAGE}@${FULL_ARM64}"\n',
+        '            "${IMAGE}@${AMD64}" "${IMAGE}@${ARM64}"\n',
+        CAUGHT,
+    ),
+    (
+        "variant-tags-composed-from-the-base-index",
+        "ci.yml",
+        '          docker buildx imagetools create "${FULL_TAGS[@]}"'
+        ' "${IMAGE}@${LIST_FULL}"\n',
+        '          docker buildx imagetools create "${FULL_TAGS[@]}"'
+        ' "${IMAGE}@${LIST}"\n',
+        CAUGHT,
+    ),
+    (
+        "variant-leg-built-from-the-base-stage",
+        "ci.yml",
+        "            --target runtime-full \\\n",
+        "            --target runtime \\\n",
+        CAUGHT,
+    ),
+    (
+        "variant-digest-recorded-as-the-base-digest",
+        "ci.yml",
+        "          printf '%s' \"${DIGEST_FULL}\" > \"digests/${{ matrix.arch }}-full\"\n",
+        "          printf '%s' \"${DIGEST}\" > \"digests/${{ matrix.arch }}-full\"\n",
+        CAUGHT,
+    ),
+    (
+        "variant-smoke-gate-deleted-from-the-release-publisher",
+        "ci.yml",
+        '        run: scripts/ci/smoke-full-image.sh'
+        ' "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        "",
+        CAUGHT,
+    ),
+    (
+        "variant-smoke-gate-deleted-from-the-branch-publisher",
+        "docker.yml",
+        '        run: scripts/ci/smoke-full-image.sh'
+        ' "${REGISTRY}/mikkoparkkola/mcp-gateway:scan-full"\n',
+        "",
+        CAUGHT,
+    ),
+    (
+        "variant-smoke-gate-turned-into-a-log-line",
+        "ci.yml",
+        '        run: scripts/ci/smoke-full-image.sh'
+        ' "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        '        continue-on-error: true\n'
+        '        run: scripts/ci/smoke-full-image.sh'
+        ' "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"\n',
+        CAUGHT,
+    ),
+    (
+        "release-publisher-builds-an-untargeted-image",
+        "ci.yml",
+        "          target: runtime\n",
         "",
         CAUGHT,
     ),
