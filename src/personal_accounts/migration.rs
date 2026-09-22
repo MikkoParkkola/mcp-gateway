@@ -38,10 +38,6 @@ use crate::oauth::TokenInfo;
 /// `lib test` compile unit, where the test-tree caller already makes
 /// `dead_code` not fire -- a bare `expect` would itself become an
 /// `unfulfilled_lint_expectations` error under `--all-targets`.
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 entry point not yet landed")
-)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(in crate::personal_accounts) enum RecordRefusal {
     /// The record carries no access token, so there is nothing to migrate.
@@ -76,10 +72,6 @@ pub(in crate::personal_accounts) enum RecordRefusal {
 /// seed is chosen to satisfy `validate_record` (`storage.rs:127-145`), and the
 /// two rules that are decisions rather than copies are `expires_at` and
 /// `scopes`.
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 entry point not yet landed")
-)]
 pub(in crate::personal_accounts) fn grant_from_legacy(
     token: &TokenInfo,
     descriptor_scopes: Option<&[String]>,

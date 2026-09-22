@@ -39,10 +39,6 @@ const DOMAIN: &[u8] = b"mcp-gateway/descriptor-revision/v1";
 /// resolved: `config.rs:272-274` keeps it a reference precisely so no secret is
 /// materialised into a serialized or `Debug`-rendered configuration, and
 /// hashing a resolved value would undo that.
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(dead_code, reason = "MIK-6744.STORE.1 entry point not yet landed")
-)]
 pub(super) fn descriptor_revision(descriptor: &AccountDescriptor) -> Result<String, AccountError> {
     // `Option` fields encode as a presence marker plus the value, so "declared
     // empty" and "not declared" are different bytes. A bare `unwrap_or("")`

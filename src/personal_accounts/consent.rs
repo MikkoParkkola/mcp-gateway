@@ -60,18 +60,9 @@ impl PersonalAccountStore {
     /// The comparison and the publication run under ONE acquisition of the
     /// authority lock, which is the entire point: between two of them, a
     /// competing grant or revoke lands and is lost.
-    // MIK-6744.STORE.1: guarded-commit is built and unit-tested but has no
-    // caller outside its own #[cfg(test)] tree until the consent-commit
-    // journey wires it in. `expect` (not `allow`) so this self-deletes the
-    // moment production wiring adds a real caller; `cfg_attr(not(test), ..)`
-    // keeps the expectation out of the `lib test` compile unit, where the
-    // test-tree caller already makes the lint fire (dead_code would not fire
-    // there, so a bare `expect` would itself become an `unfulfilled_lint_expectations`
-    // error under `--all-targets`).
-    #[cfg_attr(
-        all(not(test), not(kani)),
-        expect(dead_code, reason = "MIK-6744.STORE.1")
-    )]
+    // The dead-code expectation this carried has self-deleted, which is what
+    // `expect` rather than `allow` was for: MIK-6744.STORE.1's 3.x credential
+    // migration is the production caller it was waiting for.
     pub(crate) fn commit_grant_if_unchanged(
         &self,
         account: &AccountKey,
