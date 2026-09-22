@@ -16,12 +16,15 @@
 //! fail for the right reason is not evidence.
 //!
 //! RED AT `cfea18b8` — expected failures before implementation:
-//!   * `f4a_declared_label_must_not_satisfy_known_agents`
-//!   * `f4b_declared_label_must_not_satisfy_require_id`
-//!   * `f3_unsigned_bearer_must_not_be_proven`
+//!
+//! * `f4a_declared_label_must_not_satisfy_known_agents`
+//! * `f4b_declared_label_must_not_satisfy_require_id`
+//! * `f3_unsigned_bearer_must_not_be_proven`
+//!
 //! Green at `cfea18b8` and must stay green (controls):
-//!   * `f4_control_anonymous_caller_is_still_accepted`
-//!   * `f3_control_extraction_ignores_a_token_without_the_claim`
+//!
+//! * `f4_control_anonymous_caller_is_still_accepted`
+//! * `f3_control_extraction_ignores_a_token_without_the_claim`
 
 use mcp_gateway::security::{
     AgentIdentity, AgentIdentityConfig, extract_agent_identity, validate_agent_identity,

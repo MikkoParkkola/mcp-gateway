@@ -1471,7 +1471,10 @@ async fn meta_mcp_dispatch(
             // separate fields on `MetaMcpCallerContext` and
             // `TaskIntentRequest`; until those carry both, authorization
             // correctness wins the single field.
-            let agent_id = agent_identity.proven_id();
+            let agent_id = agent_identity.proven_agent_id();
+            // Audit and cost attribution read the caller's own tag. It travels
+            // beside the proven principal, never instead of it.
+            let agent_declared = agent_identity.declared_agent_label();
             let grant_subject = caller_grant_subject(
                 verified_identity.as_ref(),
                 &headers,
@@ -1621,6 +1624,7 @@ async fn meta_mcp_dispatch(
                 authorizer: &router_authorizer,
                 api_key_name,
                 agent_id,
+                agent_declared,
                 grant_subject,
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
@@ -1928,7 +1932,7 @@ async fn meta_mcp_dispatch(
                     // authorization only", and `signing: None` keeps
                     // `check_invocation_policy` running on this read. So it
                     // reads the proven principal, never the declared label.
-                    agent_id: agent_identity.proven_id(),
+                    agent_id: agent_identity.proven_agent_id(),
                     grant_subject: caller_grant_subject(
                         verified_identity.as_ref(),
                         &headers,

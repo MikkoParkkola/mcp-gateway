@@ -2695,6 +2695,7 @@ async fn run_step_with_identity(
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: client.admin,
@@ -2912,6 +2913,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
@@ -3335,6 +3337,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
@@ -3791,7 +3794,7 @@ async fn direct_route_rejects_a_missing_agent_id_when_require_id_is_set() {
         require_id: true,
         known_agents: vec![],
         ..Default::default()
-        })
+    })
     .await;
     let response = create_router(state)
         .oneshot(direct_route_call(None))
@@ -3823,7 +3826,7 @@ async fn direct_route_rejects_an_agent_outside_the_allowlist() {
         require_id: true,
         known_agents: vec!["known-agent".to_string()],
         ..Default::default()
-        })
+    })
     .await;
     let response = create_router(state)
         .oneshot(direct_route_call_proven("stranger", None))
@@ -3857,7 +3860,7 @@ async fn direct_route_rejects_an_unlisted_agent_even_when_id_is_optional() {
         require_id: false,
         known_agents: vec!["known-agent".to_string()],
         ..Default::default()
-        })
+    })
     .await;
     let response = create_router(state)
         .oneshot(direct_route_call_proven("stranger", None))
@@ -3880,7 +3883,7 @@ async fn direct_route_admits_an_absent_agent_id_when_it_is_optional() {
         require_id: false,
         known_agents: vec!["known-agent".to_string()],
         ..Default::default()
-        })
+    })
     .await;
     let response = create_router(state)
         .oneshot(direct_route_call(None))
@@ -3944,7 +3947,7 @@ async fn direct_route_admits_an_allowlisted_agent() {
         require_id: true,
         known_agents: vec!["known-agent".to_string()],
         ..Default::default()
-        })
+    })
     .await;
     let response = create_router(state)
         .oneshot(direct_route_call_proven("known-agent", None))

@@ -193,11 +193,125 @@ impl std::fmt::Display for DeclaredSource {
     }
 }
 
+/// An agent id that authorization is permitted to read.
+///
+/// The inner field is private and there is **no public constructor**, so a
+/// value of this type can only be obtained from
+/// [`AgentIdentity::proven_agent_id`] — which returns one only when a principal
+/// was cryptographically established. A caller-supplied string cannot be turned
+/// into one anywhere outside this module.
+///
+/// That is the whole point, and it is deliberately stronger than a field name.
+/// Two `Option<&str>` fields called `proven` and `declared` would leave the
+/// wrong value perfectly representable at every call site: the compiler would
+/// not care which one was passed, and a type carrying a distinction nothing
+/// enforces is documentation that reads as a guarantee. Passing a declared
+/// label where authorization is expected must **fail to compile**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProvenAgentId<'a>(&'a str);
+
+impl<'a> ProvenAgentId<'a> {
+    /// The underlying identifier, for comparison and audit.
+    #[must_use]
+    pub fn as_str(self) -> &'a str {
+        self.0
+    }
+
+    /// Build one directly, for fixtures only.
+    ///
+    /// `#[cfg(test)]`, so it does not exist in a production build and cannot
+    /// become the escape hatch that re-opens the conflation. The compile-time
+    /// guarantee is checked against a non-test build (`cargo check --lib`),
+    /// where this constructor is absent.
+    #[cfg(test)]
+    pub(crate) fn for_test(id: &'a str) -> Self {
+        Self(id)
+    }
+}
+
+impl std::fmt::Display for ProvenAgentId<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+/// An owned [`ProvenAgentId`], for a caller snapshot that outlives its request.
+///
+/// The durable task worker rebuilds a caller context after the request is gone,
+/// so it needs an owned copy. Storing a bare `String` there would have thrown
+/// away the guarantee one dispatch later — the longest-lived copy of the caller
+/// is exactly where the conflation used to survive.
+///
+/// The only constructor is [`From<ProvenAgentId>`], so an owned proven id can
+/// still only originate from a principal that was actually proven.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedProvenAgentId(String);
+
+impl From<ProvenAgentId<'_>> for OwnedProvenAgentId {
+    fn from(id: ProvenAgentId<'_>) -> Self {
+        Self(id.as_str().to_string())
+    }
+}
+
+impl OwnedProvenAgentId {
+    /// Borrow it back as the authorization-bearing type.
+    #[must_use]
+    pub fn as_proven(&self) -> ProvenAgentId<'_> {
+        ProvenAgentId(&self.0)
+    }
+
+    /// The underlying identifier, for audit.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A caller-supplied agent tag. Telemetry and cost attribution only.
+///
+/// Distinct from [`ProvenAgentId`] so the two cannot be interchanged by
+/// accident. There is no conversion into `ProvenAgentId`, by design: that
+/// conversion is exactly the defect this criterion removes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeclaredAgentLabel<'a>(&'a str);
+
+impl<'a> DeclaredAgentLabel<'a> {
+    /// The underlying tag, for attribution and audit.
+    #[must_use]
+    pub fn as_str(self) -> &'a str {
+        self.0
+    }
+}
+
+impl std::fmt::Display for DeclaredAgentLabel<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
 impl AgentIdentity {
     /// The id authorization is allowed to read, if any.
     #[must_use]
     pub fn proven_id(&self) -> Option<&str> {
         self.proven.as_ref().map(|p| p.id.as_str())
+    }
+
+    /// The authorization-bearing id, in the type that authorization consumes.
+    ///
+    /// The only way to obtain a [`ProvenAgentId`]. Anything downstream that
+    /// makes an access decision takes this type, so handing it a caller-supplied
+    /// label is a compile error rather than a code-review catch.
+    #[must_use]
+    pub fn proven_agent_id(&self) -> Option<ProvenAgentId<'_>> {
+        self.proven.as_ref().map(|p| ProvenAgentId(p.id.as_str()))
+    }
+
+    /// The caller-supplied tag, in the type that attribution consumes.
+    #[must_use]
+    pub fn declared_agent_label(&self) -> Option<DeclaredAgentLabel<'_>> {
+        self.declared
+            .as_ref()
+            .map(|d| DeclaredAgentLabel(d.id.as_str()))
     }
 
     /// The caller-supplied tag, for attribution and tracing only.
@@ -454,7 +568,7 @@ fn check_declared_label(
         .principal_labels
         .iter()
         .find(|entry| entry.id == proven.id)
-        .is_some_and(|entry| entry.labels.iter().any(|l| *l == declared.id));
+        .is_some_and(|entry| entry.labels.contains(&declared.id));
     if permitted {
         return Ok(IdentityAudit::Clean);
     }
@@ -477,7 +591,6 @@ fn extract_from_header(headers: &axum::http::HeaderMap) -> Option<String> {
         .filter(|s| !s.is_empty())
         .map(String::from)
 }
-
 
 fn extract_from_query(query: &str) -> Option<String> {
     query
@@ -533,11 +646,7 @@ fn hex_digit(b: u8) -> Option<u8> {
 /// is the path an attacker is least likely to be on.
 ///
 /// Shared by both dispatch routes so the field set cannot drift between them.
-pub fn log_agent_identity(
-    identity: &AgentIdentity,
-    audit: IdentityAudit,
-    refusal: Option<&str>,
-) {
+pub fn log_agent_identity(identity: &AgentIdentity, audit: IdentityAudit, refusal: Option<&str>) {
     let proven = identity.proven_id();
     let proof = identity.proven.as_ref().map(|p| p.proof.to_string());
     let secondary = identity.secondary_proof.as_ref().map(|p| p.id.as_str());
@@ -595,7 +704,6 @@ pub fn log_agent_identity(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-
 #[cfg(test)]
 mod tests {
     use axum::http::HeaderMap;
@@ -646,9 +754,13 @@ mod tests {
     /// principal.
     #[test]
     fn header_yields_a_declared_label_and_no_proof() {
-        let identity = extract_agent_identity(&header("x-agent-id", "agent-abc-123"), None, None, None);
+        let identity =
+            extract_agent_identity(&header("x-agent-id", "agent-abc-123"), None, None, None);
         assert_eq!(identity.declared_id(), Some("agent-abc-123"));
-        assert_eq!(identity.declared.as_ref().map(|d| d.source), Some(DeclaredSource::Header));
+        assert_eq!(
+            identity.declared.as_ref().map(|d| d.source),
+            Some(DeclaredSource::Header)
+        );
         assert!(
             identity.proven.is_none(),
             "a header must never produce a proven principal"
@@ -665,8 +777,12 @@ mod tests {
     /// Anchor: funded change 1.
     #[test]
     fn query_param_yields_a_declared_label() {
-        let identity =
-            extract_agent_identity(&HeaderMap::new(), Some("agent_id=agent-q1&other=v"), None, None);
+        let identity = extract_agent_identity(
+            &HeaderMap::new(),
+            Some("agent_id=agent-q1&other=v"),
+            None,
+            None,
+        );
         assert_eq!(identity.declared_id(), Some("agent-q1"));
         assert_eq!(
             identity.declared.as_ref().map(|d| d.source),
@@ -738,7 +854,10 @@ mod tests {
     fn mtls_selects_the_first_san_uri() {
         let c = cert(&["spiffe://cluster/ns/agents/sa/runner"], Some("runner"));
         let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&c), None);
-        assert_eq!(identity.proven_id(), Some("spiffe://cluster/ns/agents/sa/runner"));
+        assert_eq!(
+            identity.proven_id(),
+            Some("spiffe://cluster/ns/agents/sa/runner")
+        );
         assert_eq!(
             identity.proven.as_ref().map(|p| p.proof),
             Some(ProofSource::MutualTls)
@@ -748,8 +867,12 @@ mod tests {
     /// Anchor: the selection rule. CN is the fallback, not the first choice.
     #[test]
     fn mtls_falls_back_to_the_common_name() {
-        let identity =
-            extract_agent_identity(&HeaderMap::new(), None, Some(&cert(&[], Some("runner"))), None);
+        let identity = extract_agent_identity(
+            &HeaderMap::new(),
+            None,
+            Some(&cert(&[], Some("runner"))),
+            None,
+        );
         assert_eq!(identity.proven_id(), Some("runner"));
     }
 
@@ -759,7 +882,8 @@ mod tests {
     /// allowlist key.
     #[test]
     fn an_unnameable_certificate_is_not_a_principal() {
-        let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&cert(&[], None)), None);
+        let identity =
+            extract_agent_identity(&HeaderMap::new(), None, Some(&cert(&[], None)), None);
         assert!(
             identity.proven.is_none(),
             "a certificate with no SAN URI and no CN produced a principal, which \
@@ -815,7 +939,8 @@ mod tests {
     #[test]
     fn require_id_refuses_a_caller_that_proved_nothing() {
         let identity = AgentIdentity::default();
-        validate_agent_identity(&identity, &cfg(true, true, &[])).expect_err("require_id accepted nothing");
+        validate_agent_identity(&identity, &cfg(true, true, &[]))
+            .expect_err("require_id accepted nothing");
     }
 
     /// **INVERTED, NOT PORTED.** The original
@@ -833,7 +958,10 @@ mod tests {
         let identity = extract_agent_identity(&header("x-agent-id", "any-agent"), None, None, None);
         let reason = validate_agent_identity(&identity, &cfg(true, true, &[]))
             .expect_err("a declared label satisfied require_id under an empty allowlist");
-        assert!(reason.contains("any-agent"), "refusal must name the label: {reason}");
+        assert!(
+            reason.contains("any-agent"),
+            "refusal must name the label: {reason}"
+        );
     }
 
     /// **INVERTED, NOT PORTED.** The original
@@ -848,7 +976,8 @@ mod tests {
     /// not a control.
     #[test]
     fn a_declared_label_never_satisfies_the_allowlist() {
-        let identity = extract_agent_identity(&header("x-agent-id", "agent-allowed"), None, None, None);
+        let identity =
+            extract_agent_identity(&header("x-agent-id", "agent-allowed"), None, None, None);
         let reason = validate_agent_identity(&identity, &cfg(true, false, &["agent-allowed"]))
             .expect_err("a declared label satisfied known_agents");
         assert!(
@@ -909,21 +1038,31 @@ mod tests {
     /// mapped set is a contradiction.
     #[test]
     fn a_mapped_principal_may_not_exceed_its_label_set() {
-        let identity = with_label(proven("svc-a", ProofSource::VerifiedJwtSubject), "invoicing");
+        let identity = with_label(
+            proven("svc-a", ProofSource::VerifiedJwtSubject),
+            "invoicing",
+        );
         let mut config = cfg(true, true, &[]);
         config.principal_labels = vec![PrincipalLabels {
             id: "svc-a".to_string(),
             labels: vec!["billing".to_string()],
         }];
-        let reason = validate_agent_identity(&identity, &config).expect_err("contradiction accepted");
-        assert!(reason.contains("invoicing") && reason.contains("svc-a"), "{reason}");
+        let reason =
+            validate_agent_identity(&identity, &config).expect_err("contradiction accepted");
+        assert!(
+            reason.contains("invoicing") && reason.contains("svc-a"),
+            "{reason}"
+        );
     }
 
     /// Anchor: RULING 3's default. No entry means the principal may declare
     /// only its own name; a differing label is never read as "incomparable".
     #[test]
     fn an_unmapped_jwt_principal_refuses_a_differing_label() {
-        let identity = with_label(proven("svc-c", ProofSource::VerifiedJwtSubject), "something-else");
+        let identity = with_label(
+            proven("svc-c", ProofSource::VerifiedJwtSubject),
+            "something-else",
+        );
         validate_agent_identity(&identity, &cfg(true, true, &[]))
             .expect_err("a missing mapping was read as permission");
     }
@@ -943,11 +1082,15 @@ mod tests {
     #[test]
     fn an_mtls_mismatch_is_audited_not_refused() {
         let identity = with_label(
-            proven("spiffe://cluster/ns/agents/sa/runner", ProofSource::MutualTls),
+            proven(
+                "spiffe://cluster/ns/agents/sa/runner",
+                ProofSource::MutualTls,
+            ),
             "runner",
         );
         assert_eq!(
-            validate_agent_identity(&identity, &cfg(true, true, &[])).expect("mTLS mismatch refused"),
+            validate_agent_identity(&identity, &cfg(true, true, &[]))
+                .expect("mTLS mismatch refused"),
             IdentityAudit::DeclaredLabelMismatch,
             "the mismatch was accepted but not signalled"
         );
@@ -958,7 +1101,8 @@ mod tests {
     /// Anchor: the operator ruling's migration clause.
     #[test]
     fn the_hatch_restores_declared_only_matching() {
-        let identity = extract_agent_identity(&header("x-agent-id", "agent-allowed"), None, None, None);
+        let identity =
+            extract_agent_identity(&header("x-agent-id", "agent-allowed"), None, None, None);
         let mut config = cfg(true, true, &["agent-allowed"]);
         config.allow_unverified_agent_identity = true;
         assert!(validate_agent_identity(&identity, &config).is_ok());
@@ -993,7 +1137,7 @@ mod tests {
                 chunk.get(2).copied().unwrap_or(0),
             ];
             let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-            for i in 0..chunk.len() + 1 {
+            for i in 0..=chunk.len() {
                 out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 0x3F) as usize]));
             }
         }

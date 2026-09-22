@@ -96,6 +96,7 @@ pub(in crate::gateway::meta_mcp) fn ctx(
         authorizer,
         api_key_name: Some("test-caller"),
         agent_id: None,
+        agent_declared: None,
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
