@@ -127,19 +127,25 @@ impl std::fmt::Debug for PropagatedCredential {
 /// are fail-closed for a propagation-required backend; the distinction is for
 /// diagnostics, not for any silent-downgrade path.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PropagationError {
     /// A per-user credential could not be obtained for this identity/backend.
     /// The call MUST be refused — never downgraded to a shared credential.
     Refuse(String),
+    /// The store ANSWERED "absent": no grant exists for this principal and
+    /// backend. Separate from [`Self::Refuse`] so the `idp_refuse` audit record
+    /// can tell absence from revocation from a busy custody, which used to
+    /// arrive as one string. Not an offer — no consent URL and no promised
+    /// flow (ADR-008 Slice C, MIK-6745).
+    AccountNotConnected(String),
     /// The propagation configuration is invalid (operator error).
     Misconfigured(String),
     /// The tamper-evident transparency-log audit write failed.
     ///
     /// Fail-closed hardening (operator decision, regulated-buyer posture): a
     /// minted credential MUST NOT be used when its `idp_mint` audit record
-    /// could not be durably written, so callers on the mint path treat this
-    /// as fatal and abort the request. See
-    /// [`audit_identity_propagation`] for the full contract.
+    /// could not be durably written, so the mint path treats this as fatal.
+    /// See [`audit_identity_propagation`] for the full contract.
     AuditFailed(String),
 }
 
@@ -147,6 +153,7 @@ impl std::fmt::Display for PropagationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Refuse(m) => write!(f, "identity propagation refused (fail-closed): {m}"),
+            Self::AccountNotConnected(m) => write!(f, "no connected account (fail-closed): {m}"),
             Self::Misconfigured(m) => write!(f, "identity propagation misconfigured: {m}"),
             Self::AuditFailed(m) => write!(
                 f,
@@ -534,22 +541,15 @@ pub(crate) fn audit_subject(verified_identity: Option<&VerifiedIdentity>) -> Str
 /// [`crate::security::TransparencyLogger::append_event`] — never the resolved
 /// credential header value or a raw assertion.
 ///
-/// ponytail: audit was previously best-effort for every action — a write
-/// failure was `warn!`'d and the caller's request proceeded/failed on its own
-/// merits, mirroring how `TransparencyLogger::log_invocation` failures are
-/// handled elsewhere in the gateway. Hardened for regulated-buyer posture: a
-/// minted credential MUST NOT go on the wire without a durable audit record,
-/// so a write failure now returns `Err(PropagationError::AuditFailed)` in
-/// addition to the `warn!`.
+/// ponytail: hardened from best-effort for regulated-buyer posture — a write
+/// failure now returns `Err(PropagationError::AuditFailed)` as well as
+/// `warn!`ing, so a minted credential cannot reach the wire unaudited.
 ///
 /// - **`idp_mint` callers MUST fail-closed**: propagate the `Err` and abort
 ///   the mint/request. No mint without a durable audit record.
 /// - **`idp_refuse` callers**: the request is already being refused on other
 ///   grounds, so the `Err` does not need to change the outcome, but MUST NOT
 ///   be silently dropped (log or propagate as fits the call site).
-///
-/// `logger = None` (transparency log disabled) is `Ok(())` — a no-op, not a
-/// failure.
 ///
 /// # Errors
 /// [`PropagationError::AuditFailed`] when
