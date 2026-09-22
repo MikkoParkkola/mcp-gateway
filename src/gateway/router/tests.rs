@@ -3790,7 +3790,8 @@ async fn direct_route_rejects_a_missing_agent_id_when_require_id_is_set() {
         enabled: true,
         require_id: true,
         known_agents: vec![],
-    })
+        ..Default::default()
+        })
     .await;
     let response = create_router(state)
         .oneshot(direct_route_call(None))
@@ -3821,7 +3822,8 @@ async fn direct_route_rejects_an_agent_outside_the_allowlist() {
         enabled: true,
         require_id: true,
         known_agents: vec!["known-agent".to_string()],
-    })
+        ..Default::default()
+        })
     .await;
     let response = create_router(state)
         .oneshot(direct_route_call(Some("stranger")))
@@ -3854,7 +3856,8 @@ async fn direct_route_rejects_an_unlisted_agent_even_when_id_is_optional() {
         enabled: true,
         require_id: false,
         known_agents: vec!["known-agent".to_string()],
-    })
+        ..Default::default()
+        })
     .await;
     let response = create_router(state)
         .oneshot(direct_route_call(Some("stranger")))
@@ -3876,7 +3879,8 @@ async fn direct_route_admits_an_absent_agent_id_when_it_is_optional() {
         enabled: true,
         require_id: false,
         known_agents: vec!["known-agent".to_string()],
-    })
+        ..Default::default()
+        })
     .await;
     let response = create_router(state)
         .oneshot(direct_route_call(None))
@@ -3894,7 +3898,8 @@ async fn direct_route_admits_an_allowlisted_agent() {
         enabled: true,
         require_id: true,
         known_agents: vec!["known-agent".to_string()],
-    })
+        ..Default::default()
+        })
     .await;
     let response = create_router(state)
         .oneshot(direct_route_call(Some("known-agent")))
