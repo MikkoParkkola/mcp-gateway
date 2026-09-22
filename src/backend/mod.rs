@@ -250,3 +250,7 @@ mod resend_isolation_tests;
 #[cfg(test)]
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
+
+#[cfg(test)]
+#[path = "grant_reload_eviction_tests.rs"]
+mod grant_reload_eviction_tests;

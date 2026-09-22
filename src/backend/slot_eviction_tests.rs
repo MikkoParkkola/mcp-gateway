@@ -8,6 +8,14 @@
 //! `identity_propagation/token_exchange.rs` and C7/C8/C10a/C10b beside
 //! `cache_binding`, because both depend on private functions there.
 //!
+//! T9 of `docs/internal/design/2026-09-22-live-identity-grant-reload.md` §3 —
+//! the cell that COMPOSES the two designs, driving the reload trigger and
+//! observing THESE slots — sits in the sibling `grant_reload_eviction_tests`.
+//! A separate file only because this one is at the 800-line ceiling; it reuses
+//! the fixtures below through `pub(super)` rather than restating them, since a
+//! second copy of `binding_and_prefix` could not observe the two sides
+//! diverging, which is the whole point of that cell.
+//!
 //! TWO HARNESS RULES, both load-bearing (§3.1).
 //!
 //! Rule 1 — no absence assertion uses a cache accessor.
@@ -82,7 +90,7 @@ fn tool(name: &str) -> Tool {
 /// The counter is what makes C2's "B did not refetch" a positive assertion
 /// rather than an absence, and what makes C1/C3's "the read reached the
 /// backend" observable at all.
-struct CountingUpstream {
+pub(super) struct CountingUpstream {
     fills: AtomicUsize,
     revoked: AtomicBool,
     closed: AtomicBool,
@@ -97,13 +105,13 @@ impl CountingUpstream {
         })
     }
 
-    fn fills(&self) -> usize {
+    pub(super) fn fills(&self) -> usize {
         self.fills.load(Ordering::SeqCst)
     }
 
     /// Flip the upstream to the post-revocation catalogue. A slot that still
     /// answers `BEFORE` after this is serving bytes fetched under the old grant.
-    fn revoke(&self) {
+    pub(super) fn revoke(&self) {
         self.revoked.store(true, Ordering::SeqCst);
     }
 
@@ -171,7 +179,7 @@ impl Transport for CountingUpstream {
     }
 }
 
-fn per_user_backend(name: &str) -> Arc<Backend> {
+pub(super) fn per_user_backend(name: &str) -> Arc<Backend> {
     Arc::new(Backend::new(
         name,
         BackendConfig {
@@ -190,8 +198,8 @@ fn per_user_backend(name: &str) -> Arc<Backend> {
     ))
 }
 
-const AUDIENCE: &str = "https://ledger.internal";
-const ISSUER: &str = "https://idp.example";
+pub(super) const AUDIENCE: &str = "https://ledger.internal";
+pub(super) const ISSUER: &str = "https://idp.example";
 
 fn identity(subject: &str) -> VerifiedIdentity {
     VerifiedIdentity {
@@ -208,7 +216,7 @@ fn identity(subject: &str) -> VerifiedIdentity {
 ///
 /// `audience` is a parameter because C2 and C9 need two bindings that differ
 /// only in audience, and because the prefix must match across all of them.
-async fn binding_and_prefix(subject: &str, audience: &str) -> (String, String) {
+pub(super) async fn binding_and_prefix(subject: &str, audience: &str) -> (String, String) {
     let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     let strategy = SignedAssertionStrategy::new(key, 300);
     let descriptor = crate::identity_propagation::BackendDescriptor {
@@ -231,7 +239,7 @@ async fn binding_and_prefix(subject: &str, audience: &str) -> (String, String) {
     (credential.cache_binding, prefix)
 }
 
-fn slot(binding: &str) -> PoolKey {
+pub(super) fn slot(binding: &str) -> PoolKey {
     PoolKey::PerUser {
         binding: binding.to_string(),
     }
@@ -241,7 +249,7 @@ fn slot(binding: &str) -> PoolKey {
 ///
 /// Returns after asserting nothing: the PREMISE assertion belongs in the
 /// cell's own body (Rule 2), so this helper deliberately does not make it.
-async fn fill_slot(backend: &Backend, binding: &str) -> Arc<CountingUpstream> {
+pub(super) async fn fill_slot(backend: &Backend, binding: &str) -> Arc<CountingUpstream> {
     let upstream = CountingUpstream::new();
     backend
         .set_pooled_transport_for_test(&slot(binding), Arc::clone(&upstream) as Arc<dyn Transport>);
