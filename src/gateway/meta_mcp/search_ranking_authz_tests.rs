@@ -153,7 +153,7 @@ async fn denied_backend_never_enters_the_candidate_set() {
     .await;
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY }), None)
+        .search_tools_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 
@@ -188,7 +188,7 @@ async fn permissive_profile_sees_the_same_capabilities() {
     .await;
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY }), None)
+        .search_tools_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 
@@ -238,7 +238,7 @@ async fn code_mode_denied_backend_contributes_no_matches() {
     meta.set_capabilities(cap_backend);
 
     let response = meta
-        .code_mode_search(&json!({ "query": QUERY }), None)
+        .code_mode_search_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 
@@ -275,7 +275,7 @@ async fn high_scoring_match_beyond_the_limit_survives_truncation() {
     .await;
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY, "limit": 1 }), None)
+        .search_tools_anon(&json!({ "query": QUERY, "limit": 1 }), None)
         .await
         .unwrap();
 
@@ -378,7 +378,7 @@ async fn usage_feedback_cannot_surface_an_irrelevant_tool() {
     .await;
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY }), None)
+        .search_tools_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 
@@ -418,7 +418,7 @@ async fn usage_feedback_cannot_promote_a_forbidden_tool() {
     .await;
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY }), None)
+        .search_tools_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 
@@ -461,7 +461,7 @@ async fn code_mode_ranks_before_truncating() {
     meta.set_capabilities(cap_backend);
 
     let response = meta
-        .code_mode_search(&json!({ "query": QUERY, "limit": 1 }), None)
+        .code_mode_search_anon(&json!({ "query": QUERY, "limit": 1 }), None)
         .await
         .unwrap();
 
@@ -551,7 +551,7 @@ async fn heavy_usage_outranks_the_exact_match_when_nothing_is_denied() {
     .await;
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY, "limit": 1 }), None)
+        .search_tools_anon(&json!({ "query": QUERY, "limit": 1 }), None)
         .await
         .unwrap();
 
@@ -579,7 +579,7 @@ async fn a_forbidden_heavily_used_tool_loses_to_an_allowed_relevant_one() {
     .await;
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY, "limit": 1 }), None)
+        .search_tools_anon(&json!({ "query": QUERY, "limit": 1 }), None)
         .await
         .unwrap();
 
@@ -610,7 +610,7 @@ async fn code_mode_forbidden_heavily_used_tool_loses_to_an_allowed_one() {
     meta.set_capabilities(cap_backend);
 
     let response = meta
-        .code_mode_search(&json!({ "query": QUERY, "limit": 1 }), None)
+        .code_mode_search_anon(&json!({ "query": QUERY, "limit": 1 }), None)
         .await
         .unwrap();
 
@@ -658,7 +658,7 @@ async fn a_zero_relevance_candidate_cannot_be_lifted_by_usage() {
     meta.set_capabilities(cap_backend);
 
     let all = meta
-        .code_mode_search(&json!({ "query": QUERY }), None)
+        .code_mode_search_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
     // Guards the assertion below: if the backend-name match stopped admitting
@@ -674,7 +674,7 @@ async fn a_zero_relevance_candidate_cannot_be_lifted_by_usage() {
     );
 
     let response = meta
-        .code_mode_search(&json!({ "query": QUERY, "limit": 1 }), None)
+        .code_mode_search_anon(&json!({ "query": QUERY, "limit": 1 }), None)
         .await
         .unwrap();
 
@@ -820,7 +820,7 @@ async fn permissive_profile_sees_the_mcp_backend_tools() {
     .await;
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY }), None)
+        .search_tools_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 
@@ -859,7 +859,7 @@ async fn denied_mcp_backend_never_enters_the_candidate_set() {
     .await;
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY }), None)
+        .search_tools_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 
@@ -897,7 +897,7 @@ async fn code_mode_denied_mcp_backend_contributes_no_matches() {
     .await;
 
     let response = meta
-        .code_mode_search(&json!({ "query": QUERY }), None)
+        .code_mode_search_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 
@@ -936,7 +936,7 @@ async fn a_forbidden_mcp_tool_loses_to_an_allowed_one() {
     .await;
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY }), None)
+        .search_tools_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 
@@ -982,7 +982,7 @@ async fn code_mode_forbidden_mcp_tool_loses_to_an_allowed_one() {
     .await;
 
     let response = meta
-        .code_mode_search(&json!({ "query": QUERY }), None)
+        .code_mode_search_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 
@@ -1023,7 +1023,7 @@ async fn code_mode_heavy_usage_outranks_the_exact_match_when_nothing_is_denied()
     meta.set_capabilities(cap_backend);
 
     let response = meta
-        .code_mode_search(&json!({ "query": QUERY, "limit": 1 }), None)
+        .code_mode_search_anon(&json!({ "query": QUERY, "limit": 1 }), None)
         .await
         .unwrap();
 
@@ -1054,7 +1054,7 @@ async fn code_mode_usage_reorders_these_fixtures_on_a_keyword_query() {
     let (meta, _dirs) = glob_fixture_meta().await;
 
     let response = meta
-        .code_mode_search(&json!({ "query": QUERY, "limit": 1 }), None)
+        .code_mode_search_anon(&json!({ "query": QUERY, "limit": 1 }), None)
         .await
         .unwrap();
 
@@ -1160,7 +1160,7 @@ async fn per_user_backend_tools_are_discoverable() {
     ));
 
     let response = meta
-        .search_tools(&json!({ "query": QUERY }), None)
+        .search_tools_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
 

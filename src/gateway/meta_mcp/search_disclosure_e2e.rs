@@ -199,11 +199,11 @@ const T5_QUERIES: [&str; 5] = [
 async fn mik_gw_t3_gateway_search_omits_ranking_unless_explain() {
     let meta = catalog_meta().await;
     let hidden = meta
-        .code_mode_search(&json!({ "query": "linear create issue", "limit": 2 }), None)
+        .code_mode_search_anon(&json!({ "query": "linear create issue", "limit": 2 }), None)
         .await
         .unwrap();
     let shown = meta
-        .code_mode_search(
+        .code_mode_search_anon(
             &json!({ "query": "linear create issue", "limit": 2, "explain": true }),
             None,
         )
@@ -218,7 +218,7 @@ async fn mik_gw_t3_gateway_search_omits_ranking_unless_explain() {
 async fn mik_gw_t1_default_is_l0() {
     let meta = catalog_meta().await;
     let result = meta
-        .code_mode_search(&json!({ "query": "linear create issue", "limit": 1 }), None)
+        .code_mode_search_anon(&json!({ "query": "linear create issue", "limit": 1 }), None)
         .await
         .unwrap();
     let hit = &result["matches"][0];
@@ -236,7 +236,7 @@ async fn mik_gw_t1_default_is_l0() {
 async fn mik_gw_t2_detail_and_include_schema_select_tiers() {
     let meta = catalog_meta().await;
     let l1 = meta
-        .code_mode_search(
+        .code_mode_search_anon(
             &json!({ "query": "linear create issue", "limit": 1, "detail": "l1" }),
             None,
         )
@@ -249,7 +249,7 @@ async fn mik_gw_t2_detail_and_include_schema_select_tiers() {
     assert!(l1_hit.get("when_to_use").is_some());
 
     let via_legacy = meta
-        .code_mode_search(
+        .code_mode_search_anon(
             &json!({ "query": "linear create issue", "limit": 1, "include_schema": true }),
             None,
         )
@@ -258,7 +258,7 @@ async fn mik_gw_t2_detail_and_include_schema_select_tiers() {
     assert!(via_legacy["matches"][0].get("input_schema").is_some());
 
     let l2 = meta
-        .code_mode_search(
+        .code_mode_search_anon(
             &json!({ "query": "linear create issue", "limit": 1, "detail": "l2" }),
             None,
         )
@@ -272,11 +272,11 @@ async fn mik_gw_t5_l0_top_tool_matches_legacy_full_for_five_queries() {
     let meta = catalog_meta().await;
     for query in T5_QUERIES {
         let l0 = meta
-            .code_mode_search(&json!({ "query": query, "limit": 3 }), None)
+            .code_mode_search_anon(&json!({ "query": query, "limit": 3 }), None)
             .await
             .unwrap();
         let legacy = meta
-            .code_mode_search(
+            .code_mode_search_anon(
                 &json!({
                     "query": query,
                     "limit": 3,
@@ -313,7 +313,7 @@ async fn mik_gw_t5_l0_top_tool_matches_legacy_full_for_five_queries() {
 async fn mik_gw_t2_invalid_detail_fails_fast() {
     let meta = catalog_meta().await;
     let err = meta
-        .code_mode_search(&json!({ "query": "linear", "detail": "full" }), None)
+        .code_mode_search_anon(&json!({ "query": "linear", "detail": "full" }), None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("l0|l1|l2"), "{err}");
@@ -662,7 +662,7 @@ async fn mik_7332_discovery_1_disclosure_tiers_agree_with_invocation() {
 
     // --- L0: killed AND denied tools are both absent, for different reasons.
     let l0 = meta
-        .code_mode_search(&json!({ "query": "*_tool", "limit": 10 }), None)
+        .code_mode_search_anon(&json!({ "query": "*_tool", "limit": 10 }), None)
         .await
         .unwrap();
     let l0_names: Vec<&str> = l0["matches"]
@@ -688,7 +688,7 @@ async fn mik_7332_discovery_1_disclosure_tiers_agree_with_invocation() {
     // profile-denied one still does not — proving the two absences are
     // different mechanisms, not the same filter under two names.
     let l1 = meta
-        .code_mode_search(
+        .code_mode_search_anon(
             &json!({ "query": "*_tool", "limit": 10, "detail": "l1" }),
             None,
         )

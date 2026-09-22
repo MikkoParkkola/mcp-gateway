@@ -32,7 +32,11 @@ async fn code_mode_glob_results_are_not_reranked() {
     let (meta, _dirs) = glob_fixture_meta().await;
 
     let response = meta
-        .code_mode_search(&json!({ "query": "zebracorn_*", "limit": 1 }), None)
+        .code_mode_search(
+            &json!({ "query": "zebracorn_*", "limit": 1 }),
+            None,
+            &crate::gateway::meta_mcp::anonymous_caller(),
+        )
         .await
         .unwrap();
 

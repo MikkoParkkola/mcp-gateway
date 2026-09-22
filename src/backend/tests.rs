@@ -12,9 +12,10 @@ use serde_json::{Value, json};
 use tokio::sync::Barrier;
 use tokio::time::sleep;
 
+use super::cached_metadata::CachedMetadata;
 use super::*;
 use crate::config::TransportConfig;
-use crate::protocol::{JsonRpcResponse, RequestId, ToolAnnotations, ToolsListResult};
+use crate::protocol::{JsonRpcResponse, RequestId, Tool, ToolAnnotations, ToolsListResult};
 use crate::transport::Transport;
 use crate::{Error, Result};
 

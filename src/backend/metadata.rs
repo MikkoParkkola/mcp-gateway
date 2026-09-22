@@ -12,6 +12,7 @@ use tracing::debug;
 use super::Backend;
 use super::annotations::prepare_tool_metadata;
 use super::cached_metadata::CachedMetadata;
+use super::pool::PoolKey;
 use crate::Error;
 use crate::Result;
 use crate::protocol::{
@@ -20,135 +21,184 @@ use crate::protocol::{
 };
 
 impl Backend {
-    /// Get cached tools (or fetch if needed)
+    /// The tool cache belonging to `binding`'s pool slot.
     ///
-    /// Check if this backend has cached tools (non-blocking).
-    ///
-    /// Returns `true` if tools are cached and the cache hasn't expired.
-    /// Used by `search_tools` to skip unstarted backends.
-    #[must_use]
-    pub fn has_cached_tools(&self) -> bool {
-        self.tools_cache.is_fresh(self.cache_ttl)
+    /// THE ONE PLACE A METADATA CACHE IS SELECTED (MIK-7334.CATALOGUE.1 R3).
+    /// No call site constructs a `PoolKey`: readers name a caller binding and
+    /// this resolves it through `pool_key_for`, the same computation that
+    /// selects the transport. Identity-free readers pass `None` through the
+    /// named `*_shared`-style wrappers below, which is how `Shared` stays
+    /// reachable without any caller spelling a key.
+    fn tools_slot(&self, binding: Option<&str>) -> Arc<super::pool::PooledEntry> {
+        self.pooled_entry(&self.pool_key_for(binding))
     }
 
-    /// Forget the cached tool list so the next fetch reaches the backend.
+    /// Whether `binding`'s slot holds a fresh tool cache (non-blocking).
+    #[must_use]
+    pub fn has_cached_tools_for(&self, binding: Option<&str>) -> bool {
+        self.tools_slot(binding)
+            .tools_cache
+            .is_fresh(self.cache_ttl)
+    }
+
+    /// The shared slot's freshness. Used by readers that hold no caller.
+    #[must_use]
+    pub fn has_cached_tools(&self) -> bool {
+        self.has_cached_tools_for(None)
+    }
+
+    /// Forget the SHARED slot's tool list so the next fetch reaches the backend.
     ///
     /// The one caller that needs this is warm-start reconfirming an EMPTY list.
     /// An empty result is cached with a fresh timestamp like any other, so
     /// without this a retry re-reads the same empty answer and never re-asks.
+    ///
+    /// NOT the revocation hook, and deliberately not reachable as one: it
+    /// discards an empty list only, so routing revocation through it would be a
+    /// silent no-op on every populated cache. Revocation evicts the identity's
+    /// slot, which drops its transport and its caches together.
     pub fn invalidate_tools_cache(&self) {
         // Conditional on purpose: only an EMPTY list is discarded. Clearing
         // unconditionally could erase a tool list another reader populated
         // between the caller observing emptiness and acting on it, which would
         // turn a backend that had just become discoverable back into an
         // invisible one. The check happens under the cache's own write lock.
-        self.tools_cache.invalidate_if(Vec::is_empty);
+        self.tools_slot(None)
+            .tools_cache
+            .invalidate_if(Vec::is_empty);
     }
 
-    /// Return the number of tools in the cache (non-blocking, no network I/O).
+    /// Number of tools cached on `binding`'s slot (non-blocking, no network I/O).
     ///
-    /// Returns `0` when the cache is empty or has never been populated.
-    /// This is intentionally best-effort: it reads whatever is in the cache
-    /// without triggering a refresh, so the count may be stale.
+    /// Returns `0` when that slot's cache is empty or never populated. Stale by
+    /// design: it never triggers a refresh.
     #[must_use]
-    pub fn cached_tools_count(&self) -> usize {
-        self.tools_cache
+    pub fn cached_tools_count_for(&self, binding: Option<&str>) -> usize {
+        self.tools_slot(binding)
+            .tools_cache
             .with_cached(|tools| tools.map_or(0, |tools| tools.len()))
     }
 
-    /// `false` means "unknown", not "empty".
+    /// The shared slot's count.
+    #[must_use]
+    pub fn cached_tools_count(&self) -> usize {
+        self.cached_tools_count_for(None)
+    }
+
+    /// `false` means the shared slot was never populated, not that it is empty.
     #[must_use]
     pub fn cached_tools_known(&self) -> bool {
-        self.tools_cache.ever_populated()
+        self.tools_slot(None).tools_cache.ever_populated()
     }
 
     /// Both under one guard; use wherever the two travel together.
     #[must_use]
     pub fn cached_tools_count_and_known(&self) -> (usize, bool) {
-        self.tools_cache
+        self.tools_slot(None)
+            .tools_cache
             .with_cached_and_populated(|tools, populated| {
                 (tools.map_or(0, |tools| tools.len()), populated)
             })
     }
 
-    /// Return the names of all cached tools (non-blocking, no network I/O).
+    /// Names of the tools cached on `binding`'s slot (non-blocking).
     ///
-    /// Returns an empty `Vec` when the cache is empty or has never been populated.
-    /// Intended for producing "did you mean?" suggestions on unknown tool names.
+    /// Intended for "did you mean?" suggestions, which is exactly why the
+    /// binding is threaded: one caller's tool NAMES surfacing in another
+    /// caller's suggestions is this criterion's leak class arriving through the
+    /// back door while the front door is sealed.
     #[must_use]
-    pub fn get_cached_tool_names(&self) -> Vec<String> {
-        self.tools_cache.with_cached(|tools| {
+    pub fn get_cached_tool_names_for(&self, binding: Option<&str>) -> Vec<String> {
+        self.tools_slot(binding).tools_cache.with_cached(|tools| {
             tools
                 .map(|tools| tools.iter().map(|t| t.name.clone()).collect())
                 .unwrap_or_default()
         })
     }
 
-    /// Return a single tool by exact name from the cache (non-blocking, no network I/O).
-    ///
-    /// Returns `None` when the cache is empty, has never been populated, or does
-    /// not contain a tool with the given name.  Intended for resolving surfaced
-    /// tool schemas at `tools/list` time.
+    /// The shared slot's tool names.
     #[must_use]
-    pub fn get_cached_tool(&self, name: &str) -> Option<Tool> {
-        self.tools_cache.with_cached(|tools| {
+    pub fn get_cached_tool_names(&self) -> Vec<String> {
+        self.get_cached_tool_names_for(None)
+    }
+
+    /// One tool by exact name from `binding`'s slot (non-blocking).
+    #[must_use]
+    pub fn get_cached_tool_for(&self, binding: Option<&str>, name: &str) -> Option<Tool> {
+        self.tools_slot(binding).tools_cache.with_cached(|tools| {
             tools.and_then(|tools| tools.iter().find(|t| t.name == name).cloned())
         })
     }
 
-    /// Return a snapshot of all cached tools (non-blocking, no network I/O).
-    ///
-    /// Returns an empty shared vector when the cache is empty or has never been
-    /// populated. Used by the `spec-preview` filtered `tools/list`
-    /// implementation to avoid cloning the full tool list on every cache hit.
+    /// One tool by exact name from the shared slot.
     #[must_use]
-    pub fn get_cached_tools_snapshot(&self) -> Arc<Vec<Tool>> {
-        self.tools_cache
+    pub fn get_cached_tool(&self, name: &str) -> Option<Tool> {
+        self.get_cached_tool_for(None, name)
+    }
+
+    /// Snapshot of the tools cached on `binding`'s slot (non-blocking).
+    #[must_use]
+    pub fn get_cached_tools_snapshot_for(&self, binding: Option<&str>) -> Arc<Vec<Tool>> {
+        self.tools_slot(binding)
+            .tools_cache
             .snapshot_shared()
             .unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
-    /// NOTE (MIK-7334.CATALOGUE.1): this path is deliberately identity-free.
+    /// Snapshot of the shared slot's tools.
+    #[must_use]
+    pub fn get_cached_tools_snapshot(&self) -> Arc<Vec<Tool>> {
+        self.get_cached_tools_snapshot_for(None)
+    }
+
+    /// Fill or serve one metadata list ON A SPECIFIC POOL SLOT
+    /// (MIK-7334.CATALOGUE.1).
     ///
-    /// The four metadata lists are fetched through `request_internal`, which
-    /// reaches for `shared_transport()` — the single `PoolKey::Shared` slot
-    /// (`pool.rs`) — and passes no caller identity. `pool_key_for` collapses
-    /// every non-`per_user` case to that same key, and the metadata fetch has
-    /// no identity to give it in the first place, so what is cached here is the
-    /// gateway's own static-credential catalogue and never one caller's. The
-    /// direct backend route serves those identical bytes live: it exempts
-    /// `tools/list` from its identity gate (`router/backend_handlers.rs:649`),
-    /// so `identity_key` stays `None` there too.
+    /// THE SLOT IS THE WHOLE POINT. `select` is handed the `PooledEntry` this
+    /// fetch runs over, so the cache written and the transport written from are
+    /// the same `Arc<PooledEntry>` — not two lookups that agree today. The fill
+    /// closure has no way to reach `shared_transport()`, because the transport
+    /// it uses is the one `ensure_entry_started(key)` returned for this slot, so
+    /// a per-user slot cannot be filled with the static-credential answer.
     ///
-    /// A `session_mode = per_user` backend was briefly short-circuited here so
-    /// the shared answer would not be served under a caller's own identity.
-    /// That withheld all four lists from every meta discovery reader — the
-    /// backend surfaced zero tools — while route 1 kept serving the same bytes,
-    /// and it isolated nothing that was not already identity-independent.
-    /// Per-identity catalogues remain unbuilt: delivering them needs a
-    /// per-identity fetch over the caller's own pool slot, which is a mode, not
-    /// a guard.
-    async fn get_cached_list_shared<T, F>(
+    /// `claim_pooled_entry` via `begin_internal_activity_for`, never the
+    /// unclaimed `pooled_entry`: the reaper is otherwise free to remove the slot
+    /// and close the transport mid-fetch (R3).
+    async fn get_cached_list_on<T, S, F>(
         &self,
-        cache: &CachedMetadata<Vec<T>>,
+        key: &PoolKey,
+        select: S,
         method: &str,
         kind: &'static str,
+        extra_headers: &[(String, String)],
         parse: F,
     ) -> Result<Arc<Vec<T>>>
     where
+        S: Fn(&super::pool::PooledEntry) -> &CachedMetadata<Vec<T>>,
         F: Fn(Value) -> Result<Vec<T>>,
     {
-        cache
+        let identity_key = match key {
+            PoolKey::PerUser { binding } => Some(binding.as_str()),
+            PoolKey::Shared => None,
+        };
+        // Resolve the slot ONCE and keep it for both the cache and the fetch.
+        let lease = self.begin_internal_activity_for(key);
+        let entry = Arc::clone(lease.entry());
+        select(&entry)
             .get_or_fetch_shared(self.cache_ttl, || async {
-                // Hold the transport open for the whole fetch WITHOUT claiming
-                // client activity. ensure_started() and request_internal() reach
-                // for the transport separately; without this lease the reaper can
-                // take it in between and the caller sees a spurious
-                // BackendUnavailable for a backend that is perfectly fine.
-                let _lease = self.begin_internal_activity();
-                self.ensure_started().await?;
-
-                let response = self.request_internal(method, None).await?;
+                let transport = self.ensure_entry_started(key).await?;
+                let response = transport
+                    .request_with_headers(
+                        method,
+                        None,
+                        extra_headers,
+                        identity_key,
+                        // A `*/list` is in the side-effect-free allowlist
+                        // (`transport::SIDE_EFFECT_FREE_METHODS`), so a retried
+                        // fetch cannot duplicate an upstream effect.
+                        crate::transport::ResendPermission::Permitted,
+                    )
+                    .await?;
                 if let Some(error) = response.error {
                     return Err(Error::json_rpc(error.code, error.message));
                 }
@@ -158,7 +208,13 @@ impl Backend {
                     Vec::new()
                 };
 
-                debug!(backend = %self.name, kind, count = items.len(), "Backend metadata cached");
+                debug!(
+                    backend = %self.name,
+                    kind,
+                    count = items.len(),
+                    per_user = identity_key.is_some(),
+                    "Backend metadata cached"
+                );
 
                 Ok(items)
             })
@@ -169,13 +225,45 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the tools request fails.
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
-        self.get_cached_list_shared(&self.tools_cache, "tools/list", "tools", |result| {
-            let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
-            // Discovery is where the explicit annotations are still readable,
-            // and it always precedes a `tools/call` (ADR-012 A1).
-            *self.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
-            Ok(tools)
-        })
+        self.get_tools_for_binding(None, &[]).await
+    }
+
+    /// The tool catalogue THIS CALLER's pool slot serves.
+    ///
+    /// `binding` is the caller's `PropagatedCredential::cache_binding`, and
+    /// `pool_key_for` turns it into a slot: `Some(binding)` on a
+    /// `session_mode = per_user` backend selects that identity's own slot;
+    /// everything else collapses to `Shared`, so single-tenant behaviour is
+    /// byte-for-byte unchanged (IDP.5). `extra_headers` are the same minted
+    /// headers the slot's transport was opened with, so the catalogue is fetched
+    /// AS that caller rather than under the gateway's static credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the tools request fails.
+    pub async fn get_tools_for_binding(
+        &self,
+        binding: Option<&str>,
+        extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<Tool>>> {
+        let key = self.pool_key_for(binding);
+        self.get_cached_list_on(
+            &key,
+            |entry| &entry.tools_cache,
+            "tools/list",
+            "tools",
+            extra_headers,
+            |result| {
+                let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
+                // Discovery is where the explicit annotations are still readable,
+                // and it always precedes a `tools/call` (ADR-012 A1). Written to
+                // THIS SLOT's set: a backend-wide one would let one identity's
+                // catalogue decide another identity's retry policy.
+                *self.pooled_entry(&key).resend_permitted.write() =
+                    prepare_tool_metadata(&self.name, &mut tools);
+                Ok(tools)
+            },
+        )
         .await
     }
 
@@ -197,7 +285,7 @@ impl Backend {
         reason = "direct-route caller lands with the resend plumbing"
     )]
     pub(crate) fn set_resend_permitted(&self, permitted: std::collections::HashSet<String>) {
-        *self.resend_permitted.write() = permitted;
+        *self.tools_slot(None).resend_permitted.write() = permitted;
     }
 
     /// Snapshot of the tools currently recorded as explicitly resend-permitted.
@@ -219,7 +307,7 @@ impl Backend {
         reason = "direct-route caller lands with the resend plumbing"
     )]
     pub(crate) fn resend_permitted_snapshot(&self) -> std::collections::HashSet<String> {
-        self.resend_permitted.read().clone()
+        self.tools_slot(None).resend_permitted.read().clone()
     }
 
     /// # Errors
@@ -237,10 +325,12 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the resources request fails.
     pub async fn get_resources_shared(&self) -> Result<Arc<Vec<Resource>>> {
-        self.get_cached_list_shared(
-            &self.resources_cache,
+        self.get_cached_list_on(
+            &PoolKey::Shared,
+            |entry| &entry.resources_cache,
             "resources/list",
             "resources",
+            &[],
             |result| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
         )
         .await
@@ -263,10 +353,12 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the templates request fails.
     pub async fn get_resource_templates_shared(&self) -> Result<Arc<Vec<ResourceTemplate>>> {
-        self.get_cached_list_shared(
-            &self.resource_templates_cache,
+        self.get_cached_list_on(
+            &PoolKey::Shared,
+            |entry| &entry.resource_templates_cache,
             "resources/templates/list",
             "resource_templates",
+            &[],
             |result| {
                 Ok(
                     serde_json::from_value::<ResourcesTemplatesListResult>(result)?
@@ -294,9 +386,14 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the prompts request fails.
     pub async fn get_prompts_shared(&self) -> Result<Arc<Vec<Prompt>>> {
-        self.get_cached_list_shared(&self.prompts_cache, "prompts/list", "prompts", |result| {
-            Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts)
-        })
+        self.get_cached_list_on(
+            &PoolKey::Shared,
+            |entry| &entry.prompts_cache,
+            "prompts/list",
+            "prompts",
+            &[],
+            |result| Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts),
+        )
         .await
     }
 

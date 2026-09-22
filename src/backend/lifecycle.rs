@@ -14,7 +14,6 @@ use reqwest::Client;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
-use super::cached_metadata::CachedMetadata;
 use super::pool::{PoolKey, PooledEntry};
 use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
@@ -155,11 +154,6 @@ impl Backend {
             unserved_consecutive: AtomicU64::new(0),
             unserved_total: AtomicU64::new(0),
             probe_in_flight: std::sync::atomic::AtomicBool::new(false),
-            tools_cache: CachedMetadata::new(),
-            resend_permitted: parking_lot::RwLock::default(),
-            resources_cache: CachedMetadata::new(),
-            resource_templates_cache: CachedMetadata::new(),
-            prompts_cache: CachedMetadata::new(),
             cache_ttl,
             last_used: std::sync::atomic::AtomicU64::new(0),
             semaphore: Semaphore::new(100), // Max concurrent requests

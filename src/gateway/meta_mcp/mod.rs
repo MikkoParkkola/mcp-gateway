@@ -75,6 +75,7 @@ mod chain_interim;
 mod chain_interim_tests;
 mod confirmation;
 mod direct_route;
+mod discovery_fetch;
 mod interim_promotion;
 #[cfg(test)]
 mod interim_promotion_tests;
@@ -1190,6 +1191,70 @@ impl MetaMcp {
             .is_err()
     }
 
+    /// The caller's per-user credential for `server`: headers and cache binding.
+    ///
+    /// ONE resolution per request per backend, returning BOTH halves, because
+    /// the isolation verdict and the slot selection must not disagree about who
+    /// the caller is (design §4.3's residual) — and because resolving twice
+    /// would mint twice.
+    ///
+    /// Returns empty WITHOUT calling the resolver when the caller carries no
+    /// verified identity. That short-circuit is load-bearing, not an
+    /// optimisation: `resolve_propagation_credential` mints over the network and
+    /// writes a durable transparency-log record, and this runs in a loop over
+    /// every registered backend on ordinary discovery. A gateway whose callers
+    /// present no identity — every single-tenant deployment — therefore mints
+    /// nothing and audits nothing, exactly as before.
+    ///
+    /// A resolution failure is empty too, never an error: a caller who cannot
+    /// mint for this backend simply gets no per-user view of it, and the
+    /// identity-free guard then omits it. Discovery must not fail wholesale
+    /// because one backend out of many refused.
+    pub(crate) async fn caller_credential_for(
+        &self,
+        server: &str,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> (Vec<(String, String)>, Option<String>) {
+        if caller.verified_identity.is_none() {
+            return (Vec::new(), None);
+        }
+        self.resolve_propagation_credential(server, caller.verified_identity)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// The credential-aware sibling of [`Self::meta_route_isolation_refused`],
+    /// for the catalogue paths that fetch over the CALLER'S OWN pool slot.
+    ///
+    /// SEPARATE FUNCTION ON PURPOSE (MIK-7334.CATALOGUE.1 R2). A third `bool`
+    /// parameter on the identity-free helper would make all fourteen of its call
+    /// sites editable, and one wrong edit would be invisible in the diff. A site
+    /// opts in by NAME here, so the ten that must keep failing closed are not
+    /// touched by the change at all.
+    ///
+    /// ONLY admissible where the operation AFTER the check runs on the same slot
+    /// the credential selected. `has_per_user_credential = true` does not narrow
+    /// [`Self::enforce_oauth_isolation_for`] — it returns `Ok(())` before any
+    /// isolation arm is evaluated — so calling this at a site that then fetches
+    /// over `shared_transport()` would hand an arbitrary caller the gateway's own
+    /// backend login. `handle_logging_set_level`, `handle_prompts_list`,
+    /// `handle_resources_list` and `find_resource_owner` are exactly that shape
+    /// and keep the identity-free helper.
+    ///
+    /// The emptiness test is copied verbatim from the direct route
+    /// (`gateway::router::backend_handlers`, `enforce_oauth_isolation(&name,
+    /// !propagated_headers.is_empty())`) so the two routes cannot drift on what
+    /// the parameter means: a per-user credential was resolved for THIS backend
+    /// and THIS caller, never "the caller authenticated".
+    pub(crate) fn meta_route_isolation_refused_for_caller(
+        &self,
+        backend: &crate::backend::Backend,
+        propagated_headers: &[(String, String)],
+    ) -> bool {
+        self.enforce_oauth_isolation_for(backend, &backend.name, !propagated_headers.is_empty())
+            .is_err()
+    }
+
     /// Attach a `TransitionTracker` for predictive tool prefetch.
     pub fn set_transition_tracker(&self, tracker: Arc<TransitionTracker>) {
         *self.transition_tracker.write() = Some(tracker);
@@ -2163,11 +2228,11 @@ impl MetaMcp {
         }
 
         let result = match tool_name {
-            "gateway_search" => self.code_mode_search(&arguments, session_id).await,
+            "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
             "gateway_list_servers" => self.list_servers().await,
-            "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
-            "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
+            "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
+            "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
             "gateway_invoke" => self.invoke_tool(&arguments, session_id, caller).await,
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,
@@ -2501,3 +2566,99 @@ mod outbound_log_tests;
 #[cfg(test)]
 #[path = "surface_compaction_tests.rs"]
 mod surface_compaction_tests;
+
+#[cfg(test)]
+#[path = "catalogue_isolation_tests.rs"]
+mod catalogue_isolation_tests;
+
+#[cfg(test)]
+#[path = "catalogue_per_caller_tests.rs"]
+mod catalogue_per_caller_tests;
+
+/// A caller context for the discovery entry points, in tests.
+///
+/// `list_tools` and `search_tools` take one since MIK-7334.CATALOGUE.1: the
+/// catalogue they serve depends on who is asking, which is the whole mode. This
+/// builds the anonymous case — no verified identity, no credential principal —
+/// which on a multi-user gateway is the caller §4.6 row 2 of the design says
+/// must see an identity-bound backend omitted.
+/// Test-only discovery wrappers that supply the anonymous caller.
+///
+/// The discovery entry points take a caller since MIK-7334.CATALOGUE.1. Most
+/// existing cases are about workflow state, ranking or authorization, where the
+/// caller is not the variable under test, so they call these rather than
+/// spelling a context each time. Named `_anon` so a case that DOES depend on who
+/// is asking cannot reach one by accident.
+#[cfg(test)]
+impl MetaMcp {
+    pub(super) async fn list_tools_anon(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
+        self.list_tools(args, session_id, &anonymous_caller()).await
+    }
+
+    pub(super) async fn search_tools_anon(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
+        self.search_tools(args, session_id, &anonymous_caller())
+            .await
+    }
+
+    pub(super) async fn code_mode_search_anon(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
+        self.code_mode_search(args, session_id, &anonymous_caller())
+            .await
+    }
+}
+
+#[cfg(test)]
+pub(super) fn anonymous_caller() -> MetaMcpCallerContext<'static> {
+    // `RetryFields` is borrowed by the context, so a test-local value would not
+    // outlive the call. One shared empty set is correct here: these callers are
+    // not retrying anything.
+    static RETRY: std::sync::OnceLock<crate::protocol::mrtr::RetryFields> =
+        std::sync::OnceLock::new();
+    let retry = RETRY.get_or_init(crate::protocol::mrtr::RetryFields::default);
+    MetaMcpCallerContext {
+        task: None,
+        execution: None,
+        signing: None,
+        is_modern: true,
+        protocol_revision: None,
+        credential_principal: None,
+        authorizer: &crate::gateway::authz::AllowAll,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        retry,
+        era: crate::protocol::meta::Era::Modern,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+    }
+}
+
+/// The same context, carrying a verified end-user identity.
+///
+/// This is the caller the per-caller catalogue mode exists for: one that can
+/// resolve a per-user credential for an identity-bound backend and therefore
+/// has its own slot, its own fetch and its own catalogue.
+#[cfg(test)]
+pub(super) fn identified_caller(
+    identity: &crate::key_server::oidc::VerifiedIdentity,
+) -> MetaMcpCallerContext<'_> {
+    MetaMcpCallerContext {
+        credential_principal: Some("a-validated-bearer-token-digest"),
+        verified_identity: Some(identity),
+        ..anonymous_caller()
+    }
+}
