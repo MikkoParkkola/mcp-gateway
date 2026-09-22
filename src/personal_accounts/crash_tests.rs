@@ -7,16 +7,31 @@
 //! by hand afterwards would only re-test lookup; letting the writer die tests
 //! the writer.
 //!
-//! The commit path has exactly ONE instant that changes the durable answer: the
-//! authority rename at `commit.rs:224`. Every `boundary!` fires BEFORE the step
-//! it names, so a crash at any of the eight boundaries up to and including
-//! `ManifestRename` leaves the prior manifest in place; only the `ParentSync`
-//! check — spelled out at `commit.rs:231-237` because it needs the post-rename
-//! refusal category — runs after that rename, where the new generation is
-//! already the durable one. `every_named_boundary` drives all nine and pins the
-//! single admissible generation for each, so neither class is argued, both are
-//! measured, and a boundary added on the far side of the rename cannot default
-//! into the wrong class.
+//! The commit path has exactly ONE instant that changes the RESTART-VISIBLE
+//! answer: the authority rename at `commit.rs:224`. Every `boundary!` fires
+//! BEFORE the step it names, so a crash at any of the eight boundaries up to
+//! and including `ManifestRename` leaves the prior manifest in place; only the
+//! `ParentSync` check — spelled out at `commit.rs:231-237` because it needs
+//! the post-rename refusal category — runs after that rename, where the new
+//! generation is already what a restart reads back. `every_named_boundary`
+//! drives all nine and pins the single admissible generation for each, so
+//! neither class is argued, both are measured, and a boundary added on the far
+//! side of the rename cannot default into the wrong class.
+//!
+//! This harness kills the child process; it does not cut power. `rename(2)`
+//! is not durable until its parent directory is synced, so between
+//! `ManifestRename` and `ParentSync` a real power loss can still roll the
+//! rename back — a process kill cannot, because a completed rename is already
+//! visible to every reader on the same machine, crashed or not. Read
+//! `ParentSync`'s "durable" here as durable-under-process-restart; it is not
+//! power-loss durability evidence, and a future reader must not cite it as
+//! such or remove that fsync as redundant.
+//!
+//! `faults::ALL` is a maintained list, not compile-time derived from
+//! `Boundary`: adding a variant forces a compile error in every exhaustive
+//! match over `Boundary` (`Boundary::name`, this module's
+//! `admissible_after`), so a new boundary cannot silently misclassify, but it
+//! does not automatically add itself to `ALL` — that still needs a person.
 
 use super::commit::generation;
 use super::faults::{self, Boundary};
