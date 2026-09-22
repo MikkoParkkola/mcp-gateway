@@ -3017,12 +3017,14 @@ impl Gateway {
                     "tools/list" => {
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), STDIO)
                     }
-                    "prompts/list" => meta_mcp.handle_prompts_list(id, params).await,
+                    "prompts/list" => meta_mcp.handle_prompts_list(id, params, None).await,
                     "prompts/get" => meta_mcp.handle_prompts_get(id, params).await,
-                    "resources/list" => meta_mcp.handle_resources_list(id, params).await,
+                    "resources/list" => meta_mcp.handle_resources_list(id, params, None).await,
                     "resources/read" => meta_mcp.handle_resources_read(id, params, STDIO).await,
                     "resources/templates/list" => {
-                        meta_mcp.handle_resources_templates_list(id, params).await
+                        meta_mcp
+                            .handle_resources_templates_list(id, params, None)
+                            .await
                     }
                     "logging/setLevel" => meta_mcp.handle_logging_set_level(id, params).await,
                     "ping" => JsonRpcResponse::success(id, serde_json::json!({})),

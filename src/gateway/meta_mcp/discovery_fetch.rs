@@ -8,11 +8,73 @@
 
 use super::MetaMcp;
 use crate::backend::Backend;
+use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::Tool;
 use std::sync::Arc;
 use tracing::debug;
 
 impl MetaMcp {
+    /// The caller's per-user credential for `server`: headers and cache binding.
+    ///
+    /// THE CONTRACT LIVES HERE, not on the context-taking
+    /// [`MetaMcp::caller_credential_for`], because the three protocol-level
+    /// catalogue handlers — `prompts/list`, `resources/list` and
+    /// `resources/templates/list` — are dispatched from the method table with
+    /// the request's verified identity and no `MetaMcpCallerContext` to borrow.
+    /// The identity is the only field the resolution ever read.
+    ///
+    /// Returns empty WITHOUT calling the resolver when the caller carries no
+    /// verified identity. That short-circuit is load-bearing, not an
+    /// optimisation: `resolve_propagation_credential` mints over the network and
+    /// writes a durable transparency-log record, and this runs in a loop over
+    /// every registered backend on ordinary discovery. A gateway whose callers
+    /// present no identity — every single-tenant deployment — therefore mints
+    /// nothing and audits nothing, exactly as before (IDP.5).
+    ///
+    /// A resolution failure is empty too, never an error: a caller who cannot
+    /// mint for this backend simply gets no per-user view of it, and the
+    /// identity-free guard then omits it. Discovery must not fail wholesale
+    /// because one backend out of many refused.
+    pub(crate) async fn caller_credential_for_identity(
+        &self,
+        server: &str,
+        verified_identity: Option<&VerifiedIdentity>,
+    ) -> (Vec<(String, String)>, Option<String>) {
+        if verified_identity.is_none() {
+            return (Vec::new(), None);
+        }
+        self.resolve_propagation_credential(server, verified_identity)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Whether `backend` must be omitted from a per-caller catalogue
+    /// aggregation, and the credential to fetch it with if not.
+    ///
+    /// ONE HELPER FOR ALL THREE LIST HANDLERS (MIK-7334.CATALOGUE.1). Resolving
+    /// the credential and evaluating the isolation verdict are a pair: the
+    /// verdict is computed from the headers that were just minted, and the fetch
+    /// that follows runs on the slot those headers opened. Splitting them across
+    /// three handlers is how `resources/list` and `prompts/list` came to pass a
+    /// constant `PoolKey::Shared` while `tools/list` passed a caller-derived key.
+    ///
+    /// `None` means omit. `Some((headers, binding))` is safe to fetch with, and
+    /// `binding` is `None` for an identity-free caller, which selects the shared
+    /// slot exactly as before.
+    pub(super) async fn catalogue_credential_for(
+        &self,
+        backend: &Backend,
+        verified_identity: Option<&VerifiedIdentity>,
+    ) -> Option<(Vec<(String, String)>, Option<String>)> {
+        let (headers, binding) = self
+            .caller_credential_for_identity(&backend.name, verified_identity)
+            .await;
+        if self.meta_route_isolation_refused_for_caller(backend, &headers) {
+            return None;
+        }
+        Some((headers, binding))
+    }
+
     /// The tools discovery should show for `backend`, from THIS CALLER's slot.
     ///
     /// `binding` and `headers` come from one `caller_credential_for` resolution

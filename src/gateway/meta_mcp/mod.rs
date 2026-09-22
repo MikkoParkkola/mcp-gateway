@@ -1220,48 +1220,34 @@ impl MetaMcp {
     /// the caller is (design §4.3's residual) — and because resolving twice
     /// would mint twice.
     ///
-    /// Returns empty WITHOUT calling the resolver when the caller carries no
-    /// verified identity. That short-circuit is load-bearing, not an
-    /// optimisation: `resolve_propagation_credential` mints over the network and
-    /// writes a durable transparency-log record, and this runs in a loop over
-    /// every registered backend on ordinary discovery. A gateway whose callers
-    /// present no identity — every single-tenant deployment — therefore mints
-    /// nothing and audits nothing, exactly as before.
-    ///
-    /// A resolution failure is empty too, never an error: a caller who cannot
-    /// mint for this backend simply gets no per-user view of it, and the
-    /// identity-free guard then omits it. Discovery must not fail wholesale
-    /// because one backend out of many refused.
+    /// Context-taking convenience over
+    /// [`Self::caller_credential_for_identity`], which holds the contract and
+    /// serves the routes that are dispatched without a caller context.
     pub(crate) async fn caller_credential_for(
         &self,
         server: &str,
         caller: &MetaMcpCallerContext<'_>,
     ) -> (Vec<(String, String)>, Option<String>) {
-        if caller.verified_identity.is_none() {
-            return (Vec::new(), None);
-        }
-        self.resolve_propagation_credential(server, caller.verified_identity)
+        self.caller_credential_for_identity(server, caller.verified_identity)
             .await
-            .unwrap_or_default()
     }
 
     /// The credential-aware sibling of [`Self::meta_route_isolation_refused`],
     /// for the catalogue paths that fetch over the CALLER'S OWN pool slot.
     ///
     /// SEPARATE FUNCTION ON PURPOSE (MIK-7334.CATALOGUE.1 R2). A third `bool`
-    /// parameter on the identity-free helper would make all fourteen of its call
-    /// sites editable, and one wrong edit would be invisible in the diff. A site
-    /// opts in by NAME here, so the ten that must keep failing closed are not
-    /// touched by the change at all.
+    /// parameter on the identity-free helper would make all fourteen call sites
+    /// editable and one wrong edit invisible in the diff. A site opts in by NAME
+    /// here, so the seven that must keep failing closed are untouched.
     ///
     /// ONLY admissible where the operation AFTER the check runs on the same slot
     /// the credential selected. `has_per_user_credential = true` does not narrow
     /// [`Self::enforce_oauth_isolation_for`] — it returns `Ok(())` before any
     /// isolation arm is evaluated — so calling this at a site that then fetches
     /// over `shared_transport()` would hand an arbitrary caller the gateway's own
-    /// backend login. `handle_logging_set_level`, `handle_prompts_list`,
-    /// `handle_resources_list` and `find_resource_owner` are exactly that shape
-    /// and keep the identity-free helper.
+    /// backend login. `handle_logging_set_level` and `find_resource_owner` keep
+    /// the identity-free helper; the three catalogue list handlers qualified
+    /// once they began fetching on the caller's own slot.
     ///
     /// The emptiness test is copied verbatim from the direct route
     /// (`gateway::router::backend_handlers`, `enforce_oauth_isolation(&name,
