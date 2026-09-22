@@ -3,6 +3,7 @@
 //! The lease boundary: what a lease must match to be released, and what a
 //! broken store is allowed to look like from outside.
 
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use super::*;
@@ -279,4 +280,129 @@ fn a_lease_held_across_a_revoke_is_retired_and_cannot_be_reacquired() {
         "a restart must not resurrect the grant for the holder"
     );
     reopened.assert_quiet("release after restart");
+}
+
+/// Re-consent is the case a revoke alone cannot reach.
+///
+/// `invalidate_during_held_refresh_discards_stale_provider_success` also holds a
+/// refresh across a revoke, but it leaves the account TOMBSTONED, so every
+/// refusal there is reachable from the `Revoked` arm alone. Here a new
+/// generation is consented while the old holders are still live, so the account
+/// is connected again and that arm is gone: the held rotation has to lose the
+/// version compare-and-swap, and the populated credential cache has to be
+/// refused by the whole-lease recheck rather than by a tombstone.
+///
+/// The re-consented record moves ONLY the generation and the token bytes — same
+/// scopes, same descriptor revision, same token revision, same authorization
+/// epoch — so a recheck comparing anything less than the whole lease serves the
+/// new grant's credential to the old holder.
+#[test]
+fn reconsent_under_a_held_refresh_retires_the_cached_credential_and_the_rotation() {
+    block_on(async {
+        let first = grant();
+        let (tmp, store) = seed(&[(&alice(), first.clone())]);
+        let provider = ScriptedProvider::new();
+        let (provider_calls, entered, release_provider) = provider.hold(
+            &alice(),
+            Ok(rotation(
+                "synthetic-alice-access-stale-private-material-bb22",
+                Some(first.scopes.clone()),
+            )),
+        );
+        let (observer, observer_calls) = counting_observer();
+        let service = Arc::new(AccountService::new(store, provider, observer));
+
+        // HOLDER 1 and 2: a populated credential cache — the bytes a caller is
+        // holding, and the lease its entry is keyed on. Both stay live below.
+        let cached_lease = refuse_scaffold(service.resolve(&alice()), "lease before revoke")
+            .expect("connected account leases before revoke");
+        let cached = refuse_scaffold(service.release(&cached_lease), "credential before revoke")
+            .expect("connected account releases before revoke");
+        assert_eq!(cached, expected_credentials(&first));
+        assert_eq!(observer_calls.load(Ordering::SeqCst), 1);
+
+        // HOLDER 3: a refresh task inside the flight, parked at the provider.
+        let held = {
+            let service = Arc::clone(&service);
+            tokio::spawn(async move { service.refresh_if_expired(&alice()).await })
+        };
+        reached(entered, "provider entered before revoke")
+            .await
+            .expect("provider entered sender dropped");
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+
+        // The revoke lands with all three live, and the user re-consents before
+        // any of them has been given a chance to notice.
+        refuse_scaffold(service.invalidate(&alice()), "revoke under held refresh")
+            .expect("revoke while the refresh and the cache entry are live");
+        let revoked = ConsentExpectation::captured(
+            &service.store().lookup(&alice()).expect("capture revoke"),
+        );
+        let second = GrantRecord {
+            generation: "cafebabecafebabecafebabecafebabe".into(),
+            access_token: "synthetic-alice-access-reconsented-private-material-cc33".into(),
+            refresh_token: Some("synthetic-alice-refresh-reconsented-private-material-dd44".into()),
+            expires_at: u64::MAX,
+            ..first.clone()
+        };
+        refuse_scaffold(
+            service.commit_grant_if(&alice(), &revoked, &second),
+            "re-consent after revoke",
+        )
+        .expect("a captured revoke re-consents a new generation");
+
+        release_provider
+            .send(())
+            .expect("held provider still waiting at re-consent");
+        let stale = reached(
+            async { held.await.expect("held refresh task") },
+            "held refresh join",
+        )
+        .await;
+
+        // (i) The rotation cannot complete a token write. Its compare-and-swap
+        // named the retired generation, and the live one is connected rather
+        // than tombstoned, so this is a retired lease and not `Revoked`.
+        assert_eq!(
+            domain_err(stale, "held rotation after re-consent"),
+            AccountServiceError::LeaseRetired
+        );
+        // (ii) The cached credential is not served under the new generation.
+        assert_eq!(
+            domain_err(
+                service.release(&cached_lease),
+                "cached credential after re-consent",
+            ),
+            AccountServiceError::LeaseRetired
+        );
+        // (iii) Neither holder published anything: `on_release` fires only past
+        // the recheck, so the count standing still IS the non-publication.
+        assert_eq!(observer_calls.load(Ordering::SeqCst), 1);
+
+        // Retirement, not an account that stopped working: the new generation
+        // serves its OWN credential, under a lease the old one cannot equal.
+        let fresh = refuse_scaffold(service.resolve(&alice()), "lease under re-consent")
+            .expect("the re-consented generation leases");
+        assert_ne!(fresh, cached_lease);
+        let served = refuse_scaffold(service.release(&fresh), "credential under re-consent")
+            .expect("the re-consented generation releases");
+        assert_eq!(served, expected_credentials(&second));
+        assert_ne!(served, cached);
+        assert_eq!(observer_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+
+        // Durably, across a reopen: the held rotation reinstated nothing. A
+        // write that landed would have advanced the revision and replaced the
+        // token bytes with the ones the retired generation was rotating to.
+        let service = Arc::try_unwrap(service)
+            .ok()
+            .expect("drop all task references before reopen");
+        drop(service);
+        let store = PersonalAccountStore::open(config(tmp.path())).expect("reopen");
+        let durable = expect_connected(store.lookup(&alice()).expect("re-consented reopen"));
+        assert_eq!(durable.generation, second.generation);
+        assert_eq!(durable.token_revision, second.token_revision);
+        assert_eq!(durable.authorization_epoch, second.authorization_epoch);
+        assert_eq!(durable.access_token, second.access_token);
+    });
 }
