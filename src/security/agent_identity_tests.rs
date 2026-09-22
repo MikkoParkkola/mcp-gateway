@@ -499,8 +499,11 @@ fn a_label_mapping_does_not_cross_proof_namespaces() {
     }];
 
     // An mTLS subject of the same name is NOT governed by the jwt entry, so it
-    // falls through to the incomparable default rather than borrowing the
-    // mapping's permission.
+    // falls through to the WAIVED arm rather than borrowing the mapping's
+    // permission — which is why this fixture has to declare the waiver on the
+    // next line. Acceptance is never a default: with the waiver omitted this
+    // caller is refused, which is what `an_unwaived_mtls_mismatch_is_refused_
+    // by_default` pins.
     config.incomparable_proof_sources = vec![ProofSource::MutualTls];
     let identity = with_label(proven("runner", ProofSource::MutualTls), "billing");
     assert_eq!(
