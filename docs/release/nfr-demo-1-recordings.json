@@ -1,11 +1,12 @@
 {
   "criterion": "NFR.DEMO.1",
-  "verdict": "NFR.DEMO.1: 3 of 5 scenarios RECORDED, 2 BLOCKED (scenario 4 on MIK-7469; scenario 2 on build budget, not on product behaviour)",
+  "verdict": "NFR.DEMO.1: 5 of 5 scenarios RECORDED, 0 BLOCKED (41 rows, all PASS; scenario 4's former blocker MIK-7469 refuted by measurement)",
   "revision_under_test": {
     "gateway_version": "mcp-gateway 4.0.0",
     "binary_sha256": "6e38ee5f55e2eabc5bc751c3dc42a7b0e92a4171d435b78341c3615f2d1acd70",
     "build_sha_confidence": "assumption",
-    "provenance": "The binary was copied from a peer worktree's target/debug tree (/Users/mikko/github/.worktrees/v4-codeql-record/target/debug/mcp-gateway) because this machine had too little free disk to build. The binary embeds no commit SHA and the crate has no build.rs, so the source revision behind it is an ASSUMPTION, not a measurement -- hence build_sha_confidence. The sha256 above is measured and pins the exact bytes the recording ran against."
+    "provenance": "SCENARIOS 1, 3 AND 5. The binary was copied from a peer worktree's target/debug tree (/Users/mikko/github/.worktrees/v4-codeql-record/target/debug/mcp-gateway) because that machine had too little free disk to build. The binary embeds no commit SHA and the crate has no build.rs, so the source revision behind it is an ASSUMPTION, not a measurement -- hence build_sha_confidence. The sha256 above is measured and pins the exact bytes those three recordings ran against. See docs/release/demo/corroboration-2026-09-21.json for the run that reproduced all 25 of their rows from a named commit.",
+    "scope": "Scenarios 1, 3 and 5 only. Scenarios 2 and 4 were recorded later, on a different host and a different binary, and carry their own binary_sha256, source_commit and build_sha_confidence in their versions blocks; theirs is 'measured', this one is not."
   },
   "scenarios": [
     {
@@ -85,12 +86,92 @@
       "id": 2,
       "slug": "reconnectable-task",
       "criterion_phrase": "reconnectable task",
-      "status": "blocked",
-      "blocked_on": "Not built in this pass: needs a standalone stdio task peer (~150 lines, design §Scenario 2) plus a driver. Budget, not a product defect -- no gateway behaviour was found that would prevent the recording.",
+      "status": "recorded",
+      "driver": "scripts/release/demo/2-reconnectable-task.sh",
+      "transcript": "docs/release/demo/2-reconnectable-task-transcript.txt",
+      "results_json": "docs/release/demo/2-reconnectable-task-results.json",
       "versions": {
-        "note": "not recorded; no versions were exercised"
+        "gateway_version": "mcp-gateway 4.0.0",
+        "binary_sha256": "8752a4a9f2959055f346c7b4c4d0f826d26d507403841334fba5210faa15b421",
+        "source_commit": "88e160d2c873eaf748d75785ea69d5212d1f9206",
+        "build_sha_confidence": "measured",
+        "build_profile": "debug",
+        "host": "Linux aarch64",
+        "provenance": "Built on the Spark box from a tree rsynced out of this worktree at 88e160d2c873eaf748d75785ea69d5212d1f9206. The binary embeds no commit SHA and the crate has no build.rs, so the source revision is established by comparing the build INPUTS instead of trusting a label: the 606 files under src/, plus Cargo.toml and Cargo.lock, hash to the same content digest 3104b06e9d33c536 on both sides (`git ls-tree -r 88e160d2` blob ids locally, `git hash-object` on the Spark tree). That makes build_sha_confidence 'measured' for these two scenarios, unlike the top-level block, which describes the earlier macOS binary behind scenarios 1, 3 and 5.",
+        "gateway": "mcp-gateway 4.0.0",
+        "client_protocol_version": "2026-07-28",
+        "peer_protocol_version": "2025-06-18",
+        "auth_posture": "DISABLED -- see scope_limitation below",
+        "task_store": "tasks.store_dir left at the shipped default (~/.mcp-gateway/tasks); HOME is the run directory",
+        "peer_call_duration_secs": "20",
+        "response_cache": "disabled for this recording"
       },
-      "negative_control": "See design §Scenario 2: a build that loses the task shows a resumed session with no prior task id, or a task that cannot be reattached after disconnect."
+      "negative_control": "EXERCISED, not merely described. The claim is that the task record survives the gateway process, so the control deletes the durable store between the SIGKILL and the restart (rm -rf $DATA_DIR/tasks) and changes nothing else. Three rows go RED with actual '<absent>' -- S2.TASK_SURVIVES_A_GATEWAY_RESTART, S2.STATUS_AFTER_RESTART_IS_EXPLICIT_NOT_SILENCE and S2.CANCEL_LEAVES_A_TERMINAL_STATE -- while the four pre-restart rows stay green, which is correct because they measure the live process. That proves the restart reloads from disk rather than from anything the driver seeded, and that a build with no persistence fails this scenario. The design's other broken-build signal is the peer's submission counter reaching two, a silently replayed side effect; S2.RESTART_DID_NOT_REPLAY_THE_SUBMISSION asserts it stays at 1, counted from a file the peer writes before it sleeps, so the count survives the peer being killed with its parent.",
+      "scope_limitation": "This driver runs with auth DISABLED, so it proves cross-SESSION and cross-RESTART reconnect and nothing about cross-ACCOUNT isolation -- that is MIK-7311.LIFECYCLE.2's Rust ACs, not this criterion. The reason, verified at source: with auth enabled, task creation refuses with -32600 'task creation requires a verified caller identity' unless the request carries a VerifiedIdentity (src/gateway/router/handlers/tasks.rs:145), and the static API-key branch of the auth middleware inserts AuthenticatedClient and ApiKey but never an identity (src/gateway/auth.rs:991-1002); only key_server_credential does (:1006-1014).",
+      "findings": [
+        {
+          "id": "S2.FINDING.DRAFT_HEADER_BLAMED_THE_WRONG_MECHANISM",
+          "summary": "An unreviewed draft of this driver justified auth-disabled by claiming OIDC requires a live HTTPS issuer. That is wrong at source and was corrected rather than carried: a non-HTTPS issuer only logs a warning (src/key_server/oidc.rs:377), and an explicit provider.jwks_uri bypasses discovery and its HTTPS check entirely (:399), so a local issuer is configurable. Minting a local JWKS and a signed JWT was simply not built in this pass. The limitation stands; the stated reason did not.",
+          "carried_as": "the scope_limitation field above and the driver's own header",
+          "owner_decision_needed": false
+        },
+        {
+          "id": "S2.FINDING.SIGTERM_DRAINS_AND_HID_THE_CLAIM",
+          "summary": "_common.sh's stop_gateway sends SIGTERM and this gateway DRAINS on SIGTERM. The first run of this driver used it, the 20-second job finished during shutdown, and the restarted process read an already-terminal record -- so the recording would have proven only that a COMPLETED record survives, which is the weaker claim. The driver now uses its own SIGKILL (hard_kill_gateway). With it, the restarted gateway answers with executionOutcome 'unknown' and reason 'gateway_restart_after_dispatch', which is the explicit interrupted outcome MIK-7311.LIFECYCLE.4 requires instead of silence.",
+          "carried_as": "rows S2.TASK_SURVIVES_A_GATEWAY_RESTART and S2.STATUS_AFTER_RESTART_IS_EXPLICIT_NOT_SILENCE",
+          "owner_decision_needed": false
+        }
+      ],
+      "rows": [
+        {
+          "id": "S2.TASK_CREATED_WITH_AN_ID",
+          "expected": "true",
+          "actual": "true",
+          "status": "PASS"
+        },
+        {
+          "id": "S2.TASK_SURVIVES_A_NEW_SESSION",
+          "expected": "task-d9508c08-1175-46ee-bfcb-364afd7227a9",
+          "actual": "task-d9508c08-1175-46ee-bfcb-364afd7227a9",
+          "status": "PASS"
+        },
+        {
+          "id": "S2.RECONNECT_IS_NOT_AN_ERROR",
+          "expected": "absent",
+          "actual": "absent",
+          "status": "PASS"
+        },
+        {
+          "id": "S2.PEER_WAS_ASKED_ONCE_BEFORE_THE_RESTART",
+          "expected": "1",
+          "actual": "1",
+          "status": "PASS"
+        },
+        {
+          "id": "S2.TASK_SURVIVES_A_GATEWAY_RESTART",
+          "expected": "task-d9508c08-1175-46ee-bfcb-364afd7227a9",
+          "actual": "task-d9508c08-1175-46ee-bfcb-364afd7227a9",
+          "status": "PASS"
+        },
+        {
+          "id": "S2.STATUS_AFTER_RESTART_IS_EXPLICIT_NOT_SILENCE",
+          "expected": "explicit",
+          "actual": "explicit",
+          "status": "PASS"
+        },
+        {
+          "id": "S2.RESTART_DID_NOT_REPLAY_THE_SUBMISSION",
+          "expected": "1",
+          "actual": "1",
+          "status": "PASS"
+        },
+        {
+          "id": "S2.CANCEL_LEAVES_A_TERMINAL_STATE",
+          "expected": "terminal",
+          "actual": "terminal",
+          "status": "PASS"
+        }
+      ]
     },
     {
       "id": 3,
@@ -183,12 +264,97 @@
       "id": 4,
       "slug": "large-catalogue",
       "criterion_phrase": "large-catalogue discovery",
-      "status": "blocked",
-      "blocked_on": "MIK-7469",
+      "status": "recorded",
+      "driver": "scripts/release/demo/4-large-catalogue.sh",
+      "transcript": "docs/release/demo/4-large-catalogue-transcript.txt",
+      "results_json": "docs/release/demo/4-large-catalogue-results.json",
       "versions": {
-        "note": "not recorded; no versions were exercised"
+        "gateway_version": "mcp-gateway 4.0.0",
+        "binary_sha256": "8752a4a9f2959055f346c7b4c4d0f826d26d507403841334fba5210faa15b421",
+        "source_commit": "88e160d2c873eaf748d75785ea69d5212d1f9206",
+        "build_sha_confidence": "measured",
+        "build_profile": "debug",
+        "host": "Linux aarch64",
+        "provenance": "Built on the Spark box from a tree rsynced out of this worktree at 88e160d2c873eaf748d75785ea69d5212d1f9206. The binary embeds no commit SHA and the crate has no build.rs, so the source revision is established by comparing the build INPUTS instead of trusting a label: the 606 files under src/, plus Cargo.toml and Cargo.lock, hash to the same content digest 3104b06e9d33c536 on both sides (`git ls-tree -r 88e160d2` blob ids locally, `git hash-object` on the Spark tree). That makes build_sha_confidence 'measured' for these two scenarios, unlike the top-level block, which describes the earlier macOS binary behind scenarios 1, 3 and 5.",
+        "gateway": "mcp-gateway 4.0.0",
+        "client_protocol_version": "2025-06-18",
+        "catalogue": "the repository's own capabilities/, examples/ excluded",
+        "catalogue_size_on_disk": "119 capability files",
+        "served_meta_tools": "14 (the 11 default tools plus gateway_set_profile, gateway_get_profile and gateway_list_profiles, which this scenario's routing_profiles block adds)",
+        "max_search_limit": "25 (src/gateway/meta_mcp_helpers.rs:626)",
+        "restriction_mechanism": "routing profile deny_tools, not an API-key denylist",
+        "response_cache": "disabled for this recording"
       },
-      "negative_control": "Declared out of scope for this pass by the task brief; see MIK-7469 and design §Scenario 4 for the negative control that recording would carry."
+      "previously_blocked_on": {
+        "ticket": "MIK-7469",
+        "disposition": "refuted by measurement 2026-09-22; the blocker is not live",
+        "evidence": "MIK-7469 held that feat/v4-ranking-fuzzy could not land because two tests owned by main went red on its rebased tip: gateway::meta_mcp::search_ranking_authz_tests::heavy_usage_outranks_the_exact_match_when_nothing_is_denied and its code_mode_ sibling. Both PASS on this release line. `cargo test --lib search_ranking_authz` at 88e160d2c873eaf748d75785ea69d5212d1f9206 -> ok. 20 passed; 0 failed; 0 ignored; 5010 filtered out. The ticket's own last update is 2026-09-17T13:55Z, which PREDATES PR #607 (the RANKING.1 implementation, merged 2026-09-20T16:19:04Z); MIK-3274.RANKING.1 and MIK-3274.RANKING.2 are both graded met in the scope ledger, and RANKING.1's note disposes the same risk by falsification. The ordering this scenario records is therefore settled, which was the whole content of design ruling 4. Recorded rather than deleted so the blocker is not re-raised from the stale ticket."
+      },
+      "negative_control": "EXERCISED, not merely described. Design section Scenario 4 names the broken build as one where the forbidden-but-popular tool is present at all for the restricted caller. The control removes deny_tools from the restricted profile and changes nothing else: exactly one row goes RED -- S4.RESTRICTED_CALLER_DOES_NOT_SEE_THE_FORBIDDEN_TOOL, actual '\"gws_gmail_send\" present' -- and every other row stays green, so the control is targeted rather than a blanket break. The row cannot pass vacuously on an empty result set either: the restricted caller still receives five other Gmail matches, and S4.OPEN_CALLER_SEES_THE_SAME_TOOL_AT_RANK_1 pins that the unrestricted caller has the forbidden tool at rank 1 on the identical query. Ranking-before-truncation is pinned separately by the pair S4.SEARCH_CANDIDATES_EXCEED_THE_CEILING (119 candidates) and S4.SEARCH_LIMIT_IS_CLAMPED (25 returned), which together distinguish a clamp from a query that simply matched few tools.",
+      "findings": [
+        {
+          "id": "S4.FINDING.API_KEY_DENYLIST_DOES_NOT_FILTER_DISCOVERY",
+          "summary": "An API key's denied_tools is an invocation-time control: it is reached only from authorize_tool_call (src/gateway/router/authorization.rs:179, the single caller of check_tool_scope). The discovery path filters on profile.tool_allowed instead (src/gateway/meta_mcp/search.rs:663, :726, :755). Measured directly while writing this driver: a key carrying denied_tools: [gws_gmail_send] still received that tool at rank 1 from gateway_search_tools, with total_available unchanged at 104. This is a design boundary rather than a defect -- the two mechanisms answer different questions -- but a recording built on the key denylist would have asserted a control the discovery path never consults, which is why this scenario uses a routing profile.",
+          "carried_as": "the restriction_mechanism version field and the driver's header",
+          "owner_decision_needed": false
+        },
+        {
+          "id": "S4.FINDING.CATALOGUE_SCAN_OUTLIVES_THE_HEALTH_PORT",
+          "summary": "The capability directory scan is not finished when /health first answers. An unreviewed draft of this driver polled for the first NONZERO tool count and read 18 of 119 -- a partially filled scan, not a product defect, but a number that would have been recorded as the catalogue size. The driver now polls until the count is stable across consecutive reads. This is the same class as scenario 1's era warm-up: readiness on the HTTP port is not readiness of everything behind it.",
+          "carried_as": "row S4.CATALOGUE_MATCHES_DISK_COUNT",
+          "owner_decision_needed": false
+        }
+      ],
+      "rows": [
+        {
+          "id": "S4.SERVED_SURFACE_IS_IN_THE_COMPACT_BAND",
+          "expected": "true",
+          "actual": "true",
+          "status": "PASS"
+        },
+        {
+          "id": "S4.CATALOGUE_MATCHES_DISK_COUNT",
+          "expected": "119",
+          "actual": "119",
+          "status": "PASS"
+        },
+        {
+          "id": "S4.SERVED_SURFACE_IS_SMALLER_THAN_THE_CATALOGUE",
+          "expected": "true",
+          "actual": "true",
+          "status": "PASS"
+        },
+        {
+          "id": "S4.SEARCH_SURFACES_THE_RELEVANT_TOOL_FIRST",
+          "expected": "true",
+          "actual": "true",
+          "status": "PASS"
+        },
+        {
+          "id": "S4.SEARCH_CANDIDATES_EXCEED_THE_CEILING",
+          "expected": "true",
+          "actual": "true",
+          "status": "PASS"
+        },
+        {
+          "id": "S4.SEARCH_LIMIT_IS_CLAMPED",
+          "expected": "25",
+          "actual": "25",
+          "status": "PASS"
+        },
+        {
+          "id": "S4.RESTRICTED_CALLER_DOES_NOT_SEE_THE_FORBIDDEN_TOOL",
+          "expected": "absent",
+          "actual": "absent",
+          "status": "PASS"
+        },
+        {
+          "id": "S4.OPEN_CALLER_SEES_THE_SAME_TOOL_AT_RANK_1",
+          "expected": "gws_gmail_send",
+          "actual": "gws_gmail_send",
+          "status": "PASS"
+        }
+      ]
     },
     {
       "id": 5,

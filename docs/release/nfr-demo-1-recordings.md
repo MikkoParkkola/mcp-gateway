@@ -5,7 +5,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # NFR.DEMO.1 — recorded demonstrations
 
-VERDICT: NFR.DEMO.1: 3 of 5 scenarios RECORDED, 2 BLOCKED (scenario 4 on MIK-7469; scenario 2 on build budget, not on product behaviour)
+VERDICT: NFR.DEMO.1: 5 of 5 scenarios RECORDED, 0 BLOCKED (41 rows, all PASS; scenario 4's former blocker MIK-7469 refuted by measurement)
 
 The machine-readable evidence is [`nfr-demo-1-recordings.json`](nfr-demo-1-recordings.json).
 This page is the human-readable half: what each rule in the gate is answering, and
@@ -128,16 +128,129 @@ never reached, and the budget never sees a failure: the first run of this driver
 recorded a "healthy" peer through four injected faults. Any future fault
 scenario needs the same key.
 
-## Scenario 2 — BLOCKED on build budget
+## Scenario 2 — reconnectable task (RECORDED, 8/8 rows PASS)
 
-Not recorded in this pass, and blocked on the cost of building the fixture, not
-on any gateway behaviour: it needs a standalone stdio task peer (~150 lines,
-design §Scenario 2). Nothing found during the research suggests the recording
-would fail.
+Driver `scripts/release/demo/2-reconnectable-task.sh`, transcript
+`docs/release/demo/2-reconnectable-task-transcript.txt`, rows
+`docs/release/demo/2-reconnectable-task-results.json`.
 
-## Scenario 4 — BLOCKED on MIK-7469
+One client starts a task on a peer whose every tool call takes 20 seconds, then
+drops the session. The task is read back on a **new session**, the gateway is
+**SIGKILLed while the work is still in flight**, and the same task id is read
+again from a **restarted process**.
 
-Out of scope for this pass by the task brief.
+Proven: the record survives a session change; it survives the process; the
+restarted gateway answers with an explicit outcome — `executionOutcome:
+"unknown"`, `reason: "gateway_restart_after_dispatch"` — which is what
+MIK-7311.LIFECYCLE.4 requires instead of silence; recovery does **not** replay
+the side effect (the peer's submission counter stays at 1); and the task reaches
+a terminal state.
+
+**Why the restart, and not just a session swap.** A session-header swap against
+a live process cannot distinguish a durable record from a process-local map: it
+passes on a build with no persistence at all. The store is left at its shipped
+default (`tasks.store_dir`, `src/config/features/tasks.rs:23-32` — "a process
+that cannot open it does not start; there is no volatile fallback"), and
+`_common.sh` points `HOME` at the run directory, so nothing here configures
+durability into existence.
+
+**SIGTERM drains, and that hid the claim.** `_common.sh`'s `stop_gateway` sends
+SIGTERM, and this gateway finishes in-flight work on it. The first run of this
+driver used it, the 20-second job completed during shutdown, and the restarted
+process read an **already-terminal** record — proving only that a completed
+record survives, which is the weaker claim. The driver now uses its own SIGKILL.
+
+**Scope limitation, verified at source.** The driver runs with auth **disabled**,
+so it proves cross-session and cross-restart reconnect and **nothing** about
+cross-account isolation (that is MIK-7311.LIFECYCLE.2's Rust ACs). With auth on,
+task creation refuses with `-32600 task creation requires a verified caller
+identity` unless the request carries a `VerifiedIdentity`
+(`src/gateway/router/handlers/tasks.rs:145`), and the static API-key branch of
+the auth middleware inserts `AuthenticatedClient` and `ApiKey` but never an
+identity (`src/gateway/auth.rs:991-1002`); only `key_server_credential` does
+(`:1006-1014`).
+
+An unreviewed draft of this driver blamed OIDC's HTTPS issuer requirement
+instead. That is **wrong** and was corrected rather than carried: a non-HTTPS
+issuer only logs a warning (`src/key_server/oidc.rs:377`), and an explicit
+`provider.jwks_uri` bypasses discovery and its HTTPS check entirely (`:399`), so
+a local issuer is configurable. Minting a local JWKS and a signed JWT was simply
+not built in this pass. The limitation stands; the stated reason did not.
+
+**Negative control, exercised.** Deleting the durable store between the SIGKILL
+and the restart, changing nothing else, turns three rows RED with `actual:
+<absent>` — `S2.TASK_SURVIVES_A_GATEWAY_RESTART`,
+`S2.STATUS_AFTER_RESTART_IS_EXPLICIT_NOT_SILENCE` and
+`S2.CANCEL_LEAVES_A_TERMINAL_STATE` — while the four pre-restart rows stay green,
+which is correct: they measure the live process. The restart therefore reloads
+from disk, not from anything the driver seeded.
+
+## Scenario 4 — large-catalogue discovery (RECORDED, 8/8 rows PASS)
+
+Driver `scripts/release/demo/4-large-catalogue.sh`, transcript
+`docs/release/demo/4-large-catalogue-transcript.txt`, rows
+`docs/release/demo/4-large-catalogue-results.json`.
+
+The gateway is pointed at the repository's own production catalogue
+(`capabilities/`, `examples/` excluded — the directory
+`tests/mik_3274_ranking_3_baseline.rs` loads for ranking regression). No live
+backend, no credentials.
+
+Proven, the three claims
+[design §Scenario 4](../design/2026-09-17-nfr-demo-1-scenario-recordings.md#scenario-4--useful-large-catalogue-discovery)
+asks for, in one frame:
+
+- **Compact surface, large catalogue.** A client's `tools/list` is served 14
+  tools, inside the shipped 9–17 band (`README.md:21`; lower bound from
+  `benchmarks/public_claims.json`), while `gateway_list_tools` reaches 119 —
+  matching the 119 capability files counted on disk in the same run.
+- **Discovery works.** "send an email through gmail" returns `gws_gmail_send` at
+  rank 1 out of that pool.
+- **Authorization precedes disclosure, ranking precedes truncation.** A caller on
+  a restricted routing profile runs the *identical* query and does **not**
+  receive `gws_gmail_send`, while the unrestricted caller has it at rank 1. A
+  greedy `limit: 9999` over 119 candidates returns exactly 25, the
+  `MAX_SEARCH_LIMIT` ceiling (`src/gateway/meta_mcp_helpers.rs:626`).
+
+**Why a routing profile and not an API-key denylist.** An API key's
+`denied_tools` is an invocation-time control, reached only from
+`authorize_tool_call` (`src/gateway/router/authorization.rs:179`, the single
+caller of `check_tool_scope`). Discovery filters on `profile.tool_allowed`
+instead (`src/gateway/meta_mcp/search.rs:663`, `:726`, `:755`). Measured while
+writing this driver: a key carrying `denied_tools: [gws_gmail_send]` still
+received that tool at rank 1, `total_available` unchanged. Two mechanisms, two
+questions — but a recording built on the key denylist would have asserted a
+control the discovery path never consults.
+
+**The former blocker, MIK-7469, is refuted by measurement.** It held that
+`feat/v4-ranking-fuzzy` could not land because two tests owned by `main` went red
+on its rebased tip. Both **pass** on this release line: `cargo test --lib
+search_ranking_authz` at `88e160d2` → ok, 20 passed, 0 failed — including
+`heavy_usage_outranks_the_exact_match_when_nothing_is_denied` and its Code Mode
+sibling. The ticket's last update (2026-09-17) predates PR #607, the RANKING.1
+implementation merged 2026-09-20; `MIK-3274.RANKING.1` and `.2` are both graded
+met. Design ruling 4 sequenced this scenario behind that ticket because result
+ordering was unsettled; it is settled. The disposition is recorded in the
+manifest as `previously_blocked_on` rather than deleted, so the blocker is not
+re-raised from the stale ticket.
+
+**Two traps found while recording.** The catalogue scan is not finished when
+`/health` first answers: an unreviewed draft polled for the first *nonzero* tool
+count and read **18 of 119**, a partially filled scan that would have been
+recorded as the catalogue size. The driver now polls until the count is stable —
+the same class as scenario 1's era warm-up. And the draft's clamp row queried
+`"file"`, which matched 16 tools against a ceiling of 25: a row that **could not
+fail**. It is now a 119-candidate query returning exactly 25, with
+`S4.SEARCH_CANDIDATES_EXCEED_THE_CEILING` asserting the pool is larger than the
+ceiling so a clamp is distinguishable from a small result set.
+
+**Negative control, exercised.** Removing `deny_tools` from the restricted
+profile, changing nothing else, turns exactly one row RED —
+`S4.RESTRICTED_CALLER_DOES_NOT_SEE_THE_FORBIDDEN_TOOL`, actual `"gws_gmail_send"
+present` — and leaves every other row green. The denial row cannot pass
+vacuously either: the restricted caller still receives five other Gmail matches,
+and `S4.OPEN_CALLER_SEES_THE_SAME_TOOL_AT_RANK_1` pins that the unrestricted
+caller has the forbidden tool at rank 1 on the same query.
 
 ## Ruling 3 — what scenario 3 will not be evidence for
 
@@ -148,6 +261,24 @@ a real identity provider and must not be reused as evidence for
 `not_evidence_for` entry and enforced by the gate whatever the scenario's status.
 
 ## The binary these rows were produced against
+
+There are **two** binaries behind this manifest, and the blocks say which is
+which. `revision_under_test` describes scenarios 1, 3 and 5 only; scenarios 2
+and 4 carry their own revision fields in their `versions` blocks.
+
+### Scenarios 2 and 4 — measured
+
+Built on the Spark box from a tree rsynced out of the recording worktree.
+`binary_sha256` `8752a4a9…`, debug profile, Linux aarch64. The crate still
+embeds no commit SHA, so the source revision is established by comparing build
+**inputs** rather than trusting a label: the 606 files under `src/`, plus
+`Cargo.toml` and `Cargo.lock`, hash to the same content digest `3104b06e9d33c536`
+on both sides — blob ids from `git ls-tree -r 88e160d2` locally, `git
+hash-object` on the Spark tree. That is what earns
+`build_sha_confidence: measured` for these two, and it is the check the earlier
+pass could not make.
+
+### Scenarios 1, 3 and 5 — assumption, corroborated separately
 
 `revision_under_test.binary_sha256` pins the exact bytes. The source revision
 behind them is an **assumption**, not a measurement: this machine had too little

@@ -1,0 +1,64 @@
+== NFR.DEMO.1 scenario 2: reconnectable task ==
+gateway:  mcp-gateway 4.0.0
+client:   protocol 2026-07-28
+run dir:  /tmp/nfr-demo-1-2-reconnectable-task.C5cBZ6
+peer:     one tool call takes 20s and appends to /tmp/nfr-demo-1-2-reconnectable-task.C5cBZ6/peer-submissions.txt
+auth:     disabled (see script header -- task creation needs a
+          VerifiedIdentity that the static API-key path never inserts)
+gateway up (pid 84792, port 57101)
+
+-- session A starts a task --
+created -> {"jsonrpc":"2.0","id":1,"result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"mcp-gateway","version":"4.0.0"}},"createdAt":"2026-09-21T23:53:59.182007587Z","lastUpdatedAt":"2026-09-21T23:53:59.182007587Z","pollIntervalMs":1000,"resultType":"task","status":"working","taskId":"task-d9508c08-1175-46ee-bfcb-364afd7227a9","ttlMs":86400000}}
+task id: task-d9508c08-1175-46ee-bfcb-364afd7227a9
+[PASS] S2.TASK_CREATED_WITH_AN_ID
+        expected: true
+        actual:   true
+
+-- session A is gone; the owner comes back on session B --
+reconnect -> {"jsonrpc":"2.0","id":1,"result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"mcp-gateway","version":"4.0.0"}},"createdAt":"2026-09-21T23:53:59.182007587Z","lastUpdatedAt":"2026-09-21T23:53:59.182007587Z","pollIntervalMs":1000,"resultType":"complete","status":"working","taskId":"task-d9508c08-1175-46ee-bfcb-364afd7227a9","ttlMs":86400000}}
+[PASS] S2.TASK_SURVIVES_A_NEW_SESSION
+        expected: task-d9508c08-1175-46ee-bfcb-364afd7227a9
+        actual:   task-d9508c08-1175-46ee-bfcb-364afd7227a9
+[PASS] S2.RECONNECT_IS_NOT_AN_ERROR
+        expected: absent
+        actual:   absent
+
+-- the peer has been asked to do the work once --
+peer submissions so far -> 1
+[PASS] S2.PEER_WAS_ASKED_ONCE_BEFORE_THE_RESTART
+        expected: 1
+        actual:   1
+
+-- the gateway is killed while the task is still in flight, then restarted --
+status before the kill -> working
+gateway SIGKILLed; the durable store it left on disk:
+  /tmp/nfr-demo-1-2-reconnectable-task.C5cBZ6/home/.mcp-gateway/tasks/store.lease
+  /tmp/nfr-demo-1-2-reconnectable-task.C5cBZ6/home/.mcp-gateway/tasks/task-d9508c08-1175-46ee-bfcb-364afd7227a9.json
+record on disk says status:
+   task-d9508c08-1175-46ee-bfcb-364afd7227a9.json -> 763 bytes
+gateway up (pid 84942, port 57101)
+after restart -> {"jsonrpc":"2.0","id":1,"result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"mcp-gateway","version":"4.0.0"}},"createdAt":"2026-09-21T23:53:59.182007587Z","lastUpdatedAt":"2026-09-21T23:53:59.708108448Z","pollIntervalMs":1000,"result":{"_meta":{"io.mcp-gateway/executionOutcome":"unknown","io.mcp-gateway/reason":"gateway_restart_after_dispatch"},"content":[{"text":"The gateway restarted
+[PASS] S2.TASK_SURVIVES_A_GATEWAY_RESTART
+        expected: task-d9508c08-1175-46ee-bfcb-364afd7227a9
+        actual:   task-d9508c08-1175-46ee-bfcb-364afd7227a9
+status after the restart -> completed
+[PASS] S2.STATUS_AFTER_RESTART_IS_EXPLICIT_NOT_SILENCE
+        expected: explicit
+        actual:   explicit
+
+-- recovery did not replay the side effect --
+peer submissions after the restart -> 1
+1790034839.3278267 long job
+[PASS] S2.RESTART_DID_NOT_REPLAY_THE_SUBMISSION
+        expected: 1
+        actual:   1
+
+-- a fourth session cancels the task --
+cancel -> {"jsonrpc":"2.0","id":1,"result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"mcp-gateway","version":"4.0.0"}},"resultType":"complete"}}
+after -> {"jsonrpc":"2.0","id":1,"result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"mcp-gateway","version":"4.0.0"}},"createdAt":"2026-09-21T23:53:59.182007587Z","lastUpdatedAt":"2026-09-21T23:53:59.708108448Z","pollIntervalMs":1000,"result":{"_meta":{"io.mcp-gateway/executionOutcome":"unknown"
+[PASS] S2.CANCEL_LEAVES_A_TERMINAL_STATE
+        expected: terminal
+        actual:   terminal
+
+results: /tmp/nfr-demo-1-2-reconnectable-task.C5cBZ6/results.json
+transcript: /tmp/nfr-demo-1-2-reconnectable-task.C5cBZ6/transcript.txt

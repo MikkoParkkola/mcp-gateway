@@ -1,0 +1,65 @@
+== NFR.DEMO.1 scenario 4: large-catalogue discovery ==
+gateway:     mcp-gateway 4.0.0
+catalogue:   /home/mikko/scratch/nfr-demo-1/capabilities (production capabilities/, examples/ excluded)
+catalogue size counted on disk: 119 capability files
+claimed served meta-tool band: 9-17 tools (README.md:21; lower bound from benchmarks/public_claims.json)
+run dir:     /tmp/nfr-demo-1-4-large-catalogue.Z25va4
+gateway up (pid 89571, port 41039)
+
+-- the served meta surface a client sees on tools/list --
+tools/list -> 14 tools: gateway_get_profile,gateway_invoke,gateway_kill_server,gateway_list_disabled_capabilities,gateway_list_profiles,gateway_list_servers,gateway_list_tools,gateway_reload_capabilities,gateway_reload_config,gateway_revive_server,gateway_search_tools,gateway_set_profile,gateway_set_state,gateway_webhook_status
+[PASS] S4.SERVED_SURFACE_IS_IN_THE_COMPACT_BAND
+        expected: true
+        actual:   true
+
+-- how big is the catalogue the gateway actually loaded? --
+gateway_list_tools total -> 119 tools (2 repeat reads), 119 capability files on disk
+[PASS] S4.CATALOGUE_MATCHES_DISK_COUNT
+        expected: 119
+        actual:   119
+[PASS] S4.SERVED_SURFACE_IS_SMALLER_THAN_THE_CATALOGUE
+        expected: true
+        actual:   true
+
+-- a caller who does not know the catalogue searches for one job --
+gateway_search_tools -> {
+  "matches": [
+    {
+      "description": "Send an email via Gmail. Composes and sends a new message with optional CC/BCC recipients. [keywords: google, gmail, email, send, workspace, communication] [schema: bcc, recipients, comma-separated, email, addresses, body, plain, text, cc, subject, line, to, recipient, address, id, labelids, threadid]",
+      "differential_description": "Send an Compose
+top match -> gws_gmail_send
+[PASS] S4.SEARCH_SURFACES_THE_RELEVANT_TOOL_FIRST
+        expected: true
+        actual:   true
+
+-- the same caller asks for far more results than the ceiling allows --
+requested limit 9999, candidates -> 119, matches returned -> 25
+[PASS] S4.SEARCH_CANDIDATES_EXCEED_THE_CEILING
+        expected: true
+        actual:   true
+[PASS] S4.SEARCH_LIMIT_IS_CLAMPED
+        expected: 25
+        actual:   25
+
+-- a restricted caller runs the identical query --
+gateway_set_profile -> {
+  "description": {
+    "backend_filter": {
+      "allow": null,
+      "deny": null
+    },
+    "description": "No outbound mail",
+    "name": "restricted",
+    "tool_filter": {
+      "allow": null,
+ 
+restricted matches -> ['gws_gmail_watch', 'gmail_send_email', 'gmail_get_attachment', 'gmail_batch_modify', 'gmail_profile']
+[PASS] S4.RESTRICTED_CALLER_DOES_NOT_SEE_THE_FORBIDDEN_TOOL
+        expected: absent
+        actual:   absent
+[PASS] S4.OPEN_CALLER_SEES_THE_SAME_TOOL_AT_RANK_1
+        expected: gws_gmail_send
+        actual:   gws_gmail_send
+
+results: /tmp/nfr-demo-1-4-large-catalogue.Z25va4/results.json
+transcript: /tmp/nfr-demo-1-4-large-catalogue.Z25va4/transcript.txt
