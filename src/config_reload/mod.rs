@@ -2266,4 +2266,7 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 }
 
 #[cfg(test)]
+mod grant_change_trigger_tests;
+
+#[cfg(test)]
 mod tests;

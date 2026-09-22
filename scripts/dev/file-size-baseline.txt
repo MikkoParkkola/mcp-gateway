@@ -17,7 +17,7 @@
 2136 tests/mik_7212_acs.rs
 2097 src/capability/executor_tests.rs
 2049 tests/mik_7212_mrtr7_bridge_acs.rs
-2269 src/config_reload/mod.rs
+2272 src/config_reload/mod.rs
 2037 tests/webui_management_tests.rs
 2001 src/gateway/auth.rs
 1929 src/transport/http/mod.rs
