@@ -5,6 +5,29 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # NFR.SEC.7: what is left, and the exact steps that close it
 
+> **SUPERSEDED 2026-09-22. Do not follow the steps below. Use
+> [`docs/runbooks/nfr-sec-7-cutover.md`](../../runbooks/nfr-sec-7-cutover.md).**
+>
+> This document is kept for its evidence table, which is still accurate, and because it
+> is cited elsewhere. Its *procedure* is not, in three ways that each cost something:
+>
+> 1. **Step 5 destroys the rollback target.** `~/.local/bin/start-mcp-gateway` is a
+>    symlink into `3.4.0-f30539af/`. Editing "the two `typeset -r` lines" through it
+>    rewrites the *old* version's launcher, so the versioned directory this document
+>    promises is "left in place precisely so rollback stays available" is no longer
+>    pristine when you need it. The superseding runbook stages a separate launcher and
+>    moves the symlink — and says so at its own step 4: *"NOT `$EDITOR` on the symlink:
+>    that rewrites `$OLD` and destroys the rollback target."*
+> 2. **Step 1 builds from the wrong line.** `origin/main` is ~198 commits behind
+>    `origin/docs/ranking-1-release-line`, which is where the release work lives.
+> 3. **The acceptance condition is not sufficient on its own**, for the reason recorded
+>    in the superseding runbook's step 7 and expanded there: the drift checker probes an
+>    enumerated control set and cannot see a control merged outside `src/security/`.
+>
+> The claim in the last paragraph that closing this row takes "the release blocking
+> count to zero" is also false: `NFR.PKG.1` is a second baseline blocking row, so
+> closing this one takes the count from two to one.
+
 `NFR.SEC.7` is the last blocking row on the v4.0.0 line. Its second half — automatic
 detection of merged-versus-listening drift — has been MET since 2026-09-11. Its first
 half is not a code gap. Every build that has been probed carries the guard:
@@ -44,65 +67,13 @@ backends — to every live Claude session. Restarting it drops those connections
 session-wide. It is also the operator's daily driver. The restart is deliberately left
 to the operator and should be run with no sessions open.
 
-## The staged artifact is stale, and the acceptance check below cannot tell you
-
-**Re-stage before cutting over. Do not flip the symlink to `4.0.0-3ec43838`.**
-
-That artifact was staged from the release-line tip as it stood at 10:45 on 2026-09-22.
-Seven commits later the tip is `fbc1567b`, and one of the seven is code: `#707`, which
-evicts a caller's pooled backend slot when their identity grant is revoked. The staged
-binary does not contain it:
-
-```
-$ git show 3ec43838:src/backend/pool.rs | rg -c evict_identity_slots
-0
-```
-
-**What eviction is and is not, stated precisely, because the loose version of this claim
-is tempting and wrong.** It is NOT the barrier that stops a revoked caller making new
-calls: identity propagation resolves per request, and a revoked grant makes the store
-answer absent, which surfaces as `PropagationError::AccountNotConnected` — a variant
-whose own doc comment says it exists so the audit record "can tell absence from
-revocation from a busy custody". The call is refused before the pool is consulted. So
-the gateway does not serve a revoked caller either way.
-
-What eviction closes is the state revocation leaves behind: the pooled slot holds a live
-upstream transport minted under the now-revoked grant, together with that identity's
-cached metadata. Without eviction the backend-side session outlives the revocation, and
-identity-scoped cache entries survive it. That is a security control — it is the
-revocation half of `MIK-7334.CATALOGUE.1`, whose requirement reads "isolated by verified
-caller and authorization context, **including changes and revocation**" — but it is the
-session-teardown half, not the admission check.
-
-`NFR.SEC.7` reads *"the listening build carries every merged security control"*. On that
-wording the staged artifact is short one, and flipping to it makes the sentence false at
-the moment the row is graded MET.
-
-**The acceptance check is structurally blind to this gap**, which is why it needs saying
-here rather than being left to the gate. `security-controls.toml` derives its population
-from two authorities — `docs/requirements/nfr-sec1-control-inventory.md` and the module
-inventory under `src/security/` — and states its own residual: *"a control merged into a
-file that is neither under `src/security/` nor named by the inventory is still invisible
-to both authorities."* `#707` touched sixteen files and **none is under `src/security/`**,
-so neither authority names the control. `check-control-drift.py` will report `0 failing`
-and exit 0 against a build that lacks it. A green acceptance here is not evidence the
-criterion holds; it is evidence about the two controls the manifest does probe.
-
-So step 1 below is amended: build from the **release line**, at its tip, checked at build
-time. `origin/main` is 198 commits behind the release line, so a binary built from main
-would be missing the release, not merely this control.
-
 ## Steps
 
 Steps 1-4 touch nothing live: they create a new versioned directory beside the existing
 ones. Steps 5-6 are the operator's.
 
-1. Build a release binary from `origin/docs/ranking-1-release-line` at its **current**
-   tip, and record that tip's sha. The guard `5d25f104` is on the release line
-   (`git merge-base --is-ancestor 5d25f104 origin/docs/ranking-1-release-line` exits 0),
-   so provenance stays clean without depending on PR #561. Before copying the binary
-   anywhere, confirm the tip has not moved again:
-   `git fetch origin docs/ranking-1-release-line && git rev-parse origin/docs/ranking-1-release-line`.
+1. Build a release binary from `origin/main` (carries `5d25f104`; keeps provenance clean
+   and independent of PR #561).
 2. `mkdir -p ~/.local/libexec/mcp-gateway/4.0.0-<sha>` and copy the binary in.
 3. Copy the live `servers.yaml` from `3.4.0-f30539af/` beside it. This config predates
    v4 and carries all 33 backends.
@@ -116,45 +87,14 @@ ones. Steps 5-6 are the operator's.
 
 ## Acceptance
 
-Two conditions, because the first one alone is the blind spot described above.
-
-**1. The probed controls still fire.**
-
 ```
 python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp
 ```
 
 must report `0 failing` and exit 0. Check the exit status directly — piping into `tail`
-reports the pipe's status, not the checker's.
-
-**2. The listening build is the one you staged, and it carries what the tip carries.**
-
-The checker probes two controls; it does not enumerate the merged set. So confirm
-separately that the running process is executing the binary built from the recorded tip
-— compare the wrapper's `gateway_binary` path against the directory you created in step
-2.
-
-**The stopping rule, because "rebuild at the tip" does not terminate on its own.** The
-release line keeps moving, so a rule that re-stages on every new commit never lets the
-cutover finish. Re-stage only when a commit landed since staging that **changes
-compiled code** — that is, when
-
-```
-git diff --name-only <staged-sha>..origin/docs/ranking-1-release-line -- src/ Cargo.toml Cargo.lock
-```
-
-is non-empty. A docs-only or ledger-only commit changes nothing the binary carries and is
-not a reason to rebuild; that is exactly the difference between the seven commits above,
-six of which were documentation and one of which was `#707`. If that command is empty,
-the staged artifact is current for this criterion's purposes and the cutover proceeds.
-
-On both, flip `NFR.SEC.7` to MET in
-`docs/requirements/RELEASE-4.0.0-criteria-status.md` and its blocking cell to `no`.
-
-This step previously promised that "the release blocking count goes to zero" on that
-flip. It does not, and the claim is dropped rather than left to be discovered at the tag:
-`NFR.PKG.1` is the second baseline blocking row, and `check_scope_acceptance.py
---release` reports both. Closing `NFR.SEC.7` takes the count from two to one.
+reports the pipe's status, not the checker's. On that result, flip `NFR.SEC.7` to MET in
+`docs/requirements/RELEASE-4.0.0-criteria-status.md` and its blocking cell to `no`; the
+release blocking count goes to zero.
 
 Rollback is the reverse of step 5 plus another kickstart. The previous versioned
 directories are left in place precisely so that stays available.

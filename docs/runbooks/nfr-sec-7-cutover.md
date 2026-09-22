@@ -29,6 +29,52 @@ a binary swap plus a symlink flip.
 
 ## The artifact
 
+> **UPDATED 2026-09-22 — artifacts are now staged, and the newest one is already stale.**
+> The sweep below ("no macOS build carrying `5d25f104` exists on disk", "no candidate is
+> staged") was true on 2026-09-19 and is false now. Two 4.0.0 directories exist:
+> `~/.local/libexec/mcp-gateway/4.0.0-e82d7ee4/` and `…/4.0.0-3ec43838/`. Route C turned
+> out to be available after all — the debug trees that made it a disk question were
+> released.
+>
+> **Do not cut over to `4.0.0-3ec43838`.** Seven commits landed on the release line after
+> it was staged, and one of them is code — `fbc1567b` (#707), which evicts a caller's
+> pooled backend slot when their identity grant is revoked or rotated. The staged tree
+> does not contain it:
+>
+> ```
+> $ git show 3ec43838:src/backend/pool.rs | rg -c evict_identity_slots
+> 0
+> ```
+>
+> **What that control is, precisely.** It is *not* what stops a revoked caller making new
+> calls — identity propagation resolves per request and a revoked grant surfaces as
+> `PropagationError::AccountNotConnected`, refused before the pool is consulted. What
+> eviction closes is the state revocation leaves behind: the pooled slot holds a live
+> upstream transport minted under the now-revoked grant, plus that identity's cached
+> metadata. Without it the backend-side session outlives the revocation. It is the
+> session-teardown half of `MIK-7334.CATALOGUE.1`, whose requirement reads *"isolated by
+> verified caller and authorization context, including changes and revocation"*.
+>
+> **The drift check cannot see this, by the manifest's own admission.**
+> `security-controls.toml` derives its population from
+> `docs/requirements/nfr-sec1-control-inventory.md` plus the module inventory under
+> `src/security/`, and its header states the residual: *"a control merged into a file that
+> is neither under `src/security/` nor named by the inventory is still invisible to both
+> authorities."* #707 touched sixteen files and **none is under `src/security/`**. So step
+> 7's checker reports `0 failing` and exits 0 against a build that lacks it. Add this to
+> the list of things the drift check cannot see.
+>
+> **The stopping rule, so "rebuild at the tip" terminates.** The release line keeps
+> moving; re-staging on every commit never lets a cutover finish. Re-stage only when
+>
+> ```
+> git diff --name-only <staged-sha>..origin/docs/ranking-1-release-line -- src/ Cargo.toml Cargo.lock
+> ```
+>
+> is non-empty. Six of the seven commits above were documentation and changed nothing the
+> binary carries; one was #707 and changed everything. If that command prints nothing, the
+> staged artifact is current for this criterion and the cutover proceeds.
+
 No macOS build carrying `5d25f104` exists on disk. Swept 2026-09-19 across every
 mcp-gateway checkout and worktree: three `target/` trees exist, two of them debug builds
 in other agents' worktrees and one with no binary at all, and **no `release/` binary
