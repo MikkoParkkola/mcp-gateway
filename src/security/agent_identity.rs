@@ -23,6 +23,11 @@
 //! the principal, never satisfy `require_id`, and never satisfy `known_agents`
 //! — an allowlist satisfied by self-declaration is not a control.
 //!
+//! A declared label that **contradicts** the proven principal is refused, for
+//! either proof source. Acceptance is reachable only where the operator has
+//! declared the namespaces incomparable, which is a claim about their own
+//! deployment that only they can make.
+//!
 //! There is deliberately no unsigned-token rung. A base64 decode of a JWT
 //! payload with no signature check is not proof of anything; it is the caller's
 //! own assertion in a format that looks authoritative, which is worse than an
@@ -38,6 +43,7 @@
 //!     known_agents: []     # optional allowlist of accepted PROVEN principals
 //!     allow_unverified_agent_identity: false  # legacy: a label may satisfy the above
 //!     principal_labels: []                    # opt-in: extra labels a principal may declare
+//!     incomparable_proof_sources: []          # opt-in: namespaces a label cannot be compared to
 //! ```
 //!
 //! `known_agents` is a **proven-principal** allowlist: when non-empty, a proven
@@ -92,15 +98,38 @@ pub struct AgentIdentityConfig {
     /// path dead config: an operator reading it would never write the row that
     /// enables it.
     ///
-    /// What is true of mTLS is the *default*, not the representability: an
-    /// mTLS subject with no entry keeps the incomparable default, accepted and
-    /// audited rather than refused, because a SAN URI and a short label cannot
-    /// be compared without inventing an ordering. An operator who *can* name a
-    /// subject writes a row for it and gets the contradiction refusal. The id
+    /// An mTLS subject with no entry is **refused** on a differing label, the
+    /// same as an unmapped JWT principal, unless the operator has waived the
+    /// namespace via `incomparable_proof_sources`. An earlier version of this
+    /// doc called acceptance "the default", which was the widening this field
+    /// exists to undo: no authority above the code ever made it one. The id
     /// must be the **selected** proven id — first SAN URI, else CN — never a
     /// DN fragment: `id = "CN=runner"` mints a row that can never match.
     #[serde(default)]
     pub principal_labels: Vec<PrincipalLabels>,
+    /// Proof sources whose identifiers the operator declares **incomparable**
+    /// with a declared label.
+    ///
+    /// Empty by default, and the emptiness is the point. The ruling this
+    /// module implements says a declared label contradicting a proven one
+    /// "is a REFUSAL, not a silent override", with no proof-source
+    /// qualification. The design narrowed that to "accepted **under a
+    /// namespace waiver**", which is sound — if two namespaces are genuinely
+    /// incomparable then nothing *contradicts* and the clause does not bite —
+    /// but it is conditioned on a waiver the operator grants.
+    ///
+    /// An earlier implementation dropped the condition and made acceptance the
+    /// default for mTLS. The chain ran **refuse → refuse unless waived →
+    /// accept by default**: each step small, the composition inverting the
+    /// ruling, and a waiver an operator *grants* becoming one they must
+    /// *override*. This field restores the condition.
+    ///
+    /// Listing `mtls` here states that a SAN URI and a short label cannot be
+    /// compared, so a mismatch is recorded as a detection signal rather than
+    /// refused. It is per-source: waiving one namespace never waives the
+    /// other.
+    #[serde(default)]
+    pub incomparable_proof_sources: Vec<ProofSource>,
 }
 
 /// One allowlist entry: a proof source and the identifier it admits.
@@ -440,10 +469,12 @@ fn validate_without_proof(
 ///    certificate subject gets the contradiction refusal the criterion
 ///    promises. This arm is why the mTLS refusal path is live config rather
 ///    than dead code.
-/// 3. **Unmapped mTLS — accept and audit.** A SAN URI and a short label live
-///    in namespaces the gateway cannot compare without inventing an ordering,
-///    and an invented ordering later reads as a security guarantee. The
-///    default, not the representability: the mismatch is a detection signal.
+/// 3. **Waived namespace — accept and audit.** Reached only when the operator
+///    has listed the proof source in `incomparable_proof_sources`, declaring
+///    that a SAN URI and a short label cannot be compared in their deployment.
+///    An opt-in, never a default: the ruling says a contradicting label is a
+///    refusal, and accepting by proof source alone is the silent override it
+///    names.
 /// 4. **Unmapped JWT — refuse.** The label namespace and the `client_id`
 ///    namespace are the same kind of name, so a differing label is comparable,
 ///    and a missing mapping is never read as permission.
@@ -493,7 +524,7 @@ fn check_declared_label(
     // certificate subject unreachable in every configuration — the criterion
     // says a contradicting label "is refused rather than silently applied",
     // and for mTLS callers it never was. An operator who can name a subject
-    // can now get that refusal; one who cannot keeps the incomparable default
+    // can now get that refusal; one who cannot waives the namespace instead
     // below.
     if let Some(entry) = config
         .principal_labels
@@ -506,11 +537,20 @@ fn check_declared_label(
         return Err(contradiction(declared, proven));
     }
 
-    // Arm 3 — unmapped mTLS: the namespaces are incomparable, so the mismatch
-    // is a detection signal rather than a refusal. A SAN URI and a short label
-    // cannot be compared without inventing an ordering, and an invented
-    // ordering later reads as a security guarantee.
-    if proven.proof() == ProofSource::MutualTls {
+    // Arm 3 — the operator has WAIVED this namespace as incomparable.
+    //
+    // Gated on the waiver, not on the proof source. An unconditional version
+    // of this arm is how the ruling got inverted: it says a contradicting
+    // label "is a REFUSAL, not a silent override", and accepting every
+    // unmapped mTLS mismatch by default is the silent override it names. The
+    // design's acceptance was always conditioned on a waiver — that condition
+    // is what makes the reasoning valid, because incomparability is a claim
+    // only the operator can make about their own deployment.
+    //
+    // With the waiver, a SAN URI and a short label genuinely cannot be
+    // compared, so nothing *contradicts* and the mismatch is recorded as a
+    // detection signal. Without it, this falls through and refuses.
+    if config.incomparable_proof_sources.contains(&proven.proof()) {
         return Ok(IdentityAudit::DeclaredLabelMismatch);
     }
 
