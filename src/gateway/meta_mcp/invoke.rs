@@ -118,14 +118,14 @@ use guarded::GuardedValue;
 
 use super::super::meta_mcp_helpers::{
     build_circuit_breaker_stats_json, build_server_safety_status, build_stats_response,
-    did_you_mean, extract_bool_or, extract_optional_str, extract_required_str,
-    parse_tool_arguments,
+    extract_bool_or, extract_optional_str, extract_required_str, parse_tool_arguments,
 };
 use super::super::recovery::{ErrorCategory, RecoveryContext, attach_recovery, recovery_for};
 use super::super::trace;
 use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
 mod side_effect_markers;
+mod suggestion;
 
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
@@ -3495,7 +3495,11 @@ impl MetaMcp {
         // Eagerly check the cached tool list for a "did you mean?" hint.
         // Only fires when the cache is populated and the tool is not found there.
         // We still dispatch to the backend in case the cache is stale.
-        let cached_names = backend.get_cached_tool_names();
+        // The pool is drawn through the caller's routing profile (MIK-7518).
+        // Deriving `tool_is_cached` from the filtered list is behaviour-
+        // identical because `validate_invocation` already refuses a profile-
+        // denied tool above the caches, so a denied name never reaches here.
+        let cached_names = self.suggestible_tool_names(&backend, session_id);
         let tool_is_cached = cached_names.iter().any(|n| n == tool);
 
         // Build request params. `_meta` is one object, so one writer owns it:
@@ -3558,18 +3562,13 @@ impl MetaMcp {
         if let Some(error) = response.error {
             // When we have cached names and the tool wasn't in them, enrich
             // the error with Levenshtein-based suggestions.
-            let message = if !cached_names.is_empty() && !tool_is_cached {
-                let candidates: Vec<&str> = cached_names.iter().map(String::as_str).collect();
-                match did_you_mean(tool, &candidates, 3, 3) {
-                    Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
-                    None => format!(
-                        "Tool '{tool}' not found on server '{server}'. {}",
-                        error.message
-                    ),
-                }
-            } else {
-                error.message
-            };
+            let message = suggestion::invocation_miss_message(
+                server,
+                tool,
+                &cached_names,
+                tool_is_cached,
+                error.message,
+            );
             return Err(Error::JsonRpc {
                 code: error.code,
                 message,
