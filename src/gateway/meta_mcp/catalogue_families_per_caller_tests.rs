@@ -627,6 +627,24 @@ async fn a_stateless_backend_fills_its_shared_slot_unidentified(method: &str) {
     let alpha = listed_for(&meta, method, Some(&alpha_id)).await;
     let beta = listed_for(&meta, method, Some(&beta_id)).await;
 
+    // PROVENANCE, as a full transcript. Two reads produced exactly one fill, on
+    // the shared slot, and that fill went upstream carrying no headers at all.
+    // Unsorted and undeduplicated, with the `None` kept: it is the evidence the
+    // fill ran on the shared slot rather than a private one.
+    assert_eq!(
+        wire.fills_for(method),
+        vec![None],
+        "{method}: a `stateless` backend must fill its one shared slot once, \
+         unkeyed"
+    );
+    assert_eq!(
+        wire.headers_for(method),
+        vec![Vec::<(String, String)>::new()],
+        "{method}: the fill that populated the SHARED slot carried the calling \
+         identity's minted credential upstream, so what every caller now reads \
+         is private to one of them"
+    );
+
     // THE DISCLOSURE. Beta reads the slot alpha filled.
     assert!(
         !serves(&beta, ALPHA_ITEM),
@@ -648,24 +666,6 @@ async fn a_stateless_backend_fills_its_shared_slot_unidentified(method: &str) {
         serves(&beta, STATIC_ITEM),
         "{method}: beta was served nothing, so the check above measures an empty \
          answer rather than isolation: {beta:?}"
-    );
-
-    // PROVENANCE, as a full transcript. Two reads produced exactly one fill, on
-    // the shared slot, and that fill went upstream carrying no headers at all.
-    // Unsorted and undeduplicated, with the `None` kept: it is the evidence the
-    // fill ran on the shared slot rather than a private one.
-    assert_eq!(
-        wire.fills_for(method),
-        vec![None],
-        "{method}: a `stateless` backend must fill its one shared slot once, \
-         unkeyed"
-    );
-    assert_eq!(
-        wire.headers_for(method),
-        vec![Vec::<(String, String)>::new()],
-        "{method}: the fill that populated the SHARED slot carried the calling \
-         identity's minted credential upstream, so what every caller now reads \
-         is private to one of them"
     );
 }
 
