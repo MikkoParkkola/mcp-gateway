@@ -325,6 +325,29 @@ fn cache_binding(subject_key: &str, audience: &str) -> String {
     )
 }
 
+/// The binding PREFIX a grant revocation evicts on, reconstructed from the
+/// grant subject (MIK-7530, `MIK-7334.CATALOGUE.1` revocation conjunct).
+///
+/// UNIMPLEMENTED STUB. It returns `None` for every subject — the "matches
+/// nothing" wrong implementation the C7/C8/C10 cells exist to kill. Neutral
+/// value rather than `todo!()` so each cell fails on its own assertion.
+///
+/// The contract, from
+/// `docs/internal/design/2026-09-22-identity-keyed-slot-eviction.md` §E1:
+/// `Some(format!("idp:{}:{}:", key.len(), key))` where `key` is
+/// `VerifiedIdentity::stable_actor_id`'s encoding of (authority, subject);
+/// `None` when the authority is not issuer-shaped, so an `mtls` /
+/// `agent_oauth` / `trusted_header` grant skips rather than matches. It lands
+/// HERE, beside [`cache_binding`], because this is the only place the two
+/// formulas may meet.
+#[allow(dead_code)] // no production caller until MVP piece 3 wires the reload loop
+pub(crate) fn identity_binding_prefix(
+    subject: &crate::identity_grants::GrantSubject,
+) -> Option<String> {
+    let _ = subject;
+    None
+}
+
 /// Reference strategy: mint a short-lived gateway-signed JWT (ES256) asserting
 /// the end-user identity. For first-party / gateway-trusting backends that
 /// verify the gateway's JWKS key (ADR-001 / the gateway `GatewayKeyPair`).
@@ -970,6 +993,163 @@ mod tests {
                  (status={:?}, stderr={})",
                 output.status,
                 String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // MIK-7334.CATALOGUE.1 revocation conjunct — the prefix cells.
+    //
+    // They live HERE rather than in `src/backend/slot_eviction_tests.rs`
+    // because `cache_binding` is a private `fn` in this module, and asserting
+    // against it from outside would need a visibility widening nobody asked
+    // for. `identity_binding_prefix` is the production helper under test; it is
+    // an unimplemented stub returning `None`, so every cell below is red.
+    // ------------------------------------------------------------------
+
+    use crate::identity_grants::GrantSubject;
+
+    /// The subject key a caller's slot is really keyed on, from the production
+    /// formula (`VerifiedIdentity::stable_actor_id`).
+    fn subject_key(issuer: &str, subject: &str) -> String {
+        identity(subject, issuer).stable_actor_id()
+    }
+
+    /// The grant row an operator stores, built by the PRODUCTION constructor
+    /// path's own normalisation rules. C10a/C10b exist because that
+    /// normalisation and `stable_actor_id` disagree.
+    fn oidc_grant_subject(issuer: &str, subject: &str) -> GrantSubject {
+        // Mirrors `grant_subject_from_verified_identity`
+        // (`gateway/router/handlers.rs:71-78`), which is private to that
+        // module: trim, then take 512 CHARS. The divergence from
+        // `stable_actor_id`'s raw, BYTE-length-prefixed encoding is the defect
+        // C10a/C10b pin, so the fixture must reproduce it rather than hide it.
+        let trimmed = subject.trim();
+        let stored: String = trimmed.chars().take(512).collect();
+        GrantSubject::new(issuer.to_string(), stored, None)
+    }
+
+    // C7 — the matcher cell. Goes red when the prefix over-matches or
+    // under-matches: `contains` instead of `starts_with`, a dropped trailing
+    // separator, or a forgotten length prefix.
+    //
+    // THE FIRST DRAFT OF THIS CELL WAS VACUOUS AND REVIEW CAUGHT IT. On
+    // ordinary fixtures a full `idp:{n}:{S}:` prefix occurs only at offset 0,
+    // where `contains` and `starts_with` agree — so the cell could not go red
+    // against the matcher its own row claims to kill. The fixture therefore
+    // PLANTS the collision: identity Y is given an audience whose bytes carry
+    // identity X's COMPLETE prefix at a nonzero offset. Reachable by
+    // configuration, not contrived — the audience is an operator-set string.
+    #[test]
+    fn c7_the_prefix_matches_by_starts_with_and_never_by_containment() {
+        let issuer = "https://idp";
+        let x_key = subject_key(issuer, "xyz");
+        let prefix = identity_binding_prefix(&oidc_grant_subject(issuer, "xyz"))
+            .expect("C7 premise: an issuer-shaped subject yields a prefix");
+
+        // Direction 1 — it matches X's own binding for EVERY audience, and
+        // every token-exchange widening of those keys (which append further
+        // length-prefixed segments to the right).
+        for audience in ["https://mail", "https://ledger", ""] {
+            let binding = cache_binding(&x_key, audience);
+            assert!(
+                binding.starts_with(&prefix),
+                "C7: X's prefix must match X's binding for audience {audience:?}"
+            );
+            let widened = format!("{binding}:4:sts1:4:read");
+            assert!(
+                widened.starts_with(&prefix),
+                "C7: X's prefix must match the token-exchange widening too"
+            );
+        }
+
+        // Direction 2 — THE PLANTED COLLISION. Y's audience contains X's
+        // complete prefix at a nonzero offset. `contains` evicts Y here;
+        // `starts_with` does not.
+        let y_key = subject_key(issuer, "someone-else");
+        let poisoned_audience = format!("https://h/{prefix}junk");
+        let y_binding = cache_binding(&y_key, &poisoned_audience);
+        assert!(
+            y_binding.contains(&prefix),
+            "C7 premise: the fixture must actually plant the collision, \
+             otherwise this cell cannot discriminate `contains` from \
+             `starts_with` and passes vacuously"
+        );
+        assert!(
+            !y_binding.starts_with(&prefix),
+            "C7: X's revocation must not reach Y through a mid-string match"
+        );
+    }
+
+    // C8 — a guard, not coverage. Goes red when a non-issuer authority
+    // silently evicts something: reconstructing a prefix for an `mtls` /
+    // `agent_oauth` / `trusted_header` grant and matching by accident.
+    //
+    // GREEN AGAINST THE STUB, which returns `None` for everything. Recorded as
+    // such: it asserts exactly the stub's behaviour and only starts
+    // discriminating once C7/C10 force the `Some` arm to exist.
+    #[test]
+    fn c8_a_non_issuer_authority_yields_no_prefix_at_all() {
+        for authority in ["mtls", "agent_oauth", "trusted_header"] {
+            let subject = GrantSubject::new(authority.to_string(), "alice".to_string(), None);
+            assert!(
+                identity_binding_prefix(&subject).is_none(),
+                "C8: authority {authority:?} must SKIP, never fall through to a match"
+            );
+        }
+    }
+
+    // C10a — §E1.1, and red TODAY against live behaviour rather than absence.
+    //
+    // Goes red when a subject with surrounding whitespace is never evicted.
+    // `grant_subject_from_verified_identity` routes the subject through
+    // `trimmed_non_empty` while `stable_actor_id` length-prefixes the RAW
+    // bytes, so the grant stores one string and the binding carries another:
+    // the reconstructed prefix matches nothing, eviction returns 0, and the
+    // reload reports success. The criterion goes unmet for those callers,
+    // silently.
+    #[test]
+    fn c10a_a_subject_with_surrounding_whitespace_is_still_evictable() {
+        let issuer = "https://idp";
+        let raw = " alice ";
+        // The binding the request path really builds, from the RAW claim.
+        let binding = cache_binding(&subject_key(issuer, raw), "https://mail");
+        // The prefix the control path reconstructs, from the STORED grant row.
+        let prefix = identity_binding_prefix(&oidc_grant_subject(issuer, raw))
+            .expect("C10a premise: an issuer-shaped subject yields a prefix");
+
+        assert!(
+            binding.starts_with(&prefix),
+            "C10a: a whitespace-bearing subject's slot must be reachable by \
+             its own grant's prefix; trimming at grant construction strands it"
+        );
+    }
+
+    // C10b — the other half of §E1.1, and a DISTINCT cell: a length cutoff and
+    // a trim fail on different inputs.
+    //
+    // Goes red when a subject longer than 512 characters is never evicted.
+    // `.chars().take(512)` truncates by CHARACTERS while `stable_actor_id`
+    // length-prefixes by `.len()`, which is BYTES — so a multi-byte subject
+    // diverges on the length prefix as well as on the content, and the
+    // mismatch is not confined to the obvious over-limit case.
+    #[test]
+    fn c10b_a_subject_over_the_length_bound_is_still_evictable() {
+        let issuer = "https://idp";
+        for raw in [
+            "a".repeat(600),
+            // Multi-byte: 600 chars, 1800 bytes. The char-vs-byte disagreement
+            // is why this input is here and not folded into the ASCII case.
+            "ä".repeat(600),
+        ] {
+            let binding = cache_binding(&subject_key(issuer, &raw), "https://mail");
+            let prefix = identity_binding_prefix(&oidc_grant_subject(issuer, &raw))
+                .expect("C10b premise: an issuer-shaped subject yields a prefix");
+            assert!(
+                binding.starts_with(&prefix),
+                "C10b: a {}-byte subject's slot must be reachable by its own \
+                 grant's prefix; the 512-char cutoff strands it",
+                raw.len()
             );
         }
     }

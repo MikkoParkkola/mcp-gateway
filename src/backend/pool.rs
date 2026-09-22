@@ -319,6 +319,41 @@ impl Backend {
             .and_then(|entry| entry.value().transport.read().clone())
     }
 
+    /// Drop every per-user slot whose binding starts with `binding_prefix`,
+    /// and with each slot its transport and all four metadata caches
+    /// (MIK-7530, `MIK-7334.CATALOGUE.1` revocation conjunct). Returns the
+    /// number of slots removed.
+    ///
+    /// UNIMPLEMENTED STUB. It returns `0` — the "does nothing" wrong
+    /// implementation that `src/backend/slot_eviction_tests.rs` exists to kill.
+    /// The stub returns a neutral value rather than `todo!()` on purpose: a
+    /// panic would make every cell report the same string, and the cells are
+    /// specified by failure mode, so each must fail on its own assertion.
+    ///
+    /// The contract the cells pin, from
+    /// `docs/internal/design/2026-09-22-identity-keyed-slot-eviction.md` §E1/§E3:
+    /// match `PoolKey::PerUser { binding }` on `binding.starts_with(prefix)`,
+    /// never `contains`; remove from the map UNCONDITIONALLY (the removal is
+    /// the atomic point); close the transport only when `in_flight == 0`,
+    /// re-checked under the transport WRITE guard.
+    #[allow(clippy::unused_async_trait_impl)] // the real body awaits transport.close()
+    pub async fn evict_identity_slots(&self, binding_prefix: &str) -> usize {
+        let _ = binding_prefix;
+        0
+    }
+
+    /// Test-only: whether the pool currently maps `key`, WITHOUT creating it.
+    ///
+    /// §3.1 Rule 1: every cache accessor routes through `tools_slot` →
+    /// `pooled_entry` → `or_insert_with`, so it creates the slot it then
+    /// reports empty. `pooled_transport_for_test` does not create, but answers
+    /// `None` for both "slot absent" and "slot present, transport unstarted".
+    /// This is the one probe that distinguishes them.
+    #[cfg(test)]
+    pub(crate) fn pool_has_slot_for_test(&self, key: &PoolKey) -> bool {
+        self.pool.get(key).is_some()
+    }
+
     /// Idle-evict per-user pool slots whose last use predates `idle_ttl`,
     /// closing their transports. The canonical [`PoolKey::Shared`] slot is never
     /// evicted (it backs init, metadata, and single-tenant traffic). Returns the
