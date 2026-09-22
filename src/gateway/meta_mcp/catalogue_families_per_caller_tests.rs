@@ -27,6 +27,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+/// One recorded fetch: the method, and the headers it was handed.
+type HeaderFill = (String, Vec<(String, String)>);
+
 /// Catalogue item names the per-identity upstream serves.
 const ALPHA_ITEM: &str = "alpha_private_entry";
 const BETA_ITEM: &str = "beta_private_entry";
@@ -57,6 +60,12 @@ struct PerIdentityFamilies {
     per_identity: HashMap<String, String>,
     /// `(method, identity_key)` for every fetch, in order.
     seen: parking_lot::Mutex<Vec<(String, Option<String>)>>,
+    /// `(method, extra_headers)` for every fetch, in order.
+    ///
+    /// The WHOLE header list, never the subject parsed out of
+    /// `Authorization`: a strategy that mints under some other header name
+    /// would walk straight past a check that only reads one key.
+    headers_seen: parking_lot::Mutex<Vec<HeaderFill>>,
     /// Total fetches, for the single-flight control.
     requests: AtomicUsize,
 }
@@ -70,6 +79,7 @@ impl PerIdentityFamilies {
                 .map(|(s, t)| ((*s).to_string(), (*t).to_string()))
                 .collect(),
             seen: parking_lot::Mutex::new(Vec::new()),
+            headers_seen: parking_lot::Mutex::new(Vec::new()),
             requests: AtomicUsize::new(0),
         }
     }
@@ -87,6 +97,20 @@ impl PerIdentityFamilies {
             .iter()
             .filter(|(m, _)| m == method)
             .map(|(_, key)| key.clone())
+            .collect()
+    }
+
+    /// Every header list `method` was fetched with, in order.
+    ///
+    /// RAW, for the reason `fills_for` is raw. An empty list is a real entry
+    /// and must stay visible: it is the evidence that a fill on the shared
+    /// slot went upstream without the calling identity attached.
+    fn headers_for(&self, method: &str) -> Vec<Vec<(String, String)>> {
+        self.headers_seen
+            .lock()
+            .iter()
+            .filter(|(m, _)| m == method)
+            .map(|(_, headers)| headers.clone())
             .collect()
     }
 
@@ -134,6 +158,9 @@ impl crate::transport::Transport for PerIdentityFamilies {
         self.seen
             .lock()
             .push((method.to_string(), identity_key.map(str::to_string)));
+        self.headers_seen
+            .lock()
+            .push((method.to_string(), extra_headers.to_vec()));
 
         let item = extra_headers
             .iter()
@@ -519,4 +546,140 @@ async fn a_non_identity_backend_still_single_flights_to_one_fetch() {
              anything else means it was slotted per caller after all"
         );
     }
+}
+
+/// The backend whose `session_mode` is `stateless`, not `per_user`.
+const STATELESS_BACKEND: &str = "stateless_families";
+
+/// `session_mode = stateless`, identity propagation CONFIGURED.
+///
+/// The shape no other fixture in this file has, and the reason the suite was
+/// blind to it. `pool_key_for` grants a private slot to `(per_user, binding)`
+/// alone, so a `stateless` backend collapses to `PoolKey::Shared` however well
+/// its caller identifies itself — while the resolver still mints that caller a
+/// credential, because `cache_binding` is derived from subject and audience and
+/// never consults the session mode. The two together are the whole defect:
+/// minted headers arriving at a slot every caller reads.
+///
+/// `required: false` for the reason [`per_user_config`] gives: a `required`
+/// backend with no per-user credential is omitted outright, and these cases
+/// would then pass on an empty answer.
+fn stateless_config() -> BackendConfig {
+    BackendConfig {
+        identity_propagation: Some(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: "ledger".to_string(),
+            required: false,
+            session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
+        }),
+        ..Default::default()
+    }
+}
+
+/// A multi-user gateway holding one `stateless` backend and nothing else.
+///
+/// One backend on purpose: every assertion below is about which catalogue that
+/// backend's single shared slot holds, and a control backend contributing items
+/// of its own would only dilute the answer.
+fn stateless_gateway() -> (MetaMcp, Arc<PerIdentityFamilies>) {
+    let wire = Arc::new(PerIdentityFamilies::new(
+        STATIC_ITEM,
+        &[("alpha", ALPHA_ITEM), ("beta", BETA_ITEM)],
+    ));
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(
+        registry.register(backend_on(STATELESS_BACKEND, stateless_config(), &wire)),
+        "fixture registration"
+    );
+    let meta = MetaMcp::new(registry);
+    meta.set_identity_propagation(Arc::new(super::PerIdentityMint));
+    meta.set_multi_user(true);
+    (meta, wire)
+}
+
+/// GIVEN a `stateless` backend with identity propagation configured, whose
+/// upstream serves a different catalogue per credential
+/// WHEN alpha lists `method` and beta then lists it
+/// THEN the one shared slot was filled by a fetch carrying NO headers, so beta
+/// is served the static-credential catalogue rather than alpha's private one.
+///
+/// THE CROSS-TENANT CASE, which a `per_user` fixture cannot reach.
+/// `pool_key_for` hands a `stateless` backend `PoolKey::Shared` for every
+/// caller, so alpha's fill and beta's read are one cache entry. Carry alpha's
+/// minted credential into that fill and alpha's private catalogue is what beta
+/// reads, until TTL.
+///
+/// THE HEADER TRANSCRIPT IS THE ASSERTION, not the items. Two identities can
+/// coincidentally be served one list; a minted `Authorization` recorded on the
+/// fill that populated a shared slot cannot be explained away.
+///
+/// This pins the documented gap, NOT a per-caller `stateless` catalogue:
+/// serving one needs an uncached path or a per-identity slot, and
+/// `pool_key_for` carries a byte-for-byte single-tenant guarantee (IDP.5) that
+/// makes changing it a separate decision.
+async fn a_stateless_backend_fills_its_shared_slot_unidentified(method: &str) {
+    let (meta, wire) = stateless_gateway();
+    let alpha_id = identity("alpha");
+    let beta_id = identity("beta");
+
+    let alpha = listed_for(&meta, method, Some(&alpha_id)).await;
+    let beta = listed_for(&meta, method, Some(&beta_id)).await;
+
+    // THE DISCLOSURE. Beta reads the slot alpha filled.
+    assert!(
+        !serves(&beta, ALPHA_ITEM),
+        "{method}: beta was served alpha's private catalogue out of the shared \
+         slot of a `stateless` backend: {beta:?}"
+    );
+
+    // WHAT EACH CALLER MUST SEE INSTEAD — the static-credential catalogue, which
+    // is what a `stateless` backend served before this branch. Doubles as the
+    // anti-vacuity guard: without it the absence check above passes against a
+    // gateway that answered nobody.
+    assert!(
+        serves(&alpha, STATIC_ITEM) && !serves(&alpha, ALPHA_ITEM),
+        "{method}: a `stateless` backend fetched its catalogue under the \
+         calling identity's own credential, and one shared slot then hands that \
+         result to everybody: {alpha:?}"
+    );
+    assert!(
+        serves(&beta, STATIC_ITEM),
+        "{method}: beta was served nothing, so the check above measures an empty \
+         answer rather than isolation: {beta:?}"
+    );
+
+    // PROVENANCE, as a full transcript. Two reads produced exactly one fill, on
+    // the shared slot, and that fill went upstream carrying no headers at all.
+    // Unsorted and undeduplicated, with the `None` kept: it is the evidence the
+    // fill ran on the shared slot rather than a private one.
+    assert_eq!(
+        wire.fills_for(method),
+        vec![None],
+        "{method}: a `stateless` backend must fill its one shared slot once, \
+         unkeyed"
+    );
+    assert_eq!(
+        wire.headers_for(method),
+        vec![Vec::<(String, String)>::new()],
+        "{method}: the fill that populated the SHARED slot carried the calling \
+         identity's minted credential upstream, so what every caller now reads \
+         is private to one of them"
+    );
+}
+
+#[tokio::test]
+async fn a_stateless_backend_fills_shared_resources_unidentified() {
+    a_stateless_backend_fills_its_shared_slot_unidentified("resources/list").await;
+}
+
+#[tokio::test]
+async fn a_stateless_backend_fills_shared_resource_templates_unidentified() {
+    a_stateless_backend_fills_its_shared_slot_unidentified("resources/templates/list").await;
+}
+
+#[tokio::test]
+async fn a_stateless_backend_fills_shared_prompts_unidentified() {
+    a_stateless_backend_fills_its_shared_slot_unidentified("prompts/list").await;
 }

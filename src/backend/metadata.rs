@@ -192,6 +192,21 @@ impl Backend {
             PoolKey::PerUser { binding: slot } => Some(slot.as_str()),
             PoolKey::Shared => None,
         };
+        // MINTED HEADERS TRAVEL ONLY TO A SLOT THEIR OWNER HOLDS ALONE.
+        // `pool_key_for` grants a private slot to `(per_user, binding)` and
+        // nothing else, so a `stateless` backend — and a `per_user` one whose
+        // caller resolved no binding — lands on `PoolKey::Shared` while the
+        // resolver has still minted that caller a credential. Fetching under it
+        // would write ONE caller's private catalogue into the entry every caller
+        // reads, and serve it to all of them until TTL. Dropping the headers
+        // there restores the identity-free fill the shared slot had before,
+        // which is the documented `stateless` gap rather than a disclosure
+        // (IDP.5). Closing that gap properly needs an uncached path or a
+        // per-identity slot, and both are changes to `pool_key_for`.
+        let fetch_headers: &[(String, String)] = match identity_key {
+            Some(_) => extra_headers,
+            None => &[],
+        };
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
         let lease = self.begin_internal_activity_for(&key);
         let entry = Arc::clone(lease.entry());
@@ -202,7 +217,7 @@ impl Backend {
                     .request_with_headers(
                         method,
                         None,
-                        extra_headers,
+                        fetch_headers,
                         identity_key,
                         // A `*/list` is in the side-effect-free allowlist
                         // (`transport::SIDE_EFFECT_FREE_METHODS`), so a retried
@@ -247,7 +262,10 @@ impl Backend {
     /// everything else collapses to `Shared`, so single-tenant behaviour is
     /// byte-for-byte unchanged (IDP.5). `extra_headers` are the same minted
     /// headers the slot's transport was opened with, so the catalogue is fetched
-    /// AS that caller rather than under the gateway's static credential.
+    /// AS that caller rather than under the gateway's static credential — on a
+    /// `PerUser` slot ONLY. Collapse to `Shared` and they are dropped: one cache
+    /// entry answers every caller, so a fetch made under one caller's
+    /// credential would hand that caller's catalogue to all of them.
     ///
     /// # Errors
     ///
@@ -348,7 +366,7 @@ impl Backend {
     /// caller's `PropagatedCredential::cache_binding`, everything that is not a
     /// `session_mode = per_user` backend with a binding collapses to the shared
     /// slot, and `extra_headers` are the headers that slot's transport was
-    /// opened with.
+    /// opened with — carried on a `PerUser` slot, dropped on the shared one.
     ///
     /// # Errors
     ///
