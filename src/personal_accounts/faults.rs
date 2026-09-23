@@ -171,6 +171,20 @@ pub(super) fn reached(boundary: Boundary) -> Result<(), AccountError> {
     })
 }
 
+/// Faults armed for one store's authority directory, on ANY thread: custody
+/// runs the store on `spawn_blocking` threads a router test never sees, so
+/// the thread-local arm cannot reach it. Keyed by directory, so a parallel
+/// test's store is never hit. Each entry fires once.
+static DIR_ARMED: std::sync::Mutex<Vec<(std::path::PathBuf, Boundary)>> =
+    std::sync::Mutex::new(Vec::new());
+
+pub(super) fn arm_dir(dir: &std::path::Path, boundary: Boundary) {
+    DIR_ARMED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((dir.to_path_buf(), boundary));
+}
+
 #[test]
 fn a_fault_fires_once_at_its_own_boundary_and_then_disarms() {
     let armed = arm(Boundary::ManifestRename);

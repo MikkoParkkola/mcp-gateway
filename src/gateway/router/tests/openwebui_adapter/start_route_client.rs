@@ -191,45 +191,6 @@ async fn start_of_absent_journey_renders_expired_page_without_asking_owui() {
     assert!(owui.seen().is_empty(), "{:?}", owui.seen());
 }
 
-type Captured = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
-
-struct Sink(Captured);
-
-impl std::io::Write for Sink {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-/// Every span and event at TRACE on this thread (the handler, the bridge
-/// client and the fake all run on it under `current_thread`).
-fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
-    use tracing_subscriber::fmt::format::FmtSpan;
-    use tracing_subscriber::prelude::*;
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
-    let captured = Captured::default();
-    let writer = captured.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .without_time()
-        .with_ansi(false)
-        .with_max_level(tracing::Level::TRACE)
-        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-        .with_writer(move || Sink(writer.clone()))
-        .finish();
-    (captured, tracing::subscriber::set_default(subscriber))
-}
-
 /// §4.3 never-leak: the session token and the profile fields Open `WebUI`
 /// echoes appear in no log line, page, `Location` or cookie.
 #[tokio::test(flavor = "current_thread")]

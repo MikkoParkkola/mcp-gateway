@@ -18,16 +18,19 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use tower::ServiceExt as _;
 
-use super::config::AccountDescriptor;
-use super::provider::{
-    HttpError, HttpResponse, PersonalOAuthRefresh, ProviderHttp, SecretSource, SystemClock,
-};
+use super::config::{AccessType, AccountDescriptor, AuthorizeExtra};
+use super::provider::{HttpError, HttpResponse, PersonalOAuthRefresh, ProviderHttp, SecretSource};
 use super::service::AccountServiceError;
 use super::worker::{CustodyError, CustodyHandle};
 use super::{
     AccountKey, AccountReleaseAudit, AccountRevocation, GrantRecord, GrantVersion,
     PersonalAccountStore, StoreConfig,
 };
+
+#[path = "revoke_fixture_token.rs"]
+mod token;
+
+use token::{FixtureClock, TokenScript};
 
 pub(crate) const ISSUER: &str = "https://accounts.fixture.test";
 pub(crate) const REVOKE_URL: &str = "https://accounts.fixture.test/revoke";
@@ -143,7 +146,7 @@ pub(crate) enum Seed {
 }
 
 type FixtureCustody = CustodyHandle<
-    Arc<PersonalOAuthRefresh<FakeHttp, SystemClock, FixedSecret>>,
+    Arc<PersonalOAuthRefresh<FakeHttp, FixtureClock, FixedSecret>>,
     AccountReleaseAudit,
 >;
 
@@ -152,6 +155,9 @@ pub(crate) struct RevokeFixture {
     custody: Arc<FixtureCustody>,
     pub(crate) received: Received,
     status: Arc<AtomicU16>,
+    pub(crate) token: Arc<TokenScript>,
+    clock: FixtureClock,
+    config: StoreConfig,
     _root: tempfile::TempDir,
 }
 
@@ -211,6 +217,35 @@ impl RevokeFixture {
         seeds: &[(AccountKey, GrantRecord, Seed)],
         endpoint: RevocationEndpoint,
     ) -> Self {
+        Self::build(account_ids, resource, seeds, endpoint, None).await
+    }
+
+    /// Unseeded custody whose descriptors ask for `access_type=offline`, so a
+    /// grant without a refresh token is refused (consent callback rows).
+    pub(crate) async fn start_journeys(
+        account_ids: &[&str],
+        resource: &str,
+        endpoint: RevocationEndpoint,
+    ) -> Self {
+        let offline = AuthorizeExtra {
+            access_type: Some(AccessType::Offline),
+            ..AuthorizeExtra::default()
+        };
+        Self::build(account_ids, resource, &[], endpoint, Some(offline)).await
+    }
+
+    async fn build(
+        account_ids: &[&str],
+        resource: &str,
+        seeds: &[(AccountKey, GrantRecord, Seed)],
+        endpoint: RevocationEndpoint,
+        extra: Option<AuthorizeExtra>,
+    ) -> Self {
+        let shape = |mut descriptor: AccountDescriptor| {
+            descriptor.authorize_extra = extra;
+            descriptor
+        };
+        let clock = FixtureClock::default();
         let root = tempfile::tempdir().unwrap();
         let base = root.path().canonicalize().unwrap();
         let config = StoreConfig {
@@ -233,27 +268,38 @@ impl RevokeFixture {
             received: Arc::clone(&received),
             status: Arc::clone(&status),
         };
+        let token = Arc::new(TokenScript::default());
         let router = Router::new()
             .route("/revoke", post(revoke_endpoint))
-            .with_state(script);
+            .with_state(script)
+            .merge(
+                Router::new()
+                    .route("/token", post(token::token_endpoint))
+                    .with_state(Arc::clone(&token)),
+            );
         let metadata = format!(
             r#"{{"issuer":"{ISSUER}","authorization_endpoint":"{ISSUER}/authorize",
                 "token_endpoint":"{ISSUER}/token","revocation_endpoint":"{REVOKE_URL}"}}"#
         );
         let descriptors = account_ids
             .iter()
-            .map(|id| ((*id).to_string(), descriptor(resource, endpoint)))
+            .map(|id| ((*id).to_string(), shape(descriptor(resource, endpoint))))
             .collect();
         let http = FakeHttp { metadata, router };
-        let provider = PersonalOAuthRefresh::bootstrap(descriptors, http, SystemClock, FixedSecret)
-            .await
-            .expect("fixture descriptor bootstraps");
+        let provider =
+            PersonalOAuthRefresh::bootstrap(descriptors, http, clock.clone(), FixedSecret)
+                .await
+                .expect("fixture descriptor bootstraps");
         let custody =
-            CustodyHandle::start(config, Arc::new(provider), AccountReleaseAudit, 4).unwrap();
+            CustodyHandle::start(config.clone(), Arc::new(provider), AccountReleaseAudit, 4)
+                .unwrap();
         Self {
             custody: Arc::new(custody),
             received,
             status,
+            token,
+            clock,
+            config,
             _root: root,
         }
     }

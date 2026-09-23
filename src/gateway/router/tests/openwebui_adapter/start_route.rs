@@ -123,11 +123,20 @@ accounts:
 struct Gateway {
     router: axum::Router,
     config: crate::config::Config,
-    _fixture: RevokeFixture,
+    state: Arc<super::super::super::AppState>,
+    fixture: RevokeFixture,
     _dir: tempfile::TempDir,
 }
 
 async fn gateway(owui: &FakeOwui, starts: u32) -> Gateway {
+    let fixture =
+        RevokeFixture::start_accounts(&[WORK, HOME], RESOURCE, &[], RevocationEndpoint::Configured)
+            .await;
+    gateway_on(owui, starts, fixture).await
+}
+
+/// The gateway over a given custody fixture, with a working transparency log.
+async fn gateway_on(owui: &FakeOwui, starts: u32, fixture: RevokeFixture) -> Gateway {
     let dir = tempfile::tempdir().unwrap();
     let env = dir.path().join("adapter.env");
     std::fs::write(
@@ -139,15 +148,24 @@ async fn gateway(owui: &FakeOwui, starts: u32) -> Gateway {
     let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
     let (mut state, _store) =
         test_router_app_state_with(StreamingConfig::default(), config.clone()).await;
-    Arc::get_mut(&mut state).unwrap().auth_config = auth;
-    let fixture =
-        RevokeFixture::start_accounts(&[WORK, HOME], RESOURCE, &[], RevocationEndpoint::Configured)
-            .await;
-    let router = create_router_with_accounts(state, None, Some(fixture.handles()));
+    let log = crate::security::transparency_log::TransparencyLogConfig {
+        enabled: true,
+        path: dir.path().join("audit.ndjson").display().to_string(),
+        key_id: "fixture".into(),
+        shared_secret: String::new(),
+    };
+    let logger = crate::security::TransparencyLogger::open(Arc::new(log)).unwrap();
+    {
+        let state = Arc::get_mut(&mut state).unwrap();
+        state.auth_config = auth;
+        state.transparency_log = Some(Arc::new(logger));
+    }
+    let router = create_router_with_accounts(Arc::clone(&state), None, Some(fixture.handles()));
     Gateway {
         router,
         config,
-        _fixture: fixture,
+        state,
+        fixture,
         _dir: dir,
     }
 }
@@ -504,5 +522,46 @@ async fn start_refuses_expired_sessions_and_non_string_ids() {
     assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
 }
 
+type Captured = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
+
+struct Sink(Captured);
+
+impl std::io::Write for Sink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Every span and event at TRACE on this thread (the handler, the bridge
+/// client and the fake all run on it under `current_thread`).
+fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
+    use tracing_subscriber::fmt::format::FmtSpan;
+    use tracing_subscriber::prelude::*;
+    static INTEREST: std::sync::Once = std::sync::Once::new();
+    INTEREST.call_once(|| {
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::Registry::default()
+                .with(tracing::level_filters::LevelFilter::TRACE),
+        );
+    });
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+        .with_writer(move || Sink(writer.clone()))
+        .finish();
+    (captured, tracing::subscriber::set_default(subscriber))
+}
+
+#[path = "callback_route.rs"]
+mod callback;
 #[path = "start_route_client.rs"]
 mod client;
