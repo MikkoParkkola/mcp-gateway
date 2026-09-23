@@ -441,7 +441,7 @@ pub(crate) use service::{
 #[cfg(test)]
 pub(crate) use storage::journey::JourneyReason;
 #[cfg(test)]
-pub(crate) use storage::journey::{DigestKind, digest_compared};
+pub(crate) use storage::journey::owner_digest_compared;
 pub(crate) use storage::journey::{
     JourneyError, JourneyLimits, JourneyRefusal, JourneyStatus, JourneyView,
 };

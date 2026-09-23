@@ -33,6 +33,12 @@ const ALICE: &str = "5c0e6f7a-3b1d-4e8a-9f2c-7d6b5a4c3e21";
 const BOB: &str = "b7d9e1f3-0a2c-4e6d-8f1b-3c5e7a9d2f40";
 const ALICE_TOKEN: &str = "owui-session-alice-SECRET-3f9a";
 const BOB_TOKEN: &str = "owui-session-bob-SECRET-8c2d";
+/// Used by one T-CT test each: the operand witness is process-wide, so a
+/// subject shared with a parallel test could satisfy the assertion for it.
+const CAROL: &str = "c3a1f5e7-9b2d-4c6e-8a0f-1d3b5c7e9a2b";
+const CAROL_TOKEN: &str = "owui-session-carol-SECRET-5e1b";
+const MALLORY: &str = "d4b2e6f8-0c3a-4d7f-9b1e-2f4a6c8e0b3d";
+const MALLORY_TOKEN: &str = "owui-session-mallory-SECRET-7a4c";
 const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; \
                    form-action 'self'; frame-ancestors 'none'";
 
@@ -49,6 +55,8 @@ fn users() -> Vec<User> {
     vec![
         user(ALICE_TOKEN, ALICE, "alice-SECRET@example.test"),
         user(BOB_TOKEN, BOB, "bob-SECRET@example.test"),
+        user(CAROL_TOKEN, CAROL, "carol-SECRET@example.test"),
+        user(MALLORY_TOKEN, MALLORY, "mallory-SECRET@example.test"),
     ]
 }
 
@@ -59,16 +67,17 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-fn descriptor_yaml(id: &str) -> String {
+fn descriptor_yaml(id: &str, resource: &str) -> String {
     format!(
         "    {id}:\n      mode: personal_managed\n      provider: fixture\n      \
-         resource: {RESOURCE}\n      issuer: https://issuer.fixture.test\n      \
+         resource: {resource}\n      issuer: https://issuer.fixture.test\n      \
          redirect_uri: https://chat.fixture.test/accounts/v1/callback\n"
     )
 }
 
 fn config(env: &std::path::Path, user_endpoint: &str, starts: u32) -> crate::config::Config {
-    let descriptors = descriptor_yaml(WORK) + &descriptor_yaml(HOME);
+    let descriptors =
+        descriptor_yaml(WORK, RESOURCE) + &descriptor_yaml(HOME, "https://home.fixture.test/");
     serde_yaml::from_str(&format!(
         r#"
 env_files: ["{env}"]
@@ -301,9 +310,11 @@ async fn start_same_principal_redirects_to_pinned_authorize_and_sets_binding() {
     // GIVEN
     let owui = FakeOwui::start(users(), Answer::Session).await;
     let gw = gateway(&owui, 5).await;
-    let id = create(&gw, ALICE, WORK).await;
+    let id = create(&gw, CAROL, WORK).await;
+    let digest = owner_digest(&gw, CAROL, WORK);
+    assert!(!crate::personal_accounts::owner_digest_compared(&digest));
     // WHEN
-    let (status, headers, body) = start(&gw, &id, &[&cookie_of(ALICE_TOKEN)]).await;
+    let (status, headers, body) = start(&gw, &id, &[&cookie_of(CAROL_TOKEN)]).await;
     // THEN
     assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
     assert_eq!(headers[header::CACHE_CONTROL], "no-store");
@@ -327,13 +338,9 @@ async fn start_same_principal_redirects_to_pinned_authorize_and_sets_binding() {
         )
     );
     assert!(!location.contains(&value), "binding must not ride the URL");
-    assert_eq!(owui.seen(), vec![format!("Bearer {ALICE_TOKEN}")]);
-    assert_eq!(journey_status(&gw, ALICE, &id).await["status"], "started");
-    let digest = owner_digest(&gw, ALICE, WORK);
-    assert!(crate::personal_accounts::digest_compared(
-        crate::personal_accounts::DigestKind::Owner,
-        &digest
-    ));
+    assert_eq!(owui.seen(), vec![format!("Bearer {CAROL_TOKEN}")]);
+    assert_eq!(journey_status(&gw, CAROL, &id).await["status"], "started");
+    assert!(crate::personal_accounts::owner_digest_compared(&digest));
 }
 
 /// The page a start with no session renders; every bridge refusal must be
@@ -351,9 +358,9 @@ async fn assert_refused_like_sign_in(gw: &Gateway, id: &str, cookies: &[&str]) {
     assert_eq!((response.0, response.2), reference, "cookies {cookies:?}");
 }
 
-/// T-C02a, T-CT: A's link opened in B's browser. Refused like a missing
-/// session, the journey stays pending, and B's digest was compared in constant
-/// time. With one start per minute, A still starts after: the owner check
+/// T-C02a, T-CT: A's link opened in another user's browser. Refused like a
+/// missing session, the journey stays pending, and the intruder's digest was
+/// compared in constant time. With one start per minute, A still starts after: the owner check
 /// precedes rate admission.
 #[tokio::test]
 async fn start_as_another_owui_user_is_refused_and_spends_no_start() {
@@ -362,13 +369,11 @@ async fn start_as_another_owui_user_is_refused_and_spends_no_start() {
     let gw = gateway(&owui, 1).await;
     let id = create(&gw, ALICE, WORK).await;
     // WHEN
-    assert_refused_like_sign_in(&gw, &id, &[&cookie_of(BOB_TOKEN)]).await;
+    assert_refused_like_sign_in(&gw, &id, &[&cookie_of(MALLORY_TOKEN)]).await;
     // THEN
     assert_eq!(journey_status(&gw, ALICE, &id).await["status"], "pending");
-    assert!(crate::personal_accounts::digest_compared(
-        crate::personal_accounts::DigestKind::Owner,
-        &owner_digest(&gw, BOB, WORK)
-    ));
+    let intruder = owner_digest(&gw, MALLORY, WORK);
+    assert!(crate::personal_accounts::owner_digest_compared(&intruder));
     let (status, _, body) = start(&gw, &id, &[&cookie_of(ALICE_TOKEN)]).await;
     assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
 }
