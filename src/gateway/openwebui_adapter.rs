@@ -452,6 +452,14 @@ pub(crate) fn adapter_issuer(installation_id: &str) -> String {
     namespaced_issuer(installation_id)
 }
 
+/// The `(authority, subject)` pair an Open `WebUI` browser session proves,
+/// derived exactly as a verified tool-call assertion's: upstream mints the
+/// assertion's `sub` from the same `user.id` its session route returns, so
+/// the two routes name one principal (design §4.2 step 5).
+pub(crate) fn session_principal(installation_id: &str, user_id: &str) -> (String, String) {
+    (namespaced_issuer(installation_id), user_id.to_owned())
+}
+
 fn now_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
