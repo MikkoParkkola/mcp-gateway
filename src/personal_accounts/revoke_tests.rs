@@ -19,7 +19,10 @@ fn version(record: &GrantRecord) -> GrantVersion {
 fn both_tokens(record: &GrantRecord) -> Vec<(String, TokenTypeHint)> {
     vec![
         (
-            record.refresh_token.clone().expect("fixture has a refresh token"),
+            record
+                .refresh_token
+                .clone()
+                .expect("fixture has a refresh token"),
             TokenTypeHint::RefreshToken,
         ),
         (record.access_token.clone(), TokenTypeHint::AccessToken),
@@ -37,7 +40,10 @@ fn revoke_capturing_connected_returns_refresh_then_access_and_tombstones() {
     let material = store.revoke_capturing(&key).unwrap().expect("tokens held");
     // THEN
     assert_eq!(material.tokens_for_test(), both_tokens(&record));
-    assert_eq!(store.lookup(&key), Ok(AccountLookup::Revoked(version(&record))));
+    assert_eq!(
+        store.lookup(&key),
+        Ok(AccountLookup::Revoked(version(&record)))
+    );
 }
 
 #[test]
@@ -47,7 +53,9 @@ fn revoke_capturing_after_invalid_grant_fence_still_captures_both_tokens() {
     let key = account("alice");
     let record = grant();
     store.commit_grant(&key, &record).unwrap();
-    store.fence_expected_version(&key, &version(&record)).unwrap();
+    store
+        .fence_expected_version(&key, &version(&record))
+        .unwrap();
     // WHEN
     let material = store.revoke_capturing(&key).unwrap().expect("retained");
     // THEN: the refresh token is dead but the access token may not be
@@ -62,7 +70,9 @@ fn revoke_capturing_after_descriptor_fence_still_captures_tokens() {
     let key = account("alice");
     let record = grant();
     store.commit_grant(&key, &record).unwrap();
-    store.mark_reconnect_required(&key, &"1".repeat(64)).unwrap();
+    store
+        .mark_reconnect_required(&key, &"1".repeat(64))
+        .unwrap();
     // WHEN
     let material = store.revoke_capturing(&key).unwrap().expect("retained");
     // THEN
@@ -106,10 +116,15 @@ fn revoke_capturing_reconnect_required_with_corrupt_record_tombstones_with_nothi
     let key = account("alice");
     let record = grant();
     store.commit_grant(&key, &record).unwrap();
-    store.fence_expected_version(&key, &version(&record)).unwrap();
+    store
+        .fence_expected_version(&key, &version(&record))
+        .unwrap();
     for entry in std::fs::read_dir(&settings.store_dir).unwrap() {
         let path = entry.unwrap().path();
-        if path.file_name().is_some_and(|n| n != ".personal-accounts.lock") {
+        if path
+            .file_name()
+            .is_some_and(|n| n != ".personal-accounts.lock")
+        {
             std::fs::write(&path, b"{}").unwrap();
         }
     }

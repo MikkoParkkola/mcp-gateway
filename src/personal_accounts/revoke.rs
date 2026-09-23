@@ -105,11 +105,17 @@ impl PersonalAccountStore {
         &self,
         account: &AccountKey,
     ) -> Result<Option<RevocationMaterial>, AccountError> {
+        let digest = account.digest()?;
         let mut authority = self.lock_authority();
         #[cfg(test)]
         super::store_probe::entered(super::store_probe::StoreOp::Revoke, &self.config.store_dir);
+        // Read while the pointer still names the record: `commit::revoke`
+        // deletes the file once the tombstone is durable.
+        let retained = authority.as_ref().and_then(|current| {
+            super::storage::retained_record(&self.config, current, &digest, account)
+        });
         super::storage::commit::revoke(&self.config, &mut authority, account)?;
-        Ok(None)
+        Ok(retained.and_then(RevocationMaterial::take_from))
     }
 }
 
@@ -149,9 +155,28 @@ where
 
     async fn revoke_at_provider(
         &self,
-        _account_id: &str,
-        _material: Option<RevocationMaterial>,
+        account_id: &str,
+        material: Option<RevocationMaterial>,
     ) -> ProviderOutcome {
-        ProviderOutcome::NotApplicable
+        let Some(material) = material else {
+            return ProviderOutcome::NotApplicable;
+        };
+        let Ok(provider) = self.provider() else {
+            return ProviderOutcome::Failed;
+        };
+        let mut outcome = ProviderOutcome::Confirmed;
+        // Every token is attempted even after a failure: a dead refresh token
+        // says nothing about whether the access token is still live (R3-3).
+        for (token, hint) in &material.tokens {
+            match provider
+                .revoke_token(account_id, token.as_str(), *hint)
+                .await
+            {
+                ProviderRevocation::Confirmed => {}
+                ProviderRevocation::Unsupported => return ProviderOutcome::Unsupported,
+                ProviderRevocation::Failed => outcome = ProviderOutcome::Failed,
+            }
+        }
+        outcome
     }
 }

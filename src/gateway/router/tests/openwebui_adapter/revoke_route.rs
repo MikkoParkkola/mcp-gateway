@@ -112,8 +112,7 @@ async fn gateway(
         state.transparency_log = Some(Arc::new(logger));
     }
     let fixture = RevokeFixture::start(ACCOUNT, RESOURCE, seeds).await;
-    let router =
-        create_router_with_accounts(Arc::clone(&state), None, Some(fixture.revocation()));
+    let router = create_router_with_accounts(Arc::clone(&state), None, Some(fixture.revocation()));
     Gateway {
         router,
         fixture,
@@ -156,7 +155,10 @@ async fn delete(gw: &Gateway, subject: Option<&str>, account: &str) -> (StatusCo
     let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
         .await
         .unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 fn sent(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -222,11 +224,18 @@ async fn revoke_route_reconnect_required_sends_both_tokens_refresh_first() {
         // WHEN
         let (status, body) = delete(&gw, Some("alice"), ACCOUNT).await;
         // THEN
-        assert_eq!((status, body), (StatusCode::OK, revoked_body("confirmed")), "{seed:?}");
+        assert_eq!(
+            (status, body),
+            (StatusCode::OK, revoked_body("confirmed")),
+            "{seed:?}"
+        );
         assert_eq!(gw.fixture.received(), both(), "{seed:?}");
         // AND WHEN: revoked again, there is nothing left to send
         let (status, body) = delete(&gw, Some("alice"), ACCOUNT).await;
-        assert_eq!((status, body), (StatusCode::OK, revoked_body("not_applicable")));
+        assert_eq!(
+            (status, body),
+            (StatusCode::OK, revoked_body("not_applicable"))
+        );
         assert_eq!(gw.fixture.received(), both(), "no second request");
     }
 }
@@ -236,7 +245,10 @@ async fn revoke_route_reconnect_required_sends_both_tokens_refresh_first() {
 async fn revoke_route_already_revoked_is_not_applicable_and_sends_nothing() {
     let gw = gateway(true, &[(key("alice"), grant("alice"), Seed::Revoked)]).await;
     let (status, body) = delete(&gw, Some("alice"), ACCOUNT).await;
-    assert_eq!((status, body), (StatusCode::OK, revoked_body("not_applicable")));
+    assert_eq!(
+        (status, body),
+        (StatusCode::OK, revoked_body("not_applicable"))
+    );
     assert!(gw.fixture.received().is_empty());
 }
 
@@ -251,7 +263,10 @@ async fn revoke_route_other_principal_cannot_reach_a_and_anonymous_is_401() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     // WHEN / THEN: B with A's account id
     let (status, body) = delete(&gw, Some("bob"), ACCOUNT).await;
-    assert_eq!((status, body), (StatusCode::OK, revoked_body("not_applicable")));
+    assert_eq!(
+        (status, body),
+        (StatusCode::OK, revoked_body("not_applicable"))
+    );
     assert!(gw.fixture.received().is_empty(), "A's tokens never sent");
     assert_eq!(gw.fixture.state(&key("alice")).await, "connected");
 }
@@ -261,7 +276,11 @@ async fn revoke_route_other_principal_cannot_reach_a_and_anonymous_is_401() {
 async fn revoke_route_audit_failure_is_503_and_keeps_the_tombstone() {
     // GIVEN
     let gw = gateway(true, &[(key("alice"), grant("alice"), Seed::Connected)]).await;
-    gw.state.transparency_log.as_ref().unwrap().fail_next_append_for_test();
+    gw.state
+        .transparency_log
+        .as_ref()
+        .unwrap()
+        .fail_next_append_for_test();
     // WHEN
     let (status, body) = delete(&gw, Some("alice"), ACCOUNT).await;
     // THEN
@@ -269,7 +288,10 @@ async fn revoke_route_audit_failure_is_503_and_keeps_the_tombstone() {
     assert_eq!(body["error"], "audit_unavailable");
     assert_eq!(body["local_status"], "revoked");
     assert_eq!(gw.fixture.state(&key("alice")).await, "revoked");
-    assert!(gw.fixture.received().is_empty(), "no provider call past a failed audit");
+    assert!(
+        gw.fixture.received().is_empty(),
+        "no provider call past a failed audit"
+    );
 }
 
 /// An account id with no managed descriptor is `not_found`; nothing is touched.
@@ -277,7 +299,10 @@ async fn revoke_route_audit_failure_is_503_and_keeps_the_tombstone() {
 async fn revoke_route_undeclared_account_is_404_and_touches_nothing() {
     let gw = gateway(true, &[(key("alice"), grant("alice"), Seed::Connected)]).await;
     let (status, body) = delete(&gw, Some("alice"), "nope").await;
-    assert_eq!((status, body["error"].clone()), (StatusCode::NOT_FOUND, json!("not_found")));
+    assert_eq!(
+        (status, body["error"].clone()),
+        (StatusCode::NOT_FOUND, json!("not_found"))
+    );
     assert_eq!(gw.fixture.state(&key("alice")).await, "connected");
 }
 
