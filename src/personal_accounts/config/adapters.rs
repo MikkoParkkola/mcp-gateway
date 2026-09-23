@@ -70,6 +70,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::AccountsConfigError;
+use super::journey::SessionConfig;
 
 /// The one approved adapter kind. An enum rather than a validated `String` so
 /// that an unrecognised spelling is refused BY NAME at parse time
@@ -108,6 +109,10 @@ pub(crate) struct AdapterConfig {
     pub(crate) max_lifetime_seconds: u64,
     #[serde(default = "default_clock_skew_seconds")]
     pub(crate) clock_skew_seconds: u64,
+    /// The hosted browser bridge for this installation (journey design §4.2).
+    /// Absent stays absent through a rewrite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session: Option<SessionConfig>,
 }
 
 impl std::fmt::Debug for AdapterConfig {
@@ -121,6 +126,7 @@ impl std::fmt::Debug for AdapterConfig {
             .field("allowed_api_key_names", &self.allowed_api_key_names)
             .field("max_lifetime_seconds", &self.max_lifetime_seconds)
             .field("clock_skew_seconds", &self.clock_skew_seconds)
+            .field("session", &self.session)
             .finish()
     }
 }
@@ -541,6 +547,7 @@ mod debug_redaction_tests {
             allowed_api_key_names: vec!["webui-key".into()],
             max_lifetime_seconds: 300,
             clock_skew_seconds: 30,
+            session: None,
         };
         let rendered = format!("{adapter:?}");
         assert!(rendered.contains("office-webui"));

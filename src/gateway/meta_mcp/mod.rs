@@ -279,10 +279,6 @@ impl<'a> MetaMcpCallerContext<'a> {
     }
 }
 
-// ============================================================================
-// MetaMcp struct
-// ============================================================================
-
 /// Turn a dispatch error into a JSON-RPC error response, keeping the HTTP
 /// status when the error is an authorization refusal.
 ///
@@ -317,10 +313,9 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
             // client needs: MRTR.9 names the capability an input request would
             // have required and MRTR.9a the mode, which is the difference
             // between a client that can fix its declaration and retry and one
-            // that only sees prose. Named keys are forwarded, never the whole
-            // object, because `data` is a shared channel — `invoke_tool` puts a
-            // *backend's* error data into this same variant, so forwarding it
-            // wholesale is what would hand a backend the status field above.
+            // that only sees prose. Named keys only, never the whole object:
+            // `invoke_tool` puts a *backend's* error data into this variant, and
+            // forwarding it wholesale would hand a backend the status field.
             crate::Error::JsonRpc {
                 data: Some(data), ..
             } => {
@@ -331,13 +326,15 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
                 .into_iter()
                 .filter_map(|key| Some((key.to_string(), data.get(key)?.clone())))
                 .collect();
-                // `None` rather than an empty object, so a backend error
-                // carrying none of these keys leaves `data` absent exactly as
-                // it did when one key was forwarded.
+                // `None` rather than `{}`: a backend error carrying none of these
+                // keys leaves `data` absent exactly as when one key was forwarded.
                 (!forwarded.is_empty()).then_some(serde_json::Value::Object(forwarded))
             }
             _ => None,
         };
+        // A connect offer only under the gateway's own seal (MIK-6745, ADR-008).
+        rpc_error.data =
+            crate::personal_accounts::refusal::offer_data(error).or(rpc_error.data.take());
     }
     response
 }
@@ -415,6 +412,8 @@ pub struct MetaMcp {
     /// per descriptor here and hands the same `Arc` to the per-backend map, so
     /// both consumers of one account hold one instance.
     pub(super) account_strategies: Arc<crate::identity_propagation::AccountStrategyRegistry>,
+    /// The dispatch sites' connect offer (MIK-6745 §9.2); `None` until installed.
+    pub(super) connect_offers: RwLock<Option<Arc<crate::gateway::router::ConnectOffers>>>,
     pub(super) code_mode_enabled: bool,
     /// Whether this gateway serves more than one principal (ADR-008 INV-2).
     ///
@@ -641,6 +640,7 @@ impl MetaMcp {
             account_strategies: Arc::new(
                 crate::identity_propagation::AccountStrategyRegistry::default(),
             ),
+            connect_offers: RwLock::new(None),
             code_mode_enabled: false,
             multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),

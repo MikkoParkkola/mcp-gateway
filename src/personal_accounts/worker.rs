@@ -39,6 +39,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use super::revoke::RevocationMaterial;
 use super::service::{
     AccountService, AccountServiceError, ConsentExpectation, CredentialLease,
     CredentialReleaseObserver, RefreshProvider, ReleasedCredentials,
@@ -184,13 +185,6 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         .map_err(CustodyError::from)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
     pub(crate) async fn resolve(
         &self,
         account: &AccountKey,
@@ -231,17 +225,27 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         self.offload(move |service| service.release(&lease)).await
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
-    pub(crate) async fn invalidate(&self, account: &AccountKey) -> Result<(), CustodyError> {
+    pub(crate) async fn invalidate(
+        &self,
+        account: &AccountKey,
+    ) -> Result<Option<RevocationMaterial>, CustodyError> {
         let account = account.clone();
         self.offload(move |service| service.invalidate(&account))
             .await
+    }
+
+    /// The provider the service refreshes against. Not admitted: it touches
+    /// no store, so it holds no permit, but it still refuses after shutdown.
+    pub(crate) fn provider(&self) -> Result<P, CustodyError>
+    where
+        P: Clone,
+    {
+        self.service
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|service| service.provider().clone())
+            .ok_or(CustodyError::ShuttingDown)
     }
 
     #[cfg_attr(
@@ -291,6 +295,13 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         Ok(())
     }
 }
+
+#[path = "worker_journeys.rs"]
+mod journeys;
+pub(crate) use journeys::{AccountHandles, JourneyService, JourneyStarted};
+#[path = "worker_callback.rs"]
+mod callback;
+pub(crate) use callback::{CallbackOutcome, CallbackRequest};
 
 #[cfg(test)]
 #[path = "worker_tests.rs"]

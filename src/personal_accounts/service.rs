@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::consent::{GuardedCommit, GuardedCommitError};
+use super::revoke::RevocationMaterial;
 use super::{
     AccountError, AccountKey, AccountLookup, FenceOutcome, GrantRecord, GrantVersion,
     PersonalAccountStore, RefreshOutcome,
@@ -67,6 +68,18 @@ pub(crate) trait RefreshProvider: Send + Sync {
         account: &AccountKey,
         current: &GrantRecord,
     ) -> impl Future<Output = Result<TokenRefresh, ProviderRefreshError>> + Send;
+}
+
+/// Lets custody and the consent journey share ONE provider, so a code exchange
+/// uses exactly the metadata snapshot refresh uses.
+impl<T: RefreshProvider> RefreshProvider for Arc<T> {
+    fn refresh(
+        &self,
+        account: &AccountKey,
+        current: &GrantRecord,
+    ) -> impl Future<Output = Result<TokenRefresh, ProviderRefreshError>> + Send {
+        T::refresh(self, account, current)
+    }
 }
 
 /// Stable authorization binding plus the volatile token-revision guard.
@@ -108,7 +121,7 @@ pub(crate) trait CredentialReleaseObserver: Send + Sync {
 }
 
 /// Non-secret prior state a consent journey captured before talking to a provider.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum ConsentExpectation {
     Absent,
     Connected(GrantVersion),
@@ -230,25 +243,11 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
     pub(crate) fn store(&self) -> &PersonalAccountStore {
         &self.store
     }
 
     /// Account key → lease, or a typed refusal. Storage failure is never absence.
-    #[cfg_attr(
-        all(not(test), not(kani)),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
     pub(crate) fn resolve(
         &self,
         account: &AccountKey,
@@ -315,17 +314,18 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
         Ok(credentials)
     }
 
-    /// Durably revoke, then bar new leases and release eligibility.
-    #[cfg_attr(
-        all(not(test), not(kani)),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
-    pub(crate) fn invalidate(&self, account: &AccountKey) -> Result<(), AccountServiceError> {
-        self.store.revoke(account)?;
-        Ok(())
+    /// Durably revoke, then bar new leases and release eligibility. Returns
+    /// the provider tokens the grant still held, for the caller to revoke.
+    pub(crate) fn invalidate(
+        &self,
+        account: &AccountKey,
+    ) -> Result<Option<RevocationMaterial>, AccountServiceError> {
+        Ok(self.store.revoke_capturing(account)?)
+    }
+
+    /// The refresh provider, for the revoke route's RFC 7009 calls.
+    pub(crate) fn provider(&self) -> &P {
+        &self.provider
     }
 
     /// Commit a grant only if `expected` still holds under the authority lock.

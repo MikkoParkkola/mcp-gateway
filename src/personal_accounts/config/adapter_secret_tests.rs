@@ -60,6 +60,7 @@ fn adapter(installation_id: &str, variable: &str) -> AdapterConfig {
         allowed_api_key_names: vec!["desktop".to_string()],
         max_lifetime_seconds: 300,
         clock_skew_seconds: 30,
+        session: None,
     }
 }
 

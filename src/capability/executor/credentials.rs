@@ -59,7 +59,9 @@ impl CapabilityExecutor {
         }
         match registry
             .resolve(account, &auth.key, context.caller_proof())
-            .await?
+            .await
+            // No offer is made here, so the refusal reads exactly as before.
+            .map_err(crate::personal_accounts::refusal::unmark)?
         {
             AccountCredential::Legacy => Ok(None),
             AccountCredential::Prepared(prepared) => Ok(Some(prepared.headers().to_vec())),
@@ -118,7 +120,9 @@ impl CapabilityExecutor {
 
         match registry
             .resolve(account, &auth.key, context.caller_proof())
-            .await?
+            .await
+            // No offer is made here, so the refusal reads exactly as before.
+            .map_err(crate::personal_accounts::refusal::unmark)?
         {
             // A `shared` descriptor is not an account credential at all: the
             // deployment already serves it statically, and its cache namespace

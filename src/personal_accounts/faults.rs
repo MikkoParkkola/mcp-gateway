@@ -24,6 +24,11 @@
 //! 8. `ManifestRename` — the atomic replacement of the authority manifest
 //! 9. `ParentSync` — the fsync of the AUTHORITY directory after that rename
 //!
+//! `JourneysParentSync` is not a grant-commit step: it is the directory sync
+//! after `journeys.json` is renamed, where a failure poisons only the journey
+//! slot (journey design R2-1). `in_grant_commit` keeps it out of the cases
+//! that drive `commit_grant`.
+//!
 //! `ParentSync` keeps its established name and means the authority directory;
 //! the candidate's own is `RecordParentSync`. If a symmetric `ManifestParentSync`
 //! reads better later, that is a rename, not a missing boundary.
@@ -59,11 +64,12 @@ pub(super) enum Boundary {
     ManifestSync,
     ManifestRename,
     ParentSync,
+    JourneysParentSync,
 }
 
 /// Every durable step, in commit order. A case that iterates this cannot miss a
 /// boundary by forgetting to list it.
-pub(super) const ALL: [Boundary; 9] = [
+pub(super) const ALL: [Boundary; 10] = [
     Boundary::RecordWrite,
     Boundary::RecordSync,
     Boundary::RecordRename,
@@ -73,6 +79,7 @@ pub(super) const ALL: [Boundary; 9] = [
     Boundary::ManifestSync,
     Boundary::ManifestRename,
     Boundary::ParentSync,
+    Boundary::JourneysParentSync,
 ];
 
 impl Boundary {
@@ -87,6 +94,24 @@ impl Boundary {
             Self::ManifestSync => "manifest_sync",
             Self::ManifestRename => "manifest_rename",
             Self::ParentSync => "parent_sync",
+            Self::JourneysParentSync => "journeys_parent_sync",
+        }
+    }
+
+    /// Whether `commit_grant` reaches this boundary. Exhaustive, so a new
+    /// variant must be classified before any grant-commit case can run.
+    pub(super) fn in_grant_commit(self) -> bool {
+        match self {
+            Self::RecordWrite
+            | Self::RecordSync
+            | Self::RecordRename
+            | Self::RecordParentSync
+            | Self::CommitCheckpoint
+            | Self::ManifestWrite
+            | Self::ManifestSync
+            | Self::ManifestRename
+            | Self::ParentSync => true,
+            Self::JourneysParentSync => false,
         }
     }
 }
@@ -144,6 +169,33 @@ pub(super) fn reached(boundary: Boundary) -> Result<(), AccountError> {
             _ => Ok(()),
         }
     })
+}
+
+/// Faults armed for one store's authority directory, on ANY thread: custody
+/// runs the store on `spawn_blocking` threads a router test never sees, so
+/// the thread-local arm cannot reach it. Keyed by directory, so a parallel
+/// test's store is never hit. Each entry fires once.
+static DIR_ARMED: std::sync::Mutex<Vec<(std::path::PathBuf, Boundary)>> =
+    std::sync::Mutex::new(Vec::new());
+
+pub(super) fn arm_dir(dir: &std::path::Path, boundary: Boundary) {
+    DIR_ARMED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((dir.to_path_buf(), boundary));
+}
+
+/// [`reached`], plus any fault armed for `dir` by [`arm_dir`] (fires once).
+pub(super) fn reached_in(dir: &std::path::Path, boundary: Boundary) -> Result<(), AccountError> {
+    let mut armed = DIR_ARMED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(at) = armed.iter().position(|(d, b)| d == dir && *b == boundary) {
+        armed.remove(at);
+        return Err(AccountError::StorageUnavailable);
+    }
+    drop(armed);
+    reached(boundary)
 }
 
 #[test]

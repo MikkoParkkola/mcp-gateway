@@ -34,7 +34,7 @@ use super::auth::ResolvedAuthConfig;
 use super::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use super::oauth::{AgentAuthState, AgentDefinition, AgentRegistry, GatewayKeyPair};
 use super::proxy::ProxyManager;
-use super::router::{AppState, CallerStanding, create_router_with};
+use super::router::{AppState, CallerStanding, account_handles_of, create_router_with_accounts};
 use super::streaming::NotificationMultiplexer;
 use super::webhooks::WebhookRegistry;
 use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
@@ -2008,8 +2008,8 @@ impl Gateway {
         // the dashboard link and runs after the bind.
         let dashboard_bootstrap = Arc::clone(&state.dashboard_bootstrap);
 
-        // Create router
-        let app = create_router_with(state, webhook_routes);
+        let accounts = account_handles_of(self.custody.as_ref());
+        let app = create_router_with_accounts(state, webhook_routes, accounts);
 
         // Start the config file watcher now that the router has snapshotted its
         // startup bind-origin from `live_config` (still equal to the config the

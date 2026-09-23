@@ -31,6 +31,10 @@ pub(crate) mod identity;
 // `initialize_store_offline` and kept out of this file for its size.
 mod offline_migration;
 mod provider;
+pub(crate) mod refusal;
+mod revoke;
+#[cfg(test)]
+pub(crate) mod revoke_fixture;
 mod service;
 mod storage;
 mod vault;
@@ -158,7 +162,7 @@ impl std::fmt::Debug for GrantRecord {
 }
 
 /// Non-secret version captured by a connected or tombstoned grant.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct GrantVersion {
     pub(crate) generation: String,
     pub(crate) token_revision: u64,
@@ -181,7 +185,7 @@ pub(crate) struct PersonalAccountStore {
     // `None` means poisoned: a failure after the manifest rename left this copy
     // unable to vouch for itself, so it refuses instead of serving a state the
     // durable authority may already have superseded. A restart re-reads it.
-    authority: parking_lot::Mutex<Option<Authority>>,
+    authority: parking_lot::Mutex<AuthoritySlot>,
     // Both halves must remain exclusively owned even if another configuration
     // incorrectly pairs one of the directories with a different counterpart.
     _record_lock: crate::fs_lock::ExclusiveFileLock,
@@ -218,13 +222,31 @@ enum GrantState {
     ReconnectRequired,
 }
 
+/// What the authority mutex guards. The two halves poison independently
+/// (journey design R2-1): a journey-file fault never touches `authority`.
+struct AuthoritySlot {
+    authority: Option<Authority>,
+    #[cfg(unix)]
+    journeys: storage::journey::JourneysSlot,
+}
+
+impl AuthoritySlot {
+    fn new(authority: Authority) -> Self {
+        Self {
+            authority: Some(authority),
+            #[cfg(unix)]
+            journeys: storage::journey::JourneysSlot::default(),
+        }
+    }
+}
+
 /// The authority guard, and the only thing any operation may hold it as.
 ///
 /// Under `cfg(test)` it carries the witness session for the acquisition it
 /// represents and closes that session when the guard drops. Outside tests it is
 /// the `parking_lot` guard and nothing else — one field, no `Drop`.
 struct AuthorityGuard<'store> {
-    guard: parking_lot::MutexGuard<'store, Option<Authority>>,
+    guard: parking_lot::MutexGuard<'store, AuthoritySlot>,
     #[cfg(test)]
     ticket: consent::witness::Ticket,
 }
@@ -233,13 +255,13 @@ impl std::ops::Deref for AuthorityGuard<'_> {
     type Target = Option<Authority>;
 
     fn deref(&self) -> &Self::Target {
-        &self.guard
+        &self.guard.authority
     }
 }
 
 impl std::ops::DerefMut for AuthorityGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.guard
+        &mut self.guard.authority
     }
 }
 
@@ -345,18 +367,11 @@ impl PersonalAccountStore {
     }
 
     /// Durably tombstone the current generation before reporting success.
-    #[cfg_attr(
-        all(not(test), not(kani)),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
+    /// Production revokes through `revoke_capturing`; this is that call with
+    /// the material dropped, kept for the store-level suites.
+    #[cfg(test)]
     pub(crate) fn revoke(&self, account: &AccountKey) -> Result<(), AccountError> {
-        let mut authority = self.lock_authority();
-        #[cfg(test)]
-        store_probe::entered(store_probe::StoreOp::Revoke, &self.config.store_dir);
-        storage::commit::revoke(&self.config, &mut authority, account)
+        self.revoke_capturing(account).map(drop)
     }
 
     /// Fence the grant a provider rejected, and only while it is still the
@@ -425,7 +440,17 @@ pub(crate) use service::{
     ReleasedCredentials, TokenRefresh,
 };
 #[cfg(test)]
+pub(crate) use storage::journey::JourneyReason;
+#[cfg(test)]
+pub(crate) use storage::journey::owner_digest_compared;
+pub(crate) use storage::journey::{
+    JourneyError, JourneyLimits, JourneyRefusal, JourneyStatus, JourneyView,
+};
+#[cfg(test)]
 pub(crate) use worker::CustodyHandle;
+pub(crate) use worker::{
+    AccountHandles, CallbackOutcome, CallbackRequest, JourneyService, JourneyStarted,
+};
 pub(crate) use worker::{CustodyError, CustodyStartError};
 
 /// The managed-account dispatch strategy and the object-safe custody it runs
@@ -434,6 +459,7 @@ pub(crate) use worker::{CustodyError, CustodyStartError};
 pub use offline_migration::{
     MigratedCredential, OfflineMigrationError, migrate_legacy_credential_offline,
 };
+pub(crate) use revoke::{AccountRevocation, ProviderOutcome};
 pub(crate) use vault::{AccountCustody, VaultStrategy};
 
 /// The one refresh provider a gateway runs: the real policy over the real
@@ -476,7 +502,11 @@ impl service::CredentialReleaseObserver for AccountReleaseAudit {
 }
 
 /// The one custody type a gateway holds.
-pub(crate) type GatewayCustody = worker::CustodyHandle<GatewayRefreshProvider, AccountReleaseAudit>;
+///
+/// The provider sits behind an `Arc` so the consent journey can share the
+/// same pinned snapshot custody refreshes against.
+pub(crate) type GatewayCustody =
+    worker::CustodyHandle<std::sync::Arc<GatewayRefreshProvider>, AccountReleaseAudit>;
 
 /// Why managed custody could not be brought up.
 ///
@@ -545,7 +575,7 @@ pub(crate) async fn start_custody_with_http(
     let handle = tokio::task::spawn_blocking(move || {
         worker::CustodyHandle::start(
             store,
-            refresh,
+            std::sync::Arc::new(refresh),
             AccountReleaseAudit,
             worker::DEFAULT_CAPACITY,
         )

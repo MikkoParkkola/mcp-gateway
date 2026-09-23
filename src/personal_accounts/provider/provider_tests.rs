@@ -15,11 +15,9 @@
 //! script behind `ProviderHttp`. They prove POLICY -- bootstrap eagerness,
 //! discovery order, exact issuer/endpoint binding, which failures may advance
 //! to the next candidate, descriptor selection, request composition, response
-//! mapping. They prove NOTHING about real TLS, certificate validation, DNS
-//! pinning or redirect handling: a `TerminalFailure::Certificate` here is a
-//! value a fake returned, not a certificate that was rejected. The real
-//! transport is unbuilt and those properties need a live check against the
-//! gateway client. See HANDOFF.
+//! mapping. They prove NOTHING about real TLS, certificates, DNS pinning or
+//! redirects: a `TerminalFailure::Certificate` here is a value a fake returned.
+//! `wire_tests` drives the real transport.
 //!
 //! ONE ORDERED LOG. Metadata GETs, token POSTs and secret resolutions all append
 //! to the same `Vec<Call>`, so "the secret was read after the metadata was
@@ -50,6 +48,7 @@ const GOOGLE_ISSUER: &str = "https://accounts.google.com";
 const GOOGLE_AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_REVOKE: &str = "https://oauth2.googleapis.com/revoke";
+const DRIVE_READONLY: &str = "https://www.googleapis.com/auth/drive.readonly";
 const GOOGLE_RFC8414: &str = "https://accounts.google.com/.well-known/oauth-authorization-server";
 const GOOGLE_OIDC: &str = "https://accounts.google.com/.well-known/openid-configuration";
 const ATTACKER_TOKEN: &str = "https://oauth2.attacker.example/token";
@@ -246,11 +245,10 @@ fn descriptor_with(
         client_id: Some(CLIENT_ID.to_string()),
         client_secret_ref: Some(SECRET_REF.to_string()),
         redirect_uri: Some("https://gateway.example.com/oauth/callback".to_string()),
-        scopes: Some(vec![
-            "https://www.googleapis.com/auth/drive.readonly".to_string(),
-        ]),
+        scopes: Some(vec![DRIVE_READONLY.into()]),
         send_resource_parameter: Some(send_resource),
         external_strategy: None,
+        authorize_extra: None,
     }
 }
 
@@ -874,5 +872,7 @@ async fn invalid_grant_maps_distinctly_and_failures_leak_no_response_bytes() {
     }
 }
 
+#[path = "provider_tests/grant_flow_tests.rs"]
+mod grant_flow_tests;
 #[path = "provider_tests/pinned_userinfo_tests.rs"]
 mod pinned_userinfo_tests;

@@ -25,6 +25,7 @@ fn base() -> AccountDescriptor {
         scopes: Some(vec!["drive.readonly".to_owned()]),
         send_resource_parameter: Some(true),
         external_strategy: None,
+        authorize_extra: None,
     }
 }
 
@@ -179,4 +180,16 @@ fn an_empty_scope_list_and_an_absent_one_agree() {
     let mut absent = base();
     absent.scopes = None;
     assert_eq!(rev(&empty), rev(&absent));
+}
+
+/// `authorize_extra` must NOT move the revision: it only shapes the consent
+/// request, and hashing it would fence every existing grant on first deploy.
+#[test]
+fn authorize_extra_does_not_move_the_revision() {
+    let mut with_extra = base();
+    with_extra.authorize_extra = Some(
+        serde_json::from_str(r#"{"access_type":"offline","prompt":"consent"}"#)
+            .expect("the closed vocabulary parses"),
+    );
+    assert_eq!(rev(&base()), rev(&with_extra));
 }

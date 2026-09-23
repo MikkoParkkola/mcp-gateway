@@ -30,13 +30,20 @@ use serde::{Deserialize, Serialize};
 
 mod adapters;
 mod descriptor_debug;
+mod journey;
+mod limits;
+
+// Re-exported so the provider names the canonical types, not the module.
+pub(crate) use journey::{AccessType, AuthorizeExtra, Prompt};
+pub use limits::AccountsLimits;
+pub(crate) use limits::RECORDS_PER_ACTIVE;
 
 // Nameable from the rest of the crate without exposing the module: the type is
 // part of `AccountsConfig`'s shape, the module layout is not.
 pub(crate) use adapters::AdapterConfig;
-// The gateway-credential view the separation checks below take. Nameable from
-// `config::Config`, which is the only place that can see `auth`.
+// Gateway-credential view for the separation checks; only `config::Config` sees `auth`.
 pub(crate) use adapters::GatewayCredential;
+use journey::HostedConfig;
 
 /// Structural gateway separation for the whole block: no adapter names the same
 /// environment variable as a gateway credential.
@@ -222,6 +229,10 @@ pub struct AccountsConfig {
     /// carried `Vec` rather than a parsed-and-forgotten field.
     #[serde(default)]
     pub(crate) adapters: Vec<AdapterConfig>,
+    /// The hosted consent journey (design §10). Absent mounts nothing and
+    /// changes nothing, and stays absent through a rewrite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) hosted: Option<HostedConfig>,
 }
 
 /// Exactly the three declared spellings (approved table, row 423). A mode is
@@ -289,35 +300,9 @@ pub(crate) struct AccountDescriptor {
     /// for, and `passthrough` mints nothing at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) external_strategy: Option<IdentityPropagationConfig>,
-}
-
-/// Only the two bounds this slice maps onto `StoreConfig`. The other limit
-/// fields in the approved table belong to journeys and catalogues and are not
-/// invented here.
-///
-/// BOTH ARE "reject zero/overflow" (approved configuration table, design doc
-/// row 432). The overflow half is not an invented ceiling: `storage.rs`'s
-/// `validate_config` refuses a store whose
-/// `max_authority_bytes.checked_add(16).and_then(|size| size.checked_mul(4))`
-/// overflows, so the largest accepted `authority_bytes` is `(usize::MAX/4)-16`.
-/// The numbers named on each field below are the approved DEFAULTS, not bounds.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AccountsLimits {
-    /// Default 10000 -> `StoreConfig::max_entries`. Zero and overflow reject.
-    pub(crate) store_entries: usize,
-    /// Default 16777216 -> `StoreConfig::max_authority_bytes`. Zero rejects, and
-    /// so does any value the storage sealing arithmetic above cannot carry.
-    pub(crate) authority_bytes: usize,
-}
-
-impl Default for AccountsLimits {
-    fn default() -> Self {
-        Self {
-            store_entries: 10000,
-            authority_bytes: 16_777_216,
-        }
-    }
+    /// Extra authorize-request parameters from a closed set (design §6.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) authorize_extra: Option<AuthorizeExtra>,
 }
 
 /// Why a configuration is refused. Carries no secret material: a variant that
@@ -411,6 +396,9 @@ pub(crate) enum AccountsConfigError {
          domains"
     )]
     AdapterSecretReusesGatewayAuth { index: usize, credential: String },
+    /// A fixed phrase, like `Adapter::problem`: never a configured value.
+    #[error("accounts.hosted: {problem}")]
+    Hosted { problem: &'static str },
 }
 
 /// `StoreConfig` itself carries raw key bytes and deliberately has no `Debug`,
@@ -474,27 +462,13 @@ pub(crate) fn resolve(
         return Err(AccountsConfigError::DirectoriesNotDisjoint);
     }
 
-    validate_limit("store_entries", accounts.limits.store_entries)?;
-    validate_limit("authority_bytes", accounts.limits.authority_bytes)?;
-    // The approved storage bound: `storage::validate_config` refuses a store
-    // whose sealed-manifest arithmetic overflows, so a value that cannot carry
-    // it is rejected here rather than at open time.
-    if accounts
-        .limits
-        .authority_bytes
-        .checked_add(16)
-        .and_then(|size| size.checked_mul(4))
-        .is_none()
-    {
-        return Err(AccountsConfigError::Limit {
-            field: "authority_bytes",
-        });
-    }
+    limits::validate(&accounts.limits)?;
 
     // Structure before material, here too: `resolve` is also reached directly
     // from custody bootstrap, which does not go through `validate_adapters`.
     // Re-checking is cheap and reads nothing.
     adapters::validate(&accounts.adapters)?;
+    journey::validate(accounts)?;
 
     if !accounts.keys.contains_key(&accounts.current_key_id) {
         return Err(AccountsConfigError::CurrentKeyMissing);
@@ -584,6 +558,7 @@ pub(crate) fn validate_descriptors(
         return Err(AccountsConfigError::Deployment);
     }
     adapters::validate(&accounts.adapters)?;
+    journey::validate(accounts)?;
     let Some(descriptors) = accounts.descriptors.as_ref() else {
         return Ok(());
     };
@@ -790,13 +765,6 @@ fn validate_directory(
         .any(|part| matches!(part, std::path::Component::ParentDir))
     {
         return Err(AccountsConfigError::Directory { field });
-    }
-    Ok(())
-}
-
-fn validate_limit(field: &'static str, value: usize) -> Result<(), AccountsConfigError> {
-    if value == 0 {
-        return Err(AccountsConfigError::Limit { field });
     }
     Ok(())
 }

@@ -64,6 +64,7 @@ fn descriptor(issuer: &str) -> AccountDescriptor {
         ]),
         send_resource_parameter: Some(false),
         external_strategy: None,
+        authorize_extra: None,
     }
 }
 
@@ -72,6 +73,7 @@ fn descriptor(issuer: &str) -> AccountDescriptor {
 fn accounts(issuer: &str) -> AccountsConfig {
     AccountsConfig {
         adapters: Vec::new(),
+        hosted: None,
         schema_version: "accounts.v1".to_string(),
         enabled: true,
         deployment: "single_process".to_string(),

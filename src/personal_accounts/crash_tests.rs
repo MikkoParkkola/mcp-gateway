@@ -153,6 +153,7 @@ fn admissible_after(boundary: Boundary) -> &'static str {
         | Boundary::ManifestSync
         | Boundary::ManifestRename => "connected",
         Boundary::ParentSync => "connected_second",
+        Boundary::JourneysParentSync => unreachable!("not a grant-commit boundary"),
     }
 }
 
@@ -258,7 +259,7 @@ fn s10_a_restart_with_no_crash_injected_loads_the_generation_that_was_committed(
 
 #[test]
 fn s10_a_crash_at_every_named_boundary_leaves_exactly_one_admissible_generation() {
-    for boundary in faults::ALL {
+    for boundary in faults::ALL.into_iter().filter(|b| b.in_grant_commit()) {
         let root = store_with_first_generation();
         assert_eq!(
             drive(root.path(), "commit_second", Some(boundary.name())),

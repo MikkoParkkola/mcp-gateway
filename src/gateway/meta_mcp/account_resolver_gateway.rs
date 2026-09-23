@@ -54,6 +54,7 @@ const ASSERTION_TTL_SECS: i64 = 300;
 fn accounts_config(ids: &[&str]) -> AccountsConfig {
     AccountsConfig {
         adapters: Vec::new(),
+        hosted: None,
         schema_version: "accounts.v1".to_string(),
         enabled: true,
         deployment: "single_process".to_string(),

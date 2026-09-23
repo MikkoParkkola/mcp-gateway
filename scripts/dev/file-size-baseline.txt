@@ -86,10 +86,8 @@
 908 src/identity_grants.rs
 838 src/tool_registry.rs
 836 src/gateway/meta_mcp_helpers_chain_tests.rs
-832 src/personal_accounts/config.rs
 820 src/capability/executor/mod.rs
 814 tests/gh462_config_preservation.rs
-807 src/gateway/router/origin_guard.rs
 807 src/gateway/ui/mod.rs
 806 src/backend/ops.rs
 804 src/cli/subcommands.rs

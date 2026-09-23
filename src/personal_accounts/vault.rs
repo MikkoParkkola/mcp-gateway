@@ -18,11 +18,11 @@
 //! at the boundary rather than after the token is already on the wire.
 //!
 //! NOTHING FALLS BACK. Every refusal below is a `PropagationError` the resolver
-//! turns into a closed request for a required backend — `Refuse`, or
-//! `AccountNotConnected` for the one case the store answers "absent". There is
-//! no path here that answers "no account" with the gateway's own credential,
-//! and the absence variant is a diagnosis, not an offer: it carries no consent
-//! URL and promises no flow.
+//! turns into a closed request for a required backend — `Refuse`, or the typed
+//! `AccountNotConnected` / `AccountReconnectRequired` states a connect journey
+//! remedies. There is no path here that answers "no account" with the
+//! gateway's own credential. The typed states carry no URL: only a dispatch
+//! site may attach a connect offer (MIK-6745 design §9.2, BC-1).
 //!
 //! ONE PRINCIPAL PER DEPLOYMENT, NOT PER REQUEST. A gateway whose configuration
 //! asserts a single user ([`Principal::SoleOperator`]) serves its stored grants
@@ -63,17 +63,21 @@ use super::worker::{CustodyError, CustodyHandle};
 /// message that said the same thing three times by the time it reached a
 /// caller. The variant names the state; the inner text is the remediation.
 ///
-/// ONLY absence is lifted out of [`PropagationError::Refuse`]. Revocation,
-/// reconnect-required, a busy custody, a shutdown and a store failure stay
-/// `Refuse`, because none of them is remedied by connecting an account and
-/// reporting them as absence would invite the wrong action. In particular a
-/// store failure must never read as absence — `AccountService::connected`
-/// keeps that invariant upstream, and flattening it back here would undo it.
+/// Exactly the three states a connect journey remedies are lifted out of
+/// [`PropagationError::Refuse`]: absence, revocation and reconnect-required.
+/// The latter two keep their `context`, so their text is the `Refuse` text it
+/// always was. A busy custody, a shutdown and a store failure stay `Refuse`:
+/// connecting cannot fix them, and a store failure must never read as absence
+/// — `AccountService::connected` keeps that invariant upstream, and flattening
+/// it back here would undo it.
 fn refusal(context: &str, error: &CustodyError) -> PropagationError {
     match error {
         CustodyError::Account(AccountServiceError::ConnectOffer) => {
             PropagationError::AccountNotConnected(error.to_string())
         }
+        CustodyError::Account(
+            AccountServiceError::Revoked | AccountServiceError::ReconnectRequired,
+        ) => PropagationError::AccountReconnectRequired(format!("{context}: {error}")),
         _ => PropagationError::Refuse(format!("{context}: {error}")),
     }
 }
@@ -324,6 +328,21 @@ fn cache_binding(
         lease.descriptor_revision.len(),
         lease.descriptor_revision,
     ))
+}
+
+/// [`cache_binding`] for a lease of `generation`, so a test plants the key
+/// dispatch mints rather than a hand-written copy of its format.
+#[cfg(test)]
+pub(super) fn cache_binding_for_test(account: &AccountKey, generation: &str) -> String {
+    let lease = CredentialLease {
+        account: account.clone(),
+        generation: generation.to_owned(),
+        authorization_epoch: 1,
+        scopes: Vec::new(),
+        descriptor_revision: "0".repeat(64),
+        token_revision: 1,
+    };
+    cache_binding(account, &lease).expect("a valid account key binds")
 }
 
 #[async_trait::async_trait]

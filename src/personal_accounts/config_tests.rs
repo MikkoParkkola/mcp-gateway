@@ -93,6 +93,7 @@ fn root() -> tempfile::TempDir {
 fn valid(root: &std::path::Path) -> AccountsConfig {
     AccountsConfig {
         adapters: Vec::new(),
+        hosted: None,
         schema_version: "accounts.v1".into(),
         enabled: true,
         deployment: "single_process".into(),
@@ -108,6 +109,7 @@ fn valid(root: &std::path::Path) -> AccountsConfig {
         limits: AccountsLimits {
             store_entries: 10_000,
             authority_bytes: 16_777_216,
+            ..AccountsLimits::default()
         },
     }
 }

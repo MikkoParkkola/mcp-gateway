@@ -73,6 +73,56 @@ fn open_private(path: &Path) -> Result<fs::File, AccountError> {
         .map_err(|_| AccountError::StorageUnavailable)
 }
 
+/// Where a replace-by-rename stopped. Before the rename nothing durable moved;
+/// after it the file on disk may be newer than any in-memory copy.
+#[cfg(unix)]
+pub(super) enum Replace {
+    Staged(AccountError),
+    Renamed(AccountError),
+}
+
+/// The durable steps `replace_file` announces, in order, so a caller can map
+/// them onto its own fault boundaries.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+pub(super) enum ReplaceStep {
+    Write,
+    Sync,
+    Rename,
+    ParentSync,
+}
+
+/// Scratch file, write, `sync_all`, rename over `name`, sync the directory
+/// (journey design §5.2): the one sequence `authority.json` and
+/// `journeys.json` share. A failure before the rename removes the scratch file.
+#[cfg(unix)]
+pub(super) fn replace_file(
+    dir: &Path,
+    name: &str,
+    bytes: &[u8],
+    step: impl Fn(ReplaceStep) -> Result<(), AccountError>,
+) -> Result<(), Replace> {
+    let tmp = dir.join(scratch_name(name).map_err(Replace::Staged)?);
+    let staged = (|| -> Result<(), AccountError> {
+        let mut file = open_private(&tmp)?;
+        step(ReplaceStep::Write)?;
+        file.write_all(bytes)
+            .map_err(|_| AccountError::StorageUnavailable)?;
+        step(ReplaceStep::Sync)?;
+        file.sync_all()
+            .map_err(|_| AccountError::StorageUnavailable)?;
+        drop(file);
+        step(ReplaceStep::Rename)?;
+        fs::rename(&tmp, dir.join(name)).map_err(|_| AccountError::StorageUnavailable)
+    })();
+    if let Err(error) = staged {
+        let _ = fs::remove_file(&tmp);
+        return Err(Replace::Staged(error));
+    }
+    step(ReplaceStep::ParentSync).map_err(Replace::Renamed)?;
+    sync_directory(dir).map_err(Replace::Renamed)
+}
+
 /// Write one immutable candidate record: create, write, sync, rename, sync the
 /// parent. No debris is left behind on any failure.
 #[cfg(unix)]
@@ -185,7 +235,8 @@ fn commit_checkpoint(
     next: Authority,
 ) -> Result<(), ManifestRefusal> {
     #[cfg(test)]
-    crate::personal_accounts::faults::reached(
+    crate::personal_accounts::faults::reached_in(
+        &config.authority_dir,
         crate::personal_accounts::faults::Boundary::CommitCheckpoint,
     )
     .map_err(ManifestRefusal::Staged)?;
@@ -199,38 +250,41 @@ fn write_manifest(
     encoded: &str,
     next: Authority,
 ) -> Result<(), ManifestRefusal> {
-    let dir = &config.authority_dir;
-    let tmp = dir.join(scratch_name(AUTHORITY_FILE).map_err(ManifestRefusal::Staged)?);
-    let staged = (|| -> Result<(), AccountError> {
-        let mut file = open_private(&tmp)?;
-        boundary!(ManifestWrite);
-        file.write_all(encoded.as_bytes())
-            .map_err(|_| AccountError::StorageUnavailable)?;
-        boundary!(ManifestSync);
-        file.sync_all()
-            .map_err(|_| AccountError::StorageUnavailable)?;
-        drop(file);
-        boundary!(ManifestRename);
-        fs::rename(&tmp, dir.join(AUTHORITY_FILE)).map_err(|_| AccountError::StorageUnavailable)
-    })();
-    if let Err(error) = staged {
-        // Nothing durable moved, so the live authority is still exactly right.
-        let _ = fs::remove_file(&tmp);
-        return Err(ManifestRefusal::Staged(error));
-    }
-    #[cfg(test)]
-    if let Err(error) = crate::personal_accounts::faults::reached(
-        crate::personal_accounts::faults::Boundary::ParentSync,
+    let step = |step: ReplaceStep| -> Result<(), AccountError> {
+        #[cfg(test)]
+        crate::personal_accounts::faults::reached(manifest_boundary(step))?;
+        let _ = step;
+        Ok(())
+    };
+    match replace_file(
+        &config.authority_dir,
+        AUTHORITY_FILE,
+        encoded.as_bytes(),
+        step,
     ) {
-        *slot = None;
-        return Err(ManifestRefusal::Renamed(error));
+        // Nothing durable moved, so the live authority is still exactly right.
+        Err(Replace::Staged(error)) => Err(ManifestRefusal::Staged(error)),
+        Err(Replace::Renamed(error)) => {
+            *slot = None;
+            Err(ManifestRefusal::Renamed(error))
+        }
+        Ok(()) => {
+            *slot = Some(next);
+            Ok(())
+        }
     }
-    if let Err(error) = sync_directory(dir) {
-        *slot = None;
-        return Err(ManifestRefusal::Renamed(error));
+}
+
+/// The manifest's own fault boundaries, in `replace_file` step order.
+#[cfg(all(unix, test))]
+fn manifest_boundary(step: ReplaceStep) -> crate::personal_accounts::faults::Boundary {
+    use crate::personal_accounts::faults::Boundary;
+    match step {
+        ReplaceStep::Write => Boundary::ManifestWrite,
+        ReplaceStep::Sync => Boundary::ManifestSync,
+        ReplaceStep::Rename => Boundary::ManifestRename,
+        ReplaceStep::ParentSync => Boundary::ParentSync,
     }
-    *slot = Some(next);
-    Ok(())
 }
 
 /// Seal a record, make it the accepted candidate, and publish the manifest that
@@ -474,13 +528,6 @@ fn refusal_as_fault(refusal: &ManifestRefusal) -> AccountError {
 }
 
 #[cfg(unix)]
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(
-        dead_code,
-        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-    )
-)]
 pub(in crate::personal_accounts) fn revoke(
     config: &StoreConfig,
     slot: &mut Option<Authority>,

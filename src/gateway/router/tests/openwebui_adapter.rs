@@ -326,3 +326,9 @@ accounts:
         "unlisted api key"
     );
 }
+
+mod connect_offer;
+mod fake_owui;
+mod hosted_routes;
+mod revoke_route;
+mod start_route;

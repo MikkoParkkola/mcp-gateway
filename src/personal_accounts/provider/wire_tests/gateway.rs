@@ -3,7 +3,7 @@
 //! Gateway startup over the real wire.
 //!
 //! TARGET PATH: `src/personal_accounts/provider/wire_tests/gateway.rs`, wired by
-//! `mod gateway;` in `wire_tests.rs`. PROPOSAL ONLY — not applied, not compiled.
+//! `mod gateway;` in `wire_tests.rs`.
 //!
 //! WHAT CHANGED FROM r1, AND WHY. r1 claimed an ordering proof from the WRONG
 //! observation: after a startup that had already failed, it opened the store,
