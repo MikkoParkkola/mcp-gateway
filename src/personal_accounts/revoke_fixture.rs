@@ -200,6 +200,17 @@ impl RevokeFixture {
         seeds: &[(AccountKey, GrantRecord, Seed)],
         endpoint: RevocationEndpoint,
     ) -> Self {
+        Self::start_accounts(&[account_id], resource, seeds, endpoint).await
+    }
+
+    /// [`Self::start`] with one managed descriptor per id, all pinned to the
+    /// same fake issuer (parallel journeys, T-COOKIE).
+    pub(crate) async fn start_accounts(
+        account_ids: &[&str],
+        resource: &str,
+        seeds: &[(AccountKey, GrantRecord, Seed)],
+        endpoint: RevocationEndpoint,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let base = root.path().canonicalize().unwrap();
         let config = StoreConfig {
@@ -229,8 +240,10 @@ impl RevokeFixture {
             r#"{{"issuer":"{ISSUER}","authorization_endpoint":"{ISSUER}/authorize",
                 "token_endpoint":"{ISSUER}/token","revocation_endpoint":"{REVOKE_URL}"}}"#
         );
-        let descriptors =
-            BTreeMap::from([(account_id.to_string(), descriptor(resource, endpoint))]);
+        let descriptors = account_ids
+            .iter()
+            .map(|id| ((*id).to_string(), descriptor(resource, endpoint)))
+            .collect();
         let http = FakeHttp { metadata, router };
         let provider = PersonalOAuthRefresh::bootstrap(descriptors, http, SystemClock, FixedSecret)
             .await
