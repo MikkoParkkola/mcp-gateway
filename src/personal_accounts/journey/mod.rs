@@ -39,6 +39,8 @@ mod persist;
 #[path = "sweep.rs"]
 mod sweep;
 
+pub(crate) use callback::Admitted;
+pub(crate) use grant::JourneyCommit;
 pub(crate) use persist::JourneysSlot;
 #[cfg(test)]
 use persist::read_journeys;
@@ -47,11 +49,11 @@ use persist::read_journeys;
 #[path = "tests.rs"]
 mod tests;
 #[cfg(test)]
-#[path = "tests_gaps.rs"]
-mod tests_gaps;
-#[cfg(test)]
 #[path = "tests_commit.rs"]
 mod tests_commit;
+#[cfg(test)]
+#[path = "tests_gaps.rs"]
+mod tests_gaps;
 
 /// Schema of the sealed journeys envelope (design §5.1).
 pub(crate) const JOURNEY_SCHEMA: &str = "personal_accounts.journeys.v1";

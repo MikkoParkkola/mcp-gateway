@@ -10,6 +10,7 @@ use super::{
     Consumed, DigestKind, JourneyError, JourneyId, JourneyLimits, JourneyReason, JourneyRecord,
     JourneyRefusal, JourneyStatus, JourneyTable, Secret, digests_equal, keyed_digest,
 };
+use crate::personal_accounts::config::AccountDescriptor;
 use crate::personal_accounts::service::ConsentExpectation;
 use crate::personal_accounts::{PersonalAccountStore, StoreConfig};
 
@@ -29,6 +30,15 @@ pub(crate) struct Admitted {
     pub(crate) descriptor_revision: String,
     pub(crate) expected: ConsentExpectation,
     pub(crate) return_path: String,
+}
+
+impl Admitted {
+    /// Step 6's `config_changed` check: `live` is the descriptor this journey
+    /// was created against, unchanged by any reload since.
+    pub(crate) fn created_against(&self, live: &AccountDescriptor) -> bool {
+        super::super::migration_revision::descriptor_revision(live)
+            .is_ok_and(|revision| revision == self.descriptor_revision)
+    }
 }
 
 /// Step 1: the record whose `state_digest` is `HMAC(state)` under the
@@ -146,6 +156,20 @@ fn within_cap(state: &str, binding: Option<&str>) -> Result<(), JourneyError> {
 }
 
 impl PersonalAccountStore {
+    /// Step 1 alone: the journey `state` names, so the caller can pick that
+    /// journey's binding cookie before admission judges it.
+    pub(crate) fn callback_journey(
+        &self,
+        now: u64,
+        limits: &JourneyLimits,
+        state: &str,
+    ) -> Result<JourneyId, JourneyError> {
+        within_cap(state, None)?;
+        self.journey_transition(now, limits, |tx| {
+            locate(&self.config, tx.table, state).ok_or(JourneyRefusal::UnknownState)
+        })
+    }
+
     /// Callback steps 1-4 without consuming: locate, replay, expiry, binding.
     pub(crate) fn admit_callback(
         &self,

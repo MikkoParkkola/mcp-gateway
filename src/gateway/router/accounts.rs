@@ -29,6 +29,8 @@ use crate::personal_accounts::{
 
 #[path = "accounts/bridge.rs"]
 mod bridge;
+#[path = "accounts/callback.rs"]
+mod callback;
 #[path = "accounts/hosted.rs"]
 mod hosted;
 #[path = "accounts/journeys.rs"]
@@ -65,7 +67,11 @@ pub(super) fn router(
         journeys,
     } = handles.filter(|_| hosted)?;
     let create = Arc::clone(&journeys);
-    let browser = browser_routes(Arc::clone(&journeys));
+    let completing = Arc::clone(&journeys);
+    let browser = browser_routes(Arc::clone(&journeys)).route(
+        CALLBACK,
+        get(move |state, uri, headers| callback::callback(completing, state, uri, headers)),
+    );
     let owner = Router::new()
         .route(
             "/accounts/v1/journeys",

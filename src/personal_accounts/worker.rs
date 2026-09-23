@@ -306,6 +306,9 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
 #[path = "worker_journeys.rs"]
 mod journeys;
 pub(crate) use journeys::{AccountHandles, JourneyService, JourneyStarted};
+#[path = "worker_callback.rs"]
+mod callback;
+pub(crate) use callback::{CallbackOutcome, CallbackRequest};
 
 #[cfg(test)]
 #[path = "worker_tests.rs"]
