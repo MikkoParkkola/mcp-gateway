@@ -175,7 +175,7 @@ map to 503 `storage_unavailable` with `retryable: true`.
   What remains is:
   - `journey_id`
   - `owner_digest`, `principal_digest`
-  - `state_digest`
+  - `state_digest`, `digest_key_id`
   - `account_id`
   - `status`
   - `reason`, a closed enum
@@ -557,8 +557,13 @@ and exchanges nothing.
 1. **Locate the journey.** Hash `state` and look up the record under
    `journey_transition`. A missing or unknown state gets `invalid_request`, and no
    record is touched.
-2. **Check for replay FIRST (review R2-3).** If `consumed` is set or the status is
-   terminal, increment `replay_refusals` and refuse. The status keeps its terminal
+2. **Check for replay FIRST (review R2-3), against the PRE-sweep status (review
+   R3-2).** Classification reads the record as it was before `journey_transition`'s
+   expiry sweep runs in the same acquisition. A replay is `consumed == true` or a
+   pre-sweep status of `connected`/`cancelled`/`failed`/`superseded`; only then
+   increment `replay_refusals` and refuse. A record that was still `started` (or
+   that the sweep is about to expire) and is past `callback_by` is an EXPIRY, not a
+   replay: it goes to step 3 and `replay_refusals` is not incremented. The status keeps its terminal
    value, and the API adds `replay_refused: true`. Expiry never rewrites a
    terminal record: both this step and the sweep in `journey_transition` step 2
    touch only `pending`/`started` records. A completed journey replayed after
@@ -870,9 +875,13 @@ Under **one** `lock_authority()` acquisition it:
      `retained_record`. That helper is the body of `connected_record`
      (`storage.rs:636-677`) without the `Connected` state gate, keeping the same
      SHA and version checks.
-   - It copies `refresh_token`, or `access_token` when there is no refresh token,
-     into `RevocationMaterial { token: Zeroizing<String>, hint }`, which has a
-     redacted `Debug`.
+   - It copies BOTH tokens that exist into `RevocationMaterial { tokens:
+     Vec<(Zeroizing<String>, hint)> }`, which has a redacted `Debug`: the
+     `refresh_token` (hint `refresh_token`) and the `access_token` (hint
+     `access_token`). Provider revocation sends one RFC 7009 request per token,
+     refresh first; `provider_revocation` is `confirmed` only if every request
+     returned 200 (review R3-3: after `invalid_grant` the refresh token is dead but
+     the access token may be live, so revoking only one would miss it).
    - A `ReconnectRequired` grant can still hold a live provider token. After
      `invalid_grant` the refresh token is dead, but the access token may not be.
      After a descriptor-revision fence both tokens may still be live. So it is
@@ -1244,11 +1253,14 @@ accounts:
   | `descriptor_revision`, generation | 64 / 32 hex | fixed by existing validation (`storage.rs:148-166`) |
   | serialized `expected` (`ConsentExpectation`) | 192 bytes | derived: tag + 32 + 64 hex + two `u64`, asserted by a unit test |
   | `reason` | closed enum, ≤ 64 bytes serialized including the `provider_revoke_*` suffix | type |
+  | `digest_key_id` (and every `accounts.keys` id when `hosted` is set) | 64 bytes, `[A-Za-z0-9._-]` | config validation (review R3-1) |
 
   A POST whose `account_id` or `return_path` exceeds its cap gets 400
   `invalid_request` before any store access (T-R2-5). The worst-case record is
-  therefore under `RECORD_MAX` = 1 KiB, which T-R2-5 asserts by serializing a
-  maximal record.
+  bounded by these caps. `RECORD_MAX` is set to the serialized size of a maximal
+  record (every capped field at its cap, including `digest_key_id`) rounded up to
+  the next 256 bytes, not assumed to be 1 KiB; T-R2-5 serializes that maximal record
+  and asserts it fits (review R3-1).
 - **Limits.** The four limit fields (`journeys_total`, `journeys_per_user`,
   `starts_per_minute_per_user`, and the new `journeys_created_per_minute`,
   default 120) reject zero and overflow. That is the rule `AccountsLimits`
@@ -1371,6 +1383,9 @@ Each row gives:
 | T-R2-4 | Revoke DELETE while A is `ReconnectRequired`, for each of two causes: after `invalid_grant` and after a descriptor-revision fence. Then revoke while A is `Revoked`. | No route | In the `ReconnectRequired` cases, fake `/revoke` receives the retained token and the response is `confirmed`. In the `Revoked` case the response is `not_applicable` and nothing is sent. | Capture limited to `Connected` |
 | T-R2-5 | A POST whose `account_id` is 65 bytes long, then one with a 257-byte `return_path`. A unit test serializes a maximal `JourneyRecord`. | 404 | Both POSTs get 400 before any store access. The maximal record is at most `RECORD_MAX`. | Cap missing on a field |
 | T-KEYROT | A starts a journey under key `k1`. The config reloads with `current_key_id: k2`, keeping `k1` in `keys`. Then the callback arrives (review R2-6). | 404 | The callback validates and connects. New journeys record `digest_key_id = k2`. With `k1` removed, the callback is refused as unknown state. | Digest key derived from `current_key_id` at verification time |
+| T-KEYROT2 | POST under key `k1`, config reload to `current_key_id: k2`, then start, then callback (review R3-4). | 404 | The start write re-captures `digest_key_id = k2` in the same persist that mints `state_digest`/`binding_digest`; the callback validates. | `digest_key_id` not rewritten at start |
+| T-R3-2 | Start a journey, let `callback_by` pass without any callback, then deliver the first callback. | 404 | Outcome page is expiry; status `expired`; `replay_refused` false and `replay_refusals` = 0. | Late first callback classified as replay |
+| T-R3-3 | Revoke while A is `ReconnectRequired` after `invalid_grant`, with both tokens retained. | No route | Fake `/revoke` receives two requests, refresh then access, with the matching hints. | Only one token revoked |
 | T-CFG | Bad config variants: an extra field under `hosted`/`session`; `redirect_uri` ≠ origin + callback path; `http` with a non-loopback `user_endpoint`; two `session` adapters; `return_paths` entries `//evil.example`, `/\evil.example`, `https://evil.example`, or one with a control character (reviews L1, L3). Also a POST with `return_path: "//evil.example"` against a valid list, and a config with `hosted` omitted. | n/a | Each bad config rejects startup. The POST gets 400 `invalid_request`. With `hosted` omitted, the route is 404 and the refusal text is unchanged. | `deny_unknown_fields` missing. Prefix check is only `starts_with("/")`. Comparison normalises. |
 
 Element coverage:
@@ -1652,3 +1667,13 @@ confirmed all 16 round-1 findings as resolved.
 | R2-5 | grok | Numeric caps on every variable-length journey field imply `RECORD_MAX` | §5.1, §10; T-R2-5 |
 | R2-6 | grok | Journey HMAC key follows the recorded `digest_key_id`, not the current key | §4.2 (after step 8), §5.1 record; T-KEYROT |
 | R2-7 | coordinator | Status line | line 3 |
+
+### Round 3 (grok confirmation, applied directly)
+
+| Id | Finding | Where |
+|---|---|---|
+| R3-1 | `digest_key_id` uncapped, so `RECORD_MAX` was not implied | §10 caps table; `RECORD_MAX` derived from a maximal record; T-R2-5 |
+| R3-2 | Late first callback classified as replay | §6.2 step 2 (pre-sweep classification); T-R3-2 |
+| R3-3 | `ReconnectRequired` revoke sent only one token | §8.1 (both tokens); T-R3-3 |
+| R3-4 | Key rotation between POST and start untested | T-KEYROT2 |
+| R3-5 | `digest_key_id` missing from terminal remainder list | §3 |
