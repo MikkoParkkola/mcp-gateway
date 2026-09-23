@@ -1,0 +1,14 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "stop_reason": "end_turn",
+  "num_turns": 12,
+  "session_id": "0a08a531-0731-4de3-b6b0-ef12ed96965b",
+  "duration_ms": 49224,
+  "result": "Based on my exploration, here are the findings:\n\n## Raw Result from `mcp__gw4__gateway_list_servers` (verbatim):\n```json\n{\n  \"servers\": [\n    {\n      \"circuit_breaker\": \"closed\",\n      \"name\": \"gateway\",\n      \"running\": true,\n      \"status\": \"active\",\n      \"tools_count\": 125,\n      \"tools_known\": true,\n      \"transport\": \"capability\"\n    }\n  ]\n}\n```\n\n## gw4 Tool Names\n\nThe **gw4 MCP server itself** provides these gateway management tools:\n\n1. `mcp__gw4__gateway_invoke`\n2. `mcp__gw4__gateway_list_disabled_capabilities`\n3. `mcp__gw4__gateway_list_servers`\n4. `mcp__gw4__gateway_list_tools`\n5. `mcp__gw4__gateway_search_tools`\n6. `mcp__gw4__gateway_set_state`\n7. `mcp__gw4__gateway_webhook_status`\n\n**Note:** The 125 tools returned by `gateway_list_tools` are tools exposed *through* the gateway from backend servers (pyghidra, cisco_scanner, Google Drive/Gmail APIs, YouTube, HeyGen, etc.), not gw4's native tools. The gw4 server itself operates these 7 gateway management tools.",
+  "models": [
+    "claude-haiku-4-5-20251001"
+  ],
+  "_note": "Verbatim fields from `claude -p ... --output-format json` (Claude Code 2.1.280); cost and token-usage fields omitted as irrelevant to the verification."
+}
