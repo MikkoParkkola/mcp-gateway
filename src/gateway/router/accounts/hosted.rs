@@ -23,6 +23,9 @@ const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; \
 pub(crate) const CALLBACK: &str = "/accounts/v1/callback";
 /// Every path under the prefix that no route claims.
 const UNROUTED: &str = "/accounts/v1/{*rest}";
+/// The bare prefix, which the catch-all does not match; claimed here so it
+/// never reaches the main router's full-URI trace span.
+const PREFIX_ROOT: &str = "/accounts/v1";
 
 /// `owner` (already authenticated) plus the unauthenticated browser routes,
 /// wrapped so no response under the prefix leaves without the three headers.
@@ -30,6 +33,7 @@ pub(super) fn shell(owner: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     owner
         .route(CALLBACK, get(|| async { StatusCode::NOT_IMPLEMENTED }))
         .route(UNROUTED, any(|| async { StatusCode::NOT_FOUND }))
+        .route(PREFIX_ROOT, any(|| async { StatusCode::NOT_FOUND }))
         .layer(axum::middleware::map_response(harden))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http().make_span_with(span_for))
