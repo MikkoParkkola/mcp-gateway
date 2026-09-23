@@ -5,11 +5,14 @@
 //! authority-lock acquisition, so a journey swept or superseded during the
 //! exchange window is never resurrected and a fenced grant writes nothing.
 
+#[cfg(unix)]
+use super::JourneyReason;
 use super::persist::Transition;
 use super::{
-    AccountKey, DigestKind, JourneyError, JourneyLimits, JourneyReason, JourneyRecord,
-    JourneyStatus, digests_equal,
+    AccountKey, DigestKind, JourneyError, JourneyLimits, JourneyRecord, JourneyStatus,
+    digests_equal,
 };
+#[cfg(unix)]
 use crate::personal_accounts::consent::{GuardedCommit, commit_if_unchanged_locked};
 use crate::personal_accounts::service::ConsentExpectation;
 use crate::personal_accounts::{
@@ -49,6 +52,7 @@ fn committable(journey: &JourneyRecord, grant: &Grant<'_>) -> bool {
         && digests_equal(DigestKind::Owner, &journey.owner_digest, &grant.digest)
 }
 
+#[cfg(unix)]
 /// Runs under the transition's acquisition. A failed grant commit ends the
 /// journey `Failed/storage_unavailable` in the same journeys write.
 fn settle(
@@ -93,6 +97,20 @@ fn settle(
             Err(error)
         }
     }
+}
+
+/// Off unix the transition refuses before any closure runs; this only keeps
+/// the call site compiling.
+#[cfg(not(unix))]
+fn settle(
+    _config: &StoreConfig,
+    _tx: &mut Transition<'_>,
+    _authority: &mut Option<Authority>,
+    _grant: &Grant<'_>,
+    _journey_id: &str,
+    _now: u64,
+) -> Result<JourneyCommit, AccountError> {
+    Err(AccountError::InvalidConfiguration)
 }
 
 impl PersonalAccountStore {

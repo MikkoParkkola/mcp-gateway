@@ -369,7 +369,7 @@ impl PersonalAccountStore {
     /// Durably tombstone the current generation before reporting success.
     /// Production revokes through `revoke_capturing`; this is that call with
     /// the material dropped, kept for the store-level suites.
-    #[cfg(any(test, kani))]
+    #[cfg(test)]
     pub(crate) fn revoke(&self, account: &AccountKey) -> Result<(), AccountError> {
         self.revoke_capturing(account).map(drop)
     }

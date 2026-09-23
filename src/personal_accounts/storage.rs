@@ -52,7 +52,6 @@ pub(super) mod migration_entry;
 // MIK-6745 consent journeys: the sealed `journeys.json` table. A child of
 // `storage` (design §3) so it reaches `seal_bytes`/`open_bytes`, `random_hex`
 // and `descriptor_revision` with no visibility widening.
-#[cfg(unix)]
 #[path = "journey/mod.rs"]
 pub(super) mod journey;
 

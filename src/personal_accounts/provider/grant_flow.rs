@@ -6,16 +6,10 @@
 //! Every endpoint used here is one bootstrap PINNED; nothing is discovered and
 //! nothing is taken from a request. Credentials still leave only through
 //! `ProviderHttp::post_token`.
-#![cfg_attr(
-    all(not(test), not(kani)),
-    expect(
-        dead_code,
-        reason = "hosted consent journey provider half; the callback and DELETE routes that call it land in MIK-6745 slices 4 and 5"
-    )
-)]
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+#[cfg(test)]
 use rand::RngExt as _;
 use sha2::{Digest as _, Sha256};
 use url::Url;
@@ -53,12 +47,14 @@ impl TokenTypeHint {
 }
 
 /// A fresh OAuth `state`: 256 bits, unpadded base64url (43 characters).
+#[cfg(test)]
 pub(crate) fn new_state() -> String {
     random_256()
 }
 
 /// A fresh PKCE `code_verifier`: 256 bits, unpadded base64url (43 characters,
 /// inside RFC 7636's 43..=128 range).
+#[cfg(test)]
 pub(crate) fn new_code_verifier() -> String {
     random_256()
 }
@@ -68,6 +64,7 @@ pub(crate) fn code_challenge_s256(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
+#[cfg(test)]
 fn random_256() -> String {
     let bytes: [u8; 32] = rand::rng().random();
     URL_SAFE_NO_PAD.encode(bytes)

@@ -43,6 +43,7 @@ mod sweep;
 
 pub(crate) use callback::Admitted;
 pub(crate) use grant::JourneyCommit;
+#[cfg(unix)]
 pub(crate) use persist::JourneysSlot;
 #[cfg(test)]
 use persist::read_journeys;

@@ -2,15 +2,22 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The sealed `journeys.json` file and its in-memory slot (design §5.1, §5.2).
 
+#[cfg(unix)]
 use super::super::commit::{Replace, ReplaceStep, replace_file};
+#[cfg(unix)]
 use super::super::{TokenEnvelope, encode_fields, open_bytes, read_bounded, seal_bytes};
 use super::limits::Rates;
+#[cfg(unix)]
 use super::sweep::sweep;
 use super::{
-    AccountError, JOURNEY_SCHEMA, JOURNEYS_FILE, JourneyError, JourneyLimits, JourneyRefusal,
-    JourneyTable, KEY_ID_MAX, StoreConfig,
+    AccountError, JOURNEY_SCHEMA, JourneyError, JourneyLimits, JourneyRefusal, JourneyTable,
+    KEY_ID_MAX,
 };
-use crate::personal_accounts::{Authority, AuthoritySlot, PersonalAccountStore};
+#[cfg(unix)]
+use super::{JOURNEYS_FILE, StoreConfig};
+#[cfg(unix)]
+use crate::personal_accounts::AuthoritySlot;
+use crate::personal_accounts::{Authority, PersonalAccountStore};
 
 /// AAD domain of the journeys envelope; mirrors `authority_aad` (§5.1).
 const JOURNEYS_DOMAIN: &[u8] = b"mcp-gateway/account-journeys-aad/v1";
@@ -41,6 +48,7 @@ enum TableState {
     Stale,
 }
 
+#[cfg(unix)]
 fn journeys_aad(key_id: &str, instance_id: &str, epoch: &str) -> Result<Vec<u8>, AccountError> {
     encode_fields(
         JOURNEYS_DOMAIN,
@@ -48,6 +56,7 @@ fn journeys_aad(key_id: &str, instance_id: &str, epoch: &str) -> Result<Vec<u8>,
     )
 }
 
+#[cfg(unix)]
 /// Decrypt and parse `journeys.json` under `limits.byte_cap()`. A missing file
 /// is an empty table; anything unreadable, unauthentic or oversized refuses.
 /// The envelope names its key, so a retained old key still opens it (R2-6).
@@ -73,6 +82,7 @@ pub(crate) fn read_journeys(
     serde_json::from_slice(&plaintext).map_err(|_| AccountError::NotAuthentic)
 }
 
+#[cfg(unix)]
 /// Seal the table under the current key, bound to this store's epoch.
 fn seal_journeys(
     config: &StoreConfig,
@@ -90,6 +100,7 @@ fn seal_journeys(
     serde_json::to_vec(&envelope).map_err(|_| AccountError::StorageUnavailable)
 }
 
+#[cfg(unix)]
 /// The loaded table, reading it on first use. A `Stale` slot gets one reread
 /// per operation (design §5.2): success heals it; failure leaves it `Stale`
 /// and answers `StorageUnavailable`, whatever made the read fail.
@@ -116,6 +127,7 @@ fn loaded<'slot>(
     }
 }
 
+#[cfg(unix)]
 /// Seal and durably replace `journeys.json`, then publish `table`. A failure
 /// before the rename keeps the old copy; one after it poisons only this slot.
 fn write_journeys(
@@ -180,6 +192,7 @@ impl PersonalAccountStore {
     /// [`Self::journey_transition`] whose closure may also mutate the
     /// authority under the SAME acquisition (the journey grant commit, §6.2
     /// step 11). The authority write is the one IO such a closure performs.
+    #[cfg(unix)]
     pub(super) fn journey_transition_with_authority<T>(
         &self,
         now: u64,
@@ -219,5 +232,17 @@ impl PersonalAccountStore {
             })?;
         }
         outcome.map_err(JourneyError::Refused)
+    }
+
+    /// No durable journey table off unix: the writer half it needs is
+    /// `cfg(unix)`, so every journey operation refuses as the store does.
+    #[cfg(not(unix))]
+    pub(super) fn journey_transition_with_authority<T>(
+        &self,
+        _now: u64,
+        _limits: &JourneyLimits,
+        _f: impl FnOnce(&mut Transition<'_>, &mut Option<Authority>) -> Result<T, JourneyRefusal>,
+    ) -> Result<T, JourneyError> {
+        Err(JourneyError::Storage(AccountError::InvalidConfiguration))
     }
 }
