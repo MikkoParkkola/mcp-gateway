@@ -19,8 +19,9 @@ impl JourneyRecord {
         }
     }
 
-    /// Every terminal transition: the browser binding and the PKCE verifier
-    /// leave in the same write (C04). `state_digest` stays for replay detection.
+    /// Every terminal transition: the browser binding, the PKCE verifier and
+    /// the owner principal leave in the same write (C04, 5c). `state_digest`
+    /// stays for replay detection.
     pub(crate) fn terminate(
         &mut self,
         status: JourneyStatus,
@@ -31,6 +32,8 @@ impl JourneyRecord {
         self.reason = reason;
         self.binding_digest = None;
         self.pkce_verifier = None;
+        self.owner_authority = None;
+        self.owner_subject = None;
         self.terminal_at = Some(now);
     }
 }

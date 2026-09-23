@@ -235,7 +235,8 @@ fn commit_checkpoint(
     next: Authority,
 ) -> Result<(), ManifestRefusal> {
     #[cfg(test)]
-    crate::personal_accounts::faults::reached(
+    crate::personal_accounts::faults::reached_in(
+        &config.authority_dir,
         crate::personal_accounts::faults::Boundary::CommitCheckpoint,
     )
     .map_err(ManifestRefusal::Staged)?;

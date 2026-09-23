@@ -10,7 +10,7 @@ use super::{
     AccountError, JOURNEY_SCHEMA, JOURNEYS_FILE, JourneyError, JourneyLimits, JourneyRefusal,
     JourneyTable, KEY_ID_MAX, StoreConfig,
 };
-use crate::personal_accounts::PersonalAccountStore;
+use crate::personal_accounts::{Authority, AuthoritySlot, PersonalAccountStore};
 
 /// AAD domain of the journeys envelope; mirrors `authority_aad` (§5.1).
 const JOURNEYS_DOMAIN: &[u8] = b"mcp-gateway/account-journeys-aad/v1";
@@ -120,8 +120,8 @@ fn write_journeys(
     let step = |step: ReplaceStep| -> Result<(), AccountError> {
         #[cfg(test)]
         if matches!(step, ReplaceStep::ParentSync) {
-            use crate::personal_accounts::faults::{Boundary, reached};
-            reached(Boundary::JourneysParentSync)?;
+            use crate::personal_accounts::faults::{Boundary, reached_in};
+            reached_in(&config.authority_dir, Boundary::JourneysParentSync)?;
         }
         let _ = step;
         Ok(())
@@ -145,6 +145,10 @@ pub(crate) struct Transition<'tx> {
     pub(crate) table: &'tx mut JourneyTable,
     pub(crate) before: &'tx JourneyTable,
     pub(crate) rates: &'tx mut Rates,
+    /// Set once the authority has moved (a published grant): any failed
+    /// journeys write then poisons the slot, even one before the rename,
+    /// because the in-memory table no longer describes a durable outcome.
+    pub(crate) stale_on_write_failure: bool,
 }
 
 impl PersonalAccountStore {
@@ -160,25 +164,49 @@ impl PersonalAccountStore {
         limits: &JourneyLimits,
         f: impl FnOnce(&mut Transition<'_>) -> Result<T, JourneyRefusal>,
     ) -> Result<T, JourneyError> {
+        self.journey_transition_with_authority(now, limits, |tx, _| f(tx))
+    }
+
+    /// [`Self::journey_transition`] whose closure may also mutate the
+    /// authority under the SAME acquisition (the journey grant commit, §6.2
+    /// step 11). The authority write is the one IO such a closure performs.
+    pub(super) fn journey_transition_with_authority<T>(
+        &self,
+        now: u64,
+        limits: &JourneyLimits,
+        f: impl FnOnce(&mut Transition<'_>, &mut Option<Authority>) -> Result<T, JourneyRefusal>,
+    ) -> Result<T, JourneyError> {
         let mut guard = self.lock_authority();
-        let epoch = guard
+        let AuthoritySlot {
+            authority,
+            journeys,
+        } = &mut *guard.guard;
+        let epoch = authority
             .as_ref()
             .ok_or(JourneyError::Storage(AccountError::StorageUnavailable))?
             .store_epoch
             .clone();
-        let JourneysSlot { table: slot, rates } = &mut guard.guard.journeys;
+        let JourneysSlot { table: slot, rates } = journeys;
         let before = loaded(&self.config, &epoch, limits, slot)
             .map_err(JourneyError::Storage)?
             .clone();
         let mut next = before.clone();
         sweep(&mut next, now);
-        let outcome = f(&mut Transition {
+        let mut tx = Transition {
             table: &mut next,
             before: &before,
             rates,
-        });
+            stale_on_write_failure: false,
+        };
+        let outcome = f(&mut tx, authority);
+        let stale_on_failure = tx.stale_on_write_failure;
         if next != before {
-            write_journeys(&self.config, &epoch, next, slot).map_err(JourneyError::Storage)?;
+            write_journeys(&self.config, &epoch, next, slot).map_err(|error| {
+                if stale_on_failure {
+                    *slot = TableState::Stale;
+                }
+                JourneyError::Storage(error)
+            })?;
         }
         outcome.map_err(JourneyError::Refused)
     }

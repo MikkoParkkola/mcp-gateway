@@ -6,11 +6,11 @@ use super::super::random_hex;
 use super::persist::Transition;
 use super::sweep::evict_for_insert;
 use super::{
-    ACCOUNT_ID_MAX, AccountKey, CALLBACK_WINDOW, Consumed, DigestKind, EXPECTATION_MAX, ISSUER_MAX,
-    JourneyError, JourneyId, JourneyLimits, JourneyReason, JourneyRecord, JourneyRefusal,
-    JourneyStatus, JourneyTable, JourneyView, NewJourney, RETURN_PATH_MAX, START_WINDOW, Secret,
-    StartSecrets, digests_equal, keyed_digest, principal_digest, principal_digest_of,
-    random_secret,
+    ACCOUNT_ID_MAX, AUTHORITY_MAX, AccountKey, CALLBACK_WINDOW, DigestKind, EXPECTATION_MAX,
+    ISSUER_MAX, JourneyError, JourneyId, JourneyLimits, JourneyReason, JourneyRecord,
+    JourneyRefusal, JourneyStatus, JourneyTable, JourneyView, NewJourney, RETURN_PATH_MAX,
+    START_WINDOW, SUBJECT_MAX, Secret, StartSecrets, digests_equal, keyed_digest, principal_digest,
+    principal_digest_of, random_secret,
 };
 use crate::personal_accounts::config::AccountDescriptor;
 use crate::personal_accounts::service::ConsentExpectation;
@@ -23,6 +23,8 @@ const REVISION_LEN: usize = 64;
 fn within_caps(new: &NewJourney) -> bool {
     let expectation = serde_json::to_vec(&new.expected).map_or(usize::MAX, |bytes| bytes.len());
     new.owner.backend_id.len() <= ACCOUNT_ID_MAX
+        && new.owner.principal_authority.len() <= AUTHORITY_MAX
+        && new.owner.principal_subject.len() <= SUBJECT_MAX
         && new.owner.oauth_issuer.len() <= ISSUER_MAX
         && new.return_path.len() <= RETURN_PATH_MAX
         && new.descriptor_revision.len() <= REVISION_LEN
@@ -38,6 +40,8 @@ fn pending(config: &StoreConfig, new: NewJourney, now: u64) -> Result<JourneyRec
     Ok(JourneyRecord {
         owner_digest: new.owner.digest()?,
         principal_digest: principal_digest(&new.owner)?,
+        owner_authority: Some(new.owner.principal_authority),
+        owner_subject: Some(new.owner.principal_subject),
         account_id: new.owner.backend_id,
         descriptor_revision: new.descriptor_revision,
         issuer: new.owner.oauth_issuer,
@@ -184,78 +188,6 @@ fn arm(
     Ok(minted.secrets)
 }
 
-/// Step 1: the record whose `state_digest` is `HMAC(state)` under the
-/// record's own `digest_key_id`. A key no longer configured matches nothing.
-fn locate(config: &StoreConfig, table: &JourneyTable, state: &str) -> Option<JourneyId> {
-    table.journeys.iter().find_map(|(id, record)| {
-        let stored = record.state_digest.as_deref()?;
-        let digest = keyed_digest(config, &record.digest_key_id, Secret::State, state)?;
-        digests_equal(DigestKind::State, &digest, stored).then(|| id.clone())
-    })
-}
-
-/// Step 2 (R2-3, R3-2): a replay is decided on the PRE-sweep record.
-fn is_replay(before: &JourneyRecord) -> bool {
-    before.consumed
-        || matches!(
-            before.status,
-            JourneyStatus::Connected
-                | JourneyStatus::Cancelled
-                | JourneyStatus::Failed
-                | JourneyStatus::Superseded
-        )
-}
-
-fn binding_matches(config: &StoreConfig, record: &JourneyRecord, binding: Option<&str>) -> bool {
-    let (Some(binding), Some(stored)) = (binding, record.binding_digest.as_deref()) else {
-        return false;
-    };
-    keyed_digest(config, &record.digest_key_id, Secret::Binding, binding)
-        .is_some_and(|digest| digests_equal(DigestKind::Binding, &digest, stored))
-}
-
-/// Callback steps 1-4 and 7 in one acquisition. Every refusal after step 1
-/// still persists its effect (the transition writes on refusal).
-fn callback(
-    config: &StoreConfig,
-    tx: &mut Transition<'_>,
-    state: &str,
-    binding: Option<&str>,
-    now: u64,
-) -> Result<Consumed, JourneyRefusal> {
-    let id = locate(config, tx.table, state).ok_or(JourneyRefusal::UnknownState)?;
-    let record = tx
-        .table
-        .journeys
-        .get_mut(&id)
-        .ok_or(JourneyRefusal::UnknownState)?;
-    if tx.before.journeys.get(&id).is_some_and(is_replay) {
-        record.replay_refusals = record.replay_refusals.saturating_add(1);
-        return Err(JourneyRefusal::Replay);
-    }
-    if record.status != JourneyStatus::Started {
-        // Only an expiry (the sweep's, or a pre-sweep one) reaches here.
-        return Err(JourneyRefusal::Expired);
-    }
-    if !binding_matches(config, record, binding) {
-        record.terminate(
-            JourneyStatus::Failed,
-            Some(JourneyReason::BrowserMismatch),
-            now,
-        );
-        return Err(JourneyRefusal::BrowserMismatch);
-    }
-    let verifier = record
-        .pkce_verifier
-        .take()
-        .ok_or(JourneyRefusal::UnknownState)?;
-    record.consumed = true;
-    Ok(Consumed {
-        journey_id: id,
-        verifier,
-    })
-}
-
 fn view(record: &JourneyRecord) -> JourneyView {
     JourneyView {
         status: record.status,
@@ -294,19 +226,6 @@ impl PersonalAccountStore {
         let minted = mint(&self.config).map_err(storage)?;
         self.journey_transition(now, limits, |tx| {
             arm(tx, limits, id, &owner_digest, minted, now)
-        })
-    }
-
-    /// Callback steps 1-4 and 7: locate, replay, expiry, binding, consume.
-    pub(crate) fn consume_callback(
-        &self,
-        now: u64,
-        limits: &JourneyLimits,
-        state: &str,
-        binding: Option<&str>,
-    ) -> Result<Consumed, JourneyError> {
-        self.journey_transition(now, limits, |tx| {
-            callback(&self.config, tx, state, binding, now)
         })
     }
 

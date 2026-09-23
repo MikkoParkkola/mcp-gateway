@@ -380,8 +380,9 @@ it (`claim_store`, `storage.rs:336-351`).
 - Every variable-length field has a numeric cap, enforced by config validation
   or at creation (§10, review R2-5). Everything else is fixed-width hex, a
   number, or the 43-character verifier.
-- A record's plaintext is therefore at most `RECORD_MAX = 1 KiB`. That value is
-  asserted by a unit test that serializes a maximal record.
+- A record's plaintext is therefore at most `RECORD_MAX` (2304 bytes after the 5c
+  owner fields: a maximal record serializes to 2137). That value is asserted by a
+  unit test that serializes a maximal record.
 - The byte cap is `records_max × RECORD_MAX × 2` (100% headroom), plus the
   measured envelope framing (the `record_file_limit` pattern,
   `storage.rs:572-599`).
@@ -393,6 +394,8 @@ it (`claim_store`, `storage.rs:336-351`).
 struct JourneyTable { journeys: BTreeMap<JourneyId, JourneyRecord> }   // JourneyId = 32 lowercase hex (random_hex)
 struct JourneyRecord {
     owner_digest: String,            // AccountKey::digest() of the full account key
+    owner_authority: Option<String>, // owner principal authority, cleared at terminal (5c)
+    owner_subject: Option<String>,   // owner principal subject, cleared at terminal (5c)
     account_id: String,              // descriptor id == AccountKey.backend_id
     descriptor_revision: String,     // migration_revision::descriptor_revision at creation
     issuer: String,                  // descriptor issuer, recorded for the RFC 9207 check
@@ -411,8 +414,13 @@ struct JourneyRecord {
 }
 ```
 
-The owner's raw subject is **not** stored. Owner equality always goes through the
-digest (§4.2 step 6). `ConsentExpectation` (`src/personal_accounts/service.rs:112-117`)
+The owner's principal authority and subject are stored, sealed, **only while the
+journey is active**; every terminal transition clears them with the verifier (5c
+amendment, §16). The callback needs them to rebuild the owner's `AccountKey`,
+because `commit_grant` binds all five key fields into the AEAD AAD and the provider
+redirect carries no principal. Owner equality still always goes through the digest
+(§4.2 step 6), and the commit re-checks `key.digest() == owner_digest` in constant
+time. `ConsentExpectation` (`src/personal_accounts/service.rs:112-117`)
 gains `Serialize`/`Deserialize`. It only holds non-secret `GrantVersion` fields
 (`src/personal_accounts/mod.rs:162-167`).
 
@@ -1254,8 +1262,9 @@ accounts:
   | serialized `expected` (`ConsentExpectation`) | 192 bytes | derived: tag + 32 + 64 hex + two `u64`, asserted by a unit test |
   | `reason` | closed enum, ≤ 64 bytes serialized including the `provider_revoke_*` suffix | type |
   | `digest_key_id` (and every `accounts.keys` id when `hosted` is set) | 64 bytes, `[A-Za-z0-9._-]` | config validation (review R3-1) |
+  | `owner_authority` / `owner_subject` (5c) | 256 / 128 bytes | at creation, before any store access (no existing cap to reuse) |
 
-  A POST whose `account_id` or `return_path` exceeds its cap gets 400
+  A POST whose `account_id`, `return_path`, owner authority or subject exceeds its cap gets 400
   `invalid_request` before any store access (T-R2-5). The worst-case record is
   bounded by these caps. `RECORD_MAX` is set to the serialized size of a maximal
   record (every capped field at its cap, including `digest_key_id`) rounded up to
@@ -1677,3 +1686,4 @@ confirmed all 16 round-1 findings as resolved.
 | R3-3 | `ReconnectRequired` revoke sent only one token | §8.1 (both tokens); T-R3-3 |
 | R3-4 | Key rotation between POST and start untested | T-KEYROT2 |
 | R3-5 | `digest_key_id` missing from terminal remainder list | §3 |
+| 5c | implementation | The callback cannot rebuild the owner's `AccountKey`: `commit_grant` binds all five fields into the AEAD AAD, and the provider redirect carries no principal | §5.1 (`owner_authority`/`owner_subject`, cleared at terminal), §10 caps; `admit_callback` then `consume_callback`; `commit_journey_grant_if` under one lock; T-C03d, T-C05b |
