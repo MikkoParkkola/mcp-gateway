@@ -15,11 +15,9 @@
 //! script behind `ProviderHttp`. They prove POLICY -- bootstrap eagerness,
 //! discovery order, exact issuer/endpoint binding, which failures may advance
 //! to the next candidate, descriptor selection, request composition, response
-//! mapping. They prove NOTHING about real TLS, certificate validation, DNS
-//! pinning or redirect handling: a `TerminalFailure::Certificate` here is a
-//! value a fake returned, not a certificate that was rejected. The real
-//! transport is unbuilt and those properties need a live check against the
-//! gateway client. See HANDOFF.
+//! mapping. They prove NOTHING about real TLS, certificates, DNS pinning or
+//! redirects: a `TerminalFailure::Certificate` here is a value a fake returned.
+//! `wire_tests` drives the real transport.
 //!
 //! ONE ORDERED LOG. Metadata GETs, token POSTs and secret resolutions all append
 //! to the same `Vec<Call>`, so "the secret was read after the metadata was
@@ -874,5 +872,7 @@ async fn invalid_grant_maps_distinctly_and_failures_leak_no_response_bytes() {
     }
 }
 
+#[path = "provider_tests/grant_flow_tests.rs"]
+mod grant_flow_tests;
 #[path = "provider_tests/pinned_userinfo_tests.rs"]
 mod pinned_userinfo_tests;

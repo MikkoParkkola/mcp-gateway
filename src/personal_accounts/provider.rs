@@ -43,6 +43,7 @@ use super::service::{ProviderRefreshError, RefreshProvider, TokenRefresh};
 use super::{AccountKey, GrantRecord};
 use crate::oauth::AuthorizationServerMetadata;
 
+mod grant_flow;
 mod http;
 
 pub(crate) use http::GatewayProviderHttp;
