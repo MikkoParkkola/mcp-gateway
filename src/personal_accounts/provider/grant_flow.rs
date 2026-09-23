@@ -118,6 +118,17 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         Ok(url)
     }
 
+    /// [`Self::authorize_url`] for a sealed PKCE `verifier`: the S256
+    /// challenge is derived here, so the verifier itself never leaves custody.
+    pub(crate) fn authorize_url_for_verifier(
+        &self,
+        account_id: &str,
+        state: &str,
+        verifier: &str,
+    ) -> Result<Url, ProviderRefreshError> {
+        self.authorize_url(account_id, state, &code_challenge_s256(verifier))
+    }
+
     /// Redeem an authorization code at the PINNED token endpoint (RFC 6749
     /// §4.1.3 plus the PKCE verifier).
     ///
