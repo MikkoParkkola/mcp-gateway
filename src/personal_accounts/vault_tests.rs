@@ -520,8 +520,7 @@ fn absence_is_distinguishable_from_revocation_at_the_propagation_boundary() {
     assert!(
         !matches!(revoked, PropagationError::AccountNotConnected(_)),
         "a revoked grant is not an absent one; reporting revocation as absence \
-         would invite a reconnect for a grant the user deliberately withdrew: \
-         {revoked:?}"
+         would hide that the user withdrew it: {revoked:?}"
     );
     assert_ne!(
         std::mem::discriminant(&absent),
@@ -529,5 +528,17 @@ fn absence_is_distinguishable_from_revocation_at_the_propagation_boundary() {
         "absence and revocation must differ by VARIANT, not only by the prose \
          inside one shared variant — a string difference is not something a \
          consumer or an audit record can branch on"
+    );
+    // A connect journey remedies revocation too (MIK-6745 §9.1), so it is
+    // typed; its text stays the `Refuse` text callers have always read.
+    assert!(
+        matches!(revoked, PropagationError::AccountReconnectRequired(_)),
+        "{revoked:?}"
+    );
+    assert!(
+        revoked
+            .to_string()
+            .starts_with("identity propagation refused (fail-closed): "),
+        "{revoked}"
     );
 }

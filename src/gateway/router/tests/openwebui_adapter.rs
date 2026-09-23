@@ -327,6 +327,7 @@ accounts:
     );
 }
 
+mod connect_offer;
 mod fake_owui;
 mod hosted_routes;
 mod revoke_route;

@@ -54,6 +54,9 @@ mod tests_commit;
 #[cfg(test)]
 #[path = "tests_gaps.rs"]
 mod tests_gaps;
+#[cfg(test)]
+#[path = "tests_offer.rs"]
+mod tests_offer;
 
 /// Schema of the sealed journeys envelope (design §5.1).
 pub(crate) const JOURNEY_SCHEMA: &str = "personal_accounts.journeys.v1";
