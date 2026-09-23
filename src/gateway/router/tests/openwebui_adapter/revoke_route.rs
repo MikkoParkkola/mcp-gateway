@@ -216,6 +216,9 @@ async fn revoke_route_connected_confirms_and_isolates_other_principal() {
     assert_eq!(gw.fixture.received(), both());
     assert_eq!(gw.fixture.state(&key("alice")).await, "revoked");
     assert_eq!(gw.fixture.state(&key("bob")).await, "connected");
+    // The audit row lands in the file the store-error test reads (its control).
+    let audit = std::fs::read_to_string(gw.dir.path().join("audit.ndjson")).unwrap();
+    assert!(audit.contains("account_revoke"), "{audit}");
 }
 
 /// T-REV2: a provider failure is reported and never un-tombstones.
