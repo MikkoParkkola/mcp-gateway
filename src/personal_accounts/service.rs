@@ -69,6 +69,17 @@ pub(crate) trait RefreshProvider: Send + Sync {
     ) -> impl Future<Output = Result<TokenRefresh, ProviderRefreshError>> + Send;
 }
 
+/// STUB: red commit only.
+impl<T: RefreshProvider> RefreshProvider for Arc<T> {
+    fn refresh(
+        &self,
+        _account: &AccountKey,
+        _current: &GrantRecord,
+    ) -> impl Future<Output = Result<TokenRefresh, ProviderRefreshError>> + Send {
+        async { Err(ProviderRefreshError::Unavailable) }
+    }
+}
+
 /// Stable authorization binding plus the volatile token-revision guard.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CredentialLease {
