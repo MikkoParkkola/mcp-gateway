@@ -26,6 +26,8 @@ use crate::personal_accounts::service::ConsentExpectation;
 
 #[path = "limits.rs"]
 mod limits;
+#[path = "lookup.rs"]
+mod lookup;
 #[path = "ops.rs"]
 mod ops;
 #[path = "persist.rs"]

@@ -27,10 +27,14 @@ use crate::personal_accounts::{
     AccountHandles, AccountKey, AccountRevocation, GatewayCustody, JourneyService,
 };
 
+#[path = "accounts/bridge.rs"]
+mod bridge;
 #[path = "accounts/hosted.rs"]
 mod hosted;
 #[path = "accounts/journeys.rs"]
 mod journeys;
+#[path = "accounts/start.rs"]
+mod start;
 
 pub(crate) use hosted::CALLBACK;
 
@@ -61,6 +65,7 @@ pub(super) fn router(
         journeys,
     } = handles.filter(|_| hosted)?;
     let create = Arc::clone(&journeys);
+    let browser = browser_routes(Arc::clone(&journeys));
     let owner = Router::new()
         .route(
             "/accounts/v1/journeys",
@@ -81,7 +86,24 @@ pub(super) fn router(
                 },
             ),
         );
-    Some(hosted::shell(authenticate(owner)))
+    Some(hosted::shell(authenticate(owner).merge(browser)))
+}
+
+/// Routes a browser reaches with its Open `WebUI` session and no API
+/// credential; merged AFTER `authenticate`, so no auth layer wraps them.
+fn browser_routes(journeys: Arc<dyn JourneyService>) -> Router<Arc<AppState>> {
+    let bridge = match bridge::OwuiSessionBridge::new() {
+        Ok(bridge) => Arc::new(bridge),
+        Err(error) => {
+            // Without the client there is no bridge; the route stays the 404.
+            tracing::error!(%error, "Open WebUI session bridge client unavailable");
+            return Router::new();
+        }
+    };
+    Router::new().route(
+        start::START,
+        get(move |state, id, headers| start::start(journeys, bridge, state, id, headers)),
+    )
 }
 
 async fn delete_connection(

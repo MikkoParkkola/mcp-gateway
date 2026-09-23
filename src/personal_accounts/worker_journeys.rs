@@ -11,10 +11,14 @@ use super::{CustodyError, CustodyHandle};
 use crate::personal_accounts::AccountKey;
 use crate::personal_accounts::AccountRevocation;
 use crate::personal_accounts::config::{AccountDescriptor, AccountsLimits};
-use crate::personal_accounts::service::{CredentialReleaseObserver, RefreshProvider};
-use crate::personal_accounts::storage::journey::{
-    JourneyError, JourneyId, JourneyLimits, JourneyView, START_WINDOW,
+use crate::personal_accounts::provider::{
+    Clock, PersonalOAuthRefresh, ProviderHttp, SecretSource, code_challenge_s256,
 };
+use crate::personal_accounts::service::CredentialReleaseObserver;
+use crate::personal_accounts::storage::journey::{
+    JourneyError, JourneyId, JourneyLimits, JourneyView, START_WINDOW, StartSecrets,
+};
+use crate::personal_accounts::{AccountError, PersonalAccountStore};
 
 /// The custody halves the accounts routes hold, object-safe so the router
 /// never names the provider transport.
@@ -29,6 +33,15 @@ pub(crate) struct AccountHandles {
 pub(crate) struct JourneyCreated {
     pub(crate) journey_id: JourneyId,
     pub(crate) expires_at: u64,
+}
+
+/// A started journey, as the browser needs it. The PKCE verifier never leaves
+/// custody; `binding` goes only into the journey's `Set-Cookie`.
+pub(crate) struct JourneyStarted {
+    pub(crate) authorize_url: url::Url,
+    pub(crate) binding: String,
+    /// Seconds until `callback_by`, from the same `now` that armed it.
+    pub(crate) max_age: u64,
 }
 
 /// The outer `CustodyError` is admission (busy, shutting down); the inner
@@ -53,12 +66,28 @@ pub(crate) trait JourneyService: Send + Sync {
         id: String,
         principal: (String, String),
     ) -> JourneyResult<JourneyView>;
+
+    /// Design §4.2 step 1: the account an active journey names. Runs before
+    /// the browser's session is read, so a dead link asks Open `WebUI` nothing.
+    async fn account_of(&self, limits: JourneyLimits, id: String) -> JourneyResult<String>;
+
+    /// Steps 6-8: compare `owner` with the journey's owner, arm the journey,
+    /// and build the authorize URL on the pinned endpoint from the minted
+    /// state and verifier.
+    async fn start(
+        &self,
+        limits: JourneyLimits,
+        id: String,
+        owner: AccountKey,
+    ) -> JourneyResult<JourneyStarted>;
 }
 
 #[async_trait::async_trait]
-impl<P, O> JourneyService for CustodyHandle<P, O>
+impl<H, C, S, O> JourneyService for CustodyHandle<Arc<PersonalOAuthRefresh<H, C, S>>, O>
 where
-    P: RefreshProvider + Send + Sync + 'static,
+    H: ProviderHttp + 'static,
+    C: Clock + 'static,
+    S: SecretSource + 'static,
     O: CredentialReleaseObserver + Send + Sync + 'static,
 {
     async fn create(
@@ -95,6 +124,57 @@ where
         })
         .await
     }
+
+    async fn account_of(&self, limits: JourneyLimits, id: String) -> JourneyResult<String> {
+        self.offload(move |service| {
+            Ok(service
+                .store()
+                .active_journey_account(now_seconds(), &limits, &id))
+        })
+        .await
+    }
+
+    async fn start(
+        &self,
+        limits: JourneyLimits,
+        id: String,
+        owner: AccountKey,
+    ) -> JourneyResult<JourneyStarted> {
+        let account = owner.backend_id.clone();
+        let armed = self
+            .offload(move |service| Ok(arm(service.store(), &limits, &id, &owner)))
+            .await?;
+        let (secrets, max_age) = match armed {
+            Ok(armed) => armed,
+            Err(error) => return Ok(Err(error)),
+        };
+        let challenge = code_challenge_s256(&secrets.verifier);
+        // The URL carries exactly the state the store sealed; a URL the
+        // provider cannot build is a descriptor fault, not the user's.
+        let url = self
+            .provider()?
+            .authorize_url(&account, &secrets.state, &challenge)
+            .map_err(|_| JourneyError::Storage(AccountError::InvalidConfiguration));
+        Ok(url.map(|authorize_url| JourneyStarted {
+            authorize_url,
+            binding: secrets.binding,
+            max_age,
+        }))
+    }
+}
+
+/// One `now` for the arm and the deadline read, so `max_age` is exactly
+/// `callback_by - now`.
+fn arm(
+    store: &PersonalAccountStore,
+    limits: &JourneyLimits,
+    id: &str,
+    owner: &AccountKey,
+) -> Result<(StartSecrets, u64), JourneyError> {
+    let now = now_seconds();
+    let secrets = store.start_journey(now, limits, id, owner)?;
+    let deadline = store.journey_status(now, limits, id)?.expires_at;
+    Ok((secrets, deadline.unwrap_or(now).saturating_sub(now)))
 }
 
 impl From<&AccountsLimits> for JourneyLimits {
