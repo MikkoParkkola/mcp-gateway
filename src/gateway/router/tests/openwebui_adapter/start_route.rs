@@ -39,7 +39,7 @@ const CAROL: &str = "c3a1f5e7-9b2d-4c6e-8a0f-1d3b5c7e9a2b";
 const CAROL_TOKEN: &str = "owui-session-carol-SECRET-5e1b";
 const MALLORY: &str = "d4b2e6f8-0c3a-4d7f-9b1e-2f4a6c8e0b3d";
 const MALLORY_TOKEN: &str = "owui-session-mallory-SECRET-7a4c";
-const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; \
+const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; \
                    form-action 'self'; frame-ancestors 'none'";
 
 fn user(token: &'static str, id: &str, email: &'static str) -> User {

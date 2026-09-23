@@ -22,7 +22,7 @@ const HMAC: &str = "fixture-adapter-signing-secret-123456789";
 const PLAIN_HMAC: &str = "fixture-plain-adapter-secret-9876543210";
 const API_KEY: &str = "fixture-named-api-key";
 const HOSTED_HOST: &str = "chat.fixture.test";
-const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; \
+const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; \
                    form-action 'self'; frame-ancestors 'none'";
 
 /// Whether `accounts.hosted` is configured. When it is, the first adapter
