@@ -23,7 +23,7 @@ use crate::identity_propagation::audit_identity_propagation;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::identity::{Principal, account_key};
 use crate::personal_accounts::{
-    AccountHandles, AccountKey, AccountRevocation, GatewayCustody, JourneyService,
+    AccountHandles, AccountKey, AccountRevocation, GatewayCustody, JourneyService, ProviderOutcome,
 };
 
 #[path = "accounts/bridge.rs"]
@@ -131,8 +131,13 @@ async fn revoke_for(
     account_id: String,
 ) -> Response {
     let config = state.live_config.get();
-    let Some(key) = own_key(&config, identity, &account_id) else {
-        return envelope::refusal(StatusCode::NOT_FOUND, "not_found", None);
+    let key = match own_key(&config, identity, &account_id) {
+        Ok(key) => key,
+        Err(NoKey::NotFound) => return envelope::refusal(StatusCode::NOT_FOUND, "not_found", None),
+        Err(NoKey::Unavailable) => {
+            tracing::error!("account descriptors do not compile; revoke refused");
+            return envelope::refusal(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable", None);
+        }
     };
     let Ok(material) = revocation.invalidate(&key).await else {
         return envelope::refusal(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable", None);
@@ -146,34 +151,73 @@ async fn revoke_for(
         None,
         None,
     );
+    // The provider call runs even without an audit row: the tokens were
+    // captured once and are wiped on drop, so withholding them would leave
+    // the grant live at the provider with no later chance to revoke it.
+    let outcome = revocation.revoke_at_provider(&account_id, material).await;
+    if outcome == ProviderOutcome::Failed {
+        tracing::warn!(%account_id, "provider revocation failed; the grant may stay live upstream");
+    }
+    revoked_response(&account_id, outcome, &audited)
+}
+
+/// The DELETE answer once the tombstone is durable: 200, or 503
+/// `audit_unavailable` that still reports what the provider said.
+fn revoked_response<E>(
+    account_id: &str,
+    outcome: ProviderOutcome,
+    audited: &Result<(), E>,
+) -> Response {
     if audited.is_err() {
-        // The tombstone stands; only the provider call is withheld.
         let mut body = envelope::body("audit_unavailable", true);
         body["local_status"] = json!("revoked");
+        body["provider_revocation"] = json!(outcome.as_str());
         return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
     }
-    let outcome = revocation.revoke_at_provider(&account_id, material).await;
     let body = json!({"schema_version": envelope::SCHEMA, "account_id": account_id,
                       "status": "revoked", "provider_revocation": outcome.as_str()});
     (StatusCode::OK, axum::Json(body)).into_response()
 }
 
-/// The caller's own key for a managed descriptor, or `None` for an id that is
-/// not a configured `personal_managed` descriptor.
-fn own_key(config: &Config, identity: &VerifiedIdentity, account_id: &str) -> Option<AccountKey> {
-    let descriptors = account_bindings::compile_descriptors(config).ok()?;
+/// Why no key: the id names no managed descriptor (404), or the live
+/// descriptor set does not compile, so no id can be judged at all (503).
+enum NoKey {
+    NotFound,
+    Unavailable,
+}
+
+/// The caller's own key for a configured `personal_managed` descriptor.
+fn own_key(
+    config: &Config,
+    identity: &VerifiedIdentity,
+    account_id: &str,
+) -> Result<AccountKey, NoKey> {
+    let descriptors =
+        account_bindings::compile_descriptors(config).map_err(|_| NoKey::Unavailable)?;
     let descriptor = descriptors
         .into_iter()
-        .find(|compiled| compiled.descriptor_id == account_id)?
-        .account?;
-    account_key(Some(Principal::Verified(identity)), &descriptor).ok()
+        .find(|compiled| compiled.descriptor_id == account_id)
+        .and_then(|compiled| compiled.account)
+        .ok_or(NoKey::NotFound)?;
+    account_key(Some(Principal::Verified(identity)), &descriptor).map_err(|_| NoKey::NotFound)
 }
 
 /// Drop upstream sessions minted under any generation of this account. The
 /// prefix is the stable head of `cache_binding`; response caches need no sweep
 /// because their bindings carry a generation no lease can be issued for again.
+/// Every skipped eviction is logged under an 8-character digest prefix only.
 async fn evict_slots(state: &AppState, config: &Config, key: &AccountKey, account_id: &str) {
-    let (Ok(digest), Ok(bound)) = (key.digest(), account_bindings::compile(config)) else {
+    let Ok(digest) = key.digest() else {
+        tracing::warn!(%account_id, "revoke evicted no sessions: account key has no digest");
+        return;
+    };
+    let tag = digest.get(..8).unwrap_or_default();
+    let Ok(bound) = account_bindings::compile(config) else {
+        tracing::warn!(
+            %account_id,
+            account = tag,
+            "revoke evicted no sessions: bindings do not compile"
+        );
         return;
     };
     let prefix = format!("acct:v1:{digest}:");
@@ -181,8 +225,15 @@ async fn evict_slots(state: &AppState, config: &Config, key: &AccountKey, accoun
         if binding.descriptor_id != account_id {
             continue;
         }
-        if let Some(backend) = state.backends.get(name) {
-            backend.evict_identity_slots(&prefix).await;
-        }
+        let Some(backend) = state.backends.get(name) else {
+            tracing::warn!(
+                %account_id,
+                account = tag,
+                backend = %name,
+                "revoke evicted no sessions: bound backend not registered"
+            );
+            continue;
+        };
+        backend.evict_identity_slots(&prefix).await;
     }
 }

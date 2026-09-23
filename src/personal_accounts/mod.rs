@@ -459,7 +459,7 @@ pub(crate) use worker::{CustodyError, CustodyStartError};
 pub use offline_migration::{
     MigratedCredential, OfflineMigrationError, migrate_legacy_credential_offline,
 };
-pub(crate) use revoke::AccountRevocation;
+pub(crate) use revoke::{AccountRevocation, ProviderOutcome};
 pub(crate) use vault::{AccountCustody, VaultStrategy};
 
 /// The one refresh provider a gateway runs: the real policy over the real

@@ -103,7 +103,7 @@ pub(super) async fn start(
     let Some(identity) = bridge.identity(&session, &headers).await else {
         return Page::SignIn.into_response();
     };
-    let Some(owner) = super::own_key(&config, &identity, &account) else {
+    let Ok(owner) = super::own_key(&config, &identity, &account) else {
         return Page::Expired.into_response();
     };
     match journeys.start(limits, id.clone(), owner).await {
