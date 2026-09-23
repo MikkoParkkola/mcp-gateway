@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 
 mod adapters;
 mod descriptor_debug;
+mod journey;
 
 // Nameable from the rest of the crate without exposing the module: the type is
 // part of `AccountsConfig`'s shape, the module layout is not.
