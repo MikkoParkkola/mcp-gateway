@@ -215,6 +215,113 @@ success:
 - Revoke user A's token via `DELETE /auth/token/{jti}` and confirm the next call
   is refused.
 
+## Per-user consent journey (hosted)
+
+The section above assumes a backend will already accept the caller's identity
+(passthrough or token exchange). A browser-OAuth backend like Google Workspace
+does not — each person has to click through an actual consent screen once. The
+hosted consent journey is the gateway-rendered version of that click-through,
+for callers verified through a configured `session` bridge (Open WebUI today,
+see below): a user who hits a `personal_managed` backend refusal gets a
+gateway-sealed connect link in the refusal message, follows it to
+`/accounts/v1/journeys/{id}/start`, is redirected to the provider, lands back
+on the gateway's `/accounts/v1/callback`, and sees a gateway-rendered outcome
+page. They can review their connected accounts and disconnect at
+`/accounts/v1/complete` at any time. The grant is committed and stored per
+user, so completing or failing one user's journey never touches another
+user's credential. A caller authenticated only by OIDC (no bridge), or a POST
+to the journey API with no bridge configured, keeps getting the existing
+refusal text with no link — the link is only minted for bridge-verified
+callers.
+
+### Configure it
+
+```yaml
+accounts:
+  # ...existing schema_version, enabled, deployment, instance_id, store_dir,
+  # authority_dir, current_key_id, keys unchanged...
+  hosted:
+    public_origin: "https://chat.example.com"   # https origin only: no path, query, userinfo or default port
+    return_paths: ["/"]                          # absolute paths the outcome page may land on; compared byte-exact
+  adapters:
+    - kind: openwebui_signed_header               # existing fields (installation_id, header, issuer, hmac_secret_ref, ...) unchanged
+      session:                                     # new, required: enables the connect-link bridge; exactly one adapter may carry it
+        user_endpoint: "http://127.0.0.1:8090/api/v1/auths/"   # Open WebUI's session-user endpoint; https, or http on a loopback literal
+        cookie_name: token                          # Open WebUI's session cookie name (default "token")
+  descriptors:
+    google-workspace:
+      mode: personal_managed
+      provider: google
+      issuer: "https://accounts.google.com"
+      resource: "https://www.googleapis.com/"
+      authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth"
+      token_endpoint: "https://oauth2.googleapis.com/token"
+      revocation_endpoint: "https://oauth2.googleapis.com/revoke"
+      client_id: "<web client id>"
+      client_secret_ref: "env:GOOGLE_OAUTH_CLIENT_SECRET"
+      redirect_uri: "https://chat.example.com/accounts/v1/callback"   # must equal public_origin + /accounts/v1/callback
+      scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
+      send_resource_parameter: false                                 # Google REST takes no RFC 8707 resource parameter; must be declared explicitly
+      authorize_extra: { access_type: offline, prompt: consent }      # required for Google — see checklist step 5
+```
+
+`issuer`, `resource`, `client_id`, `authorization_endpoint`, `token_endpoint`
+and `redirect_uri` are all required on a `personal_managed` descriptor;
+`send_resource_parameter` must be declared (`true` or `false`, never omitted).
+`redirect_uri` is checked at startup against `public_origin + /accounts/v1/callback`
+for every `personal_managed` descriptor; a mismatch refuses the configuration.
+`hosted` also requires exactly one adapter carrying a `session` block. See the
+full worked config in `src/personal_accounts/config/journey_tests.rs`.
+Omitting `accounts.hosted` mounts no route and changes no existing refusal
+text.
+
+### Reverse-proxy front door
+
+`public_origin` is the origin the browser already has open when it follows the
+connect link — in the reference deployment that is the chat client's (Open
+WebUI's) public hostname, which is not necessarily the same vhost that fronts
+the gateway's own `/mcp` traffic in [Reverse Proxy](DEPLOYMENT.md#reverse-proxy).
+Whatever front door serves `public_origin` (nginx, Caddy, a Cloudflare tunnel,
+…) must forward `/accounts/v1/*` to the gateway, ordered before that origin's
+own catch-all, and pass it through unmodified; everything else on that origin
+keeps going to the chat client as before. The routes under the prefix:
+
+- `POST /accounts/v1/journeys`, `GET /accounts/v1/journeys/{id}` — owner API
+- `GET /accounts/v1/journeys/{id}/start` — the link the connect offer sends the user to
+- `GET /accounts/v1/callback` — the provider's redirect target
+- `GET /accounts/v1/complete`, `GET /accounts/v1/assets/complete.js` — the outcome/manage page
+- `DELETE /accounts/v1/connections/{account_id}` — disconnect, called from the manage page
+
+### Limits (`accounts.limits`)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `journeys_total` | 1024 | Active (`pending`/`started`) journeys, gateway-wide |
+| `journeys_per_user` | 8 | Journey creations per principal, sliding 10-minute window |
+| `starts_per_minute_per_user` | 10 | `start` invocations per principal, sliding 60 s window |
+| `journeys_created_per_minute` | 120 | Journey creations gateway-wide, sliding 60 s window |
+| `store_entries` | 10000 | Existing cap on the connected-account credential store, unrelated to the journey table |
+| `authority_bytes` | 16777216 | Existing byte cap on the same credential store |
+
+Every field rejects zero and overflow; there is no way to disable a limit,
+only raise it.
+
+### Google OAuth web-client checklist
+
+1. Google Cloud Console -> APIs & Services -> Credentials -> **Create OAuth
+   client ID** -> Application type **Web application**.
+2. Authorized redirect URIs: exactly `<public_origin>/accounts/v1/callback`
+   (for example `https://chat.example.com/accounts/v1/callback`) — no
+   trailing slash, must byte-match the descriptor's `redirect_uri`.
+3. Enable the API(s) behind the scopes you request (the Gmail API for
+   `gmail.readonly`, for example).
+4. Put the client secret in the environment variable `client_secret_ref`
+   points at; never inline it in config.
+5. Set `authorize_extra.access_type: offline` and `prompt: consent`. Without
+   `offline`, Google's token response carries no `refresh_token` and the
+   journey fails `no_refresh_token`; Google also only issues a `refresh_token`
+   on first consent unless `prompt=consent` forces reissue on reconnect.
+
 ## Before exposing the port
 
 - `auth.enabled: true`, `auth.public_paths` cut to `["/health"]`, and
