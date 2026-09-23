@@ -39,6 +39,8 @@ mod handlers;
 pub(crate) use handlers::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
 mod origin_guard;
+#[cfg(feature = "firewall")]
+mod response_pass;
 
 /// `true` when `host` names the loopback interface.
 ///

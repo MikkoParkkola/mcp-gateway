@@ -26,6 +26,7 @@ use super::helpers::{
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
+use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 #[cfg(feature = "firewall")]
 use crate::gateway::session_lifecycle;
@@ -1183,6 +1184,10 @@ async fn meta_mcp_dispatch(
     let mut execution = None;
 
     // Route to appropriate handler
+    // Fail-closed default: delivery inspects unless the `tools/call` arm below
+    // proves it already inspected this exact artifact.
+    #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
+    let mut delivery_inspection = DeliveryInspection::Required;
     let mut response = match method.as_str() {
         "subscriptions/listen" => {
             // The single long-lived stream that replaces the GET endpoint.
@@ -1782,57 +1787,17 @@ async fn meta_mcp_dispatch(
             // the block silently depended on which target sorted first.
             #[cfg(feature = "firewall")]
             {
-                let mut refused = false;
-                if let Some(ref fw) = state.firewall
-                    && let Some(ref mut result_val) = call_response.result
-                {
-                    let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
-                    let correlation = crate::security::response_policy::ResponseCorrelation {
+                delivery_inspection = super::response_pass::inspect_tools_call_response(
+                    state.firewall.as_deref(),
+                    &mut call_response,
+                    &response_targets,
+                    &crate::security::response_policy::ResponseCorrelation {
                         session_id: &session_id,
-                        caller: caller_name,
+                        caller: client.as_ref().map_or("anonymous", |c| c.name.as_str()),
                         external_server: "gateway",
                         external_tool: &external_tool,
-                    };
-                    if let Ok(verdict) = fw.check_response_artifact(
-                        result_val,
-                        &response_targets,
-                        &correlation,
-                        crate::security::response_policy::ResponseArtifactKind::FinalResponse,
-                        crate::security::response_policy::ResponseMutationPolicy::Redact,
-                    ) {
-                        if !verdict.allowed || verdict.action == FirewallAction::Block {
-                            warn!(
-                                targets = response_targets.len(),
-                                findings = verdict.findings.len(),
-                                "Firewall: response blocked"
-                            );
-                            refused = true;
-                        } else if verdict.action == FirewallAction::Warn {
-                            warn!(
-                                targets = response_targets.len(),
-                                findings = verdict.findings.len(),
-                                "Firewall: response warning"
-                            );
-                        }
-                    } else {
-                        // No authenticated target means nothing can admit this
-                        // artifact; fail closed exactly as a Block would.
-                        warn!(
-                            targets = response_targets.len(),
-                            "Firewall: response inspection lacked a policy target"
-                        );
-                        refused = true;
-                    }
-                }
-                if refused {
-                    // Not an early HTTP return: the shared owned-execution
-                    // finalization below still runs on this response.
-                    call_response = JsonRpcResponse::delivery_refusal_error(
-                        call_response.id.take(),
-                        -32600,
-                        "Response blocked by security firewall",
-                    );
-                }
+                    },
+                );
             }
 
             call_response
@@ -1990,7 +1955,7 @@ async fn meta_mcp_dispatch(
     if is_modern {
         shape_modern_response(&mut response, &method);
     }
-    response = state.meta_mcp.finalize_response_for_delivery(
+    response = state.meta_mcp.finalize_response_after_inspection(
         response,
         &crate::gateway::meta_mcp::response_security::ResponseDeliveryContext {
             method: &method,
@@ -2007,6 +1972,7 @@ async fn meta_mcp_dispatch(
                 crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
             signing: signing_context.as_ref(),
         },
+        delivery_inspection,
     );
     if let Some(execution) = execution {
         execution.complete_delivery(&response, signing_context.as_ref());
