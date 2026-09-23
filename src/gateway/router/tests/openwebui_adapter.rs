@@ -327,4 +327,5 @@ accounts:
     );
 }
 
+mod hosted_routes;
 mod revoke_route;
