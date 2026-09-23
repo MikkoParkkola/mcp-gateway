@@ -161,8 +161,12 @@ fn is_cookie_token_byte(byte: u8) -> bool {
 /// Exactness matters: the callback is `public_origin + CALLBACK_PATH` as a
 /// string, so `https://h/` would make it `https://h//accounts/...`.
 fn validate_origin(origin: &str) -> Result<(), AccountsConfigError> {
-    let exact = Url::parse(origin)
-        .is_ok_and(|url| url.scheme() == "https" && url.origin().ascii_serialization() == origin);
+    let exact = Url::parse(origin).is_ok_and(|url| {
+        url.scheme() == "https"
+                && url.origin().ascii_serialization() == origin
+                // `host.` and `host` are one name to DNS but two to cookies and TLS.
+                && !url.host_str().is_some_and(|host| host.ends_with('.'))
+    });
     if exact {
         return Ok(());
     }

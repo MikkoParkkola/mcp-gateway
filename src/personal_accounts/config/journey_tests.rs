@@ -201,6 +201,11 @@ fn public_origin_that_is_not_a_bare_https_origin_is_refused() {
         "https://chat.example.com?q=1",
         "https://user@chat.example.com",
         "https://chat.example.com:443",
+        "https://chat.example.com.",
+        "HTTPS://chat.example.com",
+        "https://CHAT.example.com",
+        "https://chat%2Eexample.com",
+        "https://bücher.example.com",
         "chat.example.com",
     ] {
         refused(
@@ -448,7 +453,7 @@ fn a_journeys_total_whose_derived_byte_cap_overflows_is_refused() {
     // carry that product is not a bound. The byte cap built on it needs
     // RECORD_MAX, which slice 2 derives, so that product is not checked here.
     refused(
-        &limit("journeys_total", &usize::MAX.to_string()),
+        &limit("journeys_total", &(usize::MAX / 4 + 1).to_string()),
         "accounts.limits.journeys_total must be a positive integer",
     );
 }

@@ -33,6 +33,13 @@ mod descriptor_debug;
 mod journey;
 mod limits;
 
+// Re-exported so slice 3's provider can name the canonical type as
+// `config::AuthorizeExtra` instead of reaching into the `journey` module.
+pub(crate) use journey::AuthorizeExtra;
+// Re-exported for the same reason, but `AccessType`/`Prompt` have no
+// in-crate consumer yet -- slice 3 is the first.
+#[expect(unused_imports, reason = "first used by the slice-3 provider")]
+pub(crate) use journey::{AccessType, Prompt};
 pub use limits::AccountsLimits;
 
 // Nameable from the rest of the crate without exposing the module: the type is
@@ -41,7 +48,7 @@ pub(crate) use adapters::AdapterConfig;
 // The gateway-credential view the separation checks below take. Nameable from
 // `config::Config`, which is the only place that can see `auth`.
 pub(crate) use adapters::GatewayCredential;
-use journey::{AuthorizeExtra, HostedConfig};
+use journey::HostedConfig;
 
 /// Structural gateway separation for the whole block: no adapter names the same
 /// environment variable as a gateway credential.
