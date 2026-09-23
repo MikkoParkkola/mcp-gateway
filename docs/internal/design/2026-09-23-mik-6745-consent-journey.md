@@ -335,7 +335,7 @@ record, not from whatever `current_key_id` is at callback time.
   headers, including 404, 405 and error pages:
   - `Cache-Control: no-store`
   - `Referrer-Policy: no-referrer`
-  - `Content-Security-Policy: default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self'; frame-ancestors 'none'`
+  - `Content-Security-Policy: default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'`
 
   The owner API routes (POST, status) set the first two through the same layer.
   T-HDR tests an arbitrary unrouted path under the prefix.

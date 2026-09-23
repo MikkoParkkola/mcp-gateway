@@ -17,7 +17,7 @@ use tower_http::trace::TraceLayer;
 use super::super::AppState;
 
 /// The browser pages' policy (§4.3): no third-party content, no framing.
-const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; \
+const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; \
                    form-action 'self'; frame-ancestors 'none'";
 /// Where the provider redirects back; routed in `accounts::router`.
 pub(crate) const CALLBACK: &str = "/accounts/v1/callback";
