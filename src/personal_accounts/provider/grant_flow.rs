@@ -17,45 +17,15 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::RngExt as _;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use url::Url;
 
 use super::{Clock, PersonalOAuthRefresh, ProviderHttp, SecretSource, required};
 use crate::oauth::AuthorizationServerMetadata;
-use crate::personal_accounts::config::{AccountDescriptor, DescriptorMode};
+use crate::personal_accounts::config::{
+    AccessType, AccountDescriptor, AuthorizeExtra, DescriptorMode, Prompt,
+};
 use crate::personal_accounts::service::{ProviderRefreshError, TokenRefresh};
-
-/// Extra authorize-request parameters, as a CLOSED vocabulary.
-///
-/// A free-form map could name `state`, `redirect_uri` or
-/// `code_challenge_method` and silently override the parameters this module
-/// exists to pin, so every key and every value is a type.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AuthorizeExtra {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) access_type: Option<AccessType>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) prompt: Option<Prompt>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) include_granted_scopes: Option<bool>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum AccessType {
-    Offline,
-    Online,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Prompt {
-    Consent,
-    SelectAccount,
-    None,
-}
 
 /// RFC 7009 §2.1 `token_type_hint`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,25 +41,6 @@ pub(crate) enum ProviderRevocation {
     Confirmed,
     Failed,
     Unsupported,
-}
-
-impl AccessType {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Offline => "offline",
-            Self::Online => "online",
-        }
-    }
-}
-
-impl Prompt {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Consent => "consent",
-            Self::SelectAccount => "select_account",
-            Self::None => "none",
-        }
-    }
 }
 
 impl TokenTypeHint {
@@ -131,7 +82,6 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
     pub(crate) fn authorize_url(
         &self,
         account_id: &str,
-        extra: AuthorizeExtra,
         state: &str,
         code_challenge: &str,
     ) -> Result<Url, ProviderRefreshError> {
@@ -139,6 +89,7 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         let resource = resource_parameter(descriptor)?;
         let client_id = required(descriptor.client_id.as_deref())?;
         let redirect_uri = required(descriptor.redirect_uri.as_deref())?;
+        let extra = authorize_extra(descriptor);
         let scopes = descriptor
             .scopes
             .as_deref()
@@ -160,17 +111,8 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
             if let Some(resource) = resource {
                 query.append_pair("resource", resource);
             }
-            if let Some(access_type) = extra.access_type {
-                query.append_pair("access_type", access_type.as_str());
-            }
-            if let Some(prompt) = extra.prompt {
-                query.append_pair("prompt", prompt.as_str());
-            }
-            if let Some(include) = extra.include_granted_scopes {
-                query.append_pair(
-                    "include_granted_scopes",
-                    if include { "true" } else { "false" },
-                );
+            for (key, value) in extra {
+                query.append_pair(key, value);
             }
         }
         Ok(url)
@@ -271,4 +213,37 @@ fn resource_parameter(
         .ok_or(ProviderRefreshError::Unavailable)?;
     let resource = required(descriptor.resource.as_deref())?;
     Ok(send.then_some(resource))
+}
+
+/// The descriptor's `authorize_extra` as query pairs. Every key and value is
+/// a literal chosen by an exhaustive match on the closed config type, so no
+/// pair can shadow a pinned parameter.
+fn authorize_extra(descriptor: &AccountDescriptor) -> Vec<(&'static str, &'static str)> {
+    let Some(extra) = descriptor.authorize_extra else {
+        return Vec::new();
+    };
+    let AuthorizeExtra {
+        access_type,
+        prompt,
+        include_granted_scopes,
+    } = extra;
+    let access_type = access_type.map(|value| match value {
+        AccessType::Offline => ("access_type", "offline"),
+        AccessType::Online => ("access_type", "online"),
+    });
+    let prompt = prompt.map(|value| match value {
+        Prompt::Consent => ("prompt", "consent"),
+        Prompt::SelectAccount => ("prompt", "select_account"),
+        Prompt::Silent => ("prompt", "none"),
+    });
+    let include = include_granted_scopes.map(|value| {
+        (
+            "include_granted_scopes",
+            if value { "true" } else { "false" },
+        )
+    });
+    [access_type, prompt, include]
+        .into_iter()
+        .flatten()
+        .collect()
 }

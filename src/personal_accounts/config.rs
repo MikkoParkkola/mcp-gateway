@@ -33,13 +33,9 @@ mod descriptor_debug;
 mod journey;
 mod limits;
 
-// Re-exported so slice 3's provider can name the canonical type as
+// Re-exported so the provider can name the canonical types as
 // `config::AuthorizeExtra` instead of reaching into the `journey` module.
-pub(crate) use journey::AuthorizeExtra;
-// Re-exported for the same reason, but `AccessType`/`Prompt` have no
-// in-crate consumer yet -- slice 3 is the first.
-#[expect(unused_imports, reason = "first used by the slice-3 provider")]
-pub(crate) use journey::{AccessType, Prompt};
+pub(crate) use journey::{AccessType, AuthorizeExtra, Prompt};
 pub use limits::AccountsLimits;
 
 // Nameable from the rest of the crate without exposing the module: the type is
