@@ -27,6 +27,7 @@ fn descriptor(client_id: Option<&str>) -> AccountDescriptor {
         scopes: Some(vec!["drive.readonly".to_owned()]),
         send_resource_parameter: Some(true),
         external_strategy: None,
+        authorize_extra: None,
     }
 }
 

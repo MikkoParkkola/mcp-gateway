@@ -169,11 +169,22 @@ fn the_hosted_only_caps_do_not_apply_without_hosted() {
         .replacen("google-workspace:", "Google_Workspace.X:", 1)
         .replacen(
             "issuer: \"https://accounts.google.com\"",
-            &format!("issuer: \"https://accounts.google.com/{}\"", "p".repeat(300)),
+            &format!(
+                "issuer: \"https://accounts.google.com/{}\"",
+                "p".repeat(300)
+            ),
             1,
         )
-        .replacen("current_key_id: current", &format!("current_key_id: {long_key}"), 1)
-        .replacen("  current: env:JOURNEY_KEY", &format!("  {long_key}: env:JOURNEY_KEY"), 1);
+        .replacen(
+            "current_key_id: current",
+            &format!("current_key_id: {long_key}"),
+            1,
+        )
+        .replacen(
+            "  current: env:JOURNEY_KEY",
+            &format!("  {long_key}: env:JOURNEY_KEY"),
+            1,
+        );
     assert!(yaml.contains(&format!("  {long_key}: env:")) && yaml.contains("Google_Workspace.X"));
     assert_eq!(check(&yaml), Ok(()));
 }
@@ -202,7 +213,10 @@ fn public_origin_that_is_not_a_bare_https_origin_is_refused() {
 /// One `return_paths` entry, written as a YAML double-quoted scalar so escapes
 /// such as `\t` and `\\` reach the parser as the bytes the case names.
 fn return_path(entry: &str) -> String {
-    with("return_paths: [\"/\"]", &format!("return_paths: [\"{entry}\"]"))
+    with(
+        "return_paths: [\"/\"]",
+        &format!("return_paths: [\"{entry}\"]"),
+    )
 }
 
 #[test]
@@ -217,7 +231,13 @@ fn an_empty_return_paths_list_is_refused() {
 fn a_return_path_that_is_not_single_slash_absolute_is_refused() {
     // `//evil` is protocol-relative in a browser; a scheme or a relative path
     // is not a path on this origin at all.
-    for entry in ["//evil.example", "https://evil.example", "evil", "", "javascript:x"] {
+    for entry in [
+        "//evil.example",
+        "https://evil.example",
+        "evil",
+        "",
+        "javascript:x",
+    ] {
         refused(&return_path(entry), "must start with exactly one /");
     }
 }
@@ -232,7 +252,16 @@ fn a_return_path_with_a_backslash_is_refused() {
 
 #[test]
 fn a_return_path_with_a_query_fragment_control_space_or_percent_is_refused() {
-    for entry in ["/a?b", "/a#b", "/a\\tb", "/a\\u0000", "/a b", "/a%0a", "/a%2F", "/\\u007f"] {
+    for entry in [
+        "/a?b",
+        "/a#b",
+        "/a\\tb",
+        "/a\\u0000",
+        "/a b",
+        "/a%0a",
+        "/a%2F",
+        "/\\u007f",
+    ] {
         refused(&return_path(entry), "must be printable ASCII");
     }
 }
@@ -327,7 +356,10 @@ fn a_managed_redirect_uri_off_the_hosted_callback_is_refused() {
 #[test]
 fn a_managed_account_id_over_64_bytes_or_outside_the_charset_is_refused() {
     let at_cap = "a".repeat(64);
-    assert_eq!(check(&with("google-workspace:", &format!("{at_cap}:"))), Ok(()));
+    assert_eq!(
+        check(&with("google-workspace:", &format!("{at_cap}:"))),
+        Ok(())
+    );
     for id in ["a".repeat(65), "Google".into(), "a.b".into(), "a/b".into()] {
         refused(
             &with("google-workspace:", &format!("\"{id}\":")),
@@ -344,7 +376,10 @@ fn a_managed_issuer_over_256_bytes_is_refused() {
     };
     let from = "issuer: \"https://accounts.google.com\"";
     assert_eq!(check(&with(from, &issuer(256))), Ok(()));
-    refused(&with(from, &issuer(257)), "issuer must be at most 256 bytes");
+    refused(
+        &with(from, &issuer(257)),
+        "issuer must be at most 256 bytes",
+    );
 }
 
 #[test]
@@ -352,18 +387,31 @@ fn a_key_id_over_64_bytes_or_outside_the_charset_is_refused_under_hosted() {
     // R3-1: the key id becomes a record's `digest_key_id`, so every id in
     // `accounts.keys` is capped, the current one included.
     let rekey = |id: &str| {
-        with("current_key_id: current", &format!("current_key_id: \"{id}\""))
-            .replacen("  current: env:JOURNEY_KEY", &format!("  \"{id}\": env:JOURNEY_KEY"), 1)
+        with(
+            "current_key_id: current",
+            &format!("current_key_id: \"{id}\""),
+        )
+        .replacen(
+            "  current: env:JOURNEY_KEY",
+            &format!("  \"{id}\": env:JOURNEY_KEY"),
+            1,
+        )
     };
     assert_eq!(check(&rekey(&"K.9_-".repeat(12))), Ok(()));
     for id in ["k".repeat(65), "a b".into(), "a/b".into(), "é".into()] {
-        refused(&rekey(&id), "key ids must be at most 64 bytes of [A-Za-z0-9._-]");
+        refused(
+            &rekey(&id),
+            "key ids must be at most 64 bytes of [A-Za-z0-9._-]",
+        );
     }
 }
 
 /// `BASE` with one `accounts.limits` field set.
 fn limit(field: &str, value: &str) -> String {
-    with("adapters:", &format!("limits:\n  {field}: {value}\nadapters:"))
+    with(
+        "adapters:",
+        &format!("limits:\n  {field}: {value}\nadapters:"),
+    )
 }
 
 #[test]
@@ -384,15 +432,21 @@ fn each_journey_limit_accepts_one_and_refuses_zero() {
 
 #[test]
 fn a_negative_journey_limit_is_refused_at_parse() {
-    for field in ["journeys_total", "journeys_per_user", "starts_per_minute_per_user", "journeys_created_per_minute"] {
-        refused(&limit(field, "-1"), "invalid value: integer `-1`");
+    for field in [
+        "journeys_total",
+        "journeys_per_user",
+        "starts_per_minute_per_user",
+        "journeys_created_per_minute",
+    ] {
+        refused(&limit(field, "-1"), "integer `-1`, expected u");
     }
 }
 
 #[test]
 fn a_journeys_total_whose_derived_byte_cap_overflows_is_refused() {
-    // records_max = 4 x journeys_total, byte cap = records_max x RECORD_MAX x 2
-    // (design §5.1): a total that cannot carry that product is not a bound.
+    // records_max = 4 x journeys_total (design §5.1): a total that cannot
+    // carry that product is not a bound. The byte cap built on it needs
+    // RECORD_MAX, which slice 2 derives, so that product is not checked here.
     refused(
         &limit("journeys_total", &usize::MAX.to_string()),
         "accounts.limits.journeys_total must be a positive integer",
@@ -402,9 +456,21 @@ fn a_journeys_total_whose_derived_byte_cap_overflows_is_refused() {
 #[test]
 fn an_unknown_field_under_each_new_block_is_refused_by_name() {
     for (from, to, name) in [
-        ("  return_paths: [\"/\"]", "  return_paths: [\"/\"]\n  bogus_hosted: 1", "bogus_hosted"),
-        ("      cookie_name: token", "      cookie_name: token\n      bogus_session: 1", "bogus_session"),
-        ("prompt: consent }", "prompt: consent, bogus_extra: x }", "bogus_extra"),
+        (
+            "  return_paths: [\"/\"]",
+            "  return_paths: [\"/\"]\n  bogus_hosted: 1",
+            "bogus_hosted",
+        ),
+        (
+            "      cookie_name: token",
+            "      cookie_name: token\n      bogus_session: 1",
+            "bogus_session",
+        ),
+        (
+            "prompt: consent }",
+            "prompt: consent, bogus_extra: x }",
+            "bogus_extra",
+        ),
     ] {
         refused(&with(from, to), &format!("unknown field `{name}`"));
     }
@@ -416,7 +482,10 @@ fn authorize_extra_accepts_only_the_closed_values() {
     let from = "authorize_extra: { access_type: offline, prompt: consent }";
     let all = "authorize_extra: { access_type: online, prompt: select_account, include_granted_scopes: true }";
     assert_eq!(check(&with(from, all)), Ok(()));
-    assert_eq!(check(&with(from, "authorize_extra: { prompt: none }")), Ok(()));
+    assert_eq!(
+        check(&with(from, "authorize_extra: { prompt: none }")),
+        Ok(())
+    );
     for (value, variant) in [
         ("{ access_type: forever }", "unknown variant `forever`"),
         ("{ prompt: login }", "unknown variant `login`"),
@@ -434,5 +503,8 @@ fn authorize_extra_on_a_non_managed_descriptor_is_refused_as_inert() {
         1,
     );
     assert!(yaml.contains("  wiki:\n"));
-    refused(&yaml, "authorize_extra is valid only on mode personal_managed");
+    refused(
+        &yaml,
+        "authorize_extra is valid only on mode personal_managed",
+    );
 }

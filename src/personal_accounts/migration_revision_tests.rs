@@ -25,6 +25,7 @@ fn base() -> AccountDescriptor {
         scopes: Some(vec!["drive.readonly".to_owned()]),
         send_resource_parameter: Some(true),
         external_strategy: None,
+        authorize_extra: None,
     }
 }
 

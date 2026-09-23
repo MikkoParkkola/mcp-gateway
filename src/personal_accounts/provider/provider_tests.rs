@@ -50,6 +50,7 @@ const GOOGLE_ISSUER: &str = "https://accounts.google.com";
 const GOOGLE_AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_REVOKE: &str = "https://oauth2.googleapis.com/revoke";
+const DRIVE_READONLY: &str = "https://www.googleapis.com/auth/drive.readonly";
 const GOOGLE_RFC8414: &str = "https://accounts.google.com/.well-known/oauth-authorization-server";
 const GOOGLE_OIDC: &str = "https://accounts.google.com/.well-known/openid-configuration";
 const ATTACKER_TOKEN: &str = "https://oauth2.attacker.example/token";
@@ -246,11 +247,10 @@ fn descriptor_with(
         client_id: Some(CLIENT_ID.to_string()),
         client_secret_ref: Some(SECRET_REF.to_string()),
         redirect_uri: Some("https://gateway.example.com/oauth/callback".to_string()),
-        scopes: Some(vec![
-            "https://www.googleapis.com/auth/drive.readonly".to_string(),
-        ]),
+        scopes: Some(vec![DRIVE_READONLY.into()]),
         send_resource_parameter: Some(send_resource),
         external_strategy: None,
+        authorize_extra: None,
     }
 }
 
