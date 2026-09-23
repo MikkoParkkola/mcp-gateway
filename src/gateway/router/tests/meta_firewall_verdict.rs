@@ -591,4 +591,4 @@ async fn meta_tools_list_keeps_every_meta_instance_inspection() {
 
 /// Inspections the Meta-MCP instance performs for one `tools/list` before this
 /// change, read off the unchanged code (see the design note of 2026-09-23).
-const TOOLS_LIST_META_INSPECTIONS: usize = 0;
+const TOOLS_LIST_META_INSPECTIONS: usize = 1;
