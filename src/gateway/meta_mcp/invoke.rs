@@ -26,10 +26,12 @@ use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enfor
 use crate::identity_grants::{GrantScope, GrantSubject, IdentityGrantRequest};
 use crate::identity_propagation::{CallerProof, CallerProvenance};
 use crate::playbook::PlaybookEngine;
+use crate::protocol::LoggingLevel;
 use crate::protocol::mrtr::{InputRequired, Refusal};
 use crate::provider::Transform as _;
 use crate::provider::transforms::ResponseTransform;
 use crate::security::validate_tool_name;
+use crate::transport::notification_sink::emit_log;
 use crate::{Error, Result};
 
 /// `logger` field on every `notifications/message` this module raises
@@ -1657,18 +1659,14 @@ impl MetaMcp {
             // the client can see beats one it has to ask an operator to read
             // out of a log, and the `-32001` below carries the remedy but not
             // the severity.
-            crate::transport::notification_sink::emit_log(
-                crate::protocol::LoggingLevel::Warning,
-                GATEWAY_INVOKE_LOGGER,
-                || {
-                    serde_json::json!({
-                        "message": "refused: multi-user gateway would serve a gateway-held \
-                                    OAuth token that is not isolated per user (ADR-008 INV-2)",
-                        "server": server,
-                        "tool": tool,
-                    })
-                },
-            );
+            emit_log(LoggingLevel::Warning, GATEWAY_INVOKE_LOGGER, || {
+                serde_json::json!({
+                    "message": "refused: multi-user gateway would serve a gateway-held \
+                                OAuth token that is not isolated per user (ADR-008 INV-2)",
+                    "server": server,
+                    "tool": tool,
+                })
+            });
             return Err(Error::json_rpc(
                 -32001,
                 format!(
@@ -1921,20 +1919,16 @@ impl MetaMcp {
         // for it. Same fields as the `tracing` call above, deliberately -- a
         // caller correlating its own invocations should not have to map one
         // vocabulary onto another.
-        crate::transport::notification_sink::emit_log(
-            crate::protocol::LoggingLevel::Info,
-            GATEWAY_INVOKE_LOGGER,
-            || {
-                serde_json::json!({
-                    "message": "tool invoked",
-                    "agent_id": agent_label,
-                    "agent_declared": declared_label,
-                    "server": server,
-                    "tool": tool,
-                    "trace_id": trace_id,
-                })
-            },
-        );
+        emit_log(LoggingLevel::Info, GATEWAY_INVOKE_LOGGER, || {
+            serde_json::json!({
+                "message": "tool invoked",
+                "agent_id": agent_label,
+                "agent_declared": declared_label,
+                "server": server,
+                "tool": tool,
+                "trace_id": trace_id,
+            })
+        });
         debug!(server, tool, trace_id, "Invoking tool");
 
         // === PRE-INVOKE: Cost governance budget check ===
