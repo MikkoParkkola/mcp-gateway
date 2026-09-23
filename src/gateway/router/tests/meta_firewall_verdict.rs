@@ -592,3 +592,30 @@ async fn meta_tools_list_keeps_every_meta_instance_inspection() {
 /// Inspections the Meta-MCP instance performs for one `tools/list` before this
 /// change, read off the unchanged code (see the design note of 2026-09-23).
 const TOOLS_LIST_META_INSPECTIONS: usize = 1;
+
+/// The refused path under the same split wiring: the router's pass blocks,
+/// replaces the result with a refusal, and delivery neither re-inspects the
+/// replaced artifact nor lets the refusal through as a success.
+#[tokio::test]
+async fn meta_tools_call_refusal_survives_without_a_second_inspection() {
+    let (state, handler, meta, _store) = split_firewall_app_state(vec![FirewallRule {
+        tool_match: TOOL.to_string(),
+        action: FirewallAction::Block,
+        reason: Some("split-wiring refusal".to_string()),
+        scan: Vec::new(),
+    }])
+    .await;
+
+    let (_status, body) = call_surfaced_tool(state, "refuse-1").await;
+
+    assert!(
+        body.get("error").is_some(),
+        "a blocked response must be delivered as a refusal: {body}"
+    );
+    assert_eq!(handler.response_inspection_counts().inspections, 1);
+    assert_eq!(
+        meta.response_inspection_counts().inspections,
+        0,
+        "the refusal must not be re-inspected at delivery"
+    );
+}

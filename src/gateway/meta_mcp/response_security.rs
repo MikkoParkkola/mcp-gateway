@@ -110,7 +110,7 @@ impl super::MetaMcp {
             context.method,
             context.targets,
             context.mutation,
-            context.inspection,
+            inspection,
         );
 
         // A disabled signer and ordinary/admission/refusal errors must never
