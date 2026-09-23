@@ -37,6 +37,24 @@ pub(crate) fn meta_response_targets(
     targets
 }
 
+/// Whether delivery must inspect the result, or an earlier pass on the same
+/// dispatch already inspected this exact artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeliveryInspection {
+    /// Inspect at delivery. Every caller that cannot prove an earlier pass.
+    /// The stdio caller (`server/mod.rs`) has no router pre-pass and relies
+    /// on this: delivery is its only inspection.
+    Required,
+    /// The HTTP `tools/call` arm ran the response firewall on this artifact
+    /// and resolved its verdict; a second pass here re-ran the detectors on
+    /// the already-sanitized result and could not change the outcome.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(dead_code, reason = "only the firewall-gated router pass inspects")
+    )]
+    AlreadyInspected,
+}
+
 /// Server-owned delivery metadata supplied after wrapping and protocol shaping.
 pub(crate) struct ResponseDeliveryContext<'a> {
     pub method: &'a str,
@@ -50,13 +68,25 @@ impl super::MetaMcp {
     /// Complete all output mutations before recording the attempted response.
     pub(crate) fn finalize_response_for_delivery(
         &self,
+        response: crate::protocol::JsonRpcResponse,
+        context: &ResponseDeliveryContext<'_>,
+    ) -> crate::protocol::JsonRpcResponse {
+        self.finalize_response_after_inspection(response, context, DeliveryInspection::Required)
+    }
+
+    /// [`Self::finalize_response_for_delivery`] for a caller that may already
+    /// have run the response firewall on this exact artifact.
+    pub(crate) fn finalize_response_after_inspection(
+        &self,
         mut response: crate::protocol::JsonRpcResponse,
         context: &ResponseDeliveryContext<'_>,
+        inspection: DeliveryInspection,
     ) -> crate::protocol::JsonRpcResponse {
         use crate::protocol::JsonRpcResponse;
 
         #[cfg(feature = "firewall")]
         if matches!(context.method, "tools/call" | "tools/list")
+            && inspection == DeliveryInspection::Required
             && response.error.is_none()
             && let Some(result) = response.result.as_mut()
             && let Some(firewall) = &self.firewall
@@ -82,7 +112,12 @@ impl super::MetaMcp {
             }
         }
         #[cfg(not(feature = "firewall"))]
-        let _ = (context.method, context.targets, context.mutation);
+        let _ = (
+            context.method,
+            context.targets,
+            context.mutation,
+            inspection,
+        );
 
         // A disabled signer and ordinary/admission/refusal errors must never
         // validate captured nonce state or increment finalization failures.

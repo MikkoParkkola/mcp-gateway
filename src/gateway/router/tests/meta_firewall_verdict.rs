@@ -23,11 +23,13 @@
 //!
 //! Reachability and production limits, stated exactly:
 //!
-//! * The inner Meta-MCP gate is NOT bypassed or weakened here. Both fixtures
-//!   wire ONE `Arc<Firewall>` into both `MetaMcp::set_firewall` and
-//!   `AppState::firewall`, which is what `gateway::server` does at startup
-//!   (`server/mod.rs:1157`). The inner gate stays armed and keeps its own
-//!   obligation.
+//! * The inner Meta-MCP gate is NOT bypassed or weakened here. The verdict
+//!   fixtures wire ONE `Arc<Firewall>` into both `MetaMcp::set_firewall` and
+//!   `AppState::firewall`. Startup no longer does that: `gateway::server` builds
+//!   two instances from the same `security.firewall` config
+//!   (`server/mod.rs:1274` for the Meta-MCP, `:1807` for `AppState`), which the
+//!   inspection-count tests below reproduce with `split_firewall_app_state`.
+//!   The inner gate stays armed and keeps its own obligation.
 //! * The defect is therefore an ORDERING defect, not an absent-gate defect,
 //!   and it is reachable under that real startup wiring — no mock verdict, no
 //!   detached firewall, no forged response. The laundering only needs a finding
@@ -123,6 +125,52 @@ async fn firewall_app_state(
 async fn app_state_with_rules(
     rules: Vec<FirewallRule>,
 ) -> (Arc<AppState>, Arc<Firewall>, tempfile::TempDir) {
+    let firewall = response_firewall(rules);
+    let (state, store_dir) =
+        state_with_firewalls(Arc::clone(&firewall), Arc::clone(&firewall)).await;
+    (state, firewall, store_dir)
+}
+
+/// The engine every fixture here uses: response scanning and credential
+/// redaction on, request scanning off.
+fn response_firewall(rules: Vec<FirewallRule>) -> Arc<Firewall> {
+    Arc::new(Firewall::from_config(
+        FirewallConfig {
+            enabled: true,
+            scan_responses: true,
+            scan_requests: false,
+            credential_redaction: true,
+            rules,
+            ..FirewallConfig::default()
+        },
+        None,
+    ))
+}
+
+/// Production wiring: `AppState` and the Meta-MCP each hold their OWN
+/// instance, built from one config (`server/mod.rs:1274`, `:1807`). Returned
+/// as `(state, handler_instance, meta_instance, store)` so a test can read each
+/// instance's inspection count separately.
+async fn split_firewall_app_state(
+    rules: Vec<FirewallRule>,
+) -> (
+    Arc<AppState>,
+    Arc<Firewall>,
+    Arc<Firewall>,
+    tempfile::TempDir,
+) {
+    let handler = response_firewall(rules.clone());
+    let meta = response_firewall(rules);
+    let (state, store_dir) = state_with_firewalls(Arc::clone(&handler), Arc::clone(&meta)).await;
+    (state, handler, meta, store_dir)
+}
+
+/// `AppState` for the Meta-MCP route with `handler_firewall` on the router and
+/// `meta_firewall` on the Meta-MCP.
+async fn state_with_firewalls(
+    handler_firewall: Arc<Firewall>,
+    meta_firewall: Arc<Firewall>,
+) -> (Arc<AppState>, tempfile::TempDir) {
     let backend = Arc::new(Backend::new(
         "demo",
         BackendConfig::default(),
@@ -134,18 +182,6 @@ async fn app_state_with_rules(
     let backends = Arc::new(BackendRegistry::new());
     let _ = backends.register(backend);
 
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            rules,
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
-
     let mut meta =
         MetaMcp::new(Arc::clone(&backends)).with_surfaced_tools(vec![SurfacedToolConfig {
             server: "demo".to_string(),
@@ -154,7 +190,7 @@ async fn app_state_with_rules(
     // Deliberately ARMED: the inner result-security gate must keep its own
     // obligation. This regression is about the router's obligation running
     // ahead of it, not about removing it.
-    meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.set_firewall(Some(meta_firewall));
     let meta_mcp = Arc::new(meta);
 
     let streaming_config = StreamingConfig::default();
@@ -193,7 +229,7 @@ async fn app_state_with_rules(
         gateway_key_pair,
         capability_dirs: Vec::new(),
         config_path: None,
-        firewall: Some(Arc::clone(&firewall)),
+        firewall: Some(handler_firewall),
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
@@ -206,7 +242,7 @@ async fn app_state_with_rules(
         task_executor,
         subscriptions,
     });
-    (state, firewall, store_dir)
+    (state, store_dir)
 }
 
 /// POST one surfaced-tool `tools/call` at the Meta-MCP route and return the
@@ -475,4 +511,177 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
         "the strongest action across all targets must win"
     );
     assert!(!verdict.allowed, "a Block verdict is not allowed");
+}
+
+/// POST one Meta-MCP `tools/list` and return the status plus decoded body.
+async fn list_tools(state: Arc<AppState>) -> (StatusCode, Value) {
+    let router = create_router(state);
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({ "jsonrpc": "2.0", "id": "list-1", "method": "tools/list", "params": {} })
+                .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// NFR.WORKLOAD.1 — a successful Meta-MCP `tools/call` is inspected ONCE, by
+/// the router's instance, which is the pass that decides refusal and redacts.
+/// The delivery-time pass re-ran the detectors on the already-sanitized result
+/// with a second instance, cloning it to do so, and could not change the
+/// outcome. Asserted per instance, not as a sum: a regression that dropped the
+/// router pass and kept the delivery pass would also total one.
+#[tokio::test]
+async fn meta_tools_call_is_inspected_once_by_the_router_instance() {
+    let (state, handler, meta, _store) = split_firewall_app_state(vec![FirewallRule {
+        tool_match: TOOL.to_string(),
+        action: FirewallAction::Allow,
+        reason: None,
+        scan: Vec::new(),
+    }])
+    .await;
+
+    let (status, body) = call_surfaced_tool(state, "once-1").await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.get("error").is_none(),
+        "an allowed call delivers: {body}"
+    );
+    assert_eq!(
+        handler.response_inspection_counts().inspections,
+        1,
+        "the router instance must inspect the tools/call result exactly once"
+    );
+    assert_eq!(
+        meta.response_inspection_counts().inspections,
+        0,
+        "the delivery pass must not re-inspect a result the router already inspected"
+    );
+}
+
+/// The skip is scoped to the `tools/call` arm. `tools/list` has no router
+/// pre-pass, so the Meta-MCP instance's inspections are its only ones and must
+/// all still run. Pinned to the exact count so a leaked skip that removed one
+/// of them cannot pass as ">= 1".
+#[tokio::test]
+async fn meta_tools_list_keeps_every_meta_instance_inspection() {
+    let (state, handler, meta, _store) = split_firewall_app_state(Vec::new()).await;
+
+    let (status, body) = list_tools(state).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        handler.response_inspection_counts().inspections,
+        0,
+        "tools/list has no router pass"
+    );
+    assert_eq!(
+        meta.response_inspection_counts().inspections,
+        TOOLS_LIST_META_INSPECTIONS,
+        "every Meta-MCP inspection of tools/list must still run"
+    );
+}
+
+/// Inspections the Meta-MCP instance performs for one `tools/list` before this
+/// change, read off the unchanged code (see the design note of 2026-09-23).
+const TOOLS_LIST_META_INSPECTIONS: usize = 1;
+
+/// The refused path under the same split wiring: the router's pass blocks,
+/// replaces the result with a refusal, and delivery neither re-inspects the
+/// replaced artifact nor lets the refusal through as a success.
+#[tokio::test]
+async fn meta_tools_call_refusal_survives_without_a_second_inspection() {
+    let (state, handler, meta, _store) = split_firewall_app_state(vec![FirewallRule {
+        tool_match: TOOL.to_string(),
+        action: FirewallAction::Block,
+        reason: Some("split-wiring refusal".to_string()),
+        scan: Vec::new(),
+    }])
+    .await;
+
+    let (_status, body) = call_surfaced_tool(state, "refuse-1").await;
+
+    assert!(
+        body.get("error").is_some(),
+        "a blocked response must be delivered as a refusal: {body}"
+    );
+    assert_eq!(handler.response_inspection_counts().inspections, 1);
+    assert_eq!(
+        meta.response_inspection_counts().inspections,
+        0,
+        "the refusal must not be re-inspected at delivery"
+    );
+}
+
+/// T6 — a modern-era `tools/call` runs `shape_modern_response` between the
+/// router pass and delivery. Shaping adds only gateway constants today, so the
+/// skip still holds; this pins that, so a later shaping change that copies
+/// backend-derived content onto the result cannot silently void it.
+#[tokio::test]
+async fn modern_meta_tools_call_is_inspected_once_by_the_router_instance() {
+    let (state, handler, meta, _store) = split_firewall_app_state(vec![FirewallRule {
+        tool_match: TOOL.to_string(),
+        action: FirewallAction::Allow,
+        reason: None,
+        scan: Vec::new(),
+    }])
+    .await;
+
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": "modern-1",
+        "method": "tools/call",
+        "params": {
+            "name": TOOL,
+            "arguments": {},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": { "name": "T6", "version": "1.0.0" },
+                crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "t6-key-1"
+            }
+        }
+    });
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", TOOL)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(crate::key_server::oidc::VerifiedIdentity {
+            subject: "alice".to_string(),
+            email: "alice@t6.test".to_string(),
+            name: None,
+            groups: Vec::new(),
+            issuer: "https://idp.t6.test".to_string(),
+        });
+    let response = create_router(state).oneshot(request).await.unwrap();
+    let status = response.status();
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.get("error").is_none(),
+        "an allowed call delivers: {body}"
+    );
+    // Proof the modern shaping ran; without it this row would be T1 again.
+    assert!(
+        body.pointer("/result/resultType").is_some(),
+        "the modern era must shape the result: {body}"
+    );
+    assert_eq!(handler.response_inspection_counts().inspections, 1);
+    assert_eq!(meta.response_inspection_counts().inspections, 0);
 }
