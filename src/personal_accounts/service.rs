@@ -243,13 +243,6 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
     pub(crate) fn store(&self) -> &PersonalAccountStore {
         &self.store
     }

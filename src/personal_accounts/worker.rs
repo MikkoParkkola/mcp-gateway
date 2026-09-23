@@ -303,6 +303,10 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
     }
 }
 
+#[path = "worker_journeys.rs"]
+mod journeys;
+pub(crate) use journeys::{AccountHandles, JourneyService};
+
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod worker_tests;

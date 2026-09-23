@@ -129,7 +129,7 @@ async fn gateway_with(
         state.transparency_log = Some(Arc::new(logger));
     }
     let fixture = RevokeFixture::start(ACCOUNT, RESOURCE, seeds, endpoint).await;
-    let router = create_router_with_accounts(Arc::clone(&state), None, Some(fixture.revocation()));
+    let router = create_router_with_accounts(Arc::clone(&state), None, Some(fixture.handles()));
     Gateway {
         router,
         fixture,

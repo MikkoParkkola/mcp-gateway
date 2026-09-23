@@ -21,13 +21,13 @@ use crate::config::{AgentIdentityConfig, StreamingConfig};
 use crate::control_plane::ControlPlaneStore;
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
-use crate::personal_accounts::AccountRevocation;
 use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
 
 mod accounts;
-pub(crate) use accounts::revocation_of;
+use crate::personal_accounts::AccountHandles;
+pub(crate) use accounts::account_handles_of;
 mod authorization;
 pub use authorization::CallerStanding;
 pub(crate) use authorization::{
@@ -216,12 +216,39 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
     create_router_with_accounts(state, extra, None)
 }
 
-/// [`create_router_with`] plus the managed-account revoke handle, which only a
+/// Agent auth, then the Open `WebUI` adapter, then authentication. Layers wrap
+/// outward, so a layer added LATER runs EARLIER: authentication runs first and
+/// the adapter reads an assertion only once the presenter is identified, which
+/// it then requires to be a named API key. Reversing the adapter and auth
+/// lines would let an unauthenticated request assert an identity. One helper
+/// for both the main chain and the accounts owner routes, so the order is
+/// written once. `None` adapter installs no layer: the no-adapter deployment
+/// keeps its exact previous behaviour.
+fn authenticate(
+    routes: Router<Arc<AppState>>,
+    agent_auth: AgentAuthState,
+    adapter: Option<OpenWebUiAdapterState>,
+    auth: AuthState,
+) -> Router<Arc<AppState>> {
+    let mut routes = routes.layer(middleware::from_fn_with_state(
+        agent_auth,
+        agent_auth_middleware,
+    ));
+    if let Some(adapter) = adapter {
+        routes = routes.layer(middleware::from_fn_with_state(
+            adapter,
+            openwebui_adapter_middleware,
+        ));
+    }
+    routes.layer(middleware::from_fn_with_state(auth, auth_middleware))
+}
+
+/// [`create_router_with`] plus the managed-account handles, which only a
 /// gateway that brought custody up has.
 pub(crate) fn create_router_with_accounts(
     state: Arc<AppState>,
     extra: Option<Router>,
-    revocation: Option<Arc<dyn AccountRevocation>>,
+    accounts: Option<AccountHandles>,
 ) -> Router {
     let auth_state = build_auth_state(&state);
 
@@ -292,38 +319,23 @@ pub(crate) fn create_router_with_accounts(
         routes = routes.merge(super::ui::api_router());
     }
 
-    // Added before the layers below so auth and the adapter wrap it.
-    let routes = accounts::mount(routes, revocation, &startup_config);
-
-    // Open WebUI assertion adapter. `None` when no adapter is configured, and
-    // then no layer is installed at all — the no-adapter deployment keeps its
-    // exact previous behaviour, including doing no environment lookup.
+    // Open WebUI assertion adapter; `None` when none is configured, and then
+    // no environment lookup happens.
     let openwebui_adapter =
         OpenWebUiAdapterState::from_config(&startup_config, &startup_config.env_overlay());
+    // Merged outside the main `TraceLayer` below: its span records the full
+    // URI, and the callback's query carries the code and state (§4.3).
+    let accounts_router = accounts::router(accounts, &startup_config, |owner| {
+        authenticate(
+            owner,
+            agent_auth_state.clone(),
+            openwebui_adapter.clone(),
+            auth_state.clone(),
+        )
+    })
+    .map(|router| router.with_state(Arc::clone(&state)));
 
-    let mut app = routes
-        // Agent JWT scope middleware runs inside the standard auth layer.
-        .layer(middleware::from_fn_with_state(
-            agent_auth_state,
-            agent_auth_middleware,
-        ));
-
-    // Layers wrap outward, so a layer added LATER runs EARLIER. Adding the
-    // adapter here — after agent auth, before the auth layer below — is what
-    // makes it run strictly after authentication: an assertion is read only
-    // once the presenter has been identified, which the adapter then requires
-    // to be a named API key. Reversing these two lines would let an
-    // unauthenticated request assert an identity.
-    if let Some(adapter_state) = openwebui_adapter {
-        app = app.layer(middleware::from_fn_with_state(
-            adapter_state,
-            openwebui_adapter_middleware,
-        ));
-    }
-
-    let mut app = app
-        // Authentication middleware (applied before other layers)
-        .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
+    let mut app = authenticate(routes, agent_auth_state, openwebui_adapter, auth_state)
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
@@ -354,6 +366,10 @@ pub(crate) fn create_router_with_accounts(
 
     if let Some(extra) = extra {
         app = app.merge(extra);
+    }
+
+    if let Some(accounts_router) = accounts_router {
+        app = app.merge(accounts_router);
     }
 
     // Origin/Host validation wraps the FULLY MERGED router, and does so last so

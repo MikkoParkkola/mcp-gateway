@@ -105,7 +105,8 @@ async fn gateway(shape: Shape) -> Gateway {
     let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
     let (mut state, _store) = test_router_app_state_with(StreamingConfig::default(), config).await;
     Arc::get_mut(&mut state).unwrap().auth_config = auth;
-    let fixture = RevokeFixture::start(ACCOUNT, RESOURCE, &[], RevocationEndpoint::Configured).await;
+    let fixture =
+        RevokeFixture::start(ACCOUNT, RESOURCE, &[], RevocationEndpoint::Configured).await;
     let router = create_router_with_accounts(state, None, Some(fixture.handles()));
     Gateway {
         router,
@@ -148,7 +149,10 @@ async fn json_of(response: Response<Body>) -> (StatusCode, Value) {
     let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
         .await
         .unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 async fn create(gw: &Gateway, subject: &str, body: &Value) -> (StatusCode, Value) {
@@ -161,7 +165,14 @@ async fn create(gw: &Gateway, subject: &str, body: &Value) -> (StatusCode, Value
 
 async fn status_of(gw: &Gateway, subject: Option<&str>, id: &str) -> (StatusCode, Value) {
     let uri = format!("/accounts/v1/journeys/{id}");
-    json_of(send(gw, request("GET", &uri, subject).body(Body::empty()).unwrap()).await).await
+    json_of(
+        send(
+            gw,
+            request("GET", &uri, subject).body(Body::empty()).unwrap(),
+        )
+        .await,
+    )
+    .await
 }
 
 fn connect_body() -> Value {
@@ -180,7 +191,9 @@ fn callback(method: &str, path: &str, mode: &str, dest: &str) -> axum::http::req
 }
 
 async fn status_for(gw: &Gateway, builder: axum::http::request::Builder) -> StatusCode {
-    send(gw, builder.body(Body::empty()).unwrap()).await.status()
+    send(gw, builder.body(Body::empty()).unwrap())
+        .await
+        .status()
 }
 
 const CALLBACK: &str = "/accounts/v1/callback";
@@ -200,13 +213,22 @@ async fn guard_callback_navigation_reaches_handler_and_every_variant_is_refused(
         callback("GET", CALLBACK, "navigate", "document").header("origin", "null"),
         callback("GET", "/accounts/v1/callback/", "navigate", "document"),
         callback("GET", "/accounts/v1/callbackx", "navigate", "document"),
-        callback("GET", "/accounts/v1/journeys/x/start", "navigate", "document"),
+        callback(
+            "GET",
+            "/accounts/v1/journeys/x/start",
+            "navigate",
+            "document",
+        ),
         callback("GET", "/accounts/v1/nope", "navigate", "document"),
         callback("GET", "/mcp", "navigate", "document"),
     ];
     for builder in refused {
         let label = format!("{:?}", builder.uri_ref());
-        assert_eq!(status_for(&gw, builder).await, StatusCode::FORBIDDEN, "{label}");
+        assert_eq!(
+            status_for(&gw, builder).await,
+            StatusCode::FORBIDDEN,
+            "{label}"
+        );
     }
 }
 
@@ -217,9 +239,18 @@ async fn guard_hosted_host_is_scoped_to_the_accounts_prefix() {
     let gw = gateway(Shape::Bridged).await;
     let on_host = |path: &str| Request::builder().uri(path).header("host", HOSTED_HOST);
     // WHEN / THEN
-    assert_eq!(status_for(&gw, on_host("/accounts/v1/nope")).await, StatusCode::NOT_FOUND);
-    assert_eq!(status_for(&gw, on_host("/mcp")).await, StatusCode::FORBIDDEN);
-    assert_eq!(status_for(&gw, on_host("/accounts/v1")).await, StatusCode::FORBIDDEN);
+    assert_eq!(
+        status_for(&gw, on_host("/accounts/v1/nope")).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status_for(&gw, on_host("/mcp")).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        status_for(&gw, on_host("/accounts/v1")).await,
+        StatusCode::FORBIDDEN
+    );
     let same_origin = on_host("/accounts/v1/nope").header("origin", "https://chat.fixture.test");
     assert_eq!(status_for(&gw, same_origin).await, StatusCode::NOT_FOUND);
     let foreign = on_host("/accounts/v1/nope").header("origin", "https://evil.test");
@@ -242,9 +273,21 @@ fn assert_hardened(response: &Response<Body>, label: &str) {
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned)
     };
-    assert_eq!(header("cache-control").as_deref(), Some("no-store"), "{label}");
-    assert_eq!(header("referrer-policy").as_deref(), Some("no-referrer"), "{label}");
-    assert_eq!(header("content-security-policy").as_deref(), Some(CSP), "{label}");
+    assert_eq!(
+        header("cache-control").as_deref(),
+        Some("no-store"),
+        "{label}"
+    );
+    assert_eq!(
+        header("referrer-policy").as_deref(),
+        Some("no-referrer"),
+        "{label}"
+    );
+    assert_eq!(
+        header("content-security-policy").as_deref(),
+        Some(CSP),
+        "{label}"
+    );
 }
 
 /// T-HDR: the layer, not a handler, sets the three headers.
@@ -256,12 +299,26 @@ async fn headers_every_accounts_response_is_hardened() {
         ("GET", "/accounts/v1/nope", None, StatusCode::NOT_FOUND),
         ("POST", CALLBACK, None, StatusCode::METHOD_NOT_ALLOWED),
         ("GET", CALLBACK, None, StatusCode::NOT_IMPLEMENTED),
-        ("GET", "/accounts/v1/journeys/abc", None, StatusCode::UNAUTHORIZED),
-        ("GET", "/accounts/v1/journeys/abc", Some("alice"), StatusCode::NOT_FOUND),
+        (
+            "GET",
+            "/accounts/v1/journeys/abc",
+            None,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "GET",
+            "/accounts/v1/journeys/abc",
+            Some("alice"),
+            StatusCode::NOT_FOUND,
+        ),
     ];
     for (method, path, subject, expected) in cases {
         // WHEN
-        let response = send(&gw, request(method, path, subject).body(Body::empty()).unwrap()).await;
+        let response = send(
+            &gw,
+            request(method, path, subject).body(Body::empty()).unwrap(),
+        )
+        .await;
         // THEN
         let label = format!("{method} {path}");
         assert_eq!(response.status(), expected, "{label}");
@@ -274,7 +331,13 @@ async fn headers_every_accounts_response_is_hardened() {
 async fn not_hosted_accounts_prefix_is_plain_404() {
     let gw = gateway(Shape::NotHosted).await;
     for (method, path) in [("GET", CALLBACK), ("POST", "/accounts/v1/journeys")] {
-        let response = send(&gw, request(method, path, Some("alice")).body(Body::empty()).unwrap()).await;
+        let response = send(
+            &gw,
+            request(method, path, Some("alice"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
         assert!(response.headers().get("content-security-policy").is_none());
     }
@@ -329,17 +392,34 @@ async fn post_refused_before_store_leaves_creation_budget_intact() {
     let refusals = [
         create(&gw, "alice", &long_account).await,
         create(&gw, "alice", &long_path).await,
-        create(&gw, "alice", &json!({"account_id": ACCOUNT, "return_path": "/x"})).await,
-        create(&gw, "alice", &json!({"account_id": ACCOUNT, "return_path": "/", "principal": "bob"})).await,
+        create(
+            &gw,
+            "alice",
+            &json!({"account_id": ACCOUNT, "return_path": "/x"}),
+        )
+        .await,
+        create(
+            &gw,
+            "alice",
+            &json!({"account_id": ACCOUNT, "return_path": "/", "principal": "bob"}),
+        )
+        .await,
     ];
     // THEN
     for (status, body) in refusals {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "invalid_request");
     }
-    assert_eq!(create(&gw, "alice", &connect_body()).await.0, StatusCode::CREATED);
+    assert_eq!(
+        create(&gw, "alice", &connect_body()).await.0,
+        StatusCode::CREATED
+    );
     let (status, body) = create(&gw, "bob", &connect_body()).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "budget of one is now spent");
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "budget of one is now spent"
+    );
     assert_eq!(body["error"]["code"], "capacity_exceeded");
 }
 
@@ -423,9 +503,21 @@ async fn trace_accounts_requests_record_no_query_or_cookie() {
     drop(guard);
     // THEN
     let output = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
-    assert!(output.contains("/accounts/v1/callback"), "positive control: {output}");
-    assert!(output.contains("/accounts/v1/journeys/{id}"), "matched path: {output}");
-    for secret in ["SECRETQUERY", "SECRETSTATE", "SECRETCOOKIE", API_KEY, "code="] {
+    assert!(
+        output.contains("/accounts/v1/callback"),
+        "positive control: {output}"
+    );
+    assert!(
+        output.contains("/accounts/v1/journeys/{id}"),
+        "matched path: {output}"
+    );
+    for secret in [
+        "SECRETQUERY",
+        "SECRETSTATE",
+        "SECRETCOOKIE",
+        API_KEY,
+        "code=",
+    ] {
         assert!(!output.contains(secret), "{secret} leaked: {output}");
     }
 }

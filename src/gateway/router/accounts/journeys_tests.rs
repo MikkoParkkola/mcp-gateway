@@ -52,8 +52,14 @@ fn bridge_predicate_admits_only_the_session_adapters_principal() {
     let bridged = config(true);
     assert!(is_bridged(&bridged, &identity("openwebui-adapter:4:desk")));
     assert!(!is_bridged(&bridged, &identity("https://idp.example")));
-    assert!(!is_bridged(&bridged, &identity("openwebui-adapter:5:desk2")));
-    assert!(!is_bridged(&config(false), &identity("openwebui-adapter:4:desk")));
+    assert!(!is_bridged(
+        &bridged,
+        &identity("openwebui-adapter:5:desk2")
+    ));
+    assert!(!is_bridged(
+        &config(false),
+        &identity("openwebui-adapter:4:desk")
+    ));
 }
 
 fn view(status: JourneyStatus, reason: Option<JourneyReason>) -> JourneyView {
@@ -69,7 +75,10 @@ fn view(status: JourneyStatus, reason: Option<JourneyReason>) -> JourneyView {
 /// §3: a superseded journey is reported as expired, reason superseded.
 #[test]
 fn status_body_reports_superseded_as_expired() {
-    let body = status_body(&view(JourneyStatus::Superseded, Some(JourneyReason::Superseded)));
+    let body = status_body(&view(
+        JourneyStatus::Superseded,
+        Some(JourneyReason::Superseded),
+    ));
     assert_eq!(body["status"], "expired");
     assert_eq!(body["reason"], "superseded");
     let pending = status_body(&view(JourneyStatus::Pending, None));
