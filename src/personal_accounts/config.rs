@@ -33,8 +33,7 @@ mod descriptor_debug;
 mod journey;
 mod limits;
 
-// Re-exported so the provider can name the canonical types as
-// `config::AuthorizeExtra` instead of reaching into the `journey` module.
+// Re-exported so the provider names the canonical types, not the module.
 pub(crate) use journey::{AccessType, AuthorizeExtra, Prompt};
 pub use limits::AccountsLimits;
 pub(crate) use limits::RECORDS_PER_ACTIVE;
@@ -42,8 +41,7 @@ pub(crate) use limits::RECORDS_PER_ACTIVE;
 // Nameable from the rest of the crate without exposing the module: the type is
 // part of `AccountsConfig`'s shape, the module layout is not.
 pub(crate) use adapters::AdapterConfig;
-// The gateway-credential view the separation checks below take. Nameable from
-// `config::Config`, which is the only place that can see `auth`.
+// Gateway-credential view for the separation checks; only `config::Config` sees `auth`.
 pub(crate) use adapters::GatewayCredential;
 use journey::HostedConfig;
 
