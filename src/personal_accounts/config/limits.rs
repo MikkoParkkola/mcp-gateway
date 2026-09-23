@@ -12,7 +12,7 @@ use super::AccountsConfigError;
 
 /// `records_max = RECORDS_PER_ACTIVE x journeys_total` (design §5.1): active
 /// records plus retained terminal ones. Derived, never configured.
-const RECORDS_PER_ACTIVE: usize = 4;
+pub(crate) const RECORDS_PER_ACTIVE: usize = 4;
 
 /// EVERY FIELD IS "reject zero/overflow" (approved configuration table, design
 /// doc row 432; journey design §10). The overflow half is not an invented

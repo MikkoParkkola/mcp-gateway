@@ -37,6 +37,7 @@ mod limits;
 // `config::AuthorizeExtra` instead of reaching into the `journey` module.
 pub(crate) use journey::{AccessType, AuthorizeExtra, Prompt};
 pub use limits::AccountsLimits;
+pub(crate) use limits::RECORDS_PER_ACTIVE;
 
 // Nameable from the rest of the crate without exposing the module: the type is
 // part of `AccountsConfig`'s shape, the module layout is not.

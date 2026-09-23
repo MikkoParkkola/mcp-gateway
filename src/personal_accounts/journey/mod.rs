@@ -4,8 +4,8 @@
 //! (design §3, §5). Every mutation runs inside one `journey_transition`
 //! under the authority lock; no network call ever runs under it.
 //!
-//! SLICE 2 CONTRACT STUBS: the signatures are the contract `tests.rs` pins;
-//! the bodies deliberately return wrong answers until the implementation.
+//! Split for the file-size ratchet: `persist` owns the sealed file, the slot and
+//! the transition; `ops` owns the five operations built on it.
 #![cfg_attr(
     not(test),
     expect(
@@ -17,20 +17,27 @@
     test,
     allow(
         dead_code,
-        reason = "MIK-6745 slice 2 stubs: reasons and refusals the tests do not yet construct"
+        reason = "MIK-6745 slice 2 part ii: digests, reasons and refusals the stubbed ops do not yet use"
     )
 )]
-#![allow(
-    clippy::unused_self,
-    clippy::unnecessary_wraps,
-    clippy::needless_pass_by_value,
-    reason = "MIK-6745 slice 2 contract stubs; the implementation deletes this allow"
-)]
 
+use hkdf::Hkdf;
+use hmac::{Hmac, KeyInit as _, Mac as _};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
-use super::super::{AccountError, AccountKey, PersonalAccountStore, StoreConfig};
+use super::super::{AccountError, AccountKey, StoreConfig};
+use crate::personal_accounts::config::RECORDS_PER_ACTIVE;
 use crate::personal_accounts::service::ConsentExpectation;
+
+#[path = "ops.rs"]
+mod ops;
+#[path = "persist.rs"]
+mod persist;
+
+pub(crate) use persist::JourneysSlot;
+#[cfg(test)]
+use persist::read_journeys;
 
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -53,9 +60,15 @@ pub(crate) const ACCOUNT_ID_MAX: usize = 64;
 pub(crate) const RETURN_PATH_MAX: usize = 256;
 pub(crate) const ISSUER_MAX: usize = 256;
 pub(crate) const KEY_ID_MAX: usize = 64;
-/// Serialized size of a maximal record rounded up to 256 bytes (R3-1).
-/// STUB: one byte, so the maximal-record assertion fails.
-pub(crate) const RECORD_MAX: usize = 1;
+/// Serialized `ConsentExpectation` cap. The maximal plain JSON form is 241
+/// bytes, so the design's 192 could not hold it (operator decision: 256).
+pub(crate) const EXPECTATION_MAX: usize = 256;
+/// Serialized size of a maximal record (1713 bytes) rounded up to 256 (R3-1).
+pub(crate) const RECORD_MAX: usize = 1792;
+/// Global creations window of `journeys_created_per_minute`.
+pub(crate) const GLOBAL_WINDOW: u64 = 60;
+/// Sliding window of `starts_per_minute_per_user`.
+pub(crate) const START_RATE_WINDOW: u64 = 60;
 
 /// 32 lowercase hex characters from `storage::random_hex`.
 pub(crate) type JourneyId = String;
@@ -95,7 +108,7 @@ pub(crate) enum JourneyReason {
 }
 
 /// One sealed journey (design §5.1). Plaintext only inside `journeys.json`.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct JourneyRecord {
     pub(crate) owner_digest: String,
@@ -130,7 +143,7 @@ impl std::fmt::Debug for JourneyRecord {
 }
 
 /// The whole sealed table, keyed by journey id.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct JourneyTable {
     pub(crate) journeys: std::collections::BTreeMap<JourneyId, JourneyRecord>,
@@ -146,14 +159,21 @@ pub(crate) struct JourneyLimits {
 }
 
 impl JourneyLimits {
-    /// `records_max = 4 x journeys_total` (design §5.1). STUB: wrong factor.
+    /// `records_max = RECORDS_PER_ACTIVE x journeys_total` (design §5.1).
+    /// Config validation refuses a total whose product overflows; saturating
+    /// here only keeps an unvalidated value from panicking.
     pub(crate) fn records_max(&self) -> usize {
-        self.journeys_total
+        self.journeys_total.saturating_mul(RECORDS_PER_ACTIVE)
     }
 
-    /// `records_max x RECORD_MAX x 2` plus envelope framing. STUB: zero.
+    /// Sealed-file bound: `records_max x RECORD_MAX x 2` plus the envelope
+    /// framing at the widest key id. The 100% headroom covers base64 (4/3)
+    /// and each entry's map key, so a table at `records_max` always fits.
     pub(crate) fn byte_cap(&self) -> usize {
-        0
+        self.records_max()
+            .saturating_mul(RECORD_MAX)
+            .saturating_mul(2)
+            .saturating_add(persist::ENVELOPE_FRAME)
     }
 }
 
@@ -223,97 +243,87 @@ pub(crate) enum DigestKind {
     Owner,
 }
 
-/// Every digest comparison goes through here (T-CT). STUB: plain `==`, uncounted.
-pub(crate) fn digests_equal(_kind: DigestKind, left: &str, right: &str) -> bool {
-    left == right
+/// Every digest comparison goes through here (review L5, T-CT): constant
+/// time over the bytes, so match timing reveals no digest prefix.
+pub(crate) fn digests_equal(kind: DigestKind, left: &str, right: &str) -> bool {
+    witness(kind);
+    subtle::ConstantTimeEq::ct_eq(left.as_bytes(), right.as_bytes()).into()
 }
+
+#[cfg(test)]
+thread_local! {
+    static COMPARISONS: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
+}
+
+#[cfg(test)]
+fn witness(kind: DigestKind) {
+    COMPARISONS.with(|cell| {
+        let mut counts = cell.get();
+        counts[kind as usize] += 1;
+        cell.set(counts);
+    });
+}
+
+#[cfg(not(test))]
+fn witness(_kind: DigestKind) {}
 
 /// `cfg(test)` witness: how many comparisons of `kind` ran on this thread.
 #[cfg(test)]
-pub(crate) fn digest_comparisons(_kind: DigestKind) -> u64 {
-    0
+pub(crate) fn digest_comparisons(kind: DigestKind) -> u64 {
+    COMPARISONS.with(|cell| cell.get()[kind as usize])
 }
 
-/// Decrypt and parse `journeys.json` under `limits.byte_cap()`. A missing file
-/// is an empty table; anything unreadable, unauthentic or oversized refuses.
-/// STUB: always refuses.
-pub(crate) fn read_journeys(
-    _config: &StoreConfig,
-    _store_epoch: &str,
-    _limits: &JourneyLimits,
-) -> Result<JourneyTable, AccountError> {
-    Err(AccountError::StorageUnavailable)
+/// HKDF info of the journey digest key (design §4.2, "Which key").
+const DIGEST_INFO: &[u8] = b"mcp-gateway/account-journey-digest/v1";
+/// Domain of the per-principal rate key (design §5.3).
+const PRINCIPAL_DOMAIN: &[u8] = b"mcp-gateway/journey-principal/v1";
+
+/// The digest labels of design §4.2 steps 7-8.
+#[derive(Clone, Copy)]
+enum Secret {
+    State,
+    Binding,
 }
 
-impl PersonalAccountStore {
-    /// THE journey mutation (design §5.2): lock, expire stale active records,
-    /// run `f`, seal and write `journeys.json`, publish, release. `f` gets the
-    /// pre-sweep snapshot as its second argument (review R3-2).
-    /// STUB: never runs `f`.
-    pub(crate) fn journey_transition<T>(
-        &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _f: impl FnOnce(&mut JourneyTable, &JourneyTable) -> Result<T, JourneyRefusal>,
-    ) -> Result<T, JourneyError> {
-        Err(JourneyError::Storage(AccountError::StorageUnavailable))
+impl Secret {
+    fn label(self) -> &'static [u8] {
+        match self {
+            Self::State => b"state",
+            Self::Binding => b"binding",
+        }
     }
+}
 
-    /// POST creation: caps, rates, capacity, supersede, eviction (§5.3).
-    /// STUB: an empty id.
-    pub(crate) fn create_journey(
-        &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _new: NewJourney,
-    ) -> Result<JourneyId, JourneyError> {
-        Ok(String::new())
-    }
+/// `HMAC-SHA256(HKDF(keys[key_id]), label || value)`, hex. A key id no longer
+/// configured yields `None`: the record fails closed as unknown (R2-6).
+fn keyed_digest(config: &StoreConfig, key_id: &str, secret: Secret, value: &str) -> Option<String> {
+    let mut key = [0_u8; 32];
+    Hkdf::<Sha256>::new(None, config.keys.get(key_id)?)
+        .expand(DIGEST_INFO, &mut key)
+        .ok()?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key).ok()?;
+    mac.update(secret.label());
+    mac.update(value.as_bytes());
+    Some(hex::encode(mac.finalize().into_bytes()))
+}
 
-    /// Owner check, then mint state, binding and verifier (§4.2 steps 6-8).
-    /// STUB: refuses.
-    pub(crate) fn start_journey(
-        &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _id: &str,
-        _owner: &AccountKey,
-    ) -> Result<StartSecrets, JourneyError> {
-        Err(JourneyError::Refused(JourneyRefusal::NotFound))
-    }
+/// `SHA-256(len-prefixed authority, subject)` under its own domain (§5.3).
+fn principal_digest(owner: &AccountKey) -> Result<String, AccountError> {
+    let fields = [
+        owner.principal_authority.as_str(),
+        owner.principal_subject.as_str(),
+    ];
+    let encoded = super::encode_fields(PRINCIPAL_DOMAIN, &fields)?;
+    Ok(hex::encode(Sha256::digest(encoded)))
+}
 
-    /// Callback steps 1-4 and 7: locate, replay, expiry, binding, consume.
-    /// STUB: refuses as unknown state.
-    pub(crate) fn consume_callback(
-        &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _state: &str,
-        _binding: Option<&str>,
-    ) -> Result<Consumed, JourneyError> {
-        Err(JourneyError::Refused(JourneyRefusal::UnknownState))
-    }
-
-    /// Terminal transition; clears `binding_digest` and `pkce_verifier` in
-    /// the same write. STUB: does nothing.
-    pub(crate) fn finish_journey(
-        &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _id: &str,
-        _status: JourneyStatus,
-        _reason: Option<JourneyReason>,
-    ) -> Result<(), JourneyError> {
-        Ok(())
-    }
-
-    /// Status API view. STUB: not found.
-    pub(crate) fn journey_status(
-        &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _id: &str,
-    ) -> Result<JourneyView, JourneyError> {
-        Err(JourneyError::Refused(JourneyRefusal::NotFound))
-    }
+/// 32 random bytes, base64url without padding (43 characters).
+fn random_secret() -> Result<String, AccountError> {
+    use base64::Engine as _;
+    use ring::rand::SecureRandom as _;
+    let mut bytes = [0_u8; 32];
+    ring::rand::SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| AccountError::StorageUnavailable)?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }

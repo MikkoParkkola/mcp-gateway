@@ -184,7 +184,7 @@ pub(crate) struct PersonalAccountStore {
     // `None` means poisoned: a failure after the manifest rename left this copy
     // unable to vouch for itself, so it refuses instead of serving a state the
     // durable authority may already have superseded. A restart re-reads it.
-    authority: parking_lot::Mutex<Option<Authority>>,
+    authority: parking_lot::Mutex<AuthoritySlot>,
     // Both halves must remain exclusively owned even if another configuration
     // incorrectly pairs one of the directories with a different counterpart.
     _record_lock: crate::fs_lock::ExclusiveFileLock,
@@ -221,13 +221,31 @@ enum GrantState {
     ReconnectRequired,
 }
 
+/// What the authority mutex guards. The two halves poison independently
+/// (journey design R2-1): a journey-file fault never touches `authority`.
+struct AuthoritySlot {
+    authority: Option<Authority>,
+    #[cfg(unix)]
+    journeys: storage::journey::JourneysSlot,
+}
+
+impl AuthoritySlot {
+    fn new(authority: Authority) -> Self {
+        Self {
+            authority: Some(authority),
+            #[cfg(unix)]
+            journeys: storage::journey::JourneysSlot::default(),
+        }
+    }
+}
+
 /// The authority guard, and the only thing any operation may hold it as.
 ///
 /// Under `cfg(test)` it carries the witness session for the acquisition it
 /// represents and closes that session when the guard drops. Outside tests it is
 /// the `parking_lot` guard and nothing else — one field, no `Drop`.
 struct AuthorityGuard<'store> {
-    guard: parking_lot::MutexGuard<'store, Option<Authority>>,
+    guard: parking_lot::MutexGuard<'store, AuthoritySlot>,
     #[cfg(test)]
     ticket: consent::witness::Ticket,
 }
@@ -236,13 +254,13 @@ impl std::ops::Deref for AuthorityGuard<'_> {
     type Target = Option<Authority>;
 
     fn deref(&self) -> &Self::Target {
-        &self.guard
+        &self.guard.authority
     }
 }
 
 impl std::ops::DerefMut for AuthorityGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.guard
+        &mut self.guard.authority
     }
 }
 

@@ -452,7 +452,7 @@ pub(super) fn initialize(config: StoreConfig) -> Result<PersonalAccountStore, Ac
     sync_directory(&config.authority_dir)?;
     Ok(PersonalAccountStore {
         config,
-        authority: parking_lot::Mutex::new(Some(authority)),
+        authority: parking_lot::Mutex::new(super::AuthoritySlot::new(authority)),
         _record_lock: record_lock,
         _authority_lock: authority_lock,
     })
@@ -523,7 +523,7 @@ pub(super) fn open(config: StoreConfig) -> Result<PersonalAccountStore, AccountE
     }
     Ok(PersonalAccountStore {
         config,
-        authority: parking_lot::Mutex::new(Some(authority)),
+        authority: parking_lot::Mutex::new(super::AuthoritySlot::new(authority)),
         _record_lock: record_lock,
         _authority_lock: authority_lock,
     })
@@ -606,20 +606,30 @@ fn record_file_limit(config: &StoreConfig) -> Result<usize, AccountError> {
 /// failure. None of them is absence, and none may block the caller.
 #[cfg(unix)]
 fn read_record(config: &StoreConfig, path: &Path) -> Result<Vec<u8>, AccountError> {
+    read_bounded(path, record_file_limit(config)?)?.ok_or(AccountError::StorageUnavailable)
+}
+
+/// The bounded private-file reader behind `read_record` and `journeys.json`.
+/// `None` is reserved for a missing file; every other refusal is an error.
+#[cfg(unix)]
+fn read_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, AccountError> {
     use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 
-    let limit = record_file_limit(config)?;
     let bound = u64::try_from(limit).map_err(|_| AccountError::InvalidConfiguration)?;
     // A FIFO must reach the regular-file check instead of blocking inside open.
-    let file = OpenOptions::new()
+    let opened = OpenOptions::new()
         .read(true)
         .custom_flags(
             (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
                 .bits()
                 .cast_signed(),
         )
-        .open(path)
-        .map_err(|_| AccountError::StorageUnavailable)?;
+        .open(path);
+    let file = match opened {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(AccountError::StorageUnavailable),
+    };
     let metadata = file
         .metadata()
         .map_err(|_| AccountError::StorageUnavailable)?;
@@ -633,7 +643,7 @@ fn read_record(config: &StoreConfig, path: &Path) -> Result<Vec<u8>, AccountErro
     if encoded.len() > limit {
         return Err(AccountError::StorageUnavailable);
     }
-    Ok(encoded)
+    Ok(Some(encoded))
 }
 
 /// Open the one accepted candidate this entry names, and no other file. The
