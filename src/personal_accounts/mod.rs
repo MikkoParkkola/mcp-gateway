@@ -447,7 +447,9 @@ pub(crate) use storage::journey::{
 };
 #[cfg(test)]
 pub(crate) use worker::CustodyHandle;
-pub(crate) use worker::{AccountHandles, JourneyService, JourneyStarted};
+pub(crate) use worker::{
+    AccountHandles, CallbackOutcome, CallbackRequest, JourneyService, JourneyStarted,
+};
 pub(crate) use worker::{CustodyError, CustodyStartError};
 
 /// The managed-account dispatch strategy and the object-safe custody it runs

@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use super::{CustodyError, CustodyHandle};
+use super::{CallbackOutcome, CallbackRequest, CustodyError, CustodyHandle};
 use crate::personal_accounts::AccountKey;
 use crate::personal_accounts::AccountRevocation;
 use crate::personal_accounts::config::{AccountDescriptor, AccountsLimits};
@@ -78,6 +78,9 @@ pub(crate) trait JourneyService: Send + Sync {
         id: String,
         owner: AccountKey,
     ) -> JourneyResult<JourneyStarted>;
+
+    /// `GET /accounts/v1/callback` (design §6.2): admit, exchange, commit.
+    async fn callback(&self, request: CallbackRequest) -> CallbackOutcome;
 }
 
 #[async_trait::async_trait]
@@ -157,6 +160,10 @@ where
             binding: secrets.binding,
             max_age,
         }))
+    }
+
+    async fn callback(&self, request: CallbackRequest) -> CallbackOutcome {
+        self.complete_callback(request).await
     }
 }
 

@@ -14,7 +14,6 @@ use axum::response::{Html, IntoResponse, Response};
 
 use super::super::AppState;
 use super::bridge::{OwuiSessionBridge, Session};
-use super::hosted::CALLBACK;
 use crate::config::Config;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::{
@@ -131,15 +130,9 @@ pub(super) async fn start(
     }
 }
 
-/// 303 to the provider, with the binding in a cookie named for this journey,
-/// so parallel journeys never overwrite each other's (§4.2 step 7, L4).
-/// `__Host-` would need `Path=/`; the cookie is scoped to the callback only.
+/// 303 to the provider, with the binding in the journey's own cookie.
 fn redirect(id: &str, started: &JourneyStarted) -> Response {
-    let cookie = format!(
-        "__Secure-mcpgw-journey-{id}={}; Secure; HttpOnly; SameSite=Lax; Path={CALLBACK}; \
-         Max-Age={}",
-        started.binding, started.max_age
-    );
+    let cookie = super::callback::binding_cookie(id, &started.binding, started.max_age);
     let (Ok(cookie), Ok(location)) = (
         HeaderValue::from_str(&cookie),
         HeaderValue::from_str(started.authorize_url.as_str()),

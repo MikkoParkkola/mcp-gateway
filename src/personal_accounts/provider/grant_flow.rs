@@ -74,6 +74,12 @@ fn random_256() -> String {
 }
 
 impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
+    /// The clock token lifetimes are read against, so journey deadlines and
+    /// grant expiry share one time base.
+    pub(crate) fn now_unix(&self) -> u64 {
+        self.clock.now_unix()
+    }
+
     /// The browser-facing authorize URL for one managed account.
     ///
     /// Built on the PINNED authorization endpoint. Reads no secret and sends
