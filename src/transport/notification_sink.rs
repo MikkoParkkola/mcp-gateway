@@ -276,6 +276,14 @@ fn passes_level_filter(notification: &JsonRpcNotification) -> bool {
     if notification.method != "notifications/message" {
         return true;
     }
+    // Checked before parsing: most requests declare nothing, and silence
+    // needs no parse.
+    if !LEVEL
+        .try_with(|slot| slot.borrow().is_some())
+        .unwrap_or(false)
+    {
+        return false;
+    }
     let raised = notification
         .params
         .as_ref()
