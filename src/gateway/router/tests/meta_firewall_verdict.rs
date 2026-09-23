@@ -619,3 +619,69 @@ async fn meta_tools_call_refusal_survives_without_a_second_inspection() {
         "the refusal must not be re-inspected at delivery"
     );
 }
+
+/// T6 — a modern-era `tools/call` runs `shape_modern_response` between the
+/// router pass and delivery. Shaping adds only gateway constants today, so the
+/// skip still holds; this pins that, so a later shaping change that copies
+/// backend-derived content onto the result cannot silently void it.
+#[tokio::test]
+async fn modern_meta_tools_call_is_inspected_once_by_the_router_instance() {
+    let (state, handler, meta, _store) = split_firewall_app_state(vec![FirewallRule {
+        tool_match: TOOL.to_string(),
+        action: FirewallAction::Allow,
+        reason: None,
+        scan: Vec::new(),
+    }])
+    .await;
+
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": "modern-1",
+        "method": "tools/call",
+        "params": {
+            "name": TOOL,
+            "arguments": {},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": { "name": "T6", "version": "1.0.0" },
+                crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "t6-key-1"
+            }
+        }
+    });
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", TOOL)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(crate::key_server::oidc::VerifiedIdentity {
+            subject: "alice".to_string(),
+            email: "alice@t6.test".to_string(),
+            name: None,
+            groups: Vec::new(),
+            issuer: "https://idp.t6.test".to_string(),
+        });
+    let response = create_router(state).oneshot(request).await.unwrap();
+    let status = response.status();
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.get("error").is_none(),
+        "an allowed call delivers: {body}"
+    );
+    // Proof the modern shaping ran; without it this row would be T1 again.
+    assert!(
+        body.pointer("/result/resultType").is_some(),
+        "the modern era must shape the result: {body}"
+    );
+    assert_eq!(handler.response_inspection_counts().inspections, 1);
+    assert_eq!(meta.response_inspection_counts().inspections, 0);
+}

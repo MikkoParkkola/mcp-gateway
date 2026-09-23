@@ -5,7 +5,7 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # NFR.WORKLOAD.1: one response inspection per meta `tools/call`
 
-Status: reviewed (grok SHIP-WITH-FIXES, kimi SHIP-WITH-FIXES); fixes folded in. No code yet.
+Status: implemented. Design reviewed (grok and kimi SHIP-WITH-FIXES, fixes folded in); code reviewed (grok SHIP, kimi SHIP).
 
 ## Problem
 
