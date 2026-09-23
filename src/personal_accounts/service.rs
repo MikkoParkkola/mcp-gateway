@@ -121,7 +121,7 @@ pub(crate) trait CredentialReleaseObserver: Send + Sync {
 }
 
 /// Non-secret prior state a consent journey captured before talking to a provider.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum ConsentExpectation {
     Absent,
     Connected(GrantVersion),

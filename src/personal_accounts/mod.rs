@@ -161,7 +161,7 @@ impl std::fmt::Debug for GrantRecord {
 }
 
 /// Non-secret version captured by a connected or tombstoned grant.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct GrantVersion {
     pub(crate) generation: String,
     pub(crate) token_revision: u64,
