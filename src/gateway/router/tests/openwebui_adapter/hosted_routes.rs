@@ -19,17 +19,18 @@ use crate::personal_accounts::revoke_fixture::{RevocationEndpoint, RevokeFixture
 const ACCOUNT: &str = "work";
 const RESOURCE: &str = "https://api.fixture.test/";
 const HMAC: &str = "fixture-adapter-signing-secret-123456789";
+const PLAIN_HMAC: &str = "fixture-plain-adapter-secret-9876543210";
 const API_KEY: &str = "fixture-named-api-key";
 const HOSTED_HOST: &str = "chat.fixture.test";
 const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; \
                    form-action 'self'; frame-ancestors 'none'";
 
-/// Whether `accounts.hosted` is configured, and whether the one adapter
-/// carries the `session` block that makes it a bridge.
+/// Whether `accounts.hosted` is configured. When it is, the first adapter
+/// carries the `session` block that makes it a bridge; the `plain` adapter
+/// never does.
 #[derive(Clone, Copy)]
 enum Shape {
     Bridged,
-    NoSession,
     NotHosted,
 }
 
@@ -38,11 +39,11 @@ fn config(env: &std::path::Path, shape: Shape) -> crate::config::Config {
         Shape::Bridged => {
             "      session:\n        user_endpoint: http://127.0.0.1:9/api/v1/auths/\n"
         }
-        Shape::NoSession | Shape::NotHosted => "",
+        Shape::NotHosted => "",
     };
     let hosted = match shape {
         Shape::NotHosted => "",
-        Shape::Bridged | Shape::NoSession => {
+        Shape::Bridged => {
             "  hosted:\n    public_origin: https://chat.fixture.test\n    return_paths: [/]\n"
         }
     };
@@ -74,7 +75,13 @@ accounts:
       issuer: open-webui
       hmac_secret_ref: env:OWUI_ROUTE_HMAC
       allowed_api_key_names: [owui]
-{session}  descriptors:
+{session}    - kind: openwebui_signed_header
+      installation_id: plain
+      header: x-plain-assertion
+      issuer: open-webui
+      hmac_secret_ref: env:OWUI_PLAIN_HMAC
+      allowed_api_key_names: [owui]
+  descriptors:
     {ACCOUNT}:
       mode: personal_managed
       provider: fixture
@@ -98,7 +105,7 @@ async fn gateway(shape: Shape) -> Gateway {
     let env = dir.path().join("adapter.env");
     std::fs::write(
         &env,
-        format!("OWUI_ROUTE_HMAC={HMAC}\nOWUI_ROUTE_STORE=UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n"),
+        format!("OWUI_ROUTE_HMAC={HMAC}\nOWUI_PLAIN_HMAC={PLAIN_HMAC}\nOWUI_ROUTE_STORE=UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n"),
     )
     .unwrap();
     let config = config(&env, shape);
@@ -116,6 +123,10 @@ async fn gateway(shape: Shape) -> Gateway {
 }
 
 fn assertion(subject: &str) -> String {
+    assertion_signed(HMAC, subject)
+}
+
+fn assertion_signed(secret: &str, subject: &str) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -124,7 +135,7 @@ fn assertion(subject: &str) -> String {
     encode(
         &Header::new(Algorithm::HS256),
         &claims,
-        &EncodingKey::from_secret(HMAC.as_bytes()),
+        &EncodingKey::from_secret(secret.as_bytes()),
     )
     .unwrap()
 }
@@ -367,17 +378,33 @@ async fn post_creates_journey_and_owner_reads_pending_status() {
     assert!(!view.to_string().contains("token"), "{view}");
 }
 
-/// T-POST-NOBRIDGE: an adapter without `session` is refused before the
-/// store; the global creation budget of one is still unspent afterwards.
+/// T-POST-NOBRIDGE: a principal of the adapter without `session` is refused
+/// before the store, so the global creation budget of one is still unspent.
 #[tokio::test(flavor = "multi_thread")]
 async fn post_without_bridge_is_403_and_consumes_no_capacity() {
-    // GIVEN: an adapter with no session block
-    let gw = gateway(Shape::NoSession).await;
+    // GIVEN: journeys_created_per_minute is 1
+    let gw = gateway(Shape::Bridged).await;
+    let plain = Request::builder()
+        .method("POST")
+        .uri("/accounts/v1/journeys")
+        .header("authorization", format!("Bearer {API_KEY}"))
+        .header("x-plain-assertion", assertion_signed(PLAIN_HMAC, "carol"))
+        .header("content-type", "application/json")
+        .body(Body::from(connect_body().to_string()))
+        .unwrap();
     // WHEN
-    let (status, body) = create(&gw, "alice", &connect_body()).await;
-    // THEN
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, body) = json_of(send(&gw, plain).await).await;
+    // THEN: refused, and the one creation is still available afterwards
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"]["code"], "forbidden");
+    assert_eq!(
+        create(&gw, "alice", &connect_body()).await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        create(&gw, "bob", &connect_body()).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 }
 
 /// T-POST-NOBRIDGE (capacity half): refusals ahead of the store spend no
