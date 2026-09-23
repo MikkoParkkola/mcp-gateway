@@ -211,6 +211,7 @@ async fn revoke_route_provider_503_reports_failed_and_stays_revoked() {
     let (status, body) = delete(&gw, Some("alice"), ACCOUNT).await;
     // THEN
     assert_eq!((status, body), (StatusCode::OK, revoked_body("failed")));
+    assert_eq!(gw.fixture.received(), both(), "every token is tried after a failure");
     assert_eq!(gw.fixture.state(&key("alice")).await, "revoked");
 }
 
