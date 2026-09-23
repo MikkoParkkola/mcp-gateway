@@ -9,8 +9,17 @@
 //! `Error::Config` it always was, so an undecorated refusal reads byte for
 //! byte as before; the catalogue swallows it unread. A marked error is only
 //! ever built here, from a resolver refusal, never from a backend's reply.
+//!
+//! PROVENANCE (ADR-008: only gateway-built connect URLs reach a client). A
+//! backend's `Error::JsonRpc` can carry any code and any `data`, so neither
+//! can prove an offer is ours. An offer built by [`offer_error`] carries a
+//! per-process secret seal; [`offer_data`] forwards the §9.1 keys only under
+//! that seal and strips it, so the seal never leaves the process and a
+//! backend cannot produce data that passes.
 
-use serde_json::json;
+use std::sync::LazyLock;
+
+use serde_json::{Value, json};
 
 use crate::Error;
 use crate::identity_propagation::PropagationError;
@@ -38,15 +47,21 @@ impl AccountState {
     }
 }
 
-/// The §9.1 `data` keys, forwarded to the client by name like every other
-/// gateway-authored key.
-pub(crate) const ACCOUNT_DATA_KEYS: [&str; 5] = [
+/// The §9.1 `data` keys, forwarded only from a sealed offer.
+const ACCOUNT_DATA_KEYS: [&str; 5] = [
     "schema_version",
     "error",
     "account_id",
     "connect_url",
     "retry_after",
 ];
+
+/// Where the seal rides inside an offer's `data`; never forwarded.
+const SEAL_KEY: &str = "gateway_offer_seal";
+
+/// The per-process seal. `None` when no randomness was available, and then
+/// nothing is forwarded: an offer without provenance fails closed.
+static SEAL: LazyLock<Option<String>> = LazyLock::new(|| super::storage::random_hex().ok());
 
 /// The marked code: the `Config` code, so a refusal nobody decorates still
 /// reports it.
@@ -116,4 +131,34 @@ pub(crate) fn refusal_text(error: &Error) -> String {
         || error.to_string(),
         |marked| Error::Config(marked.message.to_owned()).to_string(),
     )
+}
+
+/// A gateway-built offer: `envelope` sealed so [`offer_data`] will forward it.
+pub(crate) fn offer_error(code: i32, message: String, mut envelope: Value) -> Error {
+    if let (Some(seal), Some(map)) = (SEAL.as_ref(), envelope.as_object_mut()) {
+        map.insert(SEAL_KEY.to_owned(), Value::String(seal.clone()));
+    }
+    Error::JsonRpc {
+        code,
+        message,
+        data: Some(envelope),
+    }
+}
+
+/// The §9.1 keys of a sealed, gateway-built offer, seal removed; `None` for
+/// every other error, a backend's included, whatever its code or keys.
+pub(crate) fn offer_data(error: &Error) -> Option<Value> {
+    let Error::JsonRpc {
+        data: Some(data), ..
+    } = error
+    else {
+        return None;
+    };
+    let seal = SEAL.as_ref()?;
+    (data.get(SEAL_KEY).and_then(Value::as_str) == Some(seal.as_str())).then_some(())?;
+    let forwarded: serde_json::Map<String, Value> = ACCOUNT_DATA_KEYS
+        .into_iter()
+        .filter_map(|key| Some((key.to_owned(), data.get(key)?.clone())))
+        .collect();
+    Some(Value::Object(forwarded))
 }

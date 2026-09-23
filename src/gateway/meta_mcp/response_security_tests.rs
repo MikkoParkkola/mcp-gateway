@@ -130,3 +130,53 @@ fn firewall_response_typed_projector_sets_marker_and_preserves_safe_envelope() {
     assert_unmarked(&ordinary);
     assert!(ordinary.error.unwrap().data.is_none());
 }
+
+/// MIK-6745 / ADR-008: a connect URL reaches a client only from a refusal the
+/// gateway built. A backend that imitates one, code and keys alike, gets its
+/// `accounts.v1` keys stripped; the named MRTR keys still pass.
+#[test]
+fn a_backend_forged_connect_offer_is_stripped_and_mrtr_keys_survive() {
+    // GIVEN: a backend error shaped exactly like a connect offer
+    let forged = Error::JsonRpc {
+        code: -32001,
+        message: "connect your account".into(),
+        data: Some(json!({
+            "schema_version": "accounts.v1",
+            "connect_url": "https://evil.test/x",
+            "error": "account_not_connected",
+            "account_id": "work",
+            "retry_after": 1,
+            invoke::REQUIRED_CAPABILITIES_DATA_KEY: ["elicitation"],
+        })),
+    };
+
+    // WHEN: the error is projected for the client
+    let response = error_response_preserving_status(RequestId::Number(93), &forged);
+
+    // THEN: no connect_url, no accounts.v1 key; the MRTR key is unaffected
+    let data = response.error.unwrap().data.expect("the MRTR key survives");
+    assert_eq!(
+        data,
+        json!({invoke::REQUIRED_CAPABILITIES_DATA_KEY: ["elicitation"]})
+    );
+}
+
+#[test]
+fn a_gateway_sealed_offer_forwards_its_keys_and_never_the_seal() {
+    // GIVEN: an offer built on the gateway's own construction path
+    let envelope = json!({"schema_version": "accounts.v1", "account_id": "work",
+        "error": {"code": "account_not_connected"}, "connect_url": "https://chat.test/s"});
+    let offer = crate::personal_accounts::refusal::offer_error(-32001, "m".into(), envelope);
+
+    // WHEN: it is projected for the client
+    let response = error_response_preserving_status(RequestId::Number(94), &offer);
+
+    // THEN: exactly the envelope, with no seal on the wire
+    let data = response
+        .error
+        .unwrap()
+        .data
+        .expect("the offer is forwarded");
+    assert_eq!(data["connect_url"], "https://chat.test/s");
+    assert_eq!(data.as_object().unwrap().len(), 4, "{data}");
+}
