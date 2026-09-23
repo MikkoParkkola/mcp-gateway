@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `-full` variant's smoke gate bounds every probe.** Four of its six probes
+  resolve over the network — npx and uvx fetch a package, git fetches a remote —
+  and none was bounded. On a runner whose resolver stops answering, the gate
+  waits on the first probe until the job is killed hours later and reports only
+  `cancelled`, with nothing in the log between the step's first line and the
+  cancellation. Each probe now runs under a per-probe ceiling, and a probe that
+  hits it reports which one and how long it waited, so a stalled network is a red
+  step in seconds that names itself instead of an invisible wait.
+  ([@terafin](https://github.com/terafin), [#744](https://github.com/MikkoParkkola/mcp-gateway/pull/744))
+
 - **Two backends running the same command no longer share a package cache.**
   `npx -y <pkg>` installs into a cache directory shared by every process on the
   host, and concurrent installs into one tree can tear it — after which npm
