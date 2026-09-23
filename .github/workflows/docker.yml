@@ -223,6 +223,9 @@ jobs:
           trivyignores: .trivyignore
 
       - name: Smoke test the full variant (it must spawn npx and uvx)
+        # Backstop for a hang the per-probe ceilings cannot see (docker run
+        # itself, the daemon): the probes' own budgets sum well under this.
+        timeout-minutes: 20
         run: scripts/ci/smoke-full-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan-full"
 
       # Push by digest with no tag; `manifest` below creates the branch and sha
