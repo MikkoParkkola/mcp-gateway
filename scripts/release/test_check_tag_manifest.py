@@ -2230,6 +2230,18 @@ class VariantGateCoverage(unittest.TestCase):
                 f"a probe is unbounded, so a stalled network hangs the job: probe {call}",
             )
 
+    def test_the_probe_ceiling_is_applied_not_only_declared(self):
+        # Every call site passing a ceiling proves nothing if the helper that
+        # runs the probe drops it: deleting `timeout` from `run_as_gateway`
+        # would leave the call-site test green and the gate unbounded again.
+        helper = re.search(r"run_as_gateway\(\) \{(.*?)\n\}", self.body, re.S)
+        self.assertIsNotNone(helper, "run_as_gateway is gone")
+        self.assertRegex(
+            helper.group(1),
+            r"timeout\s+-k\s+\d+\s+\$\{1\}",
+            "run_as_gateway no longer applies the probe's ceiling",
+        )
+
     def test_a_probe_that_times_out_says_so(self):
         # A timeout leaves the probe's output empty, so without the exit code a
         # stalled network is reported as a broken image and the reader is sent

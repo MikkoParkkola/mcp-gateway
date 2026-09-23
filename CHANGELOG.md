@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancellation. Each probe now runs under a per-probe ceiling, and a probe that
   hits it reports which one and how long it waited, so a stalled network is a red
   step in seconds that names itself instead of an invisible wait.
+  ([@terafin](https://github.com/terafin), [#744](https://github.com/MikkoParkkola/mcp-gateway/pull/744))
 
 - **Two backends running the same command no longer share a package cache.**
   `npx -y <pkg>` installs into a cache directory shared by every process on the
