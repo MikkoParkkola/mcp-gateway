@@ -1,6 +1,6 @@
 # MIK-6745.JOURNEY.1: hosted consent journey (connect, use, refresh, revoke, cancel, expired/replayed)
 
-Status: draft for review
+Status: revised after design review (grok and kimi, both SHIP-WITH-FIXES); the revision is under re-review.
 
 Date: 2026-09-23. Worktree `feat/mik-6745-consent-journey` at `a400e119`. All
 `file:line` references are to that tree unless marked as a document.
@@ -124,11 +124,12 @@ map to 503 `storage_unavailable` with `retryable: true`.
 ```
           create (POST, or a dispatch-site offer)
                         |
-                    [pending] --- now > expires_at ---> [expired]
+                    [pending] --- now >= start_by ---> [expired]
                         |
-   start: bridge ok; binding digest, state digest and sealed PKCE verifier stored
+   start: bridge ok; binding digest, state digest, sealed PKCE verifier stored,
+          callback_by = started_at + 600 s
                         |
-                    [started] --- now > expires_at ---> [expired]
+                    [started] --- now >= callback_by ---> [expired]
                         |
    callback: state + binding ok -> consumed = true persisted while the lock is held
                         |
@@ -145,11 +146,20 @@ map to 503 `storage_unavailable` with `retryable: true`.
   a callback, before any network call. A callback that finds `consumed = true` is a
   replay. It is refused, and the record's `replay_refusals` counter goes up. That
   counter holds no request data.
-- **Expiry** is a single deadline: `expires_at = created_at + 300 s`, covering both
-  start and callback. That is the plain reading of the design's "five-minute
-  expiry", and it is not re-armed at start. A user who clicks late gets a fresh link
-  on the next refused tool call, because the dispatch-site offer (§9) mints a new
-  journey when the active one has less than 120 s left.
+- **Expiry uses two deadlines (review M4).**
+  - `start_by = created_at + 300 s` is the design's five-minute journey expiry, and
+    it bounds an unclicked link.
+  - `callback_by = started_at + 600 s` gives the user time at Google for 2FA or the
+    account chooser.
+  - The status API reports the deadline that currently applies, as `expires_at`.
+  - Re-running `start` on your own `started` journey rotates the secrets, but
+    `callback_by` stays anchored to the first start. Re-starting therefore never
+    extends the window past `created_at + 900 s`.
+- **An active journey is never superseded while it can still complete (review
+  H1).** The dispatch-site offer (§9.3) reuses an active `pending` or `started`
+  journey. It mints a new journey only when there is none, or when the active one
+  can no longer complete: a `pending` journey past `start_by`, or a `started`
+  journey past `callback_by`.
 - **Terminal transitions.** Every terminal transition deletes `binding_digest` and
   the sealed `pkce_verifier` in the same write.
 
@@ -169,11 +179,11 @@ map to 503 `storage_unavailable` with `retryable: true`.
   - `account_id`
   - `status`
   - `reason`, a closed enum
-  - `created_at`, `expires_at`, `terminal_at`
+  - `created_at`, `start_by`, `started_at`, `callback_by`, `terminal_at`
   - `replay_refusals`
 
-  Terminal records are garbage-collected 24 h after `terminal_at`, and a collected
-  ID answers `not_found`.
+  Terminal records are garbage-collected 24 h after `terminal_at`, or earlier by
+  capacity eviction (§5.3). A collected ID answers `not_found`.
 
 ## 4. Browser bridge (decision 2, resolves A07)
 
@@ -199,10 +209,22 @@ In v0.9.6 that cookie is `token`, with httponly set and `samesite` taken from
 New type `OwuiSessionBridge` in `src/gateway/router/accounts/bridge.rs`. There is one
 per configured adapter that has a `session` block (§10). The steps run in order.
 
-1. **Load the journey.** It must not be expired, and it must be either `pending` or
-   `started`. A `started` journey is re-armed after step 6 passes: state, binding
-   and verifier are rotated (§9.3). Anything else renders the expired/invalid page,
-   with no redirect.
+1. **Load the journey.** It must be either `pending` (before `start_by`) or
+   `started` (before `callback_by`). A `started` journey is re-armed after step 6
+   passes: state, binding and verifier are rotated, and `callback_by` is left
+   unchanged (§3). Anything else renders the expired/invalid page, with no
+   redirect.
+
+   **Adapter selection (review L3).** Config rejects two session-bridge adapters
+   that share one `hosted.public_origin`. This design has a single hosted origin,
+   so at most one adapter may carry a `session` block. That gives:
+   - the journey route: the adapter is the one the journey owner's authority
+     names;
+   - browser DELETE and `/complete`, which have no journey: the adapter is the
+     single bridge adapter.
+
+   Supporting several OWUI installations would need a per-adapter hosted origin
+   selected by `Host`. That is a later change.
 2. **Read the cookie.** Exactly one cookie named `session.cookie_name`, default
    `token`. If it is missing or duplicated, render "sign in to Open WebUI in this
    browser, then retry". No provider redirect.
@@ -210,16 +232,31 @@ per configured adapter that has a `session` block (§10). The steps run in order
    - Request: server-side `GET {session.user_endpoint}` with
      `Authorization: Bearer <cookie value>`.
    - v0.9.6 `get_session_user` reads the bearer first, then the cookie.
-   - Client: a dedicated `reqwest` client with no redirects, no proxy, a 5 s
-     timeout and a 64 KiB body cap.
+   - Client (review M3): a dedicated `reqwest` client, where each rule has a named
+     test in §11.2 (T-BRIDGE-*):
+     - `redirect(Policy::none())`. `reqwest` follows redirects by default, so a
+       3xx is refused rather than followed.
+     - `no_proxy()`.
+     - A 5 s total timeout.
+     - The body is read through a 64 KiB cap. An oversize body is refused, never
+       truncated and parsed.
+     - Any status other than 200 is refused.
    - The URL must be `https`, or `http` with a loopback literal host. This is
      validated at startup.
 4. **Keep only the id.**
    - Accept only a 200 JSON response.
-   - Deserialize into `struct SessionUser { id: String, expires_at: Option<i64> }`,
-     **without** `deny_unknown_fields`, so serde drops `token`, `email`, `name`,
-     `role` and `permissions` unread.
+   - Deserialize into `SessionUser { id, expires_at: Option<i64> }`, **without**
+     `deny_unknown_fields`, so serde drops `token`, `email`, `name`, `role` and
+     `permissions` unread.
    - A past `expires_at` refuses.
+   - **Fixture (review L7).** The upstream v0.9.6 model sets `'id': user.id`, and
+     the OWUI user model's `id` is a string (a UUID). I inferred that from the
+     upstream source and have not observed it on the wire. The `SessionUser`
+     fixture must be a real `GET /api/v1/auths/` body captured from Spark's
+     pinned image, with `token`, `email` and `name` values replaced by synthetic
+     ones, before the bridge tests are finalised. `id` is typed `String`, and a
+     numeric `id` would be refused. That behaviour is correct if the capture
+     confirms a string.
 5. **Namespace exactly as the tool-call adapter does.**
    - `authority` is `namespaced_issuer(installation_id)`, i.e.
      `openwebui-adapter:{len}:{installation_id}` (`src/gateway/openwebui_adapter.rs:441-447`).
@@ -244,9 +281,17 @@ per configured adapter that has a `session` block (§10). The steps run in order
 7. **Mint the browser binding.**
    - Value: 32 bytes from `ring::rand::SystemRandom`, base64url.
    - Stored: `binding_digest = HMAC-SHA256(journey_key, "binding" || value)`.
-   - Cookie: `__Secure-mcpgw-journey=<value>; Secure; HttpOnly; SameSite=Lax; Path=/accounts/v1/callback; Max-Age=<seconds until expires_at>`.
+   - Cookie (review L4): `__Secure-mcpgw-journey-<journey_id>=<value>; Secure; HttpOnly; SameSite=Lax; Path=/accounts/v1/callback; Max-Age=<seconds until callback_by>`.
+     The name is per journey, so parallel journeys for two accounts do not
+     overwrite each other's binding. At callback, the journey is found through
+     `state` first, then the cookie named for that journey id is read.
    - `__Host-` cannot be used, because it requires `Path=/`. The cookie name never
      collides with `token`.
+   - **Comparison (review L5).** Every digest comparison is constant time
+     (`subtle::ConstantTimeEq`): `owner_digest`, `binding_digest` and
+     `state_digest`. The state lookup does not index a map by the digest. It scans
+     the bounded record set and compares each candidate in constant time, so match
+     timing does not reveal digest prefixes.
 8. **Start the provider flow.**
    - PKCE verifier: 32 random bytes, S256.
    - State: 32 random bytes, i.e. 256 bits.
@@ -269,10 +314,16 @@ digests therefore survive a restart, and no new secret is introduced.
   that records the method and matched path only: no headers, no query string. The
   callback's code, state and error parameters fall under the same rule. That
   satisfies the design's "callback access logs omit query strings".
-- **Response headers.** Every `/accounts/v1/*` response sets:
+- **Response headers (review L6).** One `tower` layer
+  (a `map_response` middleware; `tower-http`'s `set-header` feature is not enabled at `Cargo.toml:76`, so no feature change is needed) wraps the whole
+  `/accounts/v1` browser router. Every response under it therefore carries these
+  headers, including 404, 405 and error pages:
   - `Cache-Control: no-store`
   - `Referrer-Policy: no-referrer`
   - `Content-Security-Policy: default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self'; frame-ancestors 'none'`
+
+  The owner API routes (POST, status) set the first two through the same layer.
+  T-HDR tests an arbitrary unrouted path under the prefix.
 - **Same-origin pages.** Gateway HTML shares Open WebUI's origin, so it could read
   Open WebUI's `localStorage`. Gateway pages therefore:
   - carry no inline script and no third-party content;
@@ -307,8 +358,21 @@ it (`claim_store`, `storage.rs:336-351`).
 - It also keeps existing stores working with no `init-store` change.
 - An unreadable, unauthenticated or oversized file refuses every journey operation with `storage_unavailable`. It is never treated as empty.
 
-**Size bound**
-- `journeys_total * 1 KiB`, plus the measured envelope framing (the `record_file_limit` pattern, `storage.rs:572-599`).
+**Size bound (review H3)**
+- The record count is bounded explicitly: `records_max = 4 × journeys_total`.
+  This covers active records plus retained terminal ones. It is derived, not a
+  separate knob.
+- Every field of a record has a fixed or configured maximum length:
+  - ids and digests are fixed-width hex;
+  - `account_id` and `return_path` are bounded by config validation;
+  - the verifier is 43 characters.
+- A record's plaintext is therefore at most `RECORD_MAX = 1 KiB`. That value is
+  asserted by a unit test that serializes a maximal record.
+- The byte cap is `records_max × RECORD_MAX × 2` (100% headroom), plus the
+  measured envelope framing (the `record_file_limit` pattern,
+  `storage.rs:572-599`).
+- A table at `records_max` therefore always fits under the cap, so a write can
+  never be refused for size. The cap exists only to bound the read.
 
 ```rust
 // src/personal_accounts/journey/record.rs  (sealed plaintext, never logged: redacted Debug)
@@ -327,7 +391,7 @@ struct JourneyRecord {
     binding_digest: Option<String>,  // HMAC, only while Started
     principal_digest: String,        // per-principal limit key, §5.3
     pkce_verifier: Option<String>,   // plaintext only inside this sealed file; removed at terminal
-    created_at: u64, expires_at: u64, terminal_at: Option<u64>,
+    created_at: u64, start_by: u64, started_at: Option<u64>, callback_by: Option<u64>, terminal_at: Option<u64>,
     replay_refusals: u32,
 }
 ```
@@ -357,14 +421,14 @@ Every journey mutation is a single function running under one lock acquisition:
 fn journey_transition<T>(&self, now: u64,
     f: impl FnOnce(&mut JourneyTable, &Authority) -> Result<T, JourneyRefusal>)
     -> Result<T, JourneyError>
-// 1. lock_authority()   2. expire every record with expires_at <= now (clears secrets)
+// 1. lock_authority()   2. expire every record past its applicable deadline (clears secrets)
 // 3. f(table)           4. seal + write journeys.json   5. publish in-memory table
 // 6. release.  f never performs IO; no network call ever runs under this lock.
 ```
 
 **Atomic consumption** is one `journey_transition`. Under the lock it:
 - finds the record whose `state_digest` equals `HMAC(state)`;
-- checks the binding, status `Started`, `!consumed` and `now < expires_at`;
+- checks the binding, status `Started`, `!consumed` and `now < callback_by`;
 - sets `consumed = true`;
 - takes the verifier out of the record, returning it to the caller;
 - persists all of the above.
@@ -384,27 +448,49 @@ acquisition safe.
 
 ### 5.3 Limits (C06)
 
-These are enforced inside `journey_transition` at creation. The limit names are the
-ones already specified in the design's configuration table (`accounts.limits`):
+These limits are enforced inside `journey_transition` when a journey is created.
+The first three names come from the design's configuration table
+(`accounts.limits`). Review M1 turned `journeys_per_user` from a count into a
+rate, because the one-active rule made a count of non-terminal rows unreachable.
 
 | Limit | Default | Rule | Refusal |
 |---|---|---|---|
-| `journeys_total` | 1024 | Count of non-terminal records | 503 `capacity_exceeded`, `Retry-After` = seconds to the earliest `expires_at` |
-| `journeys_per_user` | 8 | Non-terminal records with this `owner_digest` prefix set (see below) | 429 `rate_limited`, `Retry-After` as above |
-| `starts_per_minute_per_user` | 10 | Creations in a sliding 60 s window, kept in memory only | 429 `rate_limited`, `Retry-After` = window remainder |
-| one active per principal/account | — | A new creation marks the previous non-terminal record with the same `owner_digest` as `Superseded` and clears its secrets | none; this is not a refusal |
+| `journeys_total` | 1024 | Count of **active** (`pending`/`started`) records | 503 `capacity_exceeded`. `Retry-After` is the seconds until the earliest applicable deadline. |
+| `journeys_per_user` | 8 | Creations per `principal_digest` in a sliding 10-minute window | 429 `rate_limited`. `Retry-After` is the seconds until the oldest creation leaves the window. |
+| `starts_per_minute_per_user` | 10 | `start` invocations (first start and re-arm) per `principal_digest` in a sliding 60 s window | 429 on the start page, as a rendered message. No redirect. |
+| `journeys_created_per_minute` (new) | 120 | Global creations in a sliding 60 s window | 503 `capacity_exceeded`, with `Retry-After` |
+| one active per principal/account | — | An explicit `POST` creation supersedes the same principal/account's active predecessor (C06), marks it `Superseded` and clears its secrets. `offer_for` never supersedes a journey that can still complete. It reuses that journey (§9.3, review H1). | None. This is not a refusal. |
 
-**Per-user counting.** `journeys_per_user` needs a per-principal key that does not
-depend on the account. Records therefore also store
-`principal_digest = SHA-256(len-prefixed authority, subject)`, using the
-`mcp-gateway/journey-principal/v1` domain and the same length-prefix encoding as
+**Per-principal key.** Rate limits need a key per principal that is independent of
+the account. Each record therefore stores
+`principal_digest = SHA-256(len-prefixed authority, subject)`, under domain
+`mcp-gateway/journey-principal/v1`. It uses the same length-prefix encoding as
 `AccountKey::digest`.
 
-**Capacity release.** Expiry releases capacity because step 2 of `journey_transition`
-expires stale records before counting.
+**Record bound and eviction (review H3).** When an insert would exceed
+`records_max`, the **oldest terminal** records are evicted first, ordered by
+`terminal_at`. Active records are never evicted. Because
+`journeys_total < records_max`, at least `3 × journeys_total` terminal slots always
+exist, so eviction always makes room. An evicted terminal id answers `not_found`.
+A later replay of its state is refused as unknown state and is not counted.
 
-**Rate window.** The creation-rate window is in memory. A restart forgets it. That is
-acceptable because it throttles and does not protect state.
+**Callbacks, starts and terminal transitions never add records.** They are
+therefore never refused for capacity or size, even when the table is full of
+terminal records. That is T-FLOOD.
+
+**Capacity release.** Expiry releases active capacity, because step 2 of
+`journey_transition` expires stale records before counting.
+
+**Rate windows.** All rate windows are in memory, and a restart forgets them. That
+is acceptable because they throttle; they do not protect state.
+
+**Creation requires a bridge (review L2).**
+- `POST /accounts/v1/journeys` answers 403 `forbidden` before touching any limit
+  or the store unless the caller's authority is
+  `session_principal`-namespaced for an adapter with a `session` block.
+- Such a journey could never be started, because no bridge could authenticate its
+  browser.
+- `offer_for` applies the same predicate (predicate B in §9.2).
 
 ## 6. Start, callback, exchange and commit (decisions 1, 3)
 
@@ -451,7 +537,7 @@ and exchanges nothing.
 1. **Locate the journey.** Hash `state` and look up the record under
    `journey_transition`. A missing or unknown state gets `invalid_request`, and no
    record is touched.
-2. **Check expiry.** If `now >= expires_at`, set `Expired`, reason `expired`, clear
+2. **Check expiry.** If `now >= callback_by`, set `Expired`, reason `expired`, clear
    the secrets, and refuse (decision 5).
 3. **Check for replay.** If `consumed` or status is terminal, increment
    `replay_refusals` and refuse. The status keeps its original terminal value, and
@@ -490,25 +576,64 @@ and exchanges nothing.
      Otherwise: `no_refresh_token`.
 10. **Audit.** Write `account_grant_attempt` through `audit_identity_propagation`
     (`src/identity_propagation/mod.rs:606-613`). After step 11, write
-    `account_grant` or `account_grant_fenced`. That second write is best effort and
-    only logged on failure, the same pattern the refusal audit uses
-    (`invoke.rs:2964-2984`). If the pre-commit write
-    fails, the journey is `Failed` with reason `audit_unavailable`, the gateway
-    makes a best-effort provider revoke of the fresh token, and nothing is
-    committed (C07).
-11. **Commit** through `CustodyHandle::commit_grant_if(account, &journey.expected, record)`
-    (`src/personal_accounts/worker.rs:254-265`). This gives it a production caller,
-    so its `expect(dead_code)` and the one on `service.rs:335-342` are removed. The
-    record carries:
+    `account_grant` or `account_grant_fenced`. That second write is best effort
+    and only logged on failure, following the refusal-audit pattern
+    (`invoke.rs:2964-2984`). If the pre-commit write fails, the reason is
+    `audit_unavailable` and nothing is committed (C07).
+11. **Commit, and mark the journey `Connected`, in ONE lock acquisition** (review
+    L8). `commit_grant_if` gains a journey argument through every layer:
+
+    `CustodyHandle::commit_grant_if(account, expected, record, journey: Option<&JourneyId>)`
+    (`worker.rs:254-265`) → `AccountService::commit_grant_if` (`service.rs:342-362`)
+    → `commit_grant_if_unchanged(.., provenance, journey)` (`consent.rs:66-104`).
+
+    Under the single guard already held there, `commit_grant_if_unchanged`:
+    1. compares the expectation;
+    2. calls `commit::commit_grant`;
+    3. sets the journey `Connected` and clears its secrets, in the journey table
+       held behind the same mutex (§5.2), then writes `journeys.json`.
+
+    That gives these calls production callers, so their `expect(dead_code)`
+    attributes are removed (`service.rs:335-341`, `worker.rs:247-253`). The
+    migration caller passes `None`.
+
+    The expectation is `journey.expected`. The record carries:
     - `generation = random_hex()`;
     - `token_revision = 1`;
     - `authorization_epoch = 1`;
     - `descriptor_revision` from the journey;
     - sorted, deduplicated scopes.
 
-    A `StaleConsentFenced` result gives `Failed`, reason `superseded_grant` (§6.3).
-12. **Finish.** Set `Connected` and clear the secrets. The callback then **renders
-    the sanitized outcome page itself** (200) and does not redirect again.
+    A `Fenced` result gives reason `superseded_grant` (§6.3).
+
+    If the grant is published but the journeys write fails, the store slot is
+    poisoned exactly as `write_manifest` does (`commit.rs:196-236`). The grant is
+    durable, and the journey reads as `started`/`consumed` until `callback_by`,
+    then as `expired`. The user is told "connected, status unavailable", which is
+    never a false failure.
+
+    **Every post-exchange abort revokes the fresh tokens (review H2).** Steps 9,
+    10 and 11 can each end the flow after a successful exchange. The aborts are:
+    - scope, form or refresh-token failures;
+    - `audit_unavailable`;
+    - `superseded_grant`, including a revoke that landed while the user was at
+      Google;
+    - `storage_unavailable` from the commit;
+    - any other error.
+
+    Every one of them runs, before returning, one best-effort
+    `PersonalOAuthRefresh::revoke_token`. It uses the refresh token if present,
+    otherwise the access token, sent to the pinned revocation endpoint. The
+    outcome is appended to the sanitized reason as `provider_revoked`,
+    `provider_revoke_failed` or `provider_revoke_unsupported`. For example,
+    `superseded_grant; provider_revoked`.
+
+    Tokens from an aborted exchange are never committed and never retained: they
+    live in a `Zeroizing` value dropped at the end of the handler. This is one
+    `abort_after_exchange(reason, tokens)` helper, so no abort path can skip it.
+    T-ABORT (§11.2) covers every reason.
+12. **Finish.** Once step 11 has marked the journey `Connected`, the callback
+    **renders the sanitized outcome page itself** (200). It does not redirect again.
 
     The reason is Fetch Metadata: `Sec-Fetch-Site` describes the whole redirect
     chain. A second hop, Google → `/callback` → `/complete`, would arrive as
@@ -896,21 +1021,36 @@ The single-predicate implementation that BC-1 warns against is gating on the
 caller-aware predicate at a catalogue site. It is excluded structurally, because
 `offer_for` has no catalogue caller. It is also excluded by test (T-BC1).
 
-### 9.3 Offer reuse and creation cost
+### 9.3 Offer reuse and creation cost (review H1)
 
-`offer_for` reuses the caller's journey for that account only when it is still
-`pending` and has at least 120 s left. Otherwise it creates a new journey, which
-supersedes the predecessor.
+`offer_for` never supersedes a journey that the user may be completing.
 
-A `started` journey is never reused. Otherwise a double-click, or a Back after
-reaching Google, would hand the user a link that `start` refuses. The owner can
-also re-run `start` on their own `started` journey. That rotates the state, binding
-and verifier, and invalidates the earlier authorize URL.
+**Reuse.** It returns the `connect_url` of the caller's active journey for that
+account whenever that journey can still complete:
+- a `pending` journey before `start_by`;
+- a `started` journey before `callback_by`.
 
-Reuse avoids a durable write on every refused call.
+Reuse is **read-only**. It changes no status, digest, verifier or deadline, so an
+in-flight Google consent for that journey still connects.
 
-Limit refusals from §5.3 degrade the result. The typed refusal is still returned,
-with no `connect_url`, and `data.error.retryable = true` plus `retry_after`.
+**Creation.** A new journey is minted only when:
+- no active journey exists, or
+- the active one can no longer complete (it is past its applicable deadline).
+
+The expiry sweep in `journey_transition` step 2 marks such a journey `expired`,
+so creation never has to supersede an active record. This is the H1 guarantee:
+a refused tool call in another chat tab cannot break a consent the user is in
+the middle of. T-OFFER3 covers it.
+
+**Re-used `started` links.** When the reused journey is `started`, following its
+URL re-runs `start` for the owner, which re-arms it (§4.2 step 1). That
+invalidates the earlier authorize URL, but only when the user acts on the new
+link. It never happens as a side effect of a refused call.
+
+Reuse also avoids a durable write on every refused call.
+
+**Limit refusals.** When a §5.3 limit refuses, the typed refusal is still returned,
+with no `connect_url`, `data.error.retryable = true` and `retry_after`.
 
 ### 9.4 URL-mode elicitation: not in this increment
 
@@ -950,7 +1090,9 @@ It can be added later without changing any contract here.
 | Disclosure via `connect_url` | Predicate D ∧ R ∧ B, never minted at the 16 catalogue sites | §9.2 |
 | Principal forgery in request body | `deny_unknown_fields`. The principal comes only from verified auth or the bridge. | §6.4 |
 | Host confusion (`/mcp` on the Open WebUI origin) | The hosted Host is accepted only under `/accounts/v1/` | §6.4 |
-| Resource exhaustion | `journeys_total`, `journeys_per_user`, `starts_per_minute_per_user`, and the sealed file size bound | §5.3 |
+| Resource exhaustion | Rate limits (`journeys_per_user`, `starts_per_minute_per_user`, `journeys_created_per_minute`), an active cap (`journeys_total`), a bounded record count that evicts the oldest terminal records first, and a byte cap derived from that record count. Callbacks are never refused for capacity. | §5.1, §5.3 |
+| Orphaned provider grant after a post-exchange abort | Every abort revokes the fresh tokens at the provider before it returns | §6.2 step 11 |
+| Offer churn breaking an in-flight consent | `offer_for` reuses an active journey read-only and never supersedes it | §9.3 |
 
 ## 10. Configuration (decision 9)
 
@@ -972,6 +1114,7 @@ accounts:
     journeys_total: 1024                    # design's table already fixes (config.rs:306-312
     journeys_per_user: 8                    # currently carries only store_entries and
     starts_per_minute_per_user: 10          # authority_bytes)
+    journeys_created_per_minute: 120        # new global creation-rate cap (review H3)
   adapters:
     - kind: openwebui_signed_header         # existing fields unchanged
       installation_id: spark-owui
@@ -1005,10 +1148,26 @@ accounts:
   "exact HTTPS callback" in the design's configuration table. It closes the gap
   noted in the accounts map: `redirect_uri` is currently validated but read by no
   runtime code.
-- **Adapter session.** `hosted` requires at least one adapter with a `session`
-  block.
-- **Limits.** The three limit fields reject zero and overflow, matching the rule
-  that `AccountsLimits` applies today (`config.rs:306-321`).
+- **Adapter session (review L3).** `hosted` requires **exactly one** adapter with a
+  `session` block. More than one bridge sharing the single `public_origin` rejects
+  startup, so adapter selection is deterministic (§4.2 step 1).
+- **Return paths (review L1).** Each `return_paths` entry must pass all of these
+  checks, or startup is rejected:
+  - it starts with exactly one `/`, so a `//` prefix is rejected, since browsers
+    treat it as protocol-relative;
+  - it contains no `\` anywhere, so `/\evil.example` is rejected;
+  - it contains no `:` before the first `/`, and no scheme;
+  - it has no ASCII control characters, spaces or `%` encodings of any of these;
+  - it has no `?` or `#`.
+
+  At request time `return_path` is compared **byte-exactly** against the
+  validated list; it is never normalised. T-CFG covers `//evil.example` and
+  `/\evil.example`.
+- **Limits.** The four limit fields (`journeys_total`, `journeys_per_user`,
+  `starts_per_minute_per_user`, and the new `journeys_created_per_minute`,
+  default 120) reject zero and overflow. That is the rule `AccountsLimits`
+  already applies (`config.rs:306-321`). `records_max` is derived, not configured
+  (§5.1).
 - **Secrets.** The client secret stays an `env:` reference, resolved late through
   `SecretSource` (`src/personal_accounts/provider.rs:147-170`).
 
@@ -1019,30 +1178,35 @@ accounts:
 There are no mock crates (`Cargo.toml:170-176`). Every fake below is an in-process
 axum server on `127.0.0.1:0`.
 
-**Fake authorization server (HTTPS).**
-- It extends the rustls loopback fixture in
-  `src/personal_accounts/provider/wire_tests/fixture.rs:106-296`.
-  - That fixture is `pub(super)` today. It moves to a `#[cfg(test)]` module at
-    `src/personal_accounts/provider/test_support.rs`, visible as
-    `pub(in crate::personal_accounts)`.
-  - This is a test-only visibility change. It is listed in §12.
-- The client is `GatewayProviderHttp::for_test` (`http.rs:88-93`) with the
-  fixture CA added. That is the existing pattern in
-  `wire_tests/gateway.rs:153` and `:265`.
-- Endpoints:
-  - `/.well-known/openid-configuration`
-  - `/token`: scripted responses for `authorization_code`, with a recorded
-    request log
-  - `/revoke`: scripted as 200, 400 or 503
+**Fake authorization server (in-process, no fixture move).**
+- The router-level tests get their own fake. It is an axum `Router` that serves
+  `/.well-known/openid-configuration`, `/token` and `/revoke`, and it is reached
+  through a test-only `ProviderHttp` implementation.
+  - That implementation dispatches `get_metadata`/`post_token` to the router with
+    `tower::ServiceExt::oneshot`, with no socket and no TLS.
+  - It lives in `src/gateway/router/accounts_tests/fake_provider.rs`.
+  - `ProviderHttp` is already `pub(crate)` (`provider.rs:108`), so nothing is
+    widened. The existing provider wire fixture
+    (`provider/wire_tests/fixture.rs`) stays where it is, unchanged.
+- `/token` gives scripted responses for `authorization_code` and records a request
+  log. `/revoke` is scripted to return 200, 400 or 503, and records every token it
+  receives.
+- Real TLS, pinning and no-redirect behaviour of the production transport are
+  already covered by the existing wire tests (`wire_tests/gateway.rs:153`, `:265`).
+  The new provider methods get form-shape unit tests in the existing
+  `provider_tests.rs` with its `TraceHttp` double (`provider_tests.rs:86-132`).
 - The authorize step is not served. A test reads the 303 `Location` from `start`,
   asserts its query, and builds the callback URL itself, which is what a browser
   would do after consent.
 
 **Fake Open WebUI session endpoint (plain HTTP, loopback).**
-- `GET /api/v1/auths/` maps `Bearer <t>` to a scripted
-  `{id, expires_at, token, email, name, role}`.
-  - The extra fields are present deliberately, to prove they are dropped.
-- It can also answer 401, 500, slow (beyond the 5 s timeout) or oversize.
+- A real listener on `127.0.0.1:0`, because the bridge's `reqwest` client rules
+  (redirect policy, proxy, timeout, body cap) must be exercised on a real socket.
+- `GET /api/v1/auths/` maps `Bearer <t>` to the captured v0.9.6 body (§4.2 step 4,
+  review L7), with synthetic values.
+  - The extra fields are kept on purpose, to prove they are dropped.
+- It can also answer: 401, 500, a 302 to a second recording listener, slow
+  (beyond 5 s), or oversize (more than 64 KiB).
 - It records every `Authorization` value it receives.
 
 **Gateway harness.**
@@ -1077,7 +1241,7 @@ Each row gives:
 | T-C02c | A's journey, correct state, B's binding cookie or no cookie (swapped cookie) | 404 | `failed/browser_mismatch`. Exchange count 0. A second attempt with the right cookie is also refused (terminal). | Binding check skipped when the cookie is absent |
 | T-C02d | Cross-origin `start`/DELETE (`Sec-Fetch-Site: cross-site`, or `Origin: https://evil`). POST body with a `principal` field. | 404 | 403 from the origin guard for start/DELETE. 400 `invalid_request` for the body. | Exemption widened to all `/accounts/v1/*` |
 | T-A07 | Email-only match: the fake Open WebUI returns A's email with a different `id`. A link opened with no Open WebUI session. | 404 | Both refused before any provider redirect | Principal derived from `email` |
-| T-C03a | Callback after `expires_at` (fixed clock +301 s) (C03, expired) | 404 | Status `expired`. Exchange count 0. `lookup` unchanged. | Expiry compared with `>` against the wrong field, or checked after consume |
+| T-C03a | Callback after `callback_by` (fixed clock: start at +10 s, callback at +611 s); separately a `start` after `start_by` (+301 s) (C03, expired) | 404 | Status `expired`. Exchange count 0. `lookup` unchanged. | Expiry compared with `>` against the wrong field, or checked after consume |
 | T-C03b | Same callback URL twice (replayed) | 404 | Second: exchange count stays 1, `replay_refused: true` | `consumed` set after exchange instead of before |
 | T-C03c | Two concurrent callbacks, one held at the fake `/token` by the fixture `Pause` | 404 | Exactly one exchange. The other is refused as a replay. | Consume split into read-then-write across two lock acquisitions |
 | T-C03d | Consume, then crash before exchange (`faults` boundary); custody `shutdown` (`worker.rs:273-292`) releases the file locks; reopen, replay | 404 | Refused. Exchange count 0. The journeys file on disk has no verifier. | `consumed` kept in memory only |
@@ -1086,10 +1250,10 @@ Each row gives:
 | T-C04b | `error=server_error`; unknown error code | 404 | `failed/provider_unavailable`, `failed/provider_error`. The grant is unchanged. | Raw `error` string echoed |
 | T-C04c | Persistence after connect, cancel, error and expiry: decrypt `journeys.json` with the test key | No file exists | For every terminal record, `binding_digest` and `pkce_verifier` are `None`, and no raw state, code or token byte appears in the plaintext. Status is still queryable. | Secrets cleared only on success |
 | T-BC2 | Never-attempted vs declined: B with no journey vs B after `access_denied` | Indistinguishable (`Absent` either way) | `lookup` is `Absent` in both. The status API distinguishes them: `404 not_found` vs `cancelled`. | — (pins the BC-2 decision) |
-| T-C05a | Connected at gen1. A journey is created (expects `Connected(gen1)`). DELETE revokes. The journey is NOT cancelled. Callback. (C05, stale generation) | 404 | `failed/superseded_grant`. `lookup(A)` is `Revoked`. Exchange count 1 (the fence acts after the exchange). | Commit via unconditional `commit_grant` |
+| T-C05a | Connected at gen1. A journey is created (expects `Connected(gen1)`). DELETE revokes; the journey is NOT cancelled. Then the callback runs. (C05, stale generation) | 404 | `failed/superseded_grant; provider_revoked`. `lookup(A)` is `Revoked`. Exchange count 1 (the fence acts after the exchange). The fake `/revoke` received the freshly exchanged refresh token exactly once (review H2). | Commit via unconditional `commit_grant`. Fence abort without revocation. |
 | T-C05b | Two journeys for different accounts of A. Re-consent on one. Callback of the older stale journey for the same account. | 404 | Fenced. The newer generation survives. | Expectation captured at callback time instead of creation |
 | T-C05c | Fake `/token` returns fewer scopes; `token_type=mac`; no `refresh_token` with `access_type=offline` | 404 | `failed/scope_missing`, `failed/unexpected_token_form`, `failed/no_refresh_token`. Nothing committed. | Scope check uses intersection instead of superset |
-| T-C06a | Nine creations for one principal (`journeys_per_user`=8), with a fixed clock | 404 | The 9th gets 429 `rate_limited` with `Retry-After`. After expiry (+301 s), creation succeeds. | Expiry sweep not run before counting |
+| T-C06a | Nine POST creations for one principal within 10 minutes, each superseding the last. `journeys_per_user` = 8, as a rate. Fixed clock. | 404 | The 9th gets 429 `rate_limited`, with `Retry-After` set to the seconds until the 1st leaves the window. At 10 min + 1 s, creation succeeds. A different principal is unaffected. | Limit implemented as a count of non-terminal rows (unreachable under one-active), or keyed globally |
 | T-C06b | `journeys_total` = 2, three principals | 404 | Third gets 503 `capacity_exceeded` with `Retry-After` | Global bound unchecked |
 | T-C06c | A has a pending journey for account X, and B has one for X. A creates a new one for X. | 404 | A's old journey is `superseded`, A's journey for account Y is untouched, and B's journey is untouched. | Supersede keyed on `account_id` only |
 | T-C07a | Anonymous status and DELETE; B asks for A's journey status; B calls DELETE with A's `account_id` | 404 | 401 for anonymous. `not_found` for B's status request, with no `account_id` in the body. B's DELETE revokes only B's own key (a no-op), and A stays `Connected`. | Status lookup without an owner check |
@@ -1100,10 +1264,22 @@ Each row gives:
 | T-OFFER | Unconnected A calls `gateway_invoke`, the direct `/mcp/{backend}`, and a capability tool | Refusal with no `data` | Each error carries `data.error.code == "account_not_connected"`, `connect_url` starting with `public_origin`, and the URL in `message`. At most one journey is created (reused). | Offer minted in `resolve_propagation_credential` (T-BC1 then fails) |
 | T-OFFER2 | Same, but with an OIDC-verified principal, and with `accounts.hosted` absent | Refusal, no data | No `connect_url`. With hosted absent, the message is byte-identical to today's text. | Predicate B dropped |
 | T-BC1 | Unconnected A calls every catalogue method: `gateway_search_tools`, `gateway_list_tools` (single and all), `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`, `resources/read`, `prompts/get`, `logging/setLevel`, the spec preview, surfaced tools | n/a | Zero journeys created (store probe). No response contains `accounts/v1`. | Offer attached at any of the 16 sites |
-| T-GUARD | Callback with `Sec-Fetch-Site: cross-site, Mode: navigate, Dest: document`; the same with `Mode: cors`; the same path with POST; `/mcp` with `Host: chat.raxor.ai` | Callback 403; `/mcp` 403 | Only the first passes the guard. `/mcp` is still 403 on the hosted host. The existing `Origin: null` test stays green. | Exemption by prefix, or Host allowed globally |
+| T-GUARD | Realistic Google-callback headers (review L9): no `Origin`, `Host: chat.raxor.ai` (= `public_origin`), `Sec-Fetch-Site: cross-site`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, on `GET /accounts/v1/callback?…`. Variants: `Mode: cors`; `Dest: iframe`; POST to the same path; `Origin: null`. Also `/mcp` with `Host: chat.raxor.ai`. | Callback 403; `/mcp` 403 | Only the first request reaches the handler. Every variant stays 403, and so does `/mcp` on the hosted host. The existing `Origin: null` test stays green. | Exemption by prefix. `Dest` not checked. Host allowed globally. |
 | T-GUARD2 | The callback outcome page is the landing step. Send a `cross-site` navigate callback. Separately, send a direct `cross-site` request to `/accounts/v1/complete`. | n/a | The callback returns 200 with the outcome HTML and **no** 3xx. The direct `/accounts/v1/complete` request is still 403. | Callback 303s to `/complete` (the guard refuses the second hop) |
 | T-LEAK | `tracing` capture layer across T-C01 and T-REV | n/a | No captured event contains the Open WebUI token, code, state, verifier, access or refresh token, or `email` | Default `TraceLayer` applied to `/accounts/v1` |
-| T-CFG | Unknown field under `hosted`/`session`; `redirect_uri` ≠ origin + callback path; `http` non-loopback `user_endpoint`; omitted `hosted` | n/a | The first three reject startup. Omitted `hosted`: route 404, and the refusal text is unchanged. | `deny_unknown_fields` missing |
+| T-OFFER3 | A's journey is `started`, with the fake Google step pending. A makes a second refused dispatch for the same account, then the in-flight callback arrives (review H1). | 404 | The refused dispatch returns the **same** `journey_id`/`connect_url`. Status, `state_digest`, `binding_digest`, verifier and `callback_by` are byte-identical before and after. The callback then connects. | `offer_for` supersedes or re-arms a started journey |
+| T-ABORT | One case per post-exchange abort: `scope_missing`, `unexpected_token_form`, `no_refresh_token`, `audit_unavailable`, `superseded_grant` (after DELETE), and `storage_unavailable` on commit (fault boundary) (review H2) | 404 | In every case, nothing is committed, the fake `/revoke` receives the exchanged token exactly once, and the reason ends with `provider_revoked`. With `/revoke` scripted to 503, the reason ends with `provider_revoke_failed`. With no revocation endpoint, it ends with `provider_revoke_unsupported`. | Any abort path that returns before `abort_after_exchange` |
+| T-FLOOD | `journeys_total` = 4, so `records_max` = 16. Rate limits are raised for this test. Create and terminate 40 journeys across principals while 3 other journeys are `started` (review H3). | 404 | The record count never exceeds 16, and the oldest terminal records are evicted first. All 3 started journeys still complete through their callbacks. The sealed file stays under the cap. With the default `journeys_created_per_minute`, creation beyond the cap gets 503 with `Retry-After`. | Active records evicted. Byte cap not derived from `records_max`. Callbacks refused at capacity. |
+| T-BRIDGE-REDIRECT | Fake OWUI answers 302 to a second recording listener (review M3) | 404 | Start is refused. The second listener receives **zero** requests. | `Policy::none()` removed (reqwest follows redirects by default) |
+| T-BRIDGE-PROXY | `HTTP_PROXY`/`HTTPS_PROXY` point at a recording listener for this test | 404 | The proxy receives nothing, and the fake OWUI receives the call. | `no_proxy()` removed |
+| T-BRIDGE-STATUS | Fake OWUI answers 201, 204, 401 and 500, each with a valid JSON body | 404 | All are refused. | `is_success()` instead of `== 200` |
+| T-BRIDGE-SIZE | A body of 64 KiB + 1 byte with a valid `id` prefix | 404 | Refused, with no partial parse | Cap removed, or truncating read |
+| T-BRIDGE-TIMEOUT | Fake OWUI sleeps past 5 s | 404 | Refused at about 5 s | Timeout removed |
+| T-POST-NOBRIDGE | POST /accounts/v1/journeys by an OIDC principal, and by an adapter principal whose adapter has no `session` (review L2) | 404 | 403 `forbidden`. The journeys file and the rate counters are unchanged. | Limits consumed before the bridge predicate |
+| T-COOKIE | In one browser, A starts journeys for accounts X and Y, then both callbacks arrive in reverse order (review L4) | 404 | Both connect. Each `Set-Cookie` name carries its own journey id. | A single shared cookie name |
+| T-HDR | An unrouted `GET /accounts/v1/nope`, a 405 on `/accounts/v1/callback`, the start error page, and the outcome page (review L6) | 404 | Every response carries `no-store`, `no-referrer` and the CSP. | Headers set per handler instead of by the layer |
+| T-CT | A unit test uses a `cfg(test)` counter to check that the state lookup, binding and owner comparisons all go through `ConstantTimeEq` (review L5) | n/a | All three paths use it. | `==` on digest strings |
+| T-CFG | Bad config variants: an extra field under `hosted`/`session`; `redirect_uri` ≠ origin + callback path; `http` with a non-loopback `user_endpoint`; two `session` adapters; `return_paths` entries `//evil.example`, `/\evil.example`, `https://evil.example`, or one with a control character (reviews L1, L3). Also a POST with `return_path: "//evil.example"` against a valid list, and a config with `hosted` omitted. | n/a | Each bad config rejects startup. The POST gets 400 `invalid_request`. With `hosted` omitted, the route is 404 and the refusal text is unchanged. | `deny_unknown_fields` missing. Prefix check is only `starts_with("/")`. Comparison normalises. |
 
 Element coverage:
 - connect: T-C01, T-OFFER
@@ -1208,7 +1384,9 @@ a real browser.
 | L02-3 | B repeats, then A and B interleave calls and discovery | Each sees only their own discriminator |
 | A07-live | A's `connect_url` opened in Carla's browser session | Refusal page, no Google redirect |
 | L03-cancel | A new journey for B, where B clicks "Cancel" at Google | Completion page reads "cancelled". Status JSON `cancelled/user_denied`. B's existing grant still works. |
-| L03-expired | Open a `connect_url` 6 minutes after the refusal; re-submit a captured callback URL from browser history | "expired" page. Status shows `replay_refused`. No new grant. |
+| L03-expired-start | Sequence 1 (review M2). Carla gets a refusal. Leave its `connect_url` unclicked for 6 minutes (past `start_by`), then open it. | "expired" page with no Google redirect. The journey status is `expired`. The next refused call hands out a **new** `journey_id`. |
+| L03-expired-callback | Sequence 2. B starts a journey and stops on Google's consent screen for more than 10 minutes (past `callback_by`), then approves. | Outcome page reads "expired". Status is `expired`. No new grant: B's previous state is unchanged. |
+| L03-replay | Sequence 3, a different journey. A completes a connect normally, then re-opens the callback URL from browser history, which is the same `code` and `state`. | Outcome page reads "already used". Status shows `connected` and `replay_refused: true`. A's grant generation is unchanged. |
 | L03-refresh | Natural expiry: wait for the Google access token to lapse (about 60 min, `expires_in`), then A calls a tool. No clock-skew mechanism is built. | Sanitized log line `refresh committed` (no token). The tool result arrives through Open WebUI. |
 | L03-revoke | A presses "Disconnect" on `/accounts/v1/complete` | Response JSON with `provider_revocation: confirmed`. A's next call is refused with a reconnect link. B still works. A's Google account permissions page no longer lists the app. |
 | L03-restart | Restart the gateway, repeat an A call and a B call | Grants survive. The replay is still refused. |
@@ -1267,7 +1445,7 @@ amendments this design makes to the earlier design.
    reviewed interpretation, not a silent reinterpretation.
 8. **`wire_tests.rs:9-13` and `wire_tests/gateway.rs:7` carry stale comments.**
    They say "PROPOSAL ONLY … does NOT compile", but the module is wired in at
-   `provider.rs:53`. Fix them when the fixture moves (slice 2).
+   `provider.rs:53`. Fix them in slice 3, when the new provider methods add tests nearby. The fixture itself does not move.
 9. **C04 "terminal journey code/state/verifier bytes are removed" (reviewed
    interpretation).** After the terminal write, no raw state, code or verifier is
    persisted. The keyed `state_digest` is kept until GC (§3). Without it, decision
@@ -1318,12 +1496,12 @@ users into a flow that cannot yet be completed.
 
 | # | Slice | Tests | Removes `expect(dead_code)` at |
 |---|---|---|---|
-| 1 | Config types: `hosted`, `session`, three limits, `authorize_extra`, plus validation. Nothing is mounted. | T-CFG | — |
-| 2 | Journey table: sealed file, `journey_transition`, limits, GC. Fixture moved to test support. | T-C06a/b/c, T-C04c (store level), restart unit of T-C03d | — |
-| 3 | Provider: `authorize_url`, `exchange_code`, `revoke_token`; `Arc` sharing | Unit tests against the fake AS: form shapes, pinned endpoints, `send_resource_parameter` | — |
+| 1 | Config types: `hosted`, `session`, four limits, `authorize_extra`, plus validation. Nothing is mounted. | T-CFG | — |
+| 2 | Journey table: sealed file, `journey_transition`, limits, record bound and eviction, GC. | T-C06a/b/c, T-FLOOD (store level), T-C04c (store level), T-CT, restart unit of T-C03d | — |
+| 3 | Provider: `authorize_url`, `exchange_code`, `revoke_token`; `Arc` sharing | Form-shape unit tests in `provider_tests.rs` with `TraceHttp`: pinned endpoints, `send_resource_parameter`, revocation form | — |
 | 4 | Revoke: `revoke_capturing`, DELETE (API credential), slot eviction, audit | T-REV (API variant), T-REV2, T-C07c, T-C07a (DELETE part) | `worker.rs:241-245`, `service.rs:326-329`, `mod.rs:355-360`, `commit.rs` revoke |
-| 5 | Hosted routes: POST/status/start/callback/complete, bridge, origin-guard changes, trace isolation, browser DELETE | T-C01, T-C02a–d, T-A07, T-C03a–e, T-C04a/b, T-BC2, T-C05a–c, T-C07a/b, T-GUARD, T-LEAK, T-REF, T-C01b | `service.rs:335-342`, `worker.rs:247-253` (`commit_grant_if`), `service.rs` `StaleConsentFenced` |
-| 6 | Typed refusal plus `offer_for` at the three dispatch sites; comment rewrites (§12 item 3) | T-OFFER, T-OFFER2, T-BC1 | — |
+| 5 | Hosted routes: POST/status/start/callback/complete, bridge, origin-guard changes, trace isolation, browser DELETE, one-lock commit+Connected, `abort_after_exchange`, header layer | T-C01, T-GUARD2, T-ABORT, T-BRIDGE-*, T-POST-NOBRIDGE, T-COOKIE, T-HDR, T-C02a–d, T-A07, T-C03a–e, T-C04a/b, T-BC2, T-C05a–c, T-C07a/b, T-GUARD, T-LEAK, T-REF, T-C01b | `service.rs:335-342`, `worker.rs:247-253` (`commit_grant_if`), `service.rs` `StaleConsentFenced` |
+| 6 | Typed refusal plus `offer_for` at the three dispatch sites; comment rewrites (§12 item 3) | T-OFFER, T-OFFER2, T-OFFER3, T-BC1 | — |
 | 7 | Live run (§11.4) and evidence | L01–L04 | — |
 
 Slices 1 to 4 ship no user-visible change while `hosted` is absent. Slice 4's
@@ -1341,4 +1519,31 @@ DELETE accepts only the API credential until slice 5 adds the bridge.
 | Journeys write contention on the authority mutex | Low | Latency on refusals | Offer reuse (§9.3). Rate limits. No IO in the closure beyond one small file write. |
 | Missing `journeys.json` treated as empty after tampering | Low | None beyond refusing callbacks | Fails closed. Stale-copy rollback is additionally fenced by `commit_grant_if` (§5.2). |
 | Provider revoke fails silently to the user | Medium | Grant still live at Google | `provider_revocation: failed` is shown on the page, with a link to the Google permissions page. The local tombstone blocks gateway use regardless. |
-| Test fixture visibility change needs approval (§12) | — | Slice 2 blocked | Asked up front in this document |
+| The captured OWUI `GET /api/v1/auths/` body differs from the upstream-source reading (for example, a non-string `id`) | Low | The bridge fixture is wrong, so tests pass against a fiction | Capture from Spark before bridge tests are finalised (§4.2 step 4, review L7) |
+| A refused tool call supersedes a journey the user is completing | Removed by design | Consent silently lost | Read-only reuse (§9.3, review H1), covered by T-OFFER3 |
+| Terminal-record flood wedges the feature | Low | Callbacks refused | Terminal-first eviction, a derived byte cap and a global creation cap (§5.1, §5.3, review H3), covered by T-FLOOD |
+
+## 16. Review log
+
+The design review returned SHIP-WITH-FIXES from both reviewers (grok, kimi). This
+table records where each finding is addressed.
+
+| ID | Source | Finding | Addressed in |
+|---|---|---|---|
+| H1 | grok | `offer_for` must reuse an active pending or started journey and never supersede one that can still complete | §3 (expiry bullets), §5.3 (one-active row), §9.3; test T-OFFER3 |
+| H2 | grok, kimi | Every post-exchange abort revokes the fresh tokens at the provider | §6.2 step 11 (`abort_after_exchange`), §9.5; tests T-ABORT, T-C05a |
+| H3 | kimi | Record bound, global creation cap, terminal-first eviction, derived byte cap; callbacks never refused at capacity | §5.1 (size bound), §5.3, §10; test T-FLOOD |
+| M1 | grok | `journeys_per_user` becomes a per-principal creation rate | §5.3; test T-C06a |
+| M2 | grok | Separate L03 sequences for expired and for replay-refused | §11.4 (L03-expired-start, L03-expired-callback, L03-replay) |
+| M3 | grok | Session-bridge client rules each get a named test | §4.2 step 3; tests T-BRIDGE-REDIRECT, -PROXY, -STATUS, -SIZE, -TIMEOUT |
+| M4 | kimi | Separate deadlines: `start_by` 300 s, `callback_by` 600 s from start | §3, §4.2 steps 1 and 7, §5.1 record, §5.2, §6.2 step 2; test T-C03a |
+| L1 | grok | Strict `return_paths` validation | §10; test T-CFG |
+| L2 | kimi | POST without a session bridge is 403 and uses no capacity | §5.3; test T-POST-NOBRIDGE |
+| L3 | kimi | Deterministic adapter selection | §4.2 step 1, §10 (exactly one bridge adapter); test T-CFG |
+| L4 | kimi | Binding cookie named per journey | §4.2 step 7; test T-COOKIE |
+| L5 | kimi | Constant-time comparison for state and binding digests | §4.2 step 7; test T-CT |
+| L6 | kimi | One header layer covers the whole browser router | §4.3; test T-HDR |
+| L7 | grok | Pin a captured OWUI 0.9.6 session body as the fixture | §4.2 step 4, §11.1, §15 |
+| L8 | grok | Journey set to `Connected` in the same lock acquisition as the commit | §6.2 step 11 |
+| L9 | grok | T-GUARD uses the realistic Google-callback header set | §11.2 T-GUARD |
+| — | kimi | §11.1 and §15 still assumed the fixture moves | §11.1 (in-process fake provider), §12 item 8, §14 slices 2 and 3, §15 |
