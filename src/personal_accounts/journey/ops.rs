@@ -16,6 +16,9 @@ use crate::personal_accounts::config::AccountDescriptor;
 use crate::personal_accounts::service::ConsentExpectation;
 use crate::personal_accounts::{AccountError, PersonalAccountStore, StoreConfig};
 
+#[path = "offer.rs"]
+mod offer;
+
 /// Length of a `descriptor_revision` (hex SHA-256).
 const REVISION_LEN: usize = 64;
 
@@ -282,16 +285,26 @@ impl PersonalAccountStore {
         descriptor: &AccountDescriptor,
         return_path: String,
     ) -> Result<JourneyId, JourneyError> {
+        let new = self.connect_request(owner, descriptor, return_path)?;
+        self.create_journey(now, limits, new)
+    }
+
+    /// The request a connect journey is created or offered from.
+    fn connect_request(
+        &self,
+        owner: AccountKey,
+        descriptor: &AccountDescriptor,
+        return_path: String,
+    ) -> Result<NewJourney, JourneyError> {
         let descriptor_revision =
             super::super::migration_revision::descriptor_revision(descriptor).map_err(storage)?;
         let expected = ConsentExpectation::captured(&self.lookup(&owner).map_err(storage)?);
-        let new = NewJourney {
+        Ok(NewJourney {
             owner,
             descriptor_revision,
             expected,
             return_path,
-        };
-        self.create_journey(now, limits, new)
+        })
     }
 
     /// Status for the journey's own principal only. Another principal gets

@@ -57,6 +57,16 @@ pub(crate) trait JourneyService: Send + Sync {
         return_path: String,
     ) -> JourneyResult<JourneyCreated>;
 
+    /// The dispatch-site offer: reuse `owner`'s active journey for the
+    /// account, or mint one when none can still complete (§9.3, H1).
+    async fn offer(
+        &self,
+        limits: JourneyLimits,
+        owner: AccountKey,
+        descriptor: AccountDescriptor,
+        return_path: String,
+    ) -> JourneyResult<JourneyCreated>;
+
     /// Status of `id` for the principal `(authority, subject)` only.
     async fn status(
         &self,
@@ -106,6 +116,25 @@ where
                 .map(|journey_id| JourneyCreated {
                     journey_id,
                     expires_at: now.saturating_add(START_WINDOW),
+                }))
+        })
+        .await
+    }
+
+    async fn offer(
+        &self,
+        limits: JourneyLimits,
+        owner: AccountKey,
+        descriptor: AccountDescriptor,
+        return_path: String,
+    ) -> JourneyResult<JourneyCreated> {
+        self.offload(move |service| {
+            Ok(service
+                .store()
+                .offer_connect_journey(now_seconds(), &limits, owner, &descriptor, return_path)
+                .map(|(journey_id, expires_at)| JourneyCreated {
+                    journey_id,
+                    expires_at,
                 }))
         })
         .await

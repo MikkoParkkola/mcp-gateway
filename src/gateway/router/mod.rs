@@ -27,7 +27,7 @@ use crate::security::firewall::Firewall;
 
 mod accounts;
 use crate::personal_accounts::AccountHandles;
-pub(crate) use accounts::account_handles_of;
+pub(crate) use accounts::{ConnectOffers, account_handles_of};
 mod authorization;
 pub use authorization::CallerStanding;
 pub(crate) use authorization::{
@@ -323,6 +323,12 @@ pub(crate) fn create_router_with_accounts(
     // no environment lookup happens.
     let openwebui_adapter =
         OpenWebUiAdapterState::from_config(&startup_config, &startup_config.env_overlay());
+    // The dispatch sites offer from the same custody the owner routes use.
+    if let Some(handles) = &accounts {
+        let live = Arc::clone(&state.live_config);
+        let offers = ConnectOffers::new(Arc::clone(&handles.journeys), live);
+        state.meta_mcp.install_connect_offers(offers);
+    }
     // Merged outside the main `TraceLayer` below: its span records the full
     // URI, and the callback's query carries the code and state (§4.3).
     let accounts_router = accounts::router(accounts, &startup_config, |owner| {

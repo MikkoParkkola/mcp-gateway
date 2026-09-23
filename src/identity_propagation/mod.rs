@@ -33,10 +33,6 @@
 //! - IDP.7 session isolation: [`IdentityPropagationConfig::validate`] refuses a
 //!   configuration where a propagation-required backend reuses a shared MCP
 //!   session (would leak backend-side state across users).
-//!
-//! Wiring the framework into the live request path (carrying the full
-//! `VerifiedIdentity` through dispatch, per-user transport/session scoping,
-//! identity-aware cache keys) is the follow-up slice.
 
 use std::sync::Arc;
 
@@ -135,9 +131,11 @@ pub enum PropagationError {
     /// The store ANSWERED "absent": no grant exists for this principal and
     /// backend. Separate from [`Self::Refuse`] so the `idp_refuse` audit record
     /// can tell absence from revocation from a busy custody, which used to
-    /// arrive as one string. Not an offer — no consent URL and no promised
-    /// flow (ADR-008 Slice C, MIK-6745).
+    /// arrive as one string. Carries no URL itself: only a dispatch site may
+    /// turn it into a connect offer (MIK-6745 design §9.2, BC-1).
     AccountNotConnected(String),
+    /// Revoked or reconnect-required; displays exactly as the `Refuse` it was.
+    AccountReconnectRequired(String),
     /// The propagation configuration is invalid (operator error).
     Misconfigured(String),
     /// The tamper-evident transparency-log audit write failed.
@@ -152,7 +150,9 @@ pub enum PropagationError {
 impl std::fmt::Display for PropagationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Refuse(m) => write!(f, "identity propagation refused (fail-closed): {m}"),
+            Self::Refuse(m) | Self::AccountReconnectRequired(m) => {
+                write!(f, "identity propagation refused (fail-closed): {m}")
+            }
             Self::AccountNotConnected(m) => write!(f, "no connected account (fail-closed): {m}"),
             Self::Misconfigured(m) => write!(f, "identity propagation misconfigured: {m}"),
             Self::AuditFailed(m) => write!(

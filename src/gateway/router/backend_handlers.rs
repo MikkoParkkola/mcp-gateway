@@ -681,6 +681,7 @@ pub(super) async fn backend_handler(
     // default session bucket — passthrough forwards the caller's own credential
     // inline and is gated to trusted internals).
     let mut identity_key: Option<String> = None;
+    let mut typed = None;
     let propagated_headers: Vec<(String, String)> = if isolation_guarded {
         // Fetched once so both the passthrough-vs-minting branch below and the
         // audit write (MIK-6740) share a single lookup/clone of the backend's
@@ -726,7 +727,7 @@ pub(super) async fn backend_handler(
                     identity_key = binding;
                     Ok(headers)
                 }
-                Err(e) => Err(e.to_string()),
+                Err(e) => Err(e.to_string()).inspect_err(|_| typed = Some(e)),
             }
         };
         let subject = audit_subject(verified_identity.as_ref());
@@ -812,12 +813,8 @@ pub(super) async fn backend_handler(
                         "identity-propagation refuse audit write failed"
                     );
                 }
-                return build_http_error_response(
-                    Some(id.clone()),
-                    -32003,
-                    e,
-                    StatusCode::FORBIDDEN,
-                );
+                let (rid, who) = (Some(id.clone()), verified_identity.as_ref());
+                return state.meta_mcp.direct_refusal(rid, e, typed, who).await;
             }
         }
     } else {

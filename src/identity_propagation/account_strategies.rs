@@ -449,7 +449,8 @@ impl AccountStrategyRegistry {
                 );
                 return Err(Error::Config(format!(
                     "account '{descriptor_id}' produced no credential for this caller: {reason}"
-                )));
+                ))
+                .typed_by(&error, Some(descriptor_id)));
             }
         };
 
