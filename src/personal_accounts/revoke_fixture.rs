@@ -25,8 +25,8 @@ use super::provider::{
 use super::service::AccountServiceError;
 use super::worker::{CustodyError, CustodyHandle};
 use super::{
-    AccountKey, AccountReleaseAudit, AccountRevocation, GrantRecord,
-    GrantVersion, PersonalAccountStore, StoreConfig,
+    AccountKey, AccountReleaseAudit, AccountRevocation, GrantRecord, GrantVersion,
+    PersonalAccountStore, StoreConfig,
 };
 
 pub(crate) const ISSUER: &str = "https://accounts.fixture.test";
@@ -132,8 +132,10 @@ pub(crate) enum Seed {
     Revoked,
 }
 
-type FixtureCustody =
-    CustodyHandle<Arc<PersonalOAuthRefresh<FakeHttp, SystemClock, FixedSecret>>, AccountReleaseAudit>;
+type FixtureCustody = CustodyHandle<
+    Arc<PersonalOAuthRefresh<FakeHttp, SystemClock, FixedSecret>>,
+    AccountReleaseAudit,
+>;
 
 /// Running custody plus what the fake provider saw.
 pub(crate) struct RevokeFixture {

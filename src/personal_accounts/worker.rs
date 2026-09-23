@@ -39,11 +39,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use super::revoke::RevocationMaterial;
 use super::service::{
     AccountService, AccountServiceError, ConsentExpectation, CredentialLease,
     CredentialReleaseObserver, RefreshProvider, ReleasedCredentials,
 };
-use super::revoke::RevocationMaterial;
 use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore, StoreConfig};
 
 /// Default in-flight bound when a caller does not choose one.
