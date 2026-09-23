@@ -6,11 +6,7 @@
 //! `#[cfg(test)] mod wire_tests;` in `src/personal_accounts/provider.rs`.
 //! Two submodules beside it: `wire_tests/fixture.rs` (the recording TLS server,
 //! its pause barrier and the clients under test) and `wire_tests/gateway.rs`
-//! (startup over the wire). PROPOSAL ONLY — not applied to the worktree, and it
-//! does NOT compile there yet: it names constructor seams that do not exist
-//! (`GatewayProviderHttp::for_test`, `Gateway::new_evaluated_with_account_http`,
-//! `start_custody_with_http`) plus one re-export, all specified in
-//! `minimal-seams.patch.json`.
+//! (startup over the wire).
 //!
 //! WHAT THESE PROVE THAT THE POLICY TESTS DO NOT. The approved policy tests
 //! drive a fake `ProviderHttp`, so every claim about TLS, redirects, body bounds

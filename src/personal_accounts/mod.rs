@@ -476,7 +476,11 @@ impl service::CredentialReleaseObserver for AccountReleaseAudit {
 }
 
 /// The one custody type a gateway holds.
-pub(crate) type GatewayCustody = worker::CustodyHandle<GatewayRefreshProvider, AccountReleaseAudit>;
+///
+/// The provider sits behind an `Arc` so the consent journey can share the
+/// same pinned snapshot custody refreshes against.
+pub(crate) type GatewayCustody =
+    worker::CustodyHandle<std::sync::Arc<GatewayRefreshProvider>, AccountReleaseAudit>;
 
 /// Why managed custody could not be brought up.
 ///
@@ -545,7 +549,7 @@ pub(crate) async fn start_custody_with_http(
     let handle = tokio::task::spawn_blocking(move || {
         worker::CustodyHandle::start(
             store,
-            refresh,
+            std::sync::Arc::new(refresh),
             AccountReleaseAudit,
             worker::DEFAULT_CAPACITY,
         )

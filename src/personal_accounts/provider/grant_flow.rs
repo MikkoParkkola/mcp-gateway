@@ -14,10 +14,16 @@
     )
 )]
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use rand::RngExt as _;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use url::Url;
 
-use super::{Clock, PersonalOAuthRefresh, ProviderHttp, SecretSource};
+use super::{Clock, PersonalOAuthRefresh, ProviderHttp, SecretSource, required};
+use crate::oauth::AuthorizationServerMetadata;
+use crate::personal_accounts::config::{AccountDescriptor, DescriptorMode};
 use crate::personal_accounts::service::{ProviderRefreshError, TokenRefresh};
 
 /// Extra authorize-request parameters, as a CLOSED vocabulary.
@@ -67,50 +73,202 @@ pub(crate) enum ProviderRevocation {
     Unsupported,
 }
 
-/// STUB: red commit only.
+impl AccessType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Offline => "offline",
+            Self::Online => "online",
+        }
+    }
+}
+
+impl Prompt {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Consent => "consent",
+            Self::SelectAccount => "select_account",
+            Self::None => "none",
+        }
+    }
+}
+
+impl TokenTypeHint {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RefreshToken => "refresh_token",
+            Self::AccessToken => "access_token",
+        }
+    }
+}
+
+/// A fresh OAuth `state`: 256 bits, unpadded base64url (43 characters).
 pub(crate) fn new_state() -> String {
-    String::new()
+    random_256()
 }
 
-/// STUB: red commit only.
+/// A fresh PKCE `code_verifier`: 256 bits, unpadded base64url (43 characters,
+/// inside RFC 7636's 43..=128 range).
 pub(crate) fn new_code_verifier() -> String {
-    String::new()
+    random_256()
 }
 
-/// STUB: red commit only.
+/// RFC 7636 §4.2 `S256`: `BASE64URL(SHA256(ASCII(code_verifier)))`.
 pub(crate) fn code_challenge_s256(verifier: &str) -> String {
-    verifier.to_string()
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
+fn random_256() -> String {
+    let bytes: [u8; 32] = rand::rng().random();
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
-    /// STUB: red commit only.
+    /// The browser-facing authorize URL for one managed account.
+    ///
+    /// Built on the PINNED authorization endpoint. Reads no secret and sends
+    /// nothing: the URL is handed to a browser, which is no place for a
+    /// client secret.
     pub(crate) fn authorize_url(
         &self,
-        _account_id: &str,
-        _extra: AuthorizeExtra,
-        _state: &str,
-        _code_challenge: &str,
+        account_id: &str,
+        extra: AuthorizeExtra,
+        state: &str,
+        code_challenge: &str,
     ) -> Result<Url, ProviderRefreshError> {
-        Err(ProviderRefreshError::Unavailable)
+        let (descriptor, pinned) = self.managed(account_id)?;
+        let resource = resource_parameter(descriptor)?;
+        let client_id = required(descriptor.client_id.as_deref())?;
+        let redirect_uri = required(descriptor.redirect_uri.as_deref())?;
+        let scopes = descriptor
+            .scopes
+            .as_deref()
+            .filter(|scopes| !scopes.is_empty())
+            .ok_or(ProviderRefreshError::Unavailable)?
+            .join(" ");
+        let mut url = Url::parse(pinned.authorization_endpoint.as_str())
+            .map_err(|_| ProviderRefreshError::Unavailable)?;
+        {
+            let mut query = url.query_pairs_mut();
+            query
+                .append_pair("response_type", "code")
+                .append_pair("client_id", client_id)
+                .append_pair("redirect_uri", redirect_uri)
+                .append_pair("scope", &scopes)
+                .append_pair("state", state)
+                .append_pair("code_challenge", code_challenge)
+                .append_pair("code_challenge_method", "S256");
+            if let Some(resource) = resource {
+                query.append_pair("resource", resource);
+            }
+            if let Some(access_type) = extra.access_type {
+                query.append_pair("access_type", access_type.as_str());
+            }
+            if let Some(prompt) = extra.prompt {
+                query.append_pair("prompt", prompt.as_str());
+            }
+            if let Some(include) = extra.include_granted_scopes {
+                query.append_pair(
+                    "include_granted_scopes",
+                    if include { "true" } else { "false" },
+                );
+            }
+        }
+        Ok(url)
     }
 
-    /// STUB: red commit only.
+    /// Redeem an authorization code at the PINNED token endpoint (RFC 6749
+    /// §4.1.3 plus the PKCE verifier).
+    ///
+    /// `redirect_uri` is the descriptor's, never a caller's: it must be the
+    /// value the authorize URL carried, and that URL was built from the same
+    /// descriptor. The response maps exactly as a refresh response does.
     pub(crate) async fn exchange_code(
         &self,
-        _account_id: &str,
-        _code: &str,
-        _code_verifier: &str,
+        account_id: &str,
+        code: &str,
+        code_verifier: &str,
     ) -> Result<TokenRefresh, ProviderRefreshError> {
-        Err(ProviderRefreshError::Unavailable)
+        let (descriptor, pinned) = self.managed(account_id)?;
+        let resource = resource_parameter(descriptor)?;
+        let redirect_uri = required(descriptor.redirect_uri.as_deref())?;
+        let mut form = vec![
+            ("grant_type".to_string(), "authorization_code".to_string()),
+            ("code".to_string(), code.to_string()),
+            ("redirect_uri".to_string(), redirect_uri.to_string()),
+            ("code_verifier".to_string(), code_verifier.to_string()),
+        ];
+        form.extend(self.client_authentication(descriptor)?);
+        if let Some(resource) = resource {
+            form.push(("resource".to_string(), resource.to_string()));
+        }
+        let response = self
+            .http
+            .post_token(pinned.token_endpoint.as_str(), &form)
+            .await
+            .map_err(|_| ProviderRefreshError::Unavailable)?;
+        self.map_token_response(&response)
     }
 
-    /// STUB: red commit only.
+    /// RFC 7009 revocation at the PINNED revocation endpoint.
+    ///
+    /// Only an endpoint the operator CONFIGURED is used: bootstrap binds a
+    /// configured endpoint to the metadata, and an unconfigured one that the
+    /// metadata merely advertises was never bound, so it gets no token and no
+    /// client secret.
     pub(crate) async fn revoke_token(
         &self,
-        _account_id: &str,
-        _token: &str,
-        _hint: TokenTypeHint,
+        account_id: &str,
+        token: &str,
+        hint: TokenTypeHint,
     ) -> ProviderRevocation {
-        ProviderRevocation::Failed
+        let Ok((descriptor, pinned)) = self.managed(account_id) else {
+            return ProviderRevocation::Failed;
+        };
+        let endpoint = match (&descriptor.revocation_endpoint, &pinned.revocation_endpoint) {
+            (Some(_), Some(endpoint)) => endpoint.as_str(),
+            _ => return ProviderRevocation::Unsupported,
+        };
+        let Ok(credentials) = self.client_authentication(descriptor) else {
+            return ProviderRevocation::Failed;
+        };
+        let mut form = vec![
+            ("token".to_string(), token.to_string()),
+            ("token_type_hint".to_string(), hint.as_str().to_string()),
+        ];
+        form.extend(credentials);
+        match self.http.post_token(endpoint, &form).await {
+            Ok(response) if response.status == 200 => ProviderRevocation::Confirmed,
+            _ => ProviderRevocation::Failed,
+        }
     }
+
+    /// The managed descriptor and its pinned metadata, or a refusal before any
+    /// HTTP.
+    fn managed(
+        &self,
+        account_id: &str,
+    ) -> Result<(&AccountDescriptor, &AuthorizationServerMetadata), ProviderRefreshError> {
+        let descriptor = self
+            .descriptors
+            .get(account_id)
+            .filter(|descriptor| descriptor.mode == DescriptorMode::PersonalManaged)
+            .ok_or(ProviderRefreshError::Unavailable)?;
+        let pinned = self
+            .pinned
+            .get(account_id)
+            .ok_or(ProviderRefreshError::Unavailable)?;
+        Ok((descriptor, pinned))
+    }
+}
+
+/// `Some(resource)` when the descriptor declares `true`, `None` when it
+/// declares `false`; undeclared is refused, never defaulted.
+fn resource_parameter(
+    descriptor: &AccountDescriptor,
+) -> Result<Option<&str>, ProviderRefreshError> {
+    let send = descriptor
+        .send_resource_parameter
+        .ok_or(ProviderRefreshError::Unavailable)?;
+    let resource = required(descriptor.resource.as_deref())?;
+    Ok(send.then_some(resource))
 }

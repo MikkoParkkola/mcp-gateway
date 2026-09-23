@@ -83,7 +83,10 @@ async fn authorize_url_is_the_pinned_endpoint_with_every_pinned_parameter_once()
     assert_eq!(one(&url, "code_challenge_method"), "S256");
     assert_eq!(one(&url, "access_type"), "offline");
     assert_eq!(one(&url, "prompt"), "consent");
-    assert!(values(&url, "resource").is_empty(), "explicit false omits it");
+    assert!(
+        values(&url, "resource").is_empty(),
+        "explicit false omits it"
+    );
     assert!(values(&url, "include_granted_scopes").is_empty());
     assert!(!url.as_str().contains(SECRET_VALUE));
     assert_eq!(trace.all().len(), before, "no HTTP and no secret read");
@@ -105,15 +108,14 @@ async fn authorize_url_honours_send_resource_parameter_and_the_closed_extras() {
         r#"{{"issuer":"{LOGIN_ISSUER}","authorization_endpoint":"https://login.example.com/authorize","token_endpoint":"{LOGIN_TOKEN}"}}"#
     );
     let http = TraceHttp::new(
-        vec![(GOOGLE_RFC8414, ok(&google_doc())), (LOGIN_RFC8414, ok(&login_doc))],
+        vec![
+            (GOOGLE_RFC8414, ok(&google_doc())),
+            (LOGIN_RFC8414, ok(&login_doc)),
+        ],
         token_ok(""),
     );
-    let (_, provider) = expect_bootstrap(
-        vec![("workspace", d), ("login", undeclared)],
-        http,
-        NOW,
-    )
-    .await;
+    let (_, provider) =
+        expect_bootstrap(vec![("workspace", d), ("login", undeclared)], http, NOW).await;
 
     let url = provider
         .authorize_url("workspace", AuthorizeExtra::default(), STATE, CHALLENGE)
@@ -239,7 +241,10 @@ async fn exchange_posts_the_authorization_code_form_to_the_pinned_token_endpoint
     let calls = trace.all();
     let secret_at = calls.iter().position(|c| matches!(c, Call::Secret(_)));
     let last_metadata = calls.iter().rposition(|c| matches!(c, Call::Metadata(_)));
-    assert!(secret_at > last_metadata, "secret read after pinning: {calls:?}");
+    assert!(
+        secret_at > last_metadata,
+        "secret read after pinning: {calls:?}"
+    );
 
     let (with_trace, with_provider) = google_rig(token_ok(""), true, NOW).await;
     with_provider
@@ -265,15 +270,23 @@ async fn exchange_refusals_map_like_refresh_and_unconfigured_accounts_send_nothi
         provider.exchange_code("workspace", "c", "v").await,
         Err(ProviderRefreshError::Unavailable)
     );
-    assert_eq!(trace.token_calls().len(), 1, "the refusal came from the POST");
+    assert_eq!(
+        trace.token_calls().len(),
+        1,
+        "the refusal came from the POST"
+    );
     assert_eq!(
         provider.exchange_code("other-account", "c", "v").await,
         Err(ProviderRefreshError::Unavailable)
     );
-    assert_eq!(trace.token_calls().len(), 1, "unconfigured account: no POST");
+    assert_eq!(
+        trace.token_calls().len(),
+        1,
+        "unconfigured account: no POST"
+    );
 }
 
-/// RFC 7009 §2.1: the token, its hint and client authentication, POSTed to the
+/// RFC 7009 §2.1: the token, its hint and client authentication, posted to the
 /// PINNED revocation endpoint; 200 is the only confirmation.
 #[tokio::test]
 async fn revoke_posts_the_rfc7009_form_to_the_pinned_revocation_endpoint() {
@@ -286,7 +299,10 @@ async fn revoke_posts_the_rfc7009_form_to_the_pinned_revocation_endpoint() {
         .revoke_token("workspace", "access-1", TokenTypeHint::AccessToken)
         .await;
 
-    assert_eq!((refresh, access), (ProviderRevocation::Confirmed, ProviderRevocation::Confirmed));
+    assert_eq!(
+        (refresh, access),
+        (ProviderRevocation::Confirmed, ProviderRevocation::Confirmed)
+    );
     let sent = trace.token_calls();
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[0].0, GOOGLE_REVOKE);
@@ -300,7 +316,11 @@ async fn revoke_posts_the_rfc7009_form_to_the_pinned_revocation_endpoint() {
         ])
     );
     assert!(sent[1].1.contains(&("token".into(), "access-1".into())));
-    assert!(sent[1].1.contains(&("token_type_hint".into(), "access_token".into())));
+    assert!(
+        sent[1]
+            .1
+            .contains(&("token_type_hint".into(), "access_token".into()))
+    );
 }
 
 /// Anything but 200, a transport failure, or an account the provider does not
@@ -318,7 +338,11 @@ async fn revoke_reports_failed_for_every_non_confirmation() {
             .revoke_token("workspace", REFRESH_TOKEN, TokenTypeHint::RefreshToken)
             .await;
         assert_eq!(revoked, ProviderRevocation::Failed, "{outcome:?}");
-        assert_eq!(trace.token_calls().len(), 1, "{outcome:?} came from the POST");
+        assert_eq!(
+            trace.token_calls().len(),
+            1,
+            "{outcome:?} came from the POST"
+        );
     }
     let (trace, provider) = google_rig(ok(""), false, NOW).await;
     let revoked = provider
@@ -363,7 +387,10 @@ async fn an_arc_shared_provider_refreshes_through_the_same_pinned_snapshot() {
     )
     .await;
 
-    assert_eq!(refreshed.map(|t| t.access_token), Ok("fresh-access".to_string()));
+    assert_eq!(
+        refreshed.map(|t| t.access_token),
+        Ok("fresh-access".to_string())
+    );
     assert_eq!(trace.token_calls()[0].0, GOOGLE_TOKEN);
     assert_eq!(trace.metadata_calls().len(), fetched);
 }

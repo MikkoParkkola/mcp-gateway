@@ -113,7 +113,8 @@ pub(crate) trait ProviderHttp: Send + Sync {
         url: &str,
     ) -> impl Future<Output = Result<HttpResponse, HttpError>> + Send;
 
-    /// Form POST to the pinned token endpoint. The only credential-bearing call.
+    /// Form POST to a pinned credential endpoint (token or revocation). The
+    /// only credential-bearing call.
     fn post_token(
         &self,
         url: &str,
@@ -301,7 +302,6 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         if account.oauth_issuer != issuer || account.resource != resource {
             return Err(ProviderRefreshError::Unavailable);
         }
-        let client_id = required(descriptor.client_id.as_deref())?;
         let send_resource = descriptor
             .send_resource_parameter
             .ok_or(ProviderRefreshError::Unavailable)?;
@@ -322,15 +322,8 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         let mut form = vec![
             ("grant_type".to_string(), "refresh_token".to_string()),
             ("refresh_token".to_string(), refresh_token.to_string()),
-            ("client_id".to_string(), client_id.to_string()),
         ];
-        if let Some(reference) = descriptor.client_secret_ref.as_deref() {
-            let secret = self
-                .secrets
-                .resolve(reference)
-                .ok_or(ProviderRefreshError::Unavailable)?;
-            form.push(("client_secret".to_string(), secret));
-        }
+        form.extend(self.client_authentication(descriptor)?);
         if send_resource {
             form.push(("resource".to_string(), resource.to_string()));
         }
@@ -341,6 +334,25 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
             .await
             .map_err(|_| ProviderRefreshError::Unavailable)?;
         self.map_token_response(&response)
+    }
+
+    /// `client_id` and, when configured, the late-resolved `client_secret`
+    /// (`client_secret_post`). Called only after the pinned endpoint that will
+    /// receive the secret has been looked up.
+    fn client_authentication(
+        &self,
+        descriptor: &AccountDescriptor,
+    ) -> Result<Vec<(String, String)>, ProviderRefreshError> {
+        let client_id = required(descriptor.client_id.as_deref())?;
+        let mut form = vec![("client_id".to_string(), client_id.to_string())];
+        if let Some(reference) = descriptor.client_secret_ref.as_deref() {
+            let secret = self
+                .secrets
+                .resolve(reference)
+                .ok_or(ProviderRefreshError::Unavailable)?;
+            form.push(("client_secret".to_string(), secret));
+        }
+        Ok(form)
     }
 
     fn map_token_response(

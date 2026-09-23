@@ -69,14 +69,15 @@ pub(crate) trait RefreshProvider: Send + Sync {
     ) -> impl Future<Output = Result<TokenRefresh, ProviderRefreshError>> + Send;
 }
 
-/// STUB: red commit only.
+/// Lets custody and the consent journey share ONE provider, so a code exchange
+/// uses exactly the metadata snapshot refresh uses.
 impl<T: RefreshProvider> RefreshProvider for Arc<T> {
     fn refresh(
         &self,
-        _account: &AccountKey,
-        _current: &GrantRecord,
+        account: &AccountKey,
+        current: &GrantRecord,
     ) -> impl Future<Output = Result<TokenRefresh, ProviderRefreshError>> + Send {
-        async { Err(ProviderRefreshError::Unavailable) }
+        T::refresh(self, account, current)
     }
 }
 
