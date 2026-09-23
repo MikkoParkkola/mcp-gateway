@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The five journey operations built on `journey_transition` (design §4-§7).
 
-use super::super::random_hex;
+use super::ids::Candidates;
 use super::persist::Transition;
 use super::sweep::evict_for_insert;
 use super::{
@@ -213,8 +213,12 @@ impl PersonalAccountStore {
             return Err(JourneyError::Refused(JourneyRefusal::InvalidRequest));
         }
         let record = pending(&self.config, new, now).map_err(storage)?;
-        let id = random_hex().map_err(storage)?;
-        self.journey_transition(now, limits, |tx| insert(tx, limits, id, record, now))
+        let candidates = Candidates::draw().map_err(storage)?;
+        self.journey_transition(now, limits, |tx| match candidates.unused(tx.table) {
+            Ok(id) => insert(tx, limits, id, record, now).map(Ok),
+            Err(collided) => Ok(Err(collided)),
+        })?
+        .map_err(storage)
     }
 
     /// Owner check, then mint state, binding and verifier (§4.2 steps 6-8).

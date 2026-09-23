@@ -187,10 +187,11 @@ fn t_r2_1_a_journeys_write_failure_after_the_grant_poisons_only_the_journey_slot
         &grant(&"11".repeat(16)),
         &journey.journey_id,
     );
-    // THEN: the grant is durable and readable; journey reads refuse.
+    // THEN: the grant is durable and readable; the next journey read heals
+    // the slot from the renamed file, which already records the connection.
     assert!(fault.fired());
     assert_eq!(outcome, Ok(JourneyCommit::CommittedStatusUnavailable));
     assert_eq!(generation(&store), Some("11".repeat(16)));
     let status = store.journey_status(T0 + 3, &limits, &journey.journey_id);
-    assert!(matches!(status, Err(super::JourneyError::Storage(_))));
+    assert_eq!(status.map(|view| view.status), Ok(JourneyStatus::Connected));
 }

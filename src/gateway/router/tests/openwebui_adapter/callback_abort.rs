@@ -169,8 +169,8 @@ async fn t_abort_without_a_revocation_endpoint_reports_unsupported() {
 }
 
 /// T-R2-1: the grant is published and the later `journeys.json` write fails.
-/// The page still reports the connection; every principal keeps using the
-/// authority; only journey operations answer `storage_unavailable`.
+/// The page still reports the connection and every principal keeps using the
+/// authority. The next journey read heals from the renamed file (§5.2).
 #[tokio::test(flavor = "multi_thread")]
 async fn t_r2_1_journeys_write_failure_after_commit_does_not_poison_the_authority() {
     // GIVEN
@@ -196,7 +196,7 @@ async fn t_r2_1_journeys_write_failure_after_commit_does_not_poison_the_authorit
         "B refreshes"
     );
     let status = journey_status(&gw, ALICE, &alice.id).await;
-    assert_eq!(status["error"]["code"], "storage_unavailable");
+    assert_eq!(status["status"], "connected", "{status}");
     assert!(
         gw.fixture.received().is_empty(),
         "a durable grant is never revoked"

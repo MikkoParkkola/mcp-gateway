@@ -6,7 +6,7 @@
 use super::super::super::AccountLookup;
 use super::super::super::faults::{Boundary, arm};
 use super::tests::{
-    K1, T0, create, fresh, limits, on_disk, owner, refused, reload, request, sealed_grant, start,
+    T0, create, fresh, limits, on_disk, owner, refused, request, sealed_grant, start,
 };
 use super::{
     AccountError, CALLBACK_WINDOW, JourneyError, JourneyLimits, JourneyReason, JourneyRefusal,
@@ -180,11 +180,12 @@ fn unavailable<T: std::fmt::Debug>(result: Result<T, JourneyError>) {
     );
 }
 
-/// Gap 6, store-level half of T-R2-1 (the route half is slice 5). Kills:
-/// poisoning the authority on a journeys write failure, or not poisoning
-/// the journeys slot (serving the stale in-memory table after a rename).
+/// Gap 6, store-level half of T-R2-1 (the route half is slice 5), with the
+/// §5.2 heal. Kills: poisoning the authority on a journeys write failure;
+/// serving the in-memory table after a rename; a stale slot healed without a
+/// good reread, or never reread at all.
 #[test]
-fn journeys_parent_sync_fault_poisons_only_the_journey_slot_until_reopen() {
+fn journeys_parent_sync_fault_poisons_only_the_journey_slot_until_a_good_reread() {
     // GIVEN: a connected grant and an armed journeys directory-sync fault.
     let (_root, config, store) = fresh();
     let limits = limits();
@@ -203,14 +204,19 @@ fn journeys_parent_sync_fault_poisons_only_the_journey_slot_until_reopen() {
     store
         .commit_grant(&owner("bob", "google"), &sealed_grant())
         .unwrap();
-    // AND: every journey operation, reads included, is unavailable although
-    // the fault has disarmed (it fires once): the slot itself is poisoned.
+    // AND: while journeys.json cannot be read, every journey operation,
+    // reads included, is unavailable, and each one tries the reread again.
+    let path = config.authority_dir.join(super::JOURNEYS_FILE);
+    let durable = std::fs::read(&path).unwrap();
+    std::fs::write(&path, b"{}").unwrap();
     unavailable(store.create_journey(T0 + 1, &limits, request("carol", "google")));
     unavailable(store.journey_status(T0 + 1, &limits, "0".repeat(32).as_str()));
-    // AND: a reopen reads the renamed file and journeys work again.
-    let (config, store) = reload(store, &config, "k1", &[("k1", K1)]);
+    // AND: once the file reads again, the next operation heals the slot from
+    // disk, without a reopen.
+    std::fs::write(&path, &durable).unwrap();
     assert_eq!(on_disk(&store, &config, &limits).journeys.len(), 1);
     create(&store, T0 + 2, &limits, "carol");
+    assert_eq!(on_disk(&store, &config, &limits).journeys.len(), 2);
 }
 
 /// Gap 7, transition level (R3-2). Kills: `journey_transition` handing the
