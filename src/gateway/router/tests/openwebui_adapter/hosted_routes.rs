@@ -214,9 +214,10 @@ const CALLBACK: &str = "/accounts/v1/callback";
 async fn guard_callback_navigation_reaches_handler_and_every_variant_is_refused() {
     // GIVEN
     let gw = gateway(Shape::Bridged).await;
-    // WHEN / THEN: the real redirect reaches the 5c placeholder
+    // WHEN / THEN: the real redirect reaches the handler, which refuses a
+    // callback that carries no state as `invalid_request`
     let reached = status_for(&gw, callback("GET", CALLBACK, "navigate", "document")).await;
-    assert_eq!(reached, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(reached, StatusCode::BAD_REQUEST);
     let refused = [
         callback("GET", CALLBACK, "cors", "document"),
         callback("GET", CALLBACK, "navigate", "iframe"),
@@ -309,7 +310,7 @@ async fn headers_every_accounts_response_is_hardened() {
     let cases = [
         ("GET", "/accounts/v1/nope", None, StatusCode::NOT_FOUND),
         ("POST", CALLBACK, None, StatusCode::METHOD_NOT_ALLOWED),
-        ("GET", CALLBACK, None, StatusCode::NOT_IMPLEMENTED),
+        ("GET", CALLBACK, None, StatusCode::BAD_REQUEST),
         (
             "GET",
             "/accounts/v1/journeys/abc",

@@ -193,7 +193,7 @@ fn both() -> Vec<(String, String)> {
 }
 
 fn revoked_body(provider_revocation: &str) -> Value {
-    json!({"schema_version": 1, "account_id": ACCOUNT, "status": "revoked",
+    json!({"schema_version": "accounts.v1", "account_id": ACCOUNT, "status": "revoked",
            "provider_revocation": provider_revocation})
 }
 
@@ -307,7 +307,8 @@ async fn revoke_route_audit_failure_is_503_and_keeps_the_tombstone() {
     let (status, body) = delete(&gw, Some("alice"), ACCOUNT).await;
     // THEN
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body["error"], "audit_unavailable");
+    assert_eq!(body["schema_version"], "accounts.v1");
+    assert_eq!(body["error"]["code"], "audit_unavailable");
     assert_eq!(body["local_status"], "revoked");
     assert_eq!(gw.fixture.state(&key("alice")).await, "revoked");
     assert!(
@@ -322,7 +323,7 @@ async fn revoke_route_undeclared_account_is_404_and_touches_nothing() {
     let gw = gateway(true, &[(key("alice"), grant("alice"), Seed::Connected)]).await;
     let (status, body) = delete(&gw, Some("alice"), "nope").await;
     assert_eq!(
-        (status, body["error"].clone()),
+        (status, body["error"]["code"].clone()),
         (StatusCode::NOT_FOUND, json!("not_found"))
     );
     assert_eq!(gw.fixture.state(&key("alice")).await, "connected");
