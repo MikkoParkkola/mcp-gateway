@@ -1412,18 +1412,24 @@ class WorkflowWiring(unittest.TestCase):
         # Every gate downstream of this reads the index by digest and compares
         # it to itself, so an index composed from the base legs passes all of
         # them while `:latest-full` serves the default image.
+        #
+        # Both provenance tags carry the rehearsal suffix, or a manifest
+        # rehearsal publishes a real `sha-<commit>-full` while the base index
+        # stays isolated under its rehearsal name.
         body = "\n".join(commands("ci.yml"))
         self.assertRegex(
             body,
-            r"--tag \"\$\{IMAGE\}:sha-\$\{GITHUB_SHA\}-full\"[^\n]*"
+            r"--tag \"\$\{IMAGE\}:sha-\$\{GITHUB_SHA\}-full\$\{REHEARSAL_SUFFIX\}\"[^\n]*"
             r'\$\{IMAGE\}@\$\{FULL_AMD64\}" "\$\{IMAGE\}@\$\{FULL_ARM64\}"',
-            "ci.yml: the variant provenance index is not composed from its legs",
+            "ci.yml: the variant provenance index is not composed from its legs "
+            "under the rehearsal-aware name",
         )
         self.assertRegex(
             body,
-            r'--tag \"\$\{IMAGE\}:sha-\$\{GITHUB_SHA\}\"[^\n]*'
+            r'--tag \"\$\{IMAGE\}:sha-\$\{GITHUB_SHA\}\$\{REHEARSAL_SUFFIX\}\"[^\n]*'
             r'\$\{IMAGE\}@\$\{AMD64\}" "\$\{IMAGE\}@\$\{ARM64\}"',
-            "ci.yml: the base provenance index is not composed from its legs",
+            "ci.yml: the base provenance index is not composed from its legs "
+            "under the rehearsal-aware name",
         )
         # The image name is spelled by the author, `"${IMAGE}@…"` or inline;
         # what is pinned is which index the tags are put on.

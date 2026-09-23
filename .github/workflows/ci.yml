@@ -748,10 +748,10 @@ jobs:
           FULL_AMD64="$(cat digests/amd64-full)"
           FULL_ARM64="$(cat digests/arm64-full)"
           for value in "${FULL_AMD64}" "${FULL_ARM64}"; do test -n "${value}"; done
-          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}-full" \
+          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}-full${REHEARSAL_SUFFIX}" \
             --annotation "index:io.modelcontextprotocol.server.name=io.github.MikkoParkkola/mcp-gateway" \
             "${IMAGE}@${FULL_AMD64}" "${IMAGE}@${FULL_ARM64}"
-          LIST_FULL="$(docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}-full" \
+          LIST_FULL="$(docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}-full${REHEARSAL_SUFFIX}" \
             --format '{{.Manifest.Digest}}')"
           docker buildx imagetools inspect "${IMAGE}@${LIST_FULL}"
           {
