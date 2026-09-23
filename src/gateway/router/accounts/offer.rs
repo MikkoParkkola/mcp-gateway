@@ -103,8 +103,9 @@ impl ConnectOffers {
 /// The §9.1 `accounts.v1` data: the refusal, its account, and the offer or
 /// the limit that withheld one.
 fn envelope(text: &str, account_id: &str, state: AccountState, extra: &Value) -> Value {
-    let mut data = json!({"schema_version": "accounts.v1", "account_id": account_id,
-        "error": {"code": state.code(), "message": text, "retryable": extra["retryable"]}});
+    let retryable = extra["retryable"].as_bool().unwrap_or(false);
+    let mut data = super::super::envelope::body_with_message(state.code(), text, retryable);
+    data["account_id"] = json!(account_id);
     for key in ["connect_url", "retry_after"] {
         if let Some(value) = extra.get(key) {
             data[key] = value.clone();
