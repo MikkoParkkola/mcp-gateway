@@ -306,7 +306,9 @@ restart, and no new secret is introduced.
 **Which key (review R2-6).** Each digest is derived from the key that sealed the
 record, not from whatever `current_key_id` is at callback time.
 - Every `JourneyRecord` stores the `digest_key_id` in force when its digests were
-  minted, and the `journeys.json` envelope already carries its own `key_id`
+  minted. It is re-captured at every digest-minting step (start and re-arm), in the
+  same write that stores the new digests, so a rotation between creation and start
+  never leaves a record naming a key that did not mint its digests, and the `journeys.json` envelope already carries its own `key_id`
   (`storage.rs:65-73`).
 - Verification derives the key from `keys[digest_key_id]`. Retained keys are
   readable, following the design's rule that old key entries are read-only.
@@ -650,8 +652,12 @@ and exchanges nothing.
     - If the grant is published and the later `journeys.json` write fails, the
       authority stays `Some(next)`. That value is the published, durable
       manifest, so every other principal's lookup, use and refresh continues.
-    - Only the journey table becomes `JourneysSlot::Stale`. Journey operations
-      then answer `storage_unavailable` until restart, when the file is reread.
+    - Only the journey table becomes `JourneysSlot::Stale`. The next journey
+      operation makes one attempt to reread `journeys.json` (as the lazy load path
+      does); if that succeeds the slot heals, otherwise it answers
+      `storage_unavailable`. While stale, `GET /accounts/v1/journeys/{id}` answers
+      503 `storage_unavailable` (retryable) and never reports a status it cannot
+      read; the account's own lookup already shows `Connected`.
     - The callback reports `JourneyCommit::CommittedStatusUnavailable`, and the
       page says "connected; status unavailable". The grant is durable, so this is
       never a false failure.
@@ -1360,7 +1366,7 @@ Each row gives:
 | T-HDR | An unrouted `GET /accounts/v1/nope`, a 405 on `/accounts/v1/callback`, the start error page, and the outcome page (review L6) | 404 | Every response carries `no-store`, `no-referrer` and the CSP. | Headers set per handler instead of by the layer |
 | T-CT | A unit test uses a `cfg(test)` counter to check that the state lookup, binding and owner comparisons all go through `ConstantTimeEq` (review L5) | n/a | All three paths use it. | `==` on digest strings |
 | T-R2-1 | A and B are connected. A's journey callback commits the grant, and a fault boundary then fails the `journeys.json` write after rename. | 404 | The callback page reads "connected; status unavailable". `lookup(A)` is `Connected`. B's lookup, invoke and refresh still succeed, and the authority slot is `Some`. Journey operations answer `storage_unavailable` until the store is reopened. | Journey write failure sets `authority = None` (shared poisoning) |
-| T-R2-2 | During the exchange window (fake `/token` held by a pause), A's journey is (a) swept after `callback_by`, then separately (b) superseded by an explicit POST. Then `/token` is released. | 404 | Nothing is committed and the status is not `connected`. The reason is `journey_gone; provider_revoked`, and fake `/revoke` received the fresh token. Migration tests pass unchanged, and `commit_grant_if_unchanged` is byte-identical in the diff. | Journey status not re-validated under the commit lock, or an unconditional `Connected` write |
+| T-R2-2 | During the exchange window (fake `/token` held by a `tokio::sync::Notify` barrier the test releases explicitly, with a bounded `timeout` so a missed release fails instead of hanging), A's journey is (a) swept after `callback_by`, then separately (b) superseded by an explicit POST. Then `/token` is released. | 404 | Nothing is committed and the status is not `connected`. The reason is `journey_gone; provider_revoked`, and fake `/revoke` received the fresh token. Migration tests pass unchanged; `commit_grant_if_unchanged` keeps its signature and behaviour (it becomes a thin wrapper over the extracted lock-held helper, which the mutation column targets). | Journey status not re-validated under the commit lock, or an unconditional `Connected` write |
 | T-R2-3 | Complete a connect, advance the clock past `callback_by`, then replay the callback. | 404 | The status stays `connected` with `replay_refusals` = 1. The expiry step never rewrote the record. | Expiry check ordered before the terminal/replay check |
 | T-R2-4 | Revoke DELETE while A is `ReconnectRequired`, for each of two causes: after `invalid_grant` and after a descriptor-revision fence. Then revoke while A is `Revoked`. | No route | In the `ReconnectRequired` cases, fake `/revoke` receives the retained token and the response is `confirmed`. In the `Revoked` case the response is `not_applicable` and nothing is sent. | Capture limited to `Connected` |
 | T-R2-5 | A POST whose `account_id` is 65 bytes long, then one with a 257-byte `return_path`. A unit test serializes a maximal `JourneyRecord`. | 404 | Both POSTs get 400 before any store access. The maximal record is at most `RECORD_MAX`. | Cap missing on a field |
