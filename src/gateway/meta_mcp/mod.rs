@@ -317,8 +317,7 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
             // object, because `data` is a shared channel — `invoke_tool` puts a
             // *backend's* error data into this same variant, so forwarding it
             // wholesale is what would hand a backend the status field above.
-            // Gateway-authored only: a backend cannot construct this variant.
-            crate::Error::AccountRefused { data, .. } => data.clone(),
+            // The §9.1 connect-offer keys (MIK-6745) ride the same named-key rule.
             crate::Error::JsonRpc {
                 data: Some(data), ..
             } => {
@@ -327,6 +326,7 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
                     invoke::UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
                 ]
                 .into_iter()
+                .chain(crate::personal_accounts::refusal::ACCOUNT_DATA_KEYS)
                 .filter_map(|key| Some((key.to_string(), data.get(key)?.clone())))
                 .collect();
                 // `None` rather than `{}`: a backend error carrying none of these

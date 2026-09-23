@@ -31,6 +31,7 @@ pub(crate) mod identity;
 // `initialize_store_offline` and kept out of this file for its size.
 mod offline_migration;
 mod provider;
+pub(crate) mod refusal;
 mod revoke;
 #[cfg(test)]
 pub(crate) mod revoke_fixture;

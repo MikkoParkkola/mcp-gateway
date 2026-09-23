@@ -38,8 +38,7 @@ use super::{
     BackendDescriptor, CallerProof, IdentityPropagation, PropagationError,
     audit_identity_propagation, audit_subject,
 };
-use crate::personal_accounts::config::DescriptorMode;
-use crate::personal_accounts::identity::Principal;
+use crate::personal_accounts::{config::DescriptorMode, identity::Principal, refusal::mark};
 use crate::security::TransparencyLogger;
 use crate::{Error, Result};
 
@@ -447,10 +446,10 @@ impl AccountStrategyRegistry {
                     audience,
                     &reason,
                 );
-                return Err(Error::Config(format!(
+                let refused = Error::Config(format!(
                     "account '{descriptor_id}' produced no credential for this caller: {reason}"
-                ))
-                .typed_by(&error, Some(descriptor_id)));
+                ));
+                return Err(mark(refused, &error, Some(descriptor_id)));
             }
         };
 
