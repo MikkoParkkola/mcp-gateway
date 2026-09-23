@@ -127,6 +127,9 @@ async fn restart_rotates_binding_and_keeps_the_deadline() {
     let (_, first, _) = start(&gw, &id, &[&cookie_of(ALICE_TOKEN)]).await;
     let deadline = journey_status(&gw, ALICE, &id).await["expires_at"].clone();
     let deadline = deadline.as_u64().unwrap();
+    // Cross a second boundary, so a re-extended deadline or a constant
+    // Max-Age of 600 cannot pass.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     // WHEN
     let before = unix_now();
     let (status, second, _) = start(&gw, &id, &[&cookie_of(ALICE_TOKEN)]).await;

@@ -282,14 +282,14 @@ fn witness(kind: DigestKind, left: &str, right: &str) {
 #[cfg(not(test))]
 fn witness(_kind: DigestKind, _left: &str, _right: &str) {}
 
-/// `cfg(test)` witness: whether a `kind` comparison ever took `operand`, on
+/// `cfg(test)` witness: whether an owner comparison ever took `operand`, on
 /// any thread (T-CT at the route).
 #[cfg(test)]
-pub(crate) fn digest_compared(kind: DigestKind, operand: &str) -> bool {
+pub(crate) fn owner_digest_compared(operand: &str) -> bool {
     OPERANDS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .contains(&(kind as usize, operand.to_owned()))
+        .contains(&(DigestKind::Owner as usize, operand.to_owned()))
 }
 
 /// `cfg(test)` witness: how many comparisons of `kind` ran on this thread.
