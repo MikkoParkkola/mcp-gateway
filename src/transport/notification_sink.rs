@@ -250,10 +250,7 @@ pub(crate) fn set_request_log_level(declared: Option<&str>) {
 /// cost every `tools/call` (NFR.WORKLOAD.1). `publish` still applies the full
 /// filter; this check can only skip what it would drop.
 pub(crate) fn emit_log(level: LoggingLevel, logger: &str, data: impl FnOnce() -> Value) {
-    let wanted = LEVEL
-        .try_with(|slot| slot.borrow().is_some_and(|declared| level >= declared))
-        .unwrap_or(false);
-    if !wanted {
+    if !declared_level_admits(level) {
         return;
     }
     publish(vec![JsonRpcNotification {
@@ -279,9 +276,6 @@ fn passes_level_filter(notification: &JsonRpcNotification) -> bool {
     if notification.method != "notifications/message" {
         return true;
     }
-    let Ok(Some(declared)) = LEVEL.try_with(|slot| *slot.borrow()) else {
-        return false;
-    };
     let raised = notification
         .params
         .as_ref()
@@ -291,7 +285,16 @@ fn passes_level_filter(notification: &JsonRpcNotification) -> bool {
         tracing::debug!("notifications/message carries no level this request can judge; dropping");
         return false;
     };
-    raised >= declared
+    declared_level_admits(raised)
+}
+
+/// The delivery rule for one `raised` level, shared by `publish`'s filter and
+/// `emit_log`'s early return so the two cannot disagree: no declared level is
+/// silence, otherwise `raised >= declared`.
+fn declared_level_admits(raised: LoggingLevel) -> bool {
+    LEVEL
+        .try_with(|slot| slot.borrow().is_some_and(|declared| raised >= declared))
+        .unwrap_or(false)
 }
 
 /// Substitute a gateway-owned progress token for the caller's, recording the
