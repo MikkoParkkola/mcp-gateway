@@ -1683,13 +1683,12 @@ impl MetaMcp {
         // THE CAPABILITY ROUTE'S ACCOUNT BOUNDARY, RESOLVED HERE — BEFORE THE
         // OUTER RESPONSE CACHE IS CONSULTED.
         //
-        // The MCP route resolves its per-user credential above for the same
-        // reason: a cache key built before the caller's credential is known
-        // cannot name the caller. A REST capability's credential comes from its
-        // own `auth.account` (the tool's PRIMARY auth), not the BACKEND-keyed
-        // propagation map, and must resolve here, not in the executor, which
-        // runs after this cache lookup. It is carried into dispatch and
-        // rechecked there, never minted twice; a refusal returns now.
+        // The MCP route resolves its credential above for the same reason: a
+        // cache key built before the caller's credential is known cannot name
+        // the caller. A REST capability's credential comes from its own
+        // `auth.account` (its PRIMARY auth), not the BACKEND-keyed map, and must
+        // resolve here, not in the executor, which runs after this lookup. It is
+        // rechecked at dispatch, never minted twice; a refusal returns now.
         let resolving = self.resolve_capability_account_credential(server, tool, caller_proof);
         let account_credential = self
             .with_connect_offer(resolving.await, verified_identity)
@@ -3011,9 +3010,10 @@ impl MetaMcp {
         // run unauthenticated once `request_with_headers` drops the credential.
         //
         // A missing registry entry defaults to "capable": every real caller
-        // resolves `idp_cfg` FROM the registered backend, so "not found" only
-        // happens in unit tests against a fabricated config, and a genuinely
-        // absent backend fails downstream at dispatch regardless.
+        // resolves `idp_cfg` FROM the registered backend, so a `Some(idp_cfg)`
+        // guarantees the backend exists in production; "not found" only happens
+        // in unit tests against a fabricated config, and a genuinely absent
+        // backend fails downstream at dispatch regardless.
         let transport_capable = self
             .backends
             .get(server)
@@ -3079,7 +3079,7 @@ impl MetaMcp {
             Err(e) => refuse(format!("credential minting failed: {e}")).map_err(|refused| {
                 let backend = self.backends.get(server);
                 let account_id = backend.as_deref().and_then(|b| b.account_descriptor_id());
-                refused.typed_by(&e, account_id)
+                crate::personal_accounts::refusal::mark(refused, &e, account_id)
             }),
         }
     }

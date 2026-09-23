@@ -6,7 +6,7 @@
 //! capability route and the direct `/mcp/{backend}` route, each only after it
 //! has decided to refuse. No catalogue or listing site calls in here, so a
 //! backend's presence is never disclosed where the listing withholds it. The
-//! shared credential resolver only TYPES the refusal (`Error::AccountRefused`);
+//! shared credential resolver only marks the refusal (`refusal::mark`);
 //! it never mints, because the catalogue reaches it too.
 //!
 //! An offer needs predicate B: a principal from the bridged Open `WebUI`
@@ -22,11 +22,14 @@ use serde_json::{Value, json};
 use super::super::super::helpers::build_http_response;
 use super::{is_bridged, limits_of, owner_and_descriptor};
 use crate::config_reload::LiveConfig;
-use crate::error::AccountState;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::key_server::oidc::VerifiedIdentity;
+use crate::personal_accounts::refusal::{AccountState, Marked, marked, unmark};
 use crate::personal_accounts::{JourneyError, JourneyRefusal, JourneyService};
 use crate::protocol::{JsonRpcResponse, RequestId};
+
+/// The meta and capability routes' code for an account refusal (§9.1, §12.4).
+const ACCOUNT_REFUSAL_CODE: i32 = -32001;
 use crate::{Error, Result};
 
 /// What a dispatch site needs to offer: the journey facade and the live config
@@ -44,48 +47,31 @@ impl ConnectOffers {
         }
     }
 
-    /// The refusal with its offer attached when it is a typed account
-    /// refusal that passes predicate B; otherwise the refusal unchanged.
+    /// A marked refusal with its offer attached (code `-32001`) when it
+    /// passes predicate B; otherwise unmarked back to today's refusal.
     async fn offer(&self, error: Error, identity: Option<&VerifiedIdentity>) -> Error {
-        let text = error.to_string();
-        match error {
-            Error::AccountRefused {
+        let offered = match marked(&error) {
+            Some(marked) => self.attach(&marked, identity).await,
+            None => None,
+        };
+        match offered {
+            Some((message, data)) => Error::JsonRpc {
+                code: ACCOUNT_REFUSAL_CODE,
                 message,
-                account_id,
-                state,
-                data: None,
-            } => {
-                let refusal = Refusal {
-                    text: &text,
-                    message: &message,
-                    account_id: &account_id,
-                    state,
-                };
-                let offered = self.attach(&refusal, identity).await;
-                let (message, data) = offered.map_or((message, None), |(m, d)| (m, Some(d)));
-                Error::AccountRefused {
-                    message,
-                    account_id,
-                    state,
-                    data,
-                }
-            }
-            other => other,
+                data: Some(data),
+            },
+            None => unmark(error),
         }
     }
 
     /// The offered message and data, or `None` when no offer applies.
     async fn attach(
         &self,
-        refusal: &Refusal<'_>,
+        refusal: &Marked<'_>,
         identity: Option<&VerifiedIdentity>,
     ) -> Option<(String, Value)> {
-        let Refusal {
-            text,
-            message,
-            account_id,
-            state,
-        } = *refusal;
+        let (account_id, state) = (refusal.account_id, refusal.state);
+        let text = Error::Config(refusal.message.to_owned()).to_string();
         let config = self.live_config.get();
         let hosted = config.accounts.as_ref()?.hosted.as_ref()?;
         let identity = identity.filter(|identity| is_bridged(&config, identity))?;
@@ -100,29 +86,20 @@ impl ConnectOffers {
                     "{}/accounts/v1/journeys/{}/start",
                     hosted.public_origin, created.journey_id
                 );
-                let message = format!("{message}; connect your account: {url}");
+                let message = format!("{text}; connect your account: {url}");
                 (message, json!({"retryable": false, "connect_url": url}))
             }
             Ok(Err(JourneyError::Refused(
                 JourneyRefusal::RateLimited { retry_after }
                 | JourneyRefusal::CapacityExceeded { retry_after },
             ))) => (
-                message.to_owned(),
+                text.clone(),
                 json!({"retryable": true, "retry_after": retry_after}),
             ),
             _ => return None,
         };
-        Some((message, envelope(text, account_id, state, &extra)))
+        Some((message, envelope(&text, account_id, state, &extra)))
     }
-}
-
-/// A typed refusal as the offer reads it; `text` is its displayed form.
-#[derive(Clone, Copy)]
-struct Refusal<'a> {
-    text: &'a str,
-    message: &'a str,
-    account_id: &'a str,
-    state: AccountState,
 }
 
 /// The §9.1 `accounts.v1` data: the refusal, its account, and the offer or
@@ -157,7 +134,8 @@ impl MetaMcp {
     ) -> Result<T> {
         match (result, self.offers()) {
             (Err(error), Some(offers)) => Err(offers.offer(error, identity).await),
-            (result, _) => result,
+            (Err(error), None) => Err(unmark(error)),
+            (ok, _) => ok,
         }
     }
 
@@ -174,14 +152,12 @@ impl MetaMcp {
             (Some(error), Some(offers)) => Some(offers.offer(error, identity).await),
             _ => None,
         };
-        let shown = offered.as_ref().map(ToString::to_string);
-        let rpc = match (offered, shown) {
-            (
-                Some(Error::AccountRefused {
-                    data: Some(data), ..
-                }),
-                Some(shown),
-            ) => JsonRpcResponse::error_with_data(id, -32003, shown, data),
+        let rpc = match offered {
+            Some(Error::JsonRpc {
+                code: ACCOUNT_REFUSAL_CODE,
+                message,
+                data: Some(data),
+            }) => JsonRpcResponse::error_with_data(id, -32003, message, data),
             _ => JsonRpcResponse::error(id, -32003, text),
         };
         build_http_response(&rpc, StatusCode::FORBIDDEN)

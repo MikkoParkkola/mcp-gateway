@@ -17,26 +17,6 @@ pub enum Error {
     #[error("Configuration error: {0}")]
     Config(String),
 
-    /// A dispatch refused because the caller's own managed account is absent,
-    /// revoked or must reconnect (MIK-6745 design §9.1).
-    ///
-    /// Displays exactly as [`Error::Config`] did for the same refusal, and
-    /// takes every `Config` arm (code, category, pre-dispatch) until a dispatch
-    /// site attaches an offer, so a caller with none reads today's text and
-    /// code byte for byte. With an offer the code is `-32001`.
-    #[error("Configuration error: {message}")]
-    AccountRefused {
-        /// The refusal text, as the `Config` variant carried it.
-        message: String,
-        /// The `accounts.descriptors` id the caller must connect.
-        account_id: String,
-        /// Which remedy the account needs.
-        state: AccountState,
-        /// The `accounts.v1` offer data. Set only by a dispatch site, never by
-        /// a backend, so it is the one refusal `data` forwarded verbatim.
-        data: Option<serde_json::Value>,
-    },
-
     /// Authorization refused this call.
     ///
     /// A distinct variant, not an opaque `JsonRpc`, so a consumer can ask "is
@@ -279,53 +259,7 @@ pub enum Error {
     Internal(String),
 }
 
-/// Why a managed account refused a dispatch, as a connect offer reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccountState {
-    /// No grant is stored for the caller.
-    NotConnected,
-    /// The grant is revoked or must be re-consented.
-    ReconnectRequired,
-}
-
-impl AccountState {
-    /// The `accounts.v1` error code (design §9.1).
-    #[must_use]
-    pub fn code(self) -> &'static str {
-        match self {
-            Self::NotConnected => "account_not_connected",
-            Self::ReconnectRequired => "reconnect_required",
-        }
-    }
-}
-
 impl Error {
-    /// A [`Error::Config`] refusal retyped as [`Error::AccountRefused`] when
-    /// `cause` is an account state a connect journey remedies and the backend
-    /// names its account; any other error is returned unchanged.
-    #[must_use]
-    pub(crate) fn typed_by(
-        self,
-        cause: &crate::identity_propagation::PropagationError,
-        account_id: Option<&str>,
-    ) -> Self {
-        use crate::identity_propagation::PropagationError as Cause;
-        let state = match cause {
-            Cause::AccountNotConnected(_) => AccountState::NotConnected,
-            Cause::AccountReconnectRequired(_) => AccountState::ReconnectRequired,
-            _ => return self,
-        };
-        match (self, account_id) {
-            (Self::Config(message), Some(id)) => Self::AccountRefused {
-                message,
-                account_id: id.to_owned(),
-                state,
-                data: None,
-            },
-            (other, _) => other,
-        }
-    }
-
     /// Create a JSON-RPC error
     pub fn json_rpc(code: i32, message: impl Into<String>) -> Self {
         Self::JsonRpc {
@@ -372,9 +306,7 @@ impl Error {
             | Self::Forbidden { code, .. } => *code,
             Self::Json(_) => -32700, // Parse error
             Self::Protocol(_) | Self::ResponseFirewallRefused => -32600, // Invalid request
-            Self::BackendNotFound(_)
-            | Self::ToolNotFound(_)
-            | Self::AccountRefused { data: Some(_), .. } => -32001,
+            Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
             Self::BackendUnavailable(_)
             | Self::CircuitOpen(_)
             | Self::BackendTimeout(_)

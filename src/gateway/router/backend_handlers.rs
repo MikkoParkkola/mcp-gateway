@@ -21,6 +21,7 @@ use crate::backend::prepare_tool_metadata;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
+use crate::personal_accounts::refusal::refusal_text;
 use crate::protocol::{JsonRpcResponse, RequestId, Tool};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
@@ -727,7 +728,7 @@ pub(super) async fn backend_handler(
                     identity_key = binding;
                     Ok(headers)
                 }
-                Err(e) => Err(e.to_string()).inspect_err(|_| typed = Some(e)),
+                Err(e) => Err(refusal_text(&e)).inspect_err(|_| typed = Some(e)),
             }
         };
         let subject = audit_subject(verified_identity.as_ref());
