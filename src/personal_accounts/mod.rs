@@ -31,6 +31,9 @@ pub(crate) mod identity;
 // `initialize_store_offline` and kept out of this file for its size.
 mod offline_migration;
 mod provider;
+mod revoke;
+#[cfg(test)]
+pub(crate) mod revoke_fixture;
 mod service;
 mod storage;
 mod vault;
@@ -345,18 +348,11 @@ impl PersonalAccountStore {
     }
 
     /// Durably tombstone the current generation before reporting success.
-    #[cfg_attr(
-        all(not(test), not(kani)),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
+    /// Production revokes through `revoke_capturing`; this is that call with
+    /// the material dropped, kept for the store-level suites.
+    #[cfg(any(test, kani))]
     pub(crate) fn revoke(&self, account: &AccountKey) -> Result<(), AccountError> {
-        let mut authority = self.lock_authority();
-        #[cfg(test)]
-        store_probe::entered(store_probe::StoreOp::Revoke, &self.config.store_dir);
-        storage::commit::revoke(&self.config, &mut authority, account)
+        self.revoke_capturing(account).map(drop)
     }
 
     /// Fence the grant a provider rejected, and only while it is still the
@@ -434,6 +430,7 @@ pub(crate) use worker::{CustodyError, CustodyStartError};
 pub use offline_migration::{
     MigratedCredential, OfflineMigrationError, migrate_legacy_credential_offline,
 };
+pub(crate) use revoke::{AccountRevocation, ProviderOutcome};
 pub(crate) use vault::{AccountCustody, VaultStrategy};
 
 /// The one refresh provider a gateway runs: the real policy over the real

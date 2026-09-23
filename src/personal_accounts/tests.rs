@@ -549,6 +549,10 @@ mod commit;
 mod fence;
 
 #[cfg(unix)]
+#[path = "revoke_tests.rs"]
+mod revoke;
+
+#[cfg(unix)]
 #[path = "crash_tests.rs"]
 mod crash;
 

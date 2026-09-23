@@ -474,13 +474,6 @@ fn refusal_as_fault(refusal: &ManifestRefusal) -> AccountError {
 }
 
 #[cfg(unix)]
-#[cfg_attr(
-    all(not(test), not(kani)),
-    expect(
-        dead_code,
-        reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-    )
-)]
 pub(in crate::personal_accounts) fn revoke(
     config: &StoreConfig,
     slot: &mut Option<Authority>,

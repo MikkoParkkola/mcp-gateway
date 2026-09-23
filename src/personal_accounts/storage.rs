@@ -702,6 +702,39 @@ pub(super) fn lookup(
     }
 }
 
+/// The record a `Connected` or `ReconnectRequired` entry still names, with the
+/// same digest and version checks as a lookup. Both states keep the pointer, so
+/// both may still hold a live provider token. `None` for every other state, and
+/// for a named record that is missing or not authentic: a revoke must still
+/// tombstone an account whose ciphertext is gone.
+#[cfg(unix)]
+pub(super) fn retained_record(
+    config: &StoreConfig,
+    authority: &Authority,
+    digest: &str,
+    account: &AccountKey,
+) -> Option<GrantRecord> {
+    let entry = authority.entries.get(digest)?;
+    if !matches!(
+        entry.state,
+        GrantState::Connected | GrantState::ReconnectRequired
+    ) {
+        return None;
+    }
+    let version = entry_version(entry).ok()?;
+    connected_record(config, authority, entry, &version, digest, account).ok()
+}
+
+#[cfg(not(unix))]
+pub(super) fn retained_record(
+    _config: &StoreConfig,
+    _authority: &Authority,
+    _digest: &str,
+    _account: &AccountKey,
+) -> Option<GrantRecord> {
+    None
+}
+
 #[cfg(not(unix))]
 pub(super) fn lookup(
     _config: &StoreConfig,

@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::consent::{GuardedCommit, GuardedCommitError};
+use super::revoke::RevocationMaterial;
 use super::{
     AccountError, AccountKey, AccountLookup, FenceOutcome, GrantRecord, GrantVersion,
     PersonalAccountStore, RefreshOutcome,
@@ -327,17 +328,18 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
         Ok(credentials)
     }
 
-    /// Durably revoke, then bar new leases and release eligibility.
-    #[cfg_attr(
-        all(not(test), not(kani)),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
-    pub(crate) fn invalidate(&self, account: &AccountKey) -> Result<(), AccountServiceError> {
-        self.store.revoke(account)?;
-        Ok(())
+    /// Durably revoke, then bar new leases and release eligibility. Returns
+    /// the provider tokens the grant still held, for the caller to revoke.
+    pub(crate) fn invalidate(
+        &self,
+        account: &AccountKey,
+    ) -> Result<Option<RevocationMaterial>, AccountServiceError> {
+        Ok(self.store.revoke_capturing(account)?)
+    }
+
+    /// The refresh provider, for the revoke route's RFC 7009 calls.
+    pub(crate) fn provider(&self) -> &P {
+        &self.provider
     }
 
     /// Commit a grant only if `expected` still holds under the authority lock.
