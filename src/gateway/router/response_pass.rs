@@ -84,3 +84,63 @@ pub(super) fn inspect_tools_call_response(
     }
     DeliveryInspection::AlreadyInspected
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::RequestId;
+    use crate::security::firewall::FirewallConfig;
+    use serde_json::json;
+
+    fn correlation() -> ResponseCorrelation<'static> {
+        ResponseCorrelation {
+            session_id: "session-a",
+            caller: "caller-a",
+            external_server: "demo",
+            external_tool: "probe",
+        }
+    }
+
+    fn targets() -> Vec<ResponsePolicyTarget> {
+        vec![ResponsePolicyTarget {
+            server: "demo".into(),
+            tool: "probe".into(),
+        }]
+    }
+
+    fn firewall() -> Firewall {
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+    }
+
+    /// Delivery may skip only after this pass actually inspected: with no
+    /// firewall, or no result to inspect, the answer is Required.
+    #[test]
+    fn required_unless_this_pass_inspected() {
+        let mut ok = JsonRpcResponse::success(RequestId::Number(1), json!({"content": []}));
+        assert_eq!(
+            inspect_tools_call_response(None, &mut ok, &targets(), &correlation()),
+            DeliveryInspection::Required
+        );
+
+        let fw = firewall();
+        let mut failed = JsonRpcResponse::error(Some(RequestId::Number(2)), -32000, "backend");
+        assert_eq!(
+            inspect_tools_call_response(Some(&fw), &mut failed, &targets(), &correlation()),
+            DeliveryInspection::Required
+        );
+        assert_eq!(fw.response_inspection_counts().inspections, 0);
+
+        assert_eq!(
+            inspect_tools_call_response(Some(&fw), &mut ok, &targets(), &correlation()),
+            DeliveryInspection::AlreadyInspected
+        );
+        assert_eq!(fw.response_inspection_counts().inspections, 1);
+    }
+}
