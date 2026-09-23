@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing keeps in step with the gateway it fronts — and which fails silently
   when it falls behind, because a stale runtime is only visible when a backend
   that needs it stops starting.
+  ([@terafin](https://github.com/terafin), [#644](https://github.com/MikkoParkkola/mcp-gateway/pull/644))
 
 ### Fixed
 
