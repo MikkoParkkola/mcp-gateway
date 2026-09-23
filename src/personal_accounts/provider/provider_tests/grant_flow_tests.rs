@@ -308,6 +308,7 @@ async fn revoke_posts_the_rfc7009_form_to_the_pinned_revocation_endpoint() {
             ("client_secret", SECRET_VALUE),
         ])
     );
+    assert_eq!(sent[1].0, GOOGLE_REVOKE, "the access token too");
     assert!(sent[1].1.contains(&("token".into(), "access-1".into())));
     assert!(
         sent[1]

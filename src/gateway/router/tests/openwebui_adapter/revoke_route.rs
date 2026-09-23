@@ -91,7 +91,7 @@ struct Gateway {
     router: axum::Router,
     fixture: RevokeFixture,
     state: Arc<crate::gateway::router::AppState>,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 
 async fn gateway(
@@ -134,7 +134,7 @@ async fn gateway_with(
         router,
         fixture,
         state,
-        _dir: dir,
+        dir,
     }
 }
 
@@ -293,7 +293,8 @@ async fn revoke_route_other_principal_cannot_reach_a_and_anonymous_is_401() {
     assert_eq!(gw.fixture.state(&key("alice")).await, "connected");
 }
 
-/// T-C07c: the audit write fails after the tombstone; 503, still revoked.
+/// T-C07c: the audit write fails after the tombstone; 503, still revoked,
+/// and the captured tokens still reach the provider (they exist nowhere else).
 #[tokio::test(flavor = "multi_thread")]
 async fn revoke_route_audit_failure_is_503_and_keeps_the_tombstone() {
     // GIVEN
@@ -310,11 +311,9 @@ async fn revoke_route_audit_failure_is_503_and_keeps_the_tombstone() {
     assert_eq!(body["schema_version"], "accounts.v1");
     assert_eq!(body["error"]["code"], "audit_unavailable");
     assert_eq!(body["local_status"], "revoked");
+    assert_eq!(body["provider_revocation"], "confirmed");
     assert_eq!(gw.fixture.state(&key("alice")).await, "revoked");
-    assert!(
-        gw.fixture.received().is_empty(),
-        "no provider call past a failed audit"
-    );
+    assert_eq!(gw.fixture.received(), both(), "refresh then access");
 }
 
 /// An account id with no managed descriptor is `not_found`; nothing is touched.
@@ -339,12 +338,36 @@ async fn revoke_route_without_hosted_is_not_mounted() {
     assert_eq!(gw.fixture.state(&key("alice")).await, "connected");
 }
 
-/// A per-user slot on the bound backend under `subject`'s account prefix.
+/// A per-user slot on the bound backend, keyed exactly as dispatch keys it.
 fn account_slot(subject: &str, generation: &str) -> crate::backend::PoolKey {
-    let digest = key(subject).digest().unwrap();
     crate::backend::PoolKey::PerUser {
-        binding: format!("acct:v1:{digest}:{generation}:1:1"),
+        binding: crate::personal_accounts::revoke_fixture::account_binding(
+            &key(subject),
+            generation,
+        ),
     }
+}
+
+/// The bound backend as the registry holds it, registering it only if the
+/// gateway has not already done so.
+fn bound_backend(gw: &Gateway) -> Arc<crate::backend::Backend> {
+    if let Some(backend) = gw.state.backends.get(BOUND_BACKEND) {
+        return backend;
+    }
+    let backend = Arc::new(crate::backend::Backend::new(
+        BOUND_BACKEND,
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    assert!(
+        gw.state.backends.register(backend),
+        "registry took the backend"
+    );
+    gw.state
+        .backends
+        .get(BOUND_BACKEND)
+        .expect("bound backend registered")
 }
 
 /// T-REV (eviction count): revoke drops every one of A's upstream sessions on
@@ -362,19 +385,13 @@ async fn revoke_route_evicts_only_the_revoked_principals_slots() {
         ],
     )
     .await;
-    let backend = Arc::new(crate::backend::Backend::new(
-        BOUND_BACKEND,
-        crate::config::BackendConfig::default(),
-        &crate::config::FailsafeConfig::default(),
-        std::time::Duration::from_secs(60),
-    ));
+    let backend = bound_backend(&gw);
     let alice = [account_slot("alice", "gen1"), account_slot("alice", "gen2")];
     let bob = account_slot("bob", "gen1");
     for slot in alice.iter().chain([&bob]) {
         let transport = Arc::new(super::super::RouterNotificationTestTransport::success());
         backend.set_pooled_transport_for_test(slot, transport);
     }
-    assert!(gw.state.backends.register(Arc::clone(&backend)));
     // PREMISE: every slot is live before the revoke
     for slot in alice.iter().chain([&bob]) {
         assert!(backend.pool_has_slot_for_test(slot), "premise: {slot:?}");
@@ -411,3 +428,6 @@ async fn revoke_route_without_revocation_endpoint_is_unsupported_and_revoked() {
     assert!(gw.fixture.received().is_empty(), "no request to /revoke");
     assert_eq!(gw.fixture.state(&key("alice")).await, "revoked");
 }
+
+#[path = "revoke_route_refusals.rs"]
+mod refusals;

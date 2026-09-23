@@ -522,7 +522,7 @@ async fn start_refuses_expired_sessions_and_non_string_ids() {
     assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
 }
 
-type Captured = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
+pub(super) type Captured = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
 
 struct Sink(Captured);
 
@@ -539,7 +539,7 @@ impl std::io::Write for Sink {
 
 /// Every span and event at TRACE on this thread (the handler, the bridge
 /// client and the fake all run on it under `current_thread`).
-fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
+pub(super) fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::prelude::*;
     static INTEREST: std::sync::Once = std::sync::Once::new();

@@ -27,6 +27,9 @@ use super::{
     PersonalAccountStore, StoreConfig,
 };
 
+#[path = "revoke_fixture_down.rs"]
+mod down;
+pub(crate) use down::StoreDown;
 #[path = "revoke_fixture_token.rs"]
 mod token;
 
@@ -177,6 +180,11 @@ fn seed(store: &PersonalAccountStore, key: &AccountKey, record: &GrantRecord, ho
         Seed::DescriptorFenced => store.mark_reconnect_required(key, &"1".repeat(64)).unwrap(),
         Seed::Revoked => store.revoke(key).unwrap(),
     }
+}
+
+/// The upstream-session binding dispatch mints for `account` at `generation`.
+pub(crate) fn account_binding(account: &AccountKey, generation: &str) -> String {
+    super::vault::cache_binding_for_test(account, generation)
 }
 
 /// A grant whose two tokens are distinct per `label`.

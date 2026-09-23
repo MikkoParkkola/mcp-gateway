@@ -132,7 +132,10 @@ fn owner_and_descriptor(
         .get(account_id)
         .filter(|d| d.mode == crate::personal_accounts::config::DescriptorMode::PersonalManaged)?
         .clone();
-    Some((super::own_key(config, identity, account_id)?, descriptor))
+    Some((
+        super::own_key(config, identity, account_id).ok()?,
+        descriptor,
+    ))
 }
 
 pub(super) async fn status(

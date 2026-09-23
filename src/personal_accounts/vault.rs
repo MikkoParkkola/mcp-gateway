@@ -330,6 +330,21 @@ fn cache_binding(
     ))
 }
 
+/// [`cache_binding`] for a lease of `generation`, so a test plants the key
+/// dispatch mints rather than a hand-written copy of its format.
+#[cfg(test)]
+pub(super) fn cache_binding_for_test(account: &AccountKey, generation: &str) -> String {
+    let lease = CredentialLease {
+        account: account.clone(),
+        generation: generation.to_owned(),
+        authorization_epoch: 1,
+        scopes: Vec::new(),
+        descriptor_revision: "0".repeat(64),
+        token_revision: 1,
+    };
+    cache_binding(account, &lease).expect("a valid account key binds")
+}
+
 #[async_trait::async_trait]
 impl IdentityPropagation for VaultStrategy {
     /// Unchanged behaviour for every existing consumer: [`Self::prepare`] with
