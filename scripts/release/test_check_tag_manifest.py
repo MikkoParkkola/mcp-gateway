@@ -2140,8 +2140,23 @@ class VariantStage(unittest.TestCase):
             )
         self.assertRegex(
             stage,
-            r"astral\.sh/uv/install\.sh",
-            "the variant stage does not install uv",
+            r"COPY --from=ghcr\.io/astral-sh/uv:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}\s+/uv\s+/uvx\s",
+            "the variant stage does not install uv from a digest-pinned image",
+        )
+
+    def test_the_variant_executes_no_downloaded_installer(self):
+        # A fetched script runs whatever its URL serves on the day of the build.
+        # Node's integrity rests on apt verifying packages against a key whose
+        # fingerprint is pinned here, and uv's on an image digest.
+        stage = self.variant_stage()
+        for script in (r"setup_\d+\.x", r"install\.sh"):
+            self.assertNotRegex(
+                stage, script, f"the variant stage executes a downloaded {script}"
+            )
+        self.assertIn(
+            "6F71F525282841EEDAF851B42F59B5F99B1BE0B4",
+            stage,
+            "the variant stage does not pin the NodeSource signing key fingerprint",
         )
 
     def test_the_node_and_npm_assertions_are_at_build_time(self):

@@ -111,10 +111,16 @@ RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
     git \
     gnupg \
     openssh-client \
-    && curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource-setup.sh \
-    && bash /tmp/nodesource-setup.sh \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -f /tmp/nodesource-setup.sh \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.key \
+    && test "$(gpg --show-keys --with-colons /tmp/nodesource.key | grep -c '^pub:')" = 1 \
+    && gpg --show-keys --with-colons /tmp/nodesource.key \
+       | grep -qx 'fpr:::::::::6F71F525282841EEDAF851B42F59B5F99B1BE0B4:' \
+    && gpg --dearmor -o /usr/share/keyrings/nodesource.gpg /tmp/nodesource.key \
+    && rm -f /tmp/nodesource.key \
+    && printf '%s\n' 'Types: deb' 'URIs: https://deb.nodesource.com/node_24.x' 'Suites: nodistro' \
+       'Components: main' 'Signed-By: /usr/share/keyrings/nodesource.gpg' \
+       > /etc/apt/sources.list.d/nodesource.sources \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && node --version | grep -q '^v24\.' \
     && npm --version >/dev/null
@@ -138,9 +144,7 @@ RUN cd /tmp && mkdir npm-patch && cd npm-patch \
        done \
     && cd / && rm -rf /tmp/npm-patch
 
-RUN curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh \
-    && env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh \
-    && rm -f /tmp/uv-install.sh
+COPY --from=ghcr.io/astral-sh/uv:0.12.18@sha256:3adc3706091ce7c2fe595e669628caedd6d951551b92b258b7e7dbe06d9440bc /uv /uvx /usr/local/bin/
 
 RUN mkdir -p /home/gateway/.cache/uv /home/gateway/.npm && \
     chown -R gateway:gateway /home/gateway/.cache /home/gateway/.npm
