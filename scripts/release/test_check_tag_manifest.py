@@ -1906,6 +1906,73 @@ class VariantStage(unittest.TestCase):
             "the variant stage does not install uv",
         )
 
+    def test_the_variant_installs_what_a_deployment_declares(self):
+        stage = self.variant_stage()
+        self.assertRegex(
+            stage,
+            r"COPY[^\n]*docker/entrypoint-full\.sh",
+            "the variant does not copy the entrypoint into the image",
+        )
+        self.assertRegex(
+            stage,
+            r"ENTRYPOINT \[[^\]]*entrypoint-full\.sh",
+            "the variant does not run its own entrypoint",
+        )
+        script = (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+        self.assertIn(
+            "EXTRA_APT_PACKAGES",
+            script,
+            "the entrypoint ignores the packages a deployment declares",
+        )
+        self.assertRegex(
+            script,
+            r"apt-get install",
+            "the entrypoint never installs anything",
+        )
+        # Installing needs root, but the image must not *default* to it: a
+        # deployment asks for root itself, and the entrypoint drops back.
+        self.assertEqual(
+            re.findall(r"(?m)^USER\s+(\S+)\s*$", stage)[-1],
+            "gateway",
+            "the variant leaves the image declaring root as its user",
+        )
+
+    def test_a_deployment_gets_its_startup_steps_before_the_gateway(self):
+        script = (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+        self.assertRegex(
+            script,
+            r"/docker-entrypoint\.d",
+            "the entrypoint has no drop-in directory for a deployment's steps",
+        )
+        self.assertRegex(
+            script,
+            r"\.envsh\)\s*\.\s*\"\$f\"|\.\s*\"\$f\"",
+            "the entrypoint does not source an envsh drop-in",
+        )
+        self.assertRegex(
+            script,
+            r"\[ ! -x \"\$f\" \]",
+            "the entrypoint runs a drop-in that arrived without the exec bit",
+        )
+        run = script.index("run_dropins\n")
+        drop = script.index("setpriv --reuid=1001")
+        self.assertLess(
+            run,
+            drop,
+            "the entrypoint drops privileges before a deployment's steps run, "
+            "so a step that needs root would fail",
+        )
+        self.assertEqual(
+            script.count("run_dropins\n"),
+            2,
+            "a path through the entrypoint skips the drop-ins: root and "
+            "non-root each call them once",
+        )
+
     def test_the_node_and_npm_assertions_are_at_build_time(self):
         self.assertRegex(
             self.body,

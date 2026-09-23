@@ -146,3 +146,7 @@ RUN mkdir -p /home/gateway/.cache/uv /home/gateway/.npm && \
     chown -R gateway:gateway /home/gateway/.cache /home/gateway/.npm
 
 USER gateway
+
+COPY --chmod=0755 docker/entrypoint-full.sh /usr/local/bin/entrypoint-full.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-full.sh"]

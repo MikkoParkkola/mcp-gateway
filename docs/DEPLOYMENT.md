@@ -118,8 +118,40 @@ runtimes a stdio backend shells out to — Node.js 24, `uv`, `git` and
 `openssh-client` (for `git+https://` and `git+ssh://` package specs). It also
 leaves `curl` behind, which the builds above it use, and picks up `python3` as
 a hard dependency of the NodeSource package; neither is there to be spawned.
-`pnpm`, `yarn` and `bunx` are not installed: a backend naming one of those
-needs a layer of its own.
+`pnpm`, `yarn` and `bunx` are not installed. A backend that needs one of them —
+or a deployment that needs a package the image has no reason to carry, such as
+`iproute2` to route a backend's egress through a tunnel — declares it instead of
+forking the image:
+
+```bash
+docker run --user root -e EXTRA_APT_PACKAGES="iproute2 net-tools" \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
+
+Installing needs root, so the container runs as root and the entrypoint drops to
+the gateway user before exec'ing it. Run as the image's own user it does nothing,
+so the image behaves exactly as it does without the variable.
+
+Packages resolve at every start, so a restart can pick up a different build of
+one; name a version (`iproute2=6.12.0-1`) when that matters. An install that
+fails stops the container rather than starting without the package it was told
+to carry, which couples startup to the apt mirror — the trade a deployment makes
+by naming a package.
+
+Startup steps the image has no reason to carry go in `/docker-entrypoint.d`,
+which a deployment mounts (a file in the repository, a directory on a share — the
+entrypoint does not care). Executable `*.sh` files run and `*.envsh` files are
+sourced, in name order, as the container's user, after the packages are installed
+and before the gateway starts, so a route or a key is in place by the time a
+backend spawns. A file that is not executable is skipped with a message rather
+than half-run, and a script that fails stops the container. Both follow the
+convention nginx and postgres ship:
+
+```bash
+docker run --user root -e EXTRA_APT_PACKAGES="iproute2" \
+  -v ./startup:/docker-entrypoint.d:ro \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
 
 ```bash
 docker pull ghcr.io/mikkoparkkola/mcp-gateway:latest-full
