@@ -185,13 +185,6 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         .map_err(CustodyError::from)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
     pub(crate) async fn resolve(
         &self,
         account: &AccountKey,

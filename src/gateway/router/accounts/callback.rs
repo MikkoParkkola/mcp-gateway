@@ -13,14 +13,13 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{Html, IntoResponse, Response};
 
 use super::super::AppState;
+use super::complete::COMPLETE;
 use super::hosted::CALLBACK;
 use crate::personal_accounts::{CallbackOutcome, CallbackRequest, JourneyLimits, JourneyService};
 
 /// Each journey's binding cookie is named for it, so parallel journeys in one
 /// browser never overwrite each other's (§4.2 step 7, L4).
 const BINDING_COOKIE: &str = "__Secure-mcpgw-journey-";
-/// Where the page sends the user next, a same-origin navigation.
-const COMPLETE: &str = "/accounts/v1/complete";
 
 /// The binding cookie for journey `id`. `__Host-` would need `Path=/`; the
 /// cookie is scoped to the callback only. `max_age == 0` clears it.
@@ -124,7 +123,7 @@ fn render(outcome: &CallbackOutcome) -> Response {
     response
 }
 
-fn escape(text: &str) -> String {
+pub(super) fn escape(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {

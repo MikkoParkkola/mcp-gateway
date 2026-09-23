@@ -9,12 +9,13 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::super::AppState;
+use super::envelope::{SCHEMA, refusal};
 use crate::config::Config;
 use crate::gateway::openwebui_adapter::adapter_issuer;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -162,7 +163,7 @@ pub(super) fn status_body(view: &JourneyView) -> Value {
         JourneyStatus::Superseded => JourneyStatus::Expired,
         other => other,
     };
-    json!({"schema_version": "accounts.v1", "status": status, "reason": view.reason,
+    json!({"schema_version": SCHEMA, "status": status, "reason": view.reason,
            "expires_at": view.expires_at, "replay_refused": view.replay_refused,
            "replay_refusals": view.replay_refusals})
 }
@@ -188,20 +189,6 @@ fn journey_refusal(error: JourneyError) -> Response {
             refusal_of(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable")
         }
     }
-}
-
-/// The §9.1 error envelope; `Retry-After` when the refusal names one.
-fn refusal(status: StatusCode, code: &str, retry_after: Option<u64>) -> Response {
-    let retryable = retry_after.is_some() || status == StatusCode::SERVICE_UNAVAILABLE;
-    let body = json!({"schema_version": "accounts.v1",
-                      "error": {"code": code, "message": code, "retryable": retryable}});
-    let mut response = (status, axum::Json(body)).into_response();
-    if let Some(seconds) = retry_after {
-        response
-            .headers_mut()
-            .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
-    }
-    response
 }
 
 #[cfg(test)]
