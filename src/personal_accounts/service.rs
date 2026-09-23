@@ -248,13 +248,6 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
     }
 
     /// Account key → lease, or a typed refusal. Storage failure is never absence.
-    #[cfg_attr(
-        all(not(test), not(kani)),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
     pub(crate) fn resolve(
         &self,
         account: &AccountKey,

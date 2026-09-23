@@ -12,7 +12,9 @@ use std::time::Duration;
 use axum::http::{HeaderMap, header};
 use serde::Deserialize;
 
+use crate::config::Config;
 use crate::gateway::openwebui_adapter::session_principal;
+use crate::key_server::oidc::VerifiedIdentity;
 
 /// The session route answers in far less; anything slower is refused.
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -32,6 +34,34 @@ pub(super) struct Session {
     pub(super) installation_id: String,
     pub(super) user_endpoint: String,
     pub(super) cookie_name: String,
+}
+
+/// The one adapter with a `session` block (config admits at most one, §4.2
+/// step 1 L3); `None` means no browser credential exists at all.
+pub(super) fn session_of(config: &Config) -> Option<Session> {
+    let (adapter, block) = config
+        .accounts
+        .as_ref()?
+        .adapters
+        .iter()
+        .find_map(|adapter| Some((adapter, adapter.session.as_ref()?)))?;
+    Some(Session {
+        installation_id: adapter.installation_id.clone(),
+        user_endpoint: block.user_endpoint.clone(),
+        cookie_name: block.cookie_name.clone(),
+    })
+}
+
+/// Whether the request offers the session cookie at all, valid or not; used
+/// to classify credentials, never to authenticate.
+pub(super) fn presents_session(session: &Session, headers: &HeaderMap) -> bool {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|line| line.to_str().ok())
+        .flat_map(|line| line.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .any(|(key, _)| key == session.cookie_name)
 }
 
 pub(super) struct OwuiSessionBridge {
@@ -60,6 +90,23 @@ impl OwuiSessionBridge {
         let token = sole_cookie(headers, &session.cookie_name)?;
         let id = self.session_user(&session.user_endpoint, token).await?;
         Some(session_principal(&session.installation_id, &id))
+    }
+
+    /// [`Self::principal`] as the identity the account key is derived from,
+    /// built the same way for every browser route so the keys agree.
+    pub(super) async fn identity(
+        &self,
+        session: &Session,
+        headers: &HeaderMap,
+    ) -> Option<VerifiedIdentity> {
+        let (issuer, subject) = self.principal(session, headers).await?;
+        Some(VerifiedIdentity {
+            subject,
+            email: String::new(),
+            name: None,
+            groups: Vec::new(),
+            issuer,
+        })
     }
 
     async fn session_user(&self, endpoint: &str, token: &str) -> Option<String> {

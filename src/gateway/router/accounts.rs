@@ -2,20 +2,19 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The hosted `/accounts/v1` surface (MIK-6745 design §4.3, §6.4).
 //!
-//! `DELETE /accounts/v1/connections/{account_id}` (§8.2) is API credential
-//! only: it sits behind `auth_middleware` and the `OpenWebUI` adapter, and the
-//! principal is the `VerifiedIdentity` the adapter inserted. The account key is
-//! built from that principal and the configured descriptor, so a caller can
-//! only ever name their own account; nothing in the path or body can select
-//! another principal's entry.
+//! `DELETE /accounts/v1/connections/{account_id}` (§8.2, §8.3) is mounted
+//! once and names its principal by exactly one credential: the adapter's
+//! `VerifiedIdentity` or the bridge-verified Open `WebUI` session. The account
+//! key is built from that principal and the configured descriptor, so a caller
+//! can only ever name their own account; nothing in the path or body can
+//! select another principal's entry.
 
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Path, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{get, post};
 use serde_json::json;
 
 use super::AppState;
@@ -31,6 +30,12 @@ use crate::personal_accounts::{
 mod bridge;
 #[path = "accounts/callback.rs"]
 mod callback;
+#[path = "accounts/complete.rs"]
+mod complete;
+#[path = "accounts/connections.rs"]
+mod connections;
+#[path = "accounts/envelope.rs"]
+mod envelope;
 #[path = "accounts/hosted.rs"]
 mod hosted;
 #[path = "accounts/journeys.rs"]
@@ -52,11 +57,12 @@ pub(crate) fn account_handles_of(custody: Option<&Arc<GatewayCustody>>) -> Optio
 
 /// The whole `/accounts/v1` router, or `None` unless `accounts.hosted` is
 /// configured and custody is up; then the prefix is the ordinary 404.
-/// `authenticate` applies the main chain's auth layers to the owner routes.
+/// `authenticate` applies the main chain's auth layers to the owner routes
+/// and, separately, to the API half of `DELETE` (§6.4: mounted once).
 pub(super) fn router(
     handles: Option<AccountHandles>,
     config: &Config,
-    authenticate: impl FnOnce(Router<Arc<AppState>>) -> Router<Arc<AppState>>,
+    authenticate: impl Fn(Router<Arc<AppState>>) -> Router<Arc<AppState>>,
 ) -> Option<Router<Arc<AppState>>> {
     let hosted = config
         .accounts
@@ -67,11 +73,7 @@ pub(super) fn router(
         journeys,
     } = handles.filter(|_| hosted)?;
     let create = Arc::clone(&journeys);
-    let completing = Arc::clone(&journeys);
-    let browser = browser_routes(Arc::clone(&journeys)).route(
-        CALLBACK,
-        get(move |state, uri, headers| callback::callback(completing, state, uri, headers)),
-    );
+    let reading = Arc::clone(&journeys);
     let owner = Router::new()
         .route(
             "/accounts/v1/journeys",
@@ -79,58 +81,62 @@ pub(super) fn router(
         )
         .route(
             "/accounts/v1/journeys/{id}",
-            get(move |state, identity, id| journeys::status(journeys, state, identity, id)),
-        )
-        .route(
-            ROUTE,
-            delete(
-                move |State(state): State<Arc<AppState>>,
-                      Path(account_id): Path<String>,
-                      request| {
-                    let revocation = Arc::clone(&revocation);
-                    async move { delete_connection(state, revocation, account_id, request).await }
-                },
-            ),
+            get(move |state, identity, id| journeys::status(reading, state, identity, id)),
         );
+    let api_delete = authenticate(connections::api_route(Arc::clone(&revocation)));
+    let browser = browser_routes(journeys, revocation, api_delete);
     Some(hosted::shell(authenticate(owner).merge(browser)))
 }
 
-/// Routes a browser reaches with its Open `WebUI` session and no API
-/// credential; merged AFTER `authenticate`, so no auth layer wraps them.
-fn browser_routes(journeys: Arc<dyn JourneyService>) -> Router<Arc<AppState>> {
-    let bridge = match bridge::OwuiSessionBridge::new() {
-        Ok(bridge) => Arc::new(bridge),
-        Err(error) => {
-            // Without the client there is no bridge; the route stays the 404.
+/// Routes a browser reaches with its Open `WebUI` session; merged AFTER
+/// `authenticate`, so no auth layer wraps them. `DELETE` stays mounted for
+/// API callers, and the callback (which needs no bridge), even when the
+/// bridge client cannot be built.
+fn browser_routes(
+    journeys: Arc<dyn JourneyService>,
+    revocation: Arc<dyn AccountRevocation>,
+    api_delete: Router<Arc<AppState>>,
+) -> Router<Arc<AppState>> {
+    let bridge = bridge::OwuiSessionBridge::new()
+        .inspect_err(|error| {
             tracing::error!(%error, "Open WebUI session bridge client unavailable");
-            return Router::new();
-        }
+        })
+        .ok()
+        .map(Arc::new);
+    let disconnect = connections::route(api_delete, Arc::clone(&revocation), bridge.clone());
+    let completing = Arc::clone(&journeys);
+    let routes = Router::new().route(ROUTE, disconnect).route(
+        CALLBACK,
+        get(move |state, uri, headers| callback::callback(completing, state, uri, headers)),
+    );
+    let Some(bridge) = bridge else {
+        return routes;
     };
-    Router::new().route(
-        start::START,
-        get(move |state, id, headers| start::start(journeys, bridge, state, id, headers)),
-    )
+    let starting = Arc::clone(&bridge);
+    routes
+        .route(
+            start::START,
+            get(move |state, id, headers| start::start(journeys, starting, state, id, headers)),
+        )
+        .merge(complete::routes(revocation, bridge))
 }
 
-async fn delete_connection(
-    state: Arc<AppState>,
-    revocation: Arc<dyn AccountRevocation>,
+/// Revoke `identity`'s own `account_id` (§8.2): tombstone, evict, audit, then
+/// the provider. Whoever authenticated the caller, the key is theirs alone.
+async fn revoke_for(
+    state: &AppState,
+    revocation: &dyn AccountRevocation,
+    identity: &VerifiedIdentity,
     account_id: String,
-    request: Request,
 ) -> Response {
-    // Only the adapter's verified identity names a principal here; a bare API
-    // key or a path segment never does.
-    let Some(identity) = request.extensions().get::<VerifiedIdentity>().cloned() else {
-        return refusal(StatusCode::UNAUTHORIZED, "unauthenticated");
-    };
     let config = state.live_config.get();
-    let Some(key) = own_key(&config, &identity, &account_id) else {
-        return refusal(StatusCode::NOT_FOUND, "not_found");
+    let Some(key) = own_key(&config, identity, &account_id) else {
+        return envelope::refusal(StatusCode::NOT_FOUND, "not_found", None);
     };
     let Ok(material) = revocation.invalidate(&key).await else {
-        return refusal(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable");
+        return envelope::refusal(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable", None);
     };
-    evict_slots(&state, &config, &key, &account_id).await;
+    evict_slots(state, &config, &key, &account_id).await;
     let audited = audit_identity_propagation(
         state.transparency_log.as_deref(),
         "account_revoke",
@@ -141,13 +147,13 @@ async fn delete_connection(
     );
     if audited.is_err() {
         // The tombstone stands; only the provider call is withheld.
-        let body = json!({"schema_version": 1, "error": "audit_unavailable",
-                          "local_status": "revoked"});
+        let mut body = envelope::body("audit_unavailable", true);
+        body["local_status"] = json!("revoked");
         return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
     }
     let outcome = revocation.revoke_at_provider(&account_id, material).await;
-    let body = json!({"schema_version": 1, "account_id": account_id, "status": "revoked",
-                      "provider_revocation": outcome.as_str()});
+    let body = json!({"schema_version": envelope::SCHEMA, "account_id": account_id,
+                      "status": "revoked", "provider_revocation": outcome.as_str()});
     (StatusCode::OK, axum::Json(body)).into_response()
 }
 
@@ -178,12 +184,4 @@ async fn evict_slots(state: &AppState, config: &Config, key: &AccountKey, accoun
             backend.evict_identity_slots(&prefix).await;
         }
     }
-}
-
-fn refusal(status: StatusCode, error: &str) -> Response {
-    (
-        status,
-        axum::Json(json!({ "schema_version": 1, "error": error })),
-    )
-        .into_response()
 }

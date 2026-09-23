@@ -15,7 +15,6 @@ use axum::response::{Html, IntoResponse, Response};
 use super::super::AppState;
 use super::bridge::{OwuiSessionBridge, Session};
 use crate::config::Config;
-use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::{
     JourneyError, JourneyLimits, JourneyRefusal, JourneyService, JourneyStarted,
 };
@@ -81,17 +80,8 @@ fn page_for(error: JourneyError) -> Page {
 /// The one adapter with a `session` block (config admits at most one, §4.2
 /// step 1 L3) and the journey limits.
 fn bridged(config: &Config) -> Option<(Session, JourneyLimits)> {
-    let accounts = config.accounts.as_ref()?;
-    let (adapter, block) = accounts
-        .adapters
-        .iter()
-        .find_map(|adapter| Some((adapter, adapter.session.as_ref()?)))?;
-    let session = Session {
-        installation_id: adapter.installation_id.clone(),
-        user_endpoint: block.user_endpoint.clone(),
-        cookie_name: block.cookie_name.clone(),
-    };
-    Some((session, JourneyLimits::from(&accounts.limits)))
+    let limits = JourneyLimits::from(&config.accounts.as_ref()?.limits);
+    Some((super::bridge::session_of(config)?, limits))
 }
 
 pub(super) async fn start(
@@ -110,15 +100,8 @@ pub(super) async fn start(
         Ok(Err(error)) => return page_for(error).into_response(),
         Err(_) => return Page::Unavailable.into_response(),
     };
-    let Some((issuer, subject)) = bridge.principal(&session, &headers).await else {
+    let Some(identity) = bridge.identity(&session, &headers).await else {
         return Page::SignIn.into_response();
-    };
-    let identity = VerifiedIdentity {
-        subject,
-        email: String::new(),
-        name: None,
-        groups: Vec::new(),
-        issuer,
     };
     let Some(owner) = super::own_key(&config, &identity, &account) else {
         return Page::Expired.into_response();

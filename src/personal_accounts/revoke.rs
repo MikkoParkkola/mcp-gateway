@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use super::provider::{Clock, PersonalOAuthRefresh, ProviderHttp, SecretSource};
 use super::provider::{ProviderRevocation, TokenTypeHint};
-use super::service::CredentialReleaseObserver;
+use super::service::{AccountServiceError, CredentialReleaseObserver};
 use super::worker::{CustodyError, CustodyHandle};
 use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore};
 
@@ -136,6 +136,10 @@ pub(crate) trait AccountRevocation: Send + Sync {
         account_id: &str,
         material: Option<RevocationMaterial>,
     ) -> ProviderOutcome;
+
+    /// Whether `account` holds a live grant now. A store read only: it never
+    /// refreshes, mints, or calls the provider.
+    async fn connected(&self, account: &AccountKey) -> Result<bool, CustodyError>;
 }
 
 #[async_trait::async_trait]
@@ -151,6 +155,18 @@ where
         account: &AccountKey,
     ) -> Result<Option<RevocationMaterial>, CustodyError> {
         CustodyHandle::invalidate(self, account).await
+    }
+
+    async fn connected(&self, account: &AccountKey) -> Result<bool, CustodyError> {
+        match CustodyHandle::resolve(self, account).await {
+            Ok(_) => Ok(true),
+            Err(CustodyError::Account(
+                AccountServiceError::ConnectOffer
+                | AccountServiceError::Revoked
+                | AccountServiceError::ReconnectRequired,
+            )) => Ok(false),
+            Err(other) => Err(other),
+        }
     }
 
     async fn revoke_at_provider(
