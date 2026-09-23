@@ -1955,6 +1955,44 @@ class VariantGateCoverage(unittest.TestCase):
             "the variant gate no longer starts the image it publishes",
         )
 
+    def test_every_probe_is_bounded(self):
+        # Four probes here resolve over the network. Unbounded, a runner whose
+        # resolver stops answering waits on the first of them until the job is
+        # killed, and reports `cancelled` with no annotation and nothing in the
+        # log between the step's first line and the cancellation -- a red step
+        # that names neither the probe nor the reason.
+        # Comments dropped: the word appears in the file's own prose, and a
+        # sentence about a probe is not a probe.
+        code = "\n".join(
+            line
+            for line in self.body.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        calls = re.findall(r"\bprobe\s+(\S+)", code)
+        self.assertTrue(calls, "the variant gate runs no probe")
+        for call in calls:
+            self.assertRegex(
+                call,
+                r'^"\$\{[A-Z_]+_TIMEOUT\}"',
+                f"a probe is unbounded, so a stalled network hangs the job: probe {call}",
+            )
+
+    def test_a_probe_that_times_out_says_so(self):
+        # A timeout leaves the probe's output empty, so without the exit code a
+        # stalled network is reported as a broken image and the reader is sent
+        # after the wrong thing.
+        for code in (124, 137):
+            self.assertRegex(
+                self.body,
+                rf'"\$\{{rc\}}"\s*=\s*{code}\b',
+                f"the variant gate cannot tell a {code} timeout from a failure",
+            )
+        self.assertRegex(
+            self.body,
+            r"(?s)probe\(\)\s*\{.*?did not finish within",
+            "the variant gate never reports which probe timed out",
+        )
+
 
 class SmokeGateCoverage(unittest.TestCase):
     """What the container gate actually proves about the published image.
