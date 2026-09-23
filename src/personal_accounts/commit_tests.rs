@@ -69,7 +69,7 @@ fn s04_a_committed_grant_is_readable_and_survives_reopen() {
 
 #[test]
 fn s04_every_persistence_boundary_refuses_and_leaves_a_whole_authority() {
-    for boundary in faults::ALL {
+    for boundary in faults::ALL.into_iter().filter(|b| b.in_grant_commit()) {
         let (_root, settings, store) = empty_store(16);
         let key = alice();
         let first = grant();

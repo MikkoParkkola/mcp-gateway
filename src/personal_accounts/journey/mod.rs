@@ -5,19 +5,13 @@
 //! under the authority lock; no network call ever runs under it.
 //!
 //! Split for the file-size ratchet: `persist` owns the sealed file, the slot and
-//! the transition; `ops` owns the five operations built on it.
+//! the transition; `ops` owns the five operations built on it; `limits` the
+//! in-memory rate windows; `sweep` expiry, terminal transitions and eviction.
 #![cfg_attr(
     not(test),
     expect(
         dead_code,
         reason = "MIK-6745 slice 2: the journey table has no production caller until slice 5"
-    )
-)]
-#![cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "MIK-6745 slice 2 part ii: digests, reasons and refusals the stubbed ops do not yet use"
     )
 )]
 
@@ -30,10 +24,14 @@ use super::super::{AccountError, AccountKey, StoreConfig};
 use crate::personal_accounts::config::RECORDS_PER_ACTIVE;
 use crate::personal_accounts::service::ConsentExpectation;
 
+#[path = "limits.rs"]
+mod limits;
 #[path = "ops.rs"]
 mod ops;
 #[path = "persist.rs"]
 mod persist;
+#[path = "sweep.rs"]
+mod sweep;
 
 pub(crate) use persist::JourneysSlot;
 #[cfg(test)]

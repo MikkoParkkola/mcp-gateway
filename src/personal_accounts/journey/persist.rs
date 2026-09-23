@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The sealed `journeys.json` file and its in-memory slot (design §5.1, §5.2).
 
-use super::super::commit::{Replace, replace_file};
+use super::super::commit::{Replace, ReplaceStep, replace_file};
 use super::super::{TokenEnvelope, encode_fields, open_bytes, read_bounded, seal_bytes};
+use super::limits::Rates;
+use super::sweep::sweep;
 use super::{
     AccountError, JOURNEY_SCHEMA, JOURNEYS_FILE, JourneyError, JourneyLimits, JourneyRefusal,
     JourneyTable, KEY_ID_MAX, StoreConfig,
@@ -24,7 +26,13 @@ pub(super) const ENVELOPE_FRAME: usize =
 /// The journeys half of the authority mutex. It poisons on its own (R2-1):
 /// `Stale` never touches the authority, and only a reopen clears it.
 #[derive(Debug, Default)]
-pub(crate) enum JourneysSlot {
+pub(crate) struct JourneysSlot {
+    table: TableState,
+    rates: Rates,
+}
+
+#[derive(Debug, Default)]
+enum TableState {
     /// Not read yet; the first transition loads it under the lock.
     #[default]
     Unloaded,
@@ -54,6 +62,8 @@ pub(crate) fn read_journeys(
     };
     let envelope: TokenEnvelope =
         serde_json::from_slice(&encoded).map_err(|_| AccountError::NotAuthentic)?;
+    // Removing the key that sealed this file refuses every journey operation
+    // (fail-closed), not per journey: journeys live at most 15 minutes.
     let key = config
         .keys
         .get(&envelope.key_id)
@@ -85,14 +95,14 @@ fn loaded<'slot>(
     config: &StoreConfig,
     store_epoch: &str,
     limits: &JourneyLimits,
-    slot: &'slot mut JourneysSlot,
+    slot: &'slot mut TableState,
 ) -> Result<&'slot JourneyTable, AccountError> {
-    if matches!(slot, JourneysSlot::Unloaded) {
-        *slot = JourneysSlot::Loaded(read_journeys(config, store_epoch, limits)?);
+    if matches!(slot, TableState::Unloaded) {
+        *slot = TableState::Loaded(read_journeys(config, store_epoch, limits)?);
     }
     match slot {
-        JourneysSlot::Loaded(table) => Ok(table),
-        JourneysSlot::Unloaded | JourneysSlot::Stale => Err(AccountError::StorageUnavailable),
+        TableState::Loaded(table) => Ok(table),
+        TableState::Unloaded | TableState::Stale => Err(AccountError::StorageUnavailable),
     }
 }
 
@@ -102,33 +112,53 @@ fn write_journeys(
     config: &StoreConfig,
     store_epoch: &str,
     table: JourneyTable,
-    slot: &mut JourneysSlot,
+    slot: &mut TableState,
 ) -> Result<(), AccountError> {
     let bytes = seal_journeys(config, store_epoch, &table)?;
-    match replace_file(&config.authority_dir, JOURNEYS_FILE, &bytes, |_| Ok(())) {
+    // The one journeys fault boundary: the directory sync after the rename,
+    // where a failure poisons only this slot (slice 5, T-R2-1).
+    let step = |step: ReplaceStep| -> Result<(), AccountError> {
+        #[cfg(test)]
+        if matches!(step, ReplaceStep::ParentSync) {
+            use crate::personal_accounts::faults::{Boundary, reached};
+            reached(Boundary::JourneysParentSync)?;
+        }
+        let _ = step;
+        Ok(())
+    };
+    match replace_file(&config.authority_dir, JOURNEYS_FILE, &bytes, step) {
         Ok(()) => {
-            *slot = JourneysSlot::Loaded(table);
+            *slot = TableState::Loaded(table);
             Ok(())
         }
         Err(Replace::Staged(error)) => Err(error),
         Err(Replace::Renamed(error)) => {
-            *slot = JourneysSlot::Stale;
+            *slot = TableState::Stale;
             Err(error)
         }
     }
 }
 
+/// What a transition closure sees: the post-sweep table it mutates, the
+/// pre-sweep snapshot replay is classified against (R3-2), and the rates.
+pub(crate) struct Transition<'tx> {
+    pub(crate) table: &'tx mut JourneyTable,
+    pub(crate) before: &'tx JourneyTable,
+    pub(crate) rates: &'tx mut Rates,
+}
+
 impl PersonalAccountStore {
-    /// THE journey mutation (design §5.2): lock, load, run `f` on a copy,
-    /// seal and write `journeys.json`, publish, release. `f` gets the
-    /// pre-sweep snapshot as its second argument (review R3-2). A refusal
-    /// persists nothing; an unchanged table is not rewritten.
-    // ponytail: the §5.2 step-2 expiry sweep lands with the transitions (part ii).
+    /// THE journey mutation (design §5.2): lock, load, expire stale records,
+    /// run `f`, then seal and write `journeys.json` whenever the table changed,
+    /// publish, release. The write happens EVEN WHEN `f` REFUSES, so the sweep
+    /// and a refusal's own effects (`replay_refusals`, a terminal
+    /// `browser_mismatch`) are durable; the refusal is returned after it. An
+    /// unchanged table is not rewritten. `f` performs no IO.
     pub(crate) fn journey_transition<T>(
         &self,
-        _now: u64,
+        now: u64,
         limits: &JourneyLimits,
-        f: impl FnOnce(&mut JourneyTable, &JourneyTable) -> Result<T, JourneyRefusal>,
+        f: impl FnOnce(&mut Transition<'_>) -> Result<T, JourneyRefusal>,
     ) -> Result<T, JourneyError> {
         let mut guard = self.lock_authority();
         let epoch = guard
@@ -136,15 +166,20 @@ impl PersonalAccountStore {
             .ok_or(JourneyError::Storage(AccountError::StorageUnavailable))?
             .store_epoch
             .clone();
-        let slot = &mut guard.guard.journeys;
+        let JourneysSlot { table: slot, rates } = &mut guard.guard.journeys;
         let before = loaded(&self.config, &epoch, limits, slot)
             .map_err(JourneyError::Storage)?
             .clone();
         let mut next = before.clone();
-        let value = f(&mut next, &before).map_err(JourneyError::Refused)?;
+        sweep(&mut next, now);
+        let outcome = f(&mut Transition {
+            table: &mut next,
+            before: &before,
+            rates,
+        });
         if next != before {
             write_journeys(&self.config, &epoch, next, slot).map_err(JourneyError::Storage)?;
         }
-        Ok(value)
+        outcome.map_err(JourneyError::Refused)
     }
 }

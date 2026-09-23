@@ -1,78 +1,352 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The five journey operations built on `journey_transition` (design §4-§7).
-//!
-//! SLICE 2 PART II STUBS: the signatures are the contract `tests.rs` pins;
-//! the bodies deliberately return wrong answers until the implementation.
-#![allow(
-    clippy::unused_self,
-    clippy::unnecessary_wraps,
-    clippy::needless_pass_by_value,
-    reason = "MIK-6745 slice 2 part ii contract stubs; the implementation deletes this allow"
-)]
 
+use super::super::random_hex;
+use super::persist::Transition;
+use super::sweep::evict_for_insert;
 use super::{
-    AccountKey, Consumed, JourneyError, JourneyId, JourneyLimits, JourneyReason, JourneyRefusal,
-    JourneyStatus, JourneyView, NewJourney, StartSecrets,
+    ACCOUNT_ID_MAX, AccountKey, CALLBACK_WINDOW, Consumed, DigestKind, EXPECTATION_MAX, ISSUER_MAX,
+    JourneyError, JourneyId, JourneyLimits, JourneyReason, JourneyRecord, JourneyRefusal,
+    JourneyStatus, JourneyTable, JourneyView, NewJourney, RETURN_PATH_MAX, START_WINDOW, Secret,
+    StartSecrets, digests_equal, keyed_digest, principal_digest, random_secret,
 };
-use crate::personal_accounts::PersonalAccountStore;
+use crate::personal_accounts::{AccountError, PersonalAccountStore, StoreConfig};
+
+/// Length of a `descriptor_revision` (hex SHA-256).
+const REVISION_LEN: usize = 64;
+
+/// Field caps (R2-5), checked before any store access.
+fn within_caps(new: &NewJourney) -> bool {
+    let expectation = serde_json::to_vec(&new.expected).map_or(usize::MAX, |bytes| bytes.len());
+    new.owner.backend_id.len() <= ACCOUNT_ID_MAX
+        && new.owner.oauth_issuer.len() <= ISSUER_MAX
+        && new.return_path.len() <= RETURN_PATH_MAX
+        && new.descriptor_revision.len() <= REVISION_LEN
+        && expectation <= EXPECTATION_MAX
+}
+
+fn storage(error: AccountError) -> JourneyError {
+    JourneyError::Storage(error)
+}
+
+/// A fresh pending record; `digest_key_id` is the key current at creation.
+fn pending(config: &StoreConfig, new: NewJourney, now: u64) -> Result<JourneyRecord, AccountError> {
+    Ok(JourneyRecord {
+        owner_digest: new.owner.digest()?,
+        principal_digest: principal_digest(&new.owner)?,
+        account_id: new.owner.backend_id,
+        descriptor_revision: new.descriptor_revision,
+        issuer: new.owner.oauth_issuer,
+        expected: new.expected,
+        return_path: new.return_path,
+        status: JourneyStatus::Pending,
+        reason: None,
+        consumed: false,
+        state_digest: None,
+        binding_digest: None,
+        digest_key_id: config.current_key_id.clone(),
+        pkce_verifier: None,
+        created_at: now,
+        start_by: now.saturating_add(START_WINDOW),
+        started_at: None,
+        callback_by: None,
+        terminal_at: None,
+        replay_refusals: 0,
+    })
+}
+
+/// Active predecessors an explicit create supersedes: same principal and account.
+fn predecessors(table: &JourneyTable, record: &JourneyRecord) -> Vec<JourneyId> {
+    table
+        .journeys
+        .iter()
+        .filter(|(_, old)| {
+            old.is_active()
+                && old.principal_digest == record.principal_digest
+                && old.account_id == record.account_id
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// `journeys_total` over active records left after the supersede (503).
+/// `Retry-After` is the seconds until the earliest active deadline.
+fn admit_active(
+    table: &JourneyTable,
+    superseded: usize,
+    limits: &JourneyLimits,
+    now: u64,
+) -> Result<(), JourneyRefusal> {
+    let active = table.journeys.values().filter(|r| r.is_active()).count();
+    if active.saturating_sub(superseded) < limits.journeys_total {
+        return Ok(());
+    }
+    let earliest = table
+        .journeys
+        .values()
+        .filter_map(JourneyRecord::deadline)
+        .min();
+    let retry_after = earliest.map_or(0, |deadline| deadline.saturating_sub(now));
+    Err(JourneyRefusal::CapacityExceeded { retry_after })
+}
+
+/// Supersede, evict for room, insert, and count the creation.
+fn insert(
+    tx: &mut Transition<'_>,
+    limits: &JourneyLimits,
+    id: JourneyId,
+    record: JourneyRecord,
+    now: u64,
+) -> Result<JourneyId, JourneyRefusal> {
+    let superseded = predecessors(tx.table, &record);
+    tx.rates
+        .admit_creation(limits, &record.principal_digest, now)?;
+    admit_active(tx.table, superseded.len(), limits, now)?;
+    for old in &superseded {
+        if let Some(old) = tx.table.journeys.get_mut(old) {
+            old.terminate(
+                JourneyStatus::Superseded,
+                Some(JourneyReason::Superseded),
+                now,
+            );
+        }
+    }
+    evict_for_insert(tx.table, limits.records_max());
+    tx.rates.record_creation(&record.principal_digest, now);
+    tx.table.journeys.insert(id.clone(), record);
+    Ok(id)
+}
+
+/// Freshly minted secrets and their digests under the CURRENT key (R2-6).
+struct Minted {
+    secrets: StartSecrets,
+    key_id: String,
+    state_digest: String,
+    binding_digest: String,
+}
+
+fn mint(config: &StoreConfig) -> Result<Minted, AccountError> {
+    let secrets = StartSecrets {
+        state: random_secret()?,
+        binding: random_secret()?,
+        verifier: random_secret()?,
+    };
+    let key_id = config.current_key_id.clone();
+    let digest = |secret, value: &str| {
+        keyed_digest(config, &key_id, secret, value).ok_or(AccountError::InvalidConfiguration)
+    };
+    Ok(Minted {
+        state_digest: digest(Secret::State, &secrets.state)?,
+        binding_digest: digest(Secret::Binding, &secrets.binding)?,
+        key_id: key_id.clone(),
+        secrets,
+    })
+}
+
+/// Owner, status and start rate, then arm the record. A re-start rotates
+/// the secrets and re-captures the key but keeps the first `callback_by`.
+fn arm(
+    tx: &mut Transition<'_>,
+    limits: &JourneyLimits,
+    id: &str,
+    owner_digest: &str,
+    minted: Minted,
+    now: u64,
+) -> Result<StartSecrets, JourneyRefusal> {
+    let record = tx
+        .table
+        .journeys
+        .get_mut(id)
+        .ok_or(JourneyRefusal::NotFound)?;
+    if !digests_equal(DigestKind::Owner, &record.owner_digest, owner_digest) {
+        return Err(JourneyRefusal::OwnerMismatch);
+    }
+    let restart = match record.status {
+        JourneyStatus::Pending => false,
+        JourneyStatus::Started if !record.consumed => true,
+        _ => return Err(JourneyRefusal::NotStartable),
+    };
+    tx.rates
+        .admit_start(limits, &record.principal_digest, now)?;
+    if !restart {
+        record.status = JourneyStatus::Started;
+        record.started_at = Some(now);
+        record.callback_by = Some(now.saturating_add(CALLBACK_WINDOW));
+    }
+    record.digest_key_id = minted.key_id;
+    record.state_digest = Some(minted.state_digest);
+    record.binding_digest = Some(minted.binding_digest);
+    record.pkce_verifier = Some(minted.secrets.verifier.clone());
+    Ok(minted.secrets)
+}
+
+/// Step 1: the record whose `state_digest` is `HMAC(state)` under the
+/// record's own `digest_key_id`. A key no longer configured matches nothing.
+fn locate(config: &StoreConfig, table: &JourneyTable, state: &str) -> Option<JourneyId> {
+    table.journeys.iter().find_map(|(id, record)| {
+        let stored = record.state_digest.as_deref()?;
+        let digest = keyed_digest(config, &record.digest_key_id, Secret::State, state)?;
+        digests_equal(DigestKind::State, &digest, stored).then(|| id.clone())
+    })
+}
+
+/// Step 2 (R2-3, R3-2): a replay is decided on the PRE-sweep record.
+fn is_replay(before: &JourneyRecord) -> bool {
+    before.consumed
+        || matches!(
+            before.status,
+            JourneyStatus::Connected
+                | JourneyStatus::Cancelled
+                | JourneyStatus::Failed
+                | JourneyStatus::Superseded
+        )
+}
+
+fn binding_matches(config: &StoreConfig, record: &JourneyRecord, binding: Option<&str>) -> bool {
+    let (Some(binding), Some(stored)) = (binding, record.binding_digest.as_deref()) else {
+        return false;
+    };
+    keyed_digest(config, &record.digest_key_id, Secret::Binding, binding)
+        .is_some_and(|digest| digests_equal(DigestKind::Binding, &digest, stored))
+}
+
+/// Callback steps 1-4 and 7 in one acquisition. Every refusal after step 1
+/// still persists its effect (the transition writes on refusal).
+fn callback(
+    config: &StoreConfig,
+    tx: &mut Transition<'_>,
+    state: &str,
+    binding: Option<&str>,
+    now: u64,
+) -> Result<Consumed, JourneyRefusal> {
+    let id = locate(config, tx.table, state).ok_or(JourneyRefusal::UnknownState)?;
+    let record = tx
+        .table
+        .journeys
+        .get_mut(&id)
+        .ok_or(JourneyRefusal::UnknownState)?;
+    if tx.before.journeys.get(&id).is_some_and(is_replay) {
+        record.replay_refusals = record.replay_refusals.saturating_add(1);
+        return Err(JourneyRefusal::Replay);
+    }
+    if record.status != JourneyStatus::Started {
+        // Only an expiry (the sweep's, or a pre-sweep one) reaches here.
+        return Err(JourneyRefusal::Expired);
+    }
+    if !binding_matches(config, record, binding) {
+        record.terminate(
+            JourneyStatus::Failed,
+            Some(JourneyReason::BrowserMismatch),
+            now,
+        );
+        return Err(JourneyRefusal::BrowserMismatch);
+    }
+    let verifier = record
+        .pkce_verifier
+        .take()
+        .ok_or(JourneyRefusal::UnknownState)?;
+    record.consumed = true;
+    Ok(Consumed {
+        journey_id: id,
+        verifier,
+    })
+}
+
+fn view(record: &JourneyRecord) -> JourneyView {
+    JourneyView {
+        status: record.status,
+        reason: record.reason,
+        expires_at: record.deadline(),
+        replay_refused: record.replay_refusals > 0,
+        replay_refusals: record.replay_refusals,
+    }
+}
 
 impl PersonalAccountStore {
     /// POST creation: caps, rates, capacity, supersede, eviction (§5.3).
-    /// STUB: an empty id.
     pub(crate) fn create_journey(
         &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _new: NewJourney,
+        now: u64,
+        limits: &JourneyLimits,
+        new: NewJourney,
     ) -> Result<JourneyId, JourneyError> {
-        Ok(String::new())
+        if !within_caps(&new) {
+            return Err(JourneyError::Refused(JourneyRefusal::InvalidRequest));
+        }
+        let record = pending(&self.config, new, now).map_err(storage)?;
+        let id = random_hex().map_err(storage)?;
+        self.journey_transition(now, limits, |tx| insert(tx, limits, id, record, now))
     }
 
     /// Owner check, then mint state, binding and verifier (§4.2 steps 6-8).
-    /// STUB: refuses.
     pub(crate) fn start_journey(
         &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _id: &str,
-        _owner: &AccountKey,
+        now: u64,
+        limits: &JourneyLimits,
+        id: &str,
+        owner: &AccountKey,
     ) -> Result<StartSecrets, JourneyError> {
-        Err(JourneyError::Refused(JourneyRefusal::NotFound))
+        let owner_digest = owner.digest().map_err(storage)?;
+        let minted = mint(&self.config).map_err(storage)?;
+        self.journey_transition(now, limits, |tx| {
+            arm(tx, limits, id, &owner_digest, minted, now)
+        })
     }
 
     /// Callback steps 1-4 and 7: locate, replay, expiry, binding, consume.
-    /// STUB: refuses as unknown state.
     pub(crate) fn consume_callback(
         &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _state: &str,
-        _binding: Option<&str>,
+        now: u64,
+        limits: &JourneyLimits,
+        state: &str,
+        binding: Option<&str>,
     ) -> Result<Consumed, JourneyError> {
-        Err(JourneyError::Refused(JourneyRefusal::UnknownState))
+        self.journey_transition(now, limits, |tx| {
+            callback(&self.config, tx, state, binding, now)
+        })
     }
 
-    /// Terminal transition; clears `binding_digest` and `pkce_verifier` in
-    /// the same write. STUB: does nothing.
+    /// Terminal transition of an active journey; clears `binding_digest` and
+    /// `pkce_verifier` in the same write. A terminal record is never rewritten.
     pub(crate) fn finish_journey(
         &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _id: &str,
-        _status: JourneyStatus,
-        _reason: Option<JourneyReason>,
+        now: u64,
+        limits: &JourneyLimits,
+        id: &str,
+        status: JourneyStatus,
+        reason: Option<JourneyReason>,
     ) -> Result<(), JourneyError> {
-        Ok(())
+        self.journey_transition(now, limits, |tx| {
+            let record = tx
+                .table
+                .journeys
+                .get_mut(id)
+                .ok_or(JourneyRefusal::NotFound)?;
+            if matches!(status, JourneyStatus::Pending | JourneyStatus::Started) {
+                return Err(JourneyRefusal::InvalidRequest);
+            }
+            if !record.is_active() {
+                return Err(JourneyRefusal::NotStartable);
+            }
+            record.terminate(status, reason, now);
+            Ok(())
+        })
     }
 
-    /// Status API view. STUB: not found.
+    /// Status API view, after the sweep (which it persists).
     pub(crate) fn journey_status(
         &self,
-        _now: u64,
-        _limits: &JourneyLimits,
-        _id: &str,
+        now: u64,
+        limits: &JourneyLimits,
+        id: &str,
     ) -> Result<JourneyView, JourneyError> {
-        Err(JourneyError::Refused(JourneyRefusal::NotFound))
+        self.journey_transition(now, limits, |tx| {
+            tx.table
+                .journeys
+                .get(id)
+                .map(view)
+                .ok_or(JourneyRefusal::NotFound)
+        })
     }
 }
