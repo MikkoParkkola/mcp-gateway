@@ -14,8 +14,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest as _, Sha256};
 
 use super::super::grant_flow::{
-    AccessType, AuthorizeExtra, Prompt, ProviderRevocation, TokenTypeHint, code_challenge_s256,
-    new_code_verifier, new_state,
+    ProviderRevocation, TokenTypeHint, code_challenge_s256, new_code_verifier, new_state,
 };
 use super::*;
 
@@ -24,12 +23,15 @@ const SCOPE: &str = "https://www.googleapis.com/auth/drive.readonly";
 const STATE: &str = "state-0123456789";
 const CHALLENGE: &str = "challenge-abcdef";
 
-fn google_extra() -> AuthorizeExtra {
-    AuthorizeExtra {
-        access_type: Some(AccessType::Offline),
-        prompt: Some(Prompt::Consent),
-        include_granted_scopes: None,
-    }
+const GOOGLE_EXTRA: &str = r#"{"access_type":"offline","prompt":"consent"}"#;
+
+/// Google at its RFC 8414 location, with `authorize_extra` parsed through the
+/// config type itself, so the rows exercise the vocabulary operators write.
+async fn extras_rig(extra: &str, send_resource: bool) -> (Trace, TestProvider) {
+    let mut d = descriptor(GOOGLE_ISSUER, RESOURCE, send_resource);
+    d.authorize_extra = Some(serde_json::from_str(extra).expect("closed extra parses"));
+    let http = TraceHttp::new(vec![(GOOGLE_RFC8414, ok(&google_doc()))], token_ok(""));
+    expect_bootstrap(vec![("workspace", d)], http, NOW).await
 }
 
 /// Every query value for `key`, in order.
@@ -66,11 +68,11 @@ fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {
 /// reads no secret -- a client secret has no business near a browser URL.
 #[tokio::test]
 async fn authorize_url_is_the_pinned_endpoint_with_every_pinned_parameter_once() {
-    let (trace, provider) = google_rig(token_ok(""), false, NOW).await;
+    let (trace, provider) = extras_rig(GOOGLE_EXTRA, false).await;
     let before = trace.all().len();
 
     let url = provider
-        .authorize_url("workspace", google_extra(), STATE, CHALLENGE)
+        .authorize_url("workspace", STATE, CHALLENGE)
         .expect("managed descriptor builds an authorize URL");
 
     assert_eq!(url.as_str().split('?').next(), Some(GOOGLE_AUTH));
@@ -93,8 +95,8 @@ async fn authorize_url_is_the_pinned_endpoint_with_every_pinned_parameter_once()
 }
 
 /// `resource` follows the descriptor's declared boolean; an undeclared one is
-/// refused rather than defaulted. Scopes are space-joined. An empty extra adds
-/// nothing, and each remaining closed value renders its wire spelling.
+/// refused rather than defaulted. Scopes are space-joined. No extra adds
+/// nothing, and every closed value renders its wire spelling.
 #[tokio::test]
 async fn authorize_url_honours_send_resource_parameter_and_the_closed_extras() {
     let mut d = descriptor(GOOGLE_ISSUER, RESOURCE, true);
@@ -118,61 +120,52 @@ async fn authorize_url_honours_send_resource_parameter_and_the_closed_extras() {
         expect_bootstrap(vec![("workspace", d), ("login", undeclared)], http, NOW).await;
 
     let url = provider
-        .authorize_url("workspace", AuthorizeExtra::default(), STATE, CHALLENGE)
+        .authorize_url("workspace", STATE, CHALLENGE)
         .expect("declared true builds");
     assert_eq!(one(&url, "resource"), RESOURCE);
     assert_eq!(one(&url, "scope"), "a.read b.write");
     for key in ["access_type", "prompt", "include_granted_scopes"] {
-        assert!(values(&url, key).is_empty(), "empty extra adds no `{key}`");
+        assert!(values(&url, key).is_empty(), "no extra adds no `{key}`");
     }
 
-    let extra = AuthorizeExtra {
-        access_type: Some(AccessType::Online),
-        prompt: Some(Prompt::SelectAccount),
-        include_granted_scopes: Some(true),
-    };
-    let url = provider
-        .authorize_url("workspace", extra, STATE, CHALLENGE)
-        .expect("extras build");
-    assert_eq!(one(&url, "access_type"), "online");
-    assert_eq!(one(&url, "prompt"), "select_account");
-    assert_eq!(one(&url, "include_granted_scopes"), "true");
+    let rows = [
+        (
+            r#"{"access_type":"online","prompt":"select_account","include_granted_scopes":true}"#,
+            [
+                ("access_type", "online"),
+                ("prompt", "select_account"),
+                ("include_granted_scopes", "true"),
+            ],
+        ),
+        (
+            r#"{"prompt":"none","include_granted_scopes":false,"access_type":"offline"}"#,
+            [
+                ("access_type", "offline"),
+                ("prompt", "none"),
+                ("include_granted_scopes", "false"),
+            ],
+        ),
+    ];
+    for (extra, expected) in rows {
+        let (_, provider) = extras_rig(extra, false).await;
+        let url = provider
+            .authorize_url("workspace", STATE, CHALLENGE)
+            .expect("extras build");
+        for (key, value) in expected {
+            assert_eq!(one(&url, key), value, "{extra}");
+        }
+        assert_eq!(one(&url, "state"), STATE, "an extra never shadows state");
+    }
 
     assert_eq!(
-        provider.authorize_url("login", AuthorizeExtra::default(), STATE, CHALLENGE),
+        provider.authorize_url("login", STATE, CHALLENGE),
         Err(ProviderRefreshError::Unavailable),
         "undeclared send_resource_parameter is refused, not defaulted"
     );
     assert_eq!(
-        provider.authorize_url("other-account", AuthorizeExtra::default(), STATE, CHALLENGE),
+        provider.authorize_url("other-account", STATE, CHALLENGE),
         Err(ProviderRefreshError::Unavailable)
     );
-}
-
-/// The extras are a closed vocabulary at the parse boundary: an unknown key
-/// (including one that would shadow a pinned parameter) or an unknown value
-/// is a configuration error, never a pass-through.
-#[test]
-fn authorize_extra_parses_only_the_closed_vocabulary() {
-    let google: AuthorizeExtra =
-        serde_json::from_str(r#"{"access_type":"offline","prompt":"consent"}"#).unwrap();
-    assert_eq!(google, google_extra());
-    let other: AuthorizeExtra =
-        serde_json::from_str(r#"{"prompt":"none","include_granted_scopes":false}"#).unwrap();
-    assert_eq!(other.prompt, Some(Prompt::None));
-    assert_eq!(other.include_granted_scopes, Some(false));
-
-    for hostile in [
-        r#"{"access_type":"sometimes"}"#,
-        r#"{"prompt":"login"}"#,
-        r#"{"state":"attacker"}"#,
-        r#"{"code_challenge_method":"plain"}"#,
-    ] {
-        assert!(
-            serde_json::from_str::<AuthorizeExtra>(hostile).is_err(),
-            "{hostile} must be rejected"
-        );
-    }
 }
 
 /// 256 bits of state: 43 unpadded URL-safe characters that decode to exactly
@@ -212,7 +205,7 @@ async fn exchange_posts_the_authorization_code_form_to_the_pinned_token_endpoint
     let issued = token_ok(r#","refresh_token":"fresh-refresh""#);
     let (trace, provider) = google_rig(issued, false, NOW).await;
     let authorize = provider
-        .authorize_url("workspace", google_extra(), STATE, CHALLENGE)
+        .authorize_url("workspace", STATE, CHALLENGE)
         .expect("authorize URL");
 
     let tokens = provider
