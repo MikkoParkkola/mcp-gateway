@@ -185,6 +185,19 @@ pub(super) fn arm_dir(dir: &std::path::Path, boundary: Boundary) {
         .push((dir.to_path_buf(), boundary));
 }
 
+/// [`reached`], plus any fault armed for `dir` by [`arm_dir`] (fires once).
+pub(super) fn reached_in(dir: &std::path::Path, boundary: Boundary) -> Result<(), AccountError> {
+    let mut armed = DIR_ARMED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(at) = armed.iter().position(|(d, b)| d == dir && *b == boundary) {
+        armed.remove(at);
+        return Err(AccountError::StorageUnavailable);
+    }
+    drop(armed);
+    reached(boundary)
+}
+
 #[test]
 fn a_fault_fires_once_at_its_own_boundary_and_then_disarms() {
     let armed = arm(Boundary::ManifestRename);

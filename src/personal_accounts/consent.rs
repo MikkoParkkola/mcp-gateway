@@ -25,6 +25,8 @@
 
 use super::service::ConsentExpectation;
 use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore};
+#[cfg(unix)]
+use super::{Authority, StoreConfig};
 
 /// Outcome of a guarded commit. A fenced expectation is an ordinary refusal:
 /// the journey lost a race it was meant to lose, and nothing was written.
@@ -81,26 +83,43 @@ impl PersonalAccountStore {
         {
             let digest = account.digest()?;
             let mut authority = self.lock_authority();
-            let current = {
-                let held = authority.as_ref().ok_or(AccountError::StorageUnavailable)?;
-                super::storage::lookup(&self.config, held, &digest, account)?
-            };
-            if ConsentExpectation::captured(&current) != *expected {
-                // Nothing written, nothing removed: the journey lost a race it
-                // was meant to lose, and the winner keeps the account.
-                return Ok(GuardedCommit::Fenced);
-            }
-            // Still holding the same guard the comparison ran under.
-            super::storage::commit::commit_grant(
+            Ok(commit_if_unchanged_locked(
                 &self.config,
                 &mut authority,
+                &digest,
                 account,
+                expected,
                 record,
                 provenance,
-            )?;
-            Ok(GuardedCommit::Committed)
+            )?)
         }
     }
+}
+
+/// The compare-and-commit of `commit_grant_if_unchanged`, for a caller that
+/// already holds the authority lock: `slot` must be that guard's contents.
+/// `digest` is `account.digest()`.
+#[cfg(unix)]
+pub(super) fn commit_if_unchanged_locked(
+    config: &StoreConfig,
+    slot: &mut Option<Authority>,
+    digest: &str,
+    account: &AccountKey,
+    expected: &ConsentExpectation,
+    record: &GrantRecord,
+    provenance: Option<&str>,
+) -> Result<GuardedCommit, AccountError> {
+    let current = {
+        let held = slot.as_ref().ok_or(AccountError::StorageUnavailable)?;
+        super::storage::lookup(config, held, digest, account)?
+    };
+    if ConsentExpectation::captured(&current) != *expected {
+        // Nothing written, nothing removed: the journey lost a race it was
+        // meant to lose, and the winner keeps the account.
+        return Ok(GuardedCommit::Fenced);
+    }
+    super::storage::commit::commit_grant(config, slot, account, record, provenance)?;
+    Ok(GuardedCommit::Committed)
 }
 
 /// Test-only observation of the REAL authority lock.

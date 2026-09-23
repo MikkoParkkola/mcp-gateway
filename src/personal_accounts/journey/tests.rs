@@ -347,6 +347,8 @@ fn maximal_record() -> JourneyRecord {
     let hex = |n: usize| "f".repeat(n);
     JourneyRecord {
         owner_digest: hex(64),
+        owner_authority: Some("u".repeat(super::AUTHORITY_MAX)),
+        owner_subject: Some("s".repeat(super::SUBJECT_MAX)),
         account_id: "a".repeat(super::ACCOUNT_ID_MAX),
         descriptor_revision: hex(64),
         issuer: "i".repeat(super::ISSUER_MAX),
@@ -381,7 +383,10 @@ fn t_r2_5_over_cap_fields_are_refused_before_any_store_access() {
     let long_account = request("alice", &"a".repeat(super::ACCOUNT_ID_MAX + 1));
     let mut long_path = request("alice", "google");
     long_path.return_path = format!("/{}", "p".repeat(super::RETURN_PATH_MAX));
-    for new in [long_account, long_path] {
+    let long_subject = request(&"s".repeat(super::SUBJECT_MAX + 1), "google");
+    let mut long_authority = request("alice", "google");
+    long_authority.owner.principal_authority = "u".repeat(super::AUTHORITY_MAX + 1);
+    for new in [long_account, long_path, long_subject, long_authority] {
         assert_eq!(
             refused(store.create_journey(T0, &limits, new)),
             JourneyRefusal::InvalidRequest

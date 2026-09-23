@@ -24,6 +24,10 @@ use super::super::{AccountError, AccountKey, StoreConfig};
 use crate::personal_accounts::config::RECORDS_PER_ACTIVE;
 use crate::personal_accounts::service::ConsentExpectation;
 
+#[path = "callback.rs"]
+mod callback;
+#[path = "grant.rs"]
+mod grant;
 #[path = "limits.rs"]
 mod limits;
 #[path = "lookup.rs"]
@@ -63,11 +67,14 @@ pub(crate) const ACCOUNT_ID_MAX: usize = 64;
 pub(crate) const RETURN_PATH_MAX: usize = 256;
 pub(crate) const ISSUER_MAX: usize = 256;
 pub(crate) const KEY_ID_MAX: usize = 64;
+/// Owner principal caps (slice 5c): no shared cap existed for either part.
+pub(crate) const AUTHORITY_MAX: usize = 256;
+pub(crate) const SUBJECT_MAX: usize = 128;
 /// Serialized `ConsentExpectation` cap. The maximal plain JSON form is 241
 /// bytes, so the design's 192 could not hold it (operator decision: 256).
 pub(crate) const EXPECTATION_MAX: usize = 256;
-/// Serialized size of a maximal record (1713 bytes) rounded up to 256 (R3-1).
-pub(crate) const RECORD_MAX: usize = 1792;
+/// Serialized size of a maximal record (2137 bytes) rounded up to 256 (R3-1).
+pub(crate) const RECORD_MAX: usize = 2304;
 /// Global creations window of `journeys_created_per_minute`.
 pub(crate) const GLOBAL_WINDOW: u64 = 60;
 /// Sliding window of `starts_per_minute_per_user`.
@@ -108,6 +115,7 @@ pub(crate) enum JourneyReason {
     AuditUnavailable,
     SupersededGrant,
     JourneyGone,
+    StorageUnavailable,
 }
 
 /// One sealed journey (design §5.1). Plaintext only inside `journeys.json`.
@@ -115,6 +123,10 @@ pub(crate) enum JourneyReason {
 #[serde(deny_unknown_fields)]
 pub(crate) struct JourneyRecord {
     pub(crate) owner_digest: String,
+    /// The owner's principal, kept only while active: the callback carries no
+    /// principal, yet the grant AAD binds all five `AccountKey` fields (5c).
+    pub(crate) owner_authority: Option<String>,
+    pub(crate) owner_subject: Option<String>,
     pub(crate) account_id: String,
     pub(crate) descriptor_revision: String,
     pub(crate) issuer: String,
