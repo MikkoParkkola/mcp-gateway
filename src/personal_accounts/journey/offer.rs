@@ -3,10 +3,10 @@
 //! The dispatch-site offer (design §9.3, review H1): reuse the caller's active
 //! journey, or mint one when none can still complete. Never supersedes.
 
+use super::super::ids::Candidates;
 use super::{
     AccountDescriptor, AccountKey, JourneyError, JourneyId, JourneyLimits, JourneyRefusal,
-    NewJourney, PersonalAccountStore, insert, pending, predecessors, random_hex, storage,
-    within_caps,
+    NewJourney, PersonalAccountStore, insert, pending, predecessors, storage, within_caps,
 };
 
 impl PersonalAccountStore {
@@ -29,16 +29,20 @@ impl PersonalAccountStore {
             return Err(JourneyError::Refused(JourneyRefusal::InvalidRequest));
         }
         let record = pending(&self.config, new, now).map_err(storage)?;
-        let id = random_hex().map_err(storage)?;
+        let candidates = Candidates::draw().map_err(storage)?;
         self.journey_transition(now, limits, |tx| {
             let active = predecessors(tx.table, &record).into_iter().next();
             if let Some(active) = active {
                 let deadline = tx.table.journeys[&active].deadline().unwrap_or(now);
-                return Ok((active, deadline));
+                return Ok(Ok((active, deadline)));
             }
             let deadline = record.start_by;
-            insert(tx, limits, id, record, now).map(|id| (id, deadline))
-        })
+            match candidates.unused(tx.table) {
+                Ok(id) => insert(tx, limits, id, record, now).map(|id| Ok((id, deadline))),
+                Err(collided) => Ok(Err(collided)),
+            }
+        })?
+        .map_err(storage)
     }
 
     /// [`Self::offer_journey`] for the configured descriptor, captured exactly

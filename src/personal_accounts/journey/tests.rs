@@ -310,16 +310,23 @@ fn t_c04c_every_terminal_record_holds_no_secret_and_stays_queryable() {
     // raw state, binding or verifier byte appears anywhere in the plaintext.
     let table = on_disk(&store, &config, &limits);
     let plaintext = serde_json::to_string(&table).unwrap();
-    for (id, secrets) in &minted {
+    let statuses = [
+        JourneyStatus::Connected,
+        JourneyStatus::Cancelled,
+        JourneyStatus::Failed,
+        JourneyStatus::Expired,
+    ];
+    for ((id, secrets), status) in minted.iter().zip(statuses) {
         let record = &table.journeys[id];
         assert!(record.binding_digest.is_none() && record.pkce_verifier.is_none());
         for raw in [&secrets.state, &secrets.binding, &secrets.verifier] {
             assert!(!plaintext.contains(raw.as_str()), "raw secret persisted");
         }
-        assert!(
-            store.journey_status(late, &limits, id).is_ok(),
-            "still queryable"
-        );
+        // The sweep past callback_by rewrites active records only.
+        let view = store
+            .journey_status(late, &limits, id)
+            .expect("still queryable");
+        assert_eq!(view.status, status);
     }
 }
 
@@ -386,7 +393,28 @@ fn t_r2_5_over_cap_fields_are_refused_before_any_store_access() {
     let long_subject = request(&"s".repeat(super::SUBJECT_MAX + 1), "google");
     let mut long_authority = request("alice", "google");
     long_authority.owner.principal_authority = "u".repeat(super::AUTHORITY_MAX + 1);
-    for new in [long_account, long_path, long_subject, long_authority] {
+    let mut long_issuer = request("alice", "google");
+    long_issuer.owner.oauth_issuer = format!("https://{}", "i".repeat(super::ISSUER_MAX));
+    let mut long_revision = request("alice", "google");
+    long_revision.descriptor_revision = "0".repeat(65);
+    let mut long_expected = request("alice", "google");
+    long_expected.expected =
+        ConsentExpectation::ReconnectRequired(super::super::super::GrantVersion {
+            generation: "g".repeat(super::EXPECTATION_MAX),
+            token_revision: 1,
+            authorization_epoch: 1,
+            descriptor_revision: "0".repeat(64),
+        });
+    let cases = [
+        long_account,
+        long_path,
+        long_subject,
+        long_authority,
+        long_issuer,
+        long_revision,
+        long_expected,
+    ];
+    for new in cases {
         assert_eq!(
             refused(store.create_journey(T0, &limits, new)),
             JourneyRefusal::InvalidRequest

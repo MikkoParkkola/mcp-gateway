@@ -28,6 +28,8 @@ use crate::personal_accounts::service::ConsentExpectation;
 mod callback;
 #[path = "grant.rs"]
 mod grant;
+#[path = "ids.rs"]
+mod ids;
 #[path = "limits.rs"]
 mod limits;
 #[path = "lookup.rs"]
@@ -57,6 +59,9 @@ mod tests_gaps;
 #[cfg(test)]
 #[path = "tests_offer.rs"]
 mod tests_offer;
+#[cfg(test)]
+#[path = "tests_review.rs"]
+mod tests_review;
 
 /// Schema of the sealed journeys envelope (design §5.1).
 pub(crate) const JOURNEY_SCHEMA: &str = "personal_accounts.journeys.v1";
@@ -318,6 +323,17 @@ pub(crate) fn digest_comparisons(kind: DigestKind) -> u64 {
     COMPARISONS.with(|cell| cell.get()[kind as usize])
 }
 
+#[cfg(test)]
+thread_local! {
+    static HMACS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Keyed digests computed on this thread so far.
+#[cfg(test)]
+pub(crate) fn hmacs_computed() -> u64 {
+    HMACS.with(std::cell::Cell::get)
+}
+
 /// HKDF info of the journey digest key (design §4.2, "Which key").
 const DIGEST_INFO: &[u8] = b"mcp-gateway/account-journey-digest/v1";
 /// Domain of the per-principal rate key (design §5.3).
@@ -342,6 +358,8 @@ impl Secret {
 /// `HMAC-SHA256(HKDF(keys[key_id]), label || value)`, hex. A key id no longer
 /// configured yields `None`: the record fails closed as unknown (R2-6).
 fn keyed_digest(config: &StoreConfig, key_id: &str, secret: Secret, value: &str) -> Option<String> {
+    #[cfg(test)]
+    HMACS.with(|count| count.set(count.get() + 1));
     let mut key = [0_u8; 32];
     Hkdf::<Sha256>::new(None, config.keys.get(key_id)?)
         .expand(DIGEST_INFO, &mut key)

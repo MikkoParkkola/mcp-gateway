@@ -5,6 +5,8 @@
 //! released, then consumes; consumption re-runs every admission check in its
 //! own acquisition, so two racing callbacks still consume at most once.
 
+use std::collections::BTreeMap;
+
 use super::persist::Transition;
 use super::{
     Consumed, DigestKind, JourneyError, JourneyId, JourneyLimits, JourneyReason, JourneyRecord,
@@ -43,11 +45,17 @@ impl Admitted {
 
 /// Step 1: the record whose `state_digest` is `HMAC(state)` under the
 /// record's own `digest_key_id`. A key no longer configured matches nothing.
+/// One HMAC per distinct key id, not per record: the lock is held throughout.
 fn locate(config: &StoreConfig, table: &JourneyTable, state: &str) -> Option<JourneyId> {
+    let mut by_key: BTreeMap<&str, Option<String>> = BTreeMap::new();
     table.journeys.iter().find_map(|(id, record)| {
         let stored = record.state_digest.as_deref()?;
-        let digest = keyed_digest(config, &record.digest_key_id, Secret::State, state)?;
-        digests_equal(DigestKind::State, &digest, stored).then(|| id.clone())
+        let key_id = record.digest_key_id.as_str();
+        let digest = by_key
+            .entry(key_id)
+            .or_insert_with(|| keyed_digest(config, key_id, Secret::State, state))
+            .as_deref()?;
+        digests_equal(DigestKind::State, digest, stored).then(|| id.clone())
     })
 }
 

@@ -24,7 +24,7 @@ pub(super) const ENVELOPE_FRAME: usize =
         + 16;
 
 /// The journeys half of the authority mutex. It poisons on its own (R2-1):
-/// `Stale` never touches the authority, and only a reopen clears it.
+/// `Stale` never touches the authority, and the next good reread clears it.
 #[derive(Debug, Default)]
 pub(crate) struct JourneysSlot {
     table: TableState,
@@ -90,15 +90,25 @@ fn seal_journeys(
     serde_json::to_vec(&envelope).map_err(|_| AccountError::StorageUnavailable)
 }
 
-/// The loaded table, reading it on first use. `Stale` refuses until reopen.
+/// The loaded table, reading it on first use. A `Stale` slot gets one reread
+/// per operation (design §5.2): success heals it; failure leaves it `Stale`
+/// and answers `StorageUnavailable`, whatever made the read fail.
 fn loaded<'slot>(
     config: &StoreConfig,
     store_epoch: &str,
     limits: &JourneyLimits,
     slot: &'slot mut TableState,
 ) -> Result<&'slot JourneyTable, AccountError> {
-    if matches!(slot, TableState::Unloaded) {
-        *slot = TableState::Loaded(read_journeys(config, store_epoch, limits)?);
+    match slot {
+        TableState::Unloaded => {
+            *slot = TableState::Loaded(read_journeys(config, store_epoch, limits)?);
+        }
+        TableState::Stale => {
+            let reread = read_journeys(config, store_epoch, limits)
+                .map_err(|_| AccountError::StorageUnavailable)?;
+            *slot = TableState::Loaded(reread);
+        }
+        TableState::Loaded(_) => {}
     }
     match slot {
         TableState::Loaded(table) => Ok(table),
