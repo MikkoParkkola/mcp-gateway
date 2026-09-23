@@ -12,8 +12,14 @@ pub(super) const SCHEMA: &str = "accounts.v1";
 
 /// The envelope's body; callers may add sibling fields (`local_status`).
 pub(super) fn body(code: &str, retryable: bool) -> Value {
+    body_with_message(code, code, retryable)
+}
+
+/// [`body`] with a caller-facing `message`, for a refusal whose text says
+/// more than its code (the dispatch-site connect offer).
+pub(super) fn body_with_message(code: &str, message: &str, retryable: bool) -> Value {
     json!({"schema_version": SCHEMA,
-           "error": {"code": code, "message": code, "retryable": retryable}})
+           "error": {"code": code, "message": message, "retryable": retryable}})
 }
 
 /// The refusal; `Retry-After` when the refusal names one.
