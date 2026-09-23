@@ -331,4 +331,10 @@ impl RevokeFixture {
     pub(crate) fn received(&self) -> Vec<(String, String)> {
         self.received.lock().unwrap().clone()
     }
+
+    /// The same custody as the dispatch strategies' credential source, so an
+    /// offer and the refusal it answers read one store.
+    pub(crate) fn custody(&self) -> Arc<dyn super::AccountCustody> {
+        Arc::clone(&self.custody) as Arc<dyn super::AccountCustody>
+    }
 }
