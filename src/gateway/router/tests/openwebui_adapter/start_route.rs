@@ -67,17 +67,7 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-fn descriptor_yaml(id: &str, resource: &str) -> String {
-    format!(
-        "    {id}:\n      mode: personal_managed\n      provider: fixture\n      \
-         resource: {resource}\n      issuer: https://issuer.fixture.test\n      \
-         redirect_uri: https://chat.fixture.test/accounts/v1/callback\n"
-    )
-}
-
 fn config(env: &std::path::Path, user_endpoint: &str, starts: u32) -> crate::config::Config {
-    let descriptors =
-        descriptor_yaml(WORK, RESOURCE) + &descriptor_yaml(HOME, "https://home.fixture.test/");
     serde_yaml::from_str(&format!(
         r#"
 env_files: ["{env}"]
@@ -110,8 +100,8 @@ accounts:
       allowed_api_key_names: [owui]
       session:
         user_endpoint: {user_endpoint}
-  descriptors:
-{descriptors}  hosted:
+  descriptors: {{}}
+  hosted:
     public_origin: https://chat.fixture.test
     return_paths: [/]
 "#,
@@ -144,7 +134,10 @@ async fn gateway_on(owui: &FakeOwui, starts: u32, fixture: RevokeFixture) -> Gat
         format!("OWUI_ROUTE_HMAC={HMAC}\nOWUI_ROUTE_STORE=UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n"),
     )
     .unwrap();
-    let config = config(&env, &owui.url, starts);
+    let mut config = config(&env, &owui.url, starts);
+    // The live descriptors are custody's own, so the callback's checks and
+    // the provider's exchange read one description of each account.
+    config.accounts.as_mut().unwrap().descriptors = Some(fixture.descriptors.clone());
     let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
     let (mut state, _store) =
         test_router_app_state_with(StreamingConfig::default(), config.clone()).await;

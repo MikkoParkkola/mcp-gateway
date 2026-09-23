@@ -34,6 +34,7 @@ pub(crate) use down::StoreDown;
 mod token;
 
 use token::{FixtureClock, TokenScript};
+pub(crate) use token::{expired_grant, minted_grant};
 
 pub(crate) const ISSUER: &str = "https://accounts.fixture.test";
 pub(crate) const REVOKE_URL: &str = "https://accounts.fixture.test/revoke";
@@ -159,6 +160,9 @@ pub(crate) struct RevokeFixture {
     pub(crate) received: Received,
     status: Arc<AtomicU16>,
     pub(crate) token: Arc<TokenScript>,
+    /// The descriptors custody bootstrapped, for a gateway config that must
+    /// describe the same accounts.
+    pub(crate) descriptors: BTreeMap<String, AccountDescriptor>,
     clock: FixtureClock,
     config: StoreConfig,
     _root: tempfile::TempDir,
@@ -289,13 +293,13 @@ impl RevokeFixture {
             r#"{{"issuer":"{ISSUER}","authorization_endpoint":"{ISSUER}/authorize",
                 "token_endpoint":"{ISSUER}/token","revocation_endpoint":"{REVOKE_URL}"}}"#
         );
-        let descriptors = account_ids
+        let descriptors: BTreeMap<String, AccountDescriptor> = account_ids
             .iter()
             .map(|id| ((*id).to_string(), shape(descriptor(resource, endpoint))))
             .collect();
         let http = FakeHttp { metadata, router };
         let provider =
-            PersonalOAuthRefresh::bootstrap(descriptors, http, clock.clone(), FixedSecret)
+            PersonalOAuthRefresh::bootstrap(descriptors.clone(), http, clock.clone(), FixedSecret)
                 .await
                 .expect("fixture descriptor bootstraps");
         let custody =
@@ -306,6 +310,7 @@ impl RevokeFixture {
             received,
             status,
             token,
+            descriptors,
             clock,
             config,
             _root: root,

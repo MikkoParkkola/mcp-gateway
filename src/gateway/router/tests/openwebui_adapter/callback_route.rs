@@ -6,6 +6,7 @@
 //! and custody; the provider is the in-process fake with `/token`.
 
 use crate::personal_accounts::AccountKey;
+use crate::personal_accounts::revoke_fixture::{expired_grant, minted_grant};
 
 use super::*;
 
@@ -181,10 +182,11 @@ async fn t_c01_connect_commits_the_owners_grant_and_leaks_nothing() {
 async fn t_ref_an_exchanged_grant_refreshes_when_it_expires() {
     // GIVEN
     let (_owui, gw) = journey_gateway(RevocationEndpoint::Configured).await;
+    gw.fixture.token.queue(200, expired_grant(1));
+    gw.fixture.token.queue(200, minted_grant(2));
     let flow = begin(&gw, ALICE, ALICE_TOKEN, WORK).await;
     assert_outcome(&complete(&gw, &flow).await, "connected");
     // WHEN
-    gw.fixture.advance(3601);
     let used = gw.fixture.refreshed_token(&key_of(&gw, ALICE, WORK)).await;
     // THEN
     let refreshes = gw.fixture.grants("refresh_token");
