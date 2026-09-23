@@ -43,6 +43,7 @@ use super::service::{
     AccountService, AccountServiceError, ConsentExpectation, CredentialLease,
     CredentialReleaseObserver, RefreshProvider, ReleasedCredentials,
 };
+use super::revoke::RevocationMaterial;
 use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore, StoreConfig};
 
 /// Default in-flight bound when a caller does not choose one.
@@ -231,17 +232,27 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
         self.offload(move |service| service.release(&lease)).await
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
-    pub(crate) async fn invalidate(&self, account: &AccountKey) -> Result<(), CustodyError> {
+    pub(crate) async fn invalidate(
+        &self,
+        account: &AccountKey,
+    ) -> Result<Option<RevocationMaterial>, CustodyError> {
         let account = account.clone();
         self.offload(move |service| service.invalidate(&account))
             .await
+    }
+
+    /// The provider the service refreshes against. Not admitted: it touches
+    /// no store, so it holds no permit, but it still refuses after shutdown.
+    pub(crate) fn provider(&self) -> Result<P, CustodyError>
+    where
+        P: Clone,
+    {
+        self.service
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|service| service.provider().clone())
+            .ok_or(CustodyError::ShuttingDown)
     }
 
     #[cfg_attr(

@@ -21,10 +21,13 @@ use crate::config::{AgentIdentityConfig, StreamingConfig};
 use crate::control_plane::ControlPlaneStore;
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
+use crate::personal_accounts::AccountRevocation;
 use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
 
+mod accounts;
+pub(crate) use accounts::revocation_of;
 mod authorization;
 pub use authorization::CallerStanding;
 pub(crate) use authorization::{
@@ -210,6 +213,16 @@ fn build_auth_state(state: &Arc<AppState>) -> AuthState {
 }
 
 pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router {
+    create_router_with_accounts(state, extra, None)
+}
+
+/// [`create_router_with`] plus the managed-account revoke handle, which only a
+/// gateway that brought custody up has.
+pub(crate) fn create_router_with_accounts(
+    state: Arc<AppState>,
+    extra: Option<Router>,
+    revocation: Option<Arc<dyn AccountRevocation>>,
+) -> Router {
     let auth_state = build_auth_state(&state);
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).
@@ -278,6 +291,9 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
     {
         routes = routes.merge(super::ui::api_router());
     }
+
+    // Added before the layers below so auth and the adapter wrap it.
+    let routes = accounts::mount(routes, revocation, &startup_config);
 
     // Open WebUI assertion adapter. `None` when no adapter is configured, and
     // then no layer is installed at all — the no-adapter deployment keeps its

@@ -47,6 +47,8 @@ mod grant_flow;
 mod http;
 
 pub(crate) use http::GatewayProviderHttp;
+// For `revoke`, the one caller outside this module of the RFC 7009 half.
+pub(in crate::personal_accounts) use grant_flow::{ProviderRevocation, TokenTypeHint};
 
 #[cfg(test)]
 mod provider_tests;
