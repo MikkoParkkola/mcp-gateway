@@ -313,11 +313,9 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
             // client needs: MRTR.9 names the capability an input request would
             // have required and MRTR.9a the mode, which is the difference
             // between a client that can fix its declaration and retry and one
-            // that only sees prose. Named keys are forwarded, never the whole
-            // object, because `data` is a shared channel — `invoke_tool` puts a
-            // *backend's* error data into this same variant, so forwarding it
-            // wholesale is what would hand a backend the status field above.
-            // The §9.1 connect-offer keys (MIK-6745) ride the same named-key rule.
+            // that only sees prose. Named keys only, never the whole object:
+            // `invoke_tool` puts a *backend's* error data into this variant, and
+            // forwarding it wholesale would hand a backend the status field.
             crate::Error::JsonRpc {
                 data: Some(data), ..
             } => {
@@ -326,7 +324,6 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
                     invoke::UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
                 ]
                 .into_iter()
-                .chain(crate::personal_accounts::refusal::ACCOUNT_DATA_KEYS)
                 .filter_map(|key| Some((key.to_string(), data.get(key)?.clone())))
                 .collect();
                 // `None` rather than `{}`: a backend error carrying none of these
@@ -335,6 +332,9 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
             }
             _ => None,
         };
+        // A connect offer only under the gateway's own seal (MIK-6745, ADR-008).
+        rpc_error.data =
+            crate::personal_accounts::refusal::offer_data(error).or(rpc_error.data.take());
     }
     response
 }

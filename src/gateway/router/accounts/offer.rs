@@ -24,7 +24,9 @@ use super::{is_bridged, limits_of, owner_and_descriptor};
 use crate::config_reload::LiveConfig;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::key_server::oidc::VerifiedIdentity;
-use crate::personal_accounts::refusal::{AccountState, Marked, marked, unmark};
+use crate::personal_accounts::refusal::{
+    AccountState, Marked, marked, offer_data, offer_error, unmark,
+};
 use crate::personal_accounts::{JourneyError, JourneyRefusal, JourneyService};
 use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -55,11 +57,7 @@ impl ConnectOffers {
             None => None,
         };
         match offered {
-            Some((message, data)) => Error::JsonRpc {
-                code: ACCOUNT_REFUSAL_CODE,
-                message,
-                data: Some(data),
-            },
+            Some((message, data)) => offer_error(ACCOUNT_REFUSAL_CODE, message, data),
             None => unmark(error),
         }
     }
@@ -152,12 +150,11 @@ impl MetaMcp {
             (Some(error), Some(offers)) => Some(offers.offer(error, identity).await),
             _ => None,
         };
-        let rpc = match offered {
-            Some(Error::JsonRpc {
-                code: ACCOUNT_REFUSAL_CODE,
-                message,
-                data: Some(data),
-            }) => JsonRpcResponse::error_with_data(id, -32003, message, data),
+        let data = offered.as_ref().and_then(offer_data);
+        let rpc = match (offered, data) {
+            (Some(Error::JsonRpc { message, .. }), Some(data)) => {
+                JsonRpcResponse::error_with_data(id, -32003, message, data)
+            }
             _ => JsonRpcResponse::error(id, -32003, text),
         };
         build_http_response(&rpc, StatusCode::FORBIDDEN)
