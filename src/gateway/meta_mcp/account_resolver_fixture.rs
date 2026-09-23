@@ -165,6 +165,7 @@ pub(super) fn descriptor(id: &str) -> AccountDescriptor {
         ]),
         send_resource_parameter: Some(false),
         external_strategy: None,
+        authorize_extra: None,
     }
 }
 

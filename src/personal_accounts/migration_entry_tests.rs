@@ -66,6 +66,7 @@ fn descriptor() -> AccountDescriptor {
         scopes: Some(vec!["read".to_owned(), "write".to_owned()]),
         send_resource_parameter: Some(true),
         external_strategy: None,
+        authorize_extra: None,
     }
 }
 

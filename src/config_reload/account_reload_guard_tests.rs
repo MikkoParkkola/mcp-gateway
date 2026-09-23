@@ -48,6 +48,7 @@ fn descriptor(issuer: &str, resource: &str, scopes: &[&str]) -> AccountDescripto
         scopes: Some(scopes.iter().map(|s| (*s).to_string()).collect()),
         send_resource_parameter: Some(false),
         external_strategy: None,
+        authorize_extra: None,
     }
 }
 
@@ -78,6 +79,7 @@ fn config(reference: Option<&str>, id: &str, descriptor: AccountDescriptor) -> C
         backends,
         accounts: Some(AccountsConfig {
             adapters: Vec::new(),
+            hosted: None,
             schema_version: "accounts.v1".to_string(),
             enabled: true,
             deployment: "single_process".to_string(),

@@ -33,6 +33,7 @@ impl fmt::Debug for AccountDescriptor {
             // Non-secret by construction: strategy kind, audience, session mode
             // and an endpoint URL. Its own `Debug` carries no credential.
             .field("external_strategy", &self.external_strategy)
+            .field("authorize_extra", &self.authorize_extra)
             .finish()
     }
 }
