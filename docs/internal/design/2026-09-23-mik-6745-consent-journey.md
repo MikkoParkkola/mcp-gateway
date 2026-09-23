@@ -1,6 +1,6 @@
 # MIK-6745.JOURNEY.1: hosted consent journey (connect, use, refresh, revoke, cancel, expired/replayed)
 
-Status: revised after design review (grok and kimi, both SHIP-WITH-FIXES); the revision is under re-review.
+Status: revised after two review rounds; the final changes are awaiting confirmation.
 
 Date: 2026-09-23. Worktree `feat/mik-6745-consent-journey` at `a400e119`. All
 `file:line` references are to that tree unless marked as a document.
@@ -300,8 +300,21 @@ per configured adapter that has a `session` block (§10). The steps run in order
    - Set status `started`, persist (§5), then 303 to the authorize URL (§6.1).
 
 `journey_key` is derived with HKDF-SHA256 (`hkdf`, already in `Cargo.toml:121-134`)
-from the current store key, with info `mcp-gateway/account-journey-digest/v1`. The
-digests therefore survive a restart, and no new secret is introduced.
+with info `mcp-gateway/account-journey-digest/v1`. The digests therefore survive a
+restart, and no new secret is introduced.
+
+**Which key (review R2-6).** Each digest is derived from the key that sealed the
+record, not from whatever `current_key_id` is at callback time.
+- Every `JourneyRecord` stores the `digest_key_id` in force when its digests were
+  minted, and the `journeys.json` envelope already carries its own `key_id`
+  (`storage.rs:65-73`).
+- Verification derives the key from `keys[digest_key_id]`. Retained keys are
+  readable, following the design's rule that old key entries are read-only.
+- New digests use the current key.
+- A store-key rotation between start and callback therefore still validates,
+  which T-KEYROT tests.
+- Removing a key from `accounts.keys` while records still name it makes those
+  journeys fail closed as unknown state.
 
 ### 4.3 Never-leak rules for the Open WebUI session token
 
@@ -362,10 +375,9 @@ it (`claim_store`, `storage.rs:336-351`).
 - The record count is bounded explicitly: `records_max = 4 × journeys_total`.
   This covers active records plus retained terminal ones. It is derived, not a
   separate knob.
-- Every field of a record has a fixed or configured maximum length:
-  - ids and digests are fixed-width hex;
-  - `account_id` and `return_path` are bounded by config validation;
-  - the verifier is 43 characters.
+- Every variable-length field has a numeric cap, enforced by config validation
+  or at creation (§10, review R2-5). Everything else is fixed-width hex, a
+  number, or the 43-character verifier.
 - A record's plaintext is therefore at most `RECORD_MAX = 1 KiB`. That value is
   asserted by a unit test that serializes a maximal record.
 - The byte cap is `records_max × RECORD_MAX × 2` (100% headroom), plus the
@@ -390,6 +402,7 @@ struct JourneyRecord {
     state_digest: Option<String>,    // HMAC, set at start, kept until GC (replay detection)
     binding_digest: Option<String>,  // HMAC, only while Started
     principal_digest: String,        // per-principal limit key, §5.3
+    digest_key_id: String,           // store key id the HMAC digests were derived from (R2-6)
     pkce_verifier: Option<String>,   // plaintext only inside this sealed file; removed at terminal
     created_at: u64, start_by: u64, started_at: Option<u64>, callback_by: Option<u64>, terminal_at: Option<u64>,
     replay_refusals: u32,
@@ -403,12 +416,17 @@ gains `Serialize`/`Deserialize`. It only holds non-secret `GrantVersion` fields
 
 ### 5.2 Locking and compare-and-swap
 
-The journey table is kept in memory as `Option<JourneyTable>` inside the **same
-`parking_lot::Mutex` as the authority**. `PersonalAccountStore.authority`
-(`mod.rs:179-189`) becomes a struct `{ authority, journeys }`, still acquired only
-through `lock_authority()` (`mod.rs:279-302`). That gives journeys the same poisoning
-rule: a failed write after rename sets the slot to `None`, as `write_manifest` does
-(`commit.rs:196-236`).
+The journey table lives in memory behind the **same `parking_lot::Mutex` as the
+authority**. `PersonalAccountStore.authority` (`mod.rs:179-189`) becomes a struct
+`{ authority: Option<Authority>, journeys: JourneysSlot }`. It is still acquired
+only through `lock_authority()` (`mod.rs:279-302`).
+
+The two halves **poison independently** (review R2-1).
+- A failed `authority.json` write after rename sets `authority` to `None`, as
+  `write_manifest` does today (`commit.rs:196-236`).
+- A failed `journeys.json` write after rename sets only `journeys` to
+  `JourneysSlot::Stale`. It never touches the authority, so grant lookup, use and
+  refresh for every principal are unaffected by any journey-file fault.
 
 Journeys are written with the same scratch-file → `sync_all` → `rename` → directory
 sync sequence as `write_manifest`. That sequence is factored into one private helper
@@ -421,7 +439,7 @@ Every journey mutation is a single function running under one lock acquisition:
 fn journey_transition<T>(&self, now: u64,
     f: impl FnOnce(&mut JourneyTable, &Authority) -> Result<T, JourneyRefusal>)
     -> Result<T, JourneyError>
-// 1. lock_authority()   2. expire every record past its applicable deadline (clears secrets)
+// 1. lock_authority()   2. expire every pending/started record past its deadline (terminal records are never rewritten)
 // 3. f(table)           4. seal + write journeys.json   5. publish in-memory table
 // 6. release.  f never performs IO; no network call ever runs under this lock.
 ```
@@ -537,11 +555,14 @@ and exchanges nothing.
 1. **Locate the journey.** Hash `state` and look up the record under
    `journey_transition`. A missing or unknown state gets `invalid_request`, and no
    record is touched.
-2. **Check expiry.** If `now >= callback_by`, set `Expired`, reason `expired`, clear
-   the secrets, and refuse (decision 5).
-3. **Check for replay.** If `consumed` or status is terminal, increment
-   `replay_refusals` and refuse. The status keeps its original terminal value, and
-   the API adds `replay_refused: true`.
+2. **Check for replay FIRST (review R2-3).** If `consumed` is set or the status is
+   terminal, increment `replay_refusals` and refuse. The status keeps its terminal
+   value, and the API adds `replay_refused: true`. Expiry never rewrites a
+   terminal record: both this step and the sweep in `journey_transition` step 2
+   touch only `pending`/`started` records. A completed journey replayed after
+   `callback_by` therefore stays `connected`.
+3. **Check expiry.** If the journey is still `started` and `now >= callback_by`,
+   set `Expired`, reason `expired`, clear the secrets, and refuse (decision 5).
 4. **Check the browser binding.** `HMAC(cookie)` must equal `binding_digest`. On a
    mismatch or a missing cookie, set `Failed`, reason `browser_mismatch`, clear the
    secrets, and refuse. This is terminal, so an attacker who holds the state cannot
@@ -580,22 +601,41 @@ and exchanges nothing.
     and only logged on failure, following the refusal-audit pattern
     (`invoke.rs:2964-2984`). If the pre-commit write fails, the reason is
     `audit_unavailable` and nothing is committed (C07).
-11. **Commit, and mark the journey `Connected`, in ONE lock acquisition** (review
-    L8). `commit_grant_if` gains a journey argument through every layer:
+11. **Commit and finish the journey in ONE lock acquisition** (reviews L8, R2-2).
+    This is a dedicated store method, not a new parameter threaded through
+    existing ones:
 
-    `CustodyHandle::commit_grant_if(account, expected, record, journey: Option<&JourneyId>)`
-    (`worker.rs:254-265`) → `AccountService::commit_grant_if` (`service.rs:342-362`)
-    → `commit_grant_if_unchanged(.., provenance, journey)` (`consent.rs:66-104`).
+    ```rust
+    // src/personal_accounts/journey/store.rs (method on PersonalAccountStore,
+    // reached through a new CustodyHandle async method offloaded like worker.rs:254-265)
+    fn commit_journey_grant_if(&self, account: &AccountKey, expected: &ConsentExpectation,
+        record: &GrantRecord, journey_id: JourneyId) -> Result<JourneyCommit, JourneyError>
+    ```
 
-    Under the single guard already held there, `commit_grant_if_unchanged`:
-    1. compares the expectation;
-    2. calls `commit::commit_grant`;
-    3. sets the journey `Connected` and clears its secrets, in the journey table
-       held behind the same mutex (§5.2), then writes `journeys.json`.
+    Under a single `lock_authority()` guard it runs these steps:
+    1. **Validate the journey.** It must exist, be `Started` and `consumed`, name
+       the same `account_id` and `owner_digest` as `account`, and not have been
+       expired by the sweep or superseded since consumption. Any other state
+       returns `JourneyCommit::JourneyGone` and commits nothing. A journey that was
+       swept or superseded during the exchange window is therefore never
+       resurrected to `connected`. The caller then takes the H2 abort path (reason
+       `journey_gone`, with the tokens revoked).
+    2. **Compare and commit** with a lock-held helper extracted from the body of
+       `commit_grant_if_unchanged` (`consent.rs:84-100`). It is the same
+       `ConsentExpectation::captured` comparison, then `commit::commit_grant`.
+       `commit_grant_if_unchanged` becomes a thin wrapper that takes the lock and
+       calls the helper, so its behaviour and signature are unchanged. The
+       `CustodyHandle`/`AccountService` `commit_grant_if` functions are **not
+       modified**, and the migration caller (`migration_entry.rs:134-143`) is
+       untouched.
+    3. **Finish the journey.** On `Committed`, mark it `Connected`. On `Fenced`,
+       mark it `Failed/superseded_grant`, which leads to the H2 abort. In both
+       cases clear its secrets and write `journeys.json`.
 
-    That gives these calls production callers, so their `expect(dead_code)`
-    attributes are removed (`service.rs:335-341`, `worker.rs:247-253`). The
-    migration caller passes `None`.
+    The `expect(dead_code)` attributes on `commit_grant_if` (`service.rs:335-341`,
+    `worker.rs:247-253`) stay, because those functions still have no production
+    caller. The migration keeps the underlying guarded commit alive, and the
+    journey gets its own entry point.
 
     The expectation is `journey.expected`. The record carries:
     - `generation = random_hex()`;
@@ -604,13 +644,18 @@ and exchanges nothing.
     - `descriptor_revision` from the journey;
     - sorted, deduplicated scopes.
 
-    A `Fenced` result gives reason `superseded_grant` (§6.3).
-
-    If the grant is published but the journeys write fails, the store slot is
-    poisoned exactly as `write_manifest` does (`commit.rs:196-236`). The grant is
-    durable, and the journey reads as `started`/`consumed` until `callback_by`,
-    then as `expired`. The user is told "connected, status unavailable", which is
-    never a false failure.
+    **A journeys write failure never poisons the authority (review R2-1).** The
+    in-memory slot becomes `{ authority: Option<Authority>, journeys:
+    JourneysSlot }`, and each half poisons independently.
+    - If the grant is published and the later `journeys.json` write fails, the
+      authority stays `Some(next)`. That value is the published, durable
+      manifest, so every other principal's lookup, use and refresh continues.
+    - Only the journey table becomes `JourneysSlot::Stale`. Journey operations
+      then answer `storage_unavailable` until restart, when the file is reread.
+    - The callback reports `JourneyCommit::CommittedStatusUnavailable`, and the
+      page says "connected; status unavailable". The grant is durable, so this is
+      never a false failure.
+    - T-R2-1 injects this failure.
 
     **Every post-exchange abort revokes the fresh tokens (review H2).** Steps 9,
     10 and 11 can each end the flow after a successful exchange. The aborts are:
@@ -619,6 +664,7 @@ and exchanges nothing.
     - `superseded_grant`, including a revoke that landed while the user was at
       Google;
     - `storage_unavailable` from the commit;
+    - `journey_gone` (the journey was swept or superseded during the exchange, R2-2);
     - any other error.
 
     Every one of them runs, before returning, one best-effort
@@ -808,15 +854,33 @@ gone, so the provider can no longer be told.
 The fix is a new store method, `PersonalAccountStore::revoke_capturing(account) -> Result<Option<RevocationMaterial>, AccountError>`.
 Under **one** `lock_authority()` acquisition it:
 
-1. calls `storage::lookup`;
-2. if the result is `Connected(record)`, copies `refresh_token` (or `access_token`
-   when there is no refresh token) into
-   `RevocationMaterial { token: Zeroizing<String>, hint }`, with a redacted `Debug`;
+1. reads the manifest entry;
+2. **captures material from any state that still names a record** (review R2-4).
+   - `Connected` and `ReconnectRequired` both keep the record pointer. The
+     `ReconnectRequired` fence explicitly keeps it: "Keeps the record pointer …
+     the credential stays named by the manifest" (`commit.rs:574-576`,
+     `restate` at `:375-384` clears the pointer only for `Revoked`).
+   - For those two states it decrypts the record with a new helper,
+     `retained_record`. That helper is the body of `connected_record`
+     (`storage.rs:636-677`) without the `Connected` state gate, keeping the same
+     SHA and version checks.
+   - It copies `refresh_token`, or `access_token` when there is no refresh token,
+     into `RevocationMaterial { token: Zeroizing<String>, hint }`, which has a
+     redacted `Debug`.
+   - A `ReconnectRequired` grant can still hold a live provider token. After
+     `invalid_grant` the refresh token is dead, but the access token may not be.
+     After a descriptor-revision fence both tokens may still be live. So it is
+     revoked too.
 3. calls the existing `commit::revoke`.
 
-`Revoked` and `Absent` stay idempotent no-ops (`commit.rs:490-495`) and return
-`None`. `ReconnectRequired` is tombstoned. A record that still exists is captured,
-and one that does not returns `None`.
+The states that yield no material are:
+- `Revoked`: `restate` has already cleared the pointer and deleted the record
+  file (`commit.rs:378-384`, `:497-500`), so no token exists.
+- `Absent`: nothing was ever committed.
+
+Both stay idempotent no-ops (`commit.rs:490-495`) and return `None`. A
+`ReconnectRequired` record whose file is missing or corrupt is still tombstoned,
+and returns `None`, which is reported as `not_applicable`.
 
 The chain `CustodyHandle::invalidate` → `AccountService::invalidate` →
 `PersonalAccountStore::revoke` (`src/personal_accounts/worker.rs:241-245`,
@@ -1163,6 +1227,22 @@ accounts:
   At request time `return_path` is compared **byte-exactly** against the
   validated list; it is never normalised. T-CFG covers `//evil.example` and
   `/\evil.example`.
+- **Journey field caps (review R2-5).** These bound `RECORD_MAX` through
+  validation alone:
+
+  | Field | Cap | Enforced at |
+  |---|---|---|
+  | `account_id` (descriptor key) | 64 bytes, `[a-z0-9_-]` | config validation, applied to `personal_managed` descriptors only when `hosted` is set, so existing configs without `hosted` are unaffected |
+  | `return_path` (each `return_paths` entry) | 256 bytes | config validation; request value must byte-equal an entry, so it is capped too |
+  | `issuer` | 256 bytes | config validation (descriptor) |
+  | `descriptor_revision`, generation | 64 / 32 hex | fixed by existing validation (`storage.rs:148-166`) |
+  | serialized `expected` (`ConsentExpectation`) | 192 bytes | derived: tag + 32 + 64 hex + two `u64`, asserted by a unit test |
+  | `reason` | closed enum, ≤ 64 bytes serialized including the `provider_revoke_*` suffix | type |
+
+  A POST whose `account_id` or `return_path` exceeds its cap gets 400
+  `invalid_request` before any store access (T-R2-5). The worst-case record is
+  therefore under `RECORD_MAX` = 1 KiB, which T-R2-5 asserts by serializing a
+  maximal record.
 - **Limits.** The four limit fields (`journeys_total`, `journeys_per_user`,
   `starts_per_minute_per_user`, and the new `journeys_created_per_minute`,
   default 120) reject zero and overflow. That is the rule `AccountsLimits`
@@ -1279,6 +1359,12 @@ Each row gives:
 | T-COOKIE | In one browser, A starts journeys for accounts X and Y, then both callbacks arrive in reverse order (review L4) | 404 | Both connect. Each `Set-Cookie` name carries its own journey id. | A single shared cookie name |
 | T-HDR | An unrouted `GET /accounts/v1/nope`, a 405 on `/accounts/v1/callback`, the start error page, and the outcome page (review L6) | 404 | Every response carries `no-store`, `no-referrer` and the CSP. | Headers set per handler instead of by the layer |
 | T-CT | A unit test uses a `cfg(test)` counter to check that the state lookup, binding and owner comparisons all go through `ConstantTimeEq` (review L5) | n/a | All three paths use it. | `==` on digest strings |
+| T-R2-1 | A and B are connected. A's journey callback commits the grant, and a fault boundary then fails the `journeys.json` write after rename. | 404 | The callback page reads "connected; status unavailable". `lookup(A)` is `Connected`. B's lookup, invoke and refresh still succeed, and the authority slot is `Some`. Journey operations answer `storage_unavailable` until the store is reopened. | Journey write failure sets `authority = None` (shared poisoning) |
+| T-R2-2 | During the exchange window (fake `/token` held by a pause), A's journey is (a) swept after `callback_by`, then separately (b) superseded by an explicit POST. Then `/token` is released. | 404 | Nothing is committed and the status is not `connected`. The reason is `journey_gone; provider_revoked`, and fake `/revoke` received the fresh token. Migration tests pass unchanged, and `commit_grant_if_unchanged` is byte-identical in the diff. | Journey status not re-validated under the commit lock, or an unconditional `Connected` write |
+| T-R2-3 | Complete a connect, advance the clock past `callback_by`, then replay the callback. | 404 | The status stays `connected` with `replay_refusals` = 1. The expiry step never rewrote the record. | Expiry check ordered before the terminal/replay check |
+| T-R2-4 | Revoke DELETE while A is `ReconnectRequired`, for each of two causes: after `invalid_grant` and after a descriptor-revision fence. Then revoke while A is `Revoked`. | No route | In the `ReconnectRequired` cases, fake `/revoke` receives the retained token and the response is `confirmed`. In the `Revoked` case the response is `not_applicable` and nothing is sent. | Capture limited to `Connected` |
+| T-R2-5 | A POST whose `account_id` is 65 bytes long, then one with a 257-byte `return_path`. A unit test serializes a maximal `JourneyRecord`. | 404 | Both POSTs get 400 before any store access. The maximal record is at most `RECORD_MAX`. | Cap missing on a field |
+| T-KEYROT | A starts a journey under key `k1`. The config reloads with `current_key_id: k2`, keeping `k1` in `keys`. Then the callback arrives (review R2-6). | 404 | The callback validates and connects. New journeys record `digest_key_id = k2`. With `k1` removed, the callback is refused as unknown state. | Digest key derived from `current_key_id` at verification time |
 | T-CFG | Bad config variants: an extra field under `hosted`/`session`; `redirect_uri` ≠ origin + callback path; `http` with a non-loopback `user_endpoint`; two `session` adapters; `return_paths` entries `//evil.example`, `/\evil.example`, `https://evil.example`, or one with a control character (reviews L1, L3). Also a POST with `return_path: "//evil.example"` against a valid list, and a config with `hosted` omitted. | n/a | Each bad config rejects startup. The POST gets 400 `invalid_request`. With `hosted` omitted, the route is 404 and the refusal text is unchanged. | `deny_unknown_fields` missing. Prefix check is only `starts_with("/")`. Comparison normalises. |
 
 Element coverage:
@@ -1386,7 +1472,7 @@ a real browser.
 | L03-cancel | A new journey for B, where B clicks "Cancel" at Google | Completion page reads "cancelled". Status JSON `cancelled/user_denied`. B's existing grant still works. |
 | L03-expired-start | Sequence 1 (review M2). Carla gets a refusal. Leave its `connect_url` unclicked for 6 minutes (past `start_by`), then open it. | "expired" page with no Google redirect. The journey status is `expired`. The next refused call hands out a **new** `journey_id`. |
 | L03-expired-callback | Sequence 2. B starts a journey and stops on Google's consent screen for more than 10 minutes (past `callback_by`), then approves. | Outcome page reads "expired". Status is `expired`. No new grant: B's previous state is unchanged. |
-| L03-replay | Sequence 3, a different journey. A completes a connect normally, then re-opens the callback URL from browser history, which is the same `code` and `state`. | Outcome page reads "already used". Status shows `connected` and `replay_refused: true`. A's grant generation is unchanged. |
+| L03-replay | Sequence 3, on a different journey. A completes a connect normally. Then A re-opens the callback URL from browser history twice: once at once, and once after more than 10 minutes, past `callback_by`. Both use the same `code` and `state`. | Both show "already used". After each attempt the status remains `connected`, never `expired` (R2-3), and `replay_refused: true` with `replay_refusals` going 1 → 2. A's grant generation is unchanged. |
 | L03-refresh | Natural expiry: wait for the Google access token to lapse (about 60 min, `expires_in`), then A calls a tool. No clock-skew mechanism is built. | Sanitized log line `refresh committed` (no token). The tool result arrives through Open WebUI. |
 | L03-revoke | A presses "Disconnect" on `/accounts/v1/complete` | Response JSON with `provider_revocation: confirmed`. A's next call is refused with a reconnect link. B still works. A's Google account permissions page no longer lists the app. |
 | L03-restart | Restart the gateway, repeat an A call and a B call | Grants survive. The replay is still refused. |
@@ -1497,10 +1583,10 @@ users into a flow that cannot yet be completed.
 | # | Slice | Tests | Removes `expect(dead_code)` at |
 |---|---|---|---|
 | 1 | Config types: `hosted`, `session`, four limits, `authorize_extra`, plus validation. Nothing is mounted. | T-CFG | — |
-| 2 | Journey table: sealed file, `journey_transition`, limits, record bound and eviction, GC. | T-C06a/b/c, T-FLOOD (store level), T-C04c (store level), T-CT, restart unit of T-C03d | — |
+| 2 | Journey table: sealed file, `journey_transition`, limits, record bound and eviction, GC. | T-C06a/b/c, T-FLOOD (store level), T-C04c (store level), T-CT, T-R2-5, T-KEYROT (store level), restart unit of T-C03d | — |
 | 3 | Provider: `authorize_url`, `exchange_code`, `revoke_token`; `Arc` sharing | Form-shape unit tests in `provider_tests.rs` with `TraceHttp`: pinned endpoints, `send_resource_parameter`, revocation form | — |
-| 4 | Revoke: `revoke_capturing`, DELETE (API credential), slot eviction, audit | T-REV (API variant), T-REV2, T-C07c, T-C07a (DELETE part) | `worker.rs:241-245`, `service.rs:326-329`, `mod.rs:355-360`, `commit.rs` revoke |
-| 5 | Hosted routes: POST/status/start/callback/complete, bridge, origin-guard changes, trace isolation, browser DELETE, one-lock commit+Connected, `abort_after_exchange`, header layer | T-C01, T-GUARD2, T-ABORT, T-BRIDGE-*, T-POST-NOBRIDGE, T-COOKIE, T-HDR, T-C02a–d, T-A07, T-C03a–e, T-C04a/b, T-BC2, T-C05a–c, T-C07a/b, T-GUARD, T-LEAK, T-REF, T-C01b | `service.rs:335-342`, `worker.rs:247-253` (`commit_grant_if`), `service.rs` `StaleConsentFenced` |
+| 4 | Revoke: `revoke_capturing`, DELETE (API credential), slot eviction, audit | T-REV (API variant), T-REV2, T-R2-4, T-C07c, T-C07a (DELETE part) | `worker.rs:241-245`, `service.rs:326-329`, `mod.rs:355-360`, `commit.rs` revoke |
+| 5 | Hosted routes: POST/status/start/callback/complete, bridge, origin-guard changes, trace isolation, browser DELETE, `commit_journey_grant_if` (extracted lock-held compare+commit), `abort_after_exchange`, header layer | T-C01, T-GUARD2, T-ABORT, T-R2-1, T-R2-2, T-R2-3, T-BRIDGE-*, T-POST-NOBRIDGE, T-COOKIE, T-HDR, T-C02a–d, T-A07, T-C03a–e, T-C04a/b, T-BC2, T-C05a–c, T-C07a/b, T-GUARD, T-LEAK, T-REF, T-C01b | `service.rs` `StaleConsentFenced` only if the journey path maps to it; otherwise none (`commit_grant_if` expectations stay, R2-2) |
 | 6 | Typed refusal plus `offer_for` at the three dispatch sites; comment rewrites (§12 item 3) | T-OFFER, T-OFFER2, T-OFFER3, T-BC1 | — |
 | 7 | Live run (§11.4) and evidence | L01–L04 | — |
 
@@ -1547,3 +1633,16 @@ table records where each finding is addressed.
 | L8 | grok | Journey set to `Connected` in the same lock acquisition as the commit | §6.2 step 11 |
 | L9 | grok | T-GUARD uses the realistic Google-callback header set | §11.2 T-GUARD |
 | — | kimi | §11.1 and §15 still assumed the fixture moves | §11.1 (in-process fake provider), §12 item 8, §14 slices 2 and 3, §15 |
+
+Round 2 (re-review). Both reviewers again returned SHIP-WITH-FIXES, and kimi
+confirmed all 16 round-1 findings as resolved.
+
+| ID | Source | Finding | Addressed in |
+|---|---|---|---|
+| R2-1 | grok (HIGH) | A journeys-file write failure must not poison the shared authority | §5.2 (`JourneysSlot`, independent poisoning), §6.2 step 11; T-R2-1 |
+| R2-2 | grok, kimi | Dedicated `commit_journey_grant_if` with the journey validated under one lock; `commit_grant_if`/`commit_grant_if_unchanged` unchanged in behaviour; no unconditional `Connected` write | §6.2 step 11, H2 abort list (`journey_gone`), §14 slice 5; T-R2-2 |
+| R2-3 | kimi | The terminal/replay check precedes expiry, and expiry never rewrites a terminal record | §6.2 steps 2–3, §5.2 sweep; §11.4 L03-replay; T-R2-3 |
+| R2-4 | kimi | `revoke_capturing` captures from every state that holds a record, including `ReconnectRequired` | §8.1; T-R2-4 |
+| R2-5 | grok | Numeric caps on every variable-length journey field imply `RECORD_MAX` | §5.1, §10; T-R2-5 |
+| R2-6 | grok | Journey HMAC key follows the recorded `digest_key_id`, not the current key | §4.2 (after step 8), §5.1 record; T-KEYROT |
+| R2-7 | coordinator | Status line | line 3 |
