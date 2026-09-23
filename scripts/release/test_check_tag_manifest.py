@@ -266,6 +266,8 @@ GATE_SCRIPT = re.compile(r"(?:python3?|uv run)\s+scripts/release/")
 # ending at a shell argument boundary, or `smoke-image.sh.bak` (a different
 # script, or none) satisfies every assertion below.
 SMOKE_GATE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/smoke-image\.sh(?=\s|$)")
+# Separate from SMOKE_GATE: an alternation would read the variant as the base.
+SMOKE_FULL_GATE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/smoke-full-image\.sh(?=\s|$)")
 # A step key that turns a failure into a log line, or a condition that is false
 # whatever the run: both leave every wiring assertion above satisfied.
 NEVER_RUNS = re.compile(r"^(?:- )?if:\s*['\"]?(?:\$\{\{\s*)?false(?:\s*\}\})?['\"]?$")
@@ -1068,7 +1070,14 @@ class WorkflowWiring(unittest.TestCase):
                     rf"^{name}: [\"']?\$\{{\{{\s*steps\.\w+"
                     rf"\.outputs\.{name.lower()}\s*\}}\}}[\"']?$"
                 )
-                for name in ("LIST", "AMD64", "ARM64")
+                for name in (
+                    "LIST",
+                    "AMD64",
+                    "ARM64",
+                    "LIST_FULL",
+                    "AMD64_FULL",
+                    "ARM64_FULL",
+                )
             ]
             identity = re.compile(
                 r"^IDENTITY: [\"']?https://github\.com/MikkoParkkola/mcp-gateway"
@@ -1102,7 +1111,7 @@ class WorkflowWiring(unittest.TestCase):
                         self.assertNotRegex(
                             piece,
                             r"(?:^|\b(?:export|declare|local|typeset|readonly)\s+)"
-                            r"(?:LIST|AMD64|ARM64|d)=",
+                            r"(?:LIST|AMD64|ARM64|LIST_FULL|AMD64_FULL|ARM64_FULL|d)=",
                             f"{workflow}: {name} reassigns a digest in its shell",
                         )
                 # Bound is not used. cosign expands the loop variable, so a
@@ -1111,12 +1120,18 @@ class WorkflowWiring(unittest.TestCase):
                 # check reads what the step declares, never what the shell
                 # reaches for.
                 body = "\n".join(block)
-                for digest_name in ("LIST", "AMD64", "ARM64"):
+                for digest_name in ("LIST", "AMD64", "ARM64", "LIST_FULL", "AMD64_FULL", "ARM64_FULL"):
                     self.assertIn(
                         f"${{{digest_name}}}",
                         body,
                         f"{workflow}: {name} binds {digest_name} without expanding it",
                     )
+                self.assertRegex(
+                    body,
+                    r'for d in "\$\{LIST\}" "\$\{AMD64\}" "\$\{ARM64\}" '
+                    r'"\$\{LIST_FULL\}" "\$\{AMD64_FULL\}" "\$\{ARM64_FULL\}"; do',
+                    f"{workflow}: {name} does not iterate every published digest",
+                )
                 if not any(runs(c, COSIGN_VERIFY) for c in block):
                     continue
                 # An identity is what makes a signature mean something: an
@@ -1352,6 +1367,32 @@ class WorkflowWiring(unittest.TestCase):
                 f"{workflow}: {job} reaches {handoff} before the image is ever "
                 f"started ({blocks[min(handoffs)][0].strip()})",
             )
+            full = [
+                index
+                for index, block in enumerate(blocks)
+                if any(runs(command, SMOKE_FULL_GATE) for command in joined(block))
+            ]
+            self.assertTrue(
+                full,
+                f"{workflow}: {job} never runs scripts/ci/smoke-full-image.sh, so "
+                "the variant it publishes is started by nothing",
+            )
+            self.assertLess(
+                min(full),
+                min(handoffs),
+                f"{workflow}: {job} reaches {handoff} before the variant is ever "
+                f"started ({blocks[min(full)][0].strip()})",
+            )
+            for index in full:
+                for command in joined(blocks[index]):
+                    if not runs(command, SMOKE_FULL_GATE):
+                        continue
+                    self.assertRegex(
+                        shell(command),
+                        r"smoke-full-image\.sh\s+\S",
+                        f"{workflow}: the variant smoke gate is handed no image: "
+                        f"{shell(command)}",
+                    )
             for index in smoke:
                 for command in joined(blocks[index]):
                     if not runs(command, SMOKE_GATE):
@@ -1366,6 +1407,129 @@ class WorkflowWiring(unittest.TestCase):
                         f"{workflow}: the smoke gate is handed no image: "
                         f"{shell(command)}",
                     )
+
+    def test_the_variant_index_is_composed_from_the_variant_legs(self):
+        # Every gate downstream of this reads the index by digest and compares
+        # it to itself, so an index composed from the base legs passes all of
+        # them while `:latest-full` serves the default image.
+        #
+        # Both provenance tags carry the rehearsal suffix, or a manifest
+        # rehearsal publishes a real `sha-<commit>-full` while the base index
+        # stays isolated under its rehearsal name.
+        body = "\n".join(commands("ci.yml"))
+        self.assertRegex(
+            body,
+            r"--tag \"\$\{IMAGE\}:sha-\$\{GITHUB_SHA\}-full\$\{REHEARSAL_SUFFIX\}\"[^\n]*"
+            r'\$\{IMAGE\}@\$\{FULL_AMD64\}" "\$\{IMAGE\}@\$\{FULL_ARM64\}"',
+            "ci.yml: the variant provenance index is not composed from its legs "
+            "under the rehearsal-aware name",
+        )
+        self.assertRegex(
+            body,
+            r'--tag \"\$\{IMAGE\}:sha-\$\{GITHUB_SHA\}\$\{REHEARSAL_SUFFIX\}\"[^\n]*'
+            r'\$\{IMAGE\}@\$\{AMD64\}" "\$\{IMAGE\}@\$\{ARM64\}"',
+            "ci.yml: the base provenance index is not composed from its legs "
+            "under the rehearsal-aware name",
+        )
+        # The image name is spelled by the author, `"${IMAGE}@…"` or inline;
+        # what is pinned is which index the tags are put on.
+        self.assertRegex(
+            body,
+            r'docker buildx imagetools create "\$\{FULL_TAGS\[@\]\}" '
+            r'[^\n]*@\$\{LIST_FULL\}"',
+            "ci.yml: the variant release tags are not created from the variant index",
+        )
+        self.assertRegex(
+            body,
+            r'docker buildx imagetools create "\$\{TAGS\[@\]\}" '
+            r'[^\n]*@\$\{LIST\}"',
+            "ci.yml: the base release tags are not created from the base index",
+        )
+
+    def test_each_leg_builds_the_stage_its_digest_claims(self):
+        wanted = {"build": "runtime", "build_full": "runtime-full"}
+        for workflow in ("ci.yml", "docker.yml"):
+            for block in steps(workflow):
+                text = "\n".join(block)
+                found = [
+                    step
+                    for step, target in wanted.items()
+                    if re.search(rf"(?m)^\s*id:\s*{step}\s*$", text)
+                ]
+                if not found:
+                    continue
+                step = found[0]
+                target = re.escape(wanted[step])
+                self.assertRegex(
+                    text,
+                    rf"(?m)^\s*target:\s*{target}\s*$|--target\s+{target}(?:\s|$)",
+                    f"{workflow}: the {step} step does not build {wanted[step]}",
+                )
+
+    def test_each_recorded_digest_comes_from_the_build_it_names(self):
+        # The legs are composed into two lists by digest, so a recording step
+        # that writes the base digest under the `-full` filename publishes the
+        # default image as `:latest-full` with every other check still green.
+        blocks = [
+            block
+            for block in steps("ci.yml")
+            if "mkdir -p digests" in "\n".join(block)
+        ]
+        self.assertEqual(len(blocks), 1, "the digest recording step is not unique")
+        block = blocks[0]
+        keyed = {
+            "DIGEST": "build",
+            "DIGEST_FULL": "build_full",
+        }
+        bindings = env_of(block)
+        for name, build in keyed.items():
+            self.assertTrue(
+                any(
+                    re.match(
+                        rf"^{name}: [\"']?\$\{{\{{\s*steps\.{build}"
+                        rf"\.outputs\.digest\s*\}}\}}[\"']?$",
+                        binding,
+                    )
+                    for binding in bindings
+                ),
+                f"ci.yml: {name} is not bound to steps.{build}.outputs.digest",
+            )
+        for name, build in keyed.items():
+            suffix = "-full" if name == "DIGEST_FULL" else ""
+            self.assertIn(
+                f'printf \'%s\' "${{{name}}}" > "digests/${{{{ matrix.arch }}}}{suffix}"',
+                "\n".join(block),
+                f"ci.yml: {name} is not written to the {build} filename",
+            )
+
+    def test_every_build_of_the_root_image_names_its_target(self):
+        # The variant is the file's last stage, so an untargeted build is it.
+        for workflow in ("ci.yml", "docker.yml"):
+            for block in steps(workflow):
+                text = "\n".join(block)
+                if not re.search(r"^\s*uses:\s*docker/build-push-action@", text, re.M):
+                    continue
+                self.assertRegex(
+                    text,
+                    r"(?m)^\s*target:\s*\S+",
+                    f"{workflow}: {block[0].strip()} builds the root image with "
+                    "no target, so it builds the last stage in the file",
+                )
+            for block in steps(workflow):
+                text = "\n".join(block).replace("\n", " ")
+                if not re.search(r"docker\s+buildx\s+build(?![\w-])", text):
+                    continue
+                if not re.search(r"\s\.\s*$", text.strip()):
+                    continue
+                # Which stage, not merely that one is named: the variant's leg
+                # built from `runtime` is a `-full` tag serving the default
+                # image, which is the same defect spelled the other way round.
+                want = "runtime-full" if "full" in block[0].lower() else "runtime"
+                self.assertRegex(
+                    text,
+                    rf"--target\s+{re.escape(want)}(?:\s|$)",
+                    f"{workflow}: {block[0].strip()} does not build {want}",
+                )
 
     def test_the_branch_builder_still_refuses_to_push_on_a_tag(self):
         # A regression lock, green today: docker.yml handed :VERSION over, and
@@ -1734,7 +1898,10 @@ class WorkflowWiring(unittest.TestCase):
             for block in steps(workflow):
                 commands_in = joined(block)
                 if not any(
-                    runs(c, COSIGN_ANY) or runs(c, GATE_SCRIPT) or runs(c, SMOKE_GATE)
+                    runs(c, COSIGN_ANY)
+                    or runs(c, GATE_SCRIPT)
+                    or runs(c, SMOKE_GATE)
+                    or runs(c, SMOKE_FULL_GATE)
                     for c in commands_in
                 ):
                     continue
@@ -1846,6 +2013,20 @@ class WorkflowWiring(unittest.TestCase):
 # The smoke gate is a shell script, not a workflow, so it is read directly.
 # Overridable for the same reason the workflows are: the mutation harness
 # points these assertions at a copy.
+# The variant's gate: a shell script like the one above, pinned by what it
+# runs rather than by being called, so deleting its checks does not read as
+# the gate surviving.
+# The image definition itself. The variant exists as a third stage, and the
+# workflows only name it -- delete it and every `--target runtime-full` fails
+# at build time, but nothing here would have said so first.
+DOCKERFILE = pathlib.Path(
+    os.environ.get("MCPGW_DOCKERFILE")
+    or pathlib.Path(__file__).parents[2] / "Dockerfile"
+)
+SMOKE_FULL = pathlib.Path(
+    os.environ.get("MCPGW_SMOKE_FULL_SCRIPT")
+    or pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "smoke-full-image.sh"
+)
 SMOKE = pathlib.Path(
     os.environ.get("MCPGW_SMOKE_SCRIPT")
     or pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "smoke-image.sh"
@@ -1914,6 +2095,117 @@ class SupplyChain(unittest.TestCase):
             body.count("releases/latest/download"),
             0,
             "ci.yml: an unpinned `releases/latest` download remains somewhere",
+        )
+
+
+class VariantStage(unittest.TestCase):
+    """The third stage, read rather than assumed.
+
+    Docker builds the file’s last stage when a build names none, so the
+    variant being last is what makes an untargeted build dangerous -- and what
+    makes the base stage’s name load-bearing.
+    """
+
+    def setUp(self):
+        self.body = DOCKERFILE.read_text()
+
+    def test_the_variant_is_the_last_stage_and_runtime_is_named(self):
+        stages = re.findall(r"(?m)^FROM\s+(\S+)(?:\s+AS\s+(\S+))?\s*$", self.body)
+        self.assertTrue(stages, "the Dockerfile declares no stage")
+        self.assertEqual(
+            stages[-1][1],
+            "runtime-full",
+            "the variant is not the file's last stage",
+        )
+        names = [name for _, name in stages]
+        self.assertIn("runtime", names, "the base stage is no longer named")
+
+    def variant_stage(self):
+        # Comments dropped: an instruction installs a tool, a comment naming one
+        # installs nothing.
+        body = "\n".join(
+            line
+            for line in self.body.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        return body[body.index("FROM runtime AS runtime-full") :]
+
+    def test_the_variant_installs_what_its_smoke_gate_exercises(self):
+        stage = self.variant_stage()
+        for tool in ("nodejs", "git", "openssh-client"):
+            self.assertRegex(
+                stage,
+                rf"apt-get install[^\n]*(?:\n[^\n]*)*?\b{re.escape(tool)}\b",
+                f"the variant stage does not apt-get install {tool}",
+            )
+        self.assertRegex(
+            stage,
+            r"COPY --from=ghcr\.io/astral-sh/uv:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}\s+/uv\s+/uvx\s",
+            "the variant stage does not install uv from a digest-pinned image",
+        )
+
+    def test_the_variant_executes_no_downloaded_installer(self):
+        # A fetched script runs whatever its URL serves on the day of the build.
+        # Node's integrity rests on apt verifying packages against a key whose
+        # fingerprint is pinned here, and uv's on an image digest.
+        stage = self.variant_stage()
+        for script in (r"setup_\d+\.x", r"install\.sh"):
+            self.assertNotRegex(
+                stage, script, f"the variant stage executes a downloaded {script}"
+            )
+        self.assertIn(
+            "6F71F525282841EEDAF851B42F59B5F99B1BE0B4",
+            stage,
+            "the variant stage does not pin the NodeSource signing key fingerprint",
+        )
+
+    def test_the_node_and_npm_assertions_are_at_build_time(self):
+        self.assertRegex(
+            self.body,
+            r"node --version \| grep -q '\^v24\\\.'",
+            "the variant stage does not assert the Node major at build time",
+        )
+        self.assertRegex(
+            self.body,
+            r'npm install -g npm@\d+\.\d+\.\d+',
+            "the variant stage does not pin npm",
+        )
+
+
+class VariantGateCoverage(unittest.TestCase):
+    """What the variant's gate proves, as opposed to that it is called.
+
+    The wiring assertions pin the call site. Nothing pinned the body, so the
+    npx, uvx, git and cache checks could be deleted with every suite green and
+    an image carrying no runnable npx still published as `:latest-full`.
+    """
+
+    def setUp(self):
+        self.body = SMOKE_FULL.read_text()
+
+    def test_every_toolchain_the_variant_exists_for_is_exercised(self):
+        for label, probe in (
+            ("npx", r"npx\s+--yes"),
+            ("uvx", r"uvx\s"),
+            ("git", r"git\s+ls-remote"),
+            ("the caches", r"touch\s+/home/gateway/\.npm"),
+        ):
+            self.assertRegex(self.body, probe, f"the variant gate never runs {label}")
+
+    def test_a_probe_that_fails_still_fails_the_step(self):
+        # `fail` without its `exit` prints an annotation and reports success,
+        # which turns every probe in the file into an advisory log line.
+        self.assertRegex(
+            self.body,
+            r"(?s)fail\(\)\s*\{.*?\bexit\s+[1-9]",
+            "the variant gate's fail() does not exit non-zero",
+        )
+
+    def test_it_still_starts_the_image(self):
+        self.assertRegex(
+            self.body,
+            r"smoke-image\.sh\"?\s+\S",
+            "the variant gate no longer starts the image it publishes",
         )
 
 

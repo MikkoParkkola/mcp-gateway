@@ -1,7 +1,7 @@
 # =============================================================================
 # MCP Gateway - Multi-stage Docker Build
 # =============================================================================
-# Build:  docker build -t mcp-gateway:latest .
+# Build:  docker build --target runtime -t mcp-gateway:latest .
 # Run:    docker run -p 127.0.0.1:39400:39400 \
 #           -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
 #           -v ./gateway.yaml:/config.yaml:ro mcp-gateway:latest \
@@ -42,7 +42,7 @@ RUN touch src/main.rs && cargo build --release
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime
 # ---------------------------------------------------------------------------
-FROM debian:trixie-slim
+FROM debian:trixie-slim AS runtime
 
 LABEL io.modelcontextprotocol.server.name="io.github.MikkoParkkola/mcp-gateway"
 
@@ -94,3 +94,59 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 
 ENTRYPOINT ["mcp-gateway"]
 CMD ["--config", "/config.yaml"]
+
+# ---------------------------------------------------------------------------
+# Stage 3: Runtime + stdio backend runtimes (`:latest-full`)
+# ---------------------------------------------------------------------------
+FROM runtime AS runtime-full
+
+ARG APT_CACHE_BUST=local
+
+USER root
+
+RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    gnupg \
+    openssh-client \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.key \
+    && test "$(gpg --show-keys --with-colons /tmp/nodesource.key | grep -c '^pub:')" = 1 \
+    && gpg --show-keys --with-colons /tmp/nodesource.key \
+       | grep -qx 'fpr:::::::::6F71F525282841EEDAF851B42F59B5F99B1BE0B4:' \
+    && gpg --dearmor -o /usr/share/keyrings/nodesource.gpg /tmp/nodesource.key \
+    && rm -f /tmp/nodesource.key \
+    && printf '%s\n' 'Types: deb' 'URIs: https://deb.nodesource.com/node_24.x' 'Suites: nodistro' \
+       'Components: main' 'Signed-By: /usr/share/keyrings/nodesource.gpg' \
+       > /etc/apt/sources.list.d/nodesource.sources \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version | grep -q '^v24\.' \
+    && npm --version >/dev/null
+
+# NodeSource ships whichever npm it bundled that day; the pin makes the tree
+# scanned below a version this repo chose. Do not "simplify" it away.
+RUN npm install -g npm@12.0.2 \
+    && test "$(npm --version)" = "12.0.2"
+
+# npm protects its own vendored tree; these are unpacked over it, not installed.
+RUN cd /tmp && mkdir npm-patch && cd npm-patch \
+    && for spec in brace-expansion@5.0.9 ip-address@10.3.1 tar@7.5.21; do \
+         name="${spec%@*}"; ver="${spec##*@}"; \
+         dest="/usr/lib/node_modules/npm/node_modules/${name}"; \
+         npm pack --silent "${spec}" >/dev/null || exit 1; \
+         rm -rf "${dest}"; \
+         mkdir -p "${dest}"; \
+         tar -xzf "${name}-${ver}.tgz" -C "${dest}" --strip-components=1 || exit 1; \
+         got="$(node -p "require('${dest}/package.json').version")"; \
+         test "${got}" = "${ver}" || { echo "npm patch failed: ${name} is ${got}, wanted ${ver}" >&2; exit 1; }; \
+       done \
+    && cd / && rm -rf /tmp/npm-patch
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.18@sha256:3adc3706091ce7c2fe595e669628caedd6d951551b92b258b7e7dbe06d9440bc /uv /uvx /usr/local/bin/
+
+RUN mkdir -p /home/gateway/.cache/uv /home/gateway/.npm && \
+    chown -R gateway:gateway /home/gateway/.cache /home/gateway/.npm
+
+USER gateway
