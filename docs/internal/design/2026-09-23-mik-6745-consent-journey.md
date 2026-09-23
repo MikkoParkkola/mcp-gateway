@@ -223,7 +223,9 @@ per configured adapter that has a `session` block (§10). The steps run in order
 5. **Namespace exactly as the tool-call adapter does.**
    - `authority` is `namespaced_issuer(installation_id)`, i.e.
      `openwebui-adapter:{len}:{installation_id}` (`src/gateway/openwebui_adapter.rs:441-447`).
-     Making it `pub(crate)` is a visibility change; see §12.
+     `namespaced_issuer` stays private: the bridge calls a NEW function in the same
+     module, `openwebui_adapter::session_principal(installation_id, user_id)`, which
+     returns the `(authority, subject)` pair built with it. One derivation, no widening.
    - `subject` is `id`.
    - Upstream v0.9.6 mints the adapter assertion with `sub = str(user.id)`
      (`backend/open_webui/utils/headers.py`, `_mint_forward_user_jwt`). The session
@@ -1279,15 +1281,16 @@ amendments this design makes to the earlier design.
     T-GUARD2). The completion page is still reachable with a same-origin click from
     the outcome page.
 
-**Visibility widenings.** Operator policy requires asking before each one, so
-each is listed here for operator approval.
+**Visibility.** Operator policy requires asking before any widening; this design avoids them.
 
 | Item | From → to | Why |
 |---|---|---|
-| `namespaced_issuer` (`src/gateway/openwebui_adapter.rs:441`) | private → `pub(crate)` | The bridge must derive the identical authority. A copy would be the drift the length-prefix comment warns about. |
+| `namespaced_issuer` (`src/gateway/openwebui_adapter.rs:441`) | unchanged (private) | The bridge uses a new `session_principal` in the same module instead (§4.2 step 5) |
 | `validate_issuer` | already `pub` | none |
-| wire fixture (`provider/wire_tests/fixture.rs`) | `pub(super)` → `pub(in crate::personal_accounts)`, `cfg(test)` only | Reused by the router-level journey tests |
-| `PersonalAccountStore::revoke_capturing`, `JourneyService` | new `pub(crate)` | Router facade, the same level as `CustodyHandle` |
+| wire fixture (`provider/wire_tests/fixture.rs`) | unchanged | Router-level journey tests use their own in-process fake provider (§11.1) rather than widening a provider-private fixture |
+| `PersonalAccountStore::revoke_capturing`, `JourneyService`, `session_principal` | new `pub(crate)` | New items, not widenings of existing ones; router facade at the same level as `CustodyHandle` |
+
+No existing item's visibility is widened by this design.
 
 ## 13. Open questions (not decidable from source)
 
