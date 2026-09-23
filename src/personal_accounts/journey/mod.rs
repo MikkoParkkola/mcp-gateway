@@ -247,7 +247,7 @@ pub(crate) enum DigestKind {
 /// Every digest comparison goes through here (review L5, T-CT): constant
 /// time over the bytes, so match timing reveals no digest prefix.
 pub(crate) fn digests_equal(kind: DigestKind, left: &str, right: &str) -> bool {
-    witness(kind);
+    witness(kind, left, right);
     subtle::ConstantTimeEq::ct_eq(left.as_bytes(), right.as_bytes()).into()
 }
 
@@ -256,17 +256,39 @@ thread_local! {
     static COMPARISONS: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
 }
 
+/// Process-wide operand record: the store runs on `spawn_blocking` threads,
+/// which a route test's thread-local counts never see. Keyed by operand, so
+/// parallel tests with distinct principals cannot satisfy each other.
 #[cfg(test)]
-fn witness(kind: DigestKind) {
+static OPERANDS: std::sync::Mutex<std::collections::BTreeSet<(usize, String)>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+#[cfg(test)]
+fn witness(kind: DigestKind, left: &str, right: &str) {
     COMPARISONS.with(|cell| {
         let mut counts = cell.get();
         counts[kind as usize] += 1;
         cell.set(counts);
     });
+    let mut operands = OPERANDS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    operands.insert((kind as usize, left.to_owned()));
+    operands.insert((kind as usize, right.to_owned()));
 }
 
 #[cfg(not(test))]
-fn witness(_kind: DigestKind) {}
+fn witness(_kind: DigestKind, _left: &str, _right: &str) {}
+
+/// `cfg(test)` witness: whether a `kind` comparison ever took `operand`, on
+/// any thread (T-CT at the route).
+#[cfg(test)]
+pub(crate) fn digest_compared(kind: DigestKind, operand: &str) -> bool {
+    OPERANDS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&(kind as usize, operand.to_owned()))
+}
 
 /// `cfg(test)` witness: how many comparisons of `kind` ran on this thread.
 #[cfg(test)]
