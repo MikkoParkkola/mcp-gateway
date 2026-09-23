@@ -46,6 +46,10 @@ pub(crate) enum DeliveryInspection {
     /// The HTTP `tools/call` arm ran the response firewall on this artifact
     /// and resolved its verdict; a second pass here re-ran the detectors on
     /// the already-sanitized result and could not change the outcome.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(dead_code, reason = "only the firewall-gated router pass inspects")
+    )]
     AlreadyInspected,
 }
 
