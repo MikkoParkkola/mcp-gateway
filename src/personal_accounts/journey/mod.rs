@@ -40,6 +40,9 @@ use persist::read_journeys;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "tests_gaps.rs"]
+mod tests_gaps;
 
 /// Schema of the sealed journeys envelope (design §5.1).
 pub(crate) const JOURNEY_SCHEMA: &str = "personal_accounts.journeys.v1";
