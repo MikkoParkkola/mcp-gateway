@@ -11,9 +11,7 @@ use super::{CustodyError, CustodyHandle};
 use crate::personal_accounts::AccountKey;
 use crate::personal_accounts::AccountRevocation;
 use crate::personal_accounts::config::{AccountDescriptor, AccountsLimits};
-use crate::personal_accounts::provider::{
-    Clock, PersonalOAuthRefresh, ProviderHttp, SecretSource, code_challenge_s256,
-};
+use crate::personal_accounts::provider::{Clock, PersonalOAuthRefresh, ProviderHttp, SecretSource};
 use crate::personal_accounts::service::CredentialReleaseObserver;
 use crate::personal_accounts::storage::journey::{
     JourneyError, JourneyId, JourneyLimits, JourneyView, START_WINDOW, StartSecrets,
@@ -148,12 +146,11 @@ where
             Ok(armed) => armed,
             Err(error) => return Ok(Err(error)),
         };
-        let challenge = code_challenge_s256(&secrets.verifier);
         // The URL carries exactly the state the store sealed; a URL the
         // provider cannot build is a descriptor fault, not the user's.
         let url = self
             .provider()?
-            .authorize_url(&account, &secrets.state, &challenge)
+            .authorize_url_for_verifier(&account, &secrets.state, &secrets.verifier)
             .map_err(|_| JourneyError::Storage(AccountError::InvalidConfiguration));
         Ok(url.map(|authorize_url| JourneyStarted {
             authorize_url,
