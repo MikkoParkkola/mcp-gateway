@@ -1660,12 +1660,14 @@ impl MetaMcp {
             crate::transport::notification_sink::emit_log(
                 crate::protocol::LoggingLevel::Warning,
                 GATEWAY_INVOKE_LOGGER,
-                &serde_json::json!({
-                    "message": "refused: multi-user gateway would serve a gateway-held \
-                                OAuth token that is not isolated per user (ADR-008 INV-2)",
-                    "server": server,
-                    "tool": tool,
-                }),
+                || {
+                    serde_json::json!({
+                        "message": "refused: multi-user gateway would serve a gateway-held \
+                                    OAuth token that is not isolated per user (ADR-008 INV-2)",
+                        "server": server,
+                        "tool": tool,
+                    })
+                },
             );
             return Err(Error::json_rpc(
                 -32001,
@@ -1922,14 +1924,16 @@ impl MetaMcp {
         crate::transport::notification_sink::emit_log(
             crate::protocol::LoggingLevel::Info,
             GATEWAY_INVOKE_LOGGER,
-            &serde_json::json!({
-                "message": "tool invoked",
-                "agent_id": agent_label,
-                "agent_declared": declared_label,
-                "server": server,
-                "tool": tool,
-                "trace_id": trace_id,
-            }),
+            || {
+                serde_json::json!({
+                    "message": "tool invoked",
+                    "agent_id": agent_label,
+                    "agent_declared": declared_label,
+                    "server": server,
+                    "tool": tool,
+                    "trace_id": trace_id,
+                })
+            },
         );
         debug!(server, tool, trace_id, "Invoking tool");
 

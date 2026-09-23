@@ -244,11 +244,22 @@ pub(crate) fn set_request_log_level(declared: Option<&str>) {
 /// reconstruct the request scope from a span, and §3 rejects that.
 ///
 /// The payload is MCP's own logging shape: `level`, `logger`, `data`.
-pub(crate) fn emit_log(level: LoggingLevel, logger: &str, data: &Value) {
+///
+/// `data` is built only when the request declared a level at or below `level`:
+/// most callers declare none, and building a notification `publish` would drop
+/// cost every `tools/call` (NFR.WORKLOAD.1). `publish` still applies the full
+/// filter; this check can only skip what it would drop.
+pub(crate) fn emit_log(level: LoggingLevel, logger: &str, data: impl FnOnce() -> Value) {
+    let wanted = LEVEL
+        .try_with(|slot| slot.borrow().is_some_and(|declared| level >= declared))
+        .unwrap_or(false);
+    if !wanted {
+        return;
+    }
     publish(vec![JsonRpcNotification {
         jsonrpc: "2.0".to_string(),
         method: "notifications/message".to_string(),
-        params: Some(json!({ "level": level, "logger": logger, "data": data })),
+        params: Some(json!({ "level": level, "logger": logger, "data": data() })),
     }]);
 }
 
@@ -369,6 +380,57 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
             params: None,
+        }
+    }
+
+    /// Raise `info` through `emit_log` under `declared`, returning how often
+    /// the payload was built and what was delivered.
+    async fn emit_info(declared: Option<&str>) -> (usize, Vec<JsonRpcNotification>) {
+        let built = std::cell::Cell::new(0);
+        let ((), delivered) = collect(async {
+            set_request_log_level(declared);
+            emit_log(LoggingLevel::Info, "gateway.invoke", || {
+                built.set(built.get() + 1);
+                json!({ "message": "tool invoked" })
+            });
+        })
+        .await;
+        (built.get(), delivered)
+    }
+
+    /// L1: outside a request scope nothing can be delivered, so nothing is built.
+    #[test]
+    fn emit_log_outside_a_scope_never_builds_the_payload() {
+        let mut built = false;
+        emit_log(LoggingLevel::Error, "gateway.invoke", || {
+            built = true;
+            Value::Null
+        });
+        assert!(!built);
+    }
+
+    /// L2 and L3: silence, and a level above the raised one, both skip the build.
+    #[tokio::test]
+    async fn emit_log_builds_nothing_the_filter_would_drop() {
+        for declared in [None, Some("error")] {
+            let (built, delivered) = emit_info(declared).await;
+            assert_eq!(built, 0, "declared {declared:?}");
+            assert!(delivered.is_empty(), "declared {declared:?}");
+        }
+    }
+
+    /// L4 and L5: at or below the raised level, the payload is built once and
+    /// delivered; `debug` pins the comparison as `>=`, not equality.
+    #[tokio::test]
+    async fn emit_log_builds_and_delivers_at_or_below_the_raised_level() {
+        for declared in ["info", "debug"] {
+            let (built, delivered) = emit_info(Some(declared)).await;
+            assert_eq!(built, 1, "declared {declared}");
+            assert_eq!(delivered.len(), 1, "declared {declared}");
+            assert_eq!(
+                delivered[0].params.as_ref().unwrap()["data"]["message"],
+                "tool invoked"
+            );
         }
     }
 
