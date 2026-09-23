@@ -393,8 +393,8 @@ fn t_r2_5_a_maximal_record_fits_record_max_rounded_to_256() {
     let serialized = serde_json::to_vec(&maximal_record()).unwrap();
     let expected = serde_json::to_vec(&maximal_record().expected).unwrap();
     assert!(
-        expected.len() <= 192,
-        "serialized expectation over its 192-byte cap"
+        expected.len() <= super::EXPECTATION_MAX,
+        "serialized expectation over its EXPECTATION_MAX cap"
     );
     assert!(
         serialized.len() <= RECORD_MAX,
