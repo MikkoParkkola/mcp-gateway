@@ -1627,7 +1627,8 @@ impl MetaMcp {
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         {
-            self.resolve_caller_credential(server, &idp_cfg, verified_identity)
+            let resolved = self.resolve_caller_credential(server, &idp_cfg, verified_identity);
+            self.with_connect_offer(resolved.await, verified_identity)
                 .await?
         } else {
             self.refuse_unbound_account_backend(server)?;
@@ -1682,18 +1683,16 @@ impl MetaMcp {
         // THE CAPABILITY ROUTE'S ACCOUNT BOUNDARY, RESOLVED HERE — BEFORE THE
         // OUTER RESPONSE CACHE IS CONSULTED.
         //
-        // The MCP route resolves its per-user credential above, for the same
+        // The MCP route resolves its per-user credential above for the same
         // reason: a cache key built before the caller's credential is known
-        // cannot name the caller. A REST capability's credential does not come
-        // from `backend_identity_propagation` (that map is keyed by BACKEND
-        // name) but from the capability's own `auth.account`, so it has to be
-        // resolved from the capability definition — the tool's PRIMARY auth —
-        // and it has to be resolved here rather than inside the executor, which
-        // only runs after this cache lookup has already happened. The credential
-        // is carried into dispatch and rechecked there; it is never minted
-        // twice, and a refusal returns now, before any lookup.
+        // cannot name the caller. A REST capability's credential comes from its
+        // own `auth.account` (the tool's PRIMARY auth), not the BACKEND-keyed
+        // propagation map, and must resolve here, not in the executor, which
+        // runs after this cache lookup. It is carried into dispatch and
+        // rechecked there, never minted twice; a refusal returns now.
+        let resolving = self.resolve_capability_account_credential(server, tool, caller_proof);
         let account_credential = self
-            .resolve_capability_account_credential(server, tool, caller_proof)
+            .with_connect_offer(resolving.await, verified_identity)
             .await?;
         // ONE binding for both cache layers and for the transport's session
         // partitioning. The MCP route's propagation binding when there is one,
@@ -3011,13 +3010,10 @@ impl MetaMcp {
         // `required` backend would mint successfully here and then silently
         // run unauthenticated once `request_with_headers` drops the credential.
         //
-        // A missing registry entry defaults to "capable" (does not itself
-        // trigger this gate): every real caller resolves `idp_cfg` FROM the
-        // registered backend (`backend.identity_propagation_config()`), so a
-        // `Some(idp_cfg)` here guarantees the backend exists in production —
-        // "not found" only happens in unit tests that exercise this method
-        // directly against a fabricated config, and a genuinely absent
-        // backend fails downstream at dispatch regardless of this check.
+        // A missing registry entry defaults to "capable": every real caller
+        // resolves `idp_cfg` FROM the registered backend, so "not found" only
+        // happens in unit tests against a fabricated config, and a genuinely
+        // absent backend fails downstream at dispatch regardless.
         let transport_capable = self
             .backends
             .get(server)
@@ -3080,7 +3076,11 @@ impl MetaMcp {
                     cache_binding: Some(cred.cache_binding),
                 })
             }
-            Err(e) => refuse(format!("credential minting failed: {e}")),
+            Err(e) => refuse(format!("credential minting failed: {e}")).map_err(|refused| {
+                let backend = self.backends.get(server);
+                let account_id = backend.as_deref().and_then(|b| b.account_descriptor_id());
+                refused.typed_by(&e, account_id)
+            }),
         }
     }
 

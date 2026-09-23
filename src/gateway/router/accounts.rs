@@ -44,6 +44,7 @@ mod journeys;
 mod start;
 
 pub(crate) use hosted::CALLBACK;
+pub(crate) use journeys::ConnectOffers;
 
 const ROUTE: &str = "/accounts/v1/connections/{account_id}";
 
