@@ -16,12 +16,17 @@ use tower::ServiceExt as _;
 use super::super::super::create_router_with_accounts;
 use super::super::{ResolvedAuthConfig, StreamingConfig, test_router_app_state_with};
 use crate::personal_accounts::AccountKey;
-use crate::personal_accounts::revoke_fixture::{ISSUER, RevokeFixture, Seed, grant};
+use crate::personal_accounts::revoke_fixture::{
+    ISSUER, RevocationEndpoint, RevokeFixture, Seed, grant,
+};
 
 const ACCOUNT: &str = "work";
 const RESOURCE: &str = "https://api.fixture.test/";
 const HMAC: &str = "fixture-adapter-signing-secret-123456789";
 const API_KEY: &str = "fixture-named-api-key";
+/// The one configured backend bound to `ACCOUNT`; its slots are what revoke
+/// must evict.
+const BOUND_BACKEND: &str = "ledger";
 
 fn key(subject: &str) -> AccountKey {
     AccountKey {
@@ -42,6 +47,10 @@ fn config(env: &std::path::Path, hosted: bool) -> crate::config::Config {
     serde_yaml::from_str(&format!(
         r#"
 env_files: ["{env}"]
+backends:
+  {BOUND_BACKEND}:
+    http_url: https://ledger.fixture.test/mcp
+    account: {ACCOUNT}
 auth:
   enabled: true
   public_paths: []
@@ -89,6 +98,14 @@ async fn gateway(
     hosted: bool,
     seeds: &[(AccountKey, crate::personal_accounts::GrantRecord, Seed)],
 ) -> Gateway {
+    gateway_with(hosted, seeds, RevocationEndpoint::Configured).await
+}
+
+async fn gateway_with(
+    hosted: bool,
+    seeds: &[(AccountKey, crate::personal_accounts::GrantRecord, Seed)],
+    endpoint: RevocationEndpoint,
+) -> Gateway {
     let dir = tempfile::tempdir().unwrap();
     let env = dir.path().join("adapter.env");
     std::fs::write(
@@ -111,7 +128,7 @@ async fn gateway(
         state.auth_config = auth;
         state.transparency_log = Some(Arc::new(logger));
     }
-    let fixture = RevokeFixture::start(ACCOUNT, RESOURCE, seeds).await;
+    let fixture = RevokeFixture::start(ACCOUNT, RESOURCE, seeds, endpoint).await;
     let router = create_router_with_accounts(Arc::clone(&state), None, Some(fixture.revocation()));
     Gateway {
         router,
@@ -211,7 +228,11 @@ async fn revoke_route_provider_503_reports_failed_and_stays_revoked() {
     let (status, body) = delete(&gw, Some("alice"), ACCOUNT).await;
     // THEN
     assert_eq!((status, body), (StatusCode::OK, revoked_body("failed")));
-    assert_eq!(gw.fixture.received(), both(), "every token is tried after a failure");
+    assert_eq!(
+        gw.fixture.received(),
+        both(),
+        "every token is tried after a failure"
+    );
     assert_eq!(gw.fixture.state(&key("alice")).await, "revoked");
 }
 
@@ -315,4 +336,77 @@ async fn revoke_route_without_hosted_is_not_mounted() {
     let (status, _) = delete(&gw, Some("alice"), ACCOUNT).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(gw.fixture.state(&key("alice")).await, "connected");
+}
+
+/// A per-user slot on the bound backend under `subject`'s account prefix.
+fn account_slot(subject: &str, generation: &str) -> crate::backend::PoolKey {
+    let digest = key(subject).digest().unwrap();
+    crate::backend::PoolKey::PerUser {
+        binding: format!("acct:v1:{digest}:{generation}:1:1"),
+    }
+}
+
+/// T-REV (eviction count): revoke drops every one of A's upstream sessions on
+/// the bound backend, across generations, and none of B's. Goes red if the
+/// `evict_slots` call or its loop is deleted, or if its prefix stops at the
+/// generation or widens past the account digest.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoke_route_evicts_only_the_revoked_principals_slots() {
+    // GIVEN: the bound backend holds two A sessions and one B session
+    let gw = gateway(
+        true,
+        &[
+            (key("alice"), grant("alice"), Seed::Connected),
+            (key("bob"), grant("bob"), Seed::Connected),
+        ],
+    )
+    .await;
+    let backend = Arc::new(crate::backend::Backend::new(
+        BOUND_BACKEND,
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    let alice = [account_slot("alice", "gen1"), account_slot("alice", "gen2")];
+    let bob = account_slot("bob", "gen1");
+    for slot in alice.iter().chain([&bob]) {
+        let transport = Arc::new(super::super::RouterNotificationTestTransport::success());
+        backend.set_pooled_transport_for_test(slot, transport);
+    }
+    assert!(gw.state.backends.register(Arc::clone(&backend)));
+    // PREMISE: every slot is live before the revoke
+    for slot in alice.iter().chain([&bob]) {
+        assert!(backend.pool_has_slot_for_test(slot), "premise: {slot:?}");
+    }
+    // WHEN
+    let (status, _) = delete(&gw, Some("alice"), ACCOUNT).await;
+    // THEN
+    assert_eq!(status, StatusCode::OK);
+    for slot in &alice {
+        assert!(!backend.pool_has_slot_for_test(slot), "evicted: {slot:?}");
+    }
+    assert!(backend.pool_has_slot_for_test(&bob), "B's slot survives");
+}
+
+/// `Unsupported` (design §8.2): a descriptor with no configured revocation
+/// endpoint sends nothing, reports `unsupported` (never `failed`), and still
+/// tombstones.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoke_route_without_revocation_endpoint_is_unsupported_and_revoked() {
+    // GIVEN: a connected grant whose descriptor configures no endpoint
+    let gw = gateway_with(
+        true,
+        &[(key("alice"), grant("alice"), Seed::Connected)],
+        RevocationEndpoint::Absent,
+    )
+    .await;
+    // WHEN
+    let (status, body) = delete(&gw, Some("alice"), ACCOUNT).await;
+    // THEN
+    assert_eq!(
+        (status, body),
+        (StatusCode::OK, revoked_body("unsupported"))
+    );
+    assert!(gw.fixture.received().is_empty(), "no request to /revoke");
+    assert_eq!(gw.fixture.state(&key("alice")).await, "revoked");
 }

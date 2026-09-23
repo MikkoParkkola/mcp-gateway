@@ -103,8 +103,15 @@ impl SecretSource for FixedSecret {
     }
 }
 
-/// A managed descriptor pinned to the fake issuer, with a revocation endpoint.
-pub(crate) fn descriptor(resource: &str) -> AccountDescriptor {
+/// Whether the managed descriptor configures a `revocation_endpoint`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum RevocationEndpoint {
+    Configured,
+    Absent,
+}
+
+/// A managed descriptor pinned to the fake issuer.
+pub(crate) fn descriptor(resource: &str, endpoint: RevocationEndpoint) -> AccountDescriptor {
     AccountDescriptor {
         mode: super::config::DescriptorMode::PersonalManaged,
         provider: "fixture".to_string(),
@@ -112,7 +119,10 @@ pub(crate) fn descriptor(resource: &str) -> AccountDescriptor {
         issuer: Some(ISSUER.to_string()),
         authorization_endpoint: Some(format!("{ISSUER}/authorize")),
         token_endpoint: Some(format!("{ISSUER}/token")),
-        revocation_endpoint: Some(REVOKE_URL.to_string()),
+        revocation_endpoint: match endpoint {
+            RevocationEndpoint::Configured => Some(REVOKE_URL.to_string()),
+            RevocationEndpoint::Absent => None,
+        },
         client_id: Some("fixture-client".to_string()),
         client_secret_ref: Some(SECRET_REF.to_string()),
         redirect_uri: Some("https://chat.fixture.test/accounts/v1/callback".to_string()),
@@ -182,10 +192,13 @@ pub(crate) fn grant(label: &str) -> GrantRecord {
 
 impl RevokeFixture {
     /// Seed the store, then start the real custody over the fake transport.
+    /// The metadata advertises `/revoke` whatever `endpoint` is, so `Absent`
+    /// also proves the gateway never falls back to a discovered endpoint.
     pub(crate) async fn start(
         account_id: &str,
         resource: &str,
         seeds: &[(AccountKey, GrantRecord, Seed)],
+        endpoint: RevocationEndpoint,
     ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let base = root.path().canonicalize().unwrap();
@@ -216,7 +229,8 @@ impl RevokeFixture {
             r#"{{"issuer":"{ISSUER}","authorization_endpoint":"{ISSUER}/authorize",
                 "token_endpoint":"{ISSUER}/token","revocation_endpoint":"{REVOKE_URL}"}}"#
         );
-        let descriptors = BTreeMap::from([(account_id.to_string(), descriptor(resource))]);
+        let descriptors =
+            BTreeMap::from([(account_id.to_string(), descriptor(resource, endpoint))]);
         let http = FakeHttp { metadata, router };
         let provider = PersonalOAuthRefresh::bootstrap(descriptors, http, SystemClock, FixedSecret)
             .await
