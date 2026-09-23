@@ -175,6 +175,9 @@ async fn t_abort_without_a_revocation_endpoint_reports_unsupported() {
 async fn t_r2_1_journeys_write_failure_after_commit_does_not_poison_the_authority() {
     // GIVEN
     let (_owui, gw) = journey_gateway(RevocationEndpoint::Configured).await;
+    for grant in [expired_grant(1), minted_grant(2), minted_grant(3)] {
+        gw.fixture.token.queue(200, grant);
+    }
     let bob = begin(&gw, BOB, BOB_TOKEN, WORK).await;
     assert_outcome(&complete(&gw, &bob).await, "connected");
     let alice = begin(&gw, ALICE, ALICE_TOKEN, WORK).await;
@@ -190,9 +193,9 @@ async fn t_r2_1_journeys_write_failure_after_commit_does_not_poison_the_authorit
         gw.fixture.access_token(&bob_key).await.as_deref(),
         Some("fresh-access-1-9e4a")
     );
-    gw.fixture.advance(3601);
-    assert!(
-        gw.fixture.refreshed_token(&bob_key).await.is_some(),
+    assert_eq!(
+        gw.fixture.refreshed_token(&bob_key).await.as_deref(),
+        Some("fresh-access-3-9e4a"),
         "B refreshes"
     );
     let status = journey_status(&gw, ALICE, &alice.id).await;

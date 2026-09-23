@@ -23,16 +23,25 @@ fn start_rate(per_minute: u32) -> JourneyLimits {
 /// Gap 1. Kills: `admit_start` not called, or its window/limit ignored.
 #[test]
 fn start_rate_n_plus_one_within_a_minute_is_429_then_admitted_after_the_window() {
-    // GIVEN: alice may start 2 times a minute, and has 3 journeys to start.
+    // GIVEN: alice may start 2 times a minute, and has 3 journeys to start,
+    // one per account so no creation supersedes another.
     let (_root, _config, store) = fresh();
     let limits = start_rate(2);
-    let ids: Vec<_> = (0..3)
-        .map(|_| create(&store, T0, &limits, "alice"))
+    let accounts = ["drive", "mail", "calendar"];
+    let ids: Vec<_> = accounts
+        .iter()
+        .map(|account| {
+            store
+                .create_journey(T0, &limits, request("alice", account))
+                .expect("creation succeeds")
+        })
         .collect();
+    let start_as =
+        |now, i: usize| store.start_journey(now, &limits, &ids[i], &owner("alice", accounts[i]));
     // WHEN: she starts all three within the same second.
-    start(&store, T0, &limits, &ids[0], "alice");
-    start(&store, T0 + 1, &limits, &ids[1], "alice");
-    let third = store.start_journey(T0 + 2, &limits, &ids[2], &owner("alice", "google"));
+    start_as(T0, 0).expect("first start");
+    start_as(T0 + 1, 1).expect("second start");
+    let third = start_as(T0 + 2, 2);
     // THEN: the third is 429 until the oldest start leaves the window.
     assert_eq!(
         refused(third),
@@ -50,7 +59,7 @@ fn start_rate_n_plus_one_within_a_minute_is_429_then_admitted_after_the_window()
     let bob = create(&store, T0 + 2, &limits, "bob");
     start(&store, T0 + 2, &limits, &bob, "bob");
     // AND: once the window slides past the first start, alice starts again.
-    start(&store, T0 + START_RATE_WINDOW, &limits, &ids[2], "alice");
+    start_as(T0 + START_RATE_WINDOW, 2).expect("admitted after the window");
 }
 
 /// Gap 2. Kills: a re-start re-arming `callback_by`, or keeping old secrets.

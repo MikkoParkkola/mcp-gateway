@@ -43,6 +43,14 @@ pub(crate) fn minted_grant(n: u32) -> Value {
            "token_type": "Bearer", "expires_in": 3600, "scope": "fixture.read"})
 }
 
+/// [`minted_grant`] already expired: custody reads expiry off the system
+/// clock, so [`super::RevokeFixture::advance`] cannot age a grant.
+pub(crate) fn expired_grant(n: u32) -> Value {
+    let mut grant = minted_grant(n);
+    grant["expires_in"] = json!(0);
+    grant
+}
+
 pub(crate) async fn token_endpoint(
     State(script): State<Arc<TokenScript>>,
     Form(form): Form<BTreeMap<String, String>>,
