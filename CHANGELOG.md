@@ -28,6 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that needs it stops starting.
   ([@terafin](https://github.com/terafin), [#644](https://github.com/MikkoParkkola/mcp-gateway/pull/644))
 
+- **A hosted consent journey lets a chat client's users connect their own
+  OAuth account, with no separate admin step.** Today a `personal_managed`
+  backend refuses a caller who has not connected yet and stops there. With
+  `accounts.hosted` configured and a bridge adapter in place (Open WebUI
+  today), that refusal instead carries a gateway-sealed connect link: the
+  user follows it, is sent to the provider (Google, in the reference
+  configuration), and lands back on a gateway-rendered outcome page over
+  `/accounts/v1/*`. They can review and disconnect their own accounts at any
+  time from `/accounts/v1/complete`. Each grant is scoped and committed per
+  user, so an unconnected caller never reaches another user's credential.
+  Enabling it needs `accounts.hosted.public_origin` and `return_paths`, an
+  adapter with a `session` block, and each `personal_managed` descriptor's
+  `redirect_uri` set to `<public_origin>/accounts/v1/callback`; see
+  `docs/MULTI_USER.md` for the full configuration and the reverse-proxy
+  routing it needs. Omitting `accounts.hosted` mounts no route and changes no
+  existing refusal text.
+
 ### Fixed
 
 - **The `-full` variant's smoke gate bounds every probe.** Four of its six probes
