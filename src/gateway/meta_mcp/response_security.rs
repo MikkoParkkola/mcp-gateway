@@ -42,6 +42,8 @@ pub(crate) fn meta_response_targets(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeliveryInspection {
     /// Inspect at delivery. Every caller that cannot prove an earlier pass.
+    /// The stdio caller (`server/mod.rs`) has no router pre-pass and relies
+    /// on this: delivery is its only inspection.
     Required,
     /// The HTTP `tools/call` arm ran the response firewall on this artifact
     /// and resolved its verdict; a second pass here re-ran the detectors on
