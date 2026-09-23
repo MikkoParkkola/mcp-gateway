@@ -13,11 +13,11 @@ use super::{
     START_WINDOW, StartSecrets, digest_comparisons, read_journeys,
 };
 
-const T0: u64 = 1_800_000_000;
-const K1: [u8; 32] = [7; 32];
+pub(super) const T0: u64 = 1_800_000_000;
+pub(super) const K1: [u8; 32] = [7; 32];
 const K2: [u8; 32] = [9; 32];
 
-fn limits() -> JourneyLimits {
+pub(super) fn limits() -> JourneyLimits {
     JourneyLimits {
         journeys_total: 1024,
         journeys_per_user: 8,
@@ -52,14 +52,14 @@ fn settings(root: &std::path::Path, current: &str, keys: &[(&str, [u8; 32])]) ->
     }
 }
 
-fn fresh() -> (tempfile::TempDir, StoreConfig, PersonalAccountStore) {
+pub(super) fn fresh() -> (tempfile::TempDir, StoreConfig, PersonalAccountStore) {
     let root = tempfile::tempdir().unwrap();
     let config = settings(root.path(), "k1", &[("k1", K1)]);
     let store = PersonalAccountStore::initialize(config.clone()).expect("initialize");
     (root, config, store)
 }
 
-fn owner(subject: &str, account: &str) -> AccountKey {
+pub(super) fn owner(subject: &str, account: &str) -> AccountKey {
     AccountKey {
         principal_authority: "openwebui-adapter:4:inst".into(),
         principal_subject: subject.into(),
@@ -69,7 +69,7 @@ fn owner(subject: &str, account: &str) -> AccountKey {
     }
 }
 
-fn request(subject: &str, account: &str) -> NewJourney {
+pub(super) fn request(subject: &str, account: &str) -> NewJourney {
     NewJourney {
         owner: owner(subject, account),
         descriptor_revision: "0".repeat(64),
@@ -78,7 +78,12 @@ fn request(subject: &str, account: &str) -> NewJourney {
     }
 }
 
-fn create(store: &PersonalAccountStore, now: u64, limits: &JourneyLimits, who: &str) -> String {
+pub(super) fn create(
+    store: &PersonalAccountStore,
+    now: u64,
+    limits: &JourneyLimits,
+    who: &str,
+) -> String {
     let id = store
         .create_journey(now, limits, request(who, "google"))
         .expect("creation succeeds");
@@ -86,7 +91,7 @@ fn create(store: &PersonalAccountStore, now: u64, limits: &JourneyLimits, who: &
     id
 }
 
-fn start(
+pub(super) fn start(
     store: &PersonalAccountStore,
     now: u64,
     limits: &JourneyLimits,
@@ -108,7 +113,7 @@ fn epoch(store: &PersonalAccountStore) -> String {
 }
 
 /// The decrypted table on disk, through the production reader.
-fn on_disk(
+pub(super) fn on_disk(
     store: &PersonalAccountStore,
     config: &StoreConfig,
     limits: &JourneyLimits,
@@ -116,7 +121,7 @@ fn on_disk(
     read_journeys(config, &epoch(store), limits).expect("journeys.json decrypts")
 }
 
-fn refused(result: Result<impl Sized, JourneyError>) -> JourneyRefusal {
+pub(super) fn refused(result: Result<impl Sized, JourneyError>) -> JourneyRefusal {
     match result.err() {
         Some(JourneyError::Refused(refusal)) => refusal,
         Some(other) => panic!("expected a refusal, got {other:?}"),
@@ -409,7 +414,7 @@ fn t_r2_5_a_maximal_record_fits_record_max_rounded_to_256() {
 }
 
 /// Drop the store (releasing its lifetime locks) and reopen it with new keys.
-fn reload(
+pub(super) fn reload(
     store: PersonalAccountStore,
     config: &StoreConfig,
     current: &str,
@@ -488,7 +493,7 @@ fn t_keyrot2_start_recaptures_the_digest_key_it_mints_under() {
         .expect("the callback validates under the re-captured key");
 }
 
-fn sealed_grant() -> GrantRecord {
+pub(super) fn sealed_grant() -> GrantRecord {
     GrantRecord {
         generation: "fedcba9876543210fedcba9876543210".into(),
         token_revision: 1,
