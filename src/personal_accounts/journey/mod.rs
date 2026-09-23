@@ -310,10 +310,12 @@ fn keyed_digest(config: &StoreConfig, key_id: &str, secret: Secret, value: &str)
 
 /// `SHA-256(len-prefixed authority, subject)` under its own domain (§5.3).
 fn principal_digest(owner: &AccountKey) -> Result<String, AccountError> {
-    let fields = [
-        owner.principal_authority.as_str(),
-        owner.principal_subject.as_str(),
-    ];
+    principal_digest_of(&owner.principal_authority, &owner.principal_subject)
+}
+
+/// [`principal_digest`] from the two parts, for a caller holding no account.
+fn principal_digest_of(authority: &str, subject: &str) -> Result<String, AccountError> {
+    let fields = [authority, subject];
     let encoded = super::encode_fields(PRINCIPAL_DOMAIN, &fields)?;
     Ok(hex::encode(Sha256::digest(encoded)))
 }

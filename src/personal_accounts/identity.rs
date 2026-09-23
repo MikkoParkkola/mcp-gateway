@@ -149,6 +149,12 @@ impl<'a> Principal<'a> {
         }
     }
 
+    /// [`Self::parts`] for a consumer keyed on the principal alone, with no
+    /// descriptor to build an account key from (the journey status owner).
+    pub(crate) fn authority_subject(self) -> (&'a str, &'a str) {
+        self.parts()
+    }
+
     /// The verified identity behind this principal, when one proved it.
     ///
     /// For a consumer that genuinely needs the PROOF rather than the principal

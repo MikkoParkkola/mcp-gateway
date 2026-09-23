@@ -439,7 +439,13 @@ pub(crate) use service::{
     ReleasedCredentials, TokenRefresh,
 };
 #[cfg(test)]
+pub(crate) use storage::journey::JourneyReason;
+pub(crate) use storage::journey::{
+    JourneyError, JourneyLimits, JourneyRefusal, JourneyStatus, JourneyView,
+};
+#[cfg(test)]
 pub(crate) use worker::CustodyHandle;
+pub(crate) use worker::{AccountHandles, JourneyService};
 pub(crate) use worker::{CustodyError, CustodyStartError};
 
 /// The managed-account dispatch strategy and the object-safe custody it runs

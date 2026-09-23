@@ -446,6 +446,12 @@ fn namespaced_issuer(installation_id: &str) -> String {
     )
 }
 
+/// The issuer an installation's identities carry, for a caller that must
+/// recognise them without re-deriving the format (journey bridge, §5.3 L2).
+pub(crate) fn adapter_issuer(installation_id: &str) -> String {
+    namespaced_issuer(installation_id)
+}
+
 fn now_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

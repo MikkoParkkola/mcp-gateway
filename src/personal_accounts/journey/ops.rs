@@ -9,8 +9,11 @@ use super::{
     ACCOUNT_ID_MAX, AccountKey, CALLBACK_WINDOW, Consumed, DigestKind, EXPECTATION_MAX, ISSUER_MAX,
     JourneyError, JourneyId, JourneyLimits, JourneyReason, JourneyRecord, JourneyRefusal,
     JourneyStatus, JourneyTable, JourneyView, NewJourney, RETURN_PATH_MAX, START_WINDOW, Secret,
-    StartSecrets, digests_equal, keyed_digest, principal_digest, random_secret,
+    StartSecrets, digests_equal, keyed_digest, principal_digest, principal_digest_of,
+    random_secret,
 };
+use crate::personal_accounts::config::AccountDescriptor;
+use crate::personal_accounts::service::ConsentExpectation;
 use crate::personal_accounts::{AccountError, PersonalAccountStore, StoreConfig};
 
 /// Length of a `descriptor_revision` (hex SHA-256).
@@ -345,6 +348,50 @@ impl PersonalAccountStore {
             tx.table
                 .journeys
                 .get(id)
+                .map(view)
+                .ok_or(JourneyRefusal::NotFound)
+        })
+    }
+
+    /// POST creation from the configured descriptor: the revision and the
+    /// consent expectation are captured here, where the store is (§6.2).
+    pub(crate) fn create_connect_journey(
+        &self,
+        now: u64,
+        limits: &JourneyLimits,
+        owner: AccountKey,
+        descriptor: &AccountDescriptor,
+        return_path: String,
+    ) -> Result<JourneyId, JourneyError> {
+        let descriptor_revision =
+            super::super::migration_revision::descriptor_revision(descriptor).map_err(storage)?;
+        let expected = ConsentExpectation::captured(&self.lookup(&owner).map_err(storage)?);
+        let new = NewJourney {
+            owner,
+            descriptor_revision,
+            expected,
+            return_path,
+        };
+        self.create_journey(now, limits, new)
+    }
+
+    /// Status for the journey's own principal only. Another principal gets
+    /// the same `NotFound` as an id that never existed (T-C07a).
+    pub(crate) fn journey_status_owned(
+        &self,
+        now: u64,
+        limits: &JourneyLimits,
+        id: &str,
+        principal: (&str, &str),
+    ) -> Result<JourneyView, JourneyError> {
+        let caller = principal_digest_of(principal.0, principal.1).map_err(storage)?;
+        self.journey_transition(now, limits, |tx| {
+            tx.table
+                .journeys
+                .get(id)
+                .filter(|record| {
+                    digests_equal(DigestKind::Owner, &record.principal_digest, &caller)
+                })
                 .map(view)
                 .ok_or(JourneyRefusal::NotFound)
         })

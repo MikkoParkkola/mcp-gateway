@@ -245,9 +245,12 @@ impl RevokeFixture {
         }
     }
 
-    /// The handle the router is given.
-    pub(crate) fn revocation(&self) -> Arc<dyn AccountRevocation> {
-        Arc::clone(&self.custody) as Arc<dyn AccountRevocation>
+    /// The handles the router is given.
+    pub(crate) fn handles(&self) -> super::AccountHandles {
+        super::AccountHandles {
+            revocation: Arc::clone(&self.custody) as Arc<dyn AccountRevocation>,
+            journeys: Arc::clone(&self.custody) as Arc<dyn super::JourneyService>,
+        }
     }
 
     /// Script the next `/revoke` answers.
