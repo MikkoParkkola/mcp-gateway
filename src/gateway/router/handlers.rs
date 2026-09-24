@@ -1188,6 +1188,8 @@ async fn meta_mcp_dispatch(
     // proves it already inspected this exact artifact.
     #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
     let mut delivery_inspection = DeliveryInspection::Required;
+    // The scope and identity the resource and prompt arms forward under.
+    let (scope, identity) = (client.as_ref(), verified_identity.as_ref());
     let mut response = match method.as_str() {
         "subscriptions/listen" => {
             // The single long-lived stream that replaces the GET endpoint.
@@ -1804,48 +1806,43 @@ async fn meta_mcp_dispatch(
         }
         // Resources
         "resources/list" => {
-            state
-                .meta_mcp
-                .handle_resources_list(id, params.as_ref(), verified_identity.as_ref())
+            let meta = &state.meta_mcp;
+            meta.handle_resources_list(id, params.as_ref(), scope, identity)
                 .await
         }
         "resources/read" => {
-            state
-                .meta_mcp
-                .handle_resources_read(
-                    id,
-                    params.as_ref(),
-                    CallerStanding::of_client(client.as_ref()),
-                )
+            let standing = CallerStanding::of_client(scope);
+            let meta = &state.meta_mcp;
+            meta.handle_resources_read(id, params.as_ref(), standing, scope, identity)
                 .await
         }
         "resources/templates/list" => {
-            state
-                .meta_mcp
-                .handle_resources_templates_list(id, params.as_ref(), verified_identity.as_ref())
+            let meta = &state.meta_mcp;
+            meta.handle_resources_templates_list(id, params.as_ref(), scope, identity)
                 .await
         }
         "resources/subscribe" => {
-            state
-                .meta_mcp
-                .handle_resources_subscribe(id, params.as_ref())
+            let meta = &state.meta_mcp;
+            meta.handle_resources_subscribe(id, params.as_ref(), scope, identity)
                 .await
         }
         "resources/unsubscribe" => {
-            state
-                .meta_mcp
-                .handle_resources_unsubscribe(id, params.as_ref())
+            let meta = &state.meta_mcp;
+            meta.handle_resources_unsubscribe(id, params.as_ref(), scope, identity)
                 .await
         }
 
         // Prompts
         "prompts/list" => {
-            state
-                .meta_mcp
-                .handle_prompts_list(id, params.as_ref(), verified_identity.as_ref())
+            let meta = &state.meta_mcp;
+            meta.handle_prompts_list(id, params.as_ref(), scope, identity)
                 .await
         }
-        "prompts/get" => state.meta_mcp.handle_prompts_get(id, params.as_ref()).await,
+        "prompts/get" => {
+            let meta = &state.meta_mcp;
+            meta.handle_prompts_get(id, params.as_ref(), scope, identity)
+                .await
+        }
 
         // Logging
         "logging/setLevel" => {

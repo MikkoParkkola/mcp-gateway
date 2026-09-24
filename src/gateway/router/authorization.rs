@@ -157,17 +157,7 @@ pub(super) fn authorize_tool_target(
     validate_tool_name(target.tool)
         .map_err(|e| AuthorizationError::forbidden(-32600, e.clone()))?;
 
-    if let Some(client) = client
-        && !client.can_access_backend(target.server)
-    {
-        return Err(AuthorizationError::forbidden(
-            -32003,
-            format!(
-                "Client '{}' not authorized for backend '{}'",
-                client.name, target.server
-            ),
-        ));
-    }
+    crate::gateway::authz::authorize_backend(client, target.server)?;
 
     state
         .tool_policy

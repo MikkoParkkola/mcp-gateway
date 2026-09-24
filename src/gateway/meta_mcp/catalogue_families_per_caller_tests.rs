@@ -318,12 +318,19 @@ fn families_gateway() -> (MetaMcp, Arc<PerIdentityFamilies>) {
 async fn listed_for(meta: &MetaMcp, method: &str, who: Option<&VerifiedIdentity>) -> Vec<String> {
     let id = RequestId::Number(1);
     let (response, key) = match method {
-        "resources/list" => (meta.handle_resources_list(id, None, who).await, "resources"),
+        "resources/list" => (
+            meta.handle_resources_list(id, None, None, who).await,
+            "resources",
+        ),
         "resources/templates/list" => (
-            meta.handle_resources_templates_list(id, None, who).await,
+            meta.handle_resources_templates_list(id, None, None, who)
+                .await,
             "resourceTemplates",
         ),
-        "prompts/list" => (meta.handle_prompts_list(id, None, who).await, "prompts"),
+        "prompts/list" => (
+            meta.handle_prompts_list(id, None, None, who).await,
+            "prompts",
+        ),
         other => panic!("unknown family {other}"),
     };
     assert!(

@@ -168,7 +168,7 @@ async fn row_14_resources_subscribe_to_a_modern_backend_is_refused_in_the_gatewa
 
     let params = json!({"uri": OWNED_URI});
     let response = meta
-        .handle_resources_subscribe(RequestId::Number(1), Some(&params))
+        .handle_resources_subscribe(RequestId::Number(1), Some(&params), None, None)
         .await;
 
     let error = response
@@ -197,7 +197,7 @@ async fn row_15_resources_unsubscribe_to_a_modern_backend_is_refused_in_the_gate
 
     let params = json!({"uri": OWNED_URI});
     let response = meta
-        .handle_resources_unsubscribe(RequestId::Number(1), Some(&params))
+        .handle_resources_unsubscribe(RequestId::Number(1), Some(&params), None, None)
         .await;
 
     let error = response
@@ -227,10 +227,10 @@ async fn row_15c_a_legacy_backend_still_receives_both_resource_verbs() {
 
     let params = json!({"uri": OWNED_URI});
     let subscribe = meta
-        .handle_resources_subscribe(RequestId::Number(1), Some(&params))
+        .handle_resources_subscribe(RequestId::Number(1), Some(&params), None, None)
         .await;
     let unsubscribe = meta
-        .handle_resources_unsubscribe(RequestId::Number(2), Some(&params))
+        .handle_resources_unsubscribe(RequestId::Number(2), Some(&params), None, None)
         .await;
 
     assert!(
