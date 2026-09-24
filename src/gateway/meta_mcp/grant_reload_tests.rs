@@ -517,7 +517,7 @@ async fn t2b_control_repeated_refusals_keep_every_cached_answer_servable() {
             "tool",
             &serde_json::json!({"a": 1}),
             "",
-            Some("bob"),
+            &super::support::CachePrincipal::Caller("bob".to_string()),
             &RetryFields::default(),
             KeyContext {
                 routing_profile: "default",
@@ -525,6 +525,7 @@ async fn t2b_control_repeated_refusals_keep_every_cached_answer_servable() {
                 policy_epoch: meta.policy_epoch.load(Ordering::Acquire),
             },
         )
+        .expect("a resolved principal has a key")
     };
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("grants.json");

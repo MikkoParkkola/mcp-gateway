@@ -192,6 +192,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behaviour): callers stop sharing cached and idempotent results.**
+  Two API keys (or the admin bearer and a key) calling the same tool with the
+  same arguments shared one response-cache entry and one idempotency key
+  space, so one caller could be served another's result. An authenticated
+  caller with no OIDC identity, grant subject or propagation binding now keys
+  on the digest of its validated secret (`cred:`), never on the key's name. The
+  direct `/mcp/{name}` route now separates mTLS, trusted-header and OAuth-agent
+  callers as the meta route already did. An authenticated caller that resolves
+  to no principal bypasses the cache and the idempotency guard
+  (`mcp_cache_bypass_total`, `mcp_idempotency_guard_skipped_total`, reason
+  `unresolved_principal`, labelled by `route`). Anonymous callers still share one namespace. No
+  configuration change; see `docs/UPGRADING-4.0.md` item 14.
 - **BREAKING: identity grants written as documented now match.** Grants,
   owners and callers compare on `authority` and `subject`; `label` is display
   text. Before, a grant labelled differently from the runtime label (an API

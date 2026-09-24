@@ -18,6 +18,44 @@ use crate::gateway::meta_mcp::MetaMcpCallerContext;
 // Idempotency
 // ============================================================================
 
+/// Whether the caller presented and validated a credential.
+///
+/// Carried explicitly on every caller context, never inferred from the
+/// credential principal: the live HTTP anonymous caller carries `Some("")`, and
+/// an auth-off task worker carries the non-empty `AUTH_DISABLED_TASK_OWNER`, so
+/// a digest says nothing reliable about whether anyone authenticated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Authentication {
+    Authenticated,
+    Anonymous,
+}
+
+impl Authentication {
+    /// Read from `AuthenticatedClient::authenticated`. No client at all is
+    /// anonymous: nothing was presented.
+    pub(crate) fn of(client: Option<&crate::gateway::auth::AuthenticatedClient>) -> Self {
+        if client.is_some_and(|client| client.authenticated) {
+            Self::Authenticated
+        } else {
+            Self::Anonymous
+        }
+    }
+}
+
+/// Who the response cache and the retry key belong to.
+///
+/// A tri-state rather than `Option<String>` so the fail-closed case cannot be
+/// dropped by accident: `Anonymous` is the one namespace every caller without
+/// a credential shares, and `Unresolved` is an authenticated caller no arm
+/// could name. The key helpers below take this by reference and hold the
+/// exhaustive match, so no call site unwraps it to a string of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum CachePrincipal {
+    Caller(String),
+    Anonymous,
+    Unresolved,
+}
+
 /// Build the idempotency key for a `gateway_invoke` call.
 ///
 /// `client_key` is the key the client sent in `params._meta`; there is no other
@@ -36,16 +74,33 @@ use crate::gateway::meta_mcp::MetaMcpCallerContext;
 /// says where the client's bytes stop, so no choice of key can reach across
 /// the boundary into a segment the gateway derives.
 ///
-/// Returns `None` when no idempotency cache is configured, or when the client
-/// sent no key.
+/// Returns `None` when no idempotency cache is configured, when the client
+/// sent no key, or when the principal is `Unresolved`. `route` labels the
+/// skip counter (`meta` or `direct`).
 pub(super) fn idempotency_key_for(
     client_key: Option<&str>,
     projection_key_suffix: &str,
-    identity_suffix: &str,
+    principal: &CachePrincipal,
     idem_cache: Option<&std::sync::Arc<IdempotencyCache>>,
+    route: &'static str,
 ) -> Option<String> {
     idem_cache?;
     let key = client_key?;
+    let Some(identity_suffix) = retry_identity_suffix(principal) else {
+        // Fail closed (A0 D4): never read or write the shared key space. The
+        // call proceeds unguarded, like one that sent no key.
+        tracing::warn!(
+            route,
+            "Idempotency guard skipped: unresolved caller principal"
+        );
+        telemetry_metrics::counter!(
+            "mcp_idempotency_guard_skipped_total",
+            "reason" => "unresolved_principal",
+            "route" => route
+        )
+        .increment(1);
+        return None;
+    };
     let len = key.len();
     Some(format!(
         "{len}:{key}{projection_key_suffix}{identity_suffix}"
@@ -54,25 +109,88 @@ pub(super) fn idempotency_key_for(
 
 /// The retry de-duplication suffix: WHO a stored idempotency entry belongs to.
 ///
-/// Exactly the principal the response cache keys on (`caller_cache_principal`):
-/// the propagated binding, else the verified OIDC actor, else the caller's own
-/// `GrantSubject`. One function selects and spells the caller for both keys, so
-/// a caller the response cache tells apart can never share a retry entry — the
-/// retry key once stopped at the verified subject, and callers identified by
-/// mTLS, trusted headers or an OAuth agent shared one entry per client key.
+/// Exactly the principal the response cache keys on (`caller_cache_principal`),
+/// so a caller the response cache tells apart can never share a retry entry.
+/// Empty for `Anonymous`, the one pooled namespace; `None` for `Unresolved`,
+/// which must never fall back to that namespace.
+pub(super) fn retry_identity_suffix(principal: &CachePrincipal) -> Option<String> {
+    match principal {
+        CachePrincipal::Caller(principal) => Some(format!("|{principal}")),
+        CachePrincipal::Anonymous => Some(String::new()),
+        CachePrincipal::Unresolved => None,
+    }
+}
+
+/// Count and log one response-cache bypass for an `Unresolved` caller (A0 D4).
+/// Called once per call the cache would otherwise have served, so the read and
+/// the write that both skip do not count twice. `route` mirrors the
+/// idempotency skip counter's label.
+pub(super) fn note_cache_bypass(principal: &CachePrincipal, route: &'static str) {
+    if *principal == CachePrincipal::Unresolved {
+        tracing::warn!(
+            route,
+            "Response cache bypassed: unresolved caller principal"
+        );
+        telemetry_metrics::counter!(
+            "mcp_cache_bypass_total",
+            "reason" => "unresolved_principal",
+            "route" => route
+        )
+        .increment(1);
+    }
+}
+
+/// Who the response cache keys on, namespaced by the evidence it came from.
 ///
-/// Empty for a caller with none of the three, so all such callers share one
-/// key space: unauthenticated callers, and currently callers authenticated
-/// only by a static API key, which `caller_cache_principal` has no arm for.
-/// Separating API-key callers is tracked as the next increment.
-pub(super) fn retry_identity_suffix(
+/// One tagged, length-prefixed namespace per source, so two different kinds of
+/// principal cannot collide by spelling: an identity-propagation
+/// `cache_binding`, else the verified OIDC actor, else the caller's own
+/// `GrantSubject` (authority + subject). The `GrantSubject` arm is what
+/// separates two callers on a deployment that derives identity from trusted
+/// headers, mTLS or an OAuth agent and runs with identity propagation off and
+/// no OIDC — the shipped default, where every caller previously keyed as
+/// `None` and shared one entry.
+///
+/// Last, for an authenticated caller only, the credential digest
+/// (`AuthenticatedClient::principal`, a digest of the validated secret, never
+/// the operator-chosen key name): two API keys, or the admin bearer, stop
+/// sharing one entry. An authenticated caller no arm names is `Unresolved`;
+/// only an anonymous one joins the pooled namespace.
+///
+/// The binding is copied opaquely, never re-hashed and never trimmed: it is
+/// already the resolver's digest, and the same string is what the capability
+/// executor copies into the inner key.
+pub(super) fn caller_cache_principal(
     cache_binding: Option<&str>,
     verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     grant_subject: Option<&crate::identity_grants::GrantSubject>,
-) -> String {
-    caller_cache_principal(cache_binding, verified_identity, grant_subject)
-        .map(|principal| format!("|{principal}"))
-        .unwrap_or_default()
+    credential_principal: Option<&str>,
+    authentication: Authentication,
+) -> CachePrincipal {
+    if let Some(binding) = cache_binding {
+        return CachePrincipal::Caller(format!("idp:{}:{binding}", binding.len()));
+    }
+    if let Some(actor) =
+        verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
+    {
+        return CachePrincipal::Caller(format!("oidc:{}:{actor}", actor.len()));
+    }
+    if let Some(subject) = grant_subject {
+        return CachePrincipal::Caller(format!(
+            "grant:{}:{}:{}:{}",
+            subject.authority.len(),
+            subject.authority,
+            subject.subject.len(),
+            subject.subject
+        ));
+    }
+    match (authentication, credential_principal) {
+        (Authentication::Anonymous, _) => CachePrincipal::Anonymous,
+        (Authentication::Authenticated, Some(digest)) if !digest.is_empty() => {
+            CachePrincipal::Caller(format!("cred:{}:{digest}", digest.len()))
+        }
+        (Authentication::Authenticated, _) => CachePrincipal::Unresolved,
+    }
 }
 
 /// Build the response-cache key for a `gateway_invoke` call.
@@ -89,52 +207,22 @@ pub(super) fn retry_identity_suffix(
 /// `context` is forwarded, not consumed here: the routing profile, protocol
 /// revision and policy generation belong to the key the cache layer derives,
 /// so this passes them down rather than mixing a discriminator of its own.
-/// Who the response cache keys on, namespaced by the evidence it came from.
 ///
-/// One tagged, length-prefixed namespace per source, so two different kinds of
-/// principal cannot collide by spelling: an identity-propagation
-/// `cache_binding`, else the verified OIDC actor, else the caller's own
-/// `GrantSubject` (authority + subject). The `GrantSubject` arm is what
-/// separates two callers on a deployment that derives identity from trusted
-/// headers, mTLS or an OAuth agent and runs with identity propagation off and
-/// no OIDC — the shipped default, where every caller previously keyed as
-/// `None` and shared one entry.
-///
-/// The binding is copied opaquely, never re-hashed and never trimmed: it is
-/// already the resolver's digest, and the same string is what the capability
-/// executor copies into the inner key.
-pub(super) fn caller_cache_principal(
-    cache_binding: Option<&str>,
-    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-    grant_subject: Option<&crate::identity_grants::GrantSubject>,
-) -> Option<String> {
-    if let Some(binding) = cache_binding {
-        return Some(format!("idp:{}:{binding}", binding.len()));
-    }
-    if let Some(actor) =
-        verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
-    {
-        return Some(format!("oidc:{}:{actor}", actor.len()));
-    }
-    let subject = grant_subject?;
-    Some(format!(
-        "grant:{}:{}:{}:{}",
-        subject.authority.len(),
-        subject.authority,
-        subject.subject.len(),
-        subject.subject
-    ))
-}
-
+/// `None` for an `Unresolved` principal: no key means no `get` and no `set`.
 pub(super) fn response_cache_key_for(
     server: &str,
     tool: &str,
     arguments: &Value,
     projection_key_suffix: &str,
-    principal: Option<&str>,
+    principal: &CachePrincipal,
     retry: &crate::protocol::mrtr::RetryFields,
     context: crate::cache::KeyContext<'_>,
-) -> String {
+) -> Option<String> {
+    let principal = match principal {
+        CachePrincipal::Caller(principal) => Some(principal.as_str()),
+        CachePrincipal::Anonymous => None,
+        CachePrincipal::Unresolved => return None,
+    };
     let base = crate::cache::ResponseCache::response_key(
         server,
         tool,
@@ -143,7 +231,7 @@ pub(super) fn response_cache_key_for(
         principal,
         context,
     );
-    format!("{base}{}", retry.key_discriminator())
+    Some(format!("{base}{}", retry.key_discriminator()))
 }
 
 // ============================================================================
@@ -466,302 +554,13 @@ pub(super) fn strip_backend_provenance(mut result: Value) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::internal_invoke_args;
-    use super::strip_backend_provenance;
-    use serde_json::json;
-
-    /// A verified OIDC identity distinguished only by its subject.
-    fn verified(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
-        crate::key_server::oidc::VerifiedIdentity {
-            subject: subject.to_string(),
-            email: format!("{subject}@example.test"),
-            name: None,
-            groups: Vec::new(),
-            issuer: "i".to_string(),
-        }
-    }
-
-    /// MIK-7408. Identity propagation ON: the retry entry is tagged with the
-    /// propagated binding, which already distinguishes user AND audience.
-    #[test]
-    fn retry_identity_suffix_uses_the_binding_when_propagation_is_on() {
-        let alice = verified("alice");
-        let subject = crate::identity_grants::GrantSubject::new("mtls", "alice", None);
-        let suffix =
-            super::retry_identity_suffix(Some("idp:1:a:3:mem"), Some(&alice), Some(&subject));
-
-        assert_eq!(suffix, "|idp:13:idp:1:a:3:mem");
-    }
-
-    /// MIK-7408. Identity propagation OFF — the shipped default. The suffix
-    /// falls back to the verified subject, then to the caller's grant subject,
-    /// rather than staying empty. Each arm carries its OWN tag, so a binding
-    /// and an actor id that read alike cannot collide either.
-    #[test]
-    fn retry_identity_suffix_falls_back_to_the_verified_then_grant_subject() {
-        let actor = verified("b");
-        let unbound = super::retry_identity_suffix(None, Some(&actor), None);
-
-        assert_eq!(unbound, "|oidc:12:oidc:1:i:1:b");
-        assert_ne!(
-            unbound,
-            super::retry_identity_suffix(Some("oidc:1:i:1:b"), None, None),
-            "a binding and an actor id with identical text must stay distinct"
-        );
-
-        let subject = crate::identity_grants::GrantSubject::new("mtls", "b", None);
-        assert_eq!(
-            super::retry_identity_suffix(None, None, Some(&subject)),
-            "|grant:4:mtls:1:b"
-        );
-    }
-
-    /// MIK-7408. A caller with no binding, no verified identity and no grant
-    /// subject gets an EMPTY suffix, so two such callers share one entry. That
-    /// covers unauthenticated callers and, currently, callers authenticated
-    /// only by a static API key; separating the latter is tracked separately.
-    #[test]
-    fn retry_identity_suffix_pools_callers_with_no_principal() {
-        assert_eq!(super::retry_identity_suffix(None, None, None), "");
-    }
-
-    /// MIK-7408. Two callers, one client key each, on a backend where identity
-    /// propagation is off for the forger. The victim is bound and gets the
-    /// suffix `|idp:V` appended; the forger is unbound and simply SPELLS that
-    /// suffix inside the client key it chose. Concatenation without a boundary
-    /// makes both derive the same string, so the forger's call is admitted
-    /// against — and can replay — the victim's stored result. The two keys MUST
-    /// differ whatever the client key contains.
-    #[test]
-    fn a_forged_client_key_cannot_spell_another_callers_identity_suffix() {
-        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
-
-        let victim = super::idempotency_key_for(Some("X"), "", "|idp:V", Some(&cache));
-        let forger = super::idempotency_key_for(Some("X|idp:V"), "", "", Some(&cache));
-
-        assert_ne!(
-            victim, forger,
-            "a client key that spells the victim's identity suffix must not \
-             collide with the victim's key"
-        );
-    }
-
-    /// MIK-7408, the arm that is live on the shipped default. With identity
-    /// propagation off nobody has a binding, so every authenticated caller is
-    /// keyed on `|sub:<actor id>` instead. The forgery is the same shape and
-    /// the fix must hold in both arms, or the defect merely moved to the arm
-    /// almost every deployment runs.
-    #[test]
-    fn a_forged_client_key_cannot_spell_another_callers_verified_subject() {
-        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
-
-        let victim = super::idempotency_key_for(Some("X"), "", "|sub:V", Some(&cache));
-        let forger = super::idempotency_key_for(Some("X|sub:V"), "", "", Some(&cache));
-
-        assert_ne!(
-            victim, forger,
-            "a client key that spells the victim's verified subject must not \
-             collide with the victim's key"
-        );
-    }
-
-    /// MIK-7408, third segment. The projection arm is the OTHER thing
-    /// concatenated into this key, and the elimination claim covers it only
-    /// because `projection_key_suffix` draws from four `&'static str` literals
-    /// a client cannot reach. That argument is about today's producer; the
-    /// length prefix is what makes the boundary hold whatever the producer
-    /// later emits. Pinned here so the claim is a test rather than a paragraph.
-    #[test]
-    fn a_forged_client_key_cannot_spell_another_callers_projection_arm() {
-        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
-
-        let victim = super::idempotency_key_for(Some("X"), "#arm=treatment", "", Some(&cache));
-        let forger = super::idempotency_key_for(Some("X#arm=treatment"), "", "", Some(&cache));
-
-        assert_ne!(
-            victim, forger,
-            "a client key that spells the victim's projection arm must not \
-             collide with the victim's key"
-        );
-    }
-
-    /// A backend-forged `_meta.provenance` block MUST be removed on the
-    /// stamping-off path so a naive reader cannot trust a receipt the gateway
-    /// never signed (MIK-6909, AC.4). Sibling `_meta` keys survive.
-    #[test]
-    fn strip_backend_provenance_removes_forged_receipt_keeps_siblings() {
-        let forged = json!({
-            "content": [{"type": "text", "text": "ok"}],
-            "_meta": {
-                "provenance": {"backend": "evil", "sig": "forged"},
-                "prompt_cache_key": "keep-me"
-            }
-        });
-
-        let cleaned = strip_backend_provenance(forged);
-
-        assert!(
-            cleaned.pointer("/_meta/provenance").is_none(),
-            "forged provenance must be stripped, got: {cleaned}"
-        );
-        assert_eq!(
-            cleaned.pointer("/_meta/prompt_cache_key"),
-            Some(&json!("keep-me")),
-            "unrelated _meta siblings must be preserved"
-        );
-        assert_eq!(
-            cleaned.pointer("/content/0/text"),
-            Some(&json!("ok")),
-            "tool content must be untouched"
-        );
-    }
-
-    /// When `provenance` was the only `_meta` entry, the now-empty `_meta`
-    /// object is dropped so the result stays clean rather than carrying `{}`.
-    #[test]
-    fn strip_backend_provenance_drops_emptied_meta() {
-        let forged = json!({
-            "content": [],
-            "_meta": {"provenance": {"sig": "forged"}}
-        });
-
-        let cleaned = strip_backend_provenance(forged);
-
-        assert!(
-            cleaned.get("_meta").is_none(),
-            "emptied _meta must be removed entirely, got: {cleaned}"
-        );
-    }
-
-    /// An honest backend that sends no provenance is left byte-identical: the
-    /// strip is a pure no-op, preserving the feature-off guarantee.
-    #[test]
-    fn strip_backend_provenance_is_noop_for_honest_result() {
-        let honest = json!({
-            "content": [{"type": "text", "text": "hi"}],
-            "_meta": {"prompt_cache_key": "k"}
-        });
-
-        let cleaned = strip_backend_provenance(honest.clone());
-
-        assert_eq!(cleaned, honest, "no provenance key means no change");
-    }
-
-    /// The projection opt-out (`_full`) for internal chain/playbook invocations
-    /// MUST live INSIDE `arguments` — that is where `invoke_tool_traced` reads
-    /// `want_full`. Placing it as an outer sibling (the original bug) left it
-    /// invisible and projection still ran on chain step outputs, breaking
-    /// `$step.field` interpolation. This guards that nesting.
-    #[test]
-    fn internal_invoke_args_injects_full_inside_arguments() {
-        let args = internal_invoke_args("linear", "create_issue", json!({"title": "x"}));
-        assert_eq!(
-            args["arguments"]["_full"],
-            json!(true),
-            "_full must be inside arguments where want_full is read"
-        );
-        assert_eq!(
-            args["arguments"]["title"],
-            json!("x"),
-            "caller args preserved"
-        );
-        assert_eq!(args["server"], json!("linear"));
-        assert_eq!(args["tool"], json!("create_issue"));
-        assert!(
-            args.get("_full").is_none(),
-            "_full must NOT be an outer sibling (would be ignored by want_full)"
-        );
-    }
-
-    /// Non-object arguments pass through unchanged — no data loss, no panic.
-    #[test]
-    fn internal_invoke_args_preserves_non_object_arguments() {
-        let args = internal_invoke_args("s", "t", json!("scalar"));
-        assert_eq!(args["arguments"], json!("scalar"));
-    }
-
-    /// MRTR.10: two continuations of one call that differ only in the answers
-    /// the user gave MUST NOT share a response-cache entry. Removing the retry
-    /// argument from `response_cache_key_for` makes this assertion fail — which
-    /// is what stops that wiring being dropped by a later edit.
-    #[test]
-    fn response_cache_key_separates_two_answers_to_one_gate() {
-        use crate::protocol::mrtr::RetryFields;
-        let args = json!({"flight": "AY1337"});
-        let key_for = |answer: serde_json::Value| {
-            let retry = RetryFields {
-                input_responses: Some(answer),
-                request_state: Some("st-1".to_string()),
-                idempotency_key: None,
-                malformed: Vec::new(),
-            };
-            super::response_cache_key_for(
-                "air",
-                "book",
-                &args,
-                "",
-                None,
-                &retry,
-                crate::cache::KeyContext::default(),
-            )
-        };
-        assert_ne!(
-            key_for(json!({"confirm": "accept"})),
-            key_for(json!({"confirm": "decline"})),
-            "a declined booking must not be served the accepted booking's result"
-        );
-    }
-
-    /// A call with no retry fields MUST derive exactly the key the
-    /// principal-scoped builder derives on its own, or the upgrade silently
-    /// empties every cache. What is actually under test is that
-    /// `NO_RETRY.key_discriminator()` contributes nothing: any non-empty
-    /// discriminator on an ordinary call fails this.
-    #[test]
-    fn response_cache_key_is_unchanged_for_an_ordinary_call() {
-        let args = json!({"q": 1});
-        let key = super::response_cache_key_for(
-            "srv",
-            "tool",
-            &args,
-            "|proj",
-            Some("actor-1"),
-            &crate::protocol::mrtr::NO_RETRY,
-            crate::cache::KeyContext::default(),
-        );
-        let before = crate::cache::ResponseCache::response_key(
-            "srv",
-            "tool",
-            &args,
-            "|proj",
-            Some("actor-1"),
-            crate::cache::KeyContext::default(),
-        );
-        assert_eq!(key, before);
-    }
-
-    /// The principal is part of the key, not decoration: two callers must not
-    /// share one entry. Guards the property HEAD added and the MRTR key
-    /// builder now inherits rather than replaces.
-    #[test]
-    fn response_cache_key_separates_two_principals() {
-        let args = json!({"q": 1});
-        let k = |p| {
-            super::response_cache_key_for(
-                "srv",
-                "tool",
-                &args,
-                "",
-                Some(p),
-                &crate::protocol::mrtr::NO_RETRY,
-                crate::cache::KeyContext::default(),
-            )
-        };
-        assert_ne!(k("actor-1"), k("actor-2"));
-    }
-}
+#[path = "support_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "idempotency_caller_scope_tests.rs"]
 mod idempotency_caller_scope_tests;
+
+#[cfg(test)]
+#[path = "cache_principal_tests.rs"]
+mod cache_principal_tests;

@@ -37,7 +37,7 @@ fn key_now(meta: &MetaMcp, retry: &RetryFields) -> String {
         "tool",
         &json!({"a": 1}),
         "",
-        Some("alice"),
+        &super::support::CachePrincipal::Caller("alice".to_string()),
         retry,
         KeyContext {
             routing_profile: "default",
@@ -45,6 +45,7 @@ fn key_now(meta: &MetaMcp, retry: &RetryFields) -> String {
             policy_epoch,
         },
     )
+    .expect("a resolved principal has a key")
 }
 
 #[test]

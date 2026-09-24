@@ -177,6 +177,7 @@ pub(super) fn task_intent_for_call(
             // The same owner the durable record is admitted under, handed over
             // rather than re-derived, so the worker's caller and the task agree.
             req.owner.to_owned(),
+            crate::gateway::meta_mcp::Authentication::of(req.client),
             req.is_admin,
             req.input_capabilities,
             req.session_id
@@ -286,6 +287,7 @@ async fn recover_from_upstream(
             // This context checks authorization only; it never accesses a cache.
             protocol_revision: None,
             credential_principal: caller.client.map(|client| client.principal.as_str()),
+            authentication: crate::gateway::meta_mcp::Authentication::of(caller.client),
             execution: None,
             // No saved prepared-signing context: `None` is what keeps
             // `check_invocation_policy` running on this read, which is the point.

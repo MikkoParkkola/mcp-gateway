@@ -3187,6 +3187,7 @@ impl Gateway {
             is_modern,
             protocol_revision,
             credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
+            authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
             authorizer: stdio_authorizer,
             // Stdio has no port and no network surface: the
             // client SPAWNED this process, so it already holds
@@ -3705,6 +3706,7 @@ fn stdio_caller_context<'a>(
         is_modern: era == crate::protocol::meta::Era::Modern,
         protocol_revision: None,
         credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
+        authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         authorizer,
         // Stdio has no port and no network surface: the
         // client SPAWNED this process, so it already holds

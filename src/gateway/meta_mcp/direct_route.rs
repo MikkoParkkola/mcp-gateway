@@ -26,34 +26,43 @@ impl MetaMcp {
     ///
     /// Identity binds through the same principal function route 1 uses, and
     /// binds it HERE rather than at the caller so that ordering keeps one
-    /// owner. It never binds on the API key name: that names the KEY, not the
-    /// end user, so two people sharing one gateway key would share one entry —
-    /// the exact disclosure `SUB.4.DIRECT.2` exists to deny.
+    /// owner. It never binds on the API key name, which is operator-chosen and
+    /// may be shared by two keys; an API-key caller binds on the digest of its
+    /// validated secret (`credential_principal`) instead.
     ///
-    /// `None` when no cache is configured or the client sent no key: the call
-    /// then proceeds unguarded, exactly as before.
+    /// `None` when no cache is configured, the client sent no key, or an
+    /// authenticated caller resolves to no principal: the call then proceeds
+    /// unguarded rather than touching the shared key space.
     ///
     /// # Errors
     ///
     /// Propagates the guard's refusals: a duplicate still in flight, a key
     /// already in use for a different request, or a cache at capacity.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn direct_route_idempotency(
         &self,
         client_key: Option<&str>,
         server: &str,
         cache_binding: Option<&str>,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        grant_subject: Option<&crate::identity_grants::GrantSubject>,
+        credential_principal: Option<&str>,
+        authentication: super::Authentication,
         params: Option<&Value>,
     ) -> Result<Option<crate::idempotency::GuardOutcome>> {
         let Some(cache) = self.idempotency_cache.as_ref() else {
             return Ok(None);
         };
-        // No grant subject reaches this route yet, so a caller identified only
-        // by mTLS, trusted headers or an OAuth agent is not separated here.
-        let identity_suffix =
-            support::retry_identity_suffix(cache_binding, verified_identity, None);
+        let principal = support::caller_cache_principal(
+            cache_binding,
+            verified_identity,
+            grant_subject,
+            credential_principal,
+            authentication,
+        );
         // No projection and no chain step on this route: it forwards one call.
-        let Some(key) = support::idempotency_key_for(client_key, "", &identity_suffix, Some(cache))
+        let Some(key) =
+            support::idempotency_key_for(client_key, "", &principal, Some(cache), "direct")
         else {
             return Ok(None);
         };
