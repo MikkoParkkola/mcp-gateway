@@ -37,3 +37,9 @@ tool-integrity: uncovered -- needs a backend that changes its `tools/list` betwe
 transparency-log: uncovered -- an audit record, not a refusal; its absence leaves no signal in any response
 unsafe-code-denied: uncovered -- a compile-time lint leaves no signal on the wire; drift is caught by the build, not by a request
 5 probed, 29 uncovered, 0 failing
+
+# Appended 2026-09-24T20:45:33Z: live install on 127.0.0.1:39401, launcher -> 4.0.0-e2c34b78 (same binary as the drift run above)
+# xh -b :39401/health
+{"backends":{"all_healthy":true,"count":32},"capability_backend":null,"status":"healthy","version":"4.0.0"}
+# tools/list (names)
+['gateway_execute', 'gateway_search']

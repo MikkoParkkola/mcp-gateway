@@ -27,7 +27,7 @@ Times are UTC. Personal e-mail addresses are replaced by the labels G1 and G2.
 | 6 | CONNECT B | 14:30:24 Allow -> "connected" | PASS |
 | 7 | Interleaved use, two users | 10 concurrent calls each as A and B -> 20/20 answered (3 results each); two distinct token records in the store | PASS |
 | 8 | EXPIRED consent state, real Google | 14:31:39 B journey `ac5b66ae` parked on the Google consent screen; 14:42:36 (past CALLBACK_WINDOW 600 s) Allow -> real code delivered -> gateway "Account connection: expired"; status 200 `status: expired, reason: expired`; B existing grant still answers afterwards | PASS |
-| 9 | Gateway restart keeps grants | 14:23 restart onto the 438583c1 binary: prior state (both disconnected) preserved; restart with both connected: see row 11 | see 11 |
+| 9 | Gateway restart keeps grants | 14:23 restart onto the 438583c1 binary: prior state (both disconnected) preserved; restart with both connected: see row 10 | see 10 |
 | 10 | Gateway restart keeps grants (both connected) | 15:15:05 gateway stopped; restarted 15:26:57 (new pid); 15:27:04 A and B both answer with no reconnect. (The scheduled 15:15 restart killed its own driver shell because `pgrep -f` matched the command line that contained the pattern; the gateway was down 15:15-15:26 as a result, not from any gateway fault.) | PASS |
 | 11 | REFRESH A, real Google token endpoint | A connected 14:24:43, Google access tokens live 3600 s; 15:27:04 call as A: gateway opens `oauth2.googleapis.com` before the Gmail call and the call succeeds; A token record mtime 15:27:05 (rewritten), B record unchanged since 14:30 connect | PASS |
 | 12 | REFRESH B, real Google | B connected 14:30:24; 15:31:00 call as B after expiry answers; B token record mtime 15:31:00 (rewritten) | PASS |
