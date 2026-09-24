@@ -55,7 +55,7 @@ use notify::{
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use serde_json::Value;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use std::fmt::Write as _;
 
@@ -1205,7 +1205,7 @@ impl ConfigWatcher {
         failsafe_cfg: crate::config::FailsafeConfig,
         cache_ttl: Duration,
         env: Arc<LiveEnv>,
-        _identity_grants: Option<Arc<IdentityGrantSink>>,
+        identity_grants: Option<Arc<IdentityGrantSink>>,
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) {
@@ -1223,7 +1223,8 @@ impl ConfigWatcher {
             // failed a single test.
             let ctx =
                 ReloadContext::new(config_path, live_config, registry, failsafe_cfg, cache_ttl)
-                    .with_env(env);
+                    .with_env(env)
+                    .with_identity_grant_sink_opt(identity_grants);
 
             loop {
                 tokio::select! {
@@ -1260,7 +1261,7 @@ impl ConfigWatcher {
                                     // the syntax of.
                                     warn!("Config reload: {e}");
                                 }
-                                Err(e) if e == SHUTDOWN_ABORTED_ERROR => {
+                                Err(e) if e.starts_with(SHUTDOWN_ABORTED_ERROR) => {
                                     warn!(
                                         "Config reload: aborted, the gateway is \
                                          shutting down; keeping the previous live \
@@ -1642,7 +1643,18 @@ impl ReloadContext {
         // backend edit, and the config-file watcher. See `apply_patch` for why
         // the lock cannot live one level down.
         let _reload_guard = self.registry.lock_reload().await;
-        let mut outcome = self.reload_outcome_locked().await?;
+        let mut outcome = match self.reload_outcome_locked().await {
+            Ok(outcome) => outcome,
+            // Both steps render on every path: a config refusal read alone
+            // hides whether the revocation landed. Appended, so every consumer
+            // keying on the refusal's prefix still matches.
+            Err(mut refusal) => {
+                if let Some(Ok(line) | Err(line)) = grants {
+                    write!(refusal, "; {line}").ok();
+                }
+                return Err(refusal);
+            }
+        };
         match grants {
             Some(Ok(line)) => write!(outcome.changes, "; {line}").ok(),
             // A refusal is reported, not swallowed: the config half succeeded,
@@ -1808,12 +1820,21 @@ impl ReloadContext {
     /// eviction that ran and achieved nothing.
     pub async fn reload_identity_grants(&self) -> Option<std::result::Result<String, String>> {
         let sink = self.identity_grants.as_ref()?;
-        let _grants_guard = sink.lock.lock().await;
+        // Bounded like `lock_reload_within`: busy is its own refusal, so an
+        // operator retries instead of inspecting a grants file that is fine.
+        let Ok(_grants_guard) = tokio::time::timeout(RELOAD_LOCK_WAIT, sink.lock.lock()).await
+        else {
+            error!(path = %sink.path.display(), "Identity-grant reload busy");
+            return Some(Err(
+                "identity grants reload busy: another grant reload is in progress; retry"
+                    .to_string(),
+            ));
+        };
 
         let file = match crate::identity_grants::read_identity_grants_file(&sink.path).await {
             Ok(file) => file,
             Err(reason) => {
-                warn!(
+                error!(
                     path = %sink.path.display(),
                     %reason,
                     "Identity-grant reload refused; the live grants still apply"
@@ -1833,6 +1854,7 @@ impl ReloadContext {
         }
 
         let subjects = changed_grant_subjects(&outgoing, &incoming_rows);
+        let delta = grant_delta::grant_delta(&outgoing, &incoming_rows);
         crate::gateway::publish_identity_grants(&sink.store, &sink.epoch, incoming);
 
         // Three distinct outcomes, and they must not share a counter:
@@ -1864,13 +1886,14 @@ impl ReloadContext {
         info!(
             path = %sink.path.display(),
             rows = incoming_rows.len(),
+            %delta,
             slots_evicted = evicted,
             subjects_matching_no_slot = matched_nothing,
             subjects_skipped = ?skipped,
             "Identity grants reloaded"
         );
         Some(Ok(format!(
-            "identity grants reloaded ({} rows, {evicted} pool slots evicted)",
+            "identity grants reloaded ({} rows, {delta}, {evicted} pool slots evicted)",
             incoming_rows.len()
         )))
     }
@@ -2268,6 +2291,8 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
         _ => PathBuf::from("."),
     }
 }
+
+mod grant_delta;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;
