@@ -705,3 +705,52 @@ async fn a_session_whose_token_was_revoked_receives_no_webhook_data() {
         "a revoked token must not receive webhook data"
     );
 }
+
+// ── Dashboard session ─────────────────────────────────────────────────
+
+fn with_session_cookie(handle: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::COOKIE,
+        format!("{}={handle}", crate::gateway::auth::SESSION_COOKIE)
+            .parse()
+            .unwrap(),
+    );
+    headers
+}
+
+#[tokio::test]
+async fn a_dashboard_session_receives_webhook_data_only_on_an_issued_handle() {
+    // The middleware admits an issued session cookie on any path, /mcp
+    // included, so a stream opened with one is a caller like any other.
+    let auth = authorizer(None);
+    let handle = auth.dashboard_bootstrap.issue_session();
+    let multiplexer = make_multiplexer();
+    multiplexer.set_authorizer(auth);
+    let held = crate::gateway::auth::live::held_credential;
+    let (_, mut rx_issued) = multiplexer.get_or_create_session_scoped(
+        Some("dashboard"),
+        "credential:dashboard-session",
+        held(&with_session_cookie(&handle)),
+    );
+    let (_, mut rx_forged) = multiplexer.get_or_create_session_scoped(
+        Some("forged"),
+        "unauthenticated:public",
+        held(&with_session_cookie("never-issued")),
+    );
+
+    post_webhook(make_handler_state(
+        Arc::clone(&multiplexer),
+        make_definition(true),
+    ))
+    .await;
+
+    assert!(
+        rx_issued.try_recv().is_ok(),
+        "an issued dashboard session is an authenticated caller"
+    );
+    assert!(
+        rx_forged.try_recv().is_err(),
+        "a handle this process never issued authenticates nobody"
+    );
+}
