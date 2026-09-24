@@ -20,3 +20,5 @@ mod signing_stdio_routing;
 mod dispatcher_admission_arms;
 
 mod stdout_death_admission;
+
+mod stdio_listing_scope;

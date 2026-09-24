@@ -38,6 +38,8 @@ mod meta_firewall_verdict;
 mod order2_fsm;
 mod task_execution_adapter;
 
+mod issue_555_listing_scope;
+
 /// The durable task runtime every fixture in this file is built on.
 ///
 /// A fresh `TempDir` per fixture, handed back to the caller and bound for the
