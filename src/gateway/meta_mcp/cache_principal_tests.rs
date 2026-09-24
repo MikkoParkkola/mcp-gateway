@@ -42,8 +42,16 @@ fn cache_principal_tags_cannot_collide() {
     assert_ne!(cred, other, "two API keys must not share one principal");
 
     let subject = GrantSubject::new(digest, digest, None);
+    let actor = crate::key_server::oidc::VerifiedIdentity {
+        subject: digest.to_string(),
+        email: String::new(),
+        name: None,
+        groups: Vec::new(),
+        issuer: digest.to_string(),
+    };
     let spelled = [
         caller_cache_principal(Some(digest), None, None, None, Authentication::Anonymous),
+        caller_cache_principal(None, Some(&actor), None, None, Authentication::Anonymous),
         caller_cache_principal(None, None, Some(&subject), None, Authentication::Anonymous),
     ];
     for forged in &spelled {
@@ -200,7 +208,7 @@ mod invoke_path {
             counted(
                 &events,
                 "mcp_cache_bypass_total",
-                &[("reason", "unresolved_principal")]
+                &[("reason", "unresolved_principal"), ("route", "meta")]
             ),
             2
         );
@@ -209,6 +217,29 @@ mod invoke_path {
             0,
             "an unresolved caller wrote to the shared namespace"
         );
+    }
+
+    /// T8 negative: a call that would never touch the cache (no served
+    /// protocol revision) is not counted as a bypass. Operators are told to
+    /// report any `unresolved_principal` count, so a false one costs a report.
+    #[test]
+    fn an_uncacheable_call_is_not_counted_as_a_cache_bypass() {
+        let (registry, calls) = counted_backend("alpha");
+        let (meta, _cache) = cached_meta(registry);
+        let retry = RetryFields::default();
+        let caller = MetaMcpCallerContext {
+            protocol_revision: None,
+            ..unresolved(&retry)
+        };
+        let ((), events) = observe(|| {
+            runtime().block_on(async {
+                meta.invoke_tool(&invoke_args("alpha", "read"), None, &caller)
+                    .await
+                    .expect("the call proceeds");
+            });
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(counted(&events, "mcp_cache_bypass_total", &[]), 0);
     }
 
     /// T8b. The same caller with one idempotency key sent twice: no shared

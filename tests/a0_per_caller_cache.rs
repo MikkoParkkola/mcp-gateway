@@ -12,7 +12,7 @@
 //! proved by content as well as by the delivery count.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -34,6 +34,9 @@ use mcp_gateway::mtls::{CertIdentity, MtlsConfig, MtlsPolicy};
 use mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
+use telemetry_metrics::{
+    Counter, CounterFn, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit,
+};
 use tower::ServiceExt;
 
 const BACKEND: &str = "backend";
@@ -397,6 +400,69 @@ fn delivery(body: &Value) -> Option<String> {
     (!digits.is_empty()).then(|| format!("call-{digits}"))
 }
 
+// ── Fail-closed counters ────────────────────────────────────────────────────
+
+/// The two counters A0 emits when a caller resolves to no principal. Every
+/// caller in this file IS resolvable, so both must stay at zero: without this,
+/// an implementation that marked every caller `Unresolved` (and so skipped the
+/// guard for everyone) would pass the separation cells for the wrong reason.
+const FAIL_CLOSED: [&str; 2] = [
+    "mcp_cache_bypass_total",
+    "mcp_idempotency_guard_skipped_total",
+];
+
+#[derive(Clone, Default)]
+struct Tally(Arc<AtomicU64>);
+
+impl CounterFn for Tally {
+    fn increment(&self, value: u64) {
+        self.0.fetch_add(value, Ordering::SeqCst);
+    }
+    fn absolute(&self, value: u64) {
+        self.0.fetch_max(value, Ordering::SeqCst);
+    }
+}
+
+/// A thread-local recorder that tallies only the fail-closed counters.
+/// `#[tokio::test]` runs on one thread, so the router and the backend it
+/// reaches report here.
+struct FailClosed(Tally);
+
+impl Recorder for FailClosed {
+    fn describe_counter(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+    fn describe_gauge(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+    fn describe_histogram(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+    fn register_counter(&self, key: &Key, _: &Metadata<'_>) -> Counter {
+        if FAIL_CLOSED.contains(&key.name()) {
+            Counter::from_arc(Arc::new(self.0.clone()))
+        } else {
+            Counter::noop()
+        }
+    }
+    fn register_gauge(&self, _: &Key, _: &Metadata<'_>) -> Gauge {
+        Gauge::noop()
+    }
+    fn register_histogram(&self, _: &Key, _: &Metadata<'_>) -> Histogram {
+        Histogram::noop()
+    }
+}
+
+/// Run one case under the recorder and assert no caller was left unresolved.
+async fn resolved<T>(case: impl std::future::Future<Output = T>) -> T {
+    let tally = Tally::default();
+    let recorder = FailClosed(tally.clone());
+    let out = {
+        let _guard = telemetry_metrics::set_default_local_recorder(&recorder);
+        case.await
+    };
+    assert_eq!(
+        tally.0.load(Ordering::SeqCst),
+        0,
+        "a resolvable caller was treated as unresolved (cache bypassed or guard skipped)"
+    );
+    out
+}
+
 fn ok(label: &str, (status, body): &(StatusCode, Value)) {
     assert_eq!(*status, StatusCode::OK, "{label}: {body}");
     assert!(body.get("error").is_none(), "{label}: {body}");
@@ -411,8 +477,11 @@ async fn meta_route_cache_does_not_serve_one_api_key_callers_result_to_another()
     let calls = Arc::new(AtomicUsize::new(0));
     let (state, _dir) = gateway(Setup::two_keys(true), &calls).await;
 
-    let a = post_meta(&state, 1, Some("k-1"), with_key(ALICE)).await;
-    let b = post_meta(&state, 2, Some("k-2"), with_key(BOB)).await;
+    let (a, b) = resolved(async {
+        let a = post_meta(&state, 1, Some("k-1"), with_key(ALICE)).await;
+        (a, post_meta(&state, 2, Some("k-2"), with_key(BOB)).await)
+    })
+    .await;
     ok("alice", &a);
     ok("bob", &b);
 
@@ -431,8 +500,14 @@ async fn meta_route_same_api_key_still_hits_cache() {
     let calls = Arc::new(AtomicUsize::new(0));
     let (state, _dir) = gateway(Setup::two_keys(true), &calls).await;
 
-    let first = post_meta(&state, 1, Some("k-1"), with_key(ALICE)).await;
-    let second = post_meta(&state, 2, Some("k-2"), with_key(ALICE)).await;
+    let (first, second) = resolved(async {
+        let first = post_meta(&state, 1, Some("k-1"), with_key(ALICE)).await;
+        (
+            first,
+            post_meta(&state, 2, Some("k-2"), with_key(ALICE)).await,
+        )
+    })
+    .await;
     ok("first", &first);
     ok("second", &second);
 
@@ -451,8 +526,11 @@ async fn meta_route_idempotency_key_does_not_replay_across_api_keys() {
     let calls = Arc::new(AtomicUsize::new(0));
     let (state, _dir) = gateway(Setup::two_keys(false), &calls).await;
 
-    let a = post_meta(&state, 1, Some("shared"), with_key(ALICE)).await;
-    let b = post_meta(&state, 2, Some("shared"), with_key(BOB)).await;
+    let (a, b) = resolved(async {
+        let a = post_meta(&state, 1, Some("shared"), with_key(ALICE)).await;
+        (a, post_meta(&state, 2, Some("shared"), with_key(BOB)).await)
+    })
+    .await;
     ok("alice", &a);
     ok("bob", &b);
 
@@ -473,8 +551,14 @@ async fn meta_route_same_api_key_idempotency_key_still_deduplicates() {
     let calls = Arc::new(AtomicUsize::new(0));
     let (state, _dir) = gateway(Setup::two_keys(false), &calls).await;
 
-    let first = post_meta(&state, 1, Some("k1"), with_key(ALICE)).await;
-    let second = post_meta(&state, 2, Some("k1"), with_key(ALICE)).await;
+    let (first, second) = resolved(async {
+        let first = post_meta(&state, 1, Some("k1"), with_key(ALICE)).await;
+        (
+            first,
+            post_meta(&state, 2, Some("k1"), with_key(ALICE)).await,
+        )
+    })
+    .await;
     ok("first", &first);
     ok("second", &second);
 
@@ -489,11 +573,17 @@ async fn meta_route_same_api_key_idempotency_key_still_deduplicates() {
 // ── Direct route ────────────────────────────────────────────────────────────
 
 /// Two direct-route calls with one idempotency key; returns the deliveries.
+/// Runs under [`resolved`], so every direct cell also asserts that neither
+/// caller was left unresolved.
 async fn direct_pair(setup: Setup, first: Caller, second: Caller) -> (usize, Value) {
     let calls = Arc::new(AtomicUsize::new(0));
     let (state, _dir) = gateway(setup, &calls).await;
-    let a = post_direct(&state, 1, "shared", first).await;
-    let b = post_direct(&state, 2, "shared", second).await;
+    let (a, b) = resolved(async {
+        let a = post_direct(&state, 1, "shared", first).await;
+        let b = post_direct(&state, 2, "shared", second).await;
+        (a, b)
+    })
+    .await;
     ok("first", &a);
     ok("second", &b);
     (calls.load(Ordering::SeqCst), b.1)
@@ -524,6 +614,41 @@ async fn direct_route_idempotency_separates_mtls_callers() {
 async fn direct_route_idempotency_separates_oauth_agents() {
     let (calls, second) = direct_pair(Setup::auth_off(), agent("agent-a"), agent("agent-b")).await;
     assert_eq!(calls, 2, "two OAuth agents shared one entry: {second}");
+}
+
+/// T5 control — one certificate sending one key twice is deduplicated, so
+/// the separation above is not the guard being skipped for everyone.
+#[tokio::test]
+async fn direct_route_same_mtls_caller_still_deduplicates() {
+    let (calls, second) = direct_pair(
+        Setup::auth_off(),
+        mtls("spiffe://example.test/alice"),
+        mtls("spiffe://example.test/alice"),
+    )
+    .await;
+    assert_eq!(calls, 1, "the keyed repeat ran twice: {second}");
+    assert_eq!(delivery(&second).as_deref(), Some("call-1"));
+}
+
+/// T6 (i) control — one OAuth agent sending one key twice is deduplicated.
+#[tokio::test]
+async fn direct_route_same_oauth_agent_still_deduplicates() {
+    let (calls, second) = direct_pair(Setup::auth_off(), agent("agent-a"), agent("agent-a")).await;
+    assert_eq!(calls, 1, "the keyed repeat ran twice: {second}");
+    assert_eq!(delivery(&second).as_deref(), Some("call-1"));
+}
+
+/// T6 (ii) control — one trusted subject sending one key twice is deduplicated.
+#[tokio::test]
+async fn direct_route_same_trusted_header_still_deduplicates() {
+    let setup = Setup {
+        trust_identity_headers: true,
+        ..Setup::auth_off()
+    };
+    let (calls, second) =
+        direct_pair(setup, trusted_header("alice"), trusted_header("alice")).await;
+    assert_eq!(calls, 1, "the keyed repeat ran twice: {second}");
+    assert_eq!(delivery(&second).as_deref(), Some("call-1"));
 }
 
 /// T6 (ii) — trusted identity headers, trust ON, auth off, no credential.
