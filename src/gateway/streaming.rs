@@ -70,6 +70,7 @@ struct ClientSession {
     /// The credential the session was opened with, re-validated at every
     /// scoped delivery. Never a resolved client: a snapshot would outlive a
     /// revoked or expired token.
+    // ci-allow-secret-debug: HeldCredential's own Debug prints only <redacted>
     credential: RwLock<Option<HeldCredential>>,
 }
 
