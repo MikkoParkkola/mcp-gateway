@@ -16,6 +16,9 @@ const SERVER_DRY_RUN: &str =
 const BASE_CONFIGMAP: &str =
     include_str!("../deploy/kubernetes/enterprise-alpha/base/configmap.yaml");
 const HELM_CONFIGMAP: &str = include_str!("../deploy/helm/mcp-gateway/templates/configmap.yaml");
+const HELM_DEPLOYMENT: &str = include_str!("../deploy/helm/mcp-gateway/templates/deployment.yaml");
+const DOCKERFILE: &str = include_str!("../Dockerfile");
+const COMPOSE: &str = include_str!("../deploy/single-node/docker-compose.yaml");
 const EXAMPLE_CONFIG: &str = include_str!("../gateway.example.yaml");
 const KIND_SMOKE: &str =
     include_str!("../deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh");
@@ -432,5 +435,42 @@ fn no_shipped_configuration_publishes_the_mcp_endpoint() {
             "{name} publishes /mcp; the tasks-extension guard would become the \
              only protection on a default deployment"
         );
+    }
+}
+
+/// The `path:` of the first `httpGet` after `probe:`. Text, not YAML, because
+/// the Helm template is not YAML until rendered.
+fn probe_path<'a>(manifest: &'a str, probe: &str) -> &'a str {
+    let after = &manifest[manifest.find(probe).expect("probe declared")..];
+    let line = after
+        .lines()
+        .find(|l| l.trim_start().starts_with("path:"))
+        .expect("probe has an httpGet path");
+    line.trim_start().trim_start_matches("path:").trim()
+}
+
+/// Liveness restarts, readiness routes, and neither may read `/health`.
+///
+/// `/health` answers 503 when any backend is down, so a liveness probe on it
+/// restarted every replica for one flapping upstream, and a startup probe on it
+/// kept every pod from starting while a backend was down at deploy time.
+#[test]
+fn shipped_probes_never_read_backend_health() {
+    for (name, manifest) in [("k8s base", DEPLOYMENT), ("helm", HELM_DEPLOYMENT)] {
+        assert_eq!(probe_path(manifest, "livenessProbe:"), "/livez", "{name}");
+        assert_eq!(probe_path(manifest, "readinessProbe:"), "/readyz", "{name}");
+        assert_eq!(probe_path(manifest, "startupProbe:"), "/readyz", "{name}");
+    }
+}
+
+/// A container healthcheck dials a numeric host.
+///
+/// On a `0.0.0.0` bind with no `public_url` the Host gate admits only numeric
+/// hosts, so `localhost` drew a 403 and the image reported itself unhealthy.
+#[test]
+fn container_healthchecks_dial_loopback_by_address() {
+    for (name, text) in [("Dockerfile", DOCKERFILE), ("compose", COMPOSE)] {
+        assert!(text.contains("http://127.0.0.1:39400/livez"), "{name}");
+        assert!(!text.contains("localhost:39400/health"), "{name}");
     }
 }

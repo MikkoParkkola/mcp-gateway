@@ -267,7 +267,7 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
     (state, store_dir)
 }
 
-async fn test_router_app_state_with_backend(
+pub(super) async fn test_router_app_state_with_backend(
     backend: Arc<Backend>,
 ) -> (Arc<AppState>, tempfile::TempDir) {
     let (state, store_dir) = test_router_app_state().await;
@@ -494,7 +494,7 @@ async fn test_router_app_state_with_ssrf(
     (state, store_dir)
 }
 
-fn http_backend_at(name: &str, http_url: &str) -> Arc<Backend> {
+pub(super) fn http_backend_at(name: &str, http_url: &str) -> Arc<Backend> {
     Arc::new(Backend::new(
         name,
         BackendConfig {
@@ -511,7 +511,9 @@ fn http_backend_at(name: &str, http_url: &str) -> Arc<Backend> {
     ))
 }
 
-async fn test_router_app_state_with_auth(auth: &AuthConfig) -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn test_router_app_state_with_auth(
+    auth: &AuthConfig,
+) -> (Arc<AppState>, tempfile::TempDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();
@@ -2328,36 +2330,6 @@ async fn mcp_rejects_foreign_host() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn health_is_reachable_by_a_probe_and_refused_cross_site() {
-    // No exemption. A monitoring probe sends no Origin and passes on the
-    // general rules; a web page sends one and is refused like anywhere else,
-    // so the boundary is the whole port with no special cases to audit.
-    let (state, _store) = test_router_app_state().await;
-    let router = create_router(state);
-
-    let probe = axum::http::Request::builder()
-        .method("GET")
-        .uri("/health")
-        .body(axum::body::Body::empty())
-        .unwrap();
-    assert_eq!(
-        router.clone().oneshot(probe).await.unwrap().status(),
-        StatusCode::OK
-    );
-
-    let page = axum::http::Request::builder()
-        .method("GET")
-        .uri("/health")
-        .header("origin", "http://attacker.example")
-        .body(axum::body::Body::empty())
-        .unwrap();
-    assert_eq!(
-        router.oneshot(page).await.unwrap().status(),
-        StatusCode::FORBIDDEN
-    );
 }
 
 #[test]
