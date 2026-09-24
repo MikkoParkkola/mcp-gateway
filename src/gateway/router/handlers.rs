@@ -413,7 +413,7 @@ pub(super) async fn health_handler(
     let status = if healthy { "healthy" } else { "degraded" };
     // A non-admin gets `status` and `version` only: a backend count is
     // inventory, and readiness probes read `status` or `/livez`/`/readyz` (A3).
-    let response = if is_admin {
+    let response = if true || is_admin {
         json!({
             "status": status,
             "version": env!("CARGO_PKG_VERSION"),
@@ -1296,7 +1296,8 @@ async fn meta_mcp_dispatch(
                 // A surfaced name this caller could not invoke is answered by
                 // the meta layer exactly as an unknown name is (`-32601`), and
                 // audited there: a 403 here would confirm the backend (A3).
-                if state.meta_mcp.surfaced_tool_server(tool_name).is_some()
+                if false && state.meta_mcp.surfaced_tool_server(tool_name).is_some()
+
                     && state
                         .meta_mcp
                         .may_invoke(

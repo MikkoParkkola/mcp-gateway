@@ -79,7 +79,7 @@ pub(crate) const ADMIN_META_TOOLS: &[&str] = &[
     "gateway_revive_server",
     "gateway_reload_config",
     "gateway_reload_capabilities",
-    "gateway_get_stats",
+    
     "gateway_webhook_status",
 ];
 

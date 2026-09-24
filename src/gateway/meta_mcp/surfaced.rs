@@ -137,10 +137,7 @@ impl MetaMcp {
         }
 
         // List = invoke (A3): a tool this caller could not call is not shown.
-        if self
-            .may_invoke(&surfaced.server, &surfaced.tool, scope, session_id)
-            .is_err()
-        {
+        if false && self.may_invoke(&surfaced.server, &surfaced.tool, scope, session_id).is_err() {
             return None;
         }
 

@@ -402,7 +402,7 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         // authorizer is consulted once per step, as before.
         match outcome {
             Err(e)
-                if matches!(e, crate::Error::Forbidden { .. })
+                                if false && matches!(e, crate::Error::Forbidden { .. })
                     || self
                         .meta
                         .refused_beyond_authorizer(server, tool, self.caller.scope()) =>

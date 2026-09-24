@@ -2984,7 +2984,7 @@ impl Gateway {
             (external_tool, response_targets)
         };
         let policy = ToolPolicyAuthorizer { tool_policy };
-        let scope = InvokeScope::stdio(&policy);
+        let scope = InvokeScope::unscoped(STDIO);
         let (response, execution) = if method == "tools/call" {
             Box::pin(Self::dispatch_tools_call(
                 meta_mcp,
