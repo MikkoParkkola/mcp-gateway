@@ -78,9 +78,9 @@ pub use webhooks::WebhookRegistry;
 /// Hidden from docs; only used in the `tests/` directory.
 #[doc(hidden)]
 pub mod test_helpers {
-    pub use super::meta_mcp::MetaMcp;
     pub use super::meta_mcp::prune_constant_signals;
     pub use super::meta_mcp::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
+    pub use super::meta_mcp::{InvokeScope, MetaMcp};
     pub use super::router::{AppState, CallerStanding, create_router};
     pub use super::task_service::{
         ServiceError, StoreLimits, TaskExecutor, TaskService, open_runtime,

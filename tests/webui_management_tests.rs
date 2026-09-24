@@ -1642,23 +1642,20 @@ async fn a_non_admin_api_key_gets_the_redacted_health_view() {
         .await
         .unwrap();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
-    // Asserted on the redacted SHAPE, not on `backends` failing to be an array.
-    // Both views put an object there — the admin view a map keyed by backend
-    // name, the redacted view `{count, all_healthy}` — so `as_array().is_none()`
-    // was true either way and the case passed with the `.admin` check removed.
-    let backends = body["backends"]
+    // Asserted on the redacted SHAPE. A3 narrowed it from `{count,
+    // all_healthy}` under `backends` to no `backends` at all: a backend count
+    // is inventory, and a non-admin gets `status` and `version` only.
+    let mut keys: Vec<&str> = body
         .as_object()
-        .expect("the redacted view still carries a backends object");
-    let mut keys: Vec<&str> = backends.keys().map(String::as_str).collect();
+        .expect("a health object")
+        .keys()
+        .map(String::as_str)
+        .collect();
     keys.sort_unstable();
     assert_eq!(
         keys,
-        ["all_healthy", "count"],
-        "a non-admin key gets counts and nothing that names a backend: {body}"
-    );
-    assert!(
-        body.get("capabilities").is_none(),
-        "and no capability detail, which is admin-only: {body}"
+        ["status", "version"],
+        "a non-admin key gets health and version, no backend or capability detail: {body}"
     );
 }
 
@@ -1842,10 +1839,10 @@ async fn a_credential_presented_on_a_public_path_still_counts() {
         .await
         .unwrap();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
-    // The redacted view is `{"count": N, "all_healthy": bool}`. Anything else
-    // is the admin view, which is what the credential must still buy.
+    // The redacted view has no `backends` at all (A3). Its presence is the
+    // admin view, which is what the credential must still buy.
     assert!(
-        body["backends"].get("count").is_none(),
+        body["backends"].is_object(),
         "an admin credential must still grant the admin view, got the redacted one: {body}"
     );
 }

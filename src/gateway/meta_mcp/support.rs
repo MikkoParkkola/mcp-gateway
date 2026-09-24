@@ -395,7 +395,26 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         // step they could run directly, which is a regression rather than a
         // control: a playbook is not a way AROUND a check, so it faces the same
         // one — now including the scope checks, at the chokepoint.
-        self.meta.invoke_tool(&args, None, self.caller).await
+        let outcome = self.meta.invoke_tool(&args, None, self.caller).await;
+        // A refused step's reason names an operator-defined target the caller
+        // may not reach, so it is replaced with a neutral one (A3). Decided
+        // from the refusal plus the silent non-authorizer pieces, so the
+        // authorizer is consulted once per step, as before.
+        match outcome {
+            Err(e)
+                if matches!(e, crate::Error::Forbidden { .. })
+                    || self
+                        .meta
+                        .refused_beyond_authorizer(server, tool, self.caller.scope()) =>
+            {
+                Err(crate::Error::Forbidden {
+                    code: -32003,
+                    status: 403,
+                    message: "step not permitted for this caller".to_string(),
+                })
+            }
+            other => other,
+        }
     }
 }
 

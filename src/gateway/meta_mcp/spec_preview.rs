@@ -37,16 +37,17 @@ impl MetaMcp {
         id: RequestId,
         query: &str,
         session_id: Option<&str>,
-        standing: crate::gateway::router::CallerStanding,
+        scope: super::InvokeScope<'_>,
     ) -> JsonRpcResponse {
         let query = query.trim().to_lowercase();
         if query.is_empty() {
-            return self.handle_tools_list_for_session(id, session_id, standing);
+            return self.handle_tools_list_for_session(id, session_id, scope);
         }
 
         self.shadow_tools_list_assembly(session_id, true);
         let profile = self.active_profile(session_id);
-        let tools: Vec<Tool> = self.collect_filtered_backend_tools(&query, session_id, &profile);
+        let tools: Vec<Tool> =
+            self.collect_filtered_backend_tools(&query, session_id, &profile, scope);
 
         debug!(
             query = %query,
@@ -70,6 +71,7 @@ impl MetaMcp {
         query: &str,
         session_id: Option<&str>,
         profile: &crate::routing_profile::RoutingProfile,
+        scope: super::InvokeScope<'_>,
     ) -> Vec<Tool> {
         let mut tools = Vec::new();
 
@@ -78,7 +80,12 @@ impl MetaMcp {
             && profile.backend_allowed(&cap.name)
         {
             for t in cap.get_tools() {
-                if profile.tool_allowed(&t.name) && tool_text_matches(&t, query) {
+                if profile.tool_allowed(&t.name)
+                    && tool_text_matches(&t, query)
+                    && self
+                        .may_invoke(&cap.name, &t.name, scope, session_id)
+                        .is_ok()
+                {
                     tools.push(t);
                 }
             }
@@ -96,7 +103,11 @@ impl MetaMcp {
             let cache_guard = backend.get_cached_tools_snapshot();
             for tool in cache_guard.iter() {
                 let mut t = tool.clone();
-                if !profile.tool_allowed(&t.name) {
+                if !profile.tool_allowed(&t.name)
+                    || self
+                        .may_invoke(&backend.name, &t.name, scope, session_id)
+                        .is_err()
+                {
                     continue;
                 }
                 // Enrich description with auto-tags before matching
@@ -111,9 +122,12 @@ impl MetaMcp {
 
         // Include session-promoted tools that match the query and aren't already listed
         let promoted = self.promoted_tools_for_session(session_id);
-        for t in promoted {
+        for (server, t) in promoted {
             let already = tools.iter().any(|x| x.name == t.name);
-            if !already && tool_text_matches(&t, query) {
+            if !already
+                && tool_text_matches(&t, query)
+                && self.may_invoke(&server, &t.name, scope, session_id).is_ok()
+            {
                 tools.push(t);
             }
         }
@@ -142,6 +156,7 @@ impl MetaMcp {
         id: RequestId,
         params: Option<&Value>,
         session_id: Option<&str>,
+        scope: super::InvokeScope<'_>,
     ) -> JsonRpcResponse {
         let tool_name = params.and_then(|p| p.get("name")).and_then(Value::as_str);
 
@@ -153,7 +168,7 @@ impl MetaMcp {
             );
         };
 
-        if let Some(tool) = self.resolve_tool_by_name(name) {
+        if let Some(tool) = self.resolve_tool_by_name(name, scope, session_id) {
             let result = json!({ "tool": tool });
             JsonRpcResponse::success(id, result)
         } else {
@@ -161,7 +176,7 @@ impl MetaMcp {
             // both spec-preview discovery answers for a connection are decided
             // by the same lookup `handle_tools_list_filtered` makes.
             let profile = self.active_profile(session_id);
-            let msg = self.build_tool_not_found_message(name, &profile);
+            let msg = self.build_tool_not_found_message(name, &profile, scope, session_id);
             JsonRpcResponse::error(Some(id), -32601, msg)
         }
     }
@@ -170,12 +185,19 @@ impl MetaMcp {
     ///
     /// Checks the capability backend first, then MCP backends in registry order.
     /// Returns `None` when the tool is not cached on any backend.
-    fn resolve_tool_by_name(&self, name: &str) -> Option<Tool> {
+    fn resolve_tool_by_name(
+        &self,
+        name: &str,
+        scope: super::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> Option<Tool> {
         // Check capability backend
         if let Some(cap) = self.get_capabilities() {
             let found = cap.get_tools().into_iter().find(|t| t.name == name);
             if found.is_some() {
-                return found;
+                // A withheld tool resolves as an absent one: `-32601`.
+                return found
+                    .filter(|_| self.may_invoke(&cap.name, name, scope, session_id).is_ok());
             }
         }
 
@@ -185,7 +207,11 @@ impl MetaMcp {
             if self.meta_route_isolation_refused(&backend) {
                 continue;
             }
-            if let Some(tool) = backend.get_cached_tool(name) {
+            if let Some(tool) = backend.get_cached_tool(name)
+                && self
+                    .may_invoke(&backend.name, name, scope, session_id)
+                    .is_ok()
+            {
                 return Some(tool);
             }
         }
@@ -198,8 +224,10 @@ impl MetaMcp {
         &self,
         name: &str,
         profile: &crate::routing_profile::RoutingProfile,
+        scope: super::InvokeScope<'_>,
+        session_id: Option<&str>,
     ) -> String {
-        let all_names: Vec<String> = self.collect_all_cached_tool_names(profile);
+        let all_names: Vec<String> = self.collect_all_cached_tool_names(profile, scope, session_id);
         let candidates: Vec<&str> = all_names.iter().map(String::as_str).collect();
 
         match did_you_mean(name, &candidates, 3, 3) {
@@ -220,6 +248,8 @@ impl MetaMcp {
     fn collect_all_cached_tool_names(
         &self,
         profile: &crate::routing_profile::RoutingProfile,
+        scope: super::InvokeScope<'_>,
+        session_id: Option<&str>,
     ) -> Vec<String> {
         let mut names = Vec::new();
         // The capability backend carries no per-caller identity, so only the
@@ -231,7 +261,8 @@ impl MetaMcp {
                 cap.get_tools()
                     .into_iter()
                     .map(|t| t.name)
-                    .filter(|n| profile.tool_allowed(n)),
+                    .filter(|n| profile.tool_allowed(n))
+                    .filter(|n| self.may_invoke(&cap.name, n, scope, session_id).is_ok()),
             );
         }
         for backend in self.backends.all() {
@@ -246,7 +277,8 @@ impl MetaMcp {
                 backend
                     .get_cached_tool_names()
                     .into_iter()
-                    .filter(|n| profile.tool_allowed(n)),
+                    .filter(|n| profile.tool_allowed(n))
+                    .filter(|n| self.may_invoke(&backend.name, n, scope, session_id).is_ok()),
             );
         }
         names
@@ -426,8 +458,12 @@ mod tests {
         // GIVEN: MetaMcp with no backends and an empty query
         let m = meta();
         // WHEN: filtered list is called with blank query
-        let resp =
-            m.handle_tools_list_filtered(RequestId::Number(1), "  ", None, CallerStanding::Admin);
+        let resp = m.handle_tools_list_filtered(
+            RequestId::Number(1),
+            "  ",
+            None,
+            crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
+        );
         // THEN: no error, returns the standard meta-tool list
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().len();
@@ -444,7 +480,7 @@ mod tests {
             RequestId::Number(2),
             "search",
             None,
-            CallerStanding::Admin,
+            crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
         );
         // THEN: no error, zero tools (no backends cached)
         assert!(resp.error.is_none());
@@ -462,7 +498,7 @@ mod tests {
             RequestId::Number(3),
             None,
             None,
-            CallerStanding::Admin,
+            crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
         );
         // THEN: returns standard tools/list (meta-tools present)
         assert!(resp.error.is_none());
@@ -485,7 +521,7 @@ mod tests {
             RequestId::Number(4),
             Some(&params),
             None,
-            CallerStanding::Admin,
+            crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
         );
         // THEN: no error, no meta-tools returned (filtered path, no backends)
         assert!(resp.error.is_none());
@@ -507,7 +543,12 @@ mod tests {
         // GIVEN: params without 'name'
         let m = meta();
         let resp = m
-            .handle_tools_resolve(RequestId::Number(5), None, None)
+            .handle_tools_resolve(
+                RequestId::Number(5),
+                None,
+                None,
+                crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
+            )
             .await;
         // THEN: JSON-RPC error -32602
         assert!(resp.error.is_some());
@@ -520,7 +561,12 @@ mod tests {
         let m = meta();
         let params = json!({ "name": "nonexistent_tool_xyz" });
         let resp = m
-            .handle_tools_resolve(RequestId::Number(6), Some(&params), None)
+            .handle_tools_resolve(
+                RequestId::Number(6),
+                Some(&params),
+                None,
+                crate::gateway::meta_mcp::InvokeScope::allow_all(CallerStanding::Admin),
+            )
             .await;
         // THEN: JSON-RPC error -32601 with descriptive message
         assert!(resp.error.is_some());
@@ -651,6 +697,9 @@ mod tests {
             None,
             None,
             crate::protocol::meta::Era::Legacy,
+            crate::gateway::meta_mcp::InvokeScope::allow_all(
+                crate::gateway::router::CallerStanding::Admin,
+            ),
         );
         // THEN: capabilities.tools.filtering = true and resolve = true
         let result = resp.result.unwrap();

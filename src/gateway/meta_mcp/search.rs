@@ -126,27 +126,30 @@ impl MetaMcp {
     fn collect_code_mode_capability_matches(
         &self,
         query: &str,
-        current_state: &str,
-        profile: &RoutingProfile,
         options: CodeModeSearchOptions,
         matches: &mut Vec<Value>,
         all_tags: &mut Vec<String>,
+        scope: super::InvokeScope<'_>,
+        session_id: Option<&str>,
     ) {
+        let current_state = self.current_search_state(session_id);
+        let profile = self.active_profile(session_id);
         if let Some(cap) = self.get_capabilities()
             && profile.backend_allowed(&cap.name)
         {
             let cap_killed = self.kill_switch.is_killed(&cap.name);
             for capability in cap.list_capabilities() {
                 if !capability.visible_in_states.is_empty()
-                    && !capability
-                        .visible_in_states
-                        .iter()
-                        .any(|s| s == current_state)
+                    && !capability.visible_in_states.contains(&current_state)
                 {
                     continue;
                 }
                 let tool = capability.to_mcp_tool();
-                if !profile.tool_allowed(&tool.name) {
+                if !profile.tool_allowed(&tool.name)
+                    || self
+                        .may_invoke(&cap.name, &tool.name, scope, session_id)
+                        .is_err()
+                {
                     continue;
                 }
                 collect_tool_tags_for_code_mode(&tool, all_tags);
@@ -164,12 +167,13 @@ impl MetaMcp {
     async fn collect_code_mode_backend_matches(
         &self,
         query: &str,
-        profile: &RoutingProfile,
         options: CodeModeSearchOptions,
         matches: &mut Vec<Value>,
         all_tags: &mut Vec<String>,
         caller: &super::MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
     ) {
+        let profile = self.active_profile(session_id);
         let (backends, allow_empty_cache_fetch) = self.code_mode_backend_candidates(query);
         for backend in backends {
             if !profile.backend_allowed(&backend.name) {
@@ -195,6 +199,11 @@ impl MetaMcp {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
+                    .filter(|t| {
+                        let scope = caller.scope();
+                        self.may_invoke(&backend.name, &t.name, scope, session_id)
+                            .is_ok()
+                    })
                     .map(|tool| {
                         let mut t = tool.clone();
                         if let Some(ref desc) = t.description {
@@ -223,35 +232,42 @@ impl MetaMcp {
     fn collect_search_capability_matches(
         &self,
         query: &str,
-        current_state: &str,
         profile: &RoutingProfile,
         matches: &mut Vec<Value>,
         all_tags: &mut Vec<String>,
+        scope: super::InvokeScope<'_>,
+        session_id: Option<&str>,
     ) {
+        let current_state = self.current_search_state(session_id);
         if let Some(cap) = self.get_capabilities()
             && profile.backend_allowed(&cap.name)
         {
             let cap_killed = self.kill_switch.is_killed(&cap.name);
             for capability in cap.list_capabilities() {
                 if !capability.visible_in_states.is_empty()
-                    && !capability
-                        .visible_in_states
-                        .iter()
-                        .any(|s| s == current_state)
+                    && !capability.visible_in_states.contains(&current_state)
                 {
                     continue;
                 }
                 let tool = capability.to_mcp_tool();
-                if !profile.tool_allowed(&tool.name) {
+                if !profile.tool_allowed(&tool.name)
+                    || self
+                        .may_invoke(&cap.name, &tool.name, scope, session_id)
+                        .is_err()
+                {
                     continue;
                 }
                 collect_tool_tags(&tool, all_tags);
                 if tool_matches_query(&tool, query) {
-                    let mut entry = build_match_json_with_chains(
-                        &cap.name,
-                        &tool,
-                        &capability.metadata.chains_with,
-                    );
+                    // A chain target is a name too: only admitted ones (A3).
+                    let chains: Vec<String> = capability
+                        .metadata
+                        .chains_with
+                        .iter()
+                        .filter(|t| self.may_invoke(&cap.name, t, scope, session_id).is_ok())
+                        .cloned()
+                        .collect();
+                    let mut entry = build_match_json_with_chains(&cap.name, &tool, &chains);
                     if cap_killed {
                         entry["status"] = json!("disabled");
                     }
@@ -268,6 +284,7 @@ impl MetaMcp {
         matches: &mut Vec<Value>,
         all_tags: &mut Vec<String>,
         caller: &super::MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
     ) {
         for backend in self.backends.all() {
             if !profile.backend_allowed(&backend.name) {
@@ -287,6 +304,11 @@ impl MetaMcp {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
+                    .filter(|t| {
+                        let scope = caller.scope();
+                        self.may_invoke(&backend.name, &t.name, scope, session_id)
+                            .is_ok()
+                    })
                     .map(|tool| {
                         let mut t = tool.clone();
                         if let Some(ref desc) = t.description {
@@ -330,9 +352,7 @@ impl MetaMcp {
         let query = raw_query.to_lowercase();
         let limit = extract_search_limit(args);
         let disclosure = crate::gateway::search_disclosure::resolve_search_disclosure(args)?;
-        let profile = self.active_profile(session_id);
         let use_glob = is_glob_pattern(&query);
-        let current_state = self.current_search_state(session_id);
         let options = CodeModeSearchOptions { use_glob };
 
         let mut matches: Vec<Value> = Vec::new();
@@ -340,19 +360,19 @@ impl MetaMcp {
 
         self.collect_code_mode_capability_matches(
             &query,
-            &current_state,
-            &profile,
             options,
             &mut matches,
             &mut all_tags,
+            caller.scope(),
+            session_id,
         );
         self.collect_code_mode_backend_matches(
             &query,
-            &profile,
             options,
             &mut matches,
             &mut all_tags,
             caller,
+            session_id,
         )
         .await;
 
@@ -595,12 +615,12 @@ impl MetaMcp {
     ) -> Result<Value> {
         let killed = self.kill_switch.is_killed(server);
 
-        // Backend-level profile check for single-server queries
-        if !profile.backend_allowed(server) {
-            return Err(Error::Protocol(format!(
-                "Backend '{server}' is not available in the '{}' routing profile",
-                profile.name
-            )));
+        // A backend this caller may not reach, by scope or by profile, is
+        // answered exactly as a nonexistent one (A3): a distinct message
+        // would confirm it exists.
+        let scope = caller.scope();
+        if !self.admits_backend(server, scope, session_id) {
+            return Err(Error::BackendNotFound(server.to_string()));
         }
 
         // Check if it's the capability backend
@@ -612,6 +632,7 @@ impl MetaMcp {
                 .get_tools_for_state(&current_state)
                 .into_iter()
                 .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
+                .filter(|t| self.may_invoke(server, &t.name, scope, session_id).is_ok())
                 .collect();
             let mut out = json!({
                 "server": server,
@@ -647,6 +668,7 @@ impl MetaMcp {
             .clone()
             .into_iter()
             .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
+            .filter(|t| self.may_invoke(server, &t.name, scope, session_id).is_ok())
             .collect();
 
         let mut out = json!({
@@ -686,7 +708,12 @@ impl MetaMcp {
             let current_state = self.current_search_state(session_id);
             let cap_killed = self.kill_switch.is_killed(&cap.name);
             for tool in cap.get_tools_for_state(&current_state) {
-                if !profile.tool_allowed(&tool.name) || !tool_matches_role(&tool, role_filter) {
+                if !profile.tool_allowed(&tool.name)
+                    || !tool_matches_role(&tool, role_filter)
+                    || self
+                        .may_invoke(&cap.name, &tool.name, caller.scope(), session_id)
+                        .is_err()
+                {
                     continue;
                 }
                 let mut entry = json!({
@@ -719,7 +746,12 @@ impl MetaMcp {
                     .await
             {
                 for tool in tools.iter() {
-                    if !profile.tool_allowed(&tool.name) || !tool_matches_role(tool, role_filter) {
+                    if !profile.tool_allowed(&tool.name)
+                        || !tool_matches_role(tool, role_filter)
+                        || self
+                            .may_invoke(&backend.name, &tool.name, caller.scope(), session_id)
+                            .is_err()
+                    {
                         continue;
                     }
                     let desc =
@@ -767,7 +799,6 @@ impl MetaMcp {
         let explain = extract_bool_or(args, "explain", false);
         let profile = self.active_profile(session_id);
         let search_start = std::time::Instant::now();
-        let current_state = self.current_search_state(session_id);
 
         let mut matches = Vec::new();
         // Collect all available tags for suggestion generation (only used on zero-result queries).
@@ -775,13 +806,21 @@ impl MetaMcp {
 
         self.collect_search_capability_matches(
             &query,
-            &current_state,
             &profile,
             &mut matches,
             &mut all_tags,
+            caller.scope(),
+            session_id,
         );
-        self.collect_search_backend_matches(&query, &profile, &mut matches, &mut all_tags, caller)
-            .await;
+        self.collect_search_backend_matches(
+            &query,
+            &profile,
+            &mut matches,
+            &mut all_tags,
+            caller,
+            session_id,
+        )
+        .await;
 
         let total_found = matches.len();
 

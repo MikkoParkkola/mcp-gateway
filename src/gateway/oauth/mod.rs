@@ -167,9 +167,25 @@ pub fn check_agent_scope_and_audit_reason(
     tool: &str,
     action: &Action,
 ) -> Result<(), String> {
+    let verdict = check_scopes(&identity.scopes, &identity.client_id, backend, tool, action);
+    record_agent_scope_decision(identity, backend, tool, action, &verdict);
+    verdict
+}
+
+/// Write the audit record for an agent-scope verdict `check_scopes` returned.
+///
+/// Split from the check so a caller that must not leave an invocation trail
+/// (discovery, which asks the same question) can take the verdict alone.
+pub fn record_agent_scope_decision(
+    identity: &AgentIdentity,
+    backend: &str,
+    tool: &str,
+    action: &Action,
+    verdict: &Result<(), String>,
+) {
     let raw_action = format!("{action:?}").to_lowercase();
 
-    match check_scopes(&identity.scopes, &identity.client_id, backend, tool, action) {
+    match verdict {
         Ok(()) => {
             let entry = ToolInvocationAudit::allow(
                 &identity.client_id,
@@ -179,7 +195,6 @@ pub fn check_agent_scope_and_audit_reason(
                 identity.raw_scopes.clone(),
             );
             emit_audit(&entry);
-            Ok(())
         }
         Err(reason) => {
             let entry = ToolInvocationAudit::deny(
@@ -188,7 +203,7 @@ pub fn check_agent_scope_and_audit_reason(
                 backend,
                 tool,
                 identity.raw_scopes.clone(),
-                &reason,
+                reason.as_str(),
             );
             emit_audit(&entry);
             warn!(
@@ -198,7 +213,6 @@ pub fn check_agent_scope_and_audit_reason(
                 action = %raw_action,
                 "Agent scope denied: {reason}"
             );
-            Err(reason)
         }
     }
 }

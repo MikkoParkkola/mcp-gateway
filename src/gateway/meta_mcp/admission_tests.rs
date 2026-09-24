@@ -50,16 +50,22 @@ impl ToolAuthorizer for MutablePolicy {
         None
     }
 
-    fn authorize(&self, target: ToolTarget<'_>) -> std::result::Result<(), AuthorizationError> {
+    fn decide<'a>(&'a self, target: ToolTarget<'a>) -> crate::gateway::authz::Decision<'a> {
         self.seen
             .lock()
             .push((target.server.into(), target.tool.into()));
-        if self.revoked.load(Ordering::SeqCst) && (target.server, target.tool) == self.denied_target
-        {
-            Err(AuthorizationError::forbidden(-32003, "permission revoked"))
-        } else {
-            Ok(())
-        }
+        crate::gateway::authz::Decision::of(
+            if self.revoked.load(Ordering::SeqCst)
+                && (target.server, target.tool) == self.denied_target
+            {
+                Err(AuthorizationError::forbidden(-32003, "permission revoked"))
+            } else {
+                Ok(())
+            },
+        )
+    }
+    fn admits_backend(&self, _server: &str) -> bool {
+        true
     }
     fn transport(&self) -> Transport {
         Transport::Test

@@ -31,11 +31,11 @@ struct PublicClaims {
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct MetaToolClaims {
     /// Which caller the counts below are quantified over. Both are what an
-    /// **admin** caller is served; a Standard caller is served four fewer
+    /// **admin** caller is served; a Standard caller is served five fewer in the benchmark
     /// (`ADMIN_META_TOOLS`), which
     /// `readme_benchmark_surface_shrinks_by_the_admin_set_for_a_standard_caller`
     /// pins. Published rather than left implicit because a reader who assumes
-    /// the wrong standing reads every number here off by four.
+    /// the wrong standing reads every number here off by five.
     standing: String,
     minimum: usize,
     readme_benchmark: usize,
@@ -358,7 +358,7 @@ fn readme_benchmark_surface_shrinks_by_the_admin_set_for_a_standard_caller() {
     let served = decode_tools_list(operational_meta_mcp().handle_tools_list_for_session(
         RequestId::Number(1),
         None,
-        CallerStanding::Standard,
+        mcp_gateway::gateway::test_helpers::InvokeScope::unscoped(CallerStanding::Standard),
     ))
     .tools;
     let names: Vec<&str> = served.iter().map(|t| t.name.as_str()).collect();
@@ -368,6 +368,7 @@ fn readme_benchmark_surface_shrinks_by_the_admin_set_for_a_standard_caller() {
         "gateway_revive_server",
         "gateway_reload_config",
         "gateway_reload_capabilities",
+        "gateway_webhook_status",
     ] {
         assert!(
             !names.contains(&admin_only),
@@ -376,9 +377,9 @@ fn readme_benchmark_surface_shrinks_by_the_admin_set_for_a_standard_caller() {
     }
     assert_eq!(
         served.len(),
-        claims.meta_tools.readme_benchmark - 4,
+        claims.meta_tools.readme_benchmark - 5,
         "the Standard-standing surface is the published admin benchmark of {} \
-         minus the four admin meta-tools, served {names:?}",
+         minus the five admin meta-tools it serves, served {names:?}",
         claims.meta_tools.readme_benchmark
     );
 }

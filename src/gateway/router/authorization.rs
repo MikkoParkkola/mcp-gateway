@@ -8,10 +8,10 @@ use tracing::warn;
 use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 pub(super) use crate::gateway::authz::{AuthorizationError, OwnedToolTarget, ToolTarget};
-use crate::gateway::authz::{ToolAuthorizer, Transport};
+use crate::gateway::authz::{Decision, Emit, ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::oauth::{
-    Action, AgentIdentity as OAuthAgentIdentity, check_agent_scope_and_audit_reason,
+    Action, AgentIdentity as OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
 use crate::security::{validate_tool_name, validate_url_not_ssrf};
@@ -38,11 +38,15 @@ pub(crate) fn backend_tool_targets_for_call(
     }
 }
 
-/// Meta-tools that change the gateway for everyone, and so require a credential.
+/// Meta-tools that change the gateway for everyone, or read other tenants'
+/// data, and so require a credential.
 ///
-/// The test is global effect, not "sounds administrative". Killing or reviving a
-/// backend flips a shared kill switch; reloading config or capabilities replaces
-/// state every session reads. Those four are gated.
+/// The test is global effect or cross-tenant read, not "sounds
+/// administrative". Killing or reviving a backend flips a shared kill switch;
+/// reloading config or capabilities replaces state every session reads. The
+/// statistics (`top_tools`, invocation, cache and circuit-breaker figures) and
+/// the webhook status describe every caller's traffic, so a per-caller filter
+/// of them would still be a cross-tenant read (A3).
 ///
 /// `gateway_set_profile` and `gateway_set_state` were gated here and should not
 /// have been. Both write only the caller's own session — `set_profile` calls
@@ -75,6 +79,8 @@ pub(crate) const ADMIN_META_TOOLS: &[&str] = &[
     "gateway_revive_server",
     "gateway_reload_config",
     "gateway_reload_capabilities",
+    "gateway_get_stats",
+    "gateway_webhook_status",
 ];
 
 pub(crate) fn is_admin_meta_tool(tool_name: &str) -> bool {
@@ -150,31 +156,58 @@ pub(super) fn authorize_tool_target(
     cert_identity: Option<&CertIdentity>,
     target: ToolTarget<'_>,
 ) -> Result<(), AuthorizationError> {
+    decide_tool_target(state, client, oauth_agent_identity, cert_identity, target).emit(Emit::Audit)
+}
+
+/// The HTTP invocation predicate, with its audit records deferred.
+///
+/// The one definition of what an HTTP caller may invoke: the router pre-check,
+/// the direct route and the dispatch chokepoint emit it through
+/// [`authorize_tool_target`]; discovery takes the verdict silently.
+pub(super) fn decide_tool_target<'a>(
+    state: &'a AppState,
+    client: Option<&'a AuthenticatedClient>,
+    oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
+    cert_identity: Option<&'a CertIdentity>,
+    target: ToolTarget<'a>,
+) -> Decision<'a> {
     if target.server.is_empty() || target.tool.is_empty() {
-        return Ok(());
+        return Decision::of(Ok(()));
+    }
+    let early = validate_tool_name(target.tool)
+        .map_err(|e| AuthorizationError::forbidden(-32600, e.clone()))
+        .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
+        .and_then(|()| {
+            state
+                .tool_policy
+                .check(target.server, target.tool)
+                .map_err(|e| AuthorizationError::forbidden(-32600, e.to_string()))
+        })
+        .and_then(|()| {
+            client.map_or(Ok(()), |client| {
+                client
+                    .check_tool_scope(target.server, target.tool)
+                    .map_err(|e| AuthorizationError::forbidden(-32600, e))
+            })
+        });
+    if let Err(e) = early {
+        return Decision::of(Err(e));
     }
 
-    validate_tool_name(target.tool)
-        .map_err(|e| AuthorizationError::forbidden(-32600, e.clone()))?;
-
-    crate::gateway::authz::authorize_backend(client, target.server)?;
-
-    state
-        .tool_policy
-        .check(target.server, target.tool)
-        .map_err(|e| AuthorizationError::forbidden(-32600, e.to_string()))?;
-
-    if let Some(client) = client {
-        client
-            .check_tool_scope(target.server, target.tool)
-            .map_err(|e| AuthorizationError::forbidden(-32600, e))?;
-    }
-
-    if !state.mtls_policy.is_empty() {
-        let decision = state
+    if !state.mtls_policy.is_empty()
+        && state
             .mtls_policy
-            .evaluate(cert_identity, target.server, target.tool);
-        if decision == PolicyDecision::Deny {
+            .evaluate(cert_identity, target.server, target.tool)
+            == PolicyDecision::Deny
+    {
+        let refusal = AuthorizationError::forbidden(
+            -32600,
+            format!(
+                "Tool '{}' on server '{}' is blocked by certificate policy",
+                target.tool, target.server
+            ),
+        );
+        return Decision::recorded(Err(refusal), move || {
             let identity_label =
                 cert_identity.map_or("<unauthenticated>", |id| id.display_name.as_str());
             warn!(
@@ -183,25 +216,37 @@ pub(super) fn authorize_tool_target(
                 identity = identity_label,
                 "Tool invocation denied by mTLS policy"
             );
-            return Err(AuthorizationError::forbidden(
-                -32600,
-                format!(
-                    "Tool '{}' on server '{}' is blocked by certificate policy",
-                    target.tool, target.server
-                ),
-            ));
-        }
+        });
     }
 
+    let mut agent_record: Option<(&OAuthAgentIdentity, Result<(), String>)> = None;
     if state.agent_auth.enabled {
-        let identity = oauth_agent_identity.ok_or_else(|| {
-            AuthorizationError::forbidden(
+        let Some(identity) = oauth_agent_identity else {
+            return Decision::of(Err(AuthorizationError::forbidden(
                 -32600,
                 "Agent authentication is enabled but no validated agent identity was found",
-            )
-        })?;
-        check_agent_scope_and_audit_reason(identity, target.server, target.tool, &Action::Execute)
-            .map_err(|e| AuthorizationError::forbidden(-32600, e))?;
+            )));
+        };
+        let verdict = check_scopes(
+            &identity.scopes,
+            &identity.client_id,
+            target.server,
+            target.tool,
+            &Action::Execute,
+        );
+        if let Err(reason) = &verdict {
+            let refusal = AuthorizationError::forbidden(-32600, reason.clone());
+            return Decision::recorded(Err(refusal), move || {
+                record_agent_scope_decision(
+                    identity,
+                    target.server,
+                    target.tool,
+                    &Action::Execute,
+                    &verdict,
+                );
+            });
+        }
+        agent_record = Some((identity, verdict));
     }
 
     // SSRF check at proxy time.
@@ -214,16 +259,30 @@ pub(super) fn authorize_tool_target(
     // without adding real security — the URL was already accepted at config
     // load. Untrusted-input SSRF surfaces (capability fetch, UI config-import)
     // continue to call `validate_url_not_ssrf` directly. See MIK-3529.
+    let mut verdict = Ok(());
     if state.ssrf_protection
         && !state.trust_configured_backends
         && let Some(backend) = state.backends.get(target.server)
         && let Some(url) = backend.transport_url()
     {
-        validate_url_not_ssrf(url)
-            .map_err(|e| AuthorizationError::forbidden(-32600, e.to_string()))?;
+        verdict = validate_url_not_ssrf(url)
+            .map_err(|e| AuthorizationError::forbidden(-32600, e.to_string()));
     }
 
-    Ok(())
+    // The agent allow record is written even when SSRF then refuses, exactly
+    // as the inline check wrote it before the verdict was deferred.
+    match agent_record {
+        Some((identity, allowed)) => Decision::recorded(verdict, move || {
+            record_agent_scope_decision(
+                identity,
+                target.server,
+                target.tool,
+                &Action::Execute,
+                &allowed,
+            );
+        }),
+        None => Decision::of(verdict),
+    }
 }
 
 fn target_from_invoke_arguments(arguments: &Value) -> Option<OwnedToolTarget> {
@@ -332,14 +391,18 @@ pub(crate) struct RouterAuthorizer<'a> {
 }
 
 impl ToolAuthorizer for RouterAuthorizer<'_> {
-    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
-        authorize_tool_target(
+    fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
+        decide_tool_target(
             self.state,
             self.client,
             self.oauth_agent_identity,
             self.cert_identity,
             target,
         )
+    }
+
+    fn admits_backend(&self, server: &str) -> bool {
+        crate::gateway::authz::authorize_backend(self.client, server).is_ok()
     }
 
     fn transport(&self) -> Transport {

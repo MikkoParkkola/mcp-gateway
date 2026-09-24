@@ -232,6 +232,9 @@ fn ac_discover_3_initialize_result_is_unchanged() {
             None,
             None,
             mcp_gateway::protocol::meta::Era::Legacy,
+            mcp_gateway::gateway::test_helpers::InvokeScope::unscoped(
+                mcp_gateway::gateway::test_helpers::CallerStanding::Admin,
+            ),
         );
         let result = response
             .result

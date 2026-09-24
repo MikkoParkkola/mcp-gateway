@@ -122,6 +122,7 @@ impl MetaMcp {
         &self,
         surfaced: &SurfacedToolConfig,
         session_id: Option<&str>,
+        scope: super::InvokeScope<'_>,
     ) -> Option<Tool> {
         // T2.7: routing profile check.
         let profile = self.active_profile(session_id);
@@ -132,6 +133,14 @@ impl MetaMcp {
                 profile = %profile.name,
                 "Surfaced tool excluded by routing profile"
             );
+            return None;
+        }
+
+        // List = invoke (A3): a tool this caller could not call is not shown.
+        if self
+            .may_invoke(&surfaced.server, &surfaced.tool, scope, session_id)
+            .is_err()
+        {
             return None;
         }
 
@@ -204,18 +213,32 @@ impl MetaMcp {
 // ============================================================================
 
 impl MetaMcp {
-    /// `gateway_list_servers` — list all servers with kill-switch and circuit-breaker state.
+    /// `gateway_list_servers` — the servers this caller may reach, with
+    /// kill-switch and circuit-breaker state. `tools_count` counts the tools
+    /// it could invoke over the warm cache; a cold cache does not hide a server.
     #[allow(clippy::unnecessary_wraps)]
-    pub(super) async fn list_servers(&self) -> Result<Value> {
+    pub(super) async fn list_servers(
+        &self,
+        scope: super::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
         let mut servers: Vec<Value> = Vec::new();
         for b in self.backends.all() {
+            if !self.admits_backend(&b.name, scope, session_id) {
+                continue;
+            }
+            let admitted = b
+                .get_cached_tools_snapshot()
+                .iter()
+                .filter(|t| self.may_invoke(&b.name, &t.name, scope, session_id).is_ok())
+                .count();
             let status = b.status();
             let killed = self.kill_switch.is_killed(&status.name);
             let mut entry = json!({
                 "name": status.name,
                 "running": status.running,
                 "transport": status.transport,
-                "tools_count": status.tools_cached,
+                "tools_count": admitted,
                 // Consult this before reading tools_count == 0 as "empty".
                 "tools_known": status.tools_known,
                 "circuit_breaker": status.circuit_state,
@@ -229,14 +252,24 @@ impl MetaMcp {
             servers.push(entry);
         }
 
-        if let Some(cap) = self.get_capabilities() {
+        if let Some(cap) = self.get_capabilities()
+            && self.admits_backend(&cap.name, scope, session_id)
+        {
+            let admitted = cap
+                .get_tools()
+                .iter()
+                .filter(|t| {
+                    self.may_invoke(&cap.name, &t.name, scope, session_id)
+                        .is_ok()
+                })
+                .count();
             let status = cap.status();
             let killed = self.kill_switch.is_killed(&status.name);
             servers.push(json!({
                 "name": status.name,
                 "running": true,
                 "transport": "capability",
-                "tools_count": status.capabilities_count,
+                "tools_count": admitted,
                 "tools_known": true,
                 "circuit_breaker": "closed",
                 "status": if killed { "disabled" } else { "active" }

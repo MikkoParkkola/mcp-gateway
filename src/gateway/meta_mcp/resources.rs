@@ -115,12 +115,14 @@ Example:
   gateway_invoke(server=\"brave\", tool=\"brave_web_search\",
                  arguments={\"query\": \"Rust async runtimes\"})
 
-## Cost tracking
+## Cost report
 
 Each gateway_invoke records spend automatically.
 Query current session cost with:
 
   gateway_cost_report()
+
+## Statistics
 
 Query aggregate observed statistics (invocations and cache hit rate) with:
 
@@ -373,7 +375,7 @@ impl MetaMcp {
         // Gateway-owned guides are served inline — no backend round-trip, and
         // projected through the same served set `tools/list` answers from.
         let served: HashSet<String> = self
-            .meta_tools_for(standing)
+            .meta_tools_for(standing, self.backend_counts())
             .into_iter()
             .map(|tool| tool.name)
             .collect();

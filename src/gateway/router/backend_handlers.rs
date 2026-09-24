@@ -179,17 +179,15 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
     // Parsed element by element on purpose. A single descriptor the `Tool`
     // shape cannot accept used to abort the whole pass and forward the list
     // verbatim — which handed a backend a one-element bypass for the exclusion
-    // applied to all of its siblings. An unparseable element is now carried
-    // through untouched (dropping it would hide a tool the client may already
-    // depend on) while every element we can read is still filtered.
+    // applied to all of its siblings. An unparseable element is now dropped:
+    // it cannot be judged by the call predicate, and forwarding it would
+    // disclose a name the caller may not invoke (A3).
     let mut tools = Vec::with_capacity(items.len());
-    let mut unparsed = Vec::new();
     for item in items {
         match serde_json::from_value::<Tool>(item.clone()) {
             Ok(tool) => tools.push(tool),
             Err(e) => {
-                warn!(backend = %backend_name, error = %e, "Backend tools/list entry could not be normalized");
-                unparsed.push(item.clone());
+                warn!(backend = %backend_name, error = %e, "Backend tools/list entry could not be normalized; dropped");
             }
         }
     }
@@ -199,12 +197,10 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
     let server_id = format!("backend:{backend_name}");
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
 
+    // Rebuilt from an allowlist: `{ "tools": [...] }` and nothing else. An
+    // upstream sibling key or cursor could name a withheld tool (A3).
     match serde_json::to_value(tools) {
-        Ok(Value::Array(mut normalized)) => {
-            normalized.extend(unparsed);
-            *tools_value = Value::Array(normalized);
-        }
-        Ok(normalized_tools) => *tools_value = normalized_tools,
+        Ok(normalized_tools) => *result = json!({ "tools": normalized_tools }),
         Err(e) => {
             warn!(backend = %backend_name, error = %e, "Failed to serialize normalized tools/list");
         }
@@ -962,16 +958,23 @@ pub(super) async fn backend_handler(
         }
     }
 
-    // Forward to backend
-    let forward = dispatch_in_scope(
-        &backend,
-        &method,
-        &id,
-        params.clone(),
-        &propagated_headers,
-        identity_key.as_deref(),
-    )
-    .await;
+    // Forward to backend. `tools/list` drains the whole upstream catalogue
+    // so it can be filtered per caller and answered without a cursor (A3).
+    let forward = if method == "tools/list" {
+        let (headers, key) = (&propagated_headers, identity_key.as_deref());
+        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name).await
+    } else {
+        let key = identity_key.as_deref();
+        dispatch_in_scope(
+            &backend,
+            &method,
+            &id,
+            params.clone(),
+            &propagated_headers,
+            key,
+        )
+        .await
+    };
     match forward {
         Ok(mut response) => {
             record_client_success(&state, client.as_ref());
@@ -985,6 +988,10 @@ pub(super) async fn backend_handler(
                 // client never receives.
                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
                 normalize_tools_list_response(&name, &mut response);
+                // List = invoke: only what this route's `tools/call` admits.
+                let (oauth, cert) = (oauth_agent_identity.as_ref(), cert_identity.as_ref());
+                let client = client.as_ref();
+                direct_list::retain_invocable(&state, client, oauth, cert, &name, &mut response);
             } else if method == "tools/call" {
                 scan_direct_backend_response(
                     &state,
@@ -1285,6 +1292,8 @@ pub(super) async fn costs_handler(
 
     (StatusCode::OK, Json(body)).into_response()
 }
+
+mod direct_list;
 
 #[cfg(test)]
 mod tests;

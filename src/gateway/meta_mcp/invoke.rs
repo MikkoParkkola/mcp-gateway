@@ -21,9 +21,10 @@ use crate::context_integrity::{
 };
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
+use crate::gateway::authz::{Authorize as _, Emit};
 use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
-use crate::identity_grants::{GrantScope, GrantSubject, IdentityGrantRequest};
+use crate::identity_grants::GrantSubject;
 use crate::identity_propagation::{CallerProof, CallerProvenance};
 use crate::playbook::PlaybookEngine;
 use crate::protocol::LoggingLevel;
@@ -865,6 +866,7 @@ struct BridgeDispatcher<'a> {
     policy_epoch: u64,
     protocol_revision: Option<&'a str>,
     routing_profile: &'a str,
+    scope: super::InvokeScope<'a>,
 }
 
 impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
@@ -951,6 +953,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.policy_epoch,
                 self.protocol_revision,
                 self.routing_profile,
+                self.scope,
             )
             .await
             .map_err(|e| classify_bridged_dispatch_error(&e))
@@ -1061,11 +1064,6 @@ impl MetaMcp {
         args: &Value,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<()> {
-        let authorizer = caller.authorizer;
-        let api_key_name = caller.api_key_name;
-        let agent_id = caller.agent_id;
-        let caller_identity = caller.grant_subject.as_ref();
-        let caller_is_admin = caller.is_admin;
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         // === THE AUTHORIZATION CHOKEPOINT (MIK-7252) ===
@@ -1092,6 +1090,7 @@ impl MetaMcp {
             tool,
             arguments: args.get("arguments").unwrap_or(&empty_args),
         };
+        let authorizer = caller.authorizer;
         if let Err(e) = authorizer.authorize(target) {
             crate::gateway::authz::audit_refusal(
                 authorizer.transport(),
@@ -1106,44 +1105,12 @@ impl MetaMcp {
                 message: e.message,
             });
         }
-
-        // A capability that hands a caller-chosen destination to a third party
-        // which then calls it creates persistent state outside this gateway,
-        // addressed by the caller and authorised by the operator's credential.
-        // That is an out-of-band channel needing no readable response, so it is
-        // an admin action. Derived from the definition, so one added later
-        // inherits the rule.
-        if !caller_is_admin
-            && let Some(capabilities) = self.get_capabilities()
-            && server == capabilities.name
-            && let Some(def) = capabilities.get(tool)
-            && crate::capability::definition::creates_caller_addressed_external_state(&def)
-        {
-            return Err(crate::Error::Config(format!(
-                "'{tool}' registers a caller-supplied address with a third party, which \
-                 then delivers to it using this gateway's credential. That requires an \
-                 admin credential."
-            )));
-        }
-
-        // Identity grants are the same decision as the authorizer above: whether
-        // this caller may reach this tool at all. They are taken here, with
-        // every other refusal, because the response cache and the idempotency
-        // short-circuit both return below this point — a gate under a cache
-        // read decides nothing on a hit, and hands the refused caller the
-        // answer the admitted one paid for. Resolved from the definition, so a
-        // capability added later inherits the rule.
-        if let Some(cap) = self.get_capabilities()
-            && server == cap.name
-            && cap.has_capability(tool)
-        {
-            let cap_def = cap
-                .get(tool)
-                .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
-            self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id, caller_identity)?;
-        }
-
-        Ok(())
+        self.admin_capability_rule(server, tool, caller.is_admin)?;
+        // Identity grants are the same decision as the authorizer above, taken
+        // here with every other refusal because the response cache and the
+        // idempotency short-circuit both return below this point: a gate under
+        // a cache read decides nothing on a hit.
+        self.identity_grant_rule(server, tool, caller.scope(), Emit::Audit)
     }
 
     /// Validate the per-action attestation token presented on a
@@ -1798,7 +1765,8 @@ impl MetaMcp {
                         "kind" => "idempotency"
                     )
                     .increment(1);
-                    let predictions = self.record_and_predict(session_id, &tool_key);
+                    let predictions =
+                        self.record_and_predict(session_id, &tool_key, caller.scope());
                     return Ok(GuardedValue::from_cache(cached).augment(|v| {
                         let v =
                             augment_with_trace(augment_with_predictions(v, predictions), trace_id);
@@ -1869,7 +1837,7 @@ impl MetaMcp {
             if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.complete(&cached);
             }
-            let predictions = self.record_and_predict(session_id, &tool_key);
+            let predictions = self.record_and_predict(session_id, &tool_key, caller.scope());
             return Ok(GuardedValue::from_cache(cached).augment(|v| {
                 let v = augment_with_trace(augment_with_predictions(v, predictions), trace_id);
                 self.maybe_stamp_provenance(
@@ -1999,6 +1967,7 @@ impl MetaMcp {
             policy_epoch,
             protocol_revision,
             &profile.name,
+            caller.scope(),
         ))
         .await;
 
@@ -2197,6 +2166,7 @@ impl MetaMcp {
                     policy_epoch,
                     protocol_revision,
                     routing_profile: &profile.name,
+                    scope: caller.scope(),
                 },
                 caller.channel,
                 session,
@@ -2400,6 +2370,8 @@ impl MetaMcp {
                     let alternatives = enforcer.config.alternatives.as_ref();
                     if let Some(suggestion) =
                         suggestions::suggest_cheaper(tool, cost, &all_costs, alternatives)
+                        // Never point a caller at a tool it could not call (A3).
+                        && self.admits_tool_named(&suggestion.alternative, caller.scope(), session_id)
                         && let Some(obj) = result.as_object_mut()
                     {
                         obj.insert(
@@ -2458,7 +2430,7 @@ impl MetaMcp {
             );
         }
 
-        let predictions = self.record_and_predict(session_id, &tool_key);
+        let predictions = self.record_and_predict(session_id, &tool_key, caller.scope());
 
         // SEP-1862 dynamic promotion: auto-surface this tool in the session's
         // tools/list after a successful invocation so the LLM can call it
@@ -2608,6 +2580,7 @@ impl MetaMcp {
         &self,
         session_id: Option<&str>,
         tool_key: &str,
+        scope: super::InvokeScope<'_>,
     ) -> Vec<Value> {
         let Some(tracker) = self.get_transition_tracker() else {
             return Vec::new();
@@ -2623,57 +2596,22 @@ impl MetaMcp {
             registry.prefetch_after(tool_key, &tracker, 0.20, 2);
         }
 
+        // The tracker is global, so a transition another caller taught it can
+        // name a tool this caller may not reach. Only admitted `server:tool`
+        // keys are returned; an unparsable key is dropped (A3).
         tracker
             .predict_next(tool_key, 0.30, 3)
             .into_iter()
+            .filter(|p| {
+                p.tool.split_once(':').is_some_and(|(server, tool)| {
+                    self.may_invoke(server, tool, scope, session_id).is_ok()
+                })
+            })
             .map(|p| json!({"tool": p.tool, "confidence": p.confidence}))
             .collect()
     }
 
-    fn enforce_identity_grants(
-        &self,
-        cap_def: &crate::capability::CapabilityDefinition,
-        tool: &str,
-        api_key_name: Option<&str>,
-        agent_id: Option<crate::security::ProvenAgentId<'_>>,
-        caller_identity: Option<&GrantSubject>,
-    ) -> Result<()> {
-        let request = IdentityGrantRequest {
-            identity: caller_identity
-                .cloned()
-                .or_else(|| Self::grant_subject_from_api_key(api_key_name)),
-            agent_id: agent_id.map(|a| a.as_str().to_string()),
-            capability: cap_def.name.clone(),
-            tool: Some(tool.to_string()),
-            scope: GrantScope::requested_by(cap_def),
-            exposure: cap_def.metadata.exposure,
-            owner: cap_def.metadata.identity_owner.clone(),
-            now: chrono::Utc::now(),
-        };
-
-        let evaluation = self.identity_grants.read().evaluate(&request);
-        if evaluation.allowed {
-            return Ok(());
-        }
-
-        warn!(
-            capability = %cap_def.name,
-            tool,
-            agent_id = agent_id.map_or("anonymous", |a| a.as_str()),
-            reason = ?evaluation.reason,
-            "Identity grant denied personal capability dispatch"
-        );
-
-        Err(Error::json_rpc(
-            -32004,
-            format!(
-                "Identity grant denied for capability '{}': {:?}",
-                cap_def.name, evaluation.reason
-            ),
-        ))
-    }
-
-    fn grant_subject_from_api_key(api_key_name: Option<&str>) -> Option<GrantSubject> {
+    pub(super) fn grant_subject_from_api_key(api_key_name: Option<&str>) -> Option<GrantSubject> {
         api_key_name
             .filter(|name| !name.is_empty())
             .map(|name| GrantSubject::new("api_key", name, Some(name.to_string())))
@@ -3249,6 +3187,7 @@ impl MetaMcp {
         policy_epoch: u64,
         protocol_revision: Option<&str>,
         routing_profile: &str,
+        scope: super::InvokeScope<'_>,
     ) -> Result<Value> {
         let dispatch_start = Instant::now();
         let dispatch_result = self
@@ -3269,6 +3208,7 @@ impl MetaMcp {
                 policy_epoch,
                 protocol_revision,
                 routing_profile,
+                scope,
             )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
@@ -3374,6 +3314,7 @@ impl MetaMcp {
         policy_epoch: u64,
         protocol_revision: Option<&str>,
         routing_profile: &str,
+        scope: super::InvokeScope<'_>,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -3561,7 +3502,12 @@ impl MetaMcp {
             // When we have cached names and the tool wasn't in them, enrich
             // the error with Levenshtein-based suggestions.
             let message = if !cached_names.is_empty() && !tool_is_cached {
-                let candidates: Vec<&str> = cached_names.iter().map(String::as_str).collect();
+                // Drawn only from names this caller could invoke (A3).
+                let candidates: Vec<&str> = cached_names
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|name| self.may_invoke(server, name, scope, session_id).is_ok())
+                    .collect();
                 match did_you_mean(tool, &candidates, 3, 3) {
                     Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
                     None => format!(
@@ -3807,13 +3753,21 @@ impl MetaMcp {
     /// `gateway_list_disabled_capabilities` — list capabilities suspended by
     /// the per-capability error budget.
     #[allow(clippy::unnecessary_wraps)]
-    pub(super) fn list_disabled_capabilities(&self) -> Result<Value> {
+    /// Filtered by `may_invoke`: a caller learns why its own capability fails,
+    /// never that another caller's exists (A3).
+    pub(super) fn list_disabled_capabilities(
+        &self,
+        scope: super::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
         let cap_cfg = self.capability_budget_config.read();
         let disabled = self.kill_switch.disabled_capabilities(cap_cfg.cooldown);
         let entries: Vec<Value> = disabled
             .iter()
             .filter_map(|key| {
                 let (backend, capability) = key.split_once(':')?;
+                self.may_invoke(backend, capability, scope, session_id)
+                    .ok()?;
                 let error_rate = self.kill_switch.capability_error_rate(backend, capability);
                 Some(json!({
                     "backend": backend,

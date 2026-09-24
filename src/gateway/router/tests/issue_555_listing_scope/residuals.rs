@@ -116,6 +116,7 @@ async fn predicted_next_is_scoped() {
 }
 
 /// T21: a cost suggestion never points at a tool the caller could not invoke.
+#[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn cost_suggestion_alternative_is_scoped() {
     let f = fixture_with(Auth::Keys, |meta| {

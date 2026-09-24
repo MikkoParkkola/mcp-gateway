@@ -92,6 +92,10 @@ pub struct RecoveryHint {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix_example: Option<Value>,
     /// Other tools in the same namespace that might achieve the same goal.
+    ///
+    /// Always empty today (every production constructor defaults it). Anyone
+    /// who populates it must draw only names `MetaMcp::may_invoke` admits for
+    /// the caller: a tool name is a disclosure (A3, list = invoke).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub related_tools: Vec<String>,
     /// Whether the same call (possibly after correction) is safe to retry.

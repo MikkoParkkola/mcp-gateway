@@ -26,8 +26,8 @@ use super::helpers::{
 };
 use super::identity::caller_grant_subject;
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::meta_mcp::response_security::DeliveryInspection;
+use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 #[cfg(feature = "firewall")]
 use crate::gateway::session_lifecycle;
@@ -410,33 +410,23 @@ pub(super) async fn health_handler(
         .get::<AuthenticatedClient>()
         .is_some_and(|c| c.admin);
 
-    let backends_json = if is_admin {
-        // Full details for authenticated clients
-        serde_json::to_value(&statuses).unwrap_or(json!({}))
-    } else {
-        // Redacted: only count and overall health, no names/paths
+    let status = if healthy { "healthy" } else { "degraded" };
+    // A non-admin gets `status` and `version` only: a backend count is
+    // inventory, and readiness probes read `status` or `/livez`/`/readyz` (A3).
+    let response = if is_admin {
         json!({
-            "count": statuses.len(),
-            "all_healthy": healthy
+            "status": status,
+            "version": env!("CARGO_PKG_VERSION"),
+            "backends": serde_json::to_value(&statuses).unwrap_or(json!({})),
+            // Capability-backend health as a sibling field, so the existing
+            // `backends` shape stays backward-compatible.
+            "capability_backend": capability_status
+                .as_ref()
+                .map(|s| serde_json::to_value(s).unwrap_or(json!({}))),
         })
-    };
-
-    // Capability-backend health surfaced as a sibling field (admin only) so the
-    // existing `backends` shape stays backward-compatible.
-    let capability_json = if is_admin {
-        capability_status
-            .as_ref()
-            .map(|s| serde_json::to_value(s).unwrap_or(json!({})))
     } else {
-        None
+        json!({ "status": status, "version": env!("CARGO_PKG_VERSION") })
     };
-
-    let response = json!({
-        "status": if healthy { "healthy" } else { "degraded" },
-        "version": env!("CARGO_PKG_VERSION"),
-        "backends": backends_json,
-        "capability_backend": capability_json
-    });
 
     if healthy {
         (StatusCode::OK, Json(response))
@@ -1078,6 +1068,36 @@ async fn meta_mcp_dispatch(
     let mut delivery_inspection = DeliveryInspection::Required;
     // The scope and identity the resource and prompt arms forward under.
     let (scope, identity) = (client.as_ref(), verified_identity.as_ref());
+    // The one derivation of what this caller may invoke, shared by
+    // `tools/call`, `tools/list`, `initialize` and `tools/resolve` (A3), so an
+    // identity-granted capability cannot drift between listing and invoking.
+    // Constructed concretely, so the weaker stdio authorizer cannot reach the
+    // network path.
+    let router_authorizer = RouterAuthorizer {
+        state: state.as_ref(),
+        client: client.as_ref(),
+        oauth_agent_identity: oauth_agent_identity.as_ref(),
+        cert_identity: cert_identity.as_ref(),
+        principal: refusal_principal(
+            client.as_ref(),
+            oauth_agent_identity.as_ref(),
+            cert_identity.as_ref(),
+        ),
+    };
+    let grant_subject = caller_grant_subject(
+        verified_identity.as_ref(),
+        &headers,
+        state.meta_mcp.trust_caller_identity_headers(),
+        cert_identity.as_ref(),
+        oauth_agent_identity.as_ref(),
+    );
+    let invoke_scope = InvokeScope {
+        authorizer: &router_authorizer,
+        is_admin: client.as_ref().is_some_and(|c| c.admin),
+        api_key_name: client.as_ref().map(|c| c.name.as_str()),
+        agent_id: agent_identity.proven_agent_id(),
+        grant_subject: grant_subject.as_ref(),
+    };
     let mut response = match method.as_str() {
         "subscriptions/listen" => {
             // The single long-lived stream that replaces the GET endpoint.
@@ -1157,6 +1177,7 @@ async fn meta_mcp_dispatch(
             Some(session_id.as_str()),
             header_profile.as_deref(),
             era,
+            invoke_scope,
         ),
         "tools/list" => {
             // NFR.OBS.2. The inputs that decide this surface, and the
@@ -1193,7 +1214,7 @@ async fn meta_mcp_dispatch(
                 params.as_ref(),
                 Some(session_id.as_str()),
                 code_mode_url_active,
-                CallerStanding::of_client(client.as_ref()),
+                invoke_scope,
             )
         }
         // Labelled so the destructive-confirmation gate can answer *through* the
@@ -1272,6 +1293,22 @@ async fn meta_mcp_dispatch(
                 &backend_targets,
             );
             for target in &backend_targets {
+                // A surfaced name this caller could not invoke is answered by
+                // the meta layer exactly as an unknown name is (`-32601`), and
+                // audited there: a 403 here would confirm the backend (A3).
+                if state.meta_mcp.surfaced_tool_server(tool_name).is_some()
+                    && state
+                        .meta_mcp
+                        .may_invoke(
+                            &target.server,
+                            &target.tool,
+                            invoke_scope,
+                            Some(session_id.as_str()),
+                        )
+                        .is_err()
+                {
+                    continue;
+                }
                 if let Err(e) = authorize_tool_target(
                     state.as_ref(),
                     client.as_ref(),
@@ -1399,13 +1436,6 @@ async fn meta_mcp_dispatch(
             // Audit and cost attribution read the caller's own tag. It travels
             // beside the proven principal, never instead of it.
             let agent_declared = agent_identity.declared_agent_label();
-            let grant_subject = caller_grant_subject(
-                verified_identity.as_ref(),
-                &headers,
-                state.meta_mcp.trust_caller_identity_headers(),
-                cert_identity.as_ref(),
-                oauth_agent_identity.as_ref(),
-            );
 
             // The modern destructive gate (X14). Every authorization, admin and
             // firewall check above has already run, and nothing below has yet
@@ -1476,20 +1506,8 @@ async fn meta_mcp_dispatch(
 
             // Authorization is handed to the dispatch chokepoint rather than
             // applied here, so the shapes an edge cannot see — a playbook
-            // step, whose targets are not in the request — face it too.
-            // Constructed concretely rather than taken as a parameter, so the
-            // weaker stdio authorizer cannot reach the network path.
-            let router_authorizer = RouterAuthorizer {
-                state: state.as_ref(),
-                client: client.as_ref(),
-                oauth_agent_identity: oauth_agent_identity.as_ref(),
-                cert_identity: cert_identity.as_ref(),
-                principal: refusal_principal(
-                    client.as_ref(),
-                    oauth_agent_identity.as_ref(),
-                    cert_identity.as_ref(),
-                ),
-            };
+            // step, whose targets are not in the request — face it too. The
+            // authorizer is the one derived above, before the method match.
 
             // The background-task intent, or a refusal, or nothing at all.
             //
@@ -1785,7 +1803,7 @@ async fn meta_mcp_dispatch(
         "tools/resolve" => {
             state
                 .meta_mcp
-                .handle_tools_resolve(id, params.as_ref(), Some(session_id.as_str()))
+                .handle_tools_resolve(id, params.as_ref(), Some(session_id.as_str()), invoke_scope)
                 .await
         }
 

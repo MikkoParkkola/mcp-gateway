@@ -681,8 +681,10 @@ fn normalize_tools_list_response_fills_direct_backend_proxy_annotations() {
     normalize_tools_list_response("beeper", &mut response);
 
     let result = response.result.expect("success result");
-    assert_eq!(result["nextCursor"], "abc");
-    assert_eq!(result["extra"], "preserved");
+    // Flipped by A3: the result is rebuilt as `{tools}` alone. An upstream
+    // cursor or sibling key could name a tool the caller may not invoke.
+    assert!(result.get("nextCursor").is_none(), "{result}");
+    assert!(result.get("extra").is_none(), "{result}");
 
     let search = &result["tools"][0]["annotations"];
     assert_eq!(search["readOnlyHint"], true);
@@ -737,13 +739,13 @@ fn normalize_tools_list_response_excludes_a_violator_beside_a_malformed_sibling(
     normalize_tools_list_response("beeper", &mut response);
 
     // THEN the malformed sibling no longer shields the violator: `bad` is
-    // gone, `search` survives, and the unreadable entry is still forwarded
+    // gone, `search` survives, and (A3) the unreadable entry is dropped too,
+    // since the call predicate cannot judge it
     let tools = response.result.expect("success result")["tools"]
         .as_array()
         .expect("tools array")
         .clone();
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     assert_eq!(names, vec!["search"]);
-    assert_eq!(tools.len(), 2);
-    assert_eq!(tools[1]["description"], "no name field");
+    assert_eq!(tools.len(), 1);
 }

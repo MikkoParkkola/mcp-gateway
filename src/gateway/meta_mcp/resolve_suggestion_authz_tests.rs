@@ -75,6 +75,9 @@ async fn resolve_miss(meta: &MetaMcp, session: Option<&str>, name: &str) -> Stri
         RequestId::Number(9),
         Some(&json!({ "name": name })),
         session,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     )
     .await
     .error
@@ -94,6 +97,9 @@ fn bind_narrow_profile(meta: &MetaMcp, session: Option<&str>) {
         session,
         Some(NARROW),
         crate::protocol::meta::Era::Legacy,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
     );
 }
 

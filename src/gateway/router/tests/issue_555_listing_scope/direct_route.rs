@@ -344,11 +344,12 @@ async fn listing_emits_no_invocation_audit() {
         call.get("error").is_none(),
         "the call must be allowed: {call}"
     );
-    // Two, not one: the router pre-check and the dispatch chokepoint each
-    // authorize a surfaced call today, and the invoke path stays byte-identical.
+    // Three, not one: measured on the base tip (red run 36067080760), where
+    // the router pre-check and the dispatch chokepoint each authorize a
+    // surfaced call. The invoke path stays byte-identical, so the count holds.
     assert_eq!(
         audit_records(&buffer),
-        2,
+        3,
         "invoke-path allow records changed"
     );
 }

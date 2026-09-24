@@ -32,7 +32,8 @@ use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 
 use super::auth::ResolvedAuthConfig;
-use super::meta_mcp::{MetaMcp, MetaMcpCallerContext};
+use super::authz::ToolPolicyAuthorizer;
+use super::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
 use super::oauth::{AgentAuthState, AgentDefinition, AgentRegistry, GatewayKeyPair};
 use super::proxy::ProxyManager;
 use super::router::{AppState, CallerStanding, account_handles_of, create_router_with_accounts};
@@ -142,11 +143,8 @@ const STDIO_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 pub(crate) type StdioTelemetry =
     std::sync::Mutex<Option<crate::protocol_revision_telemetry::DurableTelemetrySink>>;
 
-/// The standing stdio serves its metadata surfaces at.
-///
-/// The client spawned this process, so it already holds whatever the
-/// operator holds; withholding the admin half of the surface from it would
-/// describe a gateway nobody is talking to.
+/// The standing stdio serves its resource and prompt surfaces at: the client
+/// spawned this process, so it holds whatever the operator holds.
 const STDIO: CallerStanding = CallerStanding::Admin;
 
 fn expand_home_path(path: &str) -> PathBuf {
@@ -2985,6 +2983,8 @@ impl Gateway {
             );
             (external_tool, response_targets)
         };
+        let policy = ToolPolicyAuthorizer { tool_policy };
+        let scope = InvokeScope::stdio(&policy);
         let (response, execution) = if method == "tools/call" {
             Box::pin(Self::dispatch_tools_call(
                 meta_mcp,
@@ -3017,9 +3017,10 @@ impl Gateway {
                         Some(session_id),
                         None,
                         request_shape.era(),
+                        scope,
                     ),
                     "tools/list" => {
-                        meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), STDIO)
+                        meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), scope)
                     }
                     m if stdio_catalogue::METHODS.contains(&m) => {
                         stdio_catalogue::dispatch(meta_mcp, m, id, params).await

@@ -109,6 +109,7 @@ async fn guide_resources_are_catalogue_independent() {
 
 /// T29: splitting "Cost tracking" keeps the cost-report docs for a caller
 /// that is served `gateway_cost_report` and not `gateway_get_stats`.
+#[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn cost_report_guide_survives_for_non_admin() {
     let f = fixture_with(Auth::Keys, |meta| {
