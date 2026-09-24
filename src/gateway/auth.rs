@@ -207,7 +207,7 @@ impl ResolvedAuthConfig {
             bearer_token,
             bearer_quota_principal,
             api_keys,
-            public_paths: config.public_paths.clone(),
+            public_paths: config.enforced_public_paths(),
             rate_limiters,
             client_circuit_breaker: config.client_circuit_breaker.clone(),
             client_circuit_breakers: DashMap::new(),

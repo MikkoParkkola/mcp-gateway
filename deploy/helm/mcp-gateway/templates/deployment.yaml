@@ -80,7 +80,7 @@ spec:
           {{- if .Values.probes.enabled }}
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: http
             initialDelaySeconds: 3
             periodSeconds: 5
@@ -88,7 +88,7 @@ spec:
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
@@ -96,7 +96,7 @@ spec:
             failureThreshold: 3
           startupProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: http
             periodSeconds: 5
             failureThreshold: 12

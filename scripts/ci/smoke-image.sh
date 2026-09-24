@@ -85,8 +85,10 @@ case "${PROBE}" in
     exit 1
     ;;
 esac
-if ! printf '%s' "${PROBE}" | grep -q '/health'; then
-  echo "::error::${IMAGE}'s HEALTHCHECK does not probe /health, so leg 1 proves nothing: ${PROBE}"
+# /livez, not /health: /health fails whenever any backend is down, which is not
+# a reason to call the container unhealthy.
+if ! printf '%s' "${PROBE}" | grep -q '/livez'; then
+  echo "::error::${IMAGE}'s HEALTHCHECK does not probe /livez, so leg 1 proves nothing: ${PROBE}"
   exit 1
 fi
 if ! printf '%s' "${PROBE}" | grep -q '39400'; then
@@ -165,6 +167,20 @@ for _ in $(seq 1 30); do
 done
 if [ -z "${ANSWER}" ]; then
   echo "::error::${IMAGE} never answered an MCP request on published port ${HOST_PORT} within 60s"
+  docker logs "${EXTERNAL}"
+  exit 1
+fi
+# The same HEALTHCHECK on a 0.0.0.0 bind with no public_url. There the Host gate
+# admits only numeric hosts, so a probe dialling `localhost` drew 403 and the
+# image called itself unhealthy while serving the request above.
+STATUS=
+for _ in $(seq 1 45); do
+  STATUS="$(docker inspect -f '{{.State.Health.Status}}' "${EXTERNAL}")"
+  [ "${STATUS}" = "starting" ] || break
+  sleep 2
+done
+if [ "${STATUS}" != "healthy" ]; then
+  echo "::error::${IMAGE}'s HEALTHCHECK reports ${STATUS} on a 0.0.0.0 bind"
   docker logs "${EXTERNAL}"
   exit 1
 fi

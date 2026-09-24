@@ -192,6 +192,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: shipped probes read `/livez` and `/readyz` instead of `/health`.**
+  `/health` answers 503 when any backend is down, and the Helm chart and
+  enterprise-alpha manifests used it for liveness, readiness and startup, so
+  one flapping upstream restarted every replica and a backend down at deploy
+  time kept pods from starting. `/livez` (liveness) and `/readyz` (readiness,
+  startup) answer 200 while the gateway serves and never read backend health.
+  Both are public exactly when `/health` is, so no `public_paths` edit is
+  needed. The `Dockerfile` and single-node compose healthchecks now dial
+  `http://127.0.0.1:39400/livez`; `localhost` was refused with 403 by the Host
+  gate on a `0.0.0.0` bind with no `public_url`. `/health` is unchanged. See
+  `docs/UPGRADING-4.0.md` item 10.
+
 - **BREAKING: an HTTP backend that uses OAuth must be reached over TLS or on
   loopback** (CodeQL `rust/cleartext-transmission` #90, #91; CWE-319). The
   bearer token this transport attaches is a replayable credential, so it is no
