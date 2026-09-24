@@ -61,9 +61,10 @@ pub(super) fn idempotency_key_for(
 /// retry key once stopped at the verified subject, and callers identified by
 /// mTLS, trusted headers or an OAuth agent shared one entry per client key.
 ///
-/// Empty for a caller with none of the three: two such callers are pooled by
-/// the operator's own decision to run without authentication, the same pooling
-/// `handlers.rs`'s `unattributed` already expresses.
+/// Empty for a caller with none of the three, so all such callers share one
+/// key space: unauthenticated callers, and currently callers authenticated
+/// only by a static API key, which `caller_cache_principal` has no arm for.
+/// Separating API-key callers is tracked as the next increment.
 pub(super) fn retry_identity_suffix(
     cache_binding: Option<&str>,
     verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
@@ -518,10 +519,10 @@ mod tests {
 
     /// MIK-7408. A caller with no binding, no verified identity and no grant
     /// subject gets an EMPTY suffix, so two such callers share one entry. That
-    /// pooling is the operator's own decision to run without authentication —
-    /// the same decision `handlers.rs` already spells `unattributed`.
+    /// covers unauthenticated callers and, currently, callers authenticated
+    /// only by a static API key; separating the latter is tracked separately.
     #[test]
-    fn retry_identity_suffix_pools_callers_the_operator_left_unattributed() {
+    fn retry_identity_suffix_pools_callers_with_no_principal() {
         assert_eq!(super::retry_identity_suffix(None, None, None), "");
     }
 
