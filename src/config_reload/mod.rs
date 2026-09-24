@@ -38,6 +38,7 @@
 //!     registry,
 //!     &config,
 //!     env,
+//!     None, // no identity-grant sink: grants are not reloaded
 //!     shutdown_tx.subscribe(),
 //! );
 //! # });
@@ -1070,6 +1071,7 @@ impl ConfigWatcher {
         registry: Arc<BackendRegistry>,
         initial_config: &Config,
         env: Arc<LiveEnv>,
+        identity_grants: Option<Arc<IdentityGrantSink>>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self> {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
@@ -1098,6 +1100,7 @@ impl ConfigWatcher {
             failsafe_cfg,
             cache_ttl,
             env,
+            identity_grants,
             event_rx,
             shutdown_rx,
         );
@@ -1202,6 +1205,7 @@ impl ConfigWatcher {
         failsafe_cfg: crate::config::FailsafeConfig,
         cache_ttl: Duration,
         env: Arc<LiveEnv>,
+        _identity_grants: Option<Arc<IdentityGrantSink>>,
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) {
@@ -2267,6 +2271,9 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 
 #[cfg(test)]
 mod grant_change_trigger_tests;
+
+#[cfg(test)]
+mod grant_reload_trigger_tests;
 
 #[cfg(test)]
 mod tests;

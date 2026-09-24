@@ -1603,6 +1603,11 @@ impl Gateway {
         // started later (after `create_router`) so the router's startup
         // bind-origin snapshot reads `live_config` while it still equals the
         // config the listener binds — no startup reload race (MIK-6750 r4).
+        // ONE sink for the meta-tool context and the watcher: its mutex is what
+        // serializes grant reloads, and a second sink over the same store would
+        // let a watcher reload and a meta-tool reload race to publish.
+        let identity_grant_sink =
+            identity_grant_sink_for(&self.config.security.identity_grants, &meta_mcp);
         if let Some(ref path) = self.config_path {
             let reload_ctx = Arc::new(
                 ReloadContext::new(
@@ -1613,10 +1618,7 @@ impl Gateway {
                     self.config.meta_mcp.cache_ttl,
                 )
                 .with_env(Arc::clone(&self.env))
-                .with_identity_grant_sink_opt(identity_grant_sink_for(
-                    &self.config.security.identity_grants,
-                    &meta_mcp,
-                )),
+                .with_identity_grant_sink_opt(identity_grant_sink.clone()),
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
@@ -2024,6 +2026,7 @@ impl Gateway {
                 Arc::clone(&self.backends),
                 &self.config,
                 Arc::clone(&self.env),
+                identity_grant_sink,
                 shutdown_tx.subscribe(),
             ) {
                 Ok(w) => {
