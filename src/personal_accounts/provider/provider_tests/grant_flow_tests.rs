@@ -346,7 +346,8 @@ async fn revoke_reports_failed_for_every_non_confirmation() {
     assert!(trace.token_calls().is_empty());
 }
 
-/// Log lines emitted while `run` executes, on this thread only.
+/// Log lines emitted while `run` executes. `set_default` is thread-local,
+/// so this relies on `#[tokio::test]`'s current-thread runtime.
 async fn logged(run: impl std::future::Future<Output = ()>) -> String {
     use std::sync::{Arc, Mutex};
     #[derive(Clone, Default)]
@@ -389,7 +390,7 @@ async fn a_refused_revocation_logs_the_status_and_error_code_only() {
     })
     .await;
 
-    assert!(lines.contains("400"), "{lines}");
+    assert!(lines.contains("status=400"), "{lines}");
     assert!(lines.contains("invalid_token"), "{lines}");
     for secret in [REFRESH_TOKEN, SECRET_VALUE, "echo refresh-SECRET-1"] {
         assert!(!lines.contains(secret), "{secret} leaked: {lines}");
@@ -409,8 +410,31 @@ async fn an_unexpected_revocation_error_code_is_not_echoed() {
     })
     .await;
 
-    assert!(lines.contains("400"), "{lines}");
+    assert!(lines.contains("status=400"), "{lines}");
+    assert!(lines.contains("unrecognized"), "{lines}");
     assert!(!lines.contains("with spaces"), "{lines}");
+}
+
+/// A request that never got an answer is named as such, with no token or
+/// client secret in the line.
+#[tokio::test]
+async fn a_failed_revocation_request_logs_no_request_material() {
+    let failure = Err(HttpError::Retryable(RetrievalFailure::Unreachable));
+    let (_trace, provider) = google_rig(failure, false, NOW).await;
+
+    let lines = logged(async {
+        let revoked = provider
+            .revoke_token("workspace", REFRESH_TOKEN, TokenTypeHint::RefreshToken)
+            .await;
+        assert_eq!(revoked, ProviderRevocation::Failed);
+    })
+    .await;
+
+    assert!(lines.contains("revocation request failed"), "{lines}");
+    assert!(lines.contains("Unreachable"), "{lines}");
+    for secret in [REFRESH_TOKEN, SECRET_VALUE] {
+        assert!(!lines.contains(secret), "{secret} leaked: {lines}");
+    }
 }
 
 /// A revocation endpoint the operator did not configure was never bound at
