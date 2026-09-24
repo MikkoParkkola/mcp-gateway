@@ -938,12 +938,9 @@ fn guide_tool_names(text: &str) -> std::collections::BTreeSet<String> {
 
 /// Read the gateway-owned routing guide as the given caller is served it.
 async fn routing_guide_text(meta: &MetaMcp, standing: CallerStanding) -> String {
+    let uri = json!({"uri": "gateway://guides/routing"});
     let response = meta
-        .handle_resources_read(
-            RequestId::Number(1),
-            Some(&json!({"uri": "gateway://guides/routing"})),
-            standing,
-        )
+        .handle_resources_read(RequestId::Number(1), Some(&uri), standing, None, None)
         .await;
     response
         .result

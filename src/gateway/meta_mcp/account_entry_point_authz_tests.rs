@@ -193,6 +193,8 @@ async fn prompts_get(meta: &MetaMcp) -> JsonRpcResponse {
     meta.handle_prompts_get(
         RequestId::Number(7),
         Some(&json!({ "name": format!("isomem/{PROMPT}") })),
+        None,
+        None,
     )
     .await
 }
@@ -202,6 +204,8 @@ async fn resources_read(meta: &MetaMcp) -> JsonRpcResponse {
         RequestId::Number(8),
         Some(&json!({ "uri": RESOURCE_URI })),
         CallerStanding::Admin,
+        None,
+        None,
     )
     .await
 }
@@ -311,7 +315,7 @@ async fn prompts_list_omits_a_personal_managed_backend_on_a_multi_user_gateway()
     let (meta, calls) = meta_with(personal_managed_backend(), true);
 
     let response = meta
-        .handle_prompts_list(RequestId::Number(9), None, None)
+        .handle_prompts_list(RequestId::Number(9), None, None, None)
         .await;
 
     assert!(
@@ -334,7 +338,7 @@ async fn prompts_list_includes_the_same_backend_on_a_single_user_gateway() {
     let (meta, _calls) = meta_with(personal_managed_backend(), false);
 
     let response = meta
-        .handle_prompts_list(RequestId::Number(10), None, None)
+        .handle_prompts_list(RequestId::Number(10), None, None, None)
         .await;
 
     assert!(

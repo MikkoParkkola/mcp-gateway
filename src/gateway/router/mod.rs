@@ -62,6 +62,8 @@ mod identity_parity_tests;
 #[cfg(test)]
 mod probe_tests;
 #[cfg(test)]
+mod resource_prompt_scope_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod webhook_scope_tests;

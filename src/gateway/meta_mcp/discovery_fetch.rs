@@ -75,6 +75,16 @@ impl MetaMcp {
         if self.meta_route_isolation_refused_for_caller(backend, binding.as_deref()) {
             return None;
         }
+        // A `required` backend has no identity-free view: on a single-user
+        // gateway the guard above admits it, and the fill would then go out
+        // over the shared session without the caller. One rule for every
+        // catalogue read, the resource-owner lookup included.
+        let required = backend
+            .identity_propagation_config()
+            .is_some_and(|cfg| cfg.required);
+        if required && !backend.fetch_carries_caller_identity(binding.as_deref()) {
+            return None;
+        }
         Some((headers, binding))
     }
 

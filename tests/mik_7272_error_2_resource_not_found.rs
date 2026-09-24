@@ -47,7 +47,13 @@ fn assert_invalid_params(response: &JsonRpcResponse, method: &str) {
 async fn ac_error_2_resources_read_answers_invalid_params() {
     let params = json!({ "uri": UNOWNED_URI });
     let response = meta_mcp()
-        .handle_resources_read(RequestId::Number(1), Some(&params), CallerStanding::Admin)
+        .handle_resources_read(
+            RequestId::Number(1),
+            Some(&params),
+            CallerStanding::Admin,
+            None,
+            None,
+        )
         .await;
     assert_invalid_params(&response, "resources/read");
 }
@@ -56,7 +62,7 @@ async fn ac_error_2_resources_read_answers_invalid_params() {
 async fn ac_error_2_resources_subscribe_answers_invalid_params() {
     let params = json!({ "uri": UNOWNED_URI });
     let response = meta_mcp()
-        .handle_resources_subscribe(RequestId::Number(2), Some(&params))
+        .handle_resources_subscribe(RequestId::Number(2), Some(&params), None, None)
         .await;
     assert_invalid_params(&response, "resources/subscribe");
 }
@@ -65,7 +71,7 @@ async fn ac_error_2_resources_subscribe_answers_invalid_params() {
 async fn ac_error_2_resources_unsubscribe_answers_invalid_params() {
     let params = json!({ "uri": UNOWNED_URI });
     let response = meta_mcp()
-        .handle_resources_unsubscribe(RequestId::Number(3), Some(&params))
+        .handle_resources_unsubscribe(RequestId::Number(3), Some(&params), None, None)
         .await;
     assert_invalid_params(&response, "resources/unsubscribe");
 }
