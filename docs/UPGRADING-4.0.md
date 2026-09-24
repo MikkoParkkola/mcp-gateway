@@ -10,7 +10,8 @@ items 1-4 below, then stamps the new version. The notice is printed rather than 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
 6-8 are decided per request or per backend, so there is no single moment at startup at which
-the binary could know whether a given deployment is affected.
+the binary could know whether a given deployment is affected. Item 10 changes the shipped
+deployment files, not the binary's behaviour on an existing route.
 
 **Items 2 and 8 refuse the gateway's start. Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those three first if you are
@@ -28,6 +29,7 @@ upgrading a running deployment.
 | 6 | Caching requires an identifiable protocol revision | Send the version header, or `initialize` the session |
 | 7 | An OAuth backend must be on TLS or loopback | Put TLS in front of it, or move it to `127.0.0.1` — no opt-out |
 | 8 | A credential-bearing backend on plain `http://` is refused at load | Use TLS, or set `allow_cleartext_credentials: true` on that backend |
+| 10 | Shipped probes move from `/health` to `/livez` and `/readyz` | Repoint your own probes; `/health` still answers |
 | 9 | The savings estimates are gone from stats | Drop `--price`; compute cost from `total_cached_tokens` yourself |
 
 ## 1. OAuth credentials are stored per issuer
@@ -116,6 +118,30 @@ previously never reached them.
 
 Send `MCP-Protocol-Version` on stateless requests, or complete `initialize` and reuse the
 session. Either restores caching; neither requires a configuration change.
+
+## 10. Probes read `/livez` and `/readyz`, not `/health`
+
+`/health` answers 503 whenever any backend is down or its circuit is open. The Helm chart and
+the enterprise-alpha manifests used it for the liveness, readiness and startup probes, so one
+flapping upstream restarted every replica, and a backend that was down at deploy time kept new
+pods from ever starting. The container `HEALTHCHECK` also dialled `localhost`, which the Host
+gate refuses on a `0.0.0.0` bind with no `public_url`, so the image reported itself unhealthy.
+
+4.0.0 adds two endpoints that never read backend health:
+
+- `/livez` answers 200 while the process serves. Use it for liveness and container healthchecks.
+- `/readyz` answers 200 once the config has loaded and the listener is up. Use it for readiness
+  and startup. It deliberately does not fail on a backend: there is no per-backend `required`
+  setting, and one unreachable upstream is not a reason to take the gateway out of rotation.
+
+Both are public exactly when `/health` is. A config that lists only `/health` under
+`auth.public_paths` exposes all three, and one that omits `/health` requires a credential on all
+three. You do not need to add them to `public_paths`.
+
+The shipped chart, manifests, `Dockerfile` and single-node compose file now point at the new
+endpoints and dial `127.0.0.1`. If you wrote your own probes, or a load balancer health check,
+against `/health`, repoint them. `/health` is unchanged and remains the place to read backend
+state, so keep it for dashboards and alerts.
 
 ## After upgrading
 
