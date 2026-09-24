@@ -130,6 +130,13 @@ its response reports `"notified": false`. Add `notify: true` to each webhook tha
 MCP sessions, and give the keys that should see those events access to the capability backend.
 An API key whose `backends` list is `["*"]` or empty is unaffected by the scoping.
 
+The check runs at delivery, against the credential the session was opened with: a key-server
+token that is revoked or expires stops receiving on its open stream. With authentication on, a
+session that presented no credential (a public-path connection) receives no webhook events. With
+authentication off, every session receives them, as before.
+
+Installs already stamped 4.0.0 by a pre-release build get this notice once, on their next start.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.

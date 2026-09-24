@@ -320,7 +320,9 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 3. Verify `notify: true` in webhook definition (it defaults to `false`)
 4. Verify the session's API key may access the capability backend
    (`capabilities.name`): a key whose `backends` list omits it receives no
-   webhook notifications
+   webhook notifications. The key is re-checked at every delivery, so a
+   revoked or expired token stops receiving, and with authentication on a
+   session opened without a credential receives nothing
 
 ## Performance
 

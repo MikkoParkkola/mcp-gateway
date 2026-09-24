@@ -10,7 +10,7 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use super::{check_upgrade, stamp_path};
+use super::{check_upgrade, stamp_path, webhook_notice};
 
 const MARKER: &str = ".notice-4.0.0-webhook-notify";
 
@@ -52,4 +52,17 @@ fn a_fresh_install_is_not_told_about_a_default_it_never_had() {
         marked(dir.path()),
         "a fresh install is marked, not notified"
     );
+}
+
+#[test]
+fn the_notice_is_written_once_and_names_the_opt_in() {
+    let dir = TempDir::new().unwrap();
+    let mut first = Vec::new();
+    assert!(webhook_notice::show_once(dir.path(), &mut first).unwrap());
+    let text = String::from_utf8(first).unwrap();
+    assert!(text.contains("notify: true"), "{text}");
+
+    let mut second = Vec::new();
+    assert!(!webhook_notice::show_once(dir.path(), &mut second).unwrap());
+    assert!(second.is_empty(), "a second start repeats nothing");
 }
