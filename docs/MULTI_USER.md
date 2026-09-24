@@ -275,6 +275,19 @@ full worked config in `src/personal_accounts/config/journey_tests.rs`.
 Omitting `accounts.hosted` mounts no route and changes no existing refusal
 text.
 
+### Open WebUI side
+
+The adapter verifies the assertion Open WebUI signs when
+`FORWARD_USER_INFO_HEADER_JWT_SECRET` is set: an HS256 JWT in
+`X-OpenWebUI-User-Jwt` (Open WebUI 0.9.6). Set the adapter's `header` to that
+name and point `hmac_secret_ref` at the same secret. The tool connection to the
+gateway must also send an API key listed in `allowed_api_key_names`.
+
+Setting that secret changes Open WebUI globally: it then sends only the signed
+header, and stops sending the plain `X-OpenWebUI-User-*` headers, to every tool
+connection and model endpoint. Check that nothing else relies on the plain
+headers before turning it on.
+
 ### Reverse-proxy front door
 
 `public_origin` is the origin the browser already has open when it follows the

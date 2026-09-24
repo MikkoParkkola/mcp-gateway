@@ -1451,8 +1451,7 @@ only barrier that can make the test pass. Swapping `commit_grant_if` for
    - `gmail.readonly` is a restricted scope. An unverified app shows Google's
      "unverified app" interstitial, which the driver must click through and record.
 
-**Cloudflare change.** In `cloudflared` `config.yml`, insert this ingress rule
-before the `chat.raxor.ai` catch-all:
+**Cloudflare change.** Add this ingress rule before the `chat.raxor.ai` catch-all:
 
 ```yaml
 - hostname: chat.raxor.ai
@@ -1462,18 +1461,32 @@ before the `chat.raxor.ai` catch-all:
 
 Leave `httpHostHeader` unset, so the gateway sees `Host: chat.raxor.ai`.
 
-Before you record anything, check the route:
+The Spark tunnel is remotely managed: `cloudflared` runs with a connector token
+and takes its ingress from the Cloudflare dashboard, so editing
+`/etc/cloudflared/config.yml` changes nothing. Add the rule as a public hostname
+in Zero Trust → Networks → Tunnels (or through the tunnel configurations API),
+check it sits above the plain `chat.raxor.ai` row, and confirm the pushed
+version on the connector's metrics endpoint (`/config`). No restart is needed.
 
-```sh
-curl -sI https://chat.raxor.ai/accounts/v1/complete
-```
+`chat.raxor.ai` sits behind Cloudflare Access, so the test users' addresses
+must be in the Access allow policy, and an anonymous request never reaches the
+gateway. Before you record anything, check the route from a browser signed in
+through Access (or with an Access service token that the application admits):
+`/accounts/v1/complete` must answer from the gateway, identified by its
+`Content-Security-Policy` header. Open WebUI's SPA must not answer it.
 
-It must answer from the gateway, identified by its `Content-Security-Policy`
-header. Open WebUI's SPA must not answer it.
+**Open WebUI change.** Setting `FORWARD_USER_INFO_HEADER_JWT_SECRET` makes Open
+WebUI send only `X-OpenWebUI-User-Jwt` to every consumer (0.9.6
+`utils/headers.py`), replacing the plain `X-OpenWebUI-User-*` headers on the
+model proxy and on every tool connection. Check that no existing consumer reads
+the plain headers first. Recreating the container also regenerates its session
+secret unless `WEBUI_SECRET_KEY_FILE` points into the data volume, which signs
+every user out.
 
 **Gateway config.** Use the §10 block with:
 
-- `installation_id` set to the value already used by the deployed adapter;
+- `installation_id` set to the deployed adapter's value, or a new one where the
+  deployment has no adapter yet;
 - `session.user_endpoint: http://127.0.0.1:8090/api/v1/auths/`.
 
 Also, **L01 must confirm** that the Google Workspace backend is reachable from Open
@@ -1485,7 +1498,7 @@ WebUI through one of the three covered dispatch routes. Record which route
 - the gateway commit and artifact SHA-256 (binaries carry no embedded commit, so the
   directory digest serves as provenance);
 - the Open WebUI 0.9.6 image digest;
-- the `cloudflared` rule text;
+- the ingress rule text and the tunnel configuration version that carries it;
 - the Google client revision;
 - the redacted gateway config (secrets remain `env:` references);
 - the actual MCP route.
