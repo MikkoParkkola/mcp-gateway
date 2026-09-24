@@ -149,7 +149,7 @@ gh run list --commit "$(git rev-parse HEAD)" --event push --json workflowName,da
 |---|---|
 | `release.yml` `verify` | `Check tag against manifest and classify the channel` classified the tag as `stable`; `Verify publish package` (`cargo publish --dry-run`) green |
 | `release.yml` `release` | `gh release view v4.0.0` shows 5 binaries, the license files and `SHA256SUMS.txt`; not marked prerelease. Download and run `sha256sum -c SHA256SUMS.txt` |
-| `release.yml` `publish` | `cargo search mcp-gateway --limit 1` shows `4.0.0`; `cargo install mcp-gateway --version 4.0.0` succeeds |
+| `release.yml` `publish` | `xh https://crates.io/api/v1/crates/mcp-gateway/4.0.0` returns the version (200, not 404); `cargo search` reads a search index that can lag, so do not rely on it; `cargo install mcp-gateway --version 4.0.0` succeeds |
 | `release.yml` `npm-publish` | `npm view @mikkoparkkola/mcp-gateway dist-tags` shows `latest: 4.0.0`; `npm view @mikkoparkkola/mcp-gateway@4.0.0 dist.attestations` is present |
 | `release.yml` `homebrew-update` | `MikkoParkkola/homebrew-tap` has commit `mcp-gateway 4.0.0`; `brew update && brew upgrade mcp-gateway && mcp-gateway --version` prints 4.0.0 |
 | `ci.yml` `docker-build` | both legs green, including the Trivy and both smoke-test steps, against the pushed digest |
@@ -198,6 +198,10 @@ this runbook does not edit the ledger.
    on them. A fresh run (a re-pushed tag, or `release.yml`'s `workflow_dispatch` with
    `tag: v4.0.0`) repeats every publish that already succeeded. On crates.io and npm that
    is a hard failure, because the version already exists.
+   **A re-run builds the tagged commit again.** It cannot pick up a fix pushed to a
+   branch afterwards. Re-run only for a transient failure: a runner, network or registry
+   error, or a timeout. A defect in the code, the Dockerfile or a workflow needs a new
+   version (see [Fixing forward](#fixing-forward-with-a-new-patch-version)).
 2. **A red publish job does not prove nothing was published.** `cargo publish` can upload
    the crate and then fail while it waits for the index. `npm publish` can fail after the
    registry has accepted the tarball. Query the registry (step 5's commands) before any
@@ -219,21 +223,22 @@ this runbook does not edit the ledger.
 
 | Target (job) | Mutable once published? | Half-finished state | Recovery | Verify |
 |---|---|---|---|---|
-| Gate jobs, `verify`, `build` (`release.yml`) | Nothing published | Run red before `release` | Fix on the branch, then delete and re-create the tag **only if** `gh release view v4.0.0`, `cargo search` and `npm view` all show no 4.0.0 and `ci.yml` published no image (check `crane digest ...:4.0.0` fails). Otherwise treat it as published and fix forward | Registry queries in step 5 |
+| Gate jobs, `verify`, `build` (`release.yml`) | Nothing published | Run red before `release` | Fix on the branch, then delete and re-create the tag **only if** `gh release view v4.0.0`, `cargo search` and `npm view` all show no 4.0.0 and `ci.yml` published no image (check `crane digest ...:4.0.0` fails). Query crates.io through `xh https://crates.io/api/v1/crates/mcp-gateway/4.0.0`, not `cargo search`, which can lag. A crates.io version, once uploaded, can never be uploaded again, only yanked, so re-tagging after crates.io has the version is forbidden. Otherwise treat it as published and fix forward | Registry queries in step 5 |
 | GitHub release (`release`) | Yes: assets can be edited or deleted | Release exists with some or no assets, or the job failed after `Create Release` | `gh run rerun <run-id> --failed` (within the artifact window). Check whether the repository has GitHub immutable releases enabled, and whether `softprops/action-gh-release` replaces existing assets, before relying on a re-run to overwrite them. **Never replace an asset after `homebrew-update` ran**: the formula pins the SHA-256 values from `SHA256SUMS.txt` | `gh release view v4.0.0 --json assets`; `sha256sum -c SHA256SUMS.txt` |
-| crates.io (`publish`) | **No.** A version can never be re-published or deleted, only yanked | Published or not; the job's colour does not tell you which (rule 2) | Not published: `gh run rerun <run-id> --failed`. Published but broken: `cargo yank --version 4.0.0 mcp-gateway`, fix, release `4.0.1` through this runbook | `cargo search mcp-gateway`; `cargo info mcp-gateway@4.0.0` |
+| crates.io (`publish`) | **No.** A version can never be re-published or deleted, only yanked | Published or not; the job's colour does not tell you which (rule 2) | Not published: `gh run rerun <run-id> --failed`. Published but broken: `cargo yank mcp-gateway@4.0.0`, fix, release `4.0.1` through this runbook | `xh https://crates.io/api/v1/crates/mcp-gateway/4.0.0` (404 means not published); `cargo info mcp-gateway@4.0.0` |
 | npm (`npm-publish`) | **No.** npm refuses to reuse a version number, even after an unpublish ([npm unpublish policy](https://docs.npmjs.com/policies/unpublish)) | Published with or without provenance, or not at all | Not published: re-run failed jobs. Published but broken: `npm deprecate @mikkoparkkola/mcp-gateway@4.0.0 "<reason>"` and ship `4.0.1`. If `latest` points wrong: `npm dist-tag add @mikkoparkkola/mcp-gateway@<good> latest` | `npm view @mikkoparkkola/mcp-gateway dist-tags versions` |
 | Homebrew tap (`homebrew-update`) | Yes, it is a git commit | Formula not bumped, or bumped against assets that later changed | Re-run failed jobs. `Commit and push formula bump` exits 0 if the formula is already current, so a re-run is idempotent. A bad bump: `git revert` in `MikkoParkkola/homebrew-tap` | `brew fetch --force mcp-gateway` (checks the SHA-256 values); `brew test mcp-gateway` |
-| ghcr.io images (`ci.yml` `docker-build`, `docker-manifest`) | Tags yes, digests no. Signatures and SBOMs attach to digests | `docker-build` red: no release tag exists (legs push by digest only). `docker-manifest` red: the index exists under its provenance `sha-` tag, and `:4.0.0` exists only if `Publish the release tags (copy the verified index by digest)` ran | Re-run failed jobs in the `ci.yml` run, within a day (rule 4). `docker buildx imagetools create` onto the same verified digest is idempotent. If a tag points at the wrong digest, re-point it with `docker buildx imagetools create --tag ghcr.io/mikkoparkkola/mcp-gateway:<tag> ghcr.io/mikkoparkkola/mcp-gateway@<signed digest>`. Delete stray package versions in the GitHub Packages UI | `Assert the release tag resolves to the signed digest` green; step 6 checks |
+| ghcr.io images (`ci.yml` `docker-build`, `docker-manifest`) | Tags yes, digests no. Signatures and SBOMs attach to digests | `docker-build` red: no release tag exists (legs push by digest only). `docker-manifest` red: the index exists under its provenance `sha-` tag, and `:4.0.0` exists only if `Publish the release tags (copy the verified index by digest)` ran | Transient failure only (rule 1): re-run the **whole** `ci.yml` run with `gh run rerun <run-id>`. `docker-build` sets `fail-fast: true`, so one failed leg cancels the other, and GitHub's documentation does not say whether `--failed` also re-runs cancelled jobs. A full re-run of `ci.yml` publishes nothing outside ghcr.io and the MCP Registry, and it rebuilds both legs, so the digest expiry in rule 4 does not apply. A code defect ships as `4.0.1`. `docker buildx imagetools create` onto the same verified digest is idempotent. If a tag points at the wrong digest, re-point it with `docker buildx imagetools create --tag ghcr.io/mikkoparkkola/mcp-gateway:<tag> ghcr.io/mikkoparkkola/mcp-gateway@<signed digest>`. Delete stray package versions in the GitHub Packages UI | `Assert the release tag resolves to the signed digest` green; step 6 checks |
 | MCP Registry (`ci.yml` `publish-mcp-registry`) | Assume not. Check the registry's current documentation before trying to change a published version | Not listed, or listed pointing at `:4.0.0` | Not listed: re-run failed jobs once `:4.0.0` resolves. The job refuses to list an image reference that does not resolve | The registry entry names `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0` |
 | VS Code / Cursor | No publisher | None | Nothing to recover; the deeplinks run the installed binary | `mcp-gateway --version` on the installing host |
 
 ### If the image fails but everything else shipped
 
 This is the most likely partial state, because the two workflows gate independently. The
-binary channels are fine to leave live. Fix the image defect on the branch. If the fix
-changes no crate code, re-run `ci.yml` failed jobs where possible. If the image cannot be
-built from the `v4.0.0` commit, the image ships with `4.0.1` along with everything else.
+binary channels are fine to leave live. If the failure was transient, re-run the whole
+`ci.yml` run for the tag (ghcr.io row). Otherwise the image cannot be produced from the
+`v4.0.0` commit: a re-run rebuilds that commit, and a fix pushed to a branch never
+reaches it. Fix the defect and ship the image with `4.0.1` along with everything else.
 Do not push a second tag at the same version.
 
 ### Fixing forward with a new patch version
