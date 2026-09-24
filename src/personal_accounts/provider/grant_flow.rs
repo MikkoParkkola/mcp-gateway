@@ -64,9 +64,9 @@ pub(crate) fn code_challenge_s256(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
-/// The OAuth `error` code of a refusal body, for the operator log. Only a
-/// short plain identifier is echoed; anything else (and every free-text
-/// `error_description`) could carry request material back, so it is not.
+/// The OAuth `error` code of a refusal body, for the operator log. Only the
+/// standard RFC 6749 and RFC 7009 codes are echoed: any other value, and every
+/// free-text `error_description`, could carry request material back.
 fn oauth_error_code(body: &str) -> &'static str {
     const KNOWN: [&str; 7] = [
         "invalid_request",
