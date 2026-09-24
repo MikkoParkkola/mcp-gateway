@@ -266,7 +266,7 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
-The gateway exposes 9 tools minimum, 11 in the README benchmark scenario, counted for an administrator; a caller without admin standing is shown five fewer (the kill, revive, reload and webhook-status tools, and the stats tool where it is exposed). The base discovery quartet stays fixed. Everything else is listed only where it can answer: stats, cost reporting, playbooks and profile control appear once the configuration that backs them exists, and webhook status where a webhook registry is attached, which the stdio transport never has. A deployment that turns all of them on is served 17. It costs context exactly where it is useful.
+The gateway exposes 9 tools minimum, 11 in the README benchmark scenario, counted for an administrator; a caller without admin standing is shown five fewer, six where the stats tool is exposed, because it is only shown what it could invoke. The base discovery quartet stays fixed. Everything else is listed only where it can answer: stats, cost reporting, playbooks and profile control appear once the configuration that backs them exists, and webhook status where a webhook registry is attached, which the stdio transport never has. A deployment that turns all of them on is served 17. It costs context exactly where it is useful.
 
 ### Code Mode: two tools instead of the meta-tool set
 
@@ -421,7 +421,7 @@ They solve adjacent problems. A team that wants Claude Managed Agents to reach a
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/livez`, `/readyz` | GET | Liveness and readiness probes; never read backend health, public exactly when `/health` is |
-| `/health` | GET | Health check with backend status; authenticated admin callers also see per-backend runtime profile lifecycle state |
+| `/health` | GET | Health check: `status` and `version`; authenticated admin callers also get per-backend status and runtime profile lifecycle state |
 | `/mcp` | POST | Meta-MCP mode (dynamic discovery) |
 | `/mcp/{backend}` | POST | Direct backend access |
 | `/ui` | GET | Web dashboard |

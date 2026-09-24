@@ -23,6 +23,18 @@ async fn session_call(
     name: &str,
     arguments: Value,
 ) -> (Option<String>, Value) {
+    let params = json!({ "name": name, "arguments": arguments });
+    session_rpc(router, key, session, "tools/call", params).await
+}
+
+/// Any legacy-path method, carrying (and returning) a session id.
+async fn session_rpc(
+    router: &axum::Router,
+    key: &str,
+    session: Option<&str>,
+    method: &str,
+    params: Value,
+) -> (Option<String>, Value) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -33,13 +45,7 @@ async fn session_call(
     }
     let request = builder
         .body(axum::body::Body::from(
-            json!({
-                "jsonrpc": "2.0",
-                "id": 9,
-                "method": "tools/call",
-                "params": { "name": name, "arguments": arguments }
-            })
-            .to_string(),
+            json!({ "jsonrpc": "2.0", "id": 9, "method": method, "params": params }).to_string(),
         ))
         .expect("request");
     let response = router
@@ -374,5 +380,76 @@ async fn playbook_step_refusal_names_nothing_withheld() {
     assert!(
         !scoped.to_string().contains("beta"),
         "step error named the target: {scoped}"
+    );
+}
+
+/// T5 (promoted variant): a tool promoted into a session's `tools/list` is
+/// listed only while the caller could still invoke it. Here the session's
+/// profile is narrowed after the promotion.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn promoted_tool_is_listed_only_while_invocable() {
+    let f = fixture_with(Auth::Keys, |meta| {
+        let narrow = crate::routing_profile::RoutingProfileConfig {
+            deny_tools: Some(vec!["alpha_read".to_string()]),
+            ..Default::default()
+        };
+        let profiles = HashMap::from([
+            (
+                "open".to_string(),
+                crate::routing_profile::RoutingProfileConfig::default(),
+            ),
+            ("narrow".to_string(), narrow),
+        ]);
+        meta.with_profile_registry(crate::routing_profile::ProfileRegistry::from_config(
+            &profiles, "open",
+        ))
+    })
+    .await;
+    let key = "open-key";
+    let (sid, promoted) = session_call(
+        &f.router,
+        key,
+        None,
+        "gateway_invoke",
+        invoke("alpha", "alpha_read"),
+    )
+    .await;
+    assert!(
+        promoted.get("error").is_none(),
+        "the promoting call must succeed: {promoted}"
+    );
+    let sid = sid.expect("a legacy call gets a session id");
+    let (_, set) = session_call(
+        &f.router,
+        key,
+        Some(&sid),
+        "gateway_set_profile",
+        json!({ "profile": "narrow" }),
+    )
+    .await;
+    assert!(set.get("error").is_none(), "{set}");
+    let (_, call) = session_call(
+        &f.router,
+        key,
+        Some(&sid),
+        "gateway_invoke",
+        invoke("alpha", "alpha_read"),
+    )
+    .await;
+    assert!(
+        super::refused(&call) || call.to_string().contains("profile"),
+        "control: now refused: {call}"
+    );
+    let (_, listing) = session_rpc(&f.router, key, Some(&sid), "tools/list", json!({})).await;
+    let names: Vec<&str> = listing["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list: {listing}"))
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(
+        !names.contains(&"alpha_read"),
+        "a promoted tool the caller can no longer invoke is listed: {names:?}"
     );
 }
