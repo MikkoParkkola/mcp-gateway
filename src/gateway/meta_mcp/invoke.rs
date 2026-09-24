@@ -1706,13 +1706,13 @@ impl MetaMcp {
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC
-        // subject, then the caller's own `GrantSubject` — which is the only
-        // principal a deployment that derives identity from trusted headers,
-        // mTLS or an OAuth agent (`router/handlers.rs`) has, and without it two
-        // distinct principals shared one entry whenever propagation was off and
-        // no OIDC identity was verified, which is the shipped default. The
-        // binding handed in is the dispatch one, so a capability's account
-        // boundary reaches both keys.
+        // subject, then the caller's own `GrantSubject` (trusted headers, mTLS
+        // or an OAuth agent, `router/identity.rs`), then, for an authenticated
+        // caller, the digest of its validated credential (`cred:`). An
+        // authenticated caller none of these names is `Unresolved` and gets no
+        // cache key and no retry key; only an anonymous caller shares the
+        // pooled namespace. The binding handed in is the dispatch one, so a
+        // capability's account boundary reaches both keys.
         //
         // The retry entry is keyed on this same principal, so a caller the
         // response cache tells apart never shares a retry entry.
@@ -1723,9 +1723,6 @@ impl MetaMcp {
             caller.credential_principal,
             caller.authentication,
         );
-        if self.cache.is_some() {
-            super::support::note_cache_bypass(&caller_principal);
-        }
 
         // `want_full` no longer suppresses the key. It selects the shape of the
         // *reply*, not whether the backend acts, and a directive that switches
@@ -1834,6 +1831,11 @@ impl MetaMcp {
             .protocol_revision
             .and_then(crate::protocol::meta::served_revision);
 
+        // Counted only for a call the cache would otherwise have served, so an
+        // `unresolved_principal` count always means a real bypass.
+        if !want_full && protocol_revision.is_some() && self.cache.is_some() {
+            super::support::note_cache_bypass(&caller_principal, "meta");
+        }
         if !want_full
             && protocol_revision.is_some()
             && let Some(ref cache) = self.cache

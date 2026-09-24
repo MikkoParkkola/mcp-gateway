@@ -202,7 +202,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callers as the meta route already did. An authenticated caller that resolves
   to no principal bypasses the cache and the idempotency guard
   (`mcp_cache_bypass_total`, `mcp_idempotency_guard_skipped_total`, reason
-  `unresolved_principal`). Anonymous callers still share one namespace. No
+  `unresolved_principal`, labelled by `route`). Anonymous callers still share one namespace. No
   configuration change; see `docs/UPGRADING-4.0.md` item 14.
 - **BREAKING: identity grants written as documented now match.** Grants,
   owners and callers compare on `authority` and `subject`; `label` is display

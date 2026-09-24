@@ -122,14 +122,19 @@ pub(super) fn retry_identity_suffix(principal: &CachePrincipal) -> Option<String
 }
 
 /// Count and log one response-cache bypass for an `Unresolved` caller (A0 D4).
-/// Called once per call where the principal is resolved, so the read and the
-/// write that both skip do not count twice.
-pub(super) fn note_cache_bypass(principal: &CachePrincipal) {
+/// Called once per call the cache would otherwise have served, so the read and
+/// the write that both skip do not count twice. `route` mirrors the
+/// idempotency skip counter's label.
+pub(super) fn note_cache_bypass(principal: &CachePrincipal, route: &'static str) {
     if *principal == CachePrincipal::Unresolved {
-        tracing::warn!("Response cache bypassed: unresolved caller principal");
+        tracing::warn!(
+            route,
+            "Response cache bypassed: unresolved caller principal"
+        );
         telemetry_metrics::counter!(
             "mcp_cache_bypass_total",
-            "reason" => "unresolved_principal"
+            "reason" => "unresolved_principal",
+            "route" => route
         )
         .increment(1);
     }

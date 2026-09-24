@@ -218,7 +218,8 @@ No configuration changes. What to expect:
 - **An authenticated caller that resolves to no principal** is served without the cache and without
   the idempotency guard rather than pooled. No shipped authentication path produces one; if
   `mcp_cache_bypass_total` or `mcp_idempotency_guard_skipped_total` with
-  `reason="unresolved_principal"` ever counts, report it.
+  `reason="unresolved_principal"` ever counts, report it. Both carry a `route` label (`meta` or
+  `direct`).
 
 ## After upgrading
 
