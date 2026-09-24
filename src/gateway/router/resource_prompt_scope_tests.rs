@@ -86,8 +86,17 @@ fn api_key(key: &str, backends: &[&str]) -> ApiKeyConfig {
 }
 
 /// `required: true`: no best-effort downgrade exists for this backend.
+///
+/// HTTP so the transport can carry a minted header: on stdio the resolver
+/// refuses for that reason first, and the refusal under test would never be
+/// the one about the missing identity.
 fn required_propagation() -> BackendConfig {
     BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: "https://ledger.invalid/mcp".to_string(),
+            streamable_http: true,
+            protocol_version: None,
+        },
         identity_propagation: Some(IdentityPropagationConfig {
             strategy: PropagationStrategyKind::SignedAssertion,
             audience: "ledger".to_string(),
@@ -268,9 +277,15 @@ async fn required_propagation_backend_is_refused_to_a_caller_without_identity() 
     ];
     for (method, params) in cases {
         let (_, body) = call(&f.router, "open-key", method, params).await;
+        // The identity resolver's refusal, not any error: a URI or backend
+        // that failed to resolve answers -32602 / -32001 and names neither.
+        let message = body["error"]["message"].as_str().unwrap_or_default();
         assert!(
-            body.get("error").is_some(),
-            "{method} on a required-propagation backend with no caller identity must be refused: {body}"
+            body["error"]["code"] == -32603
+                && message.contains("identity propagation required for backend 'gamma'")
+                && message.contains("no verified end-user identity"),
+            "{method} on a required-propagation backend must be refused for the missing \
+             caller identity: {body}"
         );
         assert!(
             !f.gamma.saw(method),
