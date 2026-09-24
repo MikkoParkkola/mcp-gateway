@@ -35,6 +35,11 @@ impl CatalogueWire {
     fn saw(&self, method: &str) -> bool {
         self.seen.lock().iter().any(|m| m == method)
     }
+
+    /// Every method this upstream was asked, in order.
+    fn transcript(&self) -> Vec<String> {
+        self.seen.lock().clone()
+    }
 }
 
 #[async_trait::async_trait]
@@ -49,6 +54,9 @@ impl crate::transport::Transport for CatalogueWire {
         let body = match method {
             "resources/list" => json!({ "resources": [{ "uri": uri_of(name), "name": name }] }),
             "prompts/list" => json!({ "prompts": [{ "name": "greet" }] }),
+            "resources/templates/list" => json!({
+                "resourceTemplates": [{ "uriTemplate": format!("mem://{name}/{{id}}"), "name": name }]
+            }),
             "resources/read" => json!({ "contents": [{ "uri": uri_of(name), "text": name }] }),
             "prompts/get" => json!({ "messages": [] }),
             _ => json!({}),
@@ -198,67 +206,122 @@ async fn listed(
         .collect()
 }
 
-#[tokio::test]
-async fn scoped_caller_lists_only_its_own_backends_resources_and_prompts() {
-    let f = fixture().await;
+/// A URI no backend owns, for the "indistinguishable from absent" oracle.
+const NOWHERE: &str = "mem://nowhere/doc";
 
-    let resources = listed(&f.router, "alpha-key", "resources/list", "resources", "uri").await;
-    assert!(
-        resources.contains(&uri_of("alpha")),
-        "own backend listed: {resources:?}"
-    );
-    assert!(
-        !resources.contains(&uri_of("beta")),
-        "a caller scoped to alpha must not be shown beta's resources: {resources:?}"
-    );
-    let prompts = listed(&f.router, "alpha-key", "prompts/list", "prompts", "name").await;
-    assert!(
-        prompts.contains(&"alpha/greet".to_string()),
-        "own prompt listed: {prompts:?}"
-    );
-    assert!(
-        !prompts.contains(&"beta/greet".to_string()),
-        "a caller scoped to alpha must not be shown beta's prompts: {prompts:?}"
-    );
-    assert!(
-        !f.beta.saw("prompts/list"),
-        "an out-of-scope backend must not be contacted to build the caller's list"
-    );
-
-    // CONTROL: an unscoped caller still sees every backend.
-    let resources = listed(&f.router, "open-key", "resources/list", "resources", "uri").await;
-    assert!(
-        resources.contains(&uri_of("beta")),
-        "unscoped sees beta: {resources:?}"
-    );
-    let prompts = listed(&f.router, "open-key", "prompts/list", "prompts", "name").await;
-    assert!(
-        prompts.contains(&"beta/greet".to_string()),
-        "unscoped sees beta: {prompts:?}"
-    );
+/// A response with the requested URI blanked, so an answer about one URI can
+/// be compared with the answer about another.
+async fn answer_for(
+    router: &axum::Router,
+    key: &str,
+    method: &str,
+    uri: &str,
+) -> (StatusCode, String) {
+    let (status, body) = call(router, key, method, json!({ "uri": uri })).await;
+    (status, body["error"].to_string().replace(uri, "<uri>"))
 }
 
 #[tokio::test]
-async fn scoped_caller_is_refused_another_backends_resources_and_prompts() {
+async fn scoped_caller_lists_only_its_own_backends_resources_and_prompts() {
     let f = fixture().await;
-    let cases = [
-        ("resources/read", json!({ "uri": uri_of("beta") })),
-        ("resources/subscribe", json!({ "uri": uri_of("beta") })),
-        ("prompts/get", json!({ "name": "beta/greet" })),
+    let lists = [
+        (
+            "resources/list",
+            "resources",
+            "uri",
+            uri_of("alpha"),
+            uri_of("beta"),
+        ),
+        (
+            "resources/templates/list",
+            "resourceTemplates",
+            "name",
+            "alpha".to_string(),
+            "beta".to_string(),
+        ),
+        (
+            "prompts/list",
+            "prompts",
+            "name",
+            "alpha/greet".to_string(),
+            "beta/greet".to_string(),
+        ),
     ];
-    for (method, params) in cases {
-        let (status, body) = call(&f.router, "alpha-key", method, params.clone()).await;
-        assert_eq!(
-            (status, body["error"]["code"].as_i64()),
-            (StatusCode::FORBIDDEN, Some(-32003)),
-            "{method} on beta by a caller scoped to alpha must be refused like tools/call: {body}"
+    for (method, field, key_of, own, other) in &lists {
+        let items = listed(&f.router, "alpha-key", method, field, key_of).await;
+        assert!(
+            items.contains(own),
+            "{method}: own backend listed: {items:?}"
         );
         assert!(
-            !f.beta.saw(method),
-            "{method} reached beta for a caller not authorized for it"
+            !items.contains(other),
+            "{method}: a caller scoped to alpha must not be shown beta's items: {items:?}"
         );
+    }
+    assert_eq!(
+        f.beta.transcript(),
+        Vec::<String>::new(),
+        "an out-of-scope backend must not be contacted to build the caller's lists"
+    );
 
-        // CONTROL: the unscoped caller is served.
+    // CONTROL: an unscoped caller still sees every backend.
+    for (method, field, key_of, _, other) in &lists {
+        let items = listed(&f.router, "open-key", method, field, key_of).await;
+        assert!(
+            items.contains(other),
+            "{method}: unscoped sees beta: {items:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn scoped_caller_cannot_reach_or_detect_another_backends_resources_and_prompts() {
+    let f = fixture().await;
+    let uri_methods = [
+        "resources/read",
+        "resources/subscribe",
+        "resources/unsubscribe",
+    ];
+    for method in uri_methods {
+        // An out-of-scope URI answers exactly like one nobody owns: neither
+        // the backend nor the URI's existence may be probed across scopes.
+        let absent = answer_for(&f.router, "alpha-key", method, NOWHERE).await;
+        let out_of_scope = answer_for(&f.router, "alpha-key", method, &uri_of("beta")).await;
+        assert!(
+            absent.1.contains("-32602"),
+            "{method} on an unowned URI: {absent:?}"
+        );
+        assert_eq!(
+            out_of_scope, absent,
+            "{method}: beta's URI must be indistinguishable from an absent one to a caller \
+             scoped to alpha"
+        );
+    }
+    let (status, body) = call(
+        &f.router,
+        "alpha-key",
+        "prompts/get",
+        json!({ "name": "beta/greet" }),
+    )
+    .await;
+    assert_eq!(
+        (status, body["error"]["code"].as_i64()),
+        (StatusCode::FORBIDDEN, Some(-32003)),
+        "prompts/get on beta by a caller scoped to alpha must be refused like tools/call: {body}"
+    );
+    assert_eq!(
+        f.beta.transcript(),
+        Vec::<String>::new(),
+        "beta must not be contacted at all, ownership lookup included, for a caller not \
+         authorized for it"
+    );
+
+    // CONTROL: the unscoped caller is served.
+    let controls = uri_methods
+        .map(|m| (m, json!({ "uri": uri_of("beta") })))
+        .into_iter()
+        .chain([("prompts/get", json!({ "name": "beta/greet" }))]);
+    for (method, params) in controls {
         let (status, body) = call(&f.router, "open-key", method, params).await;
         assert!(
             status == StatusCode::OK && body.get("error").is_none(),
@@ -268,28 +331,43 @@ async fn scoped_caller_is_refused_another_backends_resources_and_prompts() {
 }
 
 #[tokio::test]
-async fn required_propagation_backend_is_refused_to_a_caller_without_identity() {
+async fn required_propagation_backend_is_not_reached_without_the_callers_identity() {
     let f = fixture().await;
-    let cases = [
-        ("resources/read", json!({ "uri": uri_of("gamma") })),
-        ("resources/subscribe", json!({ "uri": uri_of("gamma") })),
-        ("prompts/get", json!({ "name": "gamma/greet" })),
-    ];
-    for (method, params) in cases {
-        let (_, body) = call(&f.router, "open-key", method, params).await;
-        // The identity resolver's refusal, not any error: a URI or backend
-        // that failed to resolve answers -32602 / -32001 and names neither.
-        let message = body["error"]["message"].as_str().unwrap_or_default();
-        assert!(
-            body["error"]["code"] == -32603
-                && message.contains("identity propagation required for backend 'gamma'")
-                && message.contains("no verified end-user identity"),
-            "{method} on a required-propagation backend must be refused for the missing \
-             caller identity: {body}"
-        );
-        assert!(
-            !f.gamma.saw(method),
-            "{method} reached a required-propagation backend without the caller's identity"
+    for method in [
+        "resources/read",
+        "resources/subscribe",
+        "resources/unsubscribe",
+    ] {
+        // Its catalogue is never read over the shared session, so its URI
+        // resolves like an absent one rather than being forwarded.
+        let absent = answer_for(&f.router, "open-key", method, NOWHERE).await;
+        let gamma = answer_for(&f.router, "open-key", method, &uri_of("gamma")).await;
+        assert_eq!(
+            gamma, absent,
+            "{method} on the required-propagation backend's URI"
         );
     }
+    let (_, body) = call(
+        &f.router,
+        "open-key",
+        "prompts/get",
+        json!({ "name": "gamma/greet" }),
+    )
+    .await;
+    // The identity resolver's refusal, not any error: a backend that failed
+    // to resolve answers -32001 and names neither.
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        body["error"]["code"] == -32603
+            && message.contains("identity propagation required for backend 'gamma'")
+            && message.contains("no verified end-user identity"),
+        "prompts/get on a required-propagation backend must be refused for the missing \
+         caller identity: {body}"
+    );
+    assert_eq!(
+        f.gamma.transcript(),
+        Vec::<String>::new(),
+        "a required-propagation backend must not be contacted without the caller's identity, \
+         ownership lookup included"
+    );
 }
