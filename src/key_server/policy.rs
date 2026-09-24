@@ -52,7 +52,9 @@ impl PolicyEngine {
     /// Resolve the effective scopes for a verified identity.
     ///
     /// Evaluates rules in order; returns the scopes of the first matching rule.
-    /// If no rule matches, returns `None` (the caller should reject the request).
+    /// If no rule matches, or the request has no overlap with the matching
+    /// rule's backends or tools, returns `None` (the caller should reject the
+    /// request).
     #[must_use]
     pub fn resolve_scopes(
         &self,
@@ -77,7 +79,7 @@ impl PolicyEngine {
                     issuer = %identity.issuer,
                     "Policy rule matched"
                 );
-                return Some(apply_intersection(&policy_scopes, requested));
+                return apply_intersection(&policy_scopes, requested);
             }
         }
         debug!(email = %identity.email, "No policy rule matched");
@@ -131,15 +133,25 @@ fn matches_rule(criteria: &MatchCriteria, identity: &VerifiedIdentity) -> bool {
 ///
 /// If the client requests a specific subset (`requested` is non-empty), only
 /// grant what intersects. An empty `requested` means "grant everything".
-fn apply_intersection(policy: &PolicyScopes, requested: &RequestedScopes) -> TokenScopes {
+///
+/// Returns `None` when a non-empty request intersects to nothing: an empty
+/// list in [`TokenScopes`] means "all", so issuing it would widen the grant.
+fn apply_intersection(policy: &PolicyScopes, requested: &RequestedScopes) -> Option<TokenScopes> {
     let backends = intersect_scope_list(&policy.backends, &requested.backends);
     let tools = intersect_scope_list(&policy.tools, &requested.tools);
 
-    TokenScopes {
+    if (backends.is_empty() && !requested.backends.is_empty())
+        || (tools.is_empty() && !requested.tools.is_empty())
+    {
+        debug!("Requested scopes do not overlap the matched policy");
+        return None;
+    }
+
+    Some(TokenScopes {
         backends,
         tools,
         rate_limit: policy.rate_limit,
-    }
+    })
 }
 
 /// Compute the intersection of two scope lists.
