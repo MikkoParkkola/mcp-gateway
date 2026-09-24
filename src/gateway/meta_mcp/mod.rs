@@ -70,6 +70,7 @@ use confirmation::{CONFIRMATION_INPUT_KEY, confirmation_refusal_response};
 use confirmation::{GateOutcome, destructive_confirmation_gate};
 
 pub(crate) mod admission;
+mod caller_forward;
 mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;

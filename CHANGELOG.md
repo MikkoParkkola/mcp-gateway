@@ -408,10 +408,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Resource and prompt methods follow the caller's backend scope.** On the
   meta route, `resources/*` and `prompts/*` now check the API key or token's
-  backend list the way `tools/call` does: lists leave out backends the caller
-  may not use, and reads, subscriptions and prompt fetches answer 403. Reads,
-  subscriptions and prompt fetches also carry the caller's own identity to a
-  backend that requires it, and are refused when there is none.
+  backend list the way `tools/call` does. Lists leave out backends the caller
+  may not use, a resource on such a backend answers as if it did not exist,
+  and a prompt fetch answers 403. Reads, subscriptions and prompt fetches also
+  carry the caller's own identity to a backend that requires it, and are
+  refused when there is none.
 
 - **The key server refuses a token whose requested scopes miss the policy.**
   A restricted rule plus a request with no overlapping backends or tools

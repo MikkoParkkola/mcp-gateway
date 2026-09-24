@@ -381,7 +381,10 @@ impl MetaMcp {
         }
 
         // Find which backend owns this resource URI
-        let Some(backend) = self.find_resource_owner(uri).await else {
+        let Some(backend) = self
+            .find_resource_owner(uri, client, verified_identity)
+            .await
+        else {
             return resource_not_found(id, uri);
         };
 
@@ -460,7 +463,10 @@ impl MetaMcp {
             return missing_parameter_response(&id, "uri");
         };
 
-        let Some(backend) = self.find_resource_owner(uri).await else {
+        let Some(backend) = self
+            .find_resource_owner(uri, client, verified_identity)
+            .await
+        else {
             return resource_not_found(id, uri);
         };
 
@@ -505,7 +511,10 @@ impl MetaMcp {
             return missing_parameter_response(&id, "uri");
         };
 
-        let Some(backend) = self.find_resource_owner(uri).await else {
+        let Some(backend) = self
+            .find_resource_owner(uri, client, verified_identity)
+            .await
+        else {
             return resource_not_found(id, uri);
         };
 
@@ -537,98 +546,39 @@ impl MetaMcp {
         .await
     }
 
-    /// Why `client` may not have `method` forwarded to `backend`, if it may not.
+    /// Find which of the backends this caller may reach owns `uri`.
     ///
-    /// Backend scope first, with the refusal `tools/call` gives (`-32003`,
-    /// answered 403), then INV-2 (ADR-008). The isolation guard is still asked
-    /// with `false` although [`Self::forward_for_caller`] may resolve a per-user
-    /// credential, so this route admits nothing on a multi-user gateway that it
-    /// refused before. Both refusals come before any mint, so a request that is
-    /// refused anyway writes no identity audit record.
-    pub(super) fn refusal_for(
-        &self,
-        id: &RequestId,
-        backend: &crate::backend::Backend,
-        method: &str,
-        client: Option<&AuthenticatedClient>,
-    ) -> Option<JsonRpcResponse> {
-        if let Err(e) = authorize_backend(client, &backend.name) {
-            crate::gateway::authz::audit_refusal(
-                crate::gateway::authz::Transport::Http,
-                client.map(|c| c.name.as_str()),
-                &backend.name,
-                method,
-                &e.message,
-            );
-            let refusal = crate::Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
-            };
-            return Some(super::error_response_preserving_status(
-                id.clone(),
-                &refusal,
-            ));
-        }
-        self.enforce_oauth_isolation_for(backend, &backend.name, false)
-            .err()
-            .map(|e| JsonRpcResponse::error(Some(id.clone()), e.to_rpc_code(), e.to_string()))
-    }
-
-    /// Send `method` to `backend` under the caller's own identity credential.
-    ///
-    /// Resolved by the resolver `gateway_invoke` uses, so a backend whose
-    /// identity propagation is `required` is refused, never reached over the
-    /// shared session, when the caller carries no verified identity or the
-    /// mint fails. A caller with no identity and a backend without `required`
-    /// propagation get the shared session, as before. `empty` answers a
-    /// backend success that carried no result.
-    pub(super) async fn forward_for_caller(
-        &self,
-        id: RequestId,
-        backend: &crate::backend::Backend,
-        method: &str,
-        params: Value,
-        verified_identity: Option<&VerifiedIdentity>,
-        empty: Value,
-    ) -> JsonRpcResponse {
-        // Only a propagating backend is resolved. `resolve_propagation_credential`
-        // also refuses an account-bound backend with no strategy, which is
-        // `gateway_invoke`'s rule and not this route's: here that backend stays
-        // on the INV-2 terms `refusal_for` already applied.
-        let (headers, binding) = if backend.identity_propagation_config().is_some() {
-            match self
-                .resolve_propagation_credential(&backend.name, verified_identity)
-                .await
-            {
-                Ok(credential) => credential,
-                Err(e) => return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
-            }
-        } else {
-            (Vec::new(), None)
-        };
-        match backend
-            .request_with_headers(method, Some(params), &headers, binding.as_deref())
-            .await
-        {
-            Ok(resp) => match resp.error {
-                Some(error) => JsonRpcResponse::error(Some(id), error.code, error.message),
-                None => JsonRpcResponse::success(id, resp.result.unwrap_or(empty)),
-            },
-            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
-        }
-    }
-
-    /// Find which backend owns a given resource URI by checking cached resources.
+    /// The lookup contacts backends, so it is caller-aware. A backend outside
+    /// `client`'s scope is never asked, which also makes a URI it owns resolve
+    /// exactly like one nobody owns: no existence oracle across scopes. Each
+    /// catalogue is read under the caller's own credential, and a
+    /// `required`-propagation backend is skipped unless that read carries the
+    /// caller's identity, so its catalogue never goes out over the shared
+    /// session.
     pub(super) async fn find_resource_owner(
         &self,
         uri: &str,
+        client: Option<&AuthenticatedClient>,
+        verified_identity: Option<&VerifiedIdentity>,
     ) -> Option<Arc<crate::backend::Backend>> {
         for backend in self.backends.all() {
-            if self.meta_route_isolation_refused(&backend) {
+            if authorize_backend(client, &backend.name).is_err()
+                || self.meta_route_isolation_refused(&backend)
+            {
                 continue;
             }
-            if let Ok(resources) = backend.get_resources_shared().await
+            let (headers, binding) = self
+                .caller_credential_for_identity(&backend.name, verified_identity)
+                .await;
+            let required = backend
+                .identity_propagation_config()
+                .is_some_and(|cfg| cfg.required);
+            if required && !backend.fetch_carries_caller_identity(binding.as_deref()) {
+                continue;
+            }
+            if let Ok(resources) = backend
+                .get_resources_for_binding(binding.as_deref(), &headers)
+                .await
                 && resources.iter().any(|r| r.uri == uri)
             {
                 return Some(backend);
