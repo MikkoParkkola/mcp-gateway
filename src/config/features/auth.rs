@@ -130,6 +130,33 @@ impl AuthConfig {
 }
 
 impl AuthConfig {
+    /// Refuse API keys whose names are empty or shared.
+    ///
+    /// A key's name is its identity-grant subject (`api_key:<name>`), so two
+    /// keys sharing a name hold each other's grants and a nameless key can
+    /// hold none. Checked whether or not auth is enabled: enabling it later
+    /// must not be what surfaces the collision.
+    pub(crate) fn validate_api_key_names(&self) -> Result<()> {
+        let mut seen = std::collections::HashSet::new();
+        for key in &self.api_keys {
+            if key.name.trim().is_empty() {
+                return Err(Error::ConfigValidation(
+                    "auth.api_keys[].name must be non-empty: it is the key's identity-grant \
+                     subject (api_key:<name>)"
+                        .to_string(),
+                ));
+            }
+            if !seen.insert(key.name.as_str()) {
+                return Err(Error::ConfigValidation(format!(
+                    "auth.api_keys[].name '{}' is used by more than one key; names must be \
+                     unique because each is that key's identity-grant subject",
+                    key.name
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve the bearer token (expand env vars, generate if `auto`).
     ///
     /// # Errors
@@ -165,7 +192,8 @@ impl AuthConfig {
 pub struct ApiKeyConfig {
     /// The API key value (supports `env:VAR_NAME`).
     pub key: String,
-    /// Human-readable name for this client.
+    /// Name for this client: non-empty, unique across `api_keys`, and the
+    /// key's identity-grant subject (`api_key:<name>`).
     #[serde(default)]
     pub name: String,
     /// Rate limit (requests per minute, 0 = unlimited).

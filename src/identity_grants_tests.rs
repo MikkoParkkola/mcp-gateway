@@ -243,7 +243,7 @@ fn recommendation_clamps_requested_lease_duration() {
 fn recommendation_requires_confirmation_for_sensitive_or_destructive_workflow() {
     let store = LocalIdentityGrantStore::new();
     let mut request = recommendation_request(Some(alice()));
-    request.scope = GrantScope::Write;
+    request.scope = GrantScope::Any;
     request.data_class = GrantDataClass::Sensitive;
     request.tool_risk = GrantToolRisk::Destructive;
 

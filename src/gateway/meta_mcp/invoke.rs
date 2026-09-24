@@ -2650,7 +2650,7 @@ impl MetaMcp {
             agent_id: agent_id.map(|a| a.as_str().to_string()),
             capability: cap_def.name.clone(),
             tool: Some(tool.to_string()),
-            scope: GrantScope::Execute,
+            scope: GrantScope::requested_by(cap_def),
             exposure: cap_def.metadata.exposure,
             owner: cap_def.metadata.identity_owner.clone(),
             now: chrono::Utc::now(),

@@ -158,7 +158,7 @@ async fn t9_a_grant_rotation_through_the_reload_trigger_evicts_only_that_subject
     write_grants(
         &path,
         &[
-            grant_row("g1", "alice", GrantScope::Write),
+            grant_row("g1", "alice", GrantScope::Execute),
             grant_row("g2", "bob", GrantScope::Read),
         ],
     );

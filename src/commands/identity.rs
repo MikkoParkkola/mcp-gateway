@@ -287,7 +287,7 @@ fn parse_subject_spec(
     field_name: &str,
 ) -> Result<GrantSubject, String> {
     let (authority, subject) = spec.rsplit_once(':').ok_or_else(|| {
-        format!("{field_name} must use AUTHORITY:SUBJECT, for example local:alice")
+        format!("{field_name} must use AUTHORITY:SUBJECT, for example api_key:alice")
     })?;
     Ok(GrantSubject::new(
         non_empty(authority, field_name)?,
@@ -334,7 +334,6 @@ fn parse_timestamp(value: &str, field_name: &str) -> Result<DateTime<Utc>, Strin
 fn grant_scope(scope: IdentityGrantScopeArg) -> GrantScope {
     match scope {
         IdentityGrantScopeArg::Read => GrantScope::Read,
-        IdentityGrantScopeArg::Write => GrantScope::Write,
         IdentityGrantScopeArg::Execute => GrantScope::Execute,
         IdentityGrantScopeArg::Any => GrantScope::Any,
     }

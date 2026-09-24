@@ -268,8 +268,9 @@ mod principal_derives_from_the_credential {
 
     #[test]
     fn ac_ident_1a_two_api_keys_sharing_a_name_are_not_the_same_principal() {
-        // The operator names both entries "ops" — nothing forbids it, and the
-        // doc comment on the field says so. If the principal came from the
+        // Both entries named "ops". Config load refuses this since 4.0.0 (a
+        // name is a grant subject), but the principal must not lean on that
+        // check: built here without it. If the principal came from the
         // name, these two holders would be one principal, and a session opened
         // by one would be attachable by the other.
         let cfg = resolved(

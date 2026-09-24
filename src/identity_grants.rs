@@ -24,13 +24,15 @@ pub const DEFAULT_GRANT_LEASE_SECONDS: i64 = 60 * 60;
 pub const MAX_GRANT_LEASE_SECONDS: i64 = 24 * 60 * 60;
 
 /// Stable subject identity used by grant evaluation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+///
+/// Equality is `(authority, subject)` only; see `identity_grants_matching.rs`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrantSubject {
     /// Identity authority, such as an issuer URL or local authority name.
     pub authority: String,
     /// Stable subject identifier inside the authority namespace.
     pub subject: String,
-    /// Optional operator-facing label.
+    /// Optional operator-facing label. Display only: never part of identity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
 }
@@ -95,21 +97,16 @@ impl CapabilityExposure {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GrantScope {
-    /// Read-only operations.
+    /// Calls to capabilities that declare `metadata.read_only: true`.
     Read,
-    /// Mutating operations.
-    Write,
-    /// Tool execution.
+    /// Any call to the capability, read-only or not.
     Execute,
     /// Any operation.
     Any,
 }
 
-impl GrantScope {
-    fn grants(&self, requested: &Self) -> bool {
-        matches!(self, Self::Any) || self == requested
-    }
-}
+#[path = "identity_grants_matching.rs"]
+mod matching;
 
 /// One durable grant row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -793,7 +790,7 @@ impl LocalIdentityGrantStore {
         if matches!(
             request.data_class,
             GrantDataClass::Personal | GrantDataClass::Sensitive
-        ) || matches!(request.scope, GrantScope::Write | GrantScope::Any)
+        ) || matches!(request.scope, GrantScope::Any)
         {
             return Self::recommendation(
                 request,

@@ -132,11 +132,9 @@ pub enum IdentityGrantsCommand {
 /// CLI value for grant scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum IdentityGrantScopeArg {
-    /// Read-only operations.
+    /// Calls to capabilities that declare `metadata.read_only: true`.
     Read,
-    /// Mutating operations.
-    Write,
-    /// Tool execution.
+    /// Any call to the capability, read-only or not.
     Execute,
     /// Any operation.
     Any,
