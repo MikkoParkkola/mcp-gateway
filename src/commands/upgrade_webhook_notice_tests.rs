@@ -29,7 +29,7 @@ fn an_install_already_stamped_at_this_version_gets_the_webhook_notice() {
     let dir = stamped(env!("CARGO_PKG_VERSION"));
     check_upgrade(dir.path()).unwrap();
     assert!(
-        shown(dir.path()),
+        marked(dir.path()),
         "the notice must reach a pre-stamped install"
     );
 }
@@ -39,7 +39,7 @@ fn an_upgrade_from_3_x_records_the_notice_the_release_notice_carried() {
     let dir = stamped("3.5.0");
     check_upgrade(dir.path()).unwrap();
     assert!(
-        shown(dir.path()),
+        marked(dir.path()),
         "the release notice carries it; no repeat"
     );
 }
