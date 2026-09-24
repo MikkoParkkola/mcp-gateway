@@ -671,9 +671,9 @@ pub(super) async fn backend_handler(
     // MIK-6746; merged with ADR-007 IDP.2/IDP.3 fail-closed gate, MIK-6728).
     // `resolve_propagation_headers` returns an empty set for a non-propagation or
     // non-`required` backend, so the static path below is unchanged for those
-    // (IDP.5 backward-compat). Only the handshake (`initialize`, `ping`) is exempt.
-    // `tools/list` is guarded: a catalogue is identity-dependent, so an identified
-    // caller must list from the slot its `tools/call` runs on (MIK-7546).
+    // (IDP.5 backward-compat). Exempt: the handshake (`initialize`, `ping`) and
+    // `notifications/*` (answered above). `tools/list` is guarded: a catalogue is
+    // identity-dependent, so it lists from the caller's slot (MIK-7546).
     let isolation_guarded =
         !matches!(method.as_str(), "initialize" | "ping") && !method.starts_with("notifications/");
     // Caller's stable identity binding (MIK-6784) for per-identity upstream
