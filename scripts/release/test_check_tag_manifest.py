@@ -2174,7 +2174,8 @@ class VariantStage(unittest.TestCase):
     def test_every_npm_tarball_is_verified_against_a_pinned_hash(self):
         # A pinned version is still the registry's word on the bytes; the
         # sha512 (as in the registry's `dist.integrity`) is this repo's.
-        stage = self.variant_stage()
+        # Continuations folded as Docker folds them, before the shell runs.
+        stage = self.variant_stage().replace("\\\n", "")
         found = re.search(r'pins="([^"]*)"', stage)
         self.assertIsNotNone(found, "the variant stage declares no npm pins")
         pins = found.group(1).split()
