@@ -37,23 +37,31 @@ impl MetaMcp {
     ///
     /// Propagates the guard's refusals: a duplicate still in flight, a key
     /// already in use for a different request, or a cache at capacity.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn direct_route_idempotency(
         &self,
         client_key: Option<&str>,
         server: &str,
         cache_binding: Option<&str>,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        grant_subject: Option<&crate::identity_grants::GrantSubject>,
+        credential_principal: Option<&str>,
+        authentication: super::Authentication,
         params: Option<&Value>,
     ) -> Result<Option<crate::idempotency::GuardOutcome>> {
         let Some(cache) = self.idempotency_cache.as_ref() else {
             return Ok(None);
         };
-        // No grant subject reaches this route yet, so a caller identified only
-        // by mTLS, trusted headers or an OAuth agent is not separated here.
-        let identity_suffix =
-            support::retry_identity_suffix(cache_binding, verified_identity, None);
+        let principal = support::caller_cache_principal(
+            cache_binding,
+            verified_identity,
+            grant_subject,
+            credential_principal,
+            authentication,
+        );
         // No projection and no chain step on this route: it forwards one call.
-        let Some(key) = support::idempotency_key_for(client_key, "", &identity_suffix, Some(cache))
+        let Some(key) =
+            support::idempotency_key_for(client_key, "", &principal, Some(cache), "direct")
         else {
             return Ok(None);
         };

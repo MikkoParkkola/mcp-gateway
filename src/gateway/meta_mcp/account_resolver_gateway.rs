@@ -241,6 +241,7 @@ fn caller(verified_identity: Option<&VerifiedIdentity>) -> MetaMcpCallerContext<
         signing: None,
         execution: None,
         credential_principal: None,
+        authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         is_modern: false,
         protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,

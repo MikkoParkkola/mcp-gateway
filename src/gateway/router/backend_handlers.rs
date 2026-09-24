@@ -853,6 +853,9 @@ pub(super) async fn backend_handler(
             &name,
             identity_key.as_deref(),
             verified_identity.as_ref(),
+            None,
+            client.as_ref().map(|client| client.principal.as_str()),
+            crate::gateway::meta_mcp::Authentication::of(client.as_ref()),
             params.as_ref(),
         ) {
             Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {

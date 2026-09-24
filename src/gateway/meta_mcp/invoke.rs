@@ -132,7 +132,7 @@ mod side_effect_markers;
 
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
-    idempotency_key_for, response_cache_key_for, retry_identity_suffix, strip_backend_provenance,
+    idempotency_key_for, response_cache_key_for, strip_backend_provenance,
 };
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 
@@ -1713,18 +1713,15 @@ impl MetaMcp {
         // no OIDC identity was verified, which is the shipped default. The
         // binding handed in is the dispatch one, so a capability's account
         // boundary reaches both keys.
+        //
+        // The retry entry is keyed on this same principal, so a caller the
+        // response cache tells apart never shares a retry entry.
         let caller_principal = super::support::caller_cache_principal(
             dispatch_binding.as_deref(),
             verified_identity,
             caller.grant_subject.as_ref(),
-        );
-        // Who the RETRY entry belongs to: the same inputs, through the same
-        // principal function, so a caller the response cache tells apart never
-        // shares a retry entry.
-        let identity_suffix = retry_identity_suffix(
-            dispatch_binding.as_deref(),
-            verified_identity,
-            caller.grant_subject.as_ref(),
+            caller.credential_principal,
+            caller.authentication,
         );
 
         // `want_full` no longer suppresses the key. It selects the shape of the
@@ -1734,8 +1731,9 @@ impl MetaMcp {
         let idem_key = idempotency_key_for(
             caller.retry.idempotency_key.as_deref(),
             &projection_key_suffix,
-            &identity_suffix,
+            &caller_principal,
             self.idempotency_cache.as_ref(),
+            "meta",
         );
         // What the key is a key *for*. A client key is an opaque string it
         // chose, so nothing about it says which request it was minted for;
@@ -1836,20 +1834,20 @@ impl MetaMcp {
         if !want_full
             && protocol_revision.is_some()
             && let Some(ref cache) = self.cache
-        {
-            let cache_key = response_cache_key_for(
+            && let Some(cache_key) = response_cache_key_for(
                 server,
                 tool,
                 &arguments,
                 &projection_key_suffix,
-                caller_principal.as_deref(),
+                &caller_principal,
                 caller.retry,
                 crate::cache::KeyContext {
                     routing_profile: &profile.name,
                     protocol_revision,
                     policy_epoch,
                 },
-            );
+            )
+        {
             if let Some(cached) = cache.get(&cache_key) {
                 debug!(server, tool, trace_id, "Cache hit");
                 if let Some(ref stats) = self.stats {
@@ -2426,20 +2424,20 @@ impl MetaMcp {
             && !stopped_to_ask
             && protocol_revision.is_some()
             && let Some(ref cache) = self.cache
-        {
-            let cache_key = response_cache_key_for(
+            && let Some(cache_key) = response_cache_key_for(
                 server,
                 tool,
                 &arguments,
                 &projection_key_suffix,
-                caller_principal.as_deref(),
+                &caller_principal,
                 caller.retry,
                 crate::cache::KeyContext {
                     routing_profile: &profile.name,
                     protocol_revision,
                     policy_epoch,
                 },
-            );
+            )
+        {
             if cache.set(&cache_key, result.clone(), self.default_cache_ttl) {
                 debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
             }
@@ -5263,6 +5261,7 @@ mod identity_propagation_enforcement_tests {
             signing: None,
             execution: None,
             credential_principal: None,
+            authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
@@ -5338,6 +5337,7 @@ mod identity_propagation_enforcement_tests {
             signing: None,
             execution: None,
             credential_principal: None,
+            authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
@@ -5419,6 +5419,7 @@ mod identity_propagation_enforcement_tests {
             signing: None,
             execution: None,
             credential_principal: None,
+            authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
@@ -5468,6 +5469,7 @@ mod identity_propagation_enforcement_tests {
             signing: None,
             execution: None,
             credential_principal: None,
+            authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
@@ -5507,6 +5509,7 @@ mod identity_propagation_enforcement_tests {
             signing: None,
             execution: None,
             credential_principal: None,
+            authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
@@ -5551,6 +5554,7 @@ mod identity_propagation_enforcement_tests {
             signing: None,
             execution: None,
             credential_principal: None,
+            authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,

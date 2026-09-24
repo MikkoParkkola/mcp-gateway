@@ -18,6 +18,44 @@ use crate::gateway::meta_mcp::MetaMcpCallerContext;
 // Idempotency
 // ============================================================================
 
+/// Whether the caller presented and validated a credential.
+///
+/// Carried explicitly on every caller context, never inferred from the
+/// credential principal: the live HTTP anonymous caller carries `Some("")`, and
+/// an auth-off task worker carries the non-empty `AUTH_DISABLED_TASK_OWNER`, so
+/// a digest says nothing reliable about whether anyone authenticated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Authentication {
+    Authenticated,
+    Anonymous,
+}
+
+impl Authentication {
+    /// Read from `AuthenticatedClient::authenticated`. No client at all is
+    /// anonymous: nothing was presented.
+    pub(crate) fn of(client: Option<&crate::gateway::auth::AuthenticatedClient>) -> Self {
+        if client.is_some_and(|client| client.authenticated) {
+            Self::Authenticated
+        } else {
+            Self::Anonymous
+        }
+    }
+}
+
+/// Who the response cache and the retry key belong to.
+///
+/// A tri-state rather than `Option<String>` so the fail-closed case cannot be
+/// dropped by accident: `Anonymous` is the one namespace every caller without
+/// a credential shares, and `Unresolved` is an authenticated caller no arm
+/// could name. The key helpers below take this by reference and hold the
+/// exhaustive match, so no call site unwraps it to a string of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum CachePrincipal {
+    Caller(String),
+    Anonymous,
+    Unresolved,
+}
+
 /// Build the idempotency key for a `gateway_invoke` call.
 ///
 /// `client_key` is the key the client sent in `params._meta`; there is no other
@@ -36,16 +74,19 @@ use crate::gateway::meta_mcp::MetaMcpCallerContext;
 /// says where the client's bytes stop, so no choice of key can reach across
 /// the boundary into a segment the gateway derives.
 ///
-/// Returns `None` when no idempotency cache is configured, or when the client
-/// sent no key.
+/// Returns `None` when no idempotency cache is configured, when the client
+/// sent no key, or when the principal is `Unresolved`. `route` labels the
+/// skip counter (`meta` or `direct`).
 pub(super) fn idempotency_key_for(
     client_key: Option<&str>,
     projection_key_suffix: &str,
-    identity_suffix: &str,
+    principal: &CachePrincipal,
     idem_cache: Option<&std::sync::Arc<IdempotencyCache>>,
+    _route: &'static str,
 ) -> Option<String> {
     idem_cache?;
     let key = client_key?;
+    let identity_suffix = retry_identity_suffix(principal)?;
     let len = key.len();
     Some(format!(
         "{len}:{key}{projection_key_suffix}{identity_suffix}"
@@ -54,41 +95,16 @@ pub(super) fn idempotency_key_for(
 
 /// The retry de-duplication suffix: WHO a stored idempotency entry belongs to.
 ///
-/// Exactly the principal the response cache keys on (`caller_cache_principal`):
-/// the propagated binding, else the verified OIDC actor, else the caller's own
-/// `GrantSubject`. One function selects and spells the caller for both keys, so
-/// a caller the response cache tells apart can never share a retry entry — the
-/// retry key once stopped at the verified subject, and callers identified by
-/// mTLS, trusted headers or an OAuth agent shared one entry per client key.
-///
-/// Empty for a caller with none of the three, so all such callers share one
-/// key space: unauthenticated callers, and currently callers authenticated
-/// only by a static API key, which `caller_cache_principal` has no arm for.
-/// Separating API-key callers is tracked as the next increment.
-pub(super) fn retry_identity_suffix(
-    cache_binding: Option<&str>,
-    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-    grant_subject: Option<&crate::identity_grants::GrantSubject>,
-) -> String {
-    caller_cache_principal(cache_binding, verified_identity, grant_subject)
-        .map(|principal| format!("|{principal}"))
-        .unwrap_or_default()
+/// Exactly the principal the response cache keys on (`caller_cache_principal`),
+/// so a caller the response cache tells apart can never share a retry entry.
+/// Empty for `Anonymous`, the one pooled namespace.
+pub(super) fn retry_identity_suffix(principal: &CachePrincipal) -> Option<String> {
+    match principal {
+        CachePrincipal::Caller(principal) => Some(format!("|{principal}")),
+        CachePrincipal::Anonymous | CachePrincipal::Unresolved => Some(String::new()),
+    }
 }
 
-/// Build the response-cache key for a `gateway_invoke` call.
-///
-/// One function rather than the expression repeated at the read and the write:
-/// a key derived in two places is a key that can be derived two ways, and a
-/// write that lands under a key no read computes is a cache that never hits
-/// while looking exactly like one that does.
-///
-/// The retry discriminator is the MRTR.10 binding. A retry reuses the original
-/// call's arguments, so without it two continuations answering the same gate
-/// differently share one entry and the first answer is served for the second.
-///
-/// `context` is forwarded, not consumed here: the routing profile, protocol
-/// revision and policy generation belong to the key the cache layer derives,
-/// so this passes them down rather than mixing a discriminator of its own.
 /// Who the response cache keys on, namespaced by the evidence it came from.
 ///
 /// One tagged, length-prefixed namespace per source, so two different kinds of
@@ -107,34 +123,61 @@ pub(super) fn caller_cache_principal(
     cache_binding: Option<&str>,
     verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     grant_subject: Option<&crate::identity_grants::GrantSubject>,
-) -> Option<String> {
+    _credential_principal: Option<&str>,
+    authentication: Authentication,
+) -> CachePrincipal {
     if let Some(binding) = cache_binding {
-        return Some(format!("idp:{}:{binding}", binding.len()));
+        return CachePrincipal::Caller(format!("idp:{}:{binding}", binding.len()));
     }
     if let Some(actor) =
         verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
     {
-        return Some(format!("oidc:{}:{actor}", actor.len()));
+        return CachePrincipal::Caller(format!("oidc:{}:{actor}", actor.len()));
     }
-    let subject = grant_subject?;
-    Some(format!(
-        "grant:{}:{}:{}:{}",
-        subject.authority.len(),
-        subject.authority,
-        subject.subject.len(),
-        subject.subject
-    ))
+    if let Some(subject) = grant_subject {
+        return CachePrincipal::Caller(format!(
+            "grant:{}:{}:{}:{}",
+            subject.authority.len(),
+            subject.authority,
+            subject.subject.len(),
+            subject.subject
+        ));
+    }
+    match authentication {
+        Authentication::Anonymous => CachePrincipal::Anonymous,
+        Authentication::Authenticated => CachePrincipal::Unresolved,
+    }
 }
 
+/// Build the response-cache key for a `gateway_invoke` call.
+///
+/// One function rather than the expression repeated at the read and the write:
+/// a key derived in two places is a key that can be derived two ways, and a
+/// write that lands under a key no read computes is a cache that never hits
+/// while looking exactly like one that does.
+///
+/// The retry discriminator is the MRTR.10 binding. A retry reuses the original
+/// call's arguments, so without it two continuations answering the same gate
+/// differently share one entry and the first answer is served for the second.
+///
+/// `context` is forwarded, not consumed here: the routing profile, protocol
+/// revision and policy generation belong to the key the cache layer derives,
+/// so this passes them down rather than mixing a discriminator of its own.
+///
+/// `None` for an `Unresolved` principal: no key means no `get` and no `set`.
 pub(super) fn response_cache_key_for(
     server: &str,
     tool: &str,
     arguments: &Value,
     projection_key_suffix: &str,
-    principal: Option<&str>,
+    principal: &CachePrincipal,
     retry: &crate::protocol::mrtr::RetryFields,
     context: crate::cache::KeyContext<'_>,
-) -> String {
+) -> Option<String> {
+    let principal = match principal {
+        CachePrincipal::Caller(principal) => Some(principal.as_str()),
+        CachePrincipal::Anonymous | CachePrincipal::Unresolved => None,
+    };
     let base = crate::cache::ResponseCache::response_key(
         server,
         tool,
@@ -143,7 +186,7 @@ pub(super) fn response_cache_key_for(
         principal,
         context,
     );
-    format!("{base}{}", retry.key_discriminator())
+    Some(format!("{base}{}", retry.key_discriminator()))
 }
 
 // ============================================================================

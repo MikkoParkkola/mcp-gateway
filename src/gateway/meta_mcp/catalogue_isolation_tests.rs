@@ -363,7 +363,9 @@ async fn identity_bound_backends_stay_refused_on_the_shared_credential_paths() {
 /// hits — so the same-caller-same-key half runs beside it.
 #[test]
 fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
-    use super::support::{caller_cache_principal, response_cache_key_for};
+    use super::support::{
+        Authentication, CachePrincipal, caller_cache_principal, response_cache_key_for,
+    };
 
     let retry = crate::protocol::mrtr::RetryFields::default();
     let context = crate::cache::KeyContext {
@@ -371,7 +373,7 @@ fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
         protocol_revision: None,
         policy_epoch: 1,
     };
-    let key_for = |principal: Option<&str>| {
+    let key_for = |principal: &CachePrincipal| {
         response_cache_key_for(
             "hub",
             "ledger_read",
@@ -381,11 +383,12 @@ fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
             &retry,
             context,
         )
+        .expect("a resolved principal has a key")
     };
 
-    let alpha =
-        caller_cache_principal(Some("alpha"), None, None).expect("a binding is a principal");
-    let beta = caller_cache_principal(Some("beta"), None, None).expect("a binding is a principal");
+    let anon = Authentication::Anonymous;
+    let alpha = caller_cache_principal(Some("alpha"), None, None, None, anon);
+    let beta = caller_cache_principal(Some("beta"), None, None, None, anon);
     assert_ne!(
         alpha, beta,
         "two identities collapsed to one cache principal before the key was even built"
@@ -394,21 +397,21 @@ fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
     // Same server, same tool, same arguments, same authorization context — the
     // ONLY difference is who is asking.
     assert_ne!(
-        key_for(Some(&alpha)),
-        key_for(Some(&beta)),
+        key_for(&alpha),
+        key_for(&beta),
         "two callers share one result-cache key, so one caller's cached tool \
          result is served to the other (C3)"
     );
     assert_eq!(
-        key_for(Some(&alpha)),
-        key_for(Some(&alpha)),
+        key_for(&alpha),
+        key_for(&alpha),
         "one caller's key is not stable across requests: the cache could never \
          hit, and the inequality above would hold for every pair regardless of \
          whether the principal reaches the key at all"
     );
     assert_ne!(
-        key_for(Some(&alpha)),
-        key_for(None),
+        key_for(&alpha),
+        key_for(&CachePrincipal::Anonymous),
         "an identified caller and an anonymous one share a key"
     );
 
@@ -429,6 +432,8 @@ fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
                 subject: subject.to_string(),
                 label: None,
             }),
+            None,
+            Authentication::Anonymous,
         )
     };
     assert_ne!(

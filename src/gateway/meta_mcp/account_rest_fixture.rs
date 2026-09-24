@@ -616,6 +616,7 @@ fn caller(verified_identity: Option<&VerifiedIdentity>) -> MetaMcpCallerContext<
         signing: None,
         execution: None,
         credential_principal: None,
+        authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         is_modern: false,
         // The legacy fixture negotiates the current published revision so the
         // revision-keyed caches behave as they do for a real session.

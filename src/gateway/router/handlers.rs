@@ -1545,6 +1545,7 @@ async fn meta_mcp_dispatch(
                 is_modern,
                 protocol_revision: protocol_revision_owned.as_deref(),
                 credential_principal: client.as_ref().map(|client| client.principal.as_str()),
+                authentication: crate::gateway::meta_mcp::Authentication::of(client.as_ref()),
                 authorizer: &router_authorizer,
                 api_key_name,
                 agent_id,

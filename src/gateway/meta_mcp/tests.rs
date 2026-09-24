@@ -32,6 +32,7 @@ fn allow_all_ctx_named<'a>(
         signing: None,
         execution: None,
         credential_principal: None,
+        authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         is_modern: false,
         protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
@@ -63,6 +64,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         signing: None,
         execution: None,
         credential_principal: None,
+        authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         is_modern: false,
         protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
@@ -780,6 +782,7 @@ providers:
                     signing: None,
                     execution: None,
                     credential_principal: None,
+                    authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
                     is_modern: false,
                     protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
                     authorizer: &ALLOW_ALL,
@@ -3053,6 +3056,7 @@ fn allow_all_ctx_declaring(
         signing: None,
         execution: None,
         credential_principal: None,
+        authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         is_modern: false,
         protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
@@ -4069,21 +4073,27 @@ providers:
     // one production helper rather than a second spelling of it here.
     let staged_subject =
         crate::identity_grants::GrantSubject::new("cloudflare_access", "user-123", None);
-    let staged_principal =
-        super::support::caller_cache_principal(None, None, Some(&staged_subject));
+    let staged_principal = super::support::caller_cache_principal(
+        None,
+        None,
+        Some(&staged_subject),
+        None,
+        super::Authentication::Anonymous,
+    );
     let key = super::support::response_cache_key_for(
         "personal_caps",
         "calendar_read",
         &json!({}),
         &crate::projection::projection_key_suffix(meta.projection_mode, Some("session-1")),
-        staged_principal.as_deref(),
+        &staged_principal,
         &crate::protocol::mrtr::NO_RETRY,
         crate::cache::KeyContext {
             routing_profile: &profile.name,
             protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
             policy_epoch: 0,
         },
-    );
+    )
+    .expect("a resolved principal has a key");
     let body = "STAGED-CACHED-CALENDAR-BODY";
     assert!(
         cache.set(

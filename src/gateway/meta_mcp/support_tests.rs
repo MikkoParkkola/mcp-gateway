@@ -5,7 +5,25 @@
 
 use super::internal_invoke_args;
 use super::strip_backend_provenance;
+use super::{Authentication, CachePrincipal, caller_cache_principal};
 use serde_json::json;
+
+/// The retry suffix for an anonymous caller with these identities, through
+/// the one resolver the production sites use.
+fn suffix(
+    binding: Option<&str>,
+    actor: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    subject: Option<&crate::identity_grants::GrantSubject>,
+) -> Option<String> {
+    let principal =
+        caller_cache_principal(binding, actor, subject, None, Authentication::Anonymous);
+    super::retry_identity_suffix(&principal)
+}
+
+/// A caller principal spelled directly, for key-shape tests.
+fn caller(principal: &str) -> CachePrincipal {
+    CachePrincipal::Caller(principal.to_string())
+}
 
 /// A verified OIDC identity distinguished only by its subject.
 fn verified(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
@@ -24,9 +42,9 @@ fn verified(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
 fn retry_identity_suffix_uses_the_binding_when_propagation_is_on() {
     let alice = verified("alice");
     let subject = crate::identity_grants::GrantSubject::new("mtls", "alice", None);
-    let suffix = super::retry_identity_suffix(Some("idp:1:a:3:mem"), Some(&alice), Some(&subject));
+    let suffix = suffix(Some("idp:1:a:3:mem"), Some(&alice), Some(&subject));
 
-    assert_eq!(suffix, "|idp:13:idp:1:a:3:mem");
+    assert_eq!(suffix.as_deref(), Some("|idp:13:idp:1:a:3:mem"));
 }
 
 /// MIK-7408. Identity propagation OFF — the shipped default. The suffix
@@ -36,29 +54,27 @@ fn retry_identity_suffix_uses_the_binding_when_propagation_is_on() {
 #[test]
 fn retry_identity_suffix_falls_back_to_the_verified_then_grant_subject() {
     let actor = verified("b");
-    let unbound = super::retry_identity_suffix(None, Some(&actor), None);
+    let unbound = suffix(None, Some(&actor), None);
 
-    assert_eq!(unbound, "|oidc:12:oidc:1:i:1:b");
+    assert_eq!(unbound.as_deref(), Some("|oidc:12:oidc:1:i:1:b"));
     assert_ne!(
         unbound,
-        super::retry_identity_suffix(Some("oidc:1:i:1:b"), None, None),
+        suffix(Some("oidc:1:i:1:b"), None, None),
         "a binding and an actor id with identical text must stay distinct"
     );
 
     let subject = crate::identity_grants::GrantSubject::new("mtls", "b", None);
     assert_eq!(
-        super::retry_identity_suffix(None, None, Some(&subject)),
-        "|grant:4:mtls:1:b"
+        suffix(None, None, Some(&subject)).as_deref(),
+        Some("|grant:4:mtls:1:b")
     );
 }
 
-/// MIK-7408. A caller with no binding, no verified identity and no grant
-/// subject gets an EMPTY suffix, so two such callers share one entry. That
-/// covers unauthenticated callers and, currently, callers authenticated
-/// only by a static API key; separating the latter is tracked separately.
+/// MIK-7408. An anonymous caller with no binding, no verified identity and
+/// no grant subject gets an EMPTY suffix, so two such callers share one entry.
 #[test]
-fn retry_identity_suffix_pools_callers_with_no_principal() {
-    assert_eq!(super::retry_identity_suffix(None, None, None), "");
+fn retry_identity_suffix_pools_anonymous_callers() {
+    assert_eq!(suffix(None, None, None).as_deref(), Some(""));
 }
 
 /// MIK-7408. Two callers, one client key each, on a backend where identity
@@ -72,8 +88,14 @@ fn retry_identity_suffix_pools_callers_with_no_principal() {
 fn a_forged_client_key_cannot_spell_another_callers_identity_suffix() {
     let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
 
-    let victim = super::idempotency_key_for(Some("X"), "", "|idp:V", Some(&cache));
-    let forger = super::idempotency_key_for(Some("X|idp:V"), "", "", Some(&cache));
+    let victim = super::idempotency_key_for(Some("X"), "", &caller("idp:V"), Some(&cache), "meta");
+    let forger = super::idempotency_key_for(
+        Some("X|idp:V"),
+        "",
+        &CachePrincipal::Anonymous,
+        Some(&cache),
+        "meta",
+    );
 
     assert_ne!(
         victim, forger,
@@ -91,8 +113,14 @@ fn a_forged_client_key_cannot_spell_another_callers_identity_suffix() {
 fn a_forged_client_key_cannot_spell_another_callers_verified_subject() {
     let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
 
-    let victim = super::idempotency_key_for(Some("X"), "", "|sub:V", Some(&cache));
-    let forger = super::idempotency_key_for(Some("X|sub:V"), "", "", Some(&cache));
+    let victim = super::idempotency_key_for(Some("X"), "", &caller("sub:V"), Some(&cache), "meta");
+    let forger = super::idempotency_key_for(
+        Some("X|sub:V"),
+        "",
+        &CachePrincipal::Anonymous,
+        Some(&cache),
+        "meta",
+    );
 
     assert_ne!(
         victim, forger,
@@ -111,8 +139,20 @@ fn a_forged_client_key_cannot_spell_another_callers_verified_subject() {
 fn a_forged_client_key_cannot_spell_another_callers_projection_arm() {
     let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
 
-    let victim = super::idempotency_key_for(Some("X"), "#arm=treatment", "", Some(&cache));
-    let forger = super::idempotency_key_for(Some("X#arm=treatment"), "", "", Some(&cache));
+    let victim = super::idempotency_key_for(
+        Some("X"),
+        "#arm=treatment",
+        &CachePrincipal::Anonymous,
+        Some(&cache),
+        "meta",
+    );
+    let forger = super::idempotency_key_for(
+        Some("X#arm=treatment"),
+        "",
+        &CachePrincipal::Anonymous,
+        Some(&cache),
+        "meta",
+    );
 
     assert_ne!(
         victim, forger,
@@ -236,7 +276,7 @@ fn response_cache_key_separates_two_answers_to_one_gate() {
             "book",
             &args,
             "",
-            None,
+            &CachePrincipal::Anonymous,
             &retry,
             crate::cache::KeyContext::default(),
         )
@@ -261,7 +301,7 @@ fn response_cache_key_is_unchanged_for_an_ordinary_call() {
         "tool",
         &args,
         "|proj",
-        Some("actor-1"),
+        &caller("actor-1"),
         &crate::protocol::mrtr::NO_RETRY,
         crate::cache::KeyContext::default(),
     );
@@ -273,7 +313,7 @@ fn response_cache_key_is_unchanged_for_an_ordinary_call() {
         Some("actor-1"),
         crate::cache::KeyContext::default(),
     );
-    assert_eq!(key, before);
+    assert_eq!(key, Some(before));
 }
 
 /// The principal is part of the key, not decoration: two callers must not
@@ -288,7 +328,7 @@ fn response_cache_key_separates_two_principals() {
             "tool",
             &args,
             "",
-            Some(p),
+            &caller(p),
             &crate::protocol::mrtr::NO_RETRY,
             crate::cache::KeyContext::default(),
         )

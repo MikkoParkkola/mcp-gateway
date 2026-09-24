@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::gateway::authz::ToolAuthorizer;
 use crate::gateway::destructive_confirmation::ConfirmationChannel;
-use crate::gateway::meta_mcp::MetaMcpCallerContext;
+use crate::gateway::meta_mcp::{Authentication, MetaMcpCallerContext};
 use crate::gateway::router::{AppState, OwnedRouterAuthorizer, RouterAuthorizer};
 use crate::idempotency::admission::{Mode, Request};
 use crate::identity_grants::GrantSubject;
@@ -31,6 +31,9 @@ pub(crate) struct OwnedCallerContext {
     /// a second source is how the worker's caller and the durable record
     /// disagree about who owns the task.
     credential_principal: String,
+    /// Whether the creating request authenticated. Carried, never inferred:
+    /// with authentication off `credential_principal` is a non-empty constant.
+    authentication: Authentication,
     is_admin: bool,
     input_capabilities: Declared,
     session_id: Option<String>,
@@ -49,6 +52,7 @@ impl OwnedCallerContext {
         grant_subject: Option<GrantSubject>,
         verified_identity: Option<VerifiedIdentity>,
         credential_principal: String,
+        authentication: Authentication,
         is_admin: bool,
         input_capabilities: Declared,
         session_id: Option<String>,
@@ -65,6 +69,7 @@ impl OwnedCallerContext {
             grant_subject,
             verified_identity,
             credential_principal,
+            authentication,
             is_admin,
             input_capabilities,
             session_id,
@@ -104,6 +109,7 @@ impl OwnedCallerContext {
             // whenever authentication is off; carried so the worker's caller
             // cannot be a weaker principal than the request's.
             credential_principal: Some(self.credential_principal.as_str()),
+            authentication: self.authentication,
             // No second lease. The worker's execution is admitted durably in
             // `Mode::Task`, and a `Mode::Sync` lease on the same principal and
             // key would refuse the very task it was taken for; there is also no

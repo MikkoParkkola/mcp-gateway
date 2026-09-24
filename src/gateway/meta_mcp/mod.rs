@@ -97,6 +97,7 @@ mod task_confirmation;
 pub(crate) mod upstream;
 
 pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
+pub(crate) use support::Authentication;
 pub use support::prune_constant_signals;
 pub(crate) use task_confirmation::{
     TaskConfirmation, TaskConfirmationRequest, task_admission_request,
@@ -150,6 +151,9 @@ pub struct MetaMcpCallerContext<'a> {
     pub protocol_revision: Option<&'a str>,
     /// Stable validated credential principal; display names are never authority.
     pub credential_principal: Option<&'a str>,
+    /// Whether a credential was presented and validated. Explicit, never
+    /// inferred from `credential_principal` (see [`Authentication`]).
+    pub(crate) authentication: Authentication,
     /// Outer execution owner; an inner step can mark dispatch but cannot settle it.
     pub(crate) execution: Option<&'a admission::SyncLease>,
     /// Private external origin and completed signing admission, never backend metadata.
@@ -261,6 +265,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             is_modern: self.is_modern,
             protocol_revision: self.protocol_revision,
             credential_principal: self.credential_principal,
+            authentication: self.authentication,
             execution: self.execution,
             signing: self.signing,
             authorizer: self.authorizer,
