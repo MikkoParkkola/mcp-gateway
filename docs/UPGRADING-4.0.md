@@ -34,6 +34,7 @@ upgrading a running deployment.
 | 11 | Webhook `notify` defaults to off and is scoped per caller | Add `notify: true` to webhooks that should notify |
 | 12 | `auth.api_keys[].name` must be non-empty and unique | Name every key, once |
 | 13 | Identity grants match on `authority` and `subject`; `write` scope is gone | Rewrite `write` grants as `execute` |
+| 14 | Cached and idempotent results are kept per caller | None; expect per-key cache hit rates and a one-TTL idempotency gap |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -193,6 +194,31 @@ Three changes to `security.identity_grants`, all in `docs/identity_grants.md`:
 
 `GrantSubject` no longer implements `PartialOrd`/`Ord`, and its `PartialEq` ignores `label`.
 `GrantScope::Write` and `IdentityGrantScopeArg::Write` are removed.
+
+## 14. Cached and idempotent results are kept per caller
+
+In 3.x, callers authenticated only by an API key or the admin bearer shared one response-cache
+namespace and one idempotency key space. Two keys calling one tool with one set of arguments got
+one cached result, and one key could replay another's stored result under the same idempotency
+key. On the direct `/mcp/{name}` route, callers identified by mTLS, trusted identity headers or an
+OAuth agent shared the idempotency key space as well.
+
+Each authenticated caller now keys on its own principal: its OIDC identity or identity-propagation
+binding when it has one, else its grant subject (mTLS, trusted headers, OAuth agent), else a digest
+of the validated API key or bearer. The key's `name` is never used. Callers with no credential,
+such as a gateway with `auth.enabled: false`, still share one namespace.
+
+No configuration changes. What to expect:
+
+- **Cache hit rates fall to the per-key rate** on deployments with several keys, and upstream call
+  volume can rise until each key has warmed its own entries. Watch `mcp_cache_hits_total`.
+- **Idempotency entries written before the upgrade do not replay** for an authenticated caller: a
+  retry sent across the upgrade runs again instead of replaying. The gap lasts at most one
+  idempotency TTL. Where a duplicate side effect matters, upgrade during a low-write window.
+- **An authenticated caller that resolves to no principal** is served without the cache and without
+  the idempotency guard rather than pooled. No shipped authentication path produces one; if
+  `mcp_cache_bypass_total` or `mcp_idempotency_guard_skipped_total` with
+  `reason="unresolved_principal"` ever counts, report it.
 
 ## After upgrading
 

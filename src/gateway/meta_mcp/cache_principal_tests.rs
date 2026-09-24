@@ -129,7 +129,7 @@ mod invoke_path {
             .sum()
     }
 
-    fn unresolved<'a>(retry: &'a RetryFields) -> MetaMcpCallerContext<'a> {
+    fn unresolved(retry: &RetryFields) -> MetaMcpCallerContext<'_> {
         MetaMcpCallerContext {
             authentication: Authentication::Authenticated,
             credential_principal: None,

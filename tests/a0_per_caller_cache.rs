@@ -136,8 +136,10 @@ impl Setup {
 /// A gateway with idempotency ON and the counting backend registered. The
 /// `TempDir` holds the task store and must outlive the test.
 async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, tempfile::TempDir) {
-    let mut config = Config::default();
-    config.auth = setup.auth;
+    let config = Config {
+        auth: setup.auth,
+        ..Config::default()
+    };
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::clone(&backends),

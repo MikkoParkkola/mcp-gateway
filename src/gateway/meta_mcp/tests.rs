@@ -4073,13 +4073,9 @@ providers:
     // one production helper rather than a second spelling of it here.
     let staged_subject =
         crate::identity_grants::GrantSubject::new("cloudflare_access", "user-123", None);
-    let staged_principal = super::support::caller_cache_principal(
-        None,
-        None,
-        Some(&staged_subject),
-        None,
-        super::Authentication::Anonymous,
-    );
+    let anon = super::Authentication::Anonymous;
+    let staged_principal =
+        super::support::caller_cache_principal(None, None, Some(&staged_subject), None, anon);
     let key = super::support::response_cache_key_for(
         "personal_caps",
         "calendar_read",

@@ -26,12 +26,13 @@ impl MetaMcp {
     ///
     /// Identity binds through the same principal function route 1 uses, and
     /// binds it HERE rather than at the caller so that ordering keeps one
-    /// owner. It never binds on the API key name: that names the KEY, not the
-    /// end user, so two people sharing one gateway key would share one entry —
-    /// the exact disclosure `SUB.4.DIRECT.2` exists to deny.
+    /// owner. It never binds on the API key name, which is operator-chosen and
+    /// may be shared by two keys; an API-key caller binds on the digest of its
+    /// validated secret (`credential_principal`) instead.
     ///
-    /// `None` when no cache is configured or the client sent no key: the call
-    /// then proceeds unguarded, exactly as before.
+    /// `None` when no cache is configured, the client sent no key, or an
+    /// authenticated caller resolves to no principal: the call then proceeds
+    /// unguarded rather than touching the shared key space.
     ///
     /// # Errors
     ///

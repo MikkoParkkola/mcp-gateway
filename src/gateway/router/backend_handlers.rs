@@ -848,12 +848,21 @@ pub(super) async fn backend_handler(
     // twice on the one route that never reaches `invoke_tool_traced`.
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
     if method == "tools/call" {
+        // The caller as the meta route resolves it, so both routes key one
+        // caller the same way (mTLS, trusted headers, OAuth agent).
+        let grant_subject = super::identity::caller_grant_subject(
+            verified_identity.as_ref(),
+            &inbound_headers,
+            state.meta_mcp.trust_caller_identity_headers(),
+            cert_identity.as_ref(),
+            oauth_agent_identity.as_ref(),
+        );
         match state.meta_mcp.direct_route_idempotency(
             retry.idempotency_key.as_deref(),
             &name,
             identity_key.as_deref(),
             verified_identity.as_ref(),
-            None,
+            grant_subject.as_ref(),
             client.as_ref().map(|client| client.principal.as_str()),
             crate::gateway::meta_mcp::Authentication::of(client.as_ref()),
             params.as_ref(),

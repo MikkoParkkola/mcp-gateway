@@ -1723,6 +1723,9 @@ impl MetaMcp {
             caller.credential_principal,
             caller.authentication,
         );
+        if self.cache.is_some() {
+            super::support::note_cache_bypass(&caller_principal);
+        }
 
         // `want_full` no longer suppresses the key. It selects the shape of the
         // *reply*, not whether the backend acts, and a directive that switches
@@ -1847,36 +1850,35 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
+            && let Some(cached) = cache.get(&cache_key)
         {
-            if let Some(cached) = cache.get(&cache_key) {
-                debug!(server, tool, trace_id, "Cache hit");
-                if let Some(ref stats) = self.stats {
-                    stats.record_cache_hit();
-                }
-                telemetry_metrics::counter!(
-                    "mcp_cache_hits_total",
-                    "server" => server.to_owned(),
-                    "kind" => "response"
-                )
-                .increment(1);
-                // Terminal state on the response-cache-hit return: settle through
-                // the reservation, or its `Drop` would remove what was just stored.
-                if let Some(reservation) = idem_reservation.as_mut() {
-                    reservation.complete(&cached);
-                }
-                let predictions = self.record_and_predict(session_id, &tool_key);
-                return Ok(GuardedValue::from_cache(cached).augment(|v| {
-                    let v = augment_with_trace(augment_with_predictions(v, predictions), trace_id);
-                    self.maybe_stamp_provenance(
-                        v,
-                        server,
-                        tool,
-                        api_key_name,
-                        crate::trust::CacheOutcome::Hit,
-                        client_claim.as_ref(),
-                    )
-                }));
+            debug!(server, tool, trace_id, "Cache hit");
+            if let Some(ref stats) = self.stats {
+                stats.record_cache_hit();
             }
+            telemetry_metrics::counter!(
+                "mcp_cache_hits_total",
+                "server" => server.to_owned(),
+                "kind" => "response"
+            )
+            .increment(1);
+            // Terminal state on the response-cache-hit return: settle through
+            // the reservation, or its `Drop` would remove what was just stored.
+            if let Some(reservation) = idem_reservation.as_mut() {
+                reservation.complete(&cached);
+            }
+            let predictions = self.record_and_predict(session_id, &tool_key);
+            return Ok(GuardedValue::from_cache(cached).augment(|v| {
+                let v = augment_with_trace(augment_with_predictions(v, predictions), trace_id);
+                self.maybe_stamp_provenance(
+                    v,
+                    server,
+                    tool,
+                    api_key_name,
+                    crate::trust::CacheOutcome::Hit,
+                    client_claim.as_ref(),
+                )
+            }));
         }
 
         if let Some(ref stats) = self.stats {
@@ -2437,10 +2439,9 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
+            && cache.set(&cache_key, result.clone(), self.default_cache_ttl)
         {
-            if cache.set(&cache_key, result.clone(), self.default_cache_ttl) {
-                debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
-            }
+            debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
         }
 
         if let Some(reservation) = idem_reservation.as_mut()

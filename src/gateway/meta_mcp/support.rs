@@ -82,11 +82,25 @@ pub(super) fn idempotency_key_for(
     projection_key_suffix: &str,
     principal: &CachePrincipal,
     idem_cache: Option<&std::sync::Arc<IdempotencyCache>>,
-    _route: &'static str,
+    route: &'static str,
 ) -> Option<String> {
     idem_cache?;
     let key = client_key?;
-    let identity_suffix = retry_identity_suffix(principal)?;
+    let Some(identity_suffix) = retry_identity_suffix(principal) else {
+        // Fail closed (A0 D4): never read or write the shared key space. The
+        // call proceeds unguarded, like one that sent no key.
+        tracing::warn!(
+            route,
+            "Idempotency guard skipped: unresolved caller principal"
+        );
+        telemetry_metrics::counter!(
+            "mcp_idempotency_guard_skipped_total",
+            "reason" => "unresolved_principal",
+            "route" => route
+        )
+        .increment(1);
+        return None;
+    };
     let len = key.len();
     Some(format!(
         "{len}:{key}{projection_key_suffix}{identity_suffix}"
@@ -97,11 +111,27 @@ pub(super) fn idempotency_key_for(
 ///
 /// Exactly the principal the response cache keys on (`caller_cache_principal`),
 /// so a caller the response cache tells apart can never share a retry entry.
-/// Empty for `Anonymous`, the one pooled namespace.
+/// Empty for `Anonymous`, the one pooled namespace; `None` for `Unresolved`,
+/// which must never fall back to that namespace.
 pub(super) fn retry_identity_suffix(principal: &CachePrincipal) -> Option<String> {
     match principal {
         CachePrincipal::Caller(principal) => Some(format!("|{principal}")),
-        CachePrincipal::Anonymous | CachePrincipal::Unresolved => Some(String::new()),
+        CachePrincipal::Anonymous => Some(String::new()),
+        CachePrincipal::Unresolved => None,
+    }
+}
+
+/// Count and log one response-cache bypass for an `Unresolved` caller (A0 D4).
+/// Called once per call where the principal is resolved, so the read and the
+/// write that both skip do not count twice.
+pub(super) fn note_cache_bypass(principal: &CachePrincipal) {
+    if *principal == CachePrincipal::Unresolved {
+        tracing::warn!("Response cache bypassed: unresolved caller principal");
+        telemetry_metrics::counter!(
+            "mcp_cache_bypass_total",
+            "reason" => "unresolved_principal"
+        )
+        .increment(1);
     }
 }
 
@@ -116,6 +146,12 @@ pub(super) fn retry_identity_suffix(principal: &CachePrincipal) -> Option<String
 /// no OIDC — the shipped default, where every caller previously keyed as
 /// `None` and shared one entry.
 ///
+/// Last, for an authenticated caller only, the credential digest
+/// (`AuthenticatedClient::principal`, a digest of the validated secret, never
+/// the operator-chosen key name): two API keys, or the admin bearer, stop
+/// sharing one entry. An authenticated caller no arm names is `Unresolved`;
+/// only an anonymous one joins the pooled namespace.
+///
 /// The binding is copied opaquely, never re-hashed and never trimmed: it is
 /// already the resolver's digest, and the same string is what the capability
 /// executor copies into the inner key.
@@ -123,7 +159,7 @@ pub(super) fn caller_cache_principal(
     cache_binding: Option<&str>,
     verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     grant_subject: Option<&crate::identity_grants::GrantSubject>,
-    _credential_principal: Option<&str>,
+    credential_principal: Option<&str>,
     authentication: Authentication,
 ) -> CachePrincipal {
     if let Some(binding) = cache_binding {
@@ -143,9 +179,12 @@ pub(super) fn caller_cache_principal(
             subject.subject
         ));
     }
-    match authentication {
-        Authentication::Anonymous => CachePrincipal::Anonymous,
-        Authentication::Authenticated => CachePrincipal::Unresolved,
+    match (authentication, credential_principal) {
+        (Authentication::Anonymous, _) => CachePrincipal::Anonymous,
+        (Authentication::Authenticated, Some(digest)) if !digest.is_empty() => {
+            CachePrincipal::Caller(format!("cred:{}:{digest}", digest.len()))
+        }
+        (Authentication::Authenticated, _) => CachePrincipal::Unresolved,
     }
 }
 
@@ -176,7 +215,8 @@ pub(super) fn response_cache_key_for(
 ) -> Option<String> {
     let principal = match principal {
         CachePrincipal::Caller(principal) => Some(principal.as_str()),
-        CachePrincipal::Anonymous | CachePrincipal::Unresolved => None,
+        CachePrincipal::Anonymous => None,
+        CachePrincipal::Unresolved => return None,
     };
     let base = crate::cache::ResponseCache::response_key(
         server,
