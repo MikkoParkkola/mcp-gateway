@@ -38,7 +38,7 @@ Add to MCP config:
 
 ## Base Discovery Tools (4)
 
-These four discovery tools are always present. The minimum operational surface has 9 tools. The README benchmark scenario has 11, and a deployment with every optional tool configured has 17. Counts are for an admin caller; others see four fewer.
+These four discovery tools are always present. The minimum operational surface has 9 tools. The README benchmark scenario has 11, and a deployment with every optional tool configured has 17. Counts are for an admin caller; others see five fewer in the benchmark scenario.
 
 - gateway_search_tools(query) -- Semantic search across all backend tools by keyword
 - gateway_invoke(server, tool, arguments) -- Execute a tool on any backend

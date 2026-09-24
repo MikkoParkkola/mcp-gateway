@@ -64,7 +64,7 @@ mcp-gateway serve                            # 3. run
 mcp-gateway doctor                           # 4. verify everything is healthy
 ```
 
-That is it. Your AI clients now talk to the gateway, and the gateway routes to every backend you already had configured, at a flat `11 tools` instead of `~150` — 11 is the default HTTP configuration counted for an administrator; an ordinary client is shown four fewer. Start with `gateway_search_tools` from your AI client to find any backend tool, then invoke it with `gateway_invoke`.
+That is it. Your AI clients now talk to the gateway, and the gateway routes to every backend you already had configured, at a flat `11 tools` instead of `~150` — 11 is the default HTTP configuration counted for an administrator; an ordinary client is shown five fewer, because it is only shown what it could invoke. Start with `gateway_search_tools` from your AI client to find any backend tool, then invoke it with `gateway_invoke`.
 
 > **Nothing to import yet?** `mcp-gateway init --with-examples` writes a working `gateway.yaml` with public capabilities so you can confirm the gateway is alive before adding your own servers.
 
@@ -266,7 +266,7 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
-The gateway exposes 9 tools minimum, 11 in the README benchmark scenario, counted for an administrator; a caller without admin standing is shown four fewer. The base discovery quartet stays fixed. Everything else is listed only where it can answer: stats, cost reporting, playbooks and profile control appear once the configuration that backs them exists, and webhook status where a webhook registry is attached, which the stdio transport never has. A deployment that turns all of them on is served 17. It costs context exactly where it is useful.
+The gateway exposes 9 tools minimum, 11 in the README benchmark scenario, counted for an administrator; a caller without admin standing is shown five fewer (the kill, revive, reload and webhook-status tools, and the stats tool where it is exposed). The base discovery quartet stays fixed. Everything else is listed only where it can answer: stats, cost reporting, playbooks and profile control appear once the configuration that backs them exists, and webhook status where a webhook registry is attached, which the stdio transport never has. A deployment that turns all of them on is served 17. It costs context exactly where it is useful.
 
 ### Code Mode: two tools instead of the meta-tool set
 

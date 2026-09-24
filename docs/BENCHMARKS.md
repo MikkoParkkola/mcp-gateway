@@ -91,7 +91,7 @@ Reference scenario assumptions:
 - 1,000 requests
 - Claude Opus input pricing at $15 / million tokens
 
-The base discovery quartet stays constant, and the README benchmark scenario adds kill/revive, disabled-capability listing, workflow state control, config reload and capability reload. Surfacing webhook status adds the 11th tool. Stats, cost report, playbooks and profile controls are not in the modelled surface: each is listed only where the configuration that backs it exists, and a deployment with all of them is served 17. The count is an admin caller's; a caller without admin standing is served four fewer.
+The base discovery quartet stays constant, and the README benchmark scenario adds kill/revive, disabled-capability listing, workflow state control, config reload and capability reload. Surfacing webhook status adds the 11th tool. Stats, cost report, playbooks and profile controls are not in the modelled surface: each is listed only where the configuration that backs it exists, and a deployment with all of them is served 17. The count is an admin caller's; a caller without admin standing is served five fewer, since webhook status reads every caller's traffic and is admin-only.
 
 This yields the schema-only first-request numbers: **~1100 gateway tokens** and **93% smaller**, with a modeled **$209 per 1K requests**. It is not a completed-task saving. Discovery turns (`gateway_search_tools` then `gateway_invoke`) reload the host context and Meta-MCP surface while carrying earlier responses forward.
 
