@@ -154,6 +154,7 @@ root_doc_allowlist=(
   "LICENSES.md"
   "NOTICE.md"
   "README.md"
+  "RELEASING.md"
   "SECURITY.md"
   # Tracked under protest: the numerical-claim drift check and the MIK-6977
   # acceptance test both read this generated map, so removing it from the tree
