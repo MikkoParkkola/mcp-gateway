@@ -515,3 +515,7 @@ mod tests;
 #[cfg(test)]
 #[path = "idempotency_caller_scope_tests.rs"]
 mod idempotency_caller_scope_tests;
+
+#[cfg(test)]
+#[path = "cache_principal_tests.rs"]
+mod cache_principal_tests;
