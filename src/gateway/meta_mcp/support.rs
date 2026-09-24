@@ -781,3 +781,7 @@ mod tests {
         assert_ne!(k("actor-1"), k("actor-2"));
     }
 }
+
+#[cfg(test)]
+#[path = "idempotency_caller_scope_tests.rs"]
+mod idempotency_caller_scope_tests;
