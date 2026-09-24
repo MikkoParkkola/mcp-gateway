@@ -122,8 +122,31 @@ fn alpha() -> VerifiedIdentity {
     }
 }
 
+/// The durable audit record every mint requires; without one the resolver
+/// refuses to mint at all. The file lives as long as the returned handle.
+fn audit_log() -> (
+    Arc<crate::security::TransparencyLogger>,
+    tempfile::NamedTempFile,
+) {
+    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let config = crate::security::TransparencyLogConfig {
+        enabled: true,
+        path: file.path().to_string_lossy().to_string(),
+        key_id: "caller-forward".to_string(),
+        shared_secret: String::new(),
+    };
+    let logger = crate::security::TransparencyLogger::open(Arc::new(config))
+        .expect("transparency logger opens");
+    (Arc::new(logger), file)
+}
+
 /// A multi-user gateway with one `required`, per-user propagating backend.
-fn gateway() -> (MetaMcp, Arc<AlphaOnlyWire>, Arc<CountingMint>) {
+fn gateway() -> (
+    MetaMcp,
+    Arc<AlphaOnlyWire>,
+    Arc<CountingMint>,
+    tempfile::NamedTempFile,
+) {
     let config = BackendConfig {
         transport: TransportConfig::Http {
             http_url: "https://ledger.invalid/mcp".to_string(),
@@ -158,15 +181,17 @@ fn gateway() -> (MetaMcp, Arc<AlphaOnlyWire>, Arc<CountingMint>) {
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(backend), "fixture registration");
     let mint = Arc::new(CountingMint::default());
-    let meta = MetaMcp::new(registry);
+    let mut meta = MetaMcp::new(registry);
     meta.set_identity_propagation(Arc::clone(&mint) as _);
+    let (logger, audit_file) = audit_log();
+    meta.enable_transparency_log(logger);
     meta.set_multi_user(true);
-    (meta, wire, mint)
+    (meta, wire, mint, audit_file)
 }
 
 #[tokio::test]
 async fn identified_caller_reads_the_resource_it_was_listed_under_its_own_identity() {
-    let (meta, wire, mint) = gateway();
+    let (meta, wire, mint, _audit_file) = gateway();
     let who = alpha();
 
     let listed = meta
