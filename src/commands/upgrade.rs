@@ -620,6 +620,10 @@ fn print_upgrade_summary(old: SemVer, new: SemVer, _migrations: usize, dry_run: 
 mod upgrade_notice_tests;
 
 #[cfg(test)]
+#[path = "upgrade_webhook_notice_tests.rs"]
+mod upgrade_webhook_notice_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
