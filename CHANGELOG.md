@@ -209,23 +209,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the finding, and 4.0.0 is the release allowed to break this. Backends without
   OAuth are unaffected and may still use plaintext `http://`.
 
-### Removed
-
-- Removed the ungrounded savings estimates from gateway statistics: the
-  `stats --price` flag, the `gateway_get_stats.price_per_million` argument,
-  the `tokens_saved` and `estimated_savings_usd` response fields, and the public
-  `StatsSnapshot::tokens_saved`, `StatsSnapshot::estimated_savings_usd`, and
-  `UsageStats::cost_savings` fields.
-
-### Fixed
-
-
-
-- **Competitive shadow-scan exports now stay portable and loadable.** The
-  generated grep rules use the system `grep -E` on macOS and Linux, while the
-  Nginx example preserves quoted and escaped log values.
-
-### Changed
 - **A backend that would send credentials in cleartext is refused at config load** (code-scanning alerts #90, #91): an enabled backend whose `http_url` or `a2a_url` is `http://` against a host off this machine, and whose configuration is credential-bearing — an `oauth` section (including one with `enabled: false`), identity propagation, secret injection, any static header whatever its name, or userinfo or a query string in the URL — no longer starts the gateway. The predicate is deliberately blunt: a header named `X-Trace-Id` and a query of `?page=2` trip it too, because whether a given header or query carries a secret is not decidable at config load, and a name list would only catch the operators who guessed the same names we did. Such a credential is readable by every host on the path and replayable for as long as it is valid, and a config typo should not be what decides that. Loopback is exempt, decided by the same classifier the Origin gate uses. **Breaking for operators pointing any of that configuration at a plain-`http` internal host**: use TLS, or set `allow_cleartext_credentials: true` on that backend to accept the exposure. The refusal names the backend and never echoes the URL, which is the credential-bearing string.
 
 - **Destructive meta-tools are refused over stdio** (MIK-7246): `gateway_kill_server` carries `destructiveHint: true`, and the gateway asks the operator to confirm such a call before running it. That ask travels over the elicitation channel, which only the HTTP transport has — stdio speaks to one process over two pipes and can reach nobody. A destructive tool called over stdio is now refused with `-32001` and a message naming the action, rather than executed with a warning. **Breaking for stdio operators who kill backends through the gateway**: reach the management tools over the HTTP listener with a client that answers `elicitation/create`, or change the backend's configuration directly. Neither an unobtainable confirmation nor an operator decline counts against the caller's failure budget — the gate working is not the client misbehaving.
@@ -310,6 +293,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing to enumerate ([ADR-013](docs/adr/ADR-013-single-noncommercial-license.md)).
 
 ### Fixed
+
+- **Competitive shadow-scan exports now stay portable and loadable.** The
+  generated grep rules use the system `grep -E` on macOS and Linux, while the
+  Nginx example preserves quoted and escaped log values.
 
 - **A backend whose SSE response opens with a retry priming frame is no longer
   a transport error** (reported by [@Bruce-Poating](https://github.com/Bruce-Poating), [#563](https://github.com/MikkoParkkola/mcp-gateway/issues/563)). Servers built on `rmcp` with its default
@@ -416,10 +403,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first non-alphanumeric character, a tab before `#` starts a trailing comment,
   and comments, single-quoted values and escaped `\$` are inert as they always
   were. Scanning is per logical line, as the parser reads them.
-
-- **Competitive shadow-scan exports now stay portable and loadable.** The
-  generated grep rules use the system `grep -E` on macOS and Linux, while the
-  Nginx example preserves quoted and escaped log values.
 
 ### Security
 
