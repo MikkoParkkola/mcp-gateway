@@ -45,7 +45,11 @@ async fn a_second_grant_subject_is_not_served_the_firsts_idempotent_result() {
 
     let first = meta.invoke_tool(&args, None, &as_caller(&alice)).await;
     assert!(first.is_ok(), "the first call must succeed: {first:?}");
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "and must reach the backend");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "and must reach the backend"
+    );
 
     let second = meta.invoke_tool(&args, None, &as_caller(&bob)).await;
     assert!(second.is_ok(), "the second call must succeed: {second:?}");
