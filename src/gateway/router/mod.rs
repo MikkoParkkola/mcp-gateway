@@ -255,6 +255,9 @@ pub(crate) fn create_router_with_accounts(
     accounts: Option<AccountHandles>,
 ) -> Router {
     let auth_state = build_auth_state(&state);
+    // Webhook delivery re-validates each session against the same authorizer
+    // the middleware uses, so the two cannot disagree about who may see what.
+    state.multiplexer.set_authorizer(auth_state.clone());
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).
     let agent_auth_state = state.agent_auth.clone();

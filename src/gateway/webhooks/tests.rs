@@ -522,10 +522,51 @@ async fn webhook_handler_accepts_a_secret_an_env_file_assigns() {
 
 // ── Notification scope ────────────────────────────────────────────────
 
-fn client_scoped_to(backend: &str) -> crate::gateway::auth::AuthenticatedClient {
-    let mut client = crate::gateway::auth::anonymous_client();
-    client.backends = vec![backend.to_string()];
-    client
+const AUTH_YAML: &str = "enabled: true
+api_keys:
+  - key: key-in-scope
+    name: in
+    backends: [capabilities]
+  - key: key-out-of-scope
+    name: out
+    backends: [other]
+";
+
+/// The authorizer the router installs: static keys, plus a key server if given.
+fn authorizer(
+    key_server: Option<Arc<crate::key_server::KeyServer>>,
+) -> crate::gateway::auth::AuthState {
+    let config: crate::config::AuthConfig = serde_yaml::from_str(AUTH_YAML).unwrap();
+    crate::gateway::auth::AuthState {
+        auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+            &config,
+        )),
+        key_server,
+        dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+        tls_enabled: false,
+    }
+}
+
+/// The credential a request presenting `bearer` leaves on its session.
+fn held(bearer: &str) -> Option<crate::gateway::auth::live::HeldCredential> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {bearer}").parse().unwrap(),
+    );
+    crate::gateway::auth::live::held_credential(&headers)
+}
+
+/// Open a session the way the MCP handler does for a caller presenting `bearer`.
+fn open_session(
+    multiplexer: &NotificationMultiplexer,
+    id: &str,
+    bearer: Option<&str>,
+) -> tokio::sync::broadcast::Receiver<crate::gateway::streaming::TaggedNotification> {
+    let owner = format!("credential:{id}");
+    multiplexer
+        .get_or_create_session_scoped(Some(id), &owner, bearer.and_then(held))
+        .1
 }
 
 async fn post_webhook(state: WebhookHandlerState) -> Value {
@@ -551,12 +592,9 @@ fn a_webhook_that_does_not_ask_to_notify_does_not() {
 #[tokio::test]
 async fn notify_reaches_only_sessions_whose_caller_may_access_the_backend() {
     let multiplexer = make_multiplexer();
-    let in_scope = client_scoped_to("capabilities");
-    let out_of_scope = client_scoped_to("other");
-    let (_, mut rx_in) =
-        multiplexer.get_or_create_session_scoped(Some("in"), "credential:a", Some(&in_scope));
-    let (_, mut rx_out) =
-        multiplexer.get_or_create_session_scoped(Some("out"), "credential:b", Some(&out_of_scope));
+    multiplexer.set_authorizer(authorizer(None));
+    let mut rx_in = open_session(&multiplexer, "in", Some("key-in-scope"));
+    let mut rx_out = open_session(&multiplexer, "out", Some("key-out-of-scope"));
 
     post_webhook(make_handler_state(
         Arc::clone(&multiplexer),
@@ -575,10 +613,11 @@ async fn notify_reaches_only_sessions_whose_caller_may_access_the_backend() {
 }
 
 #[tokio::test]
-async fn notify_skips_a_session_that_recorded_no_caller() {
-    // No recorded caller means no known scope: fail closed.
+async fn notify_skips_a_session_that_presented_no_credential() {
+    // With authentication on, no credential means no identity: fail closed.
     let multiplexer = make_multiplexer();
-    let (_, mut rx) = multiplexer.get_or_create_session_scoped(Some("bare"), "anonymous", None);
+    multiplexer.set_authorizer(authorizer(None));
+    let mut rx = open_session(&multiplexer, "bare", None);
 
     post_webhook(make_handler_state(
         Arc::clone(&multiplexer),
@@ -588,8 +627,22 @@ async fn notify_skips_a_session_that_recorded_no_caller() {
 
     assert!(
         rx.try_recv().is_err(),
-        "an unscoped session must not receive webhook data"
+        "a credential-less session must not receive webhook data"
     );
+}
+
+#[tokio::test]
+async fn notify_delivers_nothing_before_an_authorizer_is_installed() {
+    let multiplexer = make_multiplexer();
+    let mut rx = open_session(&multiplexer, "early", Some("key-in-scope"));
+
+    post_webhook(make_handler_state(
+        Arc::clone(&multiplexer),
+        make_definition(true),
+    ))
+    .await;
+
+    assert!(rx.try_recv().is_err(), "no authorizer means no delivery");
 }
 
 // ── Revocation ────────────────────────────────────────────────────────
@@ -623,24 +676,12 @@ fn temporary_token(backends: &[&str]) -> crate::key_server::TemporaryToken {
     }
 }
 
-/// Open a session the way the MCP handler does for a caller presenting `bearer`.
-async fn open_session(
-    multiplexer: &NotificationMultiplexer,
-    key_server: &crate::key_server::KeyServer,
-    id: &str,
-    bearer: &str,
-) -> tokio::sync::broadcast::Receiver<crate::gateway::streaming::TaggedNotification> {
-    let (client, _) = key_server.validate_token(bearer).await.unwrap();
-    let owner = format!("credential:{id}");
-    multiplexer
-        .get_or_create_session_scoped(Some(id), &owner, Some(&client))
-        .1
-}
-
 #[tokio::test]
 async fn a_session_whose_token_was_revoked_receives_no_webhook_data() {
     use crate::key_server::TokenStore;
-    let key_server = crate::key_server::KeyServer::new(crate::config::KeyServerConfig::default());
+    let key_server = Arc::new(crate::key_server::KeyServer::new(
+        crate::config::KeyServerConfig::default(),
+    ));
     let kept = temporary_token(&["capabilities"]);
     let revoked = temporary_token(&["capabilities"]);
     let (kept_bearer, revoked_bearer) = (kept.token.clone(), revoked.token.clone());
@@ -648,8 +689,9 @@ async fn a_session_whose_token_was_revoked_receives_no_webhook_data() {
     key_server.store.insert(kept).await;
     key_server.store.insert(revoked).await;
     let multiplexer = make_multiplexer();
-    let mut rx_kept = open_session(&multiplexer, &key_server, "kept", &kept_bearer).await;
-    let mut rx_revoked = open_session(&multiplexer, &key_server, "revoked", &revoked_bearer).await;
+    multiplexer.set_authorizer(authorizer(Some(Arc::clone(&key_server))));
+    let mut rx_kept = open_session(&multiplexer, "kept", Some(&kept_bearer));
+    let mut rx_revoked = open_session(&multiplexer, "revoked", Some(&revoked_bearer));
 
     assert!(key_server.store.revoke_by_jti(&revoked_jti).await);
     post_webhook(make_handler_state(

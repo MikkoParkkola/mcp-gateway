@@ -439,7 +439,8 @@ async fn webhook_handler(
     if state.definition.notify {
         let reached = state
             .multiplexer
-            .broadcast_to_backend(&notification, &state.backend);
+            .broadcast_to_backend(&notification, &state.backend)
+            .await;
         state.stats.delivered.fetch_add(1, Ordering::Relaxed);
         debug!(
             request_id = %request_id,

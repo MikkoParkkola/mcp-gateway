@@ -83,9 +83,9 @@ fn test_subscriptions() -> Arc<crate::gateway::subscription_registry::Subscripti
     Arc::new(crate::gateway::subscription_registry::SubscriptionRegistry::new(64))
 }
 
-async fn test_router_app_state_with_streaming(
-    streaming_config: StreamingConfig,
-) -> (Arc<AppState>, tempfile::TempDir) {
+type Fixture = (Arc<AppState>, tempfile::TempDir);
+
+async fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Fixture {
     test_router_app_state_with(streaming_config, crate::config::Config::default()).await
 }
 
@@ -151,7 +151,7 @@ async fn test_router_app_state_with(
     (state, store_dir)
 }
 
-pub(super) async fn test_router_app_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn test_router_app_state() -> (Arc<AppState>, tempfile::TempDir) {
     test_router_app_state_with_streaming(StreamingConfig::default()).await
 }
 
@@ -511,7 +511,7 @@ fn http_backend_at(name: &str, http_url: &str) -> Arc<Backend> {
     ))
 }
 
-async fn test_router_app_state_with_auth(auth: &AuthConfig) -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn test_router_app_state_with_auth(auth: &AuthConfig) -> Fixture {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();

@@ -391,7 +391,7 @@ pub(super) async fn mcp_sse_handler(
         // when authentication is off, so a single-user gateway behaves
         // exactly as before.
         &session_owner(client.as_ref()),
-        client.as_ref(),
+        crate::gateway::auth::live::held_credential(&headers),
     );
 
     info!(session_id = %session_id, "Client connected to SSE stream");
@@ -748,7 +748,7 @@ async fn meta_mcp_dispatch(
             // when authentication is off, so a single-user gateway behaves
             // exactly as before.
             &session_owner(client.as_ref()),
-            client.as_ref(),
+            crate::gateway::auth::live::held_credential(&headers),
         );
         (id, Some(rx))
     };

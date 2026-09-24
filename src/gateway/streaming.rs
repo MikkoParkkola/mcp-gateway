@@ -27,6 +27,8 @@ use uuid::Uuid;
 use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
+use crate::gateway::auth::AuthState;
+use crate::gateway::auth::live::{HeldCredential, current_client};
 use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
 /// A tagged notification event from a backend
@@ -65,10 +67,10 @@ struct ClientSession {
     /// than the owner's, which keeps resumption working for the owner and
     /// leaks nothing to anyone else.
     owner: String,
-    /// The caller behind the session, refreshed on each owner resume so a
-    /// reloaded grant applies. `None` means no known scope: excluded from
-    /// scoped delivery.
-    caller: RwLock<Option<crate::gateway::auth::AuthenticatedClient>>,
+    /// The credential the session was opened with, re-validated at every
+    /// scoped delivery. Never a resolved client: a snapshot would outlive a
+    /// revoked or expired token.
+    credential: RwLock<Option<HeldCredential>>,
 }
 
 /// Notification Multiplexer
@@ -84,6 +86,8 @@ pub struct NotificationMultiplexer {
     config: StreamingConfig,
     /// Event ID counter (global, for uniqueness)
     event_counter: std::sync::atomic::AtomicU64,
+    /// The live authorizer scoped delivery asks; unset means no delivery.
+    authorizer: RwLock<Option<AuthState>>,
 }
 
 impl NotificationMultiplexer {
@@ -99,7 +103,13 @@ impl NotificationMultiplexer {
             backends,
             config,
             event_counter: std::sync::atomic::AtomicU64::new(1),
+            authorizer: RwLock::new(None),
         }
+    }
+
+    /// Install the authorizer that scoped delivery re-validates sessions against.
+    pub(crate) fn set_authorizer(&self, authorizer: AuthState) {
+        *self.authorizer.write() = Some(authorizer);
     }
 
     /// Start the background session-reaper task.
@@ -215,7 +225,7 @@ impl NotificationMultiplexer {
                     subscribed_backends: RwLock::new(Vec::new()),
                     created_at: Instant::now(),
                     owner: owner.to_string(),
-                    caller: RwLock::new(None),
+                    credential: RwLock::new(None),
                 }),
             );
             return (fresh, rx);
@@ -230,7 +240,7 @@ impl NotificationMultiplexer {
             subscribed_backends: RwLock::new(Vec::new()),
             created_at: Instant::now(),
             owner: owner.to_string(),
-            caller: RwLock::new(None),
+            credential: RwLock::new(None),
         });
 
         sessions.insert(id.clone(), session);
@@ -239,37 +249,49 @@ impl NotificationMultiplexer {
         (id, rx)
     }
 
-    /// Create or resume a session for `owner`, recording the caller's backend scope.
+    /// Create or resume a session for `owner`, holding the credential it presented.
     pub(crate) fn get_or_create_session_scoped(
         &self,
         session_id: Option<&str>,
         owner: &str,
-        client: Option<&crate::gateway::auth::AuthenticatedClient>,
+        credential: Option<HeldCredential>,
     ) -> (String, broadcast::Receiver<TaggedNotification>) {
         let (id, rx) = self.get_or_create_session_for(session_id, owner);
         if let Some(session) = self.sessions.read().get(&id) {
-            *session.caller.write() = client.cloned();
+            *session.credential.write() = credential;
         }
         (id, rx)
     }
 
-    /// Deliver to every session whose caller may access `backend`; returns the count.
-    pub(crate) fn broadcast_to_backend(
+    /// Deliver to every session whose caller may access `backend` now; returns the count.
+    ///
+    /// Each session's credential is re-validated at delivery, so a revoked or
+    /// expired token receives nothing even on a stream opened while it was valid.
+    pub(crate) async fn broadcast_to_backend(
         &self,
         notification: &TaggedNotification,
         backend: &str,
     ) -> usize {
-        let sessions = self.sessions.read();
-        sessions
+        let Some(authorizer) = self.authorizer.read().clone() else {
+            return 0;
+        };
+        // Copied out so no lock is held across the re-validation awaits.
+        let targets: Vec<_> = self
+            .sessions
+            .read()
             .values()
-            .filter(|s| {
-                s.caller
-                    .read()
-                    .as_ref()
-                    .is_some_and(|c| c.can_access_backend(backend))
-            })
-            .filter(|s| s.tx.send(notification.clone()).is_ok())
-            .count()
+            .map(|s| (s.tx.clone(), s.credential.read().clone()))
+            .collect();
+        let mut reached = 0;
+        for (tx, credential) in targets {
+            let live = current_client(&authorizer, credential.as_ref()).await;
+            if live.is_some_and(|c| c.can_access_backend(backend))
+                && tx.send(notification.clone()).is_ok()
+            {
+                reached += 1;
+            }
+        }
+        reached
     }
 
     /// Remove a session
