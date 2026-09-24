@@ -45,7 +45,8 @@ resources:
 # answered, and the chart renders exactly one of the two answers.
 #
 #   credential  (default) the tools require a bearer token, supplied from the
-#               Secret named below. Only /health stays open, so probes work.
+#               Secret named below. Only /health, /livez and /readyz stay open,
+#               so probes work.
 #   mesh        a service mesh authenticates before anything reaches this pod.
 #               No token is rendered and server.allow_unauthenticated_network_bind
 #               is set, which is logged at WARN on every start.
@@ -110,7 +111,7 @@ logging:
   format: json
   level: info
 
-# HTTP /health probes. Default on. Disable only for images that don't serve the
-# health endpoint (e.g. lifecycle/CI tests with a placeholder image).
+# HTTP /livez and /readyz probes. Default on. Disable only for images that don't
+# serve them (e.g. lifecycle/CI tests with a placeholder image).
 probes:
   enabled: true
