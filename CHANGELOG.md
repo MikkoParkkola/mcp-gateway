@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MODULE_NOT_FOUND`, reported as "Backend timeout" with zero tools. Each
   backend now gets its own cache directory. An operator-set
   `npm_config_cache` is left alone.
+  ([@terafin](https://github.com/terafin), [#622](https://github.com/MikkoParkkola/mcp-gateway/pull/622); the smoke-gate port lock it relies on was restored by
+  [@terafin](https://github.com/terafin) in [#695](https://github.com/MikkoParkkola/mcp-gateway/pull/695))
 
 ### Changed
 - **A tool count is no longer reported as `0` before a backend has been
@@ -136,7 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default. The section is read when the meta-MCP server is built, so an edit to
   it is reported as restart-required rather than appearing to take effect.
 
-- **`meta_mcp.exposed_meta_tools` restricts the meta-tool surface** (GH issue 449):
+- **`meta_mcp.exposed_meta_tools` restricts the meta-tool surface** (requested by [@Bruce-Poating](https://github.com/Bruce-Poating), [#449](https://github.com/MikkoParkkola/mcp-gateway/issues/449)):
   an allow-list of meta-tools to expose, enforced on both `tools/list` and
   `tools/call` for every meta-tool built-in, including the two Code Mode tools
   (`gateway_search`, `gateway_execute`). The field is new in 4.0.0 and defaults to
@@ -222,8 +224,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Competitive shadow-scan exports now stay portable and loadable.** The
   generated grep rules use the system `grep -E` on macOS and Linux, while the
   Nginx example preserves quoted and escaped log values.
-
-## [3.5.1] - 2026-09-04
 
 ### Changed
 - **A backend that would send credentials in cleartext is refused at config load** (code-scanning alerts #90, #91): an enabled backend whose `http_url` or `a2a_url` is `http://` against a host off this machine, and whose configuration is credential-bearing — an `oauth` section (including one with `enabled: false`), identity propagation, secret injection, any static header whatever its name, or userinfo or a query string in the URL — no longer starts the gateway. The predicate is deliberately blunt: a header named `X-Trace-Id` and a query of `?page=2` trip it too, because whether a given header or query carries a secret is not decidable at config load, and a name list would only catch the operators who guessed the same names we did. Such a credential is readable by every host on the path and replayable for as long as it is valid, and a config typo should not be what decides that. Loopback is exempt, decided by the same classifier the Origin gate uses. **Breaking for operators pointing any of that configuration at a plain-`http` internal host**: use TLS, or set `allow_cleartext_credentials: true` on that backend to accept the exposure. The refusal names the backend and never echoes the URL, which is the credential-bearing string.
@@ -312,7 +312,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A backend whose SSE response opens with a retry priming frame is no longer
-  a transport error** (GH #563). Servers built on `rmcp` with its default
+  a transport error** (reported by [@Bruce-Poating](https://github.com/Bruce-Poating), [#563](https://github.com/MikkoParkkola/mcp-gateway/issues/563)). Servers built on `rmcp` with its default
   `sse_retry` prepend such a frame -- a `data:` line with nothing after it,
   plus `id:` and `retry:` -- to every POST response stream. 3.5.x took the
   first `data:` line verbatim and failed the whole call with
@@ -495,7 +495,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Unreadable gateway config now reports a diagnosis** instead of a generic
   failure, so a permissions or parse problem is visible at startup.
-  ([#461](https://github.com/MikkoParkkola/mcp-gateway/pull/461))
+  (reported by [@Bruce-Poating](https://github.com/Bruce-Poating), [#437](https://github.com/MikkoParkkola/mcp-gateway/issues/437); [#461](https://github.com/MikkoParkkola/mcp-gateway/pull/461))
 
 - **Sampling POST-backs are bound to the prompted session**, so a late
   sampling response cannot land on a different client.
