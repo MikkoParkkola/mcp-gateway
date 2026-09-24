@@ -5,7 +5,7 @@
 //! The REAL store, `CustodyHandle` and `PersonalOAuthRefresh`; only the
 //! transport is faked. `post_token` is dispatched with `oneshot` into an
 //! in-process axum router whose `/revoke` records every token it receives and
-//! answers a scripted status. No socket, no TLS, no new crate.
+//! answers a scripted status, or a scripted status and body per token type. No socket, no TLS, no new crate.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -43,23 +43,31 @@ const SECRET_REF: &str = "env:FIXTURE_CLIENT_SECRET";
 /// What `/revoke` received, in order: `(token, token_type_hint)`.
 pub(crate) type Received = Arc<Mutex<Vec<(String, String)>>>;
 
+/// `token_type_hint` -> `(status, body)`, overriding the default status.
+type ByHint = Arc<Mutex<BTreeMap<String, (u16, String)>>>;
+
 #[derive(Clone)]
 struct Script {
     received: Received,
     status: Arc<AtomicU16>,
+    by_hint: ByHint,
 }
 
 async fn revoke_endpoint(
     State(script): State<Script>,
     Form(form): Form<BTreeMap<String, String>>,
-) -> StatusCode {
+) -> (StatusCode, String) {
     let field = |name: &str| form.get(name).cloned().unwrap_or_default();
+    let hint = field("token_type_hint");
     script
         .received
         .lock()
         .unwrap()
-        .push((field("token"), field("token_type_hint")));
-    StatusCode::from_u16(script.status.load(Ordering::SeqCst)).unwrap()
+        .push((field("token"), hint.clone()));
+    let scripted = script.by_hint.lock().unwrap().get(&hint).cloned();
+    let (status, body) =
+        scripted.unwrap_or_else(|| (script.status.load(Ordering::SeqCst), String::new()));
+    (StatusCode::from_u16(status).unwrap(), body)
 }
 
 /// Metadata is answered directly; credential POSTs go through the router.
@@ -159,6 +167,7 @@ pub(crate) struct RevokeFixture {
     custody: Arc<FixtureCustody>,
     pub(crate) received: Received,
     status: Arc<AtomicU16>,
+    by_hint: ByHint,
     pub(crate) token: Arc<TokenScript>,
     /// The descriptors custody bootstrapped, for a gateway config that must
     /// describe the same accounts.
@@ -276,9 +285,11 @@ impl RevokeFixture {
         drop(store);
         let received = Received::default();
         let status = Arc::new(AtomicU16::new(200));
+        let by_hint = ByHint::default();
         let script = Script {
             received: Arc::clone(&received),
             status: Arc::clone(&status),
+            by_hint: Arc::clone(&by_hint),
         };
         let token = Arc::new(TokenScript::default());
         let router = Router::new()
@@ -309,6 +320,7 @@ impl RevokeFixture {
             custody: Arc::new(custody),
             received,
             status,
+            by_hint,
             token,
             descriptors,
             clock,
@@ -328,6 +340,14 @@ impl RevokeFixture {
     /// Script the next `/revoke` answers.
     pub(crate) fn answer(&self, status: u16) {
         self.status.store(status, Ordering::SeqCst);
+    }
+
+    /// Script the `/revoke` answer for one `token_type_hint`, body included.
+    pub(crate) fn answer_hint(&self, hint: &str, status: u16, body: &str) {
+        self.by_hint
+            .lock()
+            .unwrap()
+            .insert(hint.to_string(), (status, body.to_string()));
     }
 
     /// Durable state, read through the live custody (`resolve` never mints).

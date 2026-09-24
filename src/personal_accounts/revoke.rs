@@ -130,7 +130,7 @@ pub(crate) trait AccountRevocation: Send + Sync {
     ) -> Result<Option<RevocationMaterial>, CustodyError>;
 
     /// One RFC 7009 request per token, refresh first. `Confirmed` only if
-    /// every request was answered 200.
+    /// every request was answered 200, or 400 `invalid_token` (already dead).
     async fn revoke_at_provider(
         &self,
         account_id: &str,

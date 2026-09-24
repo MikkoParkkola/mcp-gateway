@@ -888,8 +888,9 @@ Under **one** `lock_authority()` acquisition it:
      `refresh_token` (hint `refresh_token`) and the `access_token` (hint
      `access_token`). Provider revocation sends one RFC 7009 request per token,
      refresh first; `provider_revocation` is `confirmed` only if every request
-     returned 200 (review R3-3: after `invalid_grant` the refresh token is dead but
-     the access token may be live, so revoking only one would miss it).
+     returned 200 or 400 `invalid_token` (review R3-3: after `invalid_grant`
+     the refresh token is dead but the access token may be live, so revoking
+     only one would miss it).
    - A `ReconnectRequired` grant can still hold a live provider token. After
      `invalid_grant` the refresh token is dead, but the access token may not be.
      After a descriptor-revision fence both tokens may still be live. So it is
@@ -944,6 +945,7 @@ the DELETE route is now a production caller.
    | Outcome | `provider_revocation` |
    |---|---|
    | HTTP 200 | `confirmed` |
+   | HTTP 400 with OAuth error `invalid_token` (token already dead, RFC 7009 §2.2) | `confirmed` |
    | Any other status or transport error | `failed` |
    | No endpoint configured | `unsupported` |
    | Nothing to revoke (already revoked, or absent) | `not_applicable` |

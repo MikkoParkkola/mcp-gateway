@@ -434,3 +434,6 @@ async fn revoke_route_without_revocation_endpoint_is_unsupported_and_revoked() {
 
 #[path = "revoke_route_refusals.rs"]
 mod refusals;
+
+#[path = "revoke_route_invalid_token.rs"]
+mod invalid_token;

@@ -280,7 +280,7 @@ async fn exchange_refusals_map_like_refresh_and_unconfigured_accounts_send_nothi
 }
 
 /// RFC 7009 §2.1: the token, its hint and client authentication, posted to the
-/// PINNED revocation endpoint; 200 is the only confirmation.
+/// PINNED revocation endpoint; 200 confirms.
 #[tokio::test]
 async fn revoke_posts_the_rfc7009_form_to_the_pinned_revocation_endpoint() {
     let (trace, provider) = google_rig(ok(""), false, NOW).await;
@@ -317,12 +317,18 @@ async fn revoke_posts_the_rfc7009_form_to_the_pinned_revocation_endpoint() {
     );
 }
 
-/// Anything but 200, a transport failure, or an account the provider does not
-/// manage is `Failed` -- never `Confirmed`.
+/// Anything but 200 or 400 `invalid_token`, a transport failure, or an account
+/// the provider does not manage is `Failed` -- never `Confirmed`.
 #[tokio::test]
 async fn revoke_reports_failed_for_every_non_confirmation() {
     let outcomes = [
         status(400, r#"{"error":"unsupported_token_type"}"#),
+        status(400, r#"{"error":"invalid_request"}"#),
+        status(400, r#"{"error":"invalid_client"}"#),
+        status(400, ""),
+        status(400, "invalid_token"),
+        status(401, r#"{"error":"invalid_token"}"#),
+        status(503, r#"{"error":"invalid_token"}"#),
         status(503, ""),
         Err(HttpError::Terminal(TerminalFailure::Unclassified)),
     ];
@@ -379,7 +385,7 @@ async fn logged(run: impl std::future::Future<Output = ()>) -> String {
 /// the token, the client secret and free-text descriptions never appear.
 #[tokio::test]
 async fn a_refused_revocation_logs_the_status_and_error_code_only() {
-    let body = r#"{"error":"invalid_token","error_description":"echo refresh-SECRET-1"}"#;
+    let body = r#"{"error":"invalid_client","error_description":"echo refresh-SECRET-1"}"#;
     let (_trace, provider) = google_rig(status(400, body), false, NOW).await;
 
     let lines = logged(async {
@@ -391,8 +397,33 @@ async fn a_refused_revocation_logs_the_status_and_error_code_only() {
     .await;
 
     assert!(lines.contains("status=400"), "{lines}");
-    assert!(lines.contains("invalid_token"), "{lines}");
+    assert!(lines.contains("invalid_client"), "{lines}");
     for secret in [REFRESH_TOKEN, SECRET_VALUE, "echo refresh-SECRET-1"] {
+        assert!(!lines.contains(secret), "{secret} leaked: {lines}");
+    }
+}
+
+/// RFC 7009 §2.2 answers 200 for an invalid token; Google answers 400
+/// `invalid_token` for one it already revoked (the access token after its
+/// refresh token). The token is unusable either way, so that exact pair is a
+/// confirmation, logged without the token or the provider's description.
+#[tokio::test]
+async fn revoke_treats_400_invalid_token_as_already_revoked() {
+    let body = r#"{"error":"invalid_token","error_description":"echo access-SECRET-2"}"#;
+    let (trace, provider) = google_rig(status(400, body), false, NOW).await;
+
+    let lines = logged(async {
+        let revoked = provider
+            .revoke_token("workspace", "access-1", TokenTypeHint::AccessToken)
+            .await;
+        assert_eq!(revoked, ProviderRevocation::Confirmed);
+    })
+    .await;
+
+    assert_eq!(trace.token_calls().len(), 1);
+    assert!(lines.contains("already invalid"), "{lines}");
+    assert!(!lines.contains("refused"), "{lines}");
+    for secret in ["access-1", SECRET_VALUE, "echo access-SECRET-2"] {
         assert!(!lines.contains(secret), "{secret} leaked: {lines}");
     }
 }
