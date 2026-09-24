@@ -329,6 +329,20 @@ async fn scoped_caller_cannot_reach_or_detect_another_backends_resources_and_pro
 #[tokio::test]
 async fn required_propagation_backend_is_not_reached_without_the_callers_identity() {
     let f = fixture().await;
+    // Its catalogue is not listed either: a list fill for a caller without
+    // identity would go out over the shared session.
+    for (method, field, key_of) in [
+        ("resources/list", "resources", "uri"),
+        ("resources/templates/list", "resourceTemplates", "name"),
+        ("prompts/list", "prompts", "name"),
+    ] {
+        let items = listed(&f.router, "open-key", method, field, key_of).await;
+        assert!(
+            !items.iter().any(|item| item.contains("gamma")),
+            "{method}: the required-propagation backend is omitted for a caller without identity: \
+             {items:?}"
+        );
+    }
     for method in [
         "resources/read",
         "resources/subscribe",
