@@ -306,3 +306,68 @@ fn recommendation_requests_admin_review_for_cross_user_access() {
     assert!(recommendation.confirmation_required);
     assert!(recommendation.lease.is_none());
 }
+
+#[test]
+fn a_label_mismatch_alone_does_not_deny() {
+    // The runtime label is whatever the transport had to hand (an API key's
+    // name, an email claim); the grant file's label is what the operator
+    // typed. They routinely differ, and identity is (authority, subject).
+    let mut row = grant();
+    row.subject.label = Some("Alice Example".to_string());
+    row.owner = Some(row.subject.clone());
+    let store = LocalIdentityGrantStore::from_grants(vec![row]);
+
+    let mut request = personal_request(Some(GrantSubject::new("local", "alice-sub", None)));
+    request.owner = Some(GrantSubject::new(
+        "local",
+        "alice-sub",
+        Some("owner label".to_string()),
+    ));
+    let evaluation = store.evaluate(&request);
+    assert!(evaluation.allowed, "{:?}", evaluation.reason);
+    assert_eq!(evaluation.reason, IdentityGrantDecisionReason::GrantMatched);
+
+    // The converse: a shared label is not a shared identity.
+    let impostor = GrantSubject::new("local", "bob-sub", Some("Alice Example".to_string()));
+    let mut request = personal_request(Some(impostor.clone()));
+    request.owner = Some(impostor);
+    assert!(!store.evaluate(&request).allowed);
+}
+
+#[test]
+fn an_execute_grant_covers_a_read_and_a_read_grant_covers_only_reads() {
+    // Dispatch asks for `read` on a capability declaring `read_only: true`
+    // and `execute` otherwise, so both grant scopes must allow something.
+    let mut read = personal_request(Some(alice()));
+    read.scope = GrantScope::Read;
+
+    let execute_store = LocalIdentityGrantStore::from_grants(vec![grant()]);
+    assert!(execute_store.evaluate(&read).allowed, "execute covers read");
+
+    let mut read_grant = grant();
+    read_grant.scope = GrantScope::Read;
+    let read_store = LocalIdentityGrantStore::from_grants(vec![read_grant]);
+    assert!(read_store.evaluate(&read).allowed);
+    assert!(
+        !read_store
+            .evaluate(&personal_request(Some(alice())))
+            .allowed,
+        "a read grant must not allow a call to a mutating capability"
+    );
+}
+
+#[tokio::test]
+async fn a_write_scope_is_refused_at_load_rather_than_accepted_and_never_matched() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("identity-grants.yaml");
+    tokio::fs::write(
+        &path,
+        "schema_version: identity_grants.v1\ngrants:\n  - grant_id: g\n    subject:\n      authority: api_key\n      subject: alice\n    agent: any\n    capability: c\n    scope: write\n    provenance: p\n    reason: r\n",
+    )
+    .await
+    .unwrap();
+
+    let err = load_identity_grants_file(&path).await.unwrap_err();
+
+    assert!(err.contains("write"), "{err}");
+}

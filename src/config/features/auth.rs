@@ -597,3 +597,55 @@ mod cwe532_debug_redaction {
         );
     }
 }
+
+#[cfg(test)]
+mod api_key_name_tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn config_with_key_names(names: &[&str]) -> Config {
+        let mut config = Config::default();
+        config.auth.api_keys = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| ApiKeyConfig {
+                key: format!("secret-{index}"),
+                name: (*name).to_string(),
+                rate_limit: 0,
+                backends: Vec::new(),
+                allowed_tools: None,
+                denied_tools: None,
+                admin: false,
+            })
+            .collect();
+        config
+    }
+
+    // A key's name is its identity-grant subject (`api_key:<name>`), so two
+    // keys sharing a name would hold each other's grants and a nameless key
+    // could hold none. Both are refused at load, whether or not auth is on.
+    #[test]
+    fn duplicate_api_key_names_are_refused_at_load() {
+        let err = config_with_key_names(&["ops", "laptop", "ops"])
+            .validate()
+            .expect_err("two keys named 'ops' would share one grant identity");
+        assert!(err.to_string().contains("ops"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_api_key_name_is_refused_at_load() {
+        for blank in ["", "  "] {
+            let err = config_with_key_names(&["laptop", blank])
+                .validate()
+                .expect_err("a nameless key has no grant identity");
+            assert!(err.to_string().contains("name"), "{err}");
+        }
+    }
+
+    #[test]
+    fn unique_named_api_keys_load() {
+        config_with_key_names(&["laptop", "phone"])
+            .validate()
+            .expect("distinct non-empty names are the valid shape");
+    }
+}

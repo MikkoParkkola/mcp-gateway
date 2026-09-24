@@ -54,19 +54,50 @@ grants:
       authority: api_key
       subject: alice
       label: Alice
-    agent:
-      exact: agent-a
-    capability: personal_calendar
-    tool: read_day
+    agent: any
+    capability: calendar_read_day
     scope: read
     owner:
       authority: api_key
       subject: alice
-      label: Alice
-    expires_at: "2026-06-28T23:00:00Z"
     provenance: local-operator
-    reason: Alice approved read-only calendar access for agent-a.
+    reason: Alice approved read-only access to her calendar.
 ```
+
+A grant matches a caller on `authority` and `subject` only. `label` is display
+text and never takes part in matching, so the `Alice` above still matches the
+caller the gateway labels `alice`. The subject a caller carries depends on how
+it authenticated:
+
+| Caller | `authority` | `subject` |
+|---|---|---|
+| API key (`auth.api_keys`) | `api_key` | the key's `name` |
+| OIDC temporary token | the token's issuer | the token's `sub` |
+| Trusted identity headers | `X-Gateway-Identity-Authority`, else `trusted_header` | the header subject |
+| mTLS client certificate | `mtls` | first SAN URI, else CN |
+| Agent JWT | `agent_oauth` | the agent's `client_id` |
+
+Every `auth.api_keys` entry must have a non-empty `name`, unique across the
+list, because that name is the key's grant identity. Config load refuses a
+missing or duplicated name.
+
+`agent: {exact: AGENT_ID}` matches only a caller with a proven agent id, which
+only mTLS and agent-JWT callers have. An API-key caller has none, so an
+API-key grant uses `agent: any`.
+
+`capability` is the capability's `name`. `tool` is optional; for a capability
+tool it is the same name, so leave it out.
+
+`scope` is one of:
+
+- `read`: allows capabilities that declare `metadata.read_only: true`.
+- `execute`: allows any call to the capability, read-only or not.
+- `any`: the same as `execute`.
+
+`write` is refused at load. Dispatch cannot tell a write from any other
+non-read-only call, so a `write` grant would never allow anything.
+
+`expires_at` (RFC 3339) is optional; a grant without it stays live until revoked.
 
 ## Model
 
@@ -76,7 +107,7 @@ An `IdentityGrant` records:
 - Subject authority and subject id.
 - Agent binding: any agent or one exact agent id.
 - Capability id and optional tool name.
-- Action scope: read, write, execute, or any.
+- Action scope: read, execute, or any.
 - Optional owner subject for personal capabilities.
 - Expiry and revocation timestamps.
 - Provenance and human-readable reason.
@@ -110,10 +141,10 @@ Personal capability YAML uses the existing metadata block:
 ```yaml
 metadata:
   exposure: personal
+  read_only: true
   identity_owner:
     authority: api_key
     subject: alice
-    label: Alice
 ```
 
 ## Local CLI Administration
@@ -125,18 +156,18 @@ The CLI writes the same `identity_grants.v1` schema that gateway startup loads:
 mcp-gateway identity grants grant \
   --file ~/.mcp-gateway/identity-grants.yaml \
   --grant-id alice-calendar-read \
-  --subject local:alice \
+  --subject api_key:alice \
   --subject-label Alice \
-  --agent agent-a \
-  --capability personal_calendar \
-  --tool read_day \
+  --any-agent \
+  --capability calendar_read_day \
   --scope read \
   --ttl-seconds 3600 \
-  --reason "Alice approved read-only calendar access for agent-a"
+  --reason "Alice approved read-only access to her calendar"
 ```
 
-Use `--any-agent` only when the grant intentionally applies to any agent acting
-for the subject. The command rejects duplicate grant ids unless `--replace` is
+`--subject` takes `AUTHORITY:SUBJECT` from the table above. Pass
+`--agent AGENT_ID` instead of `--any-agent` only for mTLS or agent-JWT callers,
+the ones that carry a proven agent id. The command rejects duplicate grant ids unless `--replace` is
 passed. If `--owner` is omitted, the owner defaults to the subject so the common
 "user grants access to their own personal capability" flow does not require
 extra fields.

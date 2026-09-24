@@ -408,22 +408,25 @@ fn truncate(value: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mcp_gateway::identity_grants::{
+        CapabilityExposure, IdentityGrantRequest, LocalIdentityGrantStore,
+    };
 
     fn grant_input(path: PathBuf) -> LocalGrantInput {
         LocalGrantInput {
             file: path,
             grant_id: "grant-alice-calendar".to_string(),
-            subject: "local:alice".to_string(),
+            subject: "api_key:alice".to_string(),
             subject_label: Some("Alice".to_string()),
-            agent: Some("agent-a".to_string()),
-            any_agent: false,
-            capability: "personal_calendar".to_string(),
-            tool: Some("read_day".to_string()),
+            agent: None,
+            any_agent: true,
+            capability: "calendar_read_day".to_string(),
+            tool: None,
             scope: IdentityGrantScopeArg::Read,
             owner: None,
             owner_label: None,
-            expires_at: Some("2026-06-29T13:00:00Z".to_string()),
-            ttl_seconds: None,
+            expires_at: None,
+            ttl_seconds: Some(3600),
             provenance: "test://identity-cli".to_string(),
             reason: "operator-approved test grant".to_string(),
             replace: false,
@@ -477,6 +480,45 @@ mod tests {
         assert_eq!(subject.authority, "https://issuer.example");
         assert_eq!(subject.subject, "alice-sub");
         assert_eq!(subject.label.as_deref(), Some("Alice"));
+    }
+
+    /// `grant_input` is the `docs/identity_grants.md` CLI example. The gateway
+    /// then sees that caller as an API key named `alice`, labelled with its own
+    /// name, carrying no proven agent id, calling a read-only capability.
+    #[tokio::test]
+    async fn the_documented_grant_command_allows_the_api_key_caller_it_names() {
+        let doc = include_str!("../../docs/identity_grants.md");
+        for flag in [
+            "--subject api_key:alice",
+            "--any-agent",
+            "--capability calendar_read_day",
+            "--scope read",
+        ] {
+            assert!(doc.contains(flag), "the documented example drifted: {flag}");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let (_, grant) = upsert_local_grant(grant_input(dir.path().join("grants.yaml")))
+            .await
+            .unwrap();
+        let request = IdentityGrantRequest {
+            identity: Some(GrantSubject::new(
+                "api_key",
+                "alice",
+                Some("alice".to_string()),
+            )),
+            agent_id: None,
+            capability: "calendar_read_day".to_string(),
+            tool: Some("calendar_read_day".to_string()),
+            scope: GrantScope::Read,
+            exposure: CapabilityExposure::Personal,
+            owner: Some(GrantSubject::new("api_key", "alice", None)),
+            now: Utc::now(),
+        };
+
+        let evaluation = LocalIdentityGrantStore::from_grants(vec![grant]).evaluate(&request);
+
+        assert!(evaluation.allowed, "{:?}", evaluation.reason);
     }
 
     #[test]

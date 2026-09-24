@@ -18,6 +18,11 @@
 //! comparison one level up, on the LOADED store, which is where these cells
 //! now drive it. Their assertions are unchanged.
 
+// Declared here rather than in `meta_mcp/mod.rs`, which sits at its
+// file-size ratchet: the doc-example cells are grant cells too.
+#[path = "identity_grant_doc_tests.rs"]
+mod identity_grant_doc_tests;
+
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
