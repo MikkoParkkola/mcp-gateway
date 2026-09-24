@@ -78,7 +78,7 @@ async fn list_equals_invoke_gateway_list_tools() {
 #[tokio::test]
 async fn search_tools_omits_out_of_scope_matches_and_suggestions() {
     let f = fixture(Auth::Keys).await;
-    for query in ["beta", "beta_tool", "zzzz-no-hit"] {
+    for query in ["beta", "beta_tool", "cap_open", "zzzz-no-hit"] {
         let body = call_tool(
             &f.router,
             Some("alpha-only"),
