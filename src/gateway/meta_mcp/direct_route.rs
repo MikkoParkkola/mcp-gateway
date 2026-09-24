@@ -50,7 +50,8 @@ impl MetaMcp {
         };
         // No grant subject reaches this route yet, so a caller identified only
         // by mTLS, trusted headers or an OAuth agent is not separated here.
-        let identity_suffix = support::retry_identity_suffix(cache_binding, verified_identity, None);
+        let identity_suffix =
+            support::retry_identity_suffix(cache_binding, verified_identity, None);
         // No projection and no chain step on this route: it forwards one call.
         let Some(key) = support::idempotency_key_for(client_key, "", &identity_suffix, Some(cache))
         else {
