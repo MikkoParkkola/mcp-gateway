@@ -296,17 +296,22 @@ impl StdioSession {
     /// without weakening the row -- `budget` still bounds a parked reader into a
     /// failure, and `settle` still lets an over-admitted extra arrive and redden
     /// the assertion.
+    ///
+    /// `enough` sees each line parsed once (MIK-7553): re-parsing every 96 KiB
+    /// question per line spent ~200 MB of debug-build parsing inside `budget`.
     async fn collect_lines_until(
         &mut self,
         budget: Duration,
         settle: Duration,
-        enough: impl Fn(&[String]) -> bool,
+        enough: impl Fn(&[Value]) -> bool,
     ) -> Vec<String> {
         let mut lines = Vec::new();
+        let mut frames = Vec::new();
         let ended = timeout(budget, async {
             while let Ok(Some(line)) = self.stdout.next_line().await {
+                frames.extend(serde_json::from_str::<Value>(&line).ok());
                 lines.push(line);
-                if enough(&lines) {
+                if enough(&frames) {
                     break;
                 }
             }
@@ -320,7 +325,7 @@ impl StdioSession {
             "collect_lines_until: {} after {} lines",
             match ended {
                 Err(_) => "the budget expired",
-                Ok(()) if enough(&lines) => "the expected count arrived",
+                Ok(()) if enough(&frames) => "the expected count arrived",
                 Ok(()) => "stdout ended",
             },
             lines.len()
@@ -759,17 +764,14 @@ const BURST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a saturation row waits for the questions it expects.
 ///
-/// Thirty seconds was once read as too tight: four CI runs failed with 57, 58,
-/// 59 and 63 of the expected 64 questions, a spread just under the cap. Raising
-/// this to 180s tested that reading and refuted it. The row then ran for its
-/// full budget -- 187.60s wall clock for the binary -- and still collected 58,
-/// while the sibling inflight row collected 60. Six times the budget moved the
-/// count by nothing, so the missing questions are not late, they do not arrive.
+/// A 180s budget once still collected 58 of 64, so a larger number buys no
+/// evidence; `collect_lines_until`'s end-cause line is what diagnoses a miss.
 ///
-/// The value is back at its original 30s because the extra 150s buys no
-/// evidence and costs every green run. What separates a parked reader from a
-/// child that stopped emitting is the end-cause line `collect_lines_until`
-/// prints on failure, not a larger number here.
+/// Nor is it an idle deadline (MIK-7553): it must stay within the bridge's own
+/// 30s `per_prompt` (`BridgeBounds::DEFAULT`). Past that the gateway ends
+/// unanswered dispatches itself, whose frames keep an idle wait alive, whose
+/// freed permits admit a 65th question on a correct gateway, and which un-park
+/// a reader that awaits admission inline -- the defect row 7a pins.
 const COLLECT_BUDGET: Duration = Duration::from_secs(30);
 
 /// Kept reading after the expected count arrives, so one question too many is
@@ -1000,8 +1002,7 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     let wanted = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
     let lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-            let seen = frames_lenient(seen);
-            prompts_in(&seen).len() + tool_refused_ids(&seen).len() >= wanted
+            prompts_in(seen).len() + tool_refused_ids(seen).len() >= wanted
         })
         .await;
     let frames = frames_lenient(&lines);
@@ -1031,7 +1032,7 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     // budget expires and both assertions below still fail.
     let after_lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-            !prompts_in(&frames_lenient(seen)).is_empty()
+            !prompts_in(seen).is_empty()
         })
         .await;
     let after = frames_lenient(&after_lines);
@@ -1057,8 +1058,7 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
     // refusal rather than for the drop it exists to catch.
     let settled_lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-            frames_lenient(seen)
-                .iter()
+            seen.iter()
                 .filter(|frame| frame.get("method").is_none())
                 .filter(|frame| {
                     frame.pointer("/error/code").and_then(Value::as_i64) != Some(-32000)
@@ -1153,7 +1153,7 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
     let wanted = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
     let lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-            prompts_in(&frames_lenient(seen)).len() >= wanted
+            prompts_in(seen).len() >= wanted
         })
         .await;
     let frames = frames_lenient(&lines);
@@ -1240,7 +1240,7 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
     // perfectly correct run.
     let after_lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-            frames_lenient(seen).iter().any(|frame| {
+            seen.iter().any(|frame| {
                 frame.get("method").is_none()
                     && frame.get("result").is_some()
                     && matches!(frame.get("id").and_then(Value::as_i64),
