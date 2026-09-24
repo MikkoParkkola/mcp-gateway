@@ -208,9 +208,6 @@ impl MetaMcp {
                 continue;
             }
             if let Some(tool) = backend.get_cached_tool(name)
-                && self
-                    .may_invoke(&backend.name, name, scope, session_id)
-                    .is_ok()
             {
                 return Some(tool);
             }

@@ -145,11 +145,7 @@ impl MetaMcp {
                     continue;
                 }
                 let tool = capability.to_mcp_tool();
-                if !profile.tool_allowed(&tool.name)
-                    || self
-                        .may_invoke(&cap.name, &tool.name, scope, session_id)
-                        .is_err()
-                {
+                if !profile.tool_allowed(&tool.name) {
                     continue;
                 }
                 collect_tool_tags_for_code_mode(&tool, all_tags);
@@ -710,9 +706,7 @@ impl MetaMcp {
             for tool in cap.get_tools_for_state(&current_state) {
                 if !profile.tool_allowed(&tool.name)
                     || !tool_matches_role(&tool, role_filter)
-                    || self
-                        .may_invoke(&cap.name, &tool.name, caller.scope(), session_id)
-                        .is_err()
+                    
                 {
                     continue;
                 }

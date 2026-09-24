@@ -1703,7 +1703,7 @@ impl MetaMcp {
     /// The initialize instructions as this caller may read them: counts over
     /// what it could invoke, and a guide naming only those capabilities (A3).
     fn build_instructions(&self, scope: InvokeScope<'_>, session_id: Option<&str>) -> String {
-        let (tool_total, server_count) = self.admitted_counts(scope, session_id);
+        let (tool_total, server_count) = self.backend_counts();
         let mut instructions =
             build_discovery_preamble(tool_total, server_count, &self.meta_tool_exposure);
 

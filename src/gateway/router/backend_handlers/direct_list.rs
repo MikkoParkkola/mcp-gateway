@@ -43,7 +43,7 @@ pub(super) async fn drain(
 ) -> crate::Result<JsonRpcResponse> {
     let mut tools = Vec::new();
     let mut cursor: Option<Value> = None;
-    for _ in 0..DIRECT_LIST_MAX_PAGES {
+    for _ in 0..DIRECT_LIST_MAX_PAGES * 4 {
         let mut page_params = params
             .filter(|p| p.is_object())
             .cloned()
