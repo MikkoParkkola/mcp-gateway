@@ -359,5 +359,6 @@ Run one `ln` line, then the kickstart.
 Valid only because step 2 never writes into the `3.4.0-f30539af` directory, and the 3.4.0
 line is the exact command already rehearsed in step 4 — the untested part of a rollback is
 the kickstart, not the flip. The `4.0.0-438583c1` line has the same shape and was the live
-target before the e2c34b78 swap. A macOS signing rejection shows up in step 3 as `Killed: 9`;
+target before the e2c34b78 swap; it passes the drift check (it is the build the condition-4
+baseline was graded on: 5 probed, 29 uncovered, 0 failing). A macOS signing rejection shows up in step 3 as `Killed: 9`;
 `codesign -s - <binary>` clears it, and catching it there costs nobody an interruption.
