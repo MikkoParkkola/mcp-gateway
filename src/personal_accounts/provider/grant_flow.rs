@@ -218,6 +218,17 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         form.extend(credentials);
         match self.http.post_token(endpoint, &form).await {
             Ok(response) if response.status == 200 => ProviderRevocation::Confirmed,
+            // RFC 7009 §2.2 answers 200 for an invalid token; Google answers
+            // 400 `invalid_token` instead, e.g. for the access token its
+            // refresh token's revocation already killed. Either way the token
+            // is unusable, which is all revocation promises.
+            Ok(response)
+                if response.status == 400
+                    && oauth_error_code(&response.body) == "invalid_token" =>
+            {
+                tracing::info!(account_id, "token already invalid at the provider");
+                ProviderRevocation::Confirmed
+            }
             Ok(response) => {
                 tracing::warn!(
                     account_id,

@@ -280,7 +280,7 @@ async fn exchange_refusals_map_like_refresh_and_unconfigured_accounts_send_nothi
 }
 
 /// RFC 7009 §2.1: the token, its hint and client authentication, posted to the
-/// PINNED revocation endpoint; 200 is the only confirmation.
+/// PINNED revocation endpoint; 200 confirms.
 #[tokio::test]
 async fn revoke_posts_the_rfc7009_form_to_the_pinned_revocation_endpoint() {
     let (trace, provider) = google_rig(ok(""), false, NOW).await;
@@ -317,8 +317,8 @@ async fn revoke_posts_the_rfc7009_form_to_the_pinned_revocation_endpoint() {
     );
 }
 
-/// Anything but 200, a transport failure, or an account the provider does not
-/// manage is `Failed` -- never `Confirmed`.
+/// Anything but 200 or 400 `invalid_token`, a transport failure, or an account
+/// the provider does not manage is `Failed` -- never `Confirmed`.
 #[tokio::test]
 async fn revoke_reports_failed_for_every_non_confirmation() {
     let outcomes = [
