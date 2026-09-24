@@ -151,6 +151,7 @@ impl MetaMcp {
         &self,
         id: RequestId,
         _params: Option<&Value>,
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> JsonRpcResponse {
         // Prepend gateway-owned meta-prompts (served inline, no backend required).
@@ -161,6 +162,9 @@ impl MetaMcp {
         // backend the caller may not see is dropped here (fail-closed = omit).
         let mut credentialed = Vec::new();
         for backend in self.backends.all() {
+            if crate::gateway::authz::authorize_backend(client, &backend.name).is_err() {
+                continue;
+            }
             if let Some(credential) = self
                 .catalogue_credential_for(&backend, verified_identity)
                 .await
@@ -210,11 +214,14 @@ impl MetaMcp {
     /// Handle `prompts/get` — gateway meta-prompts take priority, then backend routing.
     ///
     /// Names prefixed `gateway/` are served inline without a backend round-trip.
-    /// All other names are routed using the `"backend_name/original_name"` convention.
+    /// All other names are routed using the `"backend_name/original_name"` convention,
+    /// on the terms of [`Self::forward_for_caller`].
     pub async fn handle_prompts_get(
         &self,
         id: RequestId,
         params: Option<&Value>,
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> JsonRpcResponse {
         let Some(name) = extract_nested_optional_str(params, "name") else {
             return missing_parameter_response(&id, "name");
@@ -256,24 +263,19 @@ impl MetaMcp {
             forward_params["arguments"] = arguments.clone();
         }
 
-        // INV-2 (ADR-008): on a multi-user gateway, never forward a gateway-held
-        // OAuth token that is not isolated per user. The meta route resolves no
-        // per-user credential here, so pass `false` — fail closed rather than serve
-        // one user's backend OAuth view to another (MIK-6742 leak class).
-        if let Err(e) = self.enforce_oauth_isolation_for(&backend, backend_name, false) {
-            return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+        if let Some(refused) = self.refusal_for(&id, &backend, "prompts/get", client) {
+            return refused;
         }
-
-        match backend.request("prompts/get", Some(forward_params)).await {
-            Ok(resp) => {
-                if let Some(error) = resp.error {
-                    JsonRpcResponse::error(Some(id), error.code, error.message)
-                } else {
-                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({"messages": []})))
-                }
-            }
-            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
-        }
+        let empty = json!({"messages": []});
+        self.forward_for_caller(
+            id,
+            &backend,
+            "prompts/get",
+            forward_params,
+            verified_identity,
+            empty,
+        )
+        .await
     }
 
     /// Handle `logging/setLevel` — store level and broadcast to all backends.
@@ -521,7 +523,7 @@ mod tests {
 
         let params = serde_json::json!({ "name": "mem/echo" });
         let resp = m
-            .handle_prompts_get(RequestId::Number(1), Some(&params))
+            .handle_prompts_get(RequestId::Number(1), Some(&params), None, None)
             .await;
 
         let err = resp
@@ -568,7 +570,7 @@ mod tests {
         m.set_multi_user(true);
 
         let resp = m
-            .handle_prompts_list(RequestId::Number(1), None, None)
+            .handle_prompts_list(RequestId::Number(1), None, None, None)
             .await;
         assert!(
             resp.error.is_none(),

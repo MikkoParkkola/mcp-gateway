@@ -24,7 +24,10 @@ use futures::future::join_all;
 use serde_json::{Value, json};
 use tracing::warn;
 
+use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::authz::authorize_backend;
 use crate::gateway::router::CallerStanding;
+use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::{
     JsonRpcResponse, RequestId, Resource, ResourceContents, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult,
@@ -279,6 +282,8 @@ impl MetaMcp {
     /// that presented no identity — resolves to the shared slot, so
     /// single-tenant behaviour is byte-for-byte unchanged (IDP.5).
     ///
+    /// A backend outside `client`'s scope is omitted before it is contacted.
+    ///
     /// # Panics
     ///
     /// Panics if `ResourcesListResult` fails to serialize to JSON, which cannot
@@ -287,7 +292,8 @@ impl MetaMcp {
         &self,
         id: RequestId,
         _params: Option<&Value>,
-        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        client: Option<&AuthenticatedClient>,
+        verified_identity: Option<&VerifiedIdentity>,
     ) -> JsonRpcResponse {
         // Prepend gateway-owned guides (served inline, no backend required).
         let mut all_resources: Vec<Resource> = guide_resources().into();
@@ -297,6 +303,9 @@ impl MetaMcp {
         // backend the caller may not see is dropped here (fail-closed = omit).
         let mut credentialed = Vec::new();
         for backend in self.backends.all() {
+            if authorize_backend(client, &backend.name).is_err() {
+                continue;
+            }
             if let Some(credential) = self
                 .catalogue_credential_for(&backend, verified_identity)
                 .await
@@ -346,12 +355,15 @@ impl MetaMcp {
     /// Handle `resources/read` — gateway guide resources take priority, then backend routing.
     ///
     /// Gateway-owned `gateway://` URIs are served inline without forwarding to any
-    /// backend.  All other URIs are routed to the backend that owns them.
+    /// backend.  All other URIs are routed to the backend that owns them, on
+    /// the terms of [`Self::forward_for_caller`].
     pub async fn handle_resources_read(
         &self,
         id: RequestId,
         params: Option<&Value>,
         standing: CallerStanding,
+        client: Option<&AuthenticatedClient>,
+        verified_identity: Option<&VerifiedIdentity>,
     ) -> JsonRpcResponse {
         let Some(uri) = extract_nested_optional_str(params, "uri") else {
             return missing_parameter_response(&id, "uri");
@@ -373,28 +385,20 @@ impl MetaMcp {
             return resource_not_found(id, uri);
         };
 
-        // INV-2 (ADR-008): on a multi-user gateway, never forward a gateway-held
-        // OAuth token that is not isolated per user. The meta route resolves no
-        // per-user credential here (propagation parity is direct-route-only until
-        // the invoke resolver is unlocked), so pass `false` — fail closed rather
-        // than serve one user's backend OAuth view to another (MIK-6742 leak class).
-        if let Err(e) = self.enforce_oauth_isolation_for(&backend, &backend.name, false) {
-            return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+        if let Some(refused) = self.refusal_for(&id, &backend, "resources/read", client) {
+            return refused;
         }
-
-        match backend
-            .request("resources/read", Some(json!({ "uri": uri })))
-            .await
-        {
-            Ok(resp) => {
-                if let Some(error) = resp.error {
-                    JsonRpcResponse::error(Some(id), error.code, error.message)
-                } else {
-                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({"contents": []})))
-                }
-            }
-            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
-        }
+        let params = json!({ "uri": uri });
+        let empty = json!({"contents": []});
+        self.forward_for_caller(
+            id,
+            &backend,
+            "resources/read",
+            params,
+            verified_identity,
+            empty,
+        )
+        .await
     }
 
     /// Handle `resources/templates/list` — aggregate templates from all backends.
@@ -404,11 +408,15 @@ impl MetaMcp {
         &self,
         id: RequestId,
         _params: Option<&Value>,
-        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        client: Option<&AuthenticatedClient>,
+        verified_identity: Option<&VerifiedIdentity>,
     ) -> JsonRpcResponse {
         let mut all_templates: Vec<ResourceTemplate> = Vec::new();
 
         for backend in self.backends.all() {
+            if authorize_backend(client, &backend.name).is_err() {
+                continue;
+            }
             let Some((headers, binding)) = self
                 .catalogue_credential_for(&backend, verified_identity)
                 .await
@@ -439,11 +447,14 @@ impl MetaMcp {
         JsonRpcResponse::success_serialized(id, result)
     }
 
-    /// Handle `resources/subscribe` — route to the backend that owns the URI.
+    /// Handle `resources/subscribe` — route to the backend that owns the URI, on
+    /// the terms of [`Self::forward_for_caller`].
     pub async fn handle_resources_subscribe(
         &self,
         id: RequestId,
         params: Option<&Value>,
+        client: Option<&AuthenticatedClient>,
+        verified_identity: Option<&VerifiedIdentity>,
     ) -> JsonRpcResponse {
         let Some(uri) = extract_nested_optional_str(params, "uri") else {
             return missing_parameter_response(&id, "uri");
@@ -453,9 +464,8 @@ impl MetaMcp {
             return resource_not_found(id, uri);
         };
 
-        // INV-2 (ADR-008): fail closed on a multi-user gateway — see handle_resources_read.
-        if let Err(e) = self.enforce_oauth_isolation_for(&backend, &backend.name, false) {
-            return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+        if let Some(refused) = self.refusal_for(&id, &backend, "resources/subscribe", client) {
+            return refused;
         }
 
         // Removed in 2026-07-28 and replaced by `subscriptions/listen`. The
@@ -470,26 +480,26 @@ impl MetaMcp {
             );
         }
 
-        match backend
-            .request("resources/subscribe", Some(json!({ "uri": uri })))
-            .await
-        {
-            Ok(resp) => {
-                if let Some(error) = resp.error {
-                    JsonRpcResponse::error(Some(id), error.code, error.message)
-                } else {
-                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({})))
-                }
-            }
-            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
-        }
+        let params = json!({ "uri": uri });
+        self.forward_for_caller(
+            id,
+            &backend,
+            "resources/subscribe",
+            params,
+            verified_identity,
+            json!({}),
+        )
+        .await
     }
 
-    /// Handle `resources/unsubscribe` — route to the backend that owns the URI.
+    /// Handle `resources/unsubscribe` — route to the backend that owns the URI, on
+    /// the terms of [`Self::forward_for_caller`].
     pub async fn handle_resources_unsubscribe(
         &self,
         id: RequestId,
         params: Option<&Value>,
+        client: Option<&AuthenticatedClient>,
+        verified_identity: Option<&VerifiedIdentity>,
     ) -> JsonRpcResponse {
         let Some(uri) = extract_nested_optional_str(params, "uri") else {
             return missing_parameter_response(&id, "uri");
@@ -499,9 +509,8 @@ impl MetaMcp {
             return resource_not_found(id, uri);
         };
 
-        // INV-2 (ADR-008): fail closed on a multi-user gateway — see handle_resources_read.
-        if let Err(e) = self.enforce_oauth_isolation_for(&backend, &backend.name, false) {
-            return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+        if let Some(refused) = self.refusal_for(&id, &backend, "resources/unsubscribe", client) {
+            return refused;
         }
 
         // Removed in 2026-07-28 and replaced by `subscriptions/listen`. The
@@ -516,17 +525,96 @@ impl MetaMcp {
             );
         }
 
+        let params = json!({ "uri": uri });
+        self.forward_for_caller(
+            id,
+            &backend,
+            "resources/unsubscribe",
+            params,
+            verified_identity,
+            json!({}),
+        )
+        .await
+    }
+
+    /// Why `client` may not have `method` forwarded to `backend`, if it may not.
+    ///
+    /// Backend scope first, with the refusal `tools/call` gives (`-32003`,
+    /// answered 403), then INV-2 (ADR-008). The isolation guard is still asked
+    /// with `false` although [`Self::forward_for_caller`] may resolve a per-user
+    /// credential, so this route admits nothing on a multi-user gateway that it
+    /// refused before. Both refusals come before any mint, so a request that is
+    /// refused anyway writes no identity audit record.
+    pub(super) fn refusal_for(
+        &self,
+        id: &RequestId,
+        backend: &crate::backend::Backend,
+        method: &str,
+        client: Option<&AuthenticatedClient>,
+    ) -> Option<JsonRpcResponse> {
+        if let Err(e) = authorize_backend(client, &backend.name) {
+            crate::gateway::authz::audit_refusal(
+                crate::gateway::authz::Transport::Http,
+                client.map(|c| c.name.as_str()),
+                &backend.name,
+                method,
+                &e.message,
+            );
+            let refusal = crate::Error::Forbidden {
+                code: e.code,
+                status: e.status.as_u16(),
+                message: e.message,
+            };
+            return Some(super::error_response_preserving_status(
+                id.clone(),
+                &refusal,
+            ));
+        }
+        self.enforce_oauth_isolation_for(backend, &backend.name, false)
+            .err()
+            .map(|e| JsonRpcResponse::error(Some(id.clone()), e.to_rpc_code(), e.to_string()))
+    }
+
+    /// Send `method` to `backend` under the caller's own identity credential.
+    ///
+    /// Resolved by the resolver `gateway_invoke` uses, so a backend whose
+    /// identity propagation is `required` is refused, never reached over the
+    /// shared session, when the caller carries no verified identity or the
+    /// mint fails. A caller with no identity and a backend without `required`
+    /// propagation get the shared session, as before. `empty` answers a
+    /// backend success that carried no result.
+    pub(super) async fn forward_for_caller(
+        &self,
+        id: RequestId,
+        backend: &crate::backend::Backend,
+        method: &str,
+        params: Value,
+        verified_identity: Option<&VerifiedIdentity>,
+        empty: Value,
+    ) -> JsonRpcResponse {
+        // Only a propagating backend is resolved. `resolve_propagation_credential`
+        // also refuses an account-bound backend with no strategy, which is
+        // `gateway_invoke`'s rule and not this route's: here that backend stays
+        // on the INV-2 terms `refusal_for` already applied.
+        let (headers, binding) = if backend.identity_propagation_config().is_some() {
+            match self
+                .resolve_propagation_credential(&backend.name, verified_identity)
+                .await
+            {
+                Ok(credential) => credential,
+                Err(e) => return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+            }
+        } else {
+            (Vec::new(), None)
+        };
         match backend
-            .request("resources/unsubscribe", Some(json!({ "uri": uri })))
+            .request_with_headers(method, Some(params), &headers, binding.as_deref())
             .await
         {
-            Ok(resp) => {
-                if let Some(error) = resp.error {
-                    JsonRpcResponse::error(Some(id), error.code, error.message)
-                } else {
-                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({})))
-                }
-            }
+            Ok(resp) => match resp.error {
+                Some(error) => JsonRpcResponse::error(Some(id), error.code, error.message),
+                None => JsonRpcResponse::success(id, resp.result.unwrap_or(empty)),
+            },
             Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
         }
     }

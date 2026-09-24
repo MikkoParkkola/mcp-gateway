@@ -4238,7 +4238,7 @@ async fn prompts_list_includes_backend_prompts() {
     let meta = meta_with_backend(&url, Duration::from_secs(5));
 
     let resp = meta
-        .handle_prompts_list(RequestId::Number(1), None, None)
+        .handle_prompts_list(RequestId::Number(1), None, None, None)
         .await;
     let prompts = resp.result.unwrap()["prompts"].as_array().unwrap().clone();
     let names: Vec<&str> = prompts
@@ -4264,7 +4264,7 @@ async fn prompts_list_skips_hung_backend_within_timeout() {
 
     let start = std::time::Instant::now();
     let resp = meta
-        .handle_prompts_list(RequestId::Number(1), None, None)
+        .handle_prompts_list(RequestId::Number(1), None, None, None)
         .await;
     let elapsed = start.elapsed();
 
@@ -4295,7 +4295,7 @@ async fn resources_list_skips_hung_backend_within_timeout() {
 
     let start = std::time::Instant::now();
     let resp = meta
-        .handle_resources_list(RequestId::Number(1), None, None)
+        .handle_resources_list(RequestId::Number(1), None, None, None)
         .await;
     let elapsed = start.elapsed();
 
@@ -4321,7 +4321,7 @@ async fn resources_list_includes_backend_resources() {
     let meta = meta_with_backend(&url, Duration::from_secs(5));
 
     let resp = meta
-        .handle_resources_list(RequestId::Number(1), None, None)
+        .handle_resources_list(RequestId::Number(1), None, None, None)
         .await;
     let resources = resp.result.unwrap()["resources"]
         .as_array()
@@ -4381,7 +4381,7 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
 
     let start = std::time::Instant::now();
     let resp = meta
-        .handle_prompts_list(RequestId::Number(1), None, None)
+        .handle_prompts_list(RequestId::Number(1), None, None, None)
         .await;
     let elapsed = start.elapsed();
 

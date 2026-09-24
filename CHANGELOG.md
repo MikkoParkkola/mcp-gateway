@@ -406,6 +406,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Resource and prompt methods follow the caller's backend scope.** On the
+  meta route, `resources/*` and `prompts/*` now check the API key or token's
+  backend list the way `tools/call` does: lists leave out backends the caller
+  may not use, and reads, subscriptions and prompt fetches answer 403. Reads,
+  subscriptions and prompt fetches also carry the caller's own identity to a
+  backend that requires it, and are refused when there is none.
+
 - **Anomaly detection reports when it cannot see, instead of scoring a call
   neutral.** It was keyed on the session, and a per-request session makes every
   call look like a first call — scoring 0.5 against a 0.7 threshold, forever.
