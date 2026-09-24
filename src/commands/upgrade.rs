@@ -29,6 +29,9 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+#[path = "upgrade_webhook_notice.rs"]
+mod webhook_notice;
+
 // ── Semver comparison ─────────────────────────────────────────────────────────
 
 /// A parsed semantic version triple `(major, minor, patch)`.
@@ -228,13 +231,14 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
 //
-// v4.0.0 carries five changes an operator can be surprised by, none of which a
+// v4.0.0 carries six changes an operator can be surprised by, none of which a
 // config edit can pre-empt: two need an action (re-authenticate, fix an env
-// file), one removes an advertised protocol version, and one changes what the
-// error budgets count. A 3.x `gateway.yaml` loads unchanged, so this migration
-// never edits the file — it reports, once, on the first 4.0.0 start.
+// file), one removes an advertised protocol version, one changes what the
+// error budgets count, one stops caching unidentified revisions, and one makes
+// webhook notifications opt-in. A 3.x `gateway.yaml` loads unchanged, so this
+// migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The five 4.0.0 changes, in the order they are printed.
+/// The six 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -265,17 +269,18 @@ reaches your backends and the gateway's own rate limits now apply to calls that 
 previously never got that far. Nothing errors: the symptom is throughput and \
 backend load. Send the header on stateless requests, or complete `initialize` \
 and reuse the session.",
+    webhook_notice::ITEM,
 ];
 
 /// Emit the one-time 4.0.0 notice.
 ///
-/// Takes the data directory for signature parity with the other migrations; it
-/// reads nothing, because none of the five items depends on what the config
-/// says.
+/// Reads nothing, because none of the six items depends on what the config
+/// says. It marks the webhook item as delivered so a later start does not
+/// repeat it.
 ///
 /// The `Result` is dictated by `Migration::apply`, not by anything this can fail at.
 #[allow(clippy::unnecessary_wraps)]
-fn migrate_4_0_0_release_notice(_data_dir: &Path) -> std::io::Result<()> {
+fn migrate_4_0_0_release_notice(data_dir: &Path) -> std::io::Result<()> {
     let body = NOTICE_4_0_0_ITEMS
         .iter()
         .enumerate()
@@ -292,6 +297,8 @@ fn migrate_4_0_0_release_notice(_data_dir: &Path) -> std::io::Result<()> {
         "v4.0.0: {} changes need your attention. No config was changed automatically.\n{body}",
         NOTICE_4_0_0_ITEMS.len()
     );
+    // A marker that fails to write costs one repeated notice, not the upgrade.
+    let _ = webhook_notice::mark(data_dir);
     Ok(())
 }
 
@@ -472,6 +479,11 @@ pub fn data_dir() -> PathBuf {
 /// - Stamp < current → run migrations, update stamp, log what ran.
 /// - Stamp > current → warn about downgrade; do **not** touch stamp.
 pub fn check_upgrade(data_dir: &Path) -> std::io::Result<()> {
+    check_upgrade_with(data_dir, &mut std::io::stderr())
+}
+
+/// [`check_upgrade`], writing the once-only webhook notice to `notices`.
+fn check_upgrade_with(data_dir: &Path, notices: &mut impl std::io::Write) -> std::io::Result<()> {
     let current_str = env!("CARGO_PKG_VERSION");
     let current = SemVer::parse(current_str).expect("CARGO_PKG_VERSION is always valid semver");
 
@@ -481,13 +493,13 @@ pub fn check_upgrade(data_dir: &Path) -> std::io::Result<()> {
     let Some(raw) = read_stamp(&stamp)? else {
         // Fresh install — write stamp and return.
         write_stamp(&stamp, current_str)?;
-        return Ok(());
+        return webhook_notice::mark(data_dir);
     };
 
     let Some(installed) = SemVer::parse(&raw) else {
         eprintln!("Warning: unreadable version stamp '{raw}'; treating as fresh install.");
         write_stamp(&stamp, current_str)?;
-        return Ok(());
+        return webhook_notice::mark(data_dir);
     };
 
     match installed.cmp(&current) {
@@ -519,6 +531,9 @@ pub fn check_upgrade(data_dir: &Path) -> std::io::Result<()> {
         }
     }
 
+    // Keyed on a marker, not the stamp: an install already stamped at this
+    // version ran no migration above and would otherwise never hear it.
+    webhook_notice::show_once(data_dir, notices)?;
     Ok(())
 }
 
@@ -613,6 +628,10 @@ fn print_upgrade_summary(old: SemVer, new: SemVer, _migrations: usize, dry_run: 
 #[cfg(test)]
 #[path = "upgrade_notice_tests.rs"]
 mod upgrade_notice_tests;
+
+#[cfg(test)]
+#[path = "upgrade_webhook_notice_tests.rs"]
+mod upgrade_webhook_notice_tests;
 
 #[cfg(test)]
 mod tests {

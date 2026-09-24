@@ -821,7 +821,7 @@ impl std::fmt::Debug for WebhookDefinition {
 }
 
 fn default_notify() -> bool {
-    true
+    false
 }
 
 /// Capability metadata

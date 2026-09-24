@@ -1391,10 +1391,10 @@ impl Gateway {
             }
         }
 
-        // Create webhook registry
-        let webhook_registry = Arc::new(parking_lot::RwLock::new(
-            WebhookRegistry::new(self.config.webhooks.clone()).with_env(Arc::clone(&self.env)),
-        ));
+        let webhook_registry = WebhookRegistry::new(self.config.webhooks.clone())
+            .with_env(Arc::clone(&self.env))
+            .with_backend(&self.config.capabilities.name);
+        let webhook_registry = Arc::new(parking_lot::RwLock::new(webhook_registry));
 
         // Load capabilities if enabled. Capability directories can be large;
         // when webhook route construction does not depend on them, populate the

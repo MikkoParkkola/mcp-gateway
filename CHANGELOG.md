@@ -418,6 +418,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Webhook notifications reach only callers scoped to the capability backend,
+  and are off unless a webhook opts in.** A webhook with `notify` enabled was
+  sent to every connected session, so on a gateway shared by several API keys
+  one caller could receive another integration's payload. `notify` now defaults
+  to `false`, and when enabled a session receives the event only if its caller
+  passes `can_access_backend` for `capabilities.name`. The session's credential
+  is re-validated at every delivery, so a revoked or expired token stops
+  receiving on a stream it opened while valid. With authentication on, a
+  session that presented no credential receives nothing. Breaking: a 3.x
+  webhook that relied on the old default stops notifying until it sets
+  `notify: true`. See
+  [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md) item 11.
+
 - **Resource and prompt methods follow the caller's backend scope.** On the
   meta route, `resources/*` and `prompts/*` now check the API key or token's
   backend list the way `tools/call` does. Lists leave out backends the caller

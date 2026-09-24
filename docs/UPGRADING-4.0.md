@@ -29,8 +29,9 @@ upgrading a running deployment.
 | 6 | Caching requires an identifiable protocol revision | Send the version header, or `initialize` the session |
 | 7 | An OAuth backend must be on TLS or loopback | Put TLS in front of it, or move it to `127.0.0.1` — no opt-out |
 | 8 | A credential-bearing backend on plain `http://` is refused at load | Use TLS, or set `allow_cleartext_credentials: true` on that backend |
-| 10 | Shipped probes move from `/health` to `/livez` and `/readyz` | Repoint your own probes; `/health` still answers |
 | 9 | The savings estimates are gone from stats | Drop `--price`; compute cost from `total_cached_tokens` yourself |
+| 10 | Shipped probes move from `/health` to `/livez` and `/readyz` | Repoint your own probes; `/health` still answers |
+| 11 | Webhook `notify` defaults to off and is scoped per caller | Add `notify: true` to webhooks that should notify |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -142,6 +143,25 @@ The shipped chart, manifests, `Dockerfile` and single-node compose file now poin
 endpoints and dial `127.0.0.1`. If you wrote your own probes, or a load balancer health check,
 against `/health`, repoint them. `/health` is unchanged and remains the place to read backend
 state, so keep it for dashboards and alerts.
+
+## 11. Webhook notifications are opt-in and scoped to the caller
+
+A capability webhook's `notify` now defaults to `false`. In 3.x it defaulted to `true`, and the
+event went to every connected session regardless of who owned it. With `notify: true`, a session
+now receives the event only if its API key may access the capability backend
+(`capabilities.name`), the same check that gates tool calls to that backend.
+
+Nothing errors: a webhook that relied on the old default is still received and acknowledged, and
+its response reports `"notified": false`. Add `notify: true` to each webhook that should reach
+MCP sessions, and give the keys that should see those events access to the capability backend.
+An API key whose `backends` list is `["*"]` or empty is unaffected by the scoping.
+
+The check runs at delivery, against the credential the session was opened with: a key-server
+token that is revoked or expires stops receiving on its open stream. With authentication on, a
+session that presented no credential (a public-path connection) receives no webhook events. With
+authentication off, every session receives them, as before.
+
+Installs already stamped 4.0.0 by a pre-release build get this notice once, on their next start.
 
 ## After upgrading
 

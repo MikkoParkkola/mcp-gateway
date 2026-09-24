@@ -385,12 +385,13 @@ pub(super) async fn mcp_sse_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let (session_id, _rx) = state.multiplexer.get_or_create_session_for(
+    let (session_id, _rx) = state.multiplexer.get_or_create_session_scoped(
         existing_session_id.as_deref(),
         // The identity that owns the session. Every caller is "anonymous"
         // when authentication is off, so a single-user gateway behaves
         // exactly as before.
         &session_owner(client.as_ref()),
+        crate::gateway::auth::live::held_credential(&headers),
     );
 
     info!(session_id = %session_id, "Client connected to SSE stream");
@@ -741,12 +742,13 @@ async fn meta_mcp_dispatch(
         // request every time keeps running and stops protecting.
         (String::new(), None)
     } else {
-        let (id, rx) = state.multiplexer.get_or_create_session_for(
+        let (id, rx) = state.multiplexer.get_or_create_session_scoped(
             existing_session_id.as_deref(),
             // The identity that owns the session. Every caller is "anonymous"
             // when authentication is off, so a single-user gateway behaves
             // exactly as before.
             &session_owner(client.as_ref()),
+            crate::gateway::auth::live::held_credential(&headers),
         );
         (id, Some(rx))
     };
