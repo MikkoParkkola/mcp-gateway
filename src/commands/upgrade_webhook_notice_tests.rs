@@ -10,7 +10,7 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use super::{check_upgrade, stamp_path, webhook_notice};
+use super::{check_upgrade, check_upgrade_with, stamp_path, webhook_notice};
 
 const MARKER: &str = ".notice-4.0.0-webhook-notify";
 
@@ -27,7 +27,13 @@ fn marked(dir: &Path) -> bool {
 #[test]
 fn an_install_already_stamped_at_this_version_gets_the_webhook_notice() {
     let dir = stamped(env!("CARGO_PKG_VERSION"));
-    check_upgrade(dir.path()).unwrap();
+    let mut notices = Vec::new();
+    check_upgrade_with(dir.path(), &mut notices).unwrap();
+    let text = String::from_utf8(notices).unwrap();
+    assert!(
+        text.contains("notify: true"),
+        "the notice was not emitted: {text}"
+    );
     assert!(
         marked(dir.path()),
         "the notice must reach a pre-stamped install"

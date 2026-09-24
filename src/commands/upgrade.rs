@@ -479,6 +479,11 @@ pub fn data_dir() -> PathBuf {
 /// - Stamp < current → run migrations, update stamp, log what ran.
 /// - Stamp > current → warn about downgrade; do **not** touch stamp.
 pub fn check_upgrade(data_dir: &Path) -> std::io::Result<()> {
+    check_upgrade_with(data_dir, &mut std::io::stderr())
+}
+
+/// [`check_upgrade`], writing the once-only webhook notice to `notices`.
+fn check_upgrade_with(data_dir: &Path, notices: &mut impl std::io::Write) -> std::io::Result<()> {
     let current_str = env!("CARGO_PKG_VERSION");
     let current = SemVer::parse(current_str).expect("CARGO_PKG_VERSION is always valid semver");
 
@@ -528,7 +533,7 @@ pub fn check_upgrade(data_dir: &Path) -> std::io::Result<()> {
 
     // Keyed on a marker, not the stamp: an install already stamped at this
     // version ran no migration above and would otherwise never hear it.
-    webhook_notice::show_once(data_dir, &mut std::io::stderr())?;
+    webhook_notice::show_once(data_dir, notices)?;
     Ok(())
 }
 
