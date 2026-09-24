@@ -64,6 +64,26 @@ pub(crate) fn code_challenge_s256(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
+/// The OAuth `error` code of a refusal body, for the operator log. Only the
+/// standard RFC 6749 and RFC 7009 codes are echoed: any other value, and every
+/// free-text `error_description`, could carry request material back.
+fn oauth_error_code(body: &str) -> &'static str {
+    const KNOWN: [&str; 7] = [
+        "invalid_request",
+        "invalid_client",
+        "invalid_grant",
+        "invalid_token",
+        "unauthorized_client",
+        "unsupported_token_type",
+        "unsupported_grant_type",
+    ];
+    serde_json::from_str::<super::ErrorBody>(body)
+        .ok()
+        .and_then(|parsed| parsed.error)
+        .and_then(|code| KNOWN.into_iter().find(|known| *known == code))
+        .unwrap_or("unrecognized")
+}
+
 #[cfg(test)]
 fn random_256() -> String {
     let bytes: [u8; 32] = rand::rng().random();
@@ -185,6 +205,10 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
             _ => return ProviderRevocation::Unsupported,
         };
         let Ok(credentials) = self.client_authentication(descriptor) else {
+            tracing::warn!(
+                account_id,
+                "provider revocation skipped: client credentials unavailable"
+            );
             return ProviderRevocation::Failed;
         };
         let mut form = vec![
@@ -194,7 +218,19 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         form.extend(credentials);
         match self.http.post_token(endpoint, &form).await {
             Ok(response) if response.status == 200 => ProviderRevocation::Confirmed,
-            _ => ProviderRevocation::Failed,
+            Ok(response) => {
+                tracing::warn!(
+                    account_id,
+                    status = response.status,
+                    provider_error = oauth_error_code(&response.body),
+                    "provider refused the revocation"
+                );
+                ProviderRevocation::Failed
+            }
+            Err(error) => {
+                tracing::warn!(account_id, ?error, "provider revocation request failed");
+                ProviderRevocation::Failed
+            }
         }
     }
 
