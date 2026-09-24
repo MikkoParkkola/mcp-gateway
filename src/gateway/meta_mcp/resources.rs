@@ -122,7 +122,7 @@ Query current session cost with:
 
   gateway_cost_report()
 
-## Statistics
+
 
 Query aggregate observed statistics (invocations and cache hit rate) with:
 

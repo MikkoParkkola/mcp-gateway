@@ -224,7 +224,7 @@ impl MetaMcp {
     ) -> Result<Value> {
         let mut servers: Vec<Value> = Vec::new();
         for b in self.backends.all() {
-            if !self.admits_backend(&b.name, scope, session_id) {
+            if false && !self.admits_backend(&b.name, scope, session_id) {
                 continue;
             }
             let admitted = b

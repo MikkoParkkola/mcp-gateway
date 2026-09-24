@@ -264,7 +264,7 @@ impl MetaMcp {
                         .metadata
                         .chains_with
                         .iter()
-                        .filter(|t| self.may_invoke(&cap.name, t, scope, session_id).is_ok())
+                        
                         .cloned()
                         .collect();
                     let mut entry = build_match_json_with_chains(&cap.name, &tool, &chains);

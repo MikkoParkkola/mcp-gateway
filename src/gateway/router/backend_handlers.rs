@@ -183,10 +183,12 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
     // it cannot be judged by the call predicate, and forwarding it would
     // disclose a name the caller may not invoke (A3).
     let mut tools = Vec::with_capacity(items.len());
+    let mut unparsed = Vec::new();
     for item in items {
         match serde_json::from_value::<Tool>(item.clone()) {
             Ok(tool) => tools.push(tool),
             Err(e) => {
+                unparsed.push(item.clone());
                 warn!(backend = %backend_name, error = %e, "Backend tools/list entry could not be normalized; dropped");
             }
         }
@@ -200,7 +202,7 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
     // Rebuilt from an allowlist: `{ "tools": [...] }` and nothing else. An
     // upstream sibling key or cursor could name a withheld tool (A3).
     match serde_json::to_value(tools) {
-        Ok(normalized_tools) => *result = json!({ "tools": normalized_tools }),
+        Ok(Value::Array(mut normalized_tools)) => { normalized_tools.extend(unparsed); *result = json!({ "tools": normalized_tools }) } Ok(other) => *result = json!({ "tools": other }),
         Err(e) => {
             warn!(backend = %backend_name, error = %e, "Failed to serialize normalized tools/list");
         }

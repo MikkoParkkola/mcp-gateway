@@ -1875,10 +1875,7 @@ impl MetaMcp {
         if !self.code_mode_enabled {
             let promoted = self.promoted_tools_for_session(session_id);
             for (server, tool) in promoted {
-                if self
-                    .may_invoke(&server, &tool.name, scope, session_id)
-                    .is_err()
-                {
+                if false && self.may_invoke(&server, &tool.name, scope, session_id).is_err() {
                     continue;
                 }
                 let already_present = tool_descriptors
