@@ -472,4 +472,61 @@ mod tests {
         // THEN: only brave_search granted
         assert_eq!(result, vec!["brave_search"]);
     }
+
+    // ── Out-of-policy requests fail closed ────────────────────────────────
+
+    fn resolve_restricted(backends: &[&str], tools: &[&str]) -> Option<TokenScopes> {
+        let engine = make_engine(vec![github_actions_rule()]);
+        let identity = make_identity(
+            "runner@github.invalid",
+            "https://token.actions.githubusercontent.com",
+            &[],
+        );
+        let requested = RequestedScopes {
+            backends: backends.iter().map(|s| (*s).to_string()).collect(),
+            tools: tools.iter().map(|s| (*s).to_string()).collect(),
+        };
+        engine.resolve_scopes(&identity, &requested)
+    }
+
+    #[test]
+    fn resolve_scopes_rejects_backend_request_outside_restricted_policy() {
+        // An empty backend list in TokenScopes means "all backends", so a
+        // request that intersects to nothing must be refused, not widened.
+        let scopes = resolve_restricted(&["nope"], &[]);
+        assert!(scopes.is_none(), "expected rejection, got {scopes:?}");
+    }
+
+    #[test]
+    fn resolve_scopes_rejects_tool_request_outside_restricted_policy() {
+        let scopes = resolve_restricted(&[], &["nope"]);
+        assert!(scopes.is_none(), "expected rejection, got {scopes:?}");
+    }
+
+    #[test]
+    fn resolve_scopes_partial_overlap_grants_only_the_overlap() {
+        let scopes = resolve_restricted(&["tavily", "nope"], &["tavily-search", "nope"]).unwrap();
+        assert_eq!(scopes.backends, vec!["tavily"]);
+        assert_eq!(scopes.tools, vec!["tavily-search"]);
+    }
+
+    #[test]
+    fn resolve_scopes_empty_request_keeps_restricted_policy_lists() {
+        let scopes = resolve_restricted(&[], &[]).unwrap();
+        assert_eq!(scopes.backends, vec!["tavily", "brave"]);
+        assert_eq!(scopes.tools, vec!["tavily-search", "brave_*"]);
+    }
+
+    #[test]
+    fn resolve_scopes_wildcard_policy_grants_exact_request() {
+        let engine = make_engine(vec![company_rule()]);
+        let identity = make_identity("alice@company.com", "https://accounts.google.com", &[]);
+        let requested = RequestedScopes {
+            backends: vec!["x".to_string()],
+            tools: vec!["x".to_string()],
+        };
+        let scopes = engine.resolve_scopes(&identity, &requested).unwrap();
+        assert_eq!(scopes.backends, vec!["x"]);
+        assert_eq!(scopes.tools, vec!["x"]);
+    }
 }
