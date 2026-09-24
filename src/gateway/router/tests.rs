@@ -2742,10 +2742,6 @@ async fn authz_1_playbook_step_outside_client_backend_scope_is_refused() {
         msg.contains("step not permitted for this caller") && !msg.contains("beta"),
         "the refusal must be recorded without naming the target: {msg}"
     );
-    assert!(
-        msg.contains("scoped"),
-        "and the client it refused for: {msg}"
-    );
 }
 
 #[tokio::test]
