@@ -406,6 +406,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Webhook notifications reach only callers scoped to the capability backend,
+  and are off unless a webhook opts in.** A webhook with `notify` enabled was
+  sent to every connected session, so on a gateway shared by several API keys
+  one caller could receive another integration's payload. `notify` now defaults
+  to `false`, and when enabled a session receives the event only if its caller
+  passes `can_access_backend` for `capabilities.name`. A session with no
+  recorded caller receives nothing. Breaking: a 3.x webhook that relied on the
+  old default stops notifying until it sets `notify: true`. See
+  [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md) item 10.
+
 - **Anomaly detection reports when it cannot see, instead of scoring a call
   neutral.** It was keyed on the session, and a per-request session makes every
   call look like a first call — scoring 0.5 against a 0.7 threshold, forever.

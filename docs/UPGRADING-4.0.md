@@ -29,6 +29,7 @@ upgrading a running deployment.
 | 7 | An OAuth backend must be on TLS or loopback | Put TLS in front of it, or move it to `127.0.0.1` — no opt-out |
 | 8 | A credential-bearing backend on plain `http://` is refused at load | Use TLS, or set `allow_cleartext_credentials: true` on that backend |
 | 9 | The savings estimates are gone from stats | Drop `--price`; compute cost from `total_cached_tokens` yourself |
+| 10 | Webhook `notify` defaults to off and is scoped per caller | Add `notify: true` to webhooks that should notify |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -116,6 +117,18 @@ previously never reached them.
 
 Send `MCP-Protocol-Version` on stateless requests, or complete `initialize` and reuse the
 session. Either restores caching; neither requires a configuration change.
+
+## 10. Webhook notifications are opt-in and scoped to the caller
+
+A capability webhook's `notify` now defaults to `false`. In 3.x it defaulted to `true`, and the
+event went to every connected session regardless of who owned it. With `notify: true`, a session
+now receives the event only if its API key may access the capability backend
+(`capabilities.name`), the same check that gates tool calls to that backend.
+
+Nothing errors: a webhook that relied on the old default is still received and acknowledged, and
+its response reports `"notified": false`. Add `notify: true` to each webhook that should reach
+MCP sessions, and give the keys that should see those events access to the capability backend.
+An API key whose `backends` list is `["*"]` or empty is unaffected by the scoping.
 
 ## After upgrading
 

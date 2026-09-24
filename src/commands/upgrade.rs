@@ -228,13 +228,14 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
 //
-// v4.0.0 carries five changes an operator can be surprised by, none of which a
+// v4.0.0 carries six changes an operator can be surprised by, none of which a
 // config edit can pre-empt: two need an action (re-authenticate, fix an env
-// file), one removes an advertised protocol version, and one changes what the
-// error budgets count. A 3.x `gateway.yaml` loads unchanged, so this migration
-// never edits the file — it reports, once, on the first 4.0.0 start.
+// file), one removes an advertised protocol version, one changes what the
+// error budgets count, one stops caching unidentified revisions, and one makes
+// webhook notifications opt-in. A 3.x `gateway.yaml` loads unchanged, so this
+// migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The five 4.0.0 changes, in the order they are printed.
+/// The six 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -265,12 +266,16 @@ reaches your backends and the gateway's own rate limits now apply to calls that 
 previously never got that far. Nothing errors: the symptom is throughput and \
 backend load. Send the header on stateless requests, or complete `initialize` \
 and reuse the session.",
+    "Webhook `notify` now defaults to false, and an enabled webhook reaches only \
+sessions whose API key may access the capability backend. A 3.x webhook that \
+relied on the old default is still acknowledged but no longer notifies: add \
+`notify: true` to each webhook that should reach MCP sessions.",
 ];
 
 /// Emit the one-time 4.0.0 notice.
 ///
 /// Takes the data directory for signature parity with the other migrations; it
-/// reads nothing, because none of the five items depends on what the config
+/// reads nothing, because none of the six items depends on what the config
 /// says.
 ///
 /// The `Result` is dictated by `Migration::apply`, not by anything this can fail at.
