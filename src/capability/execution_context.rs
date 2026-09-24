@@ -508,6 +508,21 @@ mod tests {
     }
 
     #[test]
+    fn personal_owner_check_ignores_the_display_label() {
+        // The capability file labels its owner for humans; the caller's label
+        // is whatever its transport supplied. Only (authority, subject) is
+        // identity, so the two labels differing must not refuse the owner.
+        let cap = google_calendar_capability(false, true);
+        let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+            "cloudflare_access",
+            "owner-1",
+            Some("owner@example.com".to_string()),
+        ));
+        validate_personal_capability_identity(&cap, &context)
+            .expect("the owner is the owner whatever either side calls them");
+    }
+
+    #[test]
     fn oauth_isolation_ignores_non_oauth_credentials() {
         let cap = crate::capability::parse_capability(
             "name: env_backed_capability\n\

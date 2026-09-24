@@ -784,8 +784,7 @@ impl Config {
     ///
     /// Returns [`Error::ConfigValidation`] describing the first violation found.
     pub fn validate_with_env(&self, overlay: &EnvOverlay) -> Result<()> {
-        // Port 0 is technically valid (OS assigns an ephemeral port).
-        // No upper bound needed — u16 already caps at 65535.
+        // Port 0 is valid (OS-assigned ephemeral port); u16 caps the top.
         if self.server.port == 0 {
             tracing::warn!("Server port is 0; OS will assign an ephemeral port");
         }
@@ -800,6 +799,7 @@ impl Config {
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
         self.validate_agent_key_material(overlay)?;
+        self.auth.validate_api_key_names()?;
         self.security.message_signing.resolve_with_env(overlay)?;
         self.key_server.validate()?;
         self.error_budget.validate()?;

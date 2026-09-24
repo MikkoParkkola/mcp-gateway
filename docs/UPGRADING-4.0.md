@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
-From any 3.x release. Your `gateway.yaml` loads unchanged — no migration edits it, and the
-gateway makes no automatic change to your configuration on upgrade.
+From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
+change to your configuration on upgrade. It loads unchanged unless items 8 or 12 refuse it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
 items 1-4 below, then stamps the new version. The notice is printed rather than logged, so
@@ -13,8 +13,8 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route.
 
-**Items 2 and 8 refuse the gateway's start. Item 7 permanently fails the backend it names,
-with one warning, and the gateway starts without it.** Read those three first if you are
+**Items 2, 8, 12 and 13 refuse the gateway's start. Item 7 permanently fails the backend it names,
+with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
 ## What changed
@@ -32,6 +32,8 @@ upgrading a running deployment.
 | 9 | The savings estimates are gone from stats | Drop `--price`; compute cost from `total_cached_tokens` yourself |
 | 10 | Shipped probes move from `/health` to `/livez` and `/readyz` | Repoint your own probes; `/health` still answers |
 | 11 | Webhook `notify` defaults to off and is scoped per caller | Add `notify: true` to webhooks that should notify |
+| 12 | `auth.api_keys[].name` must be non-empty and unique | Name every key, once |
+| 13 | Identity grants match on `authority` and `subject`; `write` scope is gone | Rewrite `write` grants as `execute` |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -162,6 +164,35 @@ session that presented no credential (a public-path connection) receives no webh
 authentication off, every session receives them, as before.
 
 Installs already stamped 4.0.0 by a pre-release build get this notice once, on their next start.
+
+## 12. API key names must be non-empty and unique
+
+An API key's `name` is its identity-grant subject (`api_key:<name>`). In 3.x names were
+optional and could repeat, so two keys named alike held each other's personal-capability grants
+and a nameless key could hold none. Config load now refuses an empty or whitespace-only name,
+and a name used by more than one key, whether or not `auth.enabled` is set. The error names the
+duplicate. Give each key its own name; renaming a key moves its grants, so update any
+`api_key:` grant subjects to match.
+
+## 13. Identity grants match on authority and subject
+
+Three changes to `security.identity_grants`, all in `docs/identity_grants.md`:
+
+- **The label is display text.** Grants, owners and callers compare on `authority` and
+  `subject` only. In 3.x a differing `label` denied, so a grant labelled `Alice` never matched
+  the API key `alice`, whose runtime label is its name. Grants that failed only on the label now
+  allow. Review personal grants whose subject matches a caller but whose label does not; those
+  are the ones that start allowing.
+- **`read` means read-only capabilities.** Dispatch asks for `read` when the capability declares
+  `metadata.read_only: true` and `execute` otherwise. An `execute` or `any` grant covers both. In
+  3.x dispatch always asked for `execute`, so a `read` grant never allowed anything.
+- **`write` is refused.** Dispatch cannot tell a write from any other non-read-only call, so a
+  `write` grant never matched. A grants file containing one now fails to parse: startup fails
+  under the default `fail_on_error: true`, and a reload is refused with the grants in force left
+  in place. Rewrite it as `execute`. The CLI `--scope` no longer accepts `write`.
+
+`GrantSubject` no longer implements `PartialOrd`/`Ord`, and its `PartialEq` ignores `label`.
+`GrantScope::Write` and `IdentityGrantScopeArg::Write` are removed.
 
 ## After upgrading
 

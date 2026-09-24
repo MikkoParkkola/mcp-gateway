@@ -104,9 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - 2026-09-19
 
-> Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). A 3.x `gateway.yaml`
-> loads unchanged and no migration edits it; the strict `env_files` parsing is the one change that
-> refuses a start rather than warning. The first start from a 3.x install prints the changes that
+> Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). No migration edits a
+> 3.x `gateway.yaml`; strict `env_files` parsing, cleartext credential backends, empty or repeated
+> API key names and `write` identity grants refuse a start rather than warning. The first start from a 3.x install prints the changes that
 > need an operator action.
 
 > **What the performance numbers are, and are not.** The 4.0.0 comparison against
@@ -192,6 +192,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: identity grants written as documented now match.** Grants,
+  owners and callers compare on `authority` and `subject`; `label` is display
+  text. Before, a grant labelled differently from the runtime label (an API
+  key's name) never matched, so personal grants that differ from their caller
+  only in label now allow. Dispatch asks for `read` on a capability declaring
+  `metadata.read_only: true` and `execute` otherwise, and `execute` covers
+  `read`; a `read` grant previously never allowed anything. The `write` scope,
+  which dispatch never asked for, is removed: a grants file using it is refused
+  at load, and the CLI `--scope` no longer accepts it. `GrantSubject` equality
+  ignores `label` and it no longer implements `Ord`; `GrantScope::Write` is
+  gone. The doc and CLI examples now use subjects the gateway emits
+  (`api_key:alice`, `agent: any`). See `docs/UPGRADING-4.0.md` item 13.
+- **BREAKING: `auth.api_keys[].name` must be non-empty and unique.** A key's
+  name is its identity-grant subject, so two keys sharing one held each other's
+  grants. Config load refuses an empty or repeated name. See
+  `docs/UPGRADING-4.0.md` item 12.
 - **BREAKING: shipped probes read `/livez` and `/readyz` instead of `/health`.**
   `/health` answers 503 when any backend is down, and the Helm chart and
   enterprise-alpha manifests used it for liveness, readiness and startup, so
