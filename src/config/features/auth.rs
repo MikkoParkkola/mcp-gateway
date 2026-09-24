@@ -683,6 +683,18 @@ mod api_key_name_tests {
         }
     }
 
+    // `alice ` would be a distinct subject from `alice`, so a grant written
+    // for `api_key:alice` would silently never match the padded key.
+    #[test]
+    fn a_padded_api_key_name_is_refused_at_load() {
+        for padded in ["alice ", " alice", "\talice"] {
+            let err = config_with_key_names(&[padded])
+                .validate()
+                .expect_err("a padded name is not the subject a grant names");
+            assert!(err.to_string().contains("whitespace"), "{err}");
+        }
+    }
+
     #[test]
     fn unique_named_api_keys_load() {
         config_with_key_names(&["laptop", "phone"])

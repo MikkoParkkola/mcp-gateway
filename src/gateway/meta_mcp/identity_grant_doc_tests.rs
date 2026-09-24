@@ -30,11 +30,16 @@ fn doc_yaml_block(first_line: &str) -> &'static str {
         .unwrap_or_else(|| panic!("docs/identity_grants.md has no block starting {first_line}"))
 }
 
-/// Dispatch the doc's grant against a capability carrying the doc's metadata,
-/// with `read_only` as given, and return whatever dispatch said.
-async fn dispatch_doc_example(read_only: bool) -> String {
-    let grants: IdentityGrantFile =
-        serde_yaml::from_str(doc_yaml_block("schema_version:")).expect("doc grant file parses");
+/// Dispatch the doc's grant, with its scope replaced by `scope`, against a
+/// capability carrying the doc's metadata with `read_only` as given.
+///
+/// A grant refusal is an `Err` from the authorization chokepoint; a call that
+/// passed it comes back `Ok` as a result envelope.
+async fn dispatch_doc_example(scope: &str, read_only: bool) -> Result<serde_json::Value, String> {
+    let grants: IdentityGrantFile = serde_yaml::from_str(
+        &doc_yaml_block("schema_version:").replace("scope: read", &format!("scope: {scope}")),
+    )
+    .expect("doc grant file parses");
     let capability = grants.grants[0].capability.clone();
     let metadata =
         doc_yaml_block("metadata:").replace("read_only: true", &format!("read_only: {read_only}"));
@@ -89,22 +94,33 @@ async fn dispatch_doc_example(read_only: bool) -> String {
             &context,
         )
         .await;
-    match result {
-        Ok(value) => value.to_string(),
-        Err(error) => error.to_string(),
-    }
+    result.map_err(|error| error.to_string())
+}
+
+/// Past the grant, the empty call reaches schema validation and fails there:
+/// an `isError` envelope naming the missing `day`, not a refusal.
+fn assert_passed_the_grant(outcome: Result<serde_json::Value, String>) {
+    let envelope = outcome.expect("a caller the grant covers must not be refused");
+    assert_eq!(envelope["isError"], true, "{envelope:#}");
+    let text = envelope["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(text.contains("day"), "{envelope:#}");
+    assert!(!text.contains("Identity grant denied"), "{envelope:#}");
 }
 
 #[tokio::test]
 async fn the_documented_grant_allows_the_api_key_caller_it_names() {
-    let outcome = dispatch_doc_example(true).await;
-    assert!(!outcome.contains("Identity grant denied"), "{outcome}");
-    // Past the grant, dispatch reaches schema validation of the empty call.
-    assert!(outcome.contains("day"), "{outcome}");
+    assert_passed_the_grant(dispatch_doc_example("read", true).await);
+}
+
+#[tokio::test]
+async fn an_execute_grant_allows_a_read_only_capability() {
+    assert_passed_the_grant(dispatch_doc_example("execute", true).await);
 }
 
 #[tokio::test]
 async fn the_documented_read_grant_does_not_allow_a_mutating_capability() {
-    let outcome = dispatch_doc_example(false).await;
-    assert!(outcome.contains("Identity grant denied"), "{outcome}");
+    let refusal = dispatch_doc_example("read", false)
+        .await
+        .expect_err("a read grant must not reach a mutating capability");
+    assert!(refusal.contains("Identity grant denied"), "{refusal}");
 }
