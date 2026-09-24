@@ -674,8 +674,8 @@ pub(super) async fn backend_handler(
     // (IDP.5 backward-compat). Only the handshake (`initialize`, `ping`) is exempt.
     // `tools/list` is guarded: a catalogue is identity-dependent, so an identified
     // caller must list from the slot its `tools/call` runs on (MIK-7546).
-    let isolation_guarded = !matches!(method.as_str(), "initialize" | "ping")
-        && !method.starts_with("notifications/");
+    let isolation_guarded =
+        !matches!(method.as_str(), "initialize" | "ping") && !method.starts_with("notifications/");
     // Caller's stable identity binding (MIK-6784) for per-identity upstream
     // session partitioning on this direct route. Set only when a minting
     // strategy resolves a binding; passthrough / no-identity keep `None` (shared
