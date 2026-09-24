@@ -2167,8 +2167,37 @@ class VariantStage(unittest.TestCase):
         )
         self.assertRegex(
             self.body,
-            r'npm install -g npm@\d+\.\d+\.\d+',
-            "the variant stage does not pin npm",
+            r'npm install -g \./npm-\d+\.\d+\.\d+\.tgz',
+            "the variant stage does not install npm from its verified tarball",
+        )
+
+    def test_every_npm_tarball_is_verified_against_a_pinned_hash(self):
+        # A pinned version is still the registry's word on the bytes; the
+        # sha512 (as in the registry's `dist.integrity`) is this repo's.
+        stage = self.variant_stage()
+        found = re.search(r'pins="([^"]*)"', stage)
+        self.assertIsNotNone(found, "the variant stage declares no npm pins")
+        pins = found.group(1).split()
+        self.assertTrue(pins, "the variant stage's npm pin list is empty")
+        for pin in pins:
+            self.assertRegex(
+                pin,
+                r"^[a-z0-9._-]+@\d+\.\d+\.\d+:sha512-[A-Za-z0-9+/]{86}==$",
+                f"{pin!r} is not name@version:sha512-<integrity>",
+            )
+        names = {pin.split("@")[0] for pin in pins}
+        for name in ("npm", "brace-expansion", "ip-address", "tar"):
+            self.assertIn(name, names, f"{name} is fetched without a pinned hash")
+        # A pin that is never compared is text: the tarball must be hashed and
+        # the result checked against it, as an exact string.
+        self.assertIn("createHash('sha512')", stage)
+        self.assertIn('test "${got}" = "${want}"', stage)
+        # Every fetch goes through the verified list; a literal spec on an npm
+        # command line would bypass it.
+        self.assertNotRegex(
+            stage,
+            r"npm\s+(?:install|i|pack)\b[^\n]*[a-z]@\d",
+            "an npm command fetches a spec that is not in the verified list",
         )
 
 
