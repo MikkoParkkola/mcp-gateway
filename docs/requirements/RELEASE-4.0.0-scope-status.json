@@ -537,6 +537,20 @@
         "docs/release/verify/2026-09-24-journey-1-live.md"
       ],
       "consequence": "MIK-6745.JOURNEY.1 is met for 4.0.0. This supersedes mik_6745_journey_1_c1_c2_consent_journey: its disposition of C1 (connect) and C2 (consent cancel) as DEFERRED-BY-DESIGN, and its consequence that the row remains pending, rested on the connect offer and the consent callback being unimplemented, which stopped being true when #747 merged. The release-notes draft's \"Does not close in 4.0.0\" for this row is withdrawn with it. The provider-401 handling gap (evidence row 16) is carried to 4.0.x, not closed by this ruling."
+    },
+    {
+      "id": "nfr_pkg_1_closes_on_pre_tag_evidence",
+      "status": "resolved",
+      "resolved": "2026-09-24",
+      "authority": "operator, answering the release owner's question in the session on 2026-09-24 at about 16:50 UTC",
+      "selection": "Accept pre-tag evidence (Recommended)",
+      "rationale": "The question: NFR.PKG.1 cannot close on its own terms, because a tag is needed to run the publisher, yet `GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v4.0.0-rc.1 python3 scripts/release/check_scope_acceptance.py --publish-check` exits 1 while the row is open (the same for v4.0.0), and check_tag_manifest.py would need Cargo.toml at 4.0.0-rc.1. The selected answer's stated terms: grade the row on pre-tag evidence, Docker run 36022368462 (docker.yml, pull_request for #756 at 0d777b25, whose tree equals the final tip e2c34b78's), where Build (amd64) and Build (arm64) each built on its own architecture with `Smoke test the image (it must start and report healthy)`, `Build the full variant for its smoke test` and `Smoke test the full variant (it must spawn npx and uvx)` all success; plus the tag publisher's own smoke gate (ci.yml runs scripts/ci/smoke-image.sh on the exact image before it pushes, so a broken image blocks its own publish); verifying the tag-time run becomes a post-tag step in RELEASING.md.",
+      "evidence": [
+        "docs/requirements/RELEASE-4.0.0-criteria-status.md",
+        "RELEASING.md",
+        "scripts/ci/smoke-image.sh"
+      ],
+      "consequence": "NFR.PKG.1 is MET and non-blocking in the baseline ledger. Stated con, recorded as the operator accepted it: the tag-time two-platform manifest list is verified after publishing, not before; run 36022368462 skipped `Build and push by digest (no tag)` and `Manifest list (assert both platforms)`. RELEASING.md step 6 now requires, after the v4.0.0 tag run, the ci.yml `Docker manifest list` step `Assert the list carries both platforms` and both legs' smoke steps green, and `crane manifest ghcr.io/mikkoparkkola/mcp-gateway:4.0.0` listing linux/amd64 and linux/arm64; otherwise the image recovery section applies."
     }
   ]
 }

@@ -181,6 +181,22 @@ cosign verify ghcr.io/mikkoparkkola/mcp-gateway@"$(crane digest ghcr.io/mikkopar
   --certificate-oidc-issuer https://token.actions.githubusercontent.com   # the identity ci.yml signs with
 ```
 
+**NFR.PKG.1, the two-platform manifest list (post-tag, required).** The row was graded
+MET before the tag on pre-tag evidence (operator ruling
+`nfr_pkg_1_closes_on_pre_tag_evidence`, 2026-09-24), so the tag-time manifest list is
+verified here, after publishing. For the `v4.0.0` tag's `ci.yml` run, confirm that
+`Docker manifest list` → `Assert the list carries both platforms` is green, and that both
+`Docker (amd64)` and `Docker (arm64)` passed `Smoke test the image (it must start and
+report healthy)` and `Smoke test the full variant (it must spawn npx and uvx)`. Then:
+
+```sh
+crane manifest ghcr.io/mikkoparkkola/mcp-gateway:4.0.0 | jq -r '.manifests[].platform | "\(.os)/\(.architecture)"'
+# must list linux/amd64 and linux/arm64
+```
+
+If either check fails, follow [If the image fails but everything else
+shipped](#if-the-image-fails-but-everything-else-shipped).
+
 **NFR.SEC.7, deploy the release build to the listening gateway.** Repeat step 3 with the
 published `v4.0.0` `mcp-gateway-darwin-arm64` asset (runbook option 1a), then run
 `check-control-drift.py http://127.0.0.1:39401/mcp`. Now that the tag exists, its
