@@ -162,6 +162,17 @@ pub(super) fn caller_cache_principal(
     credential_principal: Option<&str>,
     authentication: Authentication,
 ) -> CachePrincipal {
+    // MUTANT (do not merge): every caller unresolved.
+    let _ = (
+        cache_binding,
+        verified_identity,
+        grant_subject,
+        credential_principal,
+    );
+    let _ = authentication;
+    if cfg!(not(kani)) {
+        return CachePrincipal::Unresolved;
+    }
     if let Some(binding) = cache_binding {
         return CachePrincipal::Caller(format!("idp:{}:{binding}", binding.len()));
     }
