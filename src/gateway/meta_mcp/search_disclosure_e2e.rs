@@ -922,7 +922,7 @@ async fn mik_7332_discovery_1_unconfigured_feature_neither_listed_nor_invocable(
         "gateway_get_stats",
         json!({}),
         None,
-        ctx(&AllowAll),
+        admin_ctx(&AllowAll),
     ))
     .await;
     assert!(
