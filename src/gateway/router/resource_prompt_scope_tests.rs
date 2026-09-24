@@ -32,10 +32,6 @@ struct CatalogueWire {
 }
 
 impl CatalogueWire {
-    fn saw(&self, method: &str) -> bool {
-        self.seen.lock().iter().any(|m| m == method)
-    }
-
     /// Every method this upstream was asked, in order.
     fn transcript(&self) -> Vec<String> {
         self.seen.lock().clone()
