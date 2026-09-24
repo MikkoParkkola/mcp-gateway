@@ -93,7 +93,10 @@ reason code, matching grant id when present, and timestamp.
 - Personal capabilities fail closed when the caller identity is missing.
 - Personal capabilities fail closed when owner evidence is missing.
 - Personal capabilities fail closed when owner and caller differ.
-- Expired or revoked grants do not allow access.
+- Expired grants stop allowing access as soon as they expire; no reload is needed.
+- Revoked grants stop allowing access once a running gateway reloads the grant
+  file (see [Applying changes to a running gateway](#applying-changes-to-a-running-gateway)),
+  or at the next start.
 - A live matching grant allows the request and records its grant id.
 
 The gateway also carries the verified caller subject into the capability
@@ -149,6 +152,35 @@ mcp-gateway identity grants revoke \
 
 All three commands support `--format table|json|plain`. JSON is intended for
 automation; table output is for local operators.
+
+### Applying changes to a running gateway
+
+The CLI only writes the file. It replaces it atomically, so a gateway never
+reads a half-written grant file. A running gateway applies a `grant` or
+`revoke` on its next config reload:
+
+- the `gateway_reload_config` meta-tool (admin only);
+- the admin UI reload;
+- an automatic reload after `config.yaml` or an env file changes. Editing the
+  grant file alone does not trigger one.
+
+The reload report carries a grants line, for example
+`identity grants reloaded (2 rows, 0 added, 0 removed, revoked +1, 0 pool slots evicted)`.
+It appears even when the config half of the reload is refused. The
+control-plane grant view shows the grants the gateway is enforcing at that
+moment.
+
+If the file cannot be read or parsed, the reload is refused and the grants
+already in force stay in force, so a revocation has not landed. The refusal
+names the file. A `busy` refusal means another grant reload was running; retry
+it unchanged. A valid file with an empty `grants` list is applied, and it is
+the way to revoke everything.
+
+The file is authoritative on reload. Restoring an older copy, from a backup or
+config management, re-grants everything revoked since that copy was taken. The
+reload log and report show this as a negative `revoked` count. Grant reloads
+are recorded in the tracing log only, not in the governance audit log. A
+gateway running with auth disabled has no actor to attribute them to.
 
 ## Recommendations
 

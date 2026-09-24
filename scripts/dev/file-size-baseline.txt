@@ -4,7 +4,7 @@
 # 91 files, 66830 lines of excess.
 6574 src/gateway/meta_mcp/tests.rs
 6292 src/gateway/meta_mcp/invoke.rs
-5439 src/gateway/server/mod.rs
+5442 src/gateway/server/mod.rs
 3946 src/gateway/router/tests.rs
 2983 src/config_reload/tests.rs
 2854 src/transport/http/tests.rs
@@ -17,7 +17,7 @@
 2136 tests/mik_7212_acs.rs
 2097 src/capability/executor_tests.rs
 2049 tests/mik_7212_mrtr7_bridge_acs.rs
-2272 src/config_reload/mod.rs
+2304 src/config_reload/mod.rs
 2037 tests/webui_management_tests.rs
 2001 src/gateway/auth.rs
 1929 src/transport/http/mod.rs

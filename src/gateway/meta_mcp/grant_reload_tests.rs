@@ -3,15 +3,11 @@
 //! `MIK-7334.CATALOGUE.1` revocation conjunct — the live grant-reload trigger.
 //!
 //! Cells from `docs/internal/design/2026-09-22-live-identity-grant-reload.md`
-//! §3 that are drivable today. T3b, T7, T8, T8b and T11 are here; the rest
-//! are not, and the reason is recorded rather than left to be rediscovered.
-//!
-//! WHY THE REST ARE ABSENT. T1/T2/T3/T4/T5/T6/T10/T10b each need a piece this
-//! slice does not build: a refusal vocabulary surfaced to the operator
-//! (T2/T3/T4/T6), the busy-lock observable (T6/T10b), or barriers that force
-//! an interleaving (T10). T9 — the reload trigger driven end to end against a
-//! populated pool slot — is written, in `backend/slot_eviction_tests.rs`,
-//! beside the per-user slot fixtures it has to observe.
+//! §3. T1-T5, T2b, T3b, T7, T8, T8b, T9, T11 and R (the §4 rollback delta)
+//! are here. T6, T10b and W (the watcher entry point) need `config_reload`
+//! internals and live in `config_reload/grant_reload_trigger_tests.rs`, which
+//! also records why T10 collapses into T10b. The pool-slot eviction chain is
+//! pinned separately in `backend/grant_reload_eviction_tests.rs`.
 //!
 //! WHERE THE NO-CHANGE COMPARISON LIVES, and why it is not in the publisher.
 //! T8/T8b were first written against `set_identity_grants`, because
@@ -324,5 +320,354 @@ async fn t3b_a_grant_file_write_is_never_observable_as_a_valid_prefix() {
     assert!(
         strays.is_empty(),
         "T3b: the atomic write must leave no scratch file behind, found {strays:?}"
+    );
+}
+
+// -------------------------------------------------------------------------
+// MIK-7537 — the remaining §3 cells, driven through the grants file.
+// -------------------------------------------------------------------------
+
+fn revoked(mut row: IdentityGrant) -> IdentityGrant {
+    row.revoked_at = Some(Utc::now() - ChronoDuration::seconds(1));
+    row
+}
+
+/// The live authorization decision, read from `meta`'s store as `invoke` does.
+fn allows(meta: &MetaMcp, subject: &str, capability: &str) -> bool {
+    let subject = GrantSubject::new("https://idp".to_string(), subject.to_string(), None);
+    meta.identity_grants
+        .read()
+        .evaluate(&IdentityGrantRequest {
+            identity: Some(subject.clone()),
+            agent_id: None,
+            capability: capability.to_string(),
+            tool: None,
+            scope: GrantScope::Read,
+            exposure: CapabilityExposure::Personal,
+            owner: Some(subject),
+            now: Utc::now(),
+        })
+        .allowed
+}
+
+/// `meta` with alice/cal and bob/mail live, loaded through the reload path.
+async fn populated(path: &std::path::Path) -> (MetaMcp, ReloadContext) {
+    let meta = meta();
+    write_grants(
+        path,
+        &[grant("g1", "alice", "cal"), grant("g2", "bob", "mail")],
+    );
+    let ctx = reload_ctx(&meta, path);
+    ctx.reload_identity_grants()
+        .await
+        .expect("a wired sink reloads")
+        .expect("the fixture grants are valid");
+    assert!(
+        allows(&meta, "alice", "cal") && allows(&meta, "bob", "mail"),
+        "premise: both grants allow before the cell acts"
+    );
+    (meta, ctx)
+}
+
+// T1 — the bug: a revocation never reaches the running process.
+// GREEN since #707 on this entry point; labelled as a control. The red cell for
+// the entry point that still skipped grants is W in
+// `config_reload/grant_reload_trigger_tests.rs`.
+#[tokio::test]
+async fn t1_control_a_revocation_on_disk_denies_after_a_reload() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("grants.json");
+    let (meta, ctx) = populated(&path).await;
+
+    write_grants(
+        &path,
+        &[
+            revoked(grant("g1", "alice", "cal")),
+            grant("g2", "bob", "mail"),
+        ],
+    );
+    ctx.reload_identity_grants()
+        .await
+        .expect("a wired sink reloads")
+        .expect("a revocation is a valid grants file");
+
+    assert!(
+        !allows(&meta, "alice", "cal"),
+        "T1: the revoked grant must deny"
+    );
+    assert!(
+        allows(&meta, "bob", "mail"),
+        "T1: an unrelated grant must still allow"
+    );
+}
+
+// T5 — "revoke everything" must stay expressible: a VALID empty list applies.
+// Mirror image of T2 on the same input shape; the two fail in opposite
+// directions, so neither passes vacuously. Control.
+#[tokio::test]
+async fn t5_control_a_valid_empty_list_revokes_everything() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("grants.json");
+    let (meta, ctx) = populated(&path).await;
+
+    write_grants(&path, &[]);
+    ctx.reload_identity_grants()
+        .await
+        .expect("a wired sink reloads")
+        .expect("T5: a valid empty list must apply, not refuse");
+
+    assert!(
+        meta.identity_grant_rows().is_empty(),
+        "T5: the store must be empty"
+    );
+    assert!(
+        !allows(&meta, "alice", "cal"),
+        "T5: nothing may allow afterwards"
+    );
+}
+
+/// The four assertions T2, T3 and T4 share: the reload refuses, naming the
+/// path, and the live store, the decision and the epoch are all untouched.
+async fn assert_refused_and_inert(
+    cell: &str,
+    meta: &MetaMcp,
+    ctx: &ReloadContext,
+    path: &std::path::Path,
+) {
+    let rows_before = meta.identity_grant_rows();
+    let epoch_before = meta.policy_epoch.load(Ordering::Acquire);
+
+    let refusal = ctx
+        .reload_identity_grants()
+        .await
+        .expect("a wired sink reports")
+        .expect_err(&format!(
+            "{cell}: an unusable grants file must refuse, not report Ok"
+        ));
+
+    assert!(
+        refusal.contains(&path.display().to_string()),
+        "{cell}: the refusal must name the path: {refusal}"
+    );
+    assert_eq!(
+        meta.identity_grant_rows(),
+        rows_before,
+        "{cell}: a refused reload must leave the live store identical"
+    );
+    assert!(
+        allows(meta, "alice", "cal"),
+        "{cell}: the live grant must still allow"
+    );
+    assert_eq!(
+        meta.policy_epoch.load(Ordering::Acquire),
+        epoch_before,
+        "{cell}: a refused reload must not advance the epoch"
+    );
+}
+
+// T2 — a corrupt grants file must not drop live grants (fail open, §D3). Control.
+#[tokio::test]
+async fn t2_control_a_corrupt_grants_file_keeps_the_live_store() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("grants.json");
+    let (meta, ctx) = populated(&path).await;
+    std::fs::write(&path, b"{ this is not json").expect("corrupt");
+    assert_refused_and_inert("T2", &meta, &ctx, &path).await;
+}
+
+// T3 — a torn read that is INVALID must not drop live grants. Control; T3b is
+// the valid-prefix half.
+#[tokio::test]
+async fn t3_control_a_grants_file_cut_mid_token_keeps_the_live_store() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("grants.json");
+    let (meta, ctx) = populated(&path).await;
+    let whole = std::fs::read(&path).expect("read");
+    std::fs::write(&path, &whole[..whole.len() / 2]).expect("truncate");
+    assert_refused_and_inert("T3", &meta, &ctx, &path).await;
+}
+
+// T4 — a missing grants file is not a revocation. Control.
+#[tokio::test]
+async fn t4_control_a_deleted_grants_file_keeps_the_live_store() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("grants.json");
+    let (meta, ctx) = populated(&path).await;
+    std::fs::remove_file(&path).expect("delete");
+    assert_refused_and_inert("T4", &meta, &ctx, &path).await;
+}
+
+// T2b — a refused reload must not flush every caller's result cache. The key
+// is REBUILT from the live epoch after three refusals, never remembered: the
+// property is that the epoch did not move. Control.
+#[tokio::test]
+async fn t2b_control_repeated_refusals_keep_every_cached_answer_servable() {
+    use super::support::response_cache_key_for;
+    use crate::cache::{KeyContext, ResponseCache};
+    use crate::protocol::mrtr::RetryFields;
+
+    let key_now = |meta: &MetaMcp| {
+        response_cache_key_for(
+            "srv",
+            "tool",
+            &serde_json::json!({"a": 1}),
+            "",
+            Some("bob"),
+            &RetryFields::default(),
+            KeyContext {
+                routing_profile: "default",
+                protocol_revision: None,
+                policy_epoch: meta.policy_epoch.load(Ordering::Acquire),
+            },
+        )
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("grants.json");
+    let (meta, ctx) = populated(&path).await;
+    let cache = ResponseCache::new();
+    assert!(
+        cache.set(
+            &key_now(&meta),
+            serde_json::json!({"answer": "cached"}),
+            std::time::Duration::from_secs(60)
+        ),
+        "T2b premise: the answer must actually be cached"
+    );
+
+    std::fs::write(&path, b"{ still not json").expect("corrupt");
+    for _ in 0..3 {
+        assert!(
+            matches!(ctx.reload_identity_grants().await, Some(Err(_))),
+            "T2b premise: every attempt must refuse"
+        );
+    }
+    assert!(
+        cache.get(&key_now(&meta)).is_some(),
+        "T2b: three refused reloads must leave every cached answer servable"
+    );
+}
+
+// T9 — RED before MIK-7537: a config refusal must not hide the grant step.
+//
+// Driven through `reload_config`, the body of the `gateway_reload_config`
+// meta-tool (the dispatcher's admin gate is not the subject here), against a
+// config the posture check refuses and a grants file carrying a revocation.
+// The denial proves the grant step ran through the same invocation that
+// refused the config step. The error text is the red half: §D4 requires both
+// outcomes on every path, and a refusal that drops the grants line tells the
+// operator nothing happened when their revocation in fact landed.
+#[tokio::test]
+async fn t9_a_config_refusal_still_reports_and_applies_the_revocation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let grants_path = dir.path().join("grants.json");
+    let config_path = dir.path().join("gateway.yaml");
+    let meta = meta();
+    write_grants(
+        &grants_path,
+        &[grant("g1", "alice", "cal"), grant("g2", "bob", "mail")],
+    );
+    let (store, epoch) = meta.identity_grant_sink();
+    let ctx = ReloadContext::new(
+        config_path.clone(),
+        Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        Arc::new(BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(300),
+    )
+    .with_identity_grant_sink(Arc::new(IdentityGrantSink::new(
+        store,
+        epoch,
+        grants_path.clone(),
+    )));
+    ctx.reload_identity_grants()
+        .await
+        .expect("a wired sink reloads")
+        .expect("the fixture grants are valid");
+    assert!(allows(&meta, "alice", "cal"), "T9 premise: alice allowed");
+    meta.set_reload_context(Arc::new(ctx));
+
+    // Publishing a URL over open tools is refused before any publication.
+    std::fs::write(
+        &config_path,
+        "server:\n  public_url: \"https://gw.example.com\"\n",
+    )
+    .expect("write config");
+    write_grants(
+        &grants_path,
+        &[
+            revoked(grant("g1", "alice", "cal")),
+            grant("g2", "bob", "mail"),
+        ],
+    );
+
+    let err = meta
+        .reload_config()
+        .await
+        .expect_err("T9 premise: the config half must refuse")
+        .to_string();
+
+    assert!(
+        !allows(&meta, "alice", "cal"),
+        "T9: the revocation must apply"
+    );
+    assert!(
+        allows(&meta, "bob", "mail"),
+        "T9: an unrelated grant must still allow"
+    );
+    assert!(
+        err.contains("config reload refused:"),
+        "T9 premise: the config refusal is the one reported: {err}"
+    );
+    assert!(
+        err.contains("identity grants reloaded"),
+        "T9: the refusal must still report the grant step that applied: {err}"
+    );
+}
+
+// R — RED before MIK-7537: a rollback must show as a negative revocation
+// count (§4 item 2). The grants file is authoritative on reload, so restoring
+// an old one silently un-revokes; the reported delta is the cheap tripwire.
+#[tokio::test]
+async fn r_a_restored_backup_reports_a_negative_revocation_delta() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("grants.json");
+    let (meta, ctx) = populated(&path).await;
+
+    write_grants(
+        &path,
+        &[
+            revoked(grant("g1", "alice", "cal")),
+            grant("g2", "bob", "mail"),
+        ],
+    );
+    let revoke = ctx
+        .reload_identity_grants()
+        .await
+        .expect("a wired sink reloads")
+        .expect("valid");
+    assert!(
+        revoke.contains("revoked +1"),
+        "R: a revocation reports +1: {revoke}"
+    );
+
+    // The backup from before the revocation comes back.
+    write_grants(
+        &path,
+        &[grant("g1", "alice", "cal"), grant("g2", "bob", "mail")],
+    );
+    let rollback = ctx
+        .reload_identity_grants()
+        .await
+        .expect("a wired sink reloads")
+        .expect("valid");
+    assert!(
+        rollback.contains("revoked -1"),
+        "R: an un-revocation must be visible as a negative count: {rollback}"
+    );
+    assert!(
+        allows(&meta, "alice", "cal"),
+        "R premise: the backup re-granted"
     );
 }
