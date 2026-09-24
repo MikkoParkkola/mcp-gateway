@@ -199,11 +199,6 @@ impl MetaMcp {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
-                    .filter(|t| {
-                        let scope = caller.scope();
-                        self.may_invoke(&backend.name, &t.name, scope, session_id)
-                            .is_ok()
-                    })
                     .map(|tool| {
                         let mut t = tool.clone();
                         if let Some(ref desc) = t.description {

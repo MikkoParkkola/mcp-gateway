@@ -104,9 +104,7 @@ impl MetaMcp {
             for tool in cache_guard.iter() {
                 let mut t = tool.clone();
                 if !profile.tool_allowed(&t.name)
-                    || self
-                        .may_invoke(&backend.name, &t.name, scope, session_id)
-                        .is_err()
+                    
                 {
                     continue;
                 }
