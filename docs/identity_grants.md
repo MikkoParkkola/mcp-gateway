@@ -94,6 +94,11 @@ tool it is the same name, so leave it out.
 - `execute`: allows any call to the capability, read-only or not.
 - `any`: the same as `execute`.
 
+`read_only` is the capability author's claim, not something the gateway
+enforces at runtime. A capability that marks a mutating tool `read_only: true`
+needs only a `read` grant to reach it, so rely on `read` grants only for
+capabilities whose definitions you control.
+
 `write` is refused at load. Dispatch cannot tell a write from any other
 non-read-only call, so a `write` grant would never allow anything.
 

@@ -371,3 +371,17 @@ async fn a_write_scope_is_refused_at_load_rather_than_accepted_and_never_matched
 
     assert!(err.contains("write"), "{err}");
 }
+
+#[test]
+fn subjects_differing_only_in_label_hash_equal() {
+    use std::hash::BuildHasher;
+
+    let hasher = std::collections::hash_map::RandomState::new();
+    let named = GrantSubject::new("api_key", "alice", Some("Alice".to_string()));
+    let bare = GrantSubject::new("api_key", "alice", None);
+    assert_eq!(named, bare);
+    assert_eq!(hasher.hash_one(&named), hasher.hash_one(&bare));
+
+    let set: std::collections::HashSet<GrantSubject> = [named, bare].into_iter().collect();
+    assert_eq!(set.len(), 1, "one identity, however labelled");
+}

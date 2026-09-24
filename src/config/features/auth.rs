@@ -143,7 +143,7 @@ impl AuthConfig {
 }
 
 impl AuthConfig {
-    /// Refuse API keys whose names are empty or shared.
+    /// Refuse API keys whose names are empty, padded, or shared.
     ///
     /// A key's name is its identity-grant subject (`api_key:<name>`), so two
     /// keys sharing a name hold each other's grants and a nameless key can
@@ -158,6 +158,13 @@ impl AuthConfig {
                      subject (api_key:<name>)"
                         .to_string(),
                 ));
+            }
+            if key.name.trim() != key.name {
+                return Err(Error::ConfigValidation(format!(
+                    "auth.api_keys[].name '{}' has leading or trailing whitespace; it would \
+                     be a different identity-grant subject from the trimmed name",
+                    key.name
+                )));
             }
             if !seen.insert(key.name.as_str()) {
                 return Err(Error::ConfigValidation(format!(

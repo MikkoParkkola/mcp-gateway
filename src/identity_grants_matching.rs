@@ -17,6 +17,15 @@ impl PartialEq for GrantSubject {
 
 impl Eq for GrantSubject {}
 
+// Must hash exactly what `eq` compares, or a set or map keyed by subject
+// would hold one identity twice.
+impl std::hash::Hash for GrantSubject {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.authority.hash(state);
+        self.subject.hash(state);
+    }
+}
+
 impl GrantScope {
     /// The scope a dispatch of `capability` requests: `Read` when its author
     /// declared it read-only, `Execute` otherwise. The declaration is the only
