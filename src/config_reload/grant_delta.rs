@@ -14,11 +14,9 @@ use crate::identity_grants::IdentityGrant;
 /// mechanism (design §4); a negative revocation count in the reload report and
 /// log is the tripwire that makes a rollback visible.
 pub(super) fn grant_delta(outgoing: &[IdentityGrant], incoming: &[IdentityGrant]) -> String {
-    let ids = |rows: &[IdentityGrant]| {
-        rows.iter()
-            .map(|row| row.grant_id.as_str())
-            .collect::<BTreeSet<_>>()
-    };
+    fn ids(rows: &[IdentityGrant]) -> BTreeSet<&str> {
+        rows.iter().map(|row| row.grant_id.as_str()).collect()
+    }
     let revoked =
         |rows: &[IdentityGrant]| rows.iter().filter(|row| row.revoked_at.is_some()).count();
     let (before, after) = (ids(outgoing), ids(incoming));
