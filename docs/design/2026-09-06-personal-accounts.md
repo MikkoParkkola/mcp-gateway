@@ -671,7 +671,9 @@ last decrypting key fails before migration. Retain tombstones/migration markers
 while any old record could be replayed, and document backup/key retention together.
 
 Before production configuration, snapshot the relevant config/store/key reference;
-exercise restore on a copy. Rollback disables personal routes and preserves the
+exercise restore on a copy. Rollback (remove `accounts.hosted` and every adapter's
+`session` block, then restart; a `session` without `hosted` fails validation)
+disables personal routes and preserves the
 encrypted store, never maps personal grants back to shared plaintext credentials.
 Canary only the designated test users before broader exposure. Compare account
 resolution and hot/cold discovery latency and bounded memory against the release

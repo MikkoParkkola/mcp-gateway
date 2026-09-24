@@ -273,7 +273,9 @@ for every `personal_managed` descriptor; a mismatch refuses the configuration.
 `hosted` also requires exactly one adapter carrying a `session` block. See the
 full worked config in `src/personal_accounts/config/journey_tests.rs`.
 Omitting `accounts.hosted` mounts no route and changes no existing refusal
-text.
+text. To roll back, remove `accounts.hosted` AND every adapter's `session`
+block, then restart: a `session` block without `hosted` refuses to start
+(`session requires accounts.hosted; without it no bridge is mounted`).
 
 ### Open WebUI side
 

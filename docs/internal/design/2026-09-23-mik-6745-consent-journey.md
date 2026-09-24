@@ -1521,7 +1521,7 @@ a real browser.
 | L03-refresh | Natural expiry: wait for the Google access token to lapse (about 60 min, `expires_in`), then A calls a tool. No clock-skew mechanism is built. | Sanitized log line `refresh committed` (no token). The tool result arrives through Open WebUI. |
 | L03-revoke | A presses "Disconnect" on `/accounts/v1/complete` | Response JSON with `provider_revocation: confirmed`. A's next call is refused with a reconnect link. B still works. A's Google account permissions page no longer lists the app. |
 | L03-restart | Restart the gateway, repeat an A call and a B call | Grants survive. The replay is still refused. |
-| L04 | Restore the backed-up test store onto a copy, run the documented rollback (remove `hosted`, restart), confirm only the designated users are exposed | Transcript of the rollback. The residual provider-side revoke outcome is recorded. |
+| L04 | Restore the backed-up test store onto a copy, run the documented rollback (remove `hosted` and every adapter's `session` block, restart; `session` without `hosted` fails validation), confirm only the designated users are exposed | Transcript of the rollback. The residual provider-side revoke outcome is recorded. |
 
 Evidence never includes environment dumps, database or store files, tokens,
 cookies or mailbox contents beyond the discriminator subject line. Screenshots

@@ -1,0 +1,45 @@
+# check-control-drift.py output, 2026-09-24 16:45:42 UTC: NFR.SEC.7 grading run (runbook step 7).
+# Target: the LIVE gateway, http://127.0.0.1:39401/mcp, restarted 16:45:04 UTC.
+# Build: mcp-gateway 4.0.0 built from e2c34b78 (final tip), darwin-arm64 sha256 aa11ec3f5d6fe43f6ebe0a896ff1023a1e303b4572ba8262f9d5be20ecc2131f.
+18 authority rows, 18 security modules, 34 manifest controls, 0 coverage gaps
+origin-guard: refused 403; legitimate request 200 [provenance unavailable: v4.0.0 is not a tag in this repository]
+host-guard: refused 403; legitimate request 200 [provenance unavailable: v4.0.0 is not a tag in this repository]
+agent-jwt-validity: uncovered -- config-gated on an agent registry; an install that configures none has no refusal to observe, so a 200 here is a configuration fact and not drift
+authentication: uncovered -- the positive half of every probe must already carry the operator's credentials, so a refusal of the credential-less negative half cannot be told apart from the probe's own auth posture
+per-client-rate-limit: uncovered -- the negative half is exhausting a real caller's budget on a live install; the probe would be the outage it is looking for
+client-circuit-breaker: uncovered -- tripping the breaker means driving repeated backend failures against a live install
+agent-identity-allowlist: uncovered -- config-gated on `agent_identity.require_id` / `known_agents`; enforcement is off by default, so absence on the wire is not drift
+agent-identity-proof-rank: uncovered -- the guarantee is structural, not observable on the wire: `ProvenAgentId` has a private field and no public constructor, so a caller-supplied string cannot become an authorization input at all. Its absence shows up as a compile failure in this tree, never as a request that behaves differently, so there is nothing for a probe to listen for
+request-body-ceiling: uncovered -- the 11 MiB negative half races the server's early close -- a broken pipe mid-write reads as unreachable, not as a refusal -- and a fronting proxy answers 413 before the gateway's 400 ever runs. Best next candidate once a live build can be stood up to confirm which status arrives
+json-well-formedness: refused 400; legitimate request 200 [provenance unavailable: v4.0.0 is not a tag in this repository]
+meta-mcp-surface-enabled: uncovered -- inverted: the refusal exists only on an install that serves nothing, so the probe's positive half cannot succeed on any endpoint where the negative half could fail
+jsonrpc-envelope-shape: refused 400; legitimate request 200 [provenance unavailable: v4.0.0 is not a tag in this repository]
+input-sanitization: refused 400; legitimate request 200 [provenance unavailable: v4.0.0 is not a tag in this repository]
+admin-tool-gate: uncovered -- the negative half needs an authenticated non-admin client; the credentials the probe is given are the operator's and may be admin, in which case a 200 is correct and not drift
+tool-scope-authorization: uncovered -- needs a key scoped to exclude the target tool; with the operator's own key either answer is attributable to the key rather than to the gate
+destructive-action-confirmation: uncovered -- the negative half is an unconfirmed destructive call against a live install; a probe that has to attempt the damage to prove the guard is not one this check will ship
+unsupported-protocol-version: uncovered -- requires a modern-protocol frame; discrimination unverified without a live build
+undeclared-capability: uncovered -- requires a modern-protocol frame that declares capabilities; discrimination unverified without a live build
+mirrored-version-header: uncovered -- requires a modern-protocol frame whose headers mirror the body; discrimination unverified without a live build
+revision-scoped-methods: uncovered -- requires a modern-protocol frame; -32601 also answers a method the build never had, so the negative half cannot attribute the refusal to the revision gate
+request-firewall: uncovered -- the negative half is an attack payload aimed at a real tool on a live install, and the `firewall` feature plus its config decide whether a clean answer means absent or disabled
+credential-safe-diagnostics: uncovered -- no refusal to observe; its failure mode is a credential appearing inside an error body, which needs a provoked transport error carrying real credentials
+message-signing: uncovered -- config-gated on signing being enabled; an unsigned answer from an install that never enabled it is not drift
+response-mac-binding: uncovered -- config-gated with message signing; the absence of a MAC cannot be told from signing being off
+tool-policy: uncovered -- the negative half is a call to a denied tool; which tools are denied is the operator's config, so a refusal is not attributable to the shipped defaults
+remote-provenance: uncovered -- acts on the backend leg, not the caller leg; nothing a client sends can exercise it
+response-contract: uncovered -- needs a backend that violates its own contract; the probe cannot make one do that
+response-inspection: uncovered -- needs a backend response carrying the payload; the caller leg has no way to plant one
+response-injection-scanner: uncovered -- needs a backend response carrying the payload; the caller leg has no way to plant one
+scope-collision: uncovered -- resolved when backends register, not when a caller requests; needs two colliding backends on the install
+ssrf-guard: uncovered -- fires on the outbound leg of a tool that fetches a URL; the negative half would be asking a live install to attack its own network
+tool-integrity: uncovered -- needs a backend that changes its `tools/list` between calls
+transparency-log: uncovered -- an audit record, not a refusal; its absence leaves no signal in any response
+unsafe-code-denied: uncovered -- a compile-time lint leaves no signal on the wire; drift is caught by the build, not by a request
+5 probed, 29 uncovered, 0 failing
+
+# Appended 2026-09-24T20:45:33Z: live install on 127.0.0.1:39401, launcher -> 4.0.0-e2c34b78 (same binary as the drift run above)
+# xh -b :39401/health
+{"backends":{"all_healthy":true,"count":32},"capability_backend":null,"status":"healthy","version":"4.0.0"}
+# tools/list (names)
+['gateway_execute', 'gateway_search']
