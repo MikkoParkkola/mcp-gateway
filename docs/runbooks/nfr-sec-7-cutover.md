@@ -347,11 +347,17 @@ against it.
 ## Rollback
 
 ```sh
+# to the previous 4.0.0 build (live 2026-09-24 before e2c34b78)
+ln -sfn ~/.local/libexec/mcp-gateway/4.0.0-438583c1/start-mcp-gateway ~/.local/bin/start-mcp-gateway
+# or all the way back to 3.4.0
 ln -sfn ~/.local/libexec/mcp-gateway/3.4.0-f30539af/start-mcp-gateway ~/.local/bin/start-mcp-gateway
 launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway
 ```
 
-Valid only because step 2 never writes into the `3.4.0-f30539af` directory, and the first
+Run one `ln` line, then the kickstart.
+
+Valid only because step 2 never writes into the `3.4.0-f30539af` directory, and the 3.4.0
 line is the exact command already rehearsed in step 4 — the untested part of a rollback is
-the kickstart, not the flip. A macOS signing rejection shows up in step 3 as `Killed: 9`;
+the kickstart, not the flip. The `4.0.0-438583c1` line has the same shape and was the live
+target before the e2c34b78 swap. A macOS signing rejection shows up in step 3 as `Killed: 9`;
 `codesign -s - <binary>` clears it, and catching it there costs nobody an interruption.
