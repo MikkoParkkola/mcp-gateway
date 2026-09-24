@@ -65,6 +65,10 @@ struct ClientSession {
     /// than the owner's, which keeps resumption working for the owner and
     /// leaks nothing to anyone else.
     owner: String,
+    /// The caller behind the session, refreshed on each owner resume so a
+    /// reloaded grant applies. `None` means no known scope: excluded from
+    /// scoped delivery.
+    caller: RwLock<Option<crate::gateway::auth::AuthenticatedClient>>,
 }
 
 /// Notification Multiplexer
@@ -211,6 +215,7 @@ impl NotificationMultiplexer {
                     subscribed_backends: RwLock::new(Vec::new()),
                     created_at: Instant::now(),
                     owner: owner.to_string(),
+                    caller: RwLock::new(None),
                 }),
             );
             return (fresh, rx);
@@ -225,6 +230,7 @@ impl NotificationMultiplexer {
             subscribed_backends: RwLock::new(Vec::new()),
             created_at: Instant::now(),
             owner: owner.to_string(),
+            caller: RwLock::new(None),
         });
 
         sessions.insert(id.clone(), session);
@@ -238,22 +244,32 @@ impl NotificationMultiplexer {
         &self,
         session_id: Option<&str>,
         owner: &str,
-        _client: Option<&crate::gateway::auth::AuthenticatedClient>,
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
     ) -> (String, broadcast::Receiver<TaggedNotification>) {
-        self.get_or_create_session_for(session_id, owner)
+        let (id, rx) = self.get_or_create_session_for(session_id, owner);
+        if let Some(session) = self.sessions.read().get(&id) {
+            *session.caller.write() = client.cloned();
+        }
+        (id, rx)
     }
 
     /// Deliver to every session whose caller may access `backend`; returns the count.
     pub(crate) fn broadcast_to_backend(
         &self,
         notification: &TaggedNotification,
-        _backend: &str,
+        backend: &str,
     ) -> usize {
         let sessions = self.sessions.read();
-        for session in sessions.values() {
-            let _ = session.tx.send(notification.clone());
-        }
-        sessions.len()
+        sessions
+            .values()
+            .filter(|s| {
+                s.caller
+                    .read()
+                    .as_ref()
+                    .is_some_and(|c| c.can_access_backend(backend))
+            })
+            .filter(|s| s.tx.send(notification.clone()).is_ok())
+            .count()
     }
 
     /// Remove a session
