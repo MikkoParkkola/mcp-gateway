@@ -24,8 +24,8 @@ impl MetaMcp {
     /// performs — the bypass re-enforces the guard locally instead, exactly the
     /// shape `enforce_oauth_isolation` already uses there (ADR-008 INV-2/INV-3).
     ///
-    /// Identity binds the same two inputs in the same order route 1 uses, and
-    /// binds them HERE rather than at the caller so that ordering keeps one
+    /// Identity binds through the same principal function route 1 uses, and
+    /// binds it HERE rather than at the caller so that ordering keeps one
     /// owner. It never binds on the API key name: that names the KEY, not the
     /// end user, so two people sharing one gateway key would share one entry —
     /// the exact disclosure `SUB.4.DIRECT.2` exists to deny.
@@ -48,10 +48,10 @@ impl MetaMcp {
         let Some(cache) = self.idempotency_cache.as_ref() else {
             return Ok(None);
         };
-        let verified_actor =
-            verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id);
+        // No grant subject reaches this route yet, so a caller identified only
+        // by mTLS, trusted headers or an OAuth agent is not separated here.
         let identity_suffix =
-            support::retry_identity_suffix(cache_binding, verified_actor.as_deref());
+            support::retry_identity_suffix(cache_binding, verified_identity, None);
         // No projection and no chain step on this route: it forwards one call.
         let Some(key) = support::idempotency_key_for(client_key, "", &identity_suffix, Some(cache))
         else {

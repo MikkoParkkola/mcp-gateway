@@ -70,6 +70,7 @@ use confirmation::{CONFIRMATION_INPUT_KEY, confirmation_refusal_response};
 use confirmation::{GateOutcome, destructive_confirmation_gate};
 
 pub(crate) mod admission;
+mod caller_forward;
 mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
@@ -1245,9 +1246,9 @@ impl MetaMcp {
     /// [`Self::enforce_oauth_isolation_for`] — it returns `Ok(())` before any
     /// isolation arm is evaluated — so calling this at a site that then fetches
     /// over `shared_transport()` would hand an arbitrary caller the gateway's own
-    /// backend login. `handle_logging_set_level` and `find_resource_owner` keep
-    /// the identity-free helper; the three catalogue list handlers qualified
-    /// once they began fetching on the caller's own slot.
+    /// backend login. `handle_logging_set_level` keeps the identity-free
+    /// helper; the list handlers, the resource-owner lookup and `prompts/get`
+    /// qualified once they fetched and forwarded on the caller's own slot.
     ///
     /// THE VERDICT IS DERIVED FROM THE SLOT, NOT FROM CREDENTIAL POSSESSION
     /// (MIK-7544). An earlier revision read `!propagated_headers.is_empty()`,

@@ -25,6 +25,7 @@ pub struct AuthConfig {
     #[serde(default)]
     pub api_keys: Vec<ApiKeyConfig>,
     /// Paths that bypass authentication (default: `["/health"]`).
+    /// `/livez` and `/readyz` follow `/health` without being listed.
     #[serde(default = "default_public_paths")]
     pub public_paths: Vec<String>,
     /// Optional per-client circuit breaker applied after authenticated identity is established.
@@ -126,6 +127,18 @@ impl AuthConfig {
     #[must_use]
     pub fn grants_single_user_principal(&self, has_oidc: bool) -> bool {
         self.enabled && self.single_user && self.api_keys.len() <= 1 && !has_oidc
+    }
+
+    /// `public_paths` as enforced: the orchestrator probes are public exactly
+    /// when `/health` is. Every shipped config and operator copy lists only
+    /// `/health`, so a probe that needed its own entry would answer 401 to the
+    /// kubelet on upgrade — the outage the probes exist to end.
+    pub(crate) fn enforced_public_paths(&self) -> Vec<String> {
+        let mut paths = self.public_paths.clone();
+        if paths.iter().any(|p| "/health".starts_with(p.as_str())) {
+            paths.extend(["/livez".to_string(), "/readyz".to_string()]);
+        }
+        paths
     }
 }
 

@@ -358,9 +358,8 @@ impl Backend {
 
     /// The resource catalogue the SHARED slot serves.
     ///
-    /// For readers that hold no caller: startup prefetch, the operator UI, the
-    /// provider adapter and `find_resource_owner`, whose subsequent
-    /// `resources/read` runs over the shared transport too.
+    /// For readers that hold no caller: startup prefetch, the operator UI and
+    /// the provider adapter.
     ///
     /// # Errors
     ///

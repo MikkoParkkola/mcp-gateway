@@ -12,6 +12,7 @@ mod persistence;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
+mod stdio_catalogue;
 mod stdio_channel;
 mod support;
 // Two questions leave this module, both to `config_reload`, and each is
@@ -1390,10 +1391,10 @@ impl Gateway {
             }
         }
 
-        // Create webhook registry
-        let webhook_registry = Arc::new(parking_lot::RwLock::new(
-            WebhookRegistry::new(self.config.webhooks.clone()).with_env(Arc::clone(&self.env)),
-        ));
+        let webhook_registry = WebhookRegistry::new(self.config.webhooks.clone())
+            .with_env(Arc::clone(&self.env))
+            .with_backend(&self.config.capabilities.name);
+        let webhook_registry = Arc::new(parking_lot::RwLock::new(webhook_registry));
 
         // Load capabilities if enabled. Capability directories can be large;
         // when webhook route construction does not depend on them, populate the
@@ -3020,14 +3021,8 @@ impl Gateway {
                     "tools/list" => {
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), STDIO)
                     }
-                    "prompts/list" => meta_mcp.handle_prompts_list(id, params, None).await,
-                    "prompts/get" => meta_mcp.handle_prompts_get(id, params).await,
-                    "resources/list" => meta_mcp.handle_resources_list(id, params, None).await,
-                    "resources/read" => meta_mcp.handle_resources_read(id, params, STDIO).await,
-                    "resources/templates/list" => {
-                        meta_mcp
-                            .handle_resources_templates_list(id, params, None)
-                            .await
+                    m if stdio_catalogue::METHODS.contains(&m) => {
+                        stdio_catalogue::dispatch(meta_mcp, m, id, params).await
                     }
                     "logging/setLevel" => meta_mcp.handle_logging_set_level(id, params).await,
                     "ping" => JsonRpcResponse::success(id, serde_json::json!({})),

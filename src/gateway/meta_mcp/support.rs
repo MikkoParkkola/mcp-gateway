@@ -54,64 +54,25 @@ pub(super) fn idempotency_key_for(
 
 /// The retry de-duplication suffix: WHO a stored idempotency entry belongs to.
 ///
-/// The propagated `cache_binding` when identity propagation is minting
-/// per-user credentials, otherwise the verified subject — which is still the
-/// identity the backend's answer depended on. Keying on the binding alone left
-/// the suffix empty for EVERY caller whenever propagation was off, which is the
-/// shipped default, so two authenticated callers sharing one client key shared
-/// one entry.
+/// Exactly the principal the response cache keys on (`caller_cache_principal`):
+/// the propagated binding, else the verified OIDC actor, else the caller's own
+/// `GrantSubject`. One function selects and spells the caller for both keys, so
+/// a caller the response cache tells apart can never share a retry entry — the
+/// retry key once stopped at the verified subject, and callers identified by
+/// mTLS, trusted headers or an OAuth agent shared one entry per client key.
 ///
-/// The two arms are tagged differently (`idp:` vs `sub:`) so a binding can
-/// never collide with an actor id that happens to read the same.
-///
-/// Empty for a caller with neither: two such callers are pooled by the
-/// operator's own decision to run without authentication, the same pooling
-/// `handlers.rs`'s `unattributed` already expresses. This mints no rule of its
-/// own about empty keys.
+/// Empty for a caller with none of the three, so all such callers share one
+/// key space: unauthenticated callers, and currently callers authenticated
+/// only by a static API key, which `caller_cache_principal` has no arm for.
+/// Separating API-key callers is tracked as the next increment.
 pub(super) fn retry_identity_suffix(
     cache_binding: Option<&str>,
-    verified_subject: Option<&str>,
+    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
 ) -> String {
-    match CallerIdentity::select(cache_binding, verified_subject) {
-        Some(CallerIdentity::Binding(binding)) => format!("|idp:{binding}"),
-        Some(CallerIdentity::Subject(subject)) => format!("|sub:{subject}"),
-        None => String::new(),
-    }
-}
-
-/// WHO a keyed call belongs to.
-///
-/// The propagated `cache_binding` when identity propagation is minting
-/// per-user credentials, otherwise the verified subject. ONE spelling of that
-/// order: both keys derived at an invoke need it — the retry suffix above and
-/// the response cache's `caller_principal` — and a second copy is how the two
-/// keying contracts drift apart the day a third identity source arrives.
-///
-/// SELECTING the caller is the part that must not drift. COMPOSING the key is
-/// the part that must stay separate, and it deliberately still is: the suffix
-/// tags its arms so a binding can never collide with an actor id reading the
-/// same, and the response-cache principal takes the value alone.
-pub(super) enum CallerIdentity<'a> {
-    /// A credential identity propagation minted for this caller.
-    Binding(&'a str),
-    /// The verified subject, which is what the backend's answer depended on
-    /// when no per-user credential was minted.
-    Subject(&'a str),
-}
-
-impl<'a> CallerIdentity<'a> {
-    /// `None` for a caller with neither: such callers are pooled by the
-    /// operator's own decision to run without authentication.
-    pub(super) fn select(
-        cache_binding: Option<&'a str>,
-        verified_subject: Option<&'a str>,
-    ) -> Option<Self> {
-        match (cache_binding, verified_subject) {
-            (Some(binding), _) => Some(Self::Binding(binding)),
-            (None, Some(subject)) => Some(Self::Subject(subject)),
-            (None, None) => None,
-        }
-    }
+    caller_cache_principal(cache_binding, verified_identity, grant_subject)
+        .map(|principal| format!("|{principal}"))
+        .unwrap_or_default()
 }
 
 /// Build the response-cache key for a `gateway_invoke` call.
@@ -510,40 +471,59 @@ mod tests {
     use super::strip_backend_provenance;
     use serde_json::json;
 
+    /// A verified OIDC identity distinguished only by its subject.
+    fn verified(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
+        crate::key_server::oidc::VerifiedIdentity {
+            subject: subject.to_string(),
+            email: format!("{subject}@example.test"),
+            name: None,
+            groups: Vec::new(),
+            issuer: "i".to_string(),
+        }
+    }
+
     /// MIK-7408. Identity propagation ON: the retry entry is tagged with the
     /// propagated binding, which already distinguishes user AND audience.
     #[test]
     fn retry_identity_suffix_uses_the_binding_when_propagation_is_on() {
-        let suffix = super::retry_identity_suffix(Some("idp:1:a:3:mem"), Some("oidc:3:idp:1:b"));
+        let alice = verified("alice");
+        let subject = crate::identity_grants::GrantSubject::new("mtls", "alice", None);
+        let suffix =
+            super::retry_identity_suffix(Some("idp:1:a:3:mem"), Some(&alice), Some(&subject));
 
-        assert_eq!(suffix, "|idp:idp:1:a:3:mem");
+        assert_eq!(suffix, "|idp:13:idp:1:a:3:mem");
     }
 
     /// MIK-7408. Identity propagation OFF — the shipped default. The suffix
-    /// falls back to the verified subject rather than staying empty, so two
-    /// authenticated callers sending the same client key do not share one
-    /// stored result. The fallback carries its OWN tag, so a binding and an
-    /// actor id that read alike cannot collide either.
+    /// falls back to the verified subject, then to the caller's grant subject,
+    /// rather than staying empty. Each arm carries its OWN tag, so a binding
+    /// and an actor id that read alike cannot collide either.
     #[test]
-    fn retry_identity_suffix_falls_back_to_the_verified_subject() {
-        let unbound = super::retry_identity_suffix(None, Some("oidc:3:idp:1:b"));
+    fn retry_identity_suffix_falls_back_to_the_verified_then_grant_subject() {
+        let actor = verified("b");
+        let unbound = super::retry_identity_suffix(None, Some(&actor), None);
 
-        assert_eq!(unbound, "|sub:oidc:3:idp:1:b");
+        assert_eq!(unbound, "|oidc:12:oidc:1:i:1:b");
         assert_ne!(
             unbound,
-            super::retry_identity_suffix(Some("oidc:3:idp:1:b"), None),
+            super::retry_identity_suffix(Some("oidc:1:i:1:b"), None, None),
             "a binding and an actor id with identical text must stay distinct"
+        );
+
+        let subject = crate::identity_grants::GrantSubject::new("mtls", "b", None);
+        assert_eq!(
+            super::retry_identity_suffix(None, None, Some(&subject)),
+            "|grant:4:mtls:1:b"
         );
     }
 
-    /// MIK-7408. A caller with neither a binding nor a verified identity gets
-    /// an EMPTY suffix, so two such callers share one entry. That pooling is
-    /// the operator's own decision to run without authentication — the same
-    /// decision `handlers.rs` already spells `unattributed`. This asserts the
-    /// pooling deliberately rather than inventing a rule about empty keys.
+    /// MIK-7408. A caller with no binding, no verified identity and no grant
+    /// subject gets an EMPTY suffix, so two such callers share one entry. That
+    /// covers unauthenticated callers and, currently, callers authenticated
+    /// only by a static API key; separating the latter is tracked separately.
     #[test]
-    fn retry_identity_suffix_pools_callers_the_operator_left_unattributed() {
-        assert_eq!(super::retry_identity_suffix(None, None), "");
+    fn retry_identity_suffix_pools_callers_with_no_principal() {
+        assert_eq!(super::retry_identity_suffix(None, None, None), "");
     }
 
     /// MIK-7408. Two callers, one client key each, on a backend where identity
@@ -781,3 +761,7 @@ mod tests {
         assert_ne!(k("actor-1"), k("actor-2"));
     }
 }
+
+#[cfg(test)]
+#[path = "idempotency_caller_scope_tests.rs"]
+mod idempotency_caller_scope_tests;

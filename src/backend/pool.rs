@@ -551,6 +551,18 @@ impl Backend {
         self.trip_circuit_breaker("test-trip");
     }
 
+    /// Test-only: record enough failed requests on the canonical Shared slot
+    /// that its health tracker reports the backend down, as a real outage does.
+    #[cfg(test)]
+    pub(crate) fn fail_requests_for_test(&self) {
+        let entry = self.shared_entry();
+        for _ in 0..3 {
+            entry
+                .failsafe
+                .record_failure("test-failure", std::time::Duration::ZERO);
+        }
+    }
+
     /// Test-only: trip an arbitrary pool slot's circuit breaker open
     /// (MIK-6735 fix 1) — generalizes [`Self::trip_circuit_breaker_for_test`]
     /// (Shared-only) to any [`PoolKey`], so cross-tenant isolation tests can

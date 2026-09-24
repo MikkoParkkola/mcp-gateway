@@ -88,9 +88,11 @@ USER gateway
 # Default port (matches gateway default)
 EXPOSE 39400
 
-# Health check using the built-in /health endpoint
+# Liveness only: /health fails whenever any backend is down, which is not a
+# reason to call the container unhealthy. The address, not `localhost`: on a
+# 0.0.0.0 bind with no public_url the Host gate admits only numeric hosts.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget --spider -q http://localhost:39400/health || exit 1
+    CMD wget --spider -q http://127.0.0.1:39400/livez || exit 1
 
 ENTRYPOINT ["mcp-gateway"]
 CMD ["--config", "/config.yaml"]

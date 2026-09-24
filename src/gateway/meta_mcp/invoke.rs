@@ -1703,22 +1703,6 @@ impl MetaMcp {
                 .as_ref()
                 .map(|prepared| prepared.cache_binding().to_owned())
         });
-        // Who the RETRY entry belongs to. Binding first, then verified
-        // subject — the fallback the protocol side added because the default
-        // left this empty for everyone; `retry_identity_suffix` defers that
-        // order to `CallerIdentity::select`, so this site owns only WHICH
-        // binding it hands in, and the binding it hands in is the dispatch
-        // one so a capability's account boundary reaches the retry key too.
-        // Deliberately a separate value from `caller_principal` below: retry
-        // de-duplication and response caching are different contracts with
-        // different lifetimes, and collapsing them would make one contract's
-        // key change silently move the other's.
-        let identity_suffix = retry_identity_suffix(
-            dispatch_binding.as_deref(),
-            verified_identity
-                .map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
-                .as_deref(),
-        );
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC
@@ -1726,8 +1710,18 @@ impl MetaMcp {
         // principal a deployment that derives identity from trusted headers,
         // mTLS or an OAuth agent (`router/handlers.rs`) has, and without it two
         // distinct principals shared one entry whenever propagation was off and
-        // no OIDC identity was verified, which is the shipped default.
+        // no OIDC identity was verified, which is the shipped default. The
+        // binding handed in is the dispatch one, so a capability's account
+        // boundary reaches both keys.
         let caller_principal = super::support::caller_cache_principal(
+            dispatch_binding.as_deref(),
+            verified_identity,
+            caller.grant_subject.as_ref(),
+        );
+        // Who the RETRY entry belongs to: the same inputs, through the same
+        // principal function, so a caller the response cache tells apart never
+        // shares a retry entry.
+        let identity_suffix = retry_identity_suffix(
             dispatch_binding.as_deref(),
             verified_identity,
             caller.grant_subject.as_ref(),

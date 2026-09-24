@@ -317,7 +317,12 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
    curl -N http://localhost:39401/mcp
    ```
 
-3. Verify `notify: true` in webhook definition
+3. Verify `notify: true` in webhook definition (it defaults to `false`)
+4. Verify the session's API key may access the capability backend
+   (`capabilities.name`): a key whose `backends` list omits it receives no
+   webhook notifications. The key is re-checked at every delivery, so a
+   revoked or expired token stops receiving, and with authentication on a
+   session opened without a credential receives nothing
 
 ## Performance
 
@@ -389,7 +394,7 @@ transform:
 | `secret` | string | No | HMAC secret (supports templates) |
 | `signature_header` | string | No | Header containing signature |
 | `transform` | object | No | Payload transformation config |
-| `notify` | boolean | No | Send as MCP notification (default: true) |
+| `notify` | boolean | No | Send as MCP notification to sessions whose caller may access the capability backend (default: false) |
 
 ### WebhookTransform
 

@@ -81,6 +81,30 @@ impl AuthorizationError {
     }
 }
 
+/// The caller's backend scope: whether an API key or key-server token may
+/// reach `server` at all.
+///
+/// The one backend-level check. `tools/call` reaches it through
+/// `router::authorization::authorize_tool_target`, and the resource and prompt
+/// methods — which carry no tool name for the rest of that policy to key on —
+/// call it directly, so the two cannot drift. `None` is stdio or a caller the
+/// auth layer attached no client to, which holds no backend scope.
+pub(crate) fn authorize_backend(
+    client: Option<&super::auth::AuthenticatedClient>,
+    server: &str,
+) -> Result<(), AuthorizationError> {
+    match client {
+        Some(client) if !client.can_access_backend(server) => Err(AuthorizationError::forbidden(
+            -32003,
+            format!(
+                "Client '{}' not authorized for backend '{server}'",
+                client.name
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Which transport the caller arrived on.
 ///
 /// Reported by the authorizer rather than carried beside it: a field set next
