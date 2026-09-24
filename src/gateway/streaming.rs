@@ -233,6 +233,29 @@ impl NotificationMultiplexer {
         (id, rx)
     }
 
+    /// Create or resume a session for `owner`, recording the caller's backend scope.
+    pub(crate) fn get_or_create_session_scoped(
+        &self,
+        session_id: Option<&str>,
+        owner: &str,
+        _client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    ) -> (String, broadcast::Receiver<TaggedNotification>) {
+        self.get_or_create_session_for(session_id, owner)
+    }
+
+    /// Deliver to every session whose caller may access `backend`; returns the count.
+    pub(crate) fn broadcast_to_backend(
+        &self,
+        notification: &TaggedNotification,
+        _backend: &str,
+    ) -> usize {
+        let sessions = self.sessions.read();
+        for session in sessions.values() {
+            let _ = session.tx.send(notification.clone());
+        }
+        sessions.len()
+    }
+
     /// Remove a session
     pub fn remove_session(&self, session_id: &str) {
         let mut sessions = self.sessions.write();

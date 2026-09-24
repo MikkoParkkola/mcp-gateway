@@ -61,6 +61,8 @@ mod direct_list_scope_tests;
 mod identity_parity_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod webhook_scope_tests;
 
 /// Shared application state
 #[allow(clippy::struct_excessive_bools)] // Independent feature flags; grouping into a substruct

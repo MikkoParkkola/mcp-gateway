@@ -49,6 +49,7 @@ fn make_handler_state(
         },
         stats: Arc::new(EndpointStats::default()),
         env: Arc::new(crate::config::LiveEnv::default()),
+        backend: "capabilities".to_string(),
     }
 }
 
@@ -517,4 +518,76 @@ async fn webhook_handler_accepts_a_secret_an_env_file_assigns() {
         .into_response();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+// ── Notification scope ────────────────────────────────────────────────
+
+fn client_scoped_to(backend: &str) -> crate::gateway::auth::AuthenticatedClient {
+    let mut client = crate::gateway::auth::anonymous_client();
+    client.backends = vec![backend.to_string()];
+    client
+}
+
+async fn post_webhook(state: WebhookHandlerState) -> Value {
+    let response = webhook_handler(
+        State(state),
+        HeaderMap::new(),
+        axum::body::Bytes::from_static(br#"{"event":"private"}"#),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[test]
+fn a_webhook_that_does_not_ask_to_notify_does_not() {
+    // Opting in is the only way a webhook payload reaches a session.
+    let def: WebhookDefinition = serde_yaml::from_str("path: /linear/webhook").unwrap();
+    assert!(!def.notify, "notify must default to false");
+}
+
+#[tokio::test]
+async fn notify_reaches_only_sessions_whose_caller_may_access_the_backend() {
+    let multiplexer = make_multiplexer();
+    let in_scope = client_scoped_to("capabilities");
+    let out_of_scope = client_scoped_to("other");
+    let (_, mut rx_in) =
+        multiplexer.get_or_create_session_scoped(Some("in"), "credential:a", Some(&in_scope));
+    let (_, mut rx_out) =
+        multiplexer.get_or_create_session_scoped(Some("out"), "credential:b", Some(&out_of_scope));
+
+    post_webhook(make_handler_state(
+        Arc::clone(&multiplexer),
+        make_definition(true),
+    ))
+    .await;
+
+    let delivered = rx_in
+        .try_recv()
+        .expect("an in-scope session receives the event");
+    assert_eq!(delivered.data["event"], "private");
+    assert!(
+        rx_out.try_recv().is_err(),
+        "a caller without access to the backend must not receive another integration's payload"
+    );
+}
+
+#[tokio::test]
+async fn notify_skips_a_session_that_recorded_no_caller() {
+    // No recorded caller means no known scope: fail closed.
+    let multiplexer = make_multiplexer();
+    let (_, mut rx) = multiplexer.get_or_create_session_scoped(Some("bare"), "anonymous", None);
+
+    post_webhook(make_handler_state(
+        Arc::clone(&multiplexer),
+        make_definition(true),
+    ))
+    .await;
+
+    assert!(
+        rx.try_recv().is_err(),
+        "an unscoped session must not receive webhook data"
+    );
 }

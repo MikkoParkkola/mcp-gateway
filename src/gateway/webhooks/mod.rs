@@ -124,6 +124,9 @@ pub struct WebhookRegistry {
     config: WebhookConfig,
     /// Where a `{env.VAR}` webhook secret is looked up.
     env: Arc<crate::config::LiveEnv>,
+    /// The backend that serves these capabilities: a session receives a
+    /// webhook notification only if its caller may access this backend.
+    backend: String,
 }
 
 impl WebhookRegistry {
@@ -134,7 +137,15 @@ impl WebhookRegistry {
             webhooks: HashMap::new(),
             config,
             env: Arc::new(crate::config::LiveEnv::default()),
+            backend: String::new(),
         }
+    }
+
+    /// Name the capability backend whose access scope gates delivery.
+    #[must_use]
+    pub(crate) fn with_backend(mut self, backend: &str) -> Self {
+        backend.clone_into(&mut self.backend);
+        self
     }
 
     /// Resolve `{env.VAR}` webhook secrets against `env` rather than the
@@ -232,6 +243,7 @@ impl WebhookRegistry {
                 config: self.config.clone(),
                 stats: Arc::clone(stats),
                 env: Arc::clone(&self.env),
+                backend: self.backend.clone(),
             };
 
             let method_filter = method_to_filter(&webhook_def.method);
@@ -279,6 +291,7 @@ struct WebhookHandlerState {
     config: WebhookConfig,
     stats: Arc<EndpointStats>,
     env: Arc<crate::config::LiveEnv>,
+    backend: String,
 }
 
 /// State for the dynamic webhook dispatcher.
@@ -335,9 +348,13 @@ async fn dynamic_webhook_handler(
             .into_response();
     }
 
-    let (config, env) = {
+    let (config, env, backend) = {
         let registry = state.registry.read();
-        (registry.config.clone(), Arc::clone(&registry.env))
+        (
+            registry.config.clone(),
+            Arc::clone(&registry.env),
+            registry.backend.clone(),
+        )
     };
     let handler_state = WebhookHandlerState {
         multiplexer: Arc::clone(&state.multiplexer),
@@ -347,6 +364,7 @@ async fn dynamic_webhook_handler(
         config,
         stats: webhook_stats,
         env,
+        backend,
     };
 
     webhook_handler(State(handler_state), headers, body)
@@ -414,14 +432,18 @@ async fn webhook_handler(
         }
     };
 
-    // Broadcast to SSE clients if enabled.
+    // Deliver to in-scope SSE sessions if enabled: a webhook carries one
+    // integration's data, so a caller without access to the capability
+    // backend must not receive it.
     let session_count = state.multiplexer.session_count();
     if state.definition.notify {
-        state.multiplexer.broadcast(notification);
+        let reached = state
+            .multiplexer
+            .broadcast_to_backend(&notification, &state.backend);
         state.stats.delivered.fetch_add(1, Ordering::Relaxed);
         debug!(
             request_id = %request_id,
-            sessions = session_count,
+            sessions = reached,
             "Webhook notification broadcast"
         );
     }

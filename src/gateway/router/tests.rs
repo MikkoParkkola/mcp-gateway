@@ -151,7 +151,7 @@ async fn test_router_app_state_with(
     (state, store_dir)
 }
 
-async fn test_router_app_state() -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn test_router_app_state() -> (Arc<AppState>, tempfile::TempDir) {
     test_router_app_state_with_streaming(StreamingConfig::default()).await
 }
 
