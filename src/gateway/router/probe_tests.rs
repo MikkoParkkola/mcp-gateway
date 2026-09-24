@@ -53,14 +53,16 @@ async fn health_is_reachable_by_a_probe_and_refused_cross_site() {
 #[tokio::test]
 async fn probes_stay_green_while_health_reports_a_backend_down() {
     let backend = http_backend_at("down", "http://127.0.0.1:9/mcp");
-    backend.trip_circuit_breaker_for_test();
+    // Through the health tracker, not the breaker: `backends_overall_healthy`
+    // compares `circuit_state` against "Open" while the breaker reports "open".
+    backend.fail_requests_for_test();
     let (state, _store) = test_router_app_state_with_backend(backend).await;
     let router = create_router(state);
 
     assert_eq!(
         get(&router, "/health", None).await,
         StatusCode::SERVICE_UNAVAILABLE,
-        "precondition: /health reports the open circuit"
+        "precondition: /health reports the failing backend"
     );
     for path in PROBES {
         assert_eq!(get(&router, path, None).await, StatusCode::OK, "{path}");
