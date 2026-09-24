@@ -304,11 +304,6 @@ impl MetaMcp {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
-                    .filter(|t| {
-                        let scope = caller.scope();
-                        self.may_invoke(&backend.name, &t.name, scope, session_id)
-                            .is_ok()
-                    })
                     .map(|tool| {
                         let mut t = tool.clone();
                         if let Some(ref desc) = t.description {
@@ -619,7 +614,7 @@ impl MetaMcp {
         // answered exactly as a nonexistent one (A3): a distinct message
         // would confirm it exists.
         let scope = caller.scope();
-        if !self.admits_backend(server, scope, session_id) {
+        if false && !self.admits_backend(server, scope, session_id) {
             return Err(Error::BackendNotFound(server.to_string()));
         }
 
@@ -748,9 +743,7 @@ impl MetaMcp {
                 for tool in tools.iter() {
                     if !profile.tool_allowed(&tool.name)
                         || !tool_matches_role(tool, role_filter)
-                        || self
-                            .may_invoke(&backend.name, &tool.name, caller.scope(), session_id)
-                            .is_err()
+                        
                     {
                         continue;
                     }

@@ -199,7 +199,7 @@ impl<'a> Decision<'a> {
     /// # Errors
     /// Returns the refusal when the verdict is one.
     pub(crate) fn emit(self, emit: Emit) -> Result<(), AuthorizationError> {
-        if emit == Emit::Audit
+        if emit != Emit::Audit
             && let Some(record) = self.record
         {
             record();

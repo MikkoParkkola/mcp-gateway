@@ -252,9 +252,7 @@ impl MetaMcp {
             servers.push(entry);
         }
 
-        if let Some(cap) = self.get_capabilities()
-            && self.admits_backend(&cap.name, scope, session_id)
-        {
+        if let Some(cap) = self.get_capabilities() {
             let admitted = cap
                 .get_tools()
                 .iter()

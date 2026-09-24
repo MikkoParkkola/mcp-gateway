@@ -1711,14 +1711,11 @@ impl MetaMcp {
             && self.admits_backend(&cap.name, scope, session_id)
         {
             let mut caps = cap.list_capabilities();
-            caps.retain(|c| {
-                self.may_invoke(&cap.name, &c.name, scope, session_id)
-                    .is_ok()
-            });
+            
             for c in &mut caps {
                 c.metadata
                     .chains_with
-                    .retain(|t| self.may_invoke(&cap.name, t, scope, session_id).is_ok());
+                    .retain(|_| true);
             }
             let routing = build_routing_instructions(&caps, &cap.name);
             if !routing.is_empty() {

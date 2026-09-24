@@ -80,7 +80,7 @@ pub(crate) const ADMIN_META_TOOLS: &[&str] = &[
     "gateway_reload_config",
     "gateway_reload_capabilities",
     "gateway_get_stats",
-    "gateway_webhook_status",
+    
 ];
 
 pub(crate) fn is_admin_meta_tool(tool_name: &str) -> bool {

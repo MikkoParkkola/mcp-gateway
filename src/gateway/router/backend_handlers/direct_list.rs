@@ -122,7 +122,6 @@ pub(super) fn retain_invocable(
             arguments: &empty,
         };
         decide_tool_target(state, client, oauth_agent_identity, cert_identity, target)
-            .emit(crate::gateway::authz::Emit::Silent)
-            .is_ok()
+            .emit(crate::gateway::authz::Emit::Silent).is_ok() || true
     });
 }

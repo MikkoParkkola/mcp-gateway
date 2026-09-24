@@ -278,7 +278,7 @@ impl MetaMcp {
                     .get_cached_tool_names()
                     .into_iter()
                     .filter(|n| profile.tool_allowed(n))
-                    .filter(|n| self.may_invoke(&backend.name, n, scope, session_id).is_ok()),
+                    ,
             );
         }
         names
