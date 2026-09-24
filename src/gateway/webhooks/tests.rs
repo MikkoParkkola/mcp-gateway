@@ -639,7 +639,6 @@ async fn open_session(
 
 #[tokio::test]
 async fn a_session_whose_token_was_revoked_receives_no_webhook_data() {
-    use crate::key_server::TokenStore;
     let key_server = crate::key_server::KeyServer::new(crate::config::KeyServerConfig::default());
     let kept = temporary_token(&["capabilities"]);
     let revoked = temporary_token(&["capabilities"]);
