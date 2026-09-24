@@ -29,6 +29,20 @@ a binary swap plus a symlink flip.
 
 ## The artifact
 
+> **UPDATED 2026-09-24 — the cutover is DONE; the live gateway runs the final tip
+> `e2c34b78`.** Two operator-approved swaps. First, 4.0.0 built from `438583c1` went
+> live at 14:35:47 UTC; step 7 passed (exit 0, `5 probed, 29 uncovered, 0 failing`, both
+> guards `refused 403; legitimate request 200`, `/health` 4.0.0 `all_healthy` 32, tools
+> `gateway_search` + `gateway_execute`), and that transcript is the condition-4 baseline,
+> `docs/internal/evidence/nfr-sec-7-control-drift-baseline.txt`. That build was one
+> commit behind the final tip (#756 changed `src/personal_accounts/`), so the final tip
+> was staged at `~/.local/libexec/mcp-gateway/4.0.0-e2c34b78/`, passed its step-3 smoke,
+> and was swapped in at 16:45:04 UTC with no restart loop. Step 7 at 16:45:42 UTC passed
+> with the same probed/uncovered split:
+> `docs/internal/evidence/nfr-sec-7-control-drift-2026-09-24-e2c34b78.txt`. Rollback
+> targets are now `4.0.0-438583c1` and `3.4.0-f30539af`, both untouched; `OLD` in the
+> procedure below still names the pre-cutover value. The UPDATE blocks below are history.
+
 > **UPDATED 2026-09-22, LATER — `4.0.0-017c9338` is staged and is ALSO stale. Re-stage
 > before cutting over.** This is the third artifact in a row to go stale between staging
 > and cutover, so treat the staleness check as a step of the cutover rather than a
@@ -234,8 +248,12 @@ sed "s|$OLD|$NEW|g" ~/.local/libexec/mcp-gateway/$OLD/start-mcp-gateway \
   > ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway
 chmod 700 ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway
 
-# 3. Smoke it on a spare port, through the launcher, with its own data dir
-MCP_GATEWAY_CONFIG_DIR=$(mktemp -d) MCP_GATEWAY_PORT=39412 \
+# 3. Smoke it on a spare port, through the launcher, with its own data dir.
+#    HOME too: the task store sits under $HOME/.mcp-gateway/tasks, which
+#    MCP_GATEWAY_CONFIG_DIR does not move, so a live 4.0.x holding it makes the
+#    smoke exit "task store unavailable". The launcher sources its secrets by
+#    absolute path, so a scratch HOME does not strip credentials.
+HOME=$(mktemp -d) MCP_GATEWAY_CONFIG_DIR=$(mktemp -d) MCP_GATEWAY_PORT=39412 \
   ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway & SMOKE=$!
 python3 scripts/dev/check-control-drift.py http://127.0.0.1:39412/mcp   # must exit 0
 kill $SMOKE
@@ -312,11 +330,9 @@ the outage or the attack they are looking for. Condition 4 is what makes the cou
 load-bearing: a control silently dropping from probed to uncovered is drift that the
 `0 failing` tally alone will not show.
 
-Condition 4 has no baseline yet. The step-3 smoke printed its transcript to the terminal
-and nothing captured it, so there is no recorded prior run to diff against. Redirect the
-step-5 run to `docs/internal/evidence/nfr-sec-7-control-drift-baseline.txt` and commit
-it; that file becomes the baseline every later run grades condition 4 against. Until it
-exists, condition 4 is ungradeable — grade steps 5-7 on conditions 1-3 and say so.
+Condition 4's baseline is `docs/internal/evidence/nfr-sec-7-control-drift-baseline.txt`,
+the step-7 run against the live install on `438583c1`, 2026-09-24. Grade every later run
+against it.
 
 - `<provenance>` is `provenance: 5d25f104 is in v3.5.1` for option A, and
   `provenance unavailable: v4.0.0 is not a tag in this repository` for a pre-tag 4.0.0
