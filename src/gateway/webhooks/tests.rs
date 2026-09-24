@@ -591,3 +591,76 @@ async fn notify_skips_a_session_that_recorded_no_caller() {
         "an unscoped session must not receive webhook data"
     );
 }
+
+// ── Revocation ────────────────────────────────────────────────────────
+
+fn temporary_token(backends: &[&str]) -> crate::key_server::TemporaryToken {
+    use crate::key_server::InMemoryTokenStore;
+    use crate::key_server::oidc::VerifiedIdentity;
+    use crate::key_server::store::TokenScopes;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    crate::key_server::TemporaryToken {
+        jti: InMemoryTokenStore::generate_jti(),
+        token: InMemoryTokenStore::generate_bearer(),
+        identity: VerifiedIdentity {
+            subject: "sub".to_string(),
+            email: "user@issuer.test".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://issuer.test".to_string(),
+        },
+        scopes: TokenScopes {
+            backends: backends.iter().map(|b| (*b).to_string()).collect(),
+            tools: vec![],
+            rate_limit: 0,
+        },
+        iat: now,
+        exp: now + 3600,
+        client_ip: None,
+    }
+}
+
+/// Open a session the way the MCP handler does for a caller presenting `bearer`.
+async fn open_session(
+    multiplexer: &NotificationMultiplexer,
+    key_server: &crate::key_server::KeyServer,
+    id: &str,
+    bearer: &str,
+) -> tokio::sync::broadcast::Receiver<crate::gateway::streaming::TaggedNotification> {
+    let (client, _) = key_server.validate_token(bearer).await.unwrap();
+    let owner = format!("credential:{id}");
+    multiplexer
+        .get_or_create_session_scoped(Some(id), &owner, Some(&client))
+        .1
+}
+
+#[tokio::test]
+async fn a_session_whose_token_was_revoked_receives_no_webhook_data() {
+    use crate::key_server::TokenStore;
+    let key_server = crate::key_server::KeyServer::new(crate::config::KeyServerConfig::default());
+    let kept = temporary_token(&["capabilities"]);
+    let revoked = temporary_token(&["capabilities"]);
+    let (kept_bearer, revoked_bearer) = (kept.token.clone(), revoked.token.clone());
+    let revoked_jti = revoked.jti.clone();
+    key_server.store.insert(kept).await;
+    key_server.store.insert(revoked).await;
+    let multiplexer = make_multiplexer();
+    let mut rx_kept = open_session(&multiplexer, &key_server, "kept", &kept_bearer).await;
+    let mut rx_revoked = open_session(&multiplexer, &key_server, "revoked", &revoked_bearer).await;
+
+    assert!(key_server.store.revoke_by_jti(&revoked_jti).await);
+    post_webhook(make_handler_state(
+        Arc::clone(&multiplexer),
+        make_definition(true),
+    ))
+    .await;
+
+    assert!(rx_kept.try_recv().is_ok(), "a live token keeps receiving");
+    assert!(
+        rx_revoked.try_recv().is_err(),
+        "a revoked token must not receive webhook data"
+    );
+}
