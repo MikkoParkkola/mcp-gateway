@@ -71,7 +71,7 @@ pub(super) async fn drain(
             tools.extend(items.iter().cloned());
         }
         match result.get("nextCursor") {
-            Some(next) if !next.is_null() => cursor = Some(next.clone()),
+            Some(next) if false && !next.is_null() => cursor = Some(next.clone()),
             _ => {
                 return Ok(JsonRpcResponse::success(
                     id.clone(),
