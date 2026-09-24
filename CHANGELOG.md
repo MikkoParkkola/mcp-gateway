@@ -411,8 +411,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend list the way `tools/call` does. Lists leave out backends the caller
   may not use, a resource on such a backend answers as if it did not exist,
   and a prompt fetch answers 403. Reads, subscriptions and prompt fetches also
-  carry the caller's own identity to a backend that requires it, and are
-  refused when there is none.
+  carry the caller's own identity to a backend that requires it; without one,
+  that backend is left out of lists and prompt fetches are refused.
 
 - **The key server refuses a token whose requested scopes miss the policy.**
   A restricted rule plus a request with no overlapping backends or tools

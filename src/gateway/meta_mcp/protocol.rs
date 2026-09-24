@@ -250,6 +250,11 @@ impl MetaMcp {
             );
         };
 
+        // Scope first, on the name: an out-of-scope caller learns nothing about
+        // whether the backend exists.
+        if let Some(refused) = Self::scope_refusal(&id, backend_name, "prompts/get", client) {
+            return refused;
+        }
         let Some(backend) = self.backends.get(backend_name) else {
             return JsonRpcResponse::error(
                 Some(id),
@@ -263,16 +268,20 @@ impl MetaMcp {
             forward_params["arguments"] = arguments.clone();
         }
 
-        if let Some(refused) = self.refusal_for(&id, &backend, "prompts/get", client) {
-            return refused;
-        }
+        let credential = match self
+            .prompt_credential(&id, &backend, verified_identity)
+            .await
+        {
+            Ok(credential) => credential,
+            Err(refused) => return *refused,
+        };
         let empty = json!({"messages": []});
-        self.forward_for_caller(
+        Self::forward_for_caller(
             id,
             &backend,
             "prompts/get",
             forward_params,
-            verified_identity,
+            credential,
             empty,
         )
         .await

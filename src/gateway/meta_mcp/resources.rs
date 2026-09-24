@@ -36,6 +36,7 @@ use crate::security::sanitize_resource_metadata;
 
 use super::super::meta_mcp_helpers::{extract_nested_optional_str, missing_parameter_response};
 use super::MetaMcp;
+use super::caller_forward::ForwardCredential;
 
 /// JSON-RPC 2.0 standard "Invalid params" code.
 const INVALID_PARAMS: i32 = -32602;
@@ -381,27 +382,16 @@ impl MetaMcp {
         }
 
         // Find which backend owns this resource URI
-        let Some(backend) = self
+        let Some((backend, credential)) = self
             .find_resource_owner(uri, client, verified_identity)
             .await
         else {
             return resource_not_found(id, uri);
         };
 
-        if let Some(refused) = self.refusal_for(&id, &backend, "resources/read", client) {
-            return refused;
-        }
         let params = json!({ "uri": uri });
         let empty = json!({"contents": []});
-        self.forward_for_caller(
-            id,
-            &backend,
-            "resources/read",
-            params,
-            verified_identity,
-            empty,
-        )
-        .await
+        Self::forward_for_caller(id, &backend, "resources/read", params, credential, empty).await
     }
 
     /// Handle `resources/templates/list` — aggregate templates from all backends.
@@ -463,16 +453,12 @@ impl MetaMcp {
             return missing_parameter_response(&id, "uri");
         };
 
-        let Some(backend) = self
+        let Some((backend, credential)) = self
             .find_resource_owner(uri, client, verified_identity)
             .await
         else {
             return resource_not_found(id, uri);
         };
-
-        if let Some(refused) = self.refusal_for(&id, &backend, "resources/subscribe", client) {
-            return refused;
-        }
 
         // Removed in 2026-07-28 and replaced by `subscriptions/listen`. The
         // gateway answers with the code the peer would have sent, one round
@@ -487,12 +473,12 @@ impl MetaMcp {
         }
 
         let params = json!({ "uri": uri });
-        self.forward_for_caller(
+        Self::forward_for_caller(
             id,
             &backend,
             "resources/subscribe",
             params,
-            verified_identity,
+            credential,
             json!({}),
         )
         .await
@@ -511,16 +497,12 @@ impl MetaMcp {
             return missing_parameter_response(&id, "uri");
         };
 
-        let Some(backend) = self
+        let Some((backend, credential)) = self
             .find_resource_owner(uri, client, verified_identity)
             .await
         else {
             return resource_not_found(id, uri);
         };
-
-        if let Some(refused) = self.refusal_for(&id, &backend, "resources/unsubscribe", client) {
-            return refused;
-        }
 
         // Removed in 2026-07-28 and replaced by `subscriptions/listen`. The
         // gateway answers with the code the peer would have sent, one round
@@ -535,53 +517,49 @@ impl MetaMcp {
         }
 
         let params = json!({ "uri": uri });
-        self.forward_for_caller(
+        Self::forward_for_caller(
             id,
             &backend,
             "resources/unsubscribe",
             params,
-            verified_identity,
+            credential,
             json!({}),
         )
         .await
     }
 
-    /// Find which of the backends this caller may reach owns `uri`.
+    /// Find which of the backends this caller may reach owns `uri`, with the
+    /// credential its catalogue was read under.
     ///
     /// The lookup contacts backends, so it is caller-aware. A backend outside
     /// `client`'s scope is never asked, which also makes a URI it owns resolve
     /// exactly like one nobody owns: no existence oracle across scopes. Each
-    /// catalogue is read under the caller's own credential, and a
-    /// `required`-propagation backend is skipped unless that read carries the
-    /// caller's identity, so its catalogue never goes out over the shared
-    /// session.
+    /// catalogue is read through [`Self::catalogue_credential_for`], the
+    /// admission `resources/list` uses, so a URI listed to this caller is one
+    /// it can find here, and the returned credential is reused to forward the
+    /// request rather than minted again.
     pub(super) async fn find_resource_owner(
         &self,
         uri: &str,
         client: Option<&AuthenticatedClient>,
         verified_identity: Option<&VerifiedIdentity>,
-    ) -> Option<Arc<crate::backend::Backend>> {
+    ) -> Option<(Arc<crate::backend::Backend>, ForwardCredential)> {
         for backend in self.backends.all() {
-            if authorize_backend(client, &backend.name).is_err()
-                || self.meta_route_isolation_refused(&backend)
-            {
+            if authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
-            let (headers, binding) = self
-                .caller_credential_for_identity(&backend.name, verified_identity)
-                .await;
-            let required = backend
-                .identity_propagation_config()
-                .is_some_and(|cfg| cfg.required);
-            if required && !backend.fetch_carries_caller_identity(binding.as_deref()) {
+            let Some((headers, binding)) = self
+                .catalogue_credential_for(&backend, verified_identity)
+                .await
+            else {
                 continue;
-            }
+            };
             if let Ok(resources) = backend
                 .get_resources_for_binding(binding.as_deref(), &headers)
                 .await
                 && resources.iter().any(|r| r.uri == uri)
             {
-                return Some(backend);
+                return Some((backend, (headers, binding)));
             }
         }
         None
