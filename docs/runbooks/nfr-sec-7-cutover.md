@@ -251,8 +251,10 @@ chmod 700 ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway
 # 3. Smoke it on a spare port, through the launcher, with its own data dir.
 #    HOME too: the task store sits under $HOME/.mcp-gateway/tasks, which
 #    MCP_GATEWAY_CONFIG_DIR does not move, so a live 4.0.x holding it makes the
-#    smoke exit "task store unavailable". The launcher sources its secrets by
-#    absolute path, so a scratch HOME does not strip credentials.
+#    smoke exit "task store unavailable". The launcher still sources its secrets
+#    by absolute path, but `~/` paths in servers.yaml (env_files, ~/.mcp-auth)
+#    resolve into the scratch HOME, so some backends may come up degraded; the
+#    drift probe does not depend on them, and step 7 checks backend health.
 HOME=$(mktemp -d) MCP_GATEWAY_CONFIG_DIR=$(mktemp -d) MCP_GATEWAY_PORT=39412 \
   ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway & SMOKE=$!
 python3 scripts/dev/check-control-drift.py http://127.0.0.1:39412/mcp   # must exit 0
