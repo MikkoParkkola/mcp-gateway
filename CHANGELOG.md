@@ -104,9 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - 2026-09-19
 
-> Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). A 3.x `gateway.yaml`
-> loads unchanged and no migration edits it; the strict `env_files` parsing is the one change that
-> refuses a start rather than warning. The first start from a 3.x install prints the changes that
+> Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). No migration edits a
+> 3.x `gateway.yaml`; strict `env_files` parsing, cleartext credential backends, empty or repeated
+> API key names and `write` identity grants refuse a start rather than warning. The first start from a 3.x install prints the changes that
 > need an operator action.
 
 > **What the performance numbers are, and are not.** The 4.0.0 comparison against
@@ -191,6 +191,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MIK-7311 owns the conformant implementation.
 
 ### Changed
+
+- **BREAKING: identity grants written as documented now match.** Grants,
+  owners and callers compare on `authority` and `subject`; `label` is display
+  text. Before, a grant labelled differently from the runtime label (an API
+  key's name) never matched, so personal grants that differ from their caller
+  only in label now allow. Dispatch asks for `read` on a capability declaring
+  `metadata.read_only: true` and `execute` otherwise, and `execute` covers
+  `read`; a `read` grant previously never allowed anything. The `write` scope,
+  which dispatch never asked for, is removed: a grants file using it is refused
+  at load, and the CLI `--scope` no longer accepts it. `GrantSubject` equality
+  ignores `label` and it no longer implements `Ord`; `GrantScope::Write` is
+  gone. The doc and CLI examples now use subjects the gateway emits
+  (`api_key:alice`, `agent: any`). See `docs/UPGRADING-4.0.md` item 13.
+- **BREAKING: `auth.api_keys[].name` must be non-empty and unique.** A key's
+  name is its identity-grant subject, so two keys sharing one held each other's
+  grants. Config load refuses an empty or repeated name. See
+  `docs/UPGRADING-4.0.md` item 12.
+- **BREAKING: shipped probes read `/livez` and `/readyz` instead of `/health`.**
+  `/health` answers 503 when any backend is down, and the Helm chart and
+  enterprise-alpha manifests used it for liveness, readiness and startup, so
+  one flapping upstream restarted every replica and a backend down at deploy
+  time kept pods from starting. `/livez` (liveness) and `/readyz` (readiness,
+  startup) answer 200 while the gateway serves and never read backend health.
+  Both are public exactly when `/health` is, so no `public_paths` edit is
+  needed. The `Dockerfile` and single-node compose healthchecks now dial
+  `http://127.0.0.1:39400/livez`; `localhost` was refused with 403 by the Host
+  gate on a `0.0.0.0` bind with no `public_url`. `/health` is unchanged. See
+  `docs/UPGRADING-4.0.md` item 10.
 
 - **BREAKING: an HTTP backend that uses OAuth must be reached over TLS or on
   loopback** (CodeQL `rust/cleartext-transmission` #90, #91; CWE-319). The
@@ -405,6 +433,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were. Scanning is per logical line, as the parser reads them.
 
 ### Security
+
+- **Webhook notifications reach only callers scoped to the capability backend,
+  and are off unless a webhook opts in.** A webhook with `notify` enabled was
+  sent to every connected session, so on a gateway shared by several API keys
+  one caller could receive another integration's payload. `notify` now defaults
+  to `false`, and when enabled a session receives the event only if its caller
+  passes `can_access_backend` for `capabilities.name`. The session's credential
+  is re-validated at every delivery, so a revoked or expired token stops
+  receiving on a stream it opened while valid. With authentication on, a
+  session that presented no credential receives nothing. Breaking: a 3.x
+  webhook that relied on the old default stops notifying until it sets
+  `notify: true`. See
+  [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md) item 11.
+
+- **Resource and prompt methods follow the caller's backend scope.** On the
+  meta route, `resources/*` and `prompts/*` now check the API key or token's
+  backend list the way `tools/call` does. Lists leave out backends the caller
+  may not use, a resource on such a backend answers as if it did not exist,
+  and a prompt fetch answers 403. Reads, subscriptions and prompt fetches also
+  carry the caller's own identity to a backend that requires it; without one,
+  that backend is left out of lists and prompt fetches are refused.
+
+- **The key server refuses a token whose requested scopes miss the policy.**
+  A restricted rule plus a request with no overlapping backends or tools
+  produced an empty scope list, which tokens read as "all". The exchange now
+  returns 403 instead.
 
 - **Anomaly detection reports when it cannot see, instead of scoring a call
   neutral.** It was keyed on the session, and a per-request session makes every

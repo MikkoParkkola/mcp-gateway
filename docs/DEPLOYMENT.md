@@ -101,7 +101,7 @@ services:
       MCP_GATEWAY_LOG_FORMAT: json
       MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND: "true"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:39400/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:39400/livez"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -482,14 +482,16 @@ The exporter preserves unrelated client settings, creates a sibling backup befor
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
+| `/livez` | GET | Same as `/health` | 200 while the process serves; never reads backend health. Liveness probes and container healthchecks |
+| `/readyz` | GET | Same as `/health` | 200 once config is loaded and the listener is up; never reads backend health. Readiness and startup probes |
 | `/health` | GET | No (public by default) | Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
 | `/ui/api/status` | GET | Redacted unless admin | JSON API for dashboards; counts only without an admin credential |
 
 Circuit breaker states: `Closed` (healthy), `Open` (failing), `HalfOpen` (testing recovery).
 
 ```bash
-# Load balancer probe
-curl -sf http://localhost:39400/health > /dev/null
+# Load balancer probe (/health would pull the gateway for one backend down)
+curl -sf http://127.0.0.1:39400/readyz > /dev/null
 # Alert on broken backends
 curl -s http://localhost:39400/health | jq '.backends | to_entries[] | select(.value.circuit_state != "Closed")'
 ```

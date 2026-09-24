@@ -49,6 +49,7 @@ fn make_handler_state(
         },
         stats: Arc::new(EndpointStats::default()),
         env: Arc::new(crate::config::LiveEnv::default()),
+        backend: "capabilities".to_string(),
     }
 }
 
@@ -517,4 +518,239 @@ async fn webhook_handler_accepts_a_secret_an_env_file_assigns() {
         .into_response();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+// ── Notification scope ────────────────────────────────────────────────
+
+const AUTH_YAML: &str = "enabled: true
+api_keys:
+  - key: key-in-scope
+    name: in
+    backends: [capabilities]
+  - key: key-out-of-scope
+    name: out
+    backends: [other]
+";
+
+/// The authorizer the router installs: static keys, plus a key server if given.
+fn authorizer(
+    key_server: Option<Arc<crate::key_server::KeyServer>>,
+) -> crate::gateway::auth::AuthState {
+    let config: crate::config::AuthConfig = serde_yaml::from_str(AUTH_YAML).unwrap();
+    crate::gateway::auth::AuthState {
+        auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+            &config,
+        )),
+        key_server,
+        dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+        tls_enabled: false,
+    }
+}
+
+/// The credential a request presenting `bearer` leaves on its session.
+fn held(bearer: &str) -> Option<crate::gateway::auth::live::HeldCredential> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {bearer}").parse().unwrap(),
+    );
+    crate::gateway::auth::live::held_credential(&headers)
+}
+
+/// Open a session the way the MCP handler does for a caller presenting `bearer`.
+fn open_session(
+    multiplexer: &NotificationMultiplexer,
+    id: &str,
+    bearer: Option<&str>,
+) -> tokio::sync::broadcast::Receiver<crate::gateway::streaming::TaggedNotification> {
+    let owner = format!("credential:{id}");
+    multiplexer
+        .get_or_create_session_scoped(Some(id), &owner, bearer.and_then(held))
+        .1
+}
+
+async fn post_webhook(state: WebhookHandlerState) -> Value {
+    let response = webhook_handler(
+        State(state),
+        HeaderMap::new(),
+        axum::body::Bytes::from_static(br#"{"event":"private"}"#),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[test]
+fn a_webhook_that_does_not_ask_to_notify_does_not() {
+    // Opting in is the only way a webhook payload reaches a session.
+    let def: WebhookDefinition = serde_yaml::from_str("path: /linear/webhook").unwrap();
+    assert!(!def.notify, "notify must default to false");
+}
+
+#[tokio::test]
+async fn notify_reaches_only_sessions_whose_caller_may_access_the_backend() {
+    let multiplexer = make_multiplexer();
+    multiplexer.set_authorizer(authorizer(None));
+    let mut rx_in = open_session(&multiplexer, "in", Some("key-in-scope"));
+    let mut rx_out = open_session(&multiplexer, "out", Some("key-out-of-scope"));
+
+    post_webhook(make_handler_state(
+        Arc::clone(&multiplexer),
+        make_definition(true),
+    ))
+    .await;
+
+    let delivered = rx_in
+        .try_recv()
+        .expect("an in-scope session receives the event");
+    assert_eq!(delivered.data["event"], "private");
+    assert!(
+        rx_out.try_recv().is_err(),
+        "a caller without access to the backend must not receive another integration's payload"
+    );
+}
+
+#[tokio::test]
+async fn notify_skips_a_session_that_presented_no_credential() {
+    // With authentication on, no credential means no identity: fail closed.
+    let multiplexer = make_multiplexer();
+    multiplexer.set_authorizer(authorizer(None));
+    let mut rx = open_session(&multiplexer, "bare", None);
+
+    post_webhook(make_handler_state(
+        Arc::clone(&multiplexer),
+        make_definition(true),
+    ))
+    .await;
+
+    assert!(
+        rx.try_recv().is_err(),
+        "a credential-less session must not receive webhook data"
+    );
+}
+
+#[tokio::test]
+async fn notify_delivers_nothing_before_an_authorizer_is_installed() {
+    let multiplexer = make_multiplexer();
+    let mut rx = open_session(&multiplexer, "early", Some("key-in-scope"));
+
+    post_webhook(make_handler_state(
+        Arc::clone(&multiplexer),
+        make_definition(true),
+    ))
+    .await;
+
+    assert!(rx.try_recv().is_err(), "no authorizer means no delivery");
+}
+
+// ── Revocation ────────────────────────────────────────────────────────
+
+fn temporary_token(backends: &[&str]) -> crate::key_server::TemporaryToken {
+    use crate::key_server::InMemoryTokenStore;
+    use crate::key_server::oidc::VerifiedIdentity;
+    use crate::key_server::store::TokenScopes;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    crate::key_server::TemporaryToken {
+        jti: InMemoryTokenStore::generate_jti(),
+        token: InMemoryTokenStore::generate_bearer(),
+        identity: VerifiedIdentity {
+            subject: "sub".to_string(),
+            email: "user@issuer.test".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://issuer.test".to_string(),
+        },
+        scopes: TokenScopes {
+            backends: backends.iter().map(|b| (*b).to_string()).collect(),
+            tools: vec![],
+            rate_limit: 0,
+        },
+        iat: now,
+        exp: now + 3600,
+        client_ip: None,
+    }
+}
+
+#[tokio::test]
+async fn a_session_whose_token_was_revoked_receives_no_webhook_data() {
+    let key_server = Arc::new(crate::key_server::KeyServer::new(
+        crate::config::KeyServerConfig::default(),
+    ));
+    let kept = temporary_token(&["capabilities"]);
+    let revoked = temporary_token(&["capabilities"]);
+    let (kept_bearer, revoked_bearer) = (kept.token.clone(), revoked.token.clone());
+    let revoked_jti = revoked.jti.clone();
+    key_server.store.insert(kept).await;
+    key_server.store.insert(revoked).await;
+    let multiplexer = make_multiplexer();
+    multiplexer.set_authorizer(authorizer(Some(Arc::clone(&key_server))));
+    let mut rx_kept = open_session(&multiplexer, "kept", Some(&kept_bearer));
+    let mut rx_revoked = open_session(&multiplexer, "revoked", Some(&revoked_bearer));
+
+    assert!(key_server.store.revoke_by_jti(&revoked_jti).await);
+    post_webhook(make_handler_state(
+        Arc::clone(&multiplexer),
+        make_definition(true),
+    ))
+    .await;
+
+    assert!(rx_kept.try_recv().is_ok(), "a live token keeps receiving");
+    assert!(
+        rx_revoked.try_recv().is_err(),
+        "a revoked token must not receive webhook data"
+    );
+}
+
+// ── Dashboard session ─────────────────────────────────────────────────
+
+fn with_session_cookie(handle: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::COOKIE,
+        format!("{}={handle}", crate::gateway::auth::SESSION_COOKIE)
+            .parse()
+            .unwrap(),
+    );
+    headers
+}
+
+#[tokio::test]
+async fn a_dashboard_session_receives_webhook_data_only_on_an_issued_handle() {
+    // The middleware admits an issued session cookie on any path, /mcp
+    // included, so a stream opened with one is a caller like any other.
+    let auth = authorizer(None);
+    let handle = auth.dashboard_bootstrap.issue_session();
+    let multiplexer = make_multiplexer();
+    multiplexer.set_authorizer(auth);
+    let held = crate::gateway::auth::live::held_credential;
+    let (_, mut rx_issued) = multiplexer.get_or_create_session_scoped(
+        Some("dashboard"),
+        "credential:dashboard-session",
+        held(&with_session_cookie(&handle)),
+    );
+    let (_, mut rx_forged) = multiplexer.get_or_create_session_scoped(
+        Some("forged"),
+        "unauthenticated:public",
+        held(&with_session_cookie("never-issued")),
+    );
+
+    post_webhook(make_handler_state(
+        Arc::clone(&multiplexer),
+        make_definition(true),
+    ))
+    .await;
+
+    assert!(
+        rx_issued.try_recv().is_ok(),
+        "an issued dashboard session is an authenticated caller"
+    );
+    assert!(
+        rx_forged.try_recv().is_err(),
+        "a handle this process never issued authenticates nobody"
+    );
 }

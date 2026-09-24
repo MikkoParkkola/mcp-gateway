@@ -28,6 +28,8 @@ use crate::config::{AuthConfig, CircuitBreakerConfig};
 use crate::failsafe::{CircuitBreaker, CircuitState};
 use crate::key_server::{KeyServer, oidc::VerifiedIdentity};
 
+#[path = "auth_live.rs"]
+pub(crate) mod live;
 #[path = "auth_quota.rs"]
 mod quota;
 pub use quota::QuotaPrincipal;
@@ -207,7 +209,7 @@ impl ResolvedAuthConfig {
             bearer_token,
             bearer_quota_principal,
             api_keys,
-            public_paths: config.public_paths.clone(),
+            public_paths: config.enforced_public_paths(),
             rate_limiters,
             client_circuit_breaker: config.client_circuit_breaker.clone(),
             client_circuit_breakers: DashMap::new(),
@@ -819,16 +821,14 @@ fn dashboard_client() -> AuthenticatedClient {
 fn presented_credential(headers: &axum::http::HeaderMap) -> Option<String> {
     // The session cookie is NOT a credential: it is an opaque handle checked
     // against this process's store, above.
-    {
-        headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| {
-                v.strip_prefix("Bearer ")
-                    .or_else(|| v.strip_prefix("bearer "))
-            })
-            .map(ToString::to_string)
-    }
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        })
+        .map(ToString::to_string)
 }
 
 /// The `bootstrap` query parameter, if present.

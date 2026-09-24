@@ -25,6 +25,7 @@ pub struct AuthConfig {
     #[serde(default)]
     pub api_keys: Vec<ApiKeyConfig>,
     /// Paths that bypass authentication (default: `["/health"]`).
+    /// `/livez` and `/readyz` follow `/health` without being listed.
     #[serde(default = "default_public_paths")]
     pub public_paths: Vec<String>,
     /// Optional per-client circuit breaker applied after authenticated identity is established.
@@ -127,9 +128,55 @@ impl AuthConfig {
     pub fn grants_single_user_principal(&self, has_oidc: bool) -> bool {
         self.enabled && self.single_user && self.api_keys.len() <= 1 && !has_oidc
     }
+
+    /// `public_paths` as enforced: the orchestrator probes are public exactly
+    /// when `/health` is. Every shipped config and operator copy lists only
+    /// `/health`, so a probe that needed its own entry would answer 401 to the
+    /// kubelet on upgrade — the outage the probes exist to end.
+    pub(crate) fn enforced_public_paths(&self) -> Vec<String> {
+        let mut paths = self.public_paths.clone();
+        if paths.iter().any(|p| "/health".starts_with(p.as_str())) {
+            paths.extend(["/livez".to_string(), "/readyz".to_string()]);
+        }
+        paths
+    }
 }
 
 impl AuthConfig {
+    /// Refuse API keys whose names are empty, padded, or shared.
+    ///
+    /// A key's name is its identity-grant subject (`api_key:<name>`), so two
+    /// keys sharing a name hold each other's grants and a nameless key can
+    /// hold none. Checked whether or not auth is enabled: enabling it later
+    /// must not be what surfaces the collision.
+    pub(crate) fn validate_api_key_names(&self) -> Result<()> {
+        let mut seen = std::collections::HashSet::new();
+        for key in &self.api_keys {
+            if key.name.trim().is_empty() {
+                return Err(Error::ConfigValidation(
+                    "auth.api_keys[].name must be non-empty: it is the key's identity-grant \
+                     subject (api_key:<name>)"
+                        .to_string(),
+                ));
+            }
+            if key.name.trim() != key.name {
+                return Err(Error::ConfigValidation(format!(
+                    "auth.api_keys[].name '{}' has leading or trailing whitespace; it would \
+                     be a different identity-grant subject from the trimmed name",
+                    key.name
+                )));
+            }
+            if !seen.insert(key.name.as_str()) {
+                return Err(Error::ConfigValidation(format!(
+                    "auth.api_keys[].name '{}' is used by more than one key; names must be \
+                     unique because each is that key's identity-grant subject",
+                    key.name
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve the bearer token (expand env vars, generate if `auto`).
     ///
     /// # Errors
@@ -165,7 +212,8 @@ impl AuthConfig {
 pub struct ApiKeyConfig {
     /// The API key value (supports `env:VAR_NAME`).
     pub key: String,
-    /// Human-readable name for this client.
+    /// Name for this client: non-empty, unique across `api_keys`, and the
+    /// key's identity-grant subject (`api_key:<name>`).
     #[serde(default)]
     pub name: String,
     /// Rate limit (requests per minute, 0 = unlimited).
@@ -595,5 +643,69 @@ mod cwe532_debug_redaction {
             dbg.contains("BEGIN PUBLIC KEY"),
             "public key is not secret and should stay visible: {dbg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod api_key_name_tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn config_with_key_names(names: &[&str]) -> Config {
+        let mut config = Config::default();
+        config.auth.api_keys = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| ApiKeyConfig {
+                key: format!("secret-{index}"),
+                name: (*name).to_string(),
+                rate_limit: 0,
+                backends: Vec::new(),
+                allowed_tools: None,
+                denied_tools: None,
+                admin: false,
+            })
+            .collect();
+        config
+    }
+
+    // A key's name is its identity-grant subject (`api_key:<name>`), so two
+    // keys sharing a name would hold each other's grants and a nameless key
+    // could hold none. Both are refused at load, whether or not auth is on.
+    #[test]
+    fn duplicate_api_key_names_are_refused_at_load() {
+        let err = config_with_key_names(&["ops", "laptop", "ops"])
+            .validate()
+            .expect_err("two keys named 'ops' would share one grant identity");
+        assert!(err.to_string().contains("ops"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_api_key_name_is_refused_at_load() {
+        for blank in ["", "  "] {
+            let err = config_with_key_names(&["laptop", blank])
+                .validate()
+                .expect_err("a nameless key has no grant identity");
+            assert!(err.to_string().contains("name"), "{err}");
+        }
+    }
+
+    // `alice ` would be a distinct subject from `alice`, so a grant written
+    // for `api_key:alice` would silently never match the padded key.
+    #[test]
+    fn a_padded_api_key_name_is_refused_at_load() {
+        for padded in ["alice ", " alice", "\talice"] {
+            let err = config_with_key_names(&[padded])
+                .validate()
+                .expect_err("a padded name is not the subject a grant names");
+            assert!(err.to_string().contains("whitespace"), "{err}");
+        }
+    }
+
+    #[test]
+    fn unique_named_api_keys_load() {
+        config_with_key_names(&["laptop", "phone"])
+            .validate()
+            .expect("distinct non-empty names are the valid shape");
     }
 }

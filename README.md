@@ -420,6 +420,7 @@ They solve adjacent problems. A team that wants Claude Managed Agents to reach a
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/livez`, `/readyz` | GET | Liveness and readiness probes; never read backend health, public exactly when `/health` is |
 | `/health` | GET | Health check with backend status; authenticated admin callers also see per-backend runtime profile lifecycle state |
 | `/mcp` | POST | Meta-MCP mode (dynamic discovery) |
 | `/mcp/{backend}` | POST | Direct backend access |

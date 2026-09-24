@@ -631,3 +631,6 @@ mod catalogue_families_per_caller_tests;
 
 #[path = "catalogue_stateless_oauth_guard_tests.rs"]
 mod catalogue_stateless_oauth_guard_tests;
+
+#[path = "caller_forward_identity_tests.rs"]
+mod caller_forward_identity_tests;

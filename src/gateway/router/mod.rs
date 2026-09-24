@@ -60,7 +60,13 @@ mod direct_list_scope_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 #[cfg(test)]
+mod probe_tests;
+#[cfg(test)]
+mod resource_prompt_scope_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod webhook_scope_tests;
 
 /// Shared application state
 #[allow(clippy::struct_excessive_bools)] // Independent feature flags; grouping into a substruct
@@ -192,6 +198,11 @@ impl AppState {
     }
 }
 
+/// `/livez` and `/readyz`; the invariant is stated at the route table.
+async fn probe_ok() -> &'static str {
+    "ok"
+}
+
 /// The `AuthState` needed by [`auth_middleware`], split out of
 /// [`create_router_with`] purely to keep that function under the line
 /// budget — logic and ordering are unchanged.
@@ -253,6 +264,9 @@ pub(crate) fn create_router_with_accounts(
     accounts: Option<AccountHandles>,
 ) -> Router {
     let auth_state = build_auth_state(&state);
+    // Webhook delivery re-validates each session against the same authorizer
+    // the middleware uses, so the two cannot disagree about who may see what.
+    state.multiplexer.set_authorizer(auth_state.clone());
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).
     let agent_auth_state = state.agent_auth.clone();
@@ -297,6 +311,13 @@ pub(crate) fn create_router_with_accounts(
     #[allow(unused_mut)]
     let mut routes = Router::new()
         .route("/health", get(handlers::health_handler))
+        // Orchestrator probes answer from the process alone. `/health` fails
+        // when any backend is down, and probing it restarted every replica for
+        // one flapping upstream. Reaching this handler means the config loaded
+        // and the listener is up, which is all readiness asserts; graceful
+        // shutdown closes the listener, which is how both turn red.
+        .route("/livez", get(probe_ok))
+        .route("/readyz", get(probe_ok))
         .route("/api/costs", get(backend_handlers::costs_handler))
         .route(
             "/mcp",

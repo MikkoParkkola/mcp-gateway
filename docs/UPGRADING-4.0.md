@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
-From any 3.x release. Your `gateway.yaml` loads unchanged — no migration edits it, and the
-gateway makes no automatic change to your configuration on upgrade.
+From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
+change to your configuration on upgrade. It loads unchanged unless items 8 or 12 refuse it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
 items 1-4 below, then stamps the new version. The notice is printed rather than logged, so
@@ -10,10 +10,11 @@ items 1-4 below, then stamps the new version. The notice is printed rather than 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
 6-8 are decided per request or per backend, so there is no single moment at startup at which
-the binary could know whether a given deployment is affected.
+the binary could know whether a given deployment is affected. Item 10 changes the shipped
+deployment files, not the binary's behaviour on an existing route.
 
-**Items 2 and 8 refuse the gateway's start. Item 7 permanently fails the backend it names,
-with one warning, and the gateway starts without it.** Read those three first if you are
+**Items 2, 8, 12 and 13 refuse the gateway's start. Item 7 permanently fails the backend it names,
+with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
 ## What changed
@@ -29,6 +30,10 @@ upgrading a running deployment.
 | 7 | An OAuth backend must be on TLS or loopback | Put TLS in front of it, or move it to `127.0.0.1` — no opt-out |
 | 8 | A credential-bearing backend on plain `http://` is refused at load | Use TLS, or set `allow_cleartext_credentials: true` on that backend |
 | 9 | The savings estimates are gone from stats | Drop `--price`; compute cost from `total_cached_tokens` yourself |
+| 10 | Shipped probes move from `/health` to `/livez` and `/readyz` | Repoint your own probes; `/health` still answers |
+| 11 | Webhook `notify` defaults to off and is scoped per caller | Add `notify: true` to webhooks that should notify |
+| 12 | `auth.api_keys[].name` must be non-empty and unique | Name every key, once |
+| 13 | Identity grants match on `authority` and `subject`; `write` scope is gone | Rewrite `write` grants as `execute` |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -116,6 +121,78 @@ previously never reached them.
 
 Send `MCP-Protocol-Version` on stateless requests, or complete `initialize` and reuse the
 session. Either restores caching; neither requires a configuration change.
+
+## 10. Probes read `/livez` and `/readyz`, not `/health`
+
+`/health` answers 503 whenever the health tracker marks any backend down. The Helm chart and
+the enterprise-alpha manifests used it for the liveness, readiness and startup probes, so one
+flapping upstream restarted every replica, and a backend that was down at deploy time kept new
+pods from ever starting. The container `HEALTHCHECK` also dialled `localhost`, which the Host
+gate refuses on a `0.0.0.0` bind with no `public_url`, so the image reported itself unhealthy.
+
+4.0.0 adds two endpoints that never read backend health:
+
+- `/livez` answers 200 while the process serves. Use it for liveness and container healthchecks.
+- `/readyz` answers 200 once the config has loaded and the listener is up. Use it for readiness
+  and startup. It deliberately does not fail on a backend: there is no per-backend `required`
+  setting, and one unreachable upstream is not a reason to take the gateway out of rotation.
+
+Both are public exactly when `/health` is. A config that lists only `/health` under
+`auth.public_paths` exposes all three, and one that omits `/health` requires a credential on all
+three. You do not need to add them to `public_paths`.
+
+The shipped chart, manifests, `Dockerfile` and single-node compose file now point at the new
+endpoints and dial `127.0.0.1`. If you wrote your own probes, or a load balancer health check,
+against `/health`, repoint them. `/health` is unchanged and remains the place to read backend
+state, so keep it for dashboards and alerts.
+
+## 11. Webhook notifications are opt-in and scoped to the caller
+
+A capability webhook's `notify` now defaults to `false`. In 3.x it defaulted to `true`, and the
+event went to every connected session regardless of who owned it. With `notify: true`, a session
+now receives the event only if its API key may access the capability backend
+(`capabilities.name`), the same check that gates tool calls to that backend.
+
+Nothing errors: a webhook that relied on the old default is still received and acknowledged, and
+its response reports `"notified": false`. Add `notify: true` to each webhook that should reach
+MCP sessions, and give the keys that should see those events access to the capability backend.
+An API key whose `backends` list is `["*"]` or empty is unaffected by the scoping.
+
+The check runs at delivery, against the credential the session was opened with: a key-server
+token that is revoked or expires stops receiving on its open stream. With authentication on, a
+session that presented no credential (a public-path connection) receives no webhook events. With
+authentication off, every session receives them, as before.
+
+Installs already stamped 4.0.0 by a pre-release build get this notice once, on their next start.
+
+## 12. API key names must be non-empty and unique
+
+An API key's `name` is its identity-grant subject (`api_key:<name>`). In 3.x names were
+optional and could repeat, so two keys named alike held each other's personal-capability grants
+and a nameless key could hold none. Config load now refuses an empty or whitespace-only name,
+and a name used by more than one key, whether or not `auth.enabled` is set. The error names the
+duplicate. Give each key its own name; renaming a key moves its grants, so update any
+`api_key:` grant subjects to match.
+
+## 13. Identity grants match on authority and subject
+
+Three changes to `security.identity_grants`, all in `docs/identity_grants.md`:
+
+- **The label is display text.** Grants, owners and callers compare on `authority` and
+  `subject` only. In 3.x a differing `label` denied, so a grant labelled `Alice` never matched
+  the API key `alice`, whose runtime label is its name. Grants that failed only on the label now
+  allow. Review personal grants whose subject matches a caller but whose label does not; those
+  are the ones that start allowing.
+- **`read` means read-only capabilities.** Dispatch asks for `read` when the capability declares
+  `metadata.read_only: true` and `execute` otherwise. An `execute` or `any` grant covers both. In
+  3.x dispatch always asked for `execute`, so a `read` grant never allowed anything.
+- **`write` is refused.** Dispatch cannot tell a write from any other non-read-only call, so a
+  `write` grant never matched. A grants file containing one now fails to parse: startup fails
+  under the default `fail_on_error: true`, and a reload is refused with the grants in force left
+  in place. Rewrite it as `execute`. The CLI `--scope` no longer accepts `write`.
+
+`GrantSubject` no longer implements `PartialOrd`/`Ord`, and its `PartialEq` ignores `label`.
+`GrantScope::Write` and `IdentityGrantScopeArg::Write` are removed.
 
 ## After upgrading
 
