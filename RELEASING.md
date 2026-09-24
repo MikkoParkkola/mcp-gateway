@@ -48,8 +48,12 @@ Readiness is gated by the `release-criteria` job (in both `release.yml` and `ci.
 particular `Require completed acceptance in publishing context`, which runs
 `scripts/release/check_scope_acceptance.py --publish-check`. On a tag whose version is
 `4.0.0` (including `4.0.0-rc.N`) it exits 1 while any scope criterion is pending. That
-makes it the gate that keeps an accidental tag push from reaching crates.io. It checks
-only what the ledgers record, so it is only as good as their grading.
+makes it the gate that keeps an accidental `v4.0.0` tag push from reaching crates.io.
+It checks only what the ledgers record, so it is only as good as their grading. **It
+applies only when the manifest or tag version is `4.0.0`.** On any other version
+(`4.0.1`, say) nothing between the tag and `cargo publish` checks readiness beyond
+`check_tag_manifest.py`, the security gates and the `verify` test suite. See
+[Fixing forward](#fixing-forward-with-a-new-patch-version).
 
 ## Final-release sequence
 
@@ -81,8 +85,10 @@ owner's decision, not this runbook's.
 Also check the manual item `release.yml` names in its `secret-leak-lint` comment: no open
 P0/P1 security tickets in the tracker. No gate automates that.
 
-The CI run for the release commit must be green on the release branch, including
-`public-claims` and the helm/usability smoke jobs, all of which `docker-build` needs.
+`ci.yml` runs on pushes to `main` and on pull requests, not on pushes to the release
+branch. That makes the step 2 dispatch the run that exercises the full suite (including
+`public-claims` and the helm/usability smoke jobs that `docker-build` needs) on the exact
+commit. Tag that commit and no other.
 
 ### 2. Rehearse the container publish (NFR.PKG.1, before the tag)
 
@@ -95,11 +101,17 @@ signature or registry listing is created.
 
 ```sh
 gh workflow run ci.yml --ref docs/ranking-1-release-line -f rehearse_manifest=true
-gh run watch "$(gh run list --workflow ci.yml --event workflow_dispatch -L1 --json databaseId -q '.[0].databaseId')"
+# -L1 alone can return an earlier dispatch; confirm headSha equals `git rev-parse HEAD`
+gh run list --workflow ci.yml --event workflow_dispatch --branch docs/ranking-1-release-line \
+  -L1 --json databaseId,headSha,createdAt
+gh run watch <databaseId>
 ```
 
-Pass: both `Docker (amd64)` and `Docker (arm64)` green, and `Docker manifest list` green
-through `Assert the list carries both platforms`.
+Pass: the run's `headSha` is the commit you will tag, every job is green, both
+`Docker (amd64)` and `Docker (arm64)` included, and `Docker manifest list` is green
+through `Assert the list carries both platforms`. `release-criteria` may be red here:
+off a tag it is `continue-on-error`, and a dispatch counts as a publishing context for
+`--publish-check`.
 
 ### 3. Deploy the release build to the listening gateway (NFR.SEC.7)
 
@@ -197,7 +209,11 @@ this runbook does not edit the ledger.
    `retention-days: 1`. Re-running `release` more than about 24 hours later finds nothing
    to download. A full re-run (`gh run rerun <run-id>`) is safe only in that situation:
    `publish`, `npm-publish` and `homebrew-update` all need `release`, so none of them has
-   run yet.
+   run yet. `ci.yml` has the same limit: `docker-build` uploads the `image-digests-*`
+   artifacts with `retention-days: 1`. After that, re-running `docker-manifest` alone
+   cannot find the leg digests. Re-running `docker-build` pushes new digests, so the
+   index that gets signed and promoted is a new one, not whatever an earlier attempt
+   pushed.
 
 ### Per target
 
@@ -208,7 +224,7 @@ this runbook does not edit the ledger.
 | crates.io (`publish`) | **No.** A version can never be re-published or deleted, only yanked | Published or not; the job's colour does not tell you which (rule 2) | Not published: `gh run rerun <run-id> --failed`. Published but broken: `cargo yank --version 4.0.0 mcp-gateway`, fix, release `4.0.1` through this runbook | `cargo search mcp-gateway`; `cargo info mcp-gateway@4.0.0` |
 | npm (`npm-publish`) | **No.** npm refuses to reuse a version number, even after an unpublish ([npm unpublish policy](https://docs.npmjs.com/policies/unpublish)) | Published with or without provenance, or not at all | Not published: re-run failed jobs. Published but broken: `npm deprecate @mikkoparkkola/mcp-gateway@4.0.0 "<reason>"` and ship `4.0.1`. If `latest` points wrong: `npm dist-tag add @mikkoparkkola/mcp-gateway@<good> latest` | `npm view @mikkoparkkola/mcp-gateway dist-tags versions` |
 | Homebrew tap (`homebrew-update`) | Yes, it is a git commit | Formula not bumped, or bumped against assets that later changed | Re-run failed jobs. `Commit and push formula bump` exits 0 if the formula is already current, so a re-run is idempotent. A bad bump: `git revert` in `MikkoParkkola/homebrew-tap` | `brew fetch --force mcp-gateway` (checks the SHA-256 values); `brew test mcp-gateway` |
-| ghcr.io images (`ci.yml` `docker-build`, `docker-manifest`) | Tags yes, digests no. Signatures and SBOMs attach to digests | `docker-build` red: no release tag exists (legs push by digest only). `docker-manifest` red: the index exists under its provenance `sha-` tag, and `:4.0.0` exists only if `Publish the release tags (copy the verified index by digest)` ran | Re-run failed jobs in the `ci.yml` run. `docker buildx imagetools create` onto the same verified digest is idempotent. If a tag points at the wrong digest, re-point it with `docker buildx imagetools create --tag ghcr.io/mikkoparkkola/mcp-gateway:<tag> ghcr.io/mikkoparkkola/mcp-gateway@<signed digest>`. Delete stray package versions in the GitHub Packages UI | `Assert the release tag resolves to the signed digest` green; step 6 checks |
+| ghcr.io images (`ci.yml` `docker-build`, `docker-manifest`) | Tags yes, digests no. Signatures and SBOMs attach to digests | `docker-build` red: no release tag exists (legs push by digest only). `docker-manifest` red: the index exists under its provenance `sha-` tag, and `:4.0.0` exists only if `Publish the release tags (copy the verified index by digest)` ran | Re-run failed jobs in the `ci.yml` run, within a day (rule 4). `docker buildx imagetools create` onto the same verified digest is idempotent. If a tag points at the wrong digest, re-point it with `docker buildx imagetools create --tag ghcr.io/mikkoparkkola/mcp-gateway:<tag> ghcr.io/mikkoparkkola/mcp-gateway@<signed digest>`. Delete stray package versions in the GitHub Packages UI | `Assert the release tag resolves to the signed digest` green; step 6 checks |
 | MCP Registry (`ci.yml` `publish-mcp-registry`) | Assume not. Check the registry's current documentation before trying to change a published version | Not listed, or listed pointing at `:4.0.0` | Not listed: re-run failed jobs once `:4.0.0` resolves. The job refuses to list an image reference that does not resolve | The registry entry names `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0` |
 | VS Code / Cursor | No publisher | None | Nothing to recover; the deeplinks run the installed binary | `mcp-gateway --version` on the installing host |
 
@@ -219,3 +235,15 @@ binary channels are fine to leave live. Fix the image defect on the branch. If t
 changes no crate code, re-run `ci.yml` failed jobs where possible. If the image cannot be
 built from the `v4.0.0` commit, the image ships with `4.0.1` along with everything else.
 Do not push a second tag at the same version.
+
+### Fixing forward with a new patch version
+
+When crates.io or npm already hold a broken `4.0.0`, the fix ships as `4.0.1`:
+
+1. Bump `version` in `Cargo.toml` and refresh `Cargo.lock`. `check_tag_manifest.py`
+   refuses a tag the manifest does not match. npm and `server.json` take their version
+   from the tag inside the workflows, so they need no edit.
+2. Run the step 1 commands by hand, with `--tag v4.0.1`. No tag-time gate requires
+   `check_scope_acceptance.py` for a version other than `4.0.0`, so this is a manual
+   control, not an automated one.
+3. Continue from step 2 of the sequence.
