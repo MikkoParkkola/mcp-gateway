@@ -155,7 +155,7 @@ fn grant_to_u1() -> IdentityGrant {
         agent: GrantAgent::Any,
         capability: "cap_granted".to_string(),
         tool: None,
-        scope: GrantScope::Read,
+        scope: GrantScope::Execute,
         owner: None,
         expires_at: None,
         revoked_at: None,

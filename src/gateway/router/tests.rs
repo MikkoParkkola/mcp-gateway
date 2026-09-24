@@ -2736,9 +2736,11 @@ async fn authz_1_playbook_step_outside_client_backend_scope_is_refused() {
         response.error.is_some(),
         "a step outside the client's backend scope must be refused: {msg}"
     );
+    // A3: a refused step's reason is neutral, since it would otherwise name
+    // an operator-defined target the caller may not reach.
     assert!(
-        msg.contains("beta"),
-        "the refusal must name the backend it refused: {msg}"
+        msg.contains("step not permitted for this caller") && !msg.contains("beta"),
+        "the refusal must be recorded without naming the target: {msg}"
     );
     assert!(
         msg.contains("scoped"),
@@ -2783,8 +2785,8 @@ async fn authz_2_playbook_step_outside_client_tool_scope_is_refused() {
         "a step outside the client's tool allowlist must be refused: {msg}"
     );
     assert!(
-        msg.contains("danger_tool"),
-        "the refusal must name the tool: {msg}"
+        msg.contains("step not permitted for this caller") && !msg.contains("danger_tool"),
+        "the refusal must be recorded without naming the tool (A3): {msg}"
     );
 }
 
@@ -3039,8 +3041,8 @@ async fn authz_3_playbook_step_denied_by_global_tool_policy_is_refused() {
         "a globally denied tool must be refused even for an unrestricted client: {msg}"
     );
     assert!(
-        msg.contains("globally_blocked"),
-        "the refusal must name the tool: {msg}"
+        msg.contains("step not permitted for this caller") && !msg.contains("globally_blocked"),
+        "the refusal must be recorded without naming the tool (A3): {msg}"
     );
 }
 

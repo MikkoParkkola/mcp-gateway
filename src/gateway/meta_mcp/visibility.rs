@@ -97,6 +97,32 @@ impl MetaMcp {
                 .is_err()
     }
 
+    /// The answer to a direct-name call of a surfaced tool this caller could
+    /// not invoke: `-32601 Unknown tool`, the answer an absent name gets, never
+    /// a refusal naming its backend (A3). The refusal is audited here, once.
+    pub(super) fn withheld_surfaced(
+        &self,
+        server: &str,
+        tool_name: &str,
+        caller: &super::MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Option<Error> {
+        let refusal = self
+            .may_invoke(server, tool_name, caller.scope(), session_id)
+            .err()?;
+        crate::gateway::authz::audit_refusal(
+            caller.authorizer.transport(),
+            caller.authorizer.caller_name(),
+            server,
+            tool_name,
+            &refusal.to_string(),
+        );
+        Some(Error::json_rpc(
+            -32601,
+            format!("Unknown tool: {tool_name}"),
+        ))
+    }
+
     /// Whether this caller may be shown the backend name `server`: its
     /// backend scope and the routing profile. A cold cache does not hide it.
     pub(crate) fn admits_backend(

@@ -86,7 +86,9 @@ async fn search_tools_omits_out_of_scope_matches_and_suggestions() {
             json!({ "query": query }),
         )
         .await;
-        let text = payload(&body).to_string();
+        let mut found = payload(&body);
+        found.as_object_mut().map(|o| o.remove("query"));
+        let text = found.to_string();
         assert!(
             !text.contains("beta"),
             "search for {query:?} disclosed beta: {text}"

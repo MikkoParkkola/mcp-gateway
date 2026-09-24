@@ -278,6 +278,11 @@ impl MetaMcp {
                         json!({"server": server, "tool": tool, "arguments": operation_arguments});
                     &synthesized
                 };
+                if tool_name != "gateway_invoke"
+                    && let Some(absent) = self.withheld_surfaced(server, tool, caller, session)
+                {
+                    return Err(absent);
+                }
                 self.check_invocation_policy(envelope, session, caller)?;
             }
             let full = execution_arguments(&mut operation_arguments);

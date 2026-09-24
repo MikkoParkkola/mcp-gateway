@@ -1773,9 +1773,9 @@ impl MetaMcp {
         let session = false;
         crate::protocol_revision_telemetry::observe_tools_list(
             crate::protocol_revision_telemetry::ListFilters {
-                // The caller's invoke predicate shapes this list (A3): every
-                // backend tool is kept only if `may_invoke` admits it.
-                principal: true,
+                // The caller's invoke predicate shapes the surfaced tools (A3),
+                // so it shapes this list exactly when there are any to shape.
+                principal: !self.surfaced_tools.is_empty(),
                 profile,
                 session,
                 request: request_variant,
@@ -1985,21 +1985,11 @@ impl MetaMcp {
                     &Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
                 ));
             }
-            // Nor a surfaced tool this caller could not invoke (A3): the answer
-            // an absent name gets, never a refusal naming its backend. The
-            // refusal is still audited, once, here on every transport.
-            if let Err(e) = self.may_invoke(&server_name, tool_name, caller.scope(), session_id) {
-                crate::gateway::authz::audit_refusal(
-                    caller.authorizer.transport(),
-                    caller.authorizer.caller_name(),
-                    &server_name,
-                    tool_name,
-                    &e.to_string(),
-                );
-                return Some(error_response_preserving_status(
-                    id,
-                    &Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
-                ));
+            // Nor a surfaced tool this caller could not invoke (A3).
+            if let Some(absent) =
+                self.withheld_surfaced(&server_name, tool_name, caller, session_id)
+            {
+                return Some(error_response_preserving_status(id, &absent));
             }
             return Some(
                 self.invoke_named_backend_tool(

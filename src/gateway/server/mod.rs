@@ -4619,8 +4619,8 @@ mod tests {
             "a policy-denied stdio step must be refused: {text}"
         );
         assert!(
-            text.contains("blocked_tool"),
-            "the refusal must name the tool: {text}"
+            text.contains("step not permitted for this caller"),
+            "the refusal is recorded neutrally (A3): {text}"
         );
     }
 
