@@ -121,7 +121,7 @@ session. Either restores caching; neither requires a configuration change.
 
 ## 10. Probes read `/livez` and `/readyz`, not `/health`
 
-`/health` answers 503 whenever any backend is down or its circuit is open. The Helm chart and
+`/health` answers 503 whenever the health tracker marks any backend down. The Helm chart and
 the enterprise-alpha manifests used it for the liveness, readiness and startup probes, so one
 flapping upstream restarted every replica, and a backend that was down at deploy time kept new
 pods from ever starting. The container `HEALTHCHECK` also dialled `localhost`, which the Host
