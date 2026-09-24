@@ -129,6 +129,15 @@ async fn search_tools_omits_out_of_scope_matches_and_suggestions() {
         !text.contains("cap_open"),
         "code-mode search disclosed a capability: {text}"
     );
+    // By name too, so the code-mode capability collector is exercised.
+    let by_name = json!({ "query": "cap_open" });
+    let body = call_tool(&code.router, Some("alpha-only"), "gateway_search", by_name).await;
+    let mut found = payload(&body);
+    found.as_object_mut().map(|o| o.remove("query"));
+    assert!(
+        !found.to_string().contains("cap_"),
+        "code-mode search by name: {found}"
+    );
 }
 
 /// T8: `gateway_list_servers` names only backends the caller may reach, the
