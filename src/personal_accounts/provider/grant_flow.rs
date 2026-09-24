@@ -77,10 +77,10 @@ fn oauth_error_code(body: &str) -> &'static str {
         "unsupported_token_type",
         "unsupported_grant_type",
     ];
-    let code = serde_json::from_str::<serde_json::Value>(body)
+    serde_json::from_str::<super::ErrorBody>(body)
         .ok()
-        .and_then(|value| value.get("error")?.as_str().map(str::to_owned));
-    code.and_then(|code| KNOWN.into_iter().find(|known| *known == code))
+        .and_then(|parsed| parsed.error)
+        .and_then(|code| KNOWN.into_iter().find(|known| *known == code))
         .unwrap_or("unrecognized")
 }
 
