@@ -127,15 +127,28 @@ RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
 
 # NodeSource ships whichever npm it bundled that day; the pin makes the tree
 # scanned below a version this repo chose. Do not "simplify" it away.
-RUN npm install -g npm@12.0.2 \
-    && test "$(npm --version)" = "12.0.2"
-
-# npm protects its own vendored tree; these are unpacked over it, not installed.
+# Every tarball is checked against the sha512 pinned here (the registry's
+# `dist.integrity`) before use, so the registry cannot swap the bytes. Compare
+# the strings as written: a decoded compare can miss an edit in the last char.
+# Past npm itself, npm protects its own vendored tree; the rest are unpacked
+# over it, not installed.
 RUN cd /tmp && mkdir npm-patch && cd npm-patch \
-    && for spec in brace-expansion@5.0.9 ip-address@10.3.1 tar@7.5.21; do \
-         name="${spec%@*}"; ver="${spec##*@}"; \
-         dest="/usr/lib/node_modules/npm/node_modules/${name}"; \
+    && pins="npm@12.0.2:sha512-uIXokLlBj6FpNUTQX1PmT5pz7BlIN9QlixX+zdaSNHsd0qUXsbDLr50xzY6Sw7cJVr0uzHKDOle0swmPW/p5Qw== \
+brace-expansion@5.0.9:sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg== \
+ip-address@10.3.1:sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g== \
+tar@7.5.21:sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA==" \
+    && for pin in ${pins}; do \
+         spec="${pin%%:*}"; want="${pin#*:}"; \
          npm pack --silent "${spec}" >/dev/null || exit 1; \
+         got="$(node -p "'sha512-' + require('crypto').createHash('sha512').update(require('fs').readFileSync('${spec%@*}-${spec##*@}.tgz')).digest('base64')")" || exit 1; \
+         test "${got}" = "${want}" || { echo "npm integrity mismatch: ${spec} is ${got}, pinned ${want}" >&2; exit 1; }; \
+       done \
+    && npm install -g ./npm-12.0.2.tgz \
+    && test "$(npm --version)" = "12.0.2" \
+    && for pin in ${pins}; do \
+         spec="${pin%%:*}"; name="${spec%@*}"; ver="${spec##*@}"; \
+         test "${name}" = npm && continue; \
+         dest="/usr/lib/node_modules/npm/node_modules/${name}"; \
          rm -rf "${dest}"; \
          mkdir -p "${dest}"; \
          tar -xzf "${name}-${ver}.tgz" -C "${dest}" --strip-components=1 || exit 1; \
