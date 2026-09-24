@@ -60,6 +60,8 @@ mod direct_list_scope_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 #[cfg(test)]
+mod probe_tests;
+#[cfg(test)]
 mod tests;
 
 /// Shared application state
@@ -192,6 +194,11 @@ impl AppState {
     }
 }
 
+/// `/livez` and `/readyz`; the invariant is stated at the route table.
+async fn probe_ok() -> &'static str {
+    "ok"
+}
+
 /// The `AuthState` needed by [`auth_middleware`], split out of
 /// [`create_router_with`] purely to keep that function under the line
 /// budget — logic and ordering are unchanged.
@@ -297,6 +304,13 @@ pub(crate) fn create_router_with_accounts(
     #[allow(unused_mut)]
     let mut routes = Router::new()
         .route("/health", get(handlers::health_handler))
+        // Orchestrator probes answer from the process alone. `/health` fails
+        // when any backend is down, and probing it restarted every replica for
+        // one flapping upstream. Reaching this handler means the config loaded
+        // and the listener is up, which is all readiness asserts; graceful
+        // shutdown closes the listener, which is how both turn red.
+        .route("/livez", get(probe_ok))
+        .route("/readyz", get(probe_ok))
         .route("/api/costs", get(backend_handlers::costs_handler))
         .route(
             "/mcp",

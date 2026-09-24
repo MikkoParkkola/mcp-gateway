@@ -65,7 +65,7 @@ echo "== apply: CRDs + base manifests =="
 "$KUBECTL" apply --server-side -n "$NAMESPACE" -f "$ROOT_DIR/base/example-gateway.yaml"
 
 # 2. v1: pin a pullable image so the rollout actually converges in kind.
-#    The real Deployment has HTTP /health probes; the pause image serves no
+#    The real Deployment has HTTP /livez and /readyz probes; the pause image serves no
 #    HTTP, so the probes would keep pods un-Ready forever and `rollout status`
 #    would time out. Strip the probes for the lifecycle test (we are exercising
 #    apply+upgrade+rollback mechanics, not the gateway's health endpoint).
