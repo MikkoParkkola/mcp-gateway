@@ -394,7 +394,7 @@ pub enum Refusal {
 /// spelled by any text. The variant being public is not the control, though —
 /// the control is the caller-context field that selects it, which only the two
 /// stdio context builders set (`gateway::server`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum PrincipalSource<'a> {
     /// A caller bound by its verified identity, when it has one.
     Credential(Option<&'a crate::key_server::oidc::VerifiedIdentity>),
@@ -404,6 +404,16 @@ pub enum PrincipalSource<'a> {
         /// The per-process nonce.
         nonce: &'a [u8; 32],
     },
+}
+
+/// Redacted: the stdio nonce is never printed.
+impl std::fmt::Debug for PrincipalSource<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Credential(identity) => f.debug_tuple("Credential").field(identity).finish(),
+            Self::Stdio { .. } => f.write_str("Stdio { nonce: <redacted> }"),
+        }
+    }
 }
 
 /// The caller binding sealed into a continuation, or `None` when this caller

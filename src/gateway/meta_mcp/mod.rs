@@ -187,9 +187,9 @@ pub struct MetaMcpCallerContext<'a> {
     /// MRTR.9 refuses per requested method and MRTR.9a per requested *mode*: a
     /// client that declared `elicitation` and not `sampling` may be sent one
     /// and not the other, and one that declared elicitation in form mode alone
-    /// may not be sent a url request. On stdio there is no per-request
-    /// declaration to read, so this is [`Declared::NONE`] — absent means
-    /// absent, and a caller that declared nothing is never sent a continuation.
+    /// may not be sent a url request. On stdio a modern call reads its own
+    /// `_meta` and a legacy call the handshake; absent means absent, and a
+    /// caller that declared nothing is never sent a continuation.
     pub input_capabilities: Declared,
     /// How this caller can be asked to confirm a destructive action.
     ///

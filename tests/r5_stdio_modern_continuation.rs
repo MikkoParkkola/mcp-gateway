@@ -440,6 +440,11 @@ async fn ac_r5_an_http_caller_without_identity_is_still_refused() {
         saw_method(&received, "tools/call"),
         "R5-T7: the backend was never asked, so the mint was never reached: {response}"
     );
+    assert_eq!(
+        response.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32003),
+        "R5-T7: an unnamed HTTP caller is refused -32003: {response}"
+    );
     let message = response
         .pointer("/error/message")
         .and_then(Value::as_str)
