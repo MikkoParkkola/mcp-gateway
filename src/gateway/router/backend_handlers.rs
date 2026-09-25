@@ -15,7 +15,9 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, error, warn};
 
 use super::AppState;
-use super::authorization::{ToolTarget, authorize_tool_target};
+use super::authorization::{
+    ToolTarget, authorize_tool_target, refusal_principal, require_admin_log_level,
+};
 use super::helpers::{build_http_error_response, build_http_response, parse_request};
 use crate::backend::prepare_tool_metadata;
 use crate::gateway::auth::AuthenticatedClient;
@@ -598,6 +600,23 @@ pub(super) async fn backend_handler(
     );
 
     debug!(backend = %name, method = %method, client = ?client.as_ref().map(|c| &c.name), "Backend request");
+
+    // One backend's level is still shared by every user of that backend, so
+    // this route applies the meta route's admin gate before anything forwards.
+    if method == "logging/setLevel"
+        && let Err(e) = require_admin_log_level(
+            client.as_ref(),
+            refusal_principal(
+                client.as_ref(),
+                oauth_agent_identity.as_ref(),
+                cert_identity.as_ref(),
+            )
+            .as_deref(),
+            &name,
+        )
+    {
+        return build_http_error_response(id, e.code, e.message, e.status);
+    }
 
     // Handle notifications - forward to backend but return 202 Accepted.
     // Resolve (best-effort) the same session-bucket identity_key a matching
