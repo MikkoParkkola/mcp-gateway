@@ -1,11 +1,11 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35 or 37 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37, 38 or 39 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34 and 37 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37 and 39 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -13,8 +13,10 @@ changes to the license and to a removed CLI surface rather than to running behav
 7 and 8 are decided per backend, so there is no single moment at startup at which
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
+Item 38 refuses the start with its own error, which names the setting, so a notice would
+only repeat it.
 
-**Items 2, 8, 12, 13, 27, 29, 30, 34, 35 and 37 refuse the gateway's start (item 37 only above one declared replica; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37, 38 and 39 refuse the gateway's start (item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -55,7 +57,10 @@ upgrading a running deployment.
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
-| 40 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
+| 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
+| 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
+| 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
+| 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -398,6 +403,9 @@ shipped defaults now run one pod, and more than one is refused while the task su
 The control-plane store still sits next to the config on
 the read-only ConfigMap mount, so governance mutations stay off in a chart install (one WARN at
 startup). That is tracked separately.
+
+Both still serve the bearer token over plain HTTP inside the cluster. Item 38 makes that a
+declared choice, `cleartext_http: cluster_internal`, rather than a silent one.
 ## 22. The governance store location is configurable
 
 New `control_plane.store_dir`. When it is unset, the store stays at
@@ -793,7 +801,118 @@ reaches one pod, and a task created on one pod is not found on another.
   the declaration. Don't scale that way. See `docs/DEPLOYMENT.md`, "Replica Count and
   per-process state".
 
-## 40. API keys are configured as sha256 digests, with optional expiry
+## 38. A credential over plain HTTP on a network bind refuses the start
+
+In 3.x a gateway with `auth.enabled` bound to `0.0.0.0` served bearer tokens and API keys over
+plain HTTP without a word. It now refuses to serve when all of these hold:
+
+- the listener is reachable from the network: a non-loopback bind, or a `server.public_url`
+  whose host is not loopback;
+- it accepts a credential over HTTP: `auth.enabled`, `agent_auth.enabled` or
+  `key_server.enabled` (the key server takes OIDC ID tokens on this listener);
+- `mtls.enabled` is off, so the listener is not TLS;
+- `server.cleartext_http` is `refuse`, the default.
+
+The error names the exposure and both fixes. Loopback binds with no declared `public_url` are
+unaffected, and so is a gateway with no credential (the open-tools refusal covers that one).
+`server.allow_unauthenticated_network_bind` does not answer it: that says authentication happens
+in front of the gateway, not encryption. The check runs when `serve` starts, because `--host` is
+applied after the config loads, and on every reload: a reload that adds a non-loopback
+`public_url`, or removes the Service-name one `cluster_internal` needs, is refused the same way.
+
+`server.cleartext_http` names who protects the traffic instead. Every value but `refuse` is logged
+at WARN on every start.
+
+- **`tls_terminated_upstream`**: a reverse proxy, ingress or tunnel terminates TLS in front of
+  the gateway. Honest only if nothing reaches the plain-HTTP port except that proxy.
+- **`cluster_internal`**: callers reach the pod only over the cluster network, by its Service
+  name. Accepted only when `server.public_url`'s host is `<svc>.<ns>.svc` or
+  `<svc>.<ns>.svc.<cluster domain>`, whole labels, where the cluster domain is
+  `server.cluster_domain` (default `cluster.local`). An ingress hostname is refused and pointed
+  at `tls_terminated_upstream`.
+- **`host_local_publish`**: a container binds `0.0.0.0` and the host publishes the port on
+  loopback only, as `deploy/single-node/docker-compose.yaml` does. Honest only while every
+  publish is `127.0.0.1:`.
+
+The shipped deployments keep starting (item 21):
+
+- **Helm chart:** credential mode renders `server.cleartext_http` from the new value
+  `server.cleartextHttp`, default `cluster_internal`, and then always renders an ingress-only
+  NetworkPolicy (egress is restricted only with `networkPolicy.enabled: true`, so backends on any
+  port stay reachable). The chart fails to render when `cluster_internal` meets a `service.type`
+  other than `ClusterIP` or a `config.server.public_url` other than this release's own Service
+  name (`<fullname>.<namespace>.svc[.<cluster_domain>]`); set
+  `server.cleartextHttp=tls_terminated_upstream` when an ingress terminates TLS in front of the
+  pod. Mesh mode accepts no credential and renders no value.
+- **enterprise-alpha:** `base/configmap.yaml` sets `cleartext_http: cluster_internal` beside its
+  `public_url`. Change both together if an ingress fronts the pod.
+- **compose:** sets `MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish` beside its loopback
+  publish.
+
+## 39. `server.request_timeout` fails the load, and `server.max_body_size` is enforced
+
+In 3.x neither key did anything. No server-wide timeout existed: each call is bounded by its
+backend's `timeout`. `/mcp` and `/mcp/{name}` capped bodies at a hard-coded 10 MiB, and every
+other route, webhooks included, used the framework's 2 MiB default.
+
+- **`server.request_timeout` is removed and now stops startup; delete it.** It never did
+  anything. Set per-backend `timeout` to bound calls. The load fails, on start and on reload,
+  and the error includes:
+
+  ```text
+  `server.request_timeout` is retired: the server-wide request timeout was removed in 4.0; it was never enforced. Calls are bounded by the per-backend `timeout`. Remove server.request_timeout.
+  ```
+- **`server.max_body_size` is now enforced on every route**, read once at startup
+  (default 10 MiB). `0` would refuse every body, so it now fails the load; set a positive byte
+  count.
+- **An oversize body on `/mcp` and `/mcp/{name}` now gets HTTP 413 with JSON-RPC -32600**
+  ("Request body exceeds server.max_body_size"), where it used to get 400 with JSON-RPC -32700.
+  Clients that matched on -32700 must also handle 413 / -32600.
+- **Routes that parsed with a framework extractor (webhooks, key server, admin UI) now accept up
+  to the 10 MiB default**, up from 2 MiB. Lower `server.max_body_size` if you relied on that.
+
+## 40. A secret reference that resolves to nothing fails the load
+
+In 3.x an unset or empty secret became an empty credential without a word. `${GITHUB_TOKEN}`
+with `GITHUB_TOKEN` unset expanded to `""`, so the backend was sent `Authorization: Bearer `.
+An `env:` reference to a variable that was set but empty passed validation, and so did a literal
+`bearer_token: ""`. A `{env.X}` template in a capability, webhook or injected credential sent
+`""` when `X` was unset. Each of these now fails instead.
+
+- **`${VAR}` with no default must be set and non-empty** in the `headers` and `env` of every
+  enabled backend and in `capabilities.directories`. The error names the field and the variable:
+  `backends.github.headers.Authorization references ${GITHUB_TOKEN}, which is not set (or is
+  empty) and has no default. Set it, or write ${GITHUB_TOKEN:-} to allow empty.` One load reports
+  every such reference, together with every `env:` secret below that does not resolve. A `${`
+  that is not a `${NAME}` reference (names are uppercase, as in `${github_token}` written
+  lowercase) is refused too, instead of being sent verbatim. As in a POSIX shell, `${VAR:-text}` falls back to
+  `text` when `VAR` is unset **or empty** (3.x used the default only when unset), and `${VAR:-}`
+  is the way to say empty is intended.
+- **A disabled backend is not expanded.** Its `${VAR}` text stays as written, so a variable only
+  a disabled backend needs does not stop startup. Enabling it from the admin panel writes the
+  file and reloads; while the variable is unset that reload fails, names the variable, and the
+  running config is kept. The file already says `enabled: true`, so set the variable (or disable
+  the backend again) before the next restart, which would otherwise refuse to start.
+- **An empty secret is refused like a missing one.** `auth.bearer_token`, `auth.api_keys[].key`,
+  `agent_auth.agents[].hs256_secret` and `key_server.admin_token` written as `env:NAME` fail when
+  `NAME` is unset or empty: `auth.api_keys['ci'].key references environment variable 'CI_KEY',
+  which is empty; empty secrets are refused.` An empty literal in any of these four fails too
+  (`auth.bearer_token is empty.`), including when the config is built in code rather than
+  loaded, and the key server never accepts an empty admin bearer.
+- **`{env.X}` templates fail at call time.** Capability, webhook and injection templates resolve
+  when they are used, not at load, so the tool call or webhook delivery errors
+  (`{env.X} is not set or is empty`) instead of sending an empty credential. Write `{env.X:-}`
+  where empty is intended. A credential injection rule whose `{env.X}` is unset used to be
+  skipped; the call now fails. A capability `auth.key` (`env:X`, `{env.X}` or a bare `X`) whose
+  variable is set but empty fails the call too.
+- **A listed env file that does not exist is still allowed**, but every unresolved-reference error
+  now ends with `(env files listed but not found: <paths>)`, so a mistyped `env_files` path shows
+  up next to the variable it failed to supply.
+
+`server.metrics_token` is unchanged: an unset or empty variable there still leaves the gateway
+running with `/metrics` closed (item 33). No error prints a secret value.
+
+## 41. API keys are configured as sha256 digests, with optional expiry
 
 In 3.x `auth.api_keys[].key` held the key itself, or `env:VAR` whose value was the key. Anyone
 who could read the config, the environment or a debug log could replay it. The gateway only
@@ -853,7 +972,7 @@ These need no action and have no startup notice.
 
 ## Rolling back
 
-Keep the 3.x `gateway.yaml` you had before migrating API keys (item 40): 3.x reads `key` and
+Keep the 3.x `gateway.yaml` you had before migrating API keys (item 41): 3.x reads `key` and
 cannot read `key_sha256`, so a rollback puts that copy back. Beyond that, downgrading loads the
 same file, because 4.0.0 itself never edited it. The upgrade
 leaves the 3.x token files in place — its migration prints the notice and stamps the version,

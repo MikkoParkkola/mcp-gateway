@@ -6,8 +6,6 @@
 //! presented key and compares digests. So the config stores only the digest,
 //! and a plaintext `key` is refused by name rather than silently hashed.
 
-use std::env;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -101,26 +99,22 @@ impl std::fmt::Debug for ApiKeyConfig {
 }
 
 impl ApiKeyConfig {
-    /// The configured digest as raw bytes, expanding an `env:` reference.
+    /// The configured digest as raw bytes, resolving an `env:` reference
+    /// through `overlay` by the one secret-reference rule (C4).
     ///
     /// # Errors
     ///
-    /// Returns an error if the digest is absent, an `env:` reference cannot be
-    /// resolved, or the value is not `sha256:<64 lowercase hex>`. The error
+    /// Returns an error if the digest is absent, an `env:` reference resolves
+    /// to nothing, or the value is not `sha256:<64 lowercase hex>`. The error
     /// names the field or variable, never the value.
-    pub fn resolve_digest(&self) -> Result<[u8; 32]> {
+    pub fn resolve_digest(&self, overlay: &EnvOverlay) -> Result<[u8; 32]> {
         let name = &self.name;
-        let spec = self.key_sha256.as_deref().ok_or_else(|| {
-            Error::ConfigValidation(format!("auth.api_keys['{name}'] has no key_sha256"))
-        })?;
-        let value = match spec.strip_prefix("env:") {
-            Some(var) => env::var(var).map_err(|_| {
-                Error::ConfigValidation(format!(
-                    "auth.api_keys['{name}'].key_sha256 references missing environment variable '{var}'"
-                ))
-            })?,
-            None => spec.to_string(),
-        };
+        let field = format!("auth.api_keys['{name}'].key_sha256");
+        let spec = self
+            .key_sha256
+            .as_deref()
+            .ok_or_else(|| Error::ConfigValidation(format!("{field} is missing")))?;
+        let value = crate::config::secret_ref::SecretRef::parse(spec).resolve(&field, overlay)?;
         parse_api_key_digest(&value).ok_or_else(|| malformed(name, spec))
     }
 
@@ -187,6 +181,12 @@ impl AuthConfig {
                             Some(value) => value,
                             None => continue,
                         },
+                        // The C4 wording for an empty secret, so it reads the same.
+                        None if spec.is_empty() => {
+                            return Err(Error::ConfigValidation(format!(
+                                "auth.api_keys['{name}'].key_sha256 is empty."
+                            )));
+                        }
                         None => spec.clone(),
                     };
                     if parse_api_key_digest(&value).is_none() {

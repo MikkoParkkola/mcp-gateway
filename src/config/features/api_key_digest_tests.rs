@@ -80,7 +80,9 @@ fn expired_key_does_not_block_startup() {
     );
     let (_dir, loaded) = load(&body, None);
     let config = loaded.expect("one lapsed key must not keep the gateway from starting");
-    let resolved = ResolvedAuthConfig::try_from_config(&config.auth).expect("resolves");
+    let resolved =
+        ResolvedAuthConfig::try_from_config(&config.auth, &crate::config::EnvOverlay::none())
+            .expect("resolves");
     let client = resolved
         .validate_token(KEY)
         .expect("the live key authenticates");
@@ -148,7 +150,9 @@ fn env_digest_reference_authenticates() {
     let body = format!("    - name: ops\n      key_sha256: env:{VAR}\n");
     let (_dir, loaded) = load(&body, Some(&env));
     let config = loaded.expect("an env: digest loads");
-    let resolved = ResolvedAuthConfig::try_from_config(&config.auth).expect("resolves");
+    let resolved =
+        ResolvedAuthConfig::try_from_config(&config.auth, &crate::config::EnvOverlay::none())
+            .expect("resolves");
     assert_eq!(
         resolved.validate_token(KEY).expect("authenticates").name,
         "ops"

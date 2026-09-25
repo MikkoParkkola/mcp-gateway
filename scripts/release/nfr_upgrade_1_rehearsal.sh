@@ -255,7 +255,7 @@ else
   record "PHASE2.PERMISSIONS_AND_MOUNTS_PRESERVED" "FAIL" "post-upgrade gateway.yaml no longer parses to the expected api_key/backend shape"
 fi
 
-echo "-- phase 2a: migrate the API key to its digest (UPGRADING-4.0 item 40) --"
+echo "-- phase 2a: migrate the API key to its digest (UPGRADING-4.0 item 41) --"
 # 4.0 refuses a plaintext auth.api_keys[].key at load. The documented step:
 # hash the SAME key with hash-key and store it as key_sha256. The 3.x config is
 # kept for the rollback in phase 4, since 3.x cannot read key_sha256.

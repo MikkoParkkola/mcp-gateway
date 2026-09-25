@@ -24,7 +24,8 @@ fn resolved(key: &serde_json::Value) -> ResolvedAuthConfig {
         "api_keys": [key]
     }))
     .expect("auth config fixture deserializes");
-    ResolvedAuthConfig::try_from_config(&config).expect("resolves")
+    ResolvedAuthConfig::try_from_config(&config, &crate::config::EnvOverlay::none())
+        .expect("resolves")
 }
 
 fn digest_key(expires_at: Option<String>) -> ResolvedAuthConfig {

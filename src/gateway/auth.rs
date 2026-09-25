@@ -33,6 +33,9 @@ pub(crate) mod live;
 #[path = "auth_quota.rs"]
 mod quota;
 pub use quota::QuotaPrincipal;
+#[path = "auth_api_key.rs"]
+mod api_key;
+pub use api_key::ResolvedApiKey;
 
 /// Type alias for our rate limiter
 type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
@@ -69,28 +72,6 @@ pub struct ResolvedAuthConfig {
     client_circuit_breakers: DashMap<String, Arc<CircuitBreaker>>,
 }
 
-/// Resolved API key with expanded values
-#[derive(Clone)]
-pub struct ResolvedApiKey {
-    /// sha256 of the key. The plaintext is never held (E4).
-    pub digest: [u8; 32],
-    /// Past this instant a matching key is refused.
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    quota_principal: QuotaPrincipal,
-    /// Client name
-    pub name: String,
-    /// Rate limit (requests per minute)
-    pub rate_limit: u32,
-    /// Allowed backends
-    pub backends: Vec<String>,
-    /// Allowed tools (allowlist if Some)
-    pub allowed_tools: Option<Vec<String>>,
-    /// Denied tools (blocklist if Some)
-    pub denied_tools: Option<Vec<String>>,
-    /// Admin-level UI and management tool access.
-    pub admin: bool,
-}
-
 // Manual `Debug` that redacts resolved secrets (CWE-532, mirrors MIK-6733).
 // A derived `Debug` would print the bearer token / API key verbatim into any
 // trace or error context. Only a non-reversible fingerprint is shown.
@@ -107,25 +88,6 @@ impl std::fmt::Debug for ResolvedAuthConfig {
             )
             .field("api_keys", &self.api_keys)
             .field("public_paths", &self.public_paths)
-            .finish_non_exhaustive()
-    }
-}
-
-impl std::fmt::Debug for ResolvedApiKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResolvedApiKey")
-            // The 12 hex characters of `principal`, never more of the digest.
-            .field(
-                "digest",
-                &format!("<redacted:{}>", hex::encode(&self.digest[..6])),
-            )
-            .field("expires_at", &self.expires_at)
-            .field("name", &self.name)
-            .field("rate_limit", &self.rate_limit)
-            .field("backends", &self.backends)
-            .field("allowed_tools", &self.allowed_tools)
-            .field("denied_tools", &self.denied_tools)
-            .field("admin", &self.admin)
             .finish_non_exhaustive()
     }
 }
@@ -157,9 +119,17 @@ impl ResolvedAuthConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if any `env:VAR_NAME` secret reference cannot be resolved.
-    pub fn try_from_config(config: &AuthConfig) -> Result<Self> {
-        let bearer_token = config.resolve_bearer_token()?;
+    /// Returns an error if any `env:VAR_NAME` secret reference cannot be
+    /// resolved in `overlay` (the env files the config was loaded with, then
+    /// the process environment).
+    pub fn try_from_config(
+        config: &AuthConfig,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Self> {
+        // An empty credential compares equal to an empty presented token; the
+        // resolvers refuse one (C4, `SecretRef::resolve`), so every caller that
+        // builds this comparator is covered.
+        let bearer_token = config.resolve_bearer_token(overlay)?;
         let bearer_quota_principal = bearer_token
             .as_deref()
             .map(QuotaPrincipal::configured_bearer);
@@ -184,7 +154,7 @@ impl ResolvedAuthConfig {
             .api_keys
             .iter()
             .map(|k| {
-                let digest = k.resolve_digest()?;
+                let digest = k.resolve_digest(overlay)?;
                 Ok(ResolvedApiKey {
                     digest,
                     expires_at: k.expires_at,
@@ -228,7 +198,8 @@ impl ResolvedAuthConfig {
     /// paths should prefer [`Self::try_from_config`] so the error is returned.
     #[must_use]
     pub fn from_config(config: &AuthConfig) -> Self {
-        Self::try_from_config(config).expect("auth config secret references should resolve")
+        Self::try_from_config(config, &crate::config::EnvOverlay::none())
+            .expect("auth config secret references should resolve")
     }
 
     /// Check if a path is public (bypasses auth)
@@ -1137,6 +1108,18 @@ mod tests {
     fn test_digest(key: &str) -> [u8; 32] {
         crate::config::parse_api_key_digest(&crate::config::api_key_digest_spec(key.as_bytes()))
             .expect("a computed digest parses")
+    }
+
+    #[test]
+    fn empty_bearer_refused_by_try_from_config() {
+        let config = AuthConfig {
+            enabled: true,
+            bearer_token: Some(String::new()),
+            ..AuthConfig::default()
+        };
+        let err = ResolvedAuthConfig::try_from_config(&config, &crate::config::EnvOverlay::none())
+            .expect_err("an empty bearer would match an empty presented token");
+        assert!(err.to_string().contains("empty"), "got: {err}");
     }
 
     // ── Anonymous identity (CWE-346) ──────────────────────────────────────────
