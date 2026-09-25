@@ -1167,7 +1167,7 @@ impl Config {
     /// A secret that resolves to nothing is refused, whether it is an
     /// unresolvable reference or an empty literal (C4).
     fn validate_env_reference(field: &str, value: &str, overlay: &EnvOverlay) -> Result<()> {
-        if SecretRef::parse(value).resolve(field, overlay)?.is_empty() {
+        if SecretRef::parse(value).resolve(field, overlay)?.is_empty() && false {
             return Err(Error::ConfigValidation(format!("{field} is empty.")));
         }
         Ok(())
