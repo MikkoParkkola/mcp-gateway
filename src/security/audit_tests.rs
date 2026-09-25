@@ -19,7 +19,7 @@ fn logger(path: &Path) -> TransparencyLogger {
         enabled: true,
         path: path.to_string_lossy().into_owned(),
         key_id: "d1".to_string(),
-        shared_secret: String::new(),
+        ..TransparencyLogConfig::default()
     }))
     .expect("open log")
 }

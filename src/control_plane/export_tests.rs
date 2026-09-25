@@ -5,6 +5,7 @@
 use super::*;
 use crate::security::TransparencyLogger;
 use crate::security::transparency_log::TransparencyLogConfig;
+use crate::security::transparency_log::recompute_entry_hash;
 use std::sync::Arc;
 
 fn logger(path: &Path) -> Arc<TransparencyLogger> {
@@ -12,7 +13,7 @@ fn logger(path: &Path) -> Arc<TransparencyLogger> {
         enabled: true,
         path: path.to_string_lossy().into_owned(),
         key_id: "test".to_string(),
-        shared_secret: String::new(),
+        ..TransparencyLogConfig::default()
     });
     Arc::new(TransparencyLogger::open(cfg).expect("open log"))
 }
@@ -164,10 +165,12 @@ fn rotation_reanchors_and_resumes() {
         .unwrap();
     drop(l2);
 
+    // D6: the recreated file opens with a record continuing the counter
+    // (verify reports the deleted records as a gap); export resumes there.
     let out = exp.poll(&sink).unwrap();
     assert!(out.reanchored, "shrunk file must re-anchor");
-    assert_eq!(out.forwarded, 1);
-    assert_eq!(sink.delivered().len(), 2);
+    assert_eq!(out.forwarded, 2, "the open record, then the new entry");
+    assert_eq!(sink.delivered().len(), 3);
 }
 
 // MIK-6700 HMAC.3 — the exporter authenticates each entry's sig when a
@@ -178,6 +181,7 @@ fn signed_logger(path: &Path, secret: &str) -> Arc<TransparencyLogger> {
         path: path.to_string_lossy().into_owned(),
         key_id: "test-key".to_string(),
         shared_secret: secret.to_string(),
+        ..TransparencyLogConfig::default()
     });
     Arc::new(TransparencyLogger::open(cfg).expect("open signed log"))
 }
@@ -388,4 +392,166 @@ fn source_status_records_outcomes() {
     assert_eq!(snap["last_lag"], 1);
     assert_eq!(snap["max_lag"], 5, "max_lag is monotonic across polls");
     assert_eq!(snap["reanchor_total"], 1);
+}
+
+// ── D6 2.11: the exporter follows the log's own rotation ─────────────────────
+
+fn small_logger(path: &Path, retain: u32, secret: &str) -> Arc<TransparencyLogger> {
+    let rotation = crate::security::transparency_log::RotationConfig {
+        max_segment_bytes: 4096,
+        retain_segments: retain,
+        ..crate::security::transparency_log::RotationConfig::default()
+    };
+    let cfg = Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: path.to_string_lossy().into_owned(),
+        key_id: "test-key".to_string(),
+        shared_secret: secret.to_string(),
+        rotation,
+    });
+    Arc::new(TransparencyLogger::open(cfg).expect("open log"))
+}
+
+fn sealed(path: &Path) -> Vec<u64> {
+    crate::security::transparency_log::segments::list_segments(path)
+        .unwrap()
+        .iter()
+        .map(|s| s.seq)
+        .collect()
+}
+
+/// Append until the newest sealed segment number reaches `seq`.
+fn until_sealed(l: &TransparencyLogger, path: &Path, seq: u64) {
+    let mut i = 0;
+    while sealed(path).last().is_none_or(|s| *s < seq) {
+        gov_event(l, &format!("e{i}"));
+        i += 1;
+    }
+}
+
+/// Null control: must stay green on the unmutated build.
+#[test]
+fn export_follows_rotation_without_loss() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = small_logger(&log, 12, "");
+    (0..3).for_each(|i| gov_event(&l, &format!("a{i}")));
+    let sink = CollectingSink::new();
+    let mut exp = exporter(dir.path(), ExportSource::Governance, &log).with_max_batch(2);
+    exp.poll(&sink).unwrap();
+    until_sealed(&l, &log, 1);
+    loop {
+        let out = exp.poll(&sink).unwrap();
+        assert!(!out.reanchored);
+        if out.forwarded == 0 {
+            break;
+        }
+    }
+    let counters: Vec<u64> = sink.delivered().iter().map(|e| e.counter).collect();
+    let want: Vec<u64> = (1..=*counters.last().unwrap()).collect();
+    assert_eq!(counters, want, "every record exactly once, in order");
+}
+
+#[test]
+fn export_reanchors_at_oldest_open_record_after_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = small_logger(&log, 1, "");
+    gov_event(&l, "first");
+    let sink = CollectingSink::new();
+    let mut exp = exporter(dir.path(), ExportSource::Governance, &log);
+    exp.poll(&sink).unwrap();
+    assert_eq!(exp.cursor().segment_seq, Some(0));
+    until_sealed(&l, &log, 2); // retention 1: `.0` expired
+    assert!(!sealed(&log).contains(&0));
+    let before = sink.delivered().len();
+    let out = exp.poll(&sink).unwrap();
+    assert!(out.reanchored);
+    let first = &sink.delivered()[before];
+    assert_eq!(first.raw["event"], "audit_segment_opened");
+    assert_eq!(first.raw["segment_seq"], sealed(&log)[0]);
+}
+
+#[test]
+fn export_rejects_forged_first_line_after_reanchor() {
+    const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = small_logger(&log, 1, SECRET);
+    until_sealed(&l, &log, 2);
+    drop(l);
+    let oldest = crate::security::transparency_log::segments::sealed_path(&log, sealed(&log)[0]);
+    let body = std::fs::read_to_string(&oldest).unwrap();
+    let mut rows: Vec<serde_json::Value> = body
+        .lines()
+        .map(|r| serde_json::from_str(r).unwrap())
+        .collect();
+    rows[0]["sig"] = "hmac-sha256:00".into();
+    let body = rows
+        .iter()
+        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
+    std::fs::write(&oldest, body).unwrap();
+    let mut exp = exporter(dir.path(), ExportSource::Governance, &log).with_signing_secret(SECRET);
+    assert!(matches!(
+        exp.poll(&CollectingSink::new()),
+        Err(ExportError::VerificationFailed(_))
+    ));
+}
+
+#[test]
+fn export_rejects_non_open_first_line_after_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = small_logger(&log, 1, "");
+    until_sealed(&l, &log, 2);
+    drop(l);
+    let oldest = crate::security::transparency_log::segments::sealed_path(&log, sealed(&log)[0]);
+    let body = std::fs::read_to_string(&oldest).unwrap();
+    let mut rows: Vec<serde_json::Value> = body
+        .lines()
+        .map(|r| serde_json::from_str(r).unwrap())
+        .collect();
+    // Turn the open record into an ordinary record, hash recomputed.
+    rows[0]["event"] = "not_an_open_record".into();
+    rows[0]["entry_hash"] = recompute_entry_hash(&rows[0]).unwrap().into();
+    let body = rows
+        .iter()
+        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
+    std::fs::write(&oldest, body).unwrap();
+    let mut exp = exporter(dir.path(), ExportSource::Governance, &log);
+    assert!(matches!(
+        exp.poll(&CollectingSink::new()),
+        Err(ExportError::VerificationFailed(_))
+    ));
+}
+
+#[test]
+fn export_loads_pre_d6_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = small_logger(&log, 12, "");
+    gov_event(&l, "a");
+    std::fs::write(
+        dir.path().join("cursor.json"),
+        r#"{"last_entry_hash":"genesis","last_counter":0}"#,
+    )
+    .unwrap();
+    let mut exp = exporter(dir.path(), ExportSource::Governance, &log);
+    assert_eq!(exp.cursor().segment_seq, None);
+    assert_eq!(exp.poll(&CollectingSink::new()).unwrap().forwarded, 1);
+}
+
+#[test]
+fn export_from_genesis_cursor_after_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = small_logger(&log, 1, "");
+    until_sealed(&l, &log, 2);
+    let sink = CollectingSink::new();
+    let mut exp = exporter(dir.path(), ExportSource::Governance, &log);
+    exp.poll(&sink)
+        .expect("a fresh exporter starts at the oldest open record");
+    let first = &sink.delivered()[0];
+    assert_eq!(first.raw["event"], "audit_segment_opened");
+    assert_eq!(first.raw["segment_seq"], sealed(&log)[0]);
 }

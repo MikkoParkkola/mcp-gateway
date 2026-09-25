@@ -120,8 +120,31 @@ pub type StoreResult<T> = Result<T, StoreError>;
 /// scan at records strictly older than that position. Its numeric meaning is
 /// backend-private (a byte offset for the file backend, an index for the
 /// in-memory one), so never construct or compare one against a hand-made value.
+///
+/// The file backend's cursor names a segment of the rotating governance log
+/// and a byte offset inside it (D6 2.5), so a page walks back across a
+/// rotation without skipping or re-reading. A cursor with no segment is the
+/// pre-D6 shape: honoured only while the log has never rotated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AuditCursor(u64);
+pub struct AuditCursor {
+    offset: u64,
+    segment: Option<u64>,
+}
+
+impl AuditCursor {
+    const fn at(offset: u64) -> Self {
+        Self {
+            offset,
+            segment: None,
+        }
+    }
+
+    /// A pre-D6 offset-only cursor, for the legacy-cursor test.
+    #[cfg(test)]
+    pub(crate) const fn legacy_for_test(offset: u64) -> Self {
+        Self::at(offset)
+    }
+}
 
 /// One bounded page of audit events, newest first.
 #[derive(Debug, Clone)]
@@ -136,6 +159,10 @@ pub struct AuditPage {
     /// Bytes read from storage by this call; never exceeds
     /// [`MAX_AUDIT_SCAN_BYTES`]. The in-memory backend does no I/O and reports 0.
     pub bytes_examined: u64,
+    /// The cursor passed in no longer named a position (a pre-D6 cursor after
+    /// the log rotated), so this page restarts at the newest record. Records
+    /// may be re-read; none are skipped.
+    pub cursor_reset: bool,
 }
 
 /// Filter for [`ControlPlaneStore::read_audit`].
@@ -445,7 +472,7 @@ where
 
 /// A resume position becomes a cursor only when records remain below it.
 fn audit_cursor(resume_at: u64) -> Option<AuditCursor> {
-    (resume_at > 0).then_some(AuditCursor(resume_at))
+    (resume_at > 0).then_some(AuditCursor::at(resume_at))
 }
 
 // ── In-memory backend ──────────────────────────────────────────────────────────
@@ -539,8 +566,8 @@ impl ControlPlaneStore for InMemoryControlPlaneStore {
         // The cursor is an exclusive upper-bound index: scan backwards from it.
         let end = filter
             .cursor
-            .map_or(audit.len(), |AuditCursor(i)| {
-                usize::try_from(i).unwrap_or(usize::MAX)
+            .map_or(audit.len(), |c| {
+                usize::try_from(c.offset).unwrap_or(usize::MAX)
             })
             .min(audit.len());
         let scan = scan_audit(
@@ -556,6 +583,7 @@ impl ControlPlaneStore for InMemoryControlPlaneStore {
             next_cursor: audit_cursor(scan.stopped_at.unwrap_or(0)),
             records_examined: scan.records_examined,
             bytes_examined: 0,
+            cursor_reset: false,
         })
     }
 }
@@ -870,20 +898,11 @@ impl ControlPlaneStore for FileControlPlaneStore {
 
     fn read_audit(&self, filter: &AuditFilter) -> StoreResult<AuditPage> {
         filter.validate()?;
-        let path = self.audit.path();
-        let file_len = match std::fs::metadata(&path) {
-            Ok(m) => m.len(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
-            Err(e) => return Err(e.into()),
-        };
-        // The cursor is an exclusive upper-bound byte offset: everything below it
+        let (path, end, segment, cursor_reset) = self.audit_position(filter.cursor)?;
+        // The cursor's offset is an exclusive upper bound: everything below it
         // is still unread. Read one tail window ending there, capped so a single
         // call never reads more than MAX_AUDIT_SCAN_BYTES no matter how long the
         // log is.
-        let end = filter
-            .cursor
-            .map_or(file_len, |AuditCursor(b)| b)
-            .min(file_len);
         let window_len = end.min(MAX_AUDIT_SCAN_BYTES);
         let window_start = end - window_len;
         let window = read_window(&path, window_start, window_len)?;
@@ -909,12 +928,94 @@ impl ControlPlaneStore for FileControlPlaneStore {
         let body_start = window_start + u64::try_from(body_offset).unwrap_or(u64::MAX);
 
         let scan = scan_audit(reverse_audit_lines(body, body_start), filter)?;
+        // Exhausting the window still leaves every byte below it unread; at
+        // the start of a segment, the next page is the older segment's end.
+        let resume = scan.stopped_at.unwrap_or(body_start);
+        let next_cursor = if resume > 0 {
+            Some(AuditCursor {
+                offset: resume,
+                segment,
+            })
+        } else {
+            self.older_segment(segment)?
+        };
         Ok(AuditPage {
             events: scan.events,
-            // Exhausting the window still leaves every byte below it unread.
-            next_cursor: audit_cursor(scan.stopped_at.unwrap_or(body_start)),
+            next_cursor,
             records_examined: scan.records_examined,
             bytes_examined: window_len,
+            cursor_reset,
+        })
+    }
+}
+
+impl FileControlPlaneStore {
+    /// Resolve a cursor to `(file, end offset, segment, cursor_reset)`. No
+    /// cursor starts at the end of the active file; a segment cursor names
+    /// its file by number (a rename never changes a segment's bytes); a
+    /// pre-D6 offset-only cursor is honoured only while nothing is sealed.
+    fn audit_position(
+        &self,
+        cursor: Option<AuditCursor>,
+    ) -> StoreResult<(PathBuf, u64, Option<u64>, bool)> {
+        use crate::security::transparency_log::segments::{list_segments, sealed_path};
+        let path = self.audit.path();
+        let sealed = list_segments(&path)?;
+        let active_seq = sealed.last().map_or(0, |s| s.seq + 1);
+        let len_of = |p: &Path| match std::fs::metadata(p) {
+            Ok(m) => Ok(m.len()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(StoreError::from(e)),
+        };
+        let newest = || -> StoreResult<(PathBuf, u64, Option<u64>)> {
+            Ok((path.clone(), len_of(&path)?, Some(active_seq)))
+        };
+        let (file, end, segment, reset) = match cursor {
+            None => {
+                let (f, e, s) = newest()?;
+                (f, e, s, false)
+            }
+            Some(AuditCursor {
+                offset,
+                segment: None,
+            }) if sealed.is_empty() => (path.clone(), offset.min(len_of(&path)?), Some(0), false),
+            Some(AuditCursor { segment: None, .. }) => {
+                tracing::warn!(
+                    "pre-rotation audit cursor after a rotation: restarting at the newest record"
+                );
+                let (f, e, s) = newest()?;
+                (f, e, s, true)
+            }
+            Some(AuditCursor {
+                offset,
+                segment: Some(seq),
+            }) => {
+                let file = if seq == active_seq {
+                    path.clone()
+                } else {
+                    sealed_path(&path, seq)
+                };
+                (file.clone(), offset.min(len_of(&file)?), Some(seq), false)
+            }
+        };
+        Ok((file, end, segment, reset))
+    }
+
+    /// The cursor for the end of the segment older than `segment`, if any
+    /// survives retention.
+    fn older_segment(&self, segment: Option<u64>) -> StoreResult<Option<AuditCursor>> {
+        use crate::security::transparency_log::segments::list_segments;
+        let Some(seq) = segment else { return Ok(None) };
+        let older = list_segments(&self.audit.path())?
+            .into_iter()
+            .rev()
+            .find(|s| s.seq < seq);
+        Ok(match older {
+            Some(s) => Some(AuditCursor {
+                offset: std::fs::metadata(&s.path)?.len(),
+                segment: Some(s.seq),
+            }),
+            None => None,
         })
     }
 }
@@ -1081,6 +1182,9 @@ fn force_owner_only(_f: &std::fs::File) -> std::io::Result<()> {
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+#[path = "store_rotation_tests.rs"]
+mod rotation_tests;
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;

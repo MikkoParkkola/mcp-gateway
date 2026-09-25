@@ -24,11 +24,7 @@ fn policy(id: &str, enforced: bool) -> ControlPlanePolicy {
     }
 }
 
-fn audit_event(
-    event_id: &str,
-    actor: &str,
-    action: ControlPlaneAction,
-) -> ControlPlaneAuditEvent {
+fn audit_event(event_id: &str, actor: &str, action: ControlPlaneAction) -> ControlPlaneAuditEvent {
     ControlPlaneAuditEvent {
         event_id: event_id.to_string(),
         actor_id: actor.to_string(),
@@ -48,6 +44,7 @@ fn governance_logger(dir: &Path) -> Arc<TransparencyLogger> {
         path: dir.join("audit.jsonl").to_string_lossy().to_string(),
         key_id: "gov".to_string(),
         shared_secret: "governance-secret-at-least-32-bytes-long!".to_string(),
+        ..TransparencyLogConfig::default()
     });
     Arc::new(TransparencyLogger::open(cfg).expect("open governance log"))
 }
@@ -249,8 +246,7 @@ fn file_audit_read_caps_bytes_on_a_log_larger_than_the_window() {
     use std::io::Write;
     let dir = tempfile::tempdir().unwrap();
     let logger = governance_logger(dir.path());
-    let store =
-        FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+    let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     store
         .append_audit(&audit_event(
             "seed",
@@ -356,8 +352,7 @@ fn file_audit_read_fails_closed_on_a_line_longer_than_the_window() {
     use std::io::Write;
     let dir = tempfile::tempdir().unwrap();
     let logger = governance_logger(dir.path());
-    let store =
-        FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+    let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     store
         .append_audit(&audit_event("ok", "alice", ControlPlaneAction::MutateGrant))
         .unwrap();
@@ -417,8 +412,7 @@ fn invalid_filter_errors() {
 fn audit_backed_by_verifiable_transparency_log() {
     let dir = tempfile::tempdir().unwrap();
     let logger = governance_logger(dir.path());
-    let store =
-        FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+    let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     store
         .append_audit(&audit_event(
             "gov1",
@@ -630,8 +624,7 @@ fn malformed_audit_entry_fails_closed() {
     use std::io::Write;
     let dir = tempfile::tempdir().unwrap();
     let logger = governance_logger(dir.path());
-    let store =
-        FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+    let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     store
         .append_audit(&audit_event(
             "ok1",
@@ -660,8 +653,7 @@ fn malformed_audit_entry_fails_closed() {
 fn audited_commit_persists_grant_and_appends_verifiable_audit() {
     let dir = tempfile::tempdir().unwrap();
     let logger = governance_logger(dir.path());
-    let store =
-        FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+    let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
 
     let g = grant("g1", ControlPlaneGrantStatus::Approved);
     let event = audit_event("e1", "alice", ControlPlaneAction::MutateGrant);
@@ -686,8 +678,7 @@ fn audited_commit_persists_grant_and_appends_verifiable_audit() {
 fn set_grant_status_audited_is_field_only_and_audited() {
     let dir = tempfile::tempdir().unwrap();
     let logger = governance_logger(dir.path());
-    let store =
-        FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+    let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
 
     // Seed g1, then a concurrent edit changes a NON-status field.
     store

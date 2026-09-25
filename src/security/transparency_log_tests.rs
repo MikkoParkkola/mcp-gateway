@@ -15,7 +15,7 @@ fn cfg_no_sig(path: &Path) -> Arc<TransparencyLogConfig> {
         enabled: true,
         path: path.to_string_lossy().to_string(),
         key_id: "test".to_string(),
-        shared_secret: String::new(),
+        ..TransparencyLogConfig::default()
     })
 }
 
@@ -25,6 +25,7 @@ fn cfg_with_sig(path: &Path) -> Arc<TransparencyLogConfig> {
         path: path.to_string_lossy().to_string(),
         key_id: "test-key".to_string(),
         shared_secret: "a-test-secret-that-is-at-least-32-bytes!!".to_string(),
+        ..TransparencyLogConfig::default()
     })
 }
 
@@ -478,7 +479,13 @@ fn recover_chain_state_finds_last_entry_without_reading_oversized_log() {
     std::fs::write(tmp.path(), &content).unwrap();
 
     // WHEN: chain state is recovered
-    let (counter, entry_hash) = recover_chain_state(tmp.path()).unwrap();
+    // (D6 recovery reads the tail through the same bounded helper.)
+    let tail: serde_json::Value =
+        serde_json::from_str(&read_last_nonempty_line(tmp.path()).unwrap().unwrap()).unwrap();
+    let (counter, entry_hash) = (
+        tail["counter"].as_u64().unwrap(),
+        tail["entry_hash"].as_str().unwrap(),
+    );
 
     // THEN: the correct last entry is found via the bounded tail scan
     // alone — a whole-file read would also pass this assertion, but the

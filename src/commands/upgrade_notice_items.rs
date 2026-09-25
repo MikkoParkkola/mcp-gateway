@@ -85,4 +85,8 @@ body on `/mcp` gets HTTP 413, JSON-RPC -32600 (was 400, -32700), and webhooks no
 it), and a failed append refuses calls with 503 and unreadies `/readyz` until it recovers. Records \
 carry `schema_version: 2`, `who` and `outcome`, including refused and failed calls. On Kubernetes \
 the chart's audit volume is an emptyDir: set `audit.existingClaim` to keep the log.",
+    "The audit log now ROTATES at 64 MiB and keeps 12 sealed segments, deleting older ones with \
+a signed `audit_segment_expired` record for each; on a full disk it deletes the oldest sealed \
+segment (`rotation.on_disk_full: refuse` keeps every record and goes unready instead). \
+`audit verify` reads every segment. Do not rotate the log externally: logrotate breaks the chain.",
 ];

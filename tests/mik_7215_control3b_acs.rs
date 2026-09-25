@@ -99,7 +99,7 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
             enabled: true,
             path: path.to_string_lossy().to_string(),
             key_id: "test".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         }))
         .expect("the transparency logger must open"),
     );

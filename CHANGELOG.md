@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (UPGRADING-4.0 item 49):** the audit (transparency) log rotates at 64 MiB and keeps
+  12 sealed segments, recording each deletion as a signed `audit_segment_expired` record.
+  `security.transparency_log.rotation` sets `max_segment_bytes`, `max_segment_age_secs`,
+  `retain_segments` and `on_disk_full` (`expire_oldest` or `refuse`). `audit verify` reads every
+  segment, detects a deleted or truncated active file through `transparency.jsonl.hwm`, and gains
+  `--archive`. The SIEM exporter and the governance audit view follow segments; the governance
+  log rotates at 16 MiB x 4. Helm: `audit.rotation.*`, with a render guard on the emptyDir size.
+
 ## [4.0.0-beta.1] - 2026-09-25
 
 > **Pre-release.** The first 4.0 beta, cut so 3.x users can start testing 4.0 before the final

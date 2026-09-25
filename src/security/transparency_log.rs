@@ -37,15 +37,14 @@
 //! `preserve_order` feature), serialisation is deterministic and the hash
 //! computed on write is exactly reproducible on read.
 
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
-use tracing::warn;
 
 // ── Type aliases ──────────────────────────────────────────────────────────────
 
@@ -76,8 +75,22 @@ const MAX_TAIL_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 // D1-f failure policy and degraded state, split out for the file-size ceiling.
 #[path = "transparency_log_degraded.rs"]
 mod degraded;
+// D6 segment files, rotation and recovery, multi-segment verify.
+#[path = "transparency_log_append.rs"]
+mod append;
+#[path = "transparency_log_rotation.rs"]
+mod rotation;
+#[path = "transparency_log_segments.rs"]
+pub mod segments;
+#[path = "transparency_log_verify.rs"]
+mod verify;
+pub use verify::{
+    VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_log,
+    verify_log_signed, verify_segments,
+};
 
 use crate::security::audit::{AuditEnvelope, AuditWho};
+pub use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -96,6 +109,8 @@ pub struct TransparencyLogConfig {
     /// HMAC shared secret.  When empty, the `sig` / `key_id` fields are
     /// omitted from each entry (hash chain still provides tamper evidence).
     pub shared_secret: String,
+    /// Segment size, retention and disk-full behaviour (D6).
+    pub rotation: RotationConfig,
 }
 
 // Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
@@ -107,6 +122,7 @@ impl std::fmt::Debug for TransparencyLogConfig {
             .field("enabled", &self.enabled)
             .field("path", &self.path)
             .field("key_id", &self.key_id)
+            .field("rotation", &self.rotation)
             .field(
                 "shared_secret",
                 &if self.shared_secret.is_empty() {
@@ -126,6 +142,7 @@ impl Default for TransparencyLogConfig {
             path: "~/.mcp-gateway/transparency/transparency.jsonl".to_string(),
             key_id: "default".to_string(),
             shared_secret: String::new(),
+            rotation: RotationConfig::default(),
         }
     }
 }
@@ -134,9 +151,12 @@ impl Default for TransparencyLogConfig {
 
 /// All mutable state guarded by a single `Mutex` for atomic chain updates.
 struct Inner {
-    writer: BufWriter<File>,
+    /// The active segment, written one whole line per `write_all`.
+    file: File,
     counter: u64,
     last_entry_hash: String,
+    /// Which segment `file` is, and the inode it was opened on (D6).
+    seg: rotation::SegState,
 }
 
 // ── TransparencyLogger ────────────────────────────────────────────────────────
@@ -160,6 +180,9 @@ pub struct TransparencyLogger {
     /// Persistent I/O fault: every append fails while set (D1-T17).
     #[cfg(test)]
     fail_appends: std::sync::atomic::AtomicBool,
+    /// D6 test seams: write faults, clock offset, rotation-window probe.
+    #[cfg(test)]
+    hooks: rotation::TestHooks,
     failure_policy: crate::security::audit::AuditFailurePolicy,
     /// Set by a failed append under `FailClosed`, cleared by a successful one.
     degraded: std::sync::atomic::AtomicBool,
@@ -225,34 +248,24 @@ impl TransparencyLogger {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Recover state from the last line (if the file already exists).
-        let (counter, last_entry_hash) = if path.exists() {
-            recover_chain_state(&path)?
-        } else {
-            (0u64, "genesis".to_string())
+        // D6 2.6: take `<path>.lock` (another process may be mid-rotation),
+        // list the segments before touching the active path, then choose the
+        // seed. Genesis only with no active record and no sealed segment.
+        let recovered = {
+            let guard =
+                crate::fs_lock::ExclusiveFileLock::acquire(&segments::sibling(&path, "lock"))?;
+            rotation::recover(&path, &config, &guard, rotation::now_secs(0))?
         };
-
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
-
-        // Make the log file's directory entry durable, so a governance audit
-        // file created on the first append cannot be lost by a crash while a
-        // control-plane commit that depends on it is already durable. Unix only
-        // (opening a directory as a file is not portable); best-effort.
-        #[cfg(unix)]
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-            && let Ok(dir) = File::open(parent)
-        {
-            let _ = dir.sync_all();
-        }
-
         Ok(Self {
             inner: Mutex::new(Inner {
-                writer: BufWriter::new(file),
-                counter,
-                last_entry_hash,
+                file: recovered.file,
+                counter: recovered.counter,
+                last_entry_hash: recovered.last_entry_hash,
+                seg: recovered.seg,
             }),
             config,
+            #[cfg(test)]
+            hooks: rotation::TestHooks::default(),
             #[cfg(test)]
             fail_next_append: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
@@ -406,7 +419,21 @@ impl TransparencyLogger {
 
     fn reject_reserved_keys(fields: &serde_json::Map<String, serde_json::Value>) -> io::Result<()> {
         let chain = ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"];
-        for reserved in chain.into_iter().chain(AuditEnvelope::RESERVED) {
+        // D6: only the logger writes segment records, so a caller cannot
+        // forge a seal, an open or an expiry.
+        let segment = rotation::RESERVED_SEGMENT_FIELDS;
+        if let Some(event) = fields.get("event").and_then(serde_json::Value::as_str)
+            && event.starts_with(rotation::SEGMENT_EVENT_PREFIX)
+        {
+            return Err(io::Error::other(format!(
+                "transparency log: event '{event}' is written only by the logger"
+            )));
+        }
+        for reserved in chain
+            .into_iter()
+            .chain(AuditEnvelope::RESERVED)
+            .chain(segment)
+        {
             if fields.contains_key(reserved) {
                 return Err(io::Error::other(format!(
                     "transparency log: reserved chain field '{reserved}' cannot be supplied by caller"
@@ -431,7 +458,11 @@ impl TransparencyLogger {
         resync: bool,
     ) -> io::Result<String> {
         let result = self.append_chained(fields, envelope, resync);
-        self.record_append(result.as_ref().err());
+        // An oversized record is refused for that call only: it is an
+        // invalid record, not a log failure, so it never degrades (D6 2.1).
+        if !result.as_ref().is_err_and(rotation::is_oversized) {
+            self.record_append(result.as_ref().err());
+        }
         result
     }
 
@@ -458,295 +489,13 @@ impl TransparencyLogger {
             .inner
             .lock()
             .map_err(|_| io::Error::other("transparency log mutex poisoned"))?;
-
-        if resync {
-            let path = expand_tilde(&self.config.path);
-            if path.exists() {
-                let (counter, last_entry_hash) = recover_chain_state(&path)?;
-                inner.counter = counter;
-                inner.last_entry_hash = last_entry_hash;
-            }
-        }
-
-        // Compute the next counter locally; commit to `inner` only on success.
-        let counter = inner.counter + 1;
-        let prev_entry_hash = inner.last_entry_hash.clone();
-
-        // ── Step 1: complete the entry core (without entry_hash / sig / key_id) ─
-        //
-        // serde_json Map serialises with sorted keys (BTreeMap), so the hash is
-        // deterministic and reproducible regardless of insertion order.
-        fields.insert("counter".into(), counter.into());
-        fields.insert("prev_entry_hash".into(), prev_entry_hash.into());
-
-        // ── Step 2: entry_hash = sha256(canonical JSON of core) ───────────────
-        let core_json = serde_json::to_string(&serde_json::Value::Object(fields.clone()))
-            .map_err(io::Error::other)?;
-        let entry_hash_bytes: [u8; 32] = sha256_raw(core_json.as_bytes());
-        let entry_hash = format!("sha256:{}", hex::encode(entry_hash_bytes));
-
-        // ── Step 3: sig = hmac_sha256(secret, entry_hash_bytes || key_id) ─────
-        // key_id is bound INTO the signed message (not just written alongside)
-        // so a stripped or altered key_id fails verification (MIK-6700 review).
-        if !self.config.shared_secret.is_empty() {
-            let msg = sig_message(&entry_hash_bytes, &self.config.key_id);
-            let sig_hex = hmac_sha256_hex(self.config.shared_secret.as_bytes(), &msg);
-            fields.insert("sig".into(), format!("hmac-sha256:{sig_hex}").into());
-            fields.insert("key_id".into(), self.config.key_id.clone().into());
-        }
-
-        // ── Assemble + write the full entry ───────────────────────────────────
-        fields.insert("entry_hash".into(), entry_hash.clone().into());
-        let line =
-            serde_json::to_string(&serde_json::Value::Object(fields)).map_err(io::Error::other)?;
-
-        writeln!(inner.writer, "{line}")?;
-        inner.writer.flush()?;
-        // The synced path (governance audit) fsyncs for durability parity with
-        // the control-plane store's fsync'd collection writes, so a power loss
-        // cannot preserve a committed mutation while losing its audit record.
-        // The hot invocation path only flushes (fsync-per-entry there is too
-        // costly and its durability bar is lower).
-        if resync {
-            inner.writer.get_ref().sync_all()?;
-        }
-
-        // ── Advance chain state only after the write succeeded ─────────────────
-        inner.counter = counter;
-        inner.last_entry_hash.clone_from(&entry_hash);
-
-        Ok(entry_hash)
+        // Rotation, the disk-full path and the one `<path>.lock` acquisition
+        // all run under `Inner`, so `record_append` sees only the final result.
+        self.append_locked(&mut inner, fields, resync)
     }
 }
 
-// ── Chain verification ────────────────────────────────────────────────────────
-
-/// Result of a chain-integrity verification pass.
-pub struct VerifyResult {
-    /// `true` when every entry in the log passed all checks.
-    pub ok: bool,
-    /// Number of entries checked.
-    pub entries_checked: usize,
-    /// Counter of the first invalid entry (`None` when `ok == true`).
-    pub error_at_counter: Option<u64>,
-    /// Human-readable description of the first failure.
-    pub error_message: Option<String>,
-}
-
-/// Read `path` and verify the complete hash chain (no HMAC check).
-///
-/// Checks, for every entry:
-/// 1. Counter is exactly `previous_counter + 1` (monotonic, no gaps).
-/// 2. `prev_entry_hash` matches the prior entry's `entry_hash`.
-/// 3. `entry_hash` equals the recomputed SHA-256 of the entry without the
-///    `entry_hash`, `sig`, and `key_id` fields.
-///
-/// This entry point does **not** authenticate the per-entry HMAC `sig`, so a
-/// secret-holding attacker who re-chains an edited entry (recomputing every
-/// `entry_hash`) is not detected here. Use [`verify_log_signed`] when a shared
-/// secret is configured (MIK-6700).
-///
-/// # Errors
-///
-/// Returns `io::Error` if the file cannot be read.
-pub fn verify_log(path: &Path) -> io::Result<VerifyResult> {
-    verify_log_inner(path, None)
-}
-
-/// Read `path` and verify the hash chain **and**, when `config` has a non-empty
-/// `shared_secret`, the per-entry HMAC `sig` (MIK-6700 HMAC.1).
-///
-/// With an empty secret this is byte-for-byte equivalent to [`verify_log`]
-/// (HMAC.2 backward compatibility). With a secret configured, every entry must
-/// carry a `sig` that is a valid `HMAC-SHA256(secret, raw_entry_hash_bytes)`;
-/// an entry with a valid hash but a missing, malformed, or stale `sig` fails
-/// verification — defeating a re-chain forgery.
-///
-/// # Errors
-///
-/// Returns `io::Error` if the file cannot be read.
-pub fn verify_log_signed(path: &Path, config: &TransparencyLogConfig) -> io::Result<VerifyResult> {
-    let secret = config.shared_secret.as_bytes();
-    let secret = if secret.is_empty() {
-        None
-    } else {
-        Some(secret)
-    };
-    verify_log_inner(path, secret)
-}
-
-/// Return `true` if the log contains at least one signed entry (an entry
-/// carrying a `sig` field).
-///
-/// Used by `audit verify` to refuse a silent hash-only verification of a log
-/// that was written with signing enabled but is being checked without a secret
-/// — otherwise a stale-sig forgery would pass with exit 0 (MIK-6700 review).
-/// Scans until the first signed entry is found (early return); an empty or
-/// wholly-unsigned log returns `false`.
-///
-/// # Errors
-///
-/// Returns `io::Error` if the file cannot be read.
-pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
-    let content = bounded_read_to_string(path, MAX_AUDIT_READ_BYTES)?;
-    for raw in content.lines() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(trimmed)
-            && entry.get("sig").is_some()
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// Shared chain-verification core. When `secret` is `Some`, each entry's HMAC
-/// `sig` is additionally authenticated.
-fn verify_log_inner(path: &Path, secret: Option<&[u8]>) -> io::Result<VerifyResult> {
-    let content = bounded_read_to_string(path, MAX_AUDIT_READ_BYTES)?;
-    let mut prev_hash = "genesis".to_string();
-    let mut prev_counter: Option<u64> = None;
-    let mut entries_checked = 0usize;
-
-    for (line_no, raw) in content.lines().enumerate() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let entry: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("line {}: invalid JSON: {e}", line_no + 1),
-            )
-        })?;
-
-        let counter = entry
-            .get("counter")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("line {}: missing 'counter'", line_no + 1),
-                )
-            })?;
-
-        let stored_entry_hash = entry
-            .get("entry_hash")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("line {}: missing 'entry_hash'", line_no + 1),
-                )
-            })?;
-
-        let stored_prev_hash = entry
-            .get("prev_entry_hash")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("line {}: missing 'prev_entry_hash'", line_no + 1),
-                )
-            })?;
-
-        // ── Check 1: monotonic counter ────────────────────────────────────────
-        let expected_counter = prev_counter.map_or(counter, |pc| pc + 1);
-        if counter != expected_counter {
-            return Ok(VerifyResult {
-                ok: false,
-                entries_checked,
-                error_at_counter: Some(counter),
-                error_message: Some(format!(
-                    "counter gap at entry {counter}: expected {expected_counter}"
-                )),
-            });
-        }
-
-        // ── Check 2: prev_entry_hash chain link ───────────────────────────────
-        if stored_prev_hash != prev_hash {
-            return Ok(VerifyResult {
-                ok: false,
-                entries_checked,
-                error_at_counter: Some(counter),
-                error_message: Some(format!(
-                    "entry {counter}: prev_entry_hash mismatch \
-                     (expected '{prev_hash}', got '{stored_prev_hash}')"
-                )),
-            });
-        }
-
-        // ── Check 3: recompute entry_hash ─────────────────────────────────────
-        let recomputed = recompute_entry_hash(&entry)?;
-        if recomputed != stored_entry_hash {
-            return Ok(VerifyResult {
-                ok: false,
-                entries_checked,
-                error_at_counter: Some(counter),
-                error_message: Some(format!(
-                    "entry {counter}: entry_hash mismatch \
-                     (computed '{recomputed}', stored '{stored_entry_hash}')"
-                )),
-            });
-        }
-
-        // ── Check 4: per-entry HMAC sig (only when a secret is configured) ────
-        if let Some(secret) = secret
-            && let Err(msg) = verify_entry_sig(&entry, stored_entry_hash, secret)
-        {
-            return Ok(VerifyResult {
-                ok: false,
-                entries_checked,
-                error_at_counter: Some(counter),
-                error_message: Some(format!("entry {counter}: {msg}")),
-            });
-        }
-
-        prev_hash = stored_entry_hash.to_string();
-        prev_counter = Some(counter);
-        entries_checked += 1;
-    }
-
-    Ok(VerifyResult {
-        ok: true,
-        entries_checked,
-        error_at_counter: None,
-        error_message: None,
-    })
-}
-
-/// Read `path` and return all entries whose `session_id` matches `session`.
-///
-/// # Errors
-///
-/// Returns `io::Error` if the file cannot be read.
-pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<serde_json::Value>> {
-    let content = bounded_read_to_string(path, MAX_AUDIT_READ_BYTES)?;
-    let mut results = Vec::new();
-
-    for raw in content.lines() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let entry: serde_json::Value = match serde_json::from_str(trimmed) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!("transparency log: skipping malformed line: {e}");
-                continue;
-            }
-        };
-        if entry.get("session_id").and_then(|v| v.as_str()) == Some(session) {
-            results.push(entry);
-        }
-    }
-
-    Ok(results)
-}
+// Chain verification lives in `transparency_log_verify.rs` (D6: it spans segments).
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
@@ -758,32 +507,6 @@ fn expand_tilde(s: &str) -> PathBuf {
         return home.join(rest);
     }
     PathBuf::from(s)
-}
-
-/// Read the last non-empty line of `path` to recover `(counter, last_entry_hash)`.
-///
-/// Reads only the tail of the file (bounded by [`MAX_TAIL_SCAN_BYTES`]), not
-/// the whole log — crash recovery on every gateway restart must not scale
-/// with the total size of the audit trail (MIK-6710).
-fn recover_chain_state(path: &Path) -> io::Result<(u64, String)> {
-    let Some(line) = read_last_nonempty_line(path)? else {
-        return Ok((0, "genesis".to_string()));
-    };
-
-    let entry: serde_json::Value =
-        serde_json::from_str(&line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-    let counter = entry
-        .get("counter")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    let entry_hash = entry
-        .get("entry_hash")
-        .and_then(|v| v.as_str())
-        .unwrap_or("genesis")
-        .to_string();
-
-    Ok((counter, entry_hash))
 }
 
 /// Read `path` into a `String`, failing closed rather than allocating an
@@ -927,6 +650,35 @@ pub fn verify_entry_sig(
         .map_err(|_| "HMAC sig mismatch (possible re-chain forgery or altered key_id)".to_string())
 }
 
+/// Complete one record from its domain `fields`: add `counter` and
+/// `prev_entry_hash`, hash the canonical JSON (sorted keys), sign it when a
+/// secret is set, and return `(line, entry_hash)`. The one place a record is
+/// chained, for caller appends and the logger's own housekeeping records.
+fn chain_line(
+    config: &TransparencyLogConfig,
+    mut fields: serde_json::Map<String, serde_json::Value>,
+    counter: u64,
+    prev_entry_hash: &str,
+) -> io::Result<(String, String)> {
+    fields.insert("counter".into(), counter.into());
+    fields.insert("prev_entry_hash".into(), prev_entry_hash.into());
+    let core_json = serde_json::to_string(&serde_json::Value::Object(fields.clone()))
+        .map_err(io::Error::other)?;
+    let entry_hash_bytes: [u8; 32] = sha256_raw(core_json.as_bytes());
+    let entry_hash = format!("sha256:{}", hex::encode(entry_hash_bytes));
+    // key_id is bound INTO the signed message (MIK-6700 review).
+    if !config.shared_secret.is_empty() {
+        let msg = sig_message(&entry_hash_bytes, &config.key_id);
+        let sig_hex = hmac_sha256_hex(config.shared_secret.as_bytes(), &msg);
+        fields.insert("sig".into(), format!("hmac-sha256:{sig_hex}").into());
+        fields.insert("key_id".into(), config.key_id.clone().into());
+    }
+    fields.insert("entry_hash".into(), entry_hash.clone().into());
+    let line =
+        serde_json::to_string(&serde_json::Value::Object(fields)).map_err(io::Error::other)?;
+    Ok((line, entry_hash))
+}
+
 /// Build the HMAC message for an entry's `sig`: the 32 raw `entry_hash` bytes
 /// followed by the `key_id` bytes. Binding `key_id` into the signed material
 /// (rather than leaving it as unauthenticated metadata) means it cannot be
@@ -956,8 +708,17 @@ fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "transparency_log_recovery_tests.rs"]
+mod recovery_tests;
+#[cfg(test)]
+#[path = "transparency_log_rotation_tests.rs"]
+mod rotation_tests;
+#[cfg(test)]
 #[path = "transparency_log_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "transparency_log_writer_tests.rs"]
+mod writer_tests;
 
 #[cfg(test)]
 mod cwe532_debug_redaction {

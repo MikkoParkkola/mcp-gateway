@@ -38,6 +38,8 @@ pub struct TransparencyLogConfig {
     /// When empty, `sig` / `key_id` are omitted from each entry — the hash
     /// chain alone still provides tamper evidence.
     pub shared_secret: String,
+    /// Segment size, retention and disk-full behaviour (D6).
+    pub rotation: crate::security::audit_rotation_config::RotationConfig,
 }
 
 // Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
@@ -49,6 +51,7 @@ impl std::fmt::Debug for TransparencyLogConfig {
             .field("enabled", &self.enabled)
             .field("path", &self.path)
             .field("key_id", &self.key_id)
+            .field("rotation", &self.rotation)
             .field(
                 "shared_secret",
                 &if self.shared_secret.is_empty() {
@@ -68,11 +71,37 @@ impl Default for TransparencyLogConfig {
             path: "~/.mcp-gateway/transparency/transparency.jsonl".to_string(),
             key_id: "default".to_string(),
             shared_secret: String::new(),
+            rotation: crate::security::audit_rotation_config::RotationConfig::default(),
+        }
+    }
+}
+
+/// The runtime copy the logger opens with; one mapping, so a new key cannot
+/// be dropped at one of several hand-written call sites.
+impl From<&TransparencyLogConfig> for crate::security::transparency_log::TransparencyLogConfig {
+    fn from(c: &TransparencyLogConfig) -> Self {
+        Self {
+            enabled: c.enabled,
+            path: c.path.clone(),
+            key_id: c.key_id.clone(),
+            shared_secret: c.shared_secret.clone(),
+            rotation: c.rotation.clone(),
         }
     }
 }
 
 impl TransparencyLogConfig {
+    /// Load-time checks: the log is required with auth on (D1-a), and the
+    /// rotation bounds hold (D6).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::ConfigValidation`] naming the failed rule.
+    pub(crate) fn validate(&self, auth_enabled: bool) -> crate::Result<()> {
+        self.validate_required_by_auth(auth_enabled)?;
+        self.rotation.validate()
+    }
+
     /// 4.0.0 item D1-a: with auth on, the audit log is required. There is no
     /// opt-out: a gateway with no authenticated users has no one to audit.
     ///

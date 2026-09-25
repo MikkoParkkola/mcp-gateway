@@ -21,18 +21,20 @@
 //!   self-consistent re-chained forgery is rejected too (MIK-6700). Without a
 //!   secret it degrades to hash-only. A re-anchor is surfaced
 //!   (`PollOutcome::reanchored`) so it can be alerted on.
-//! - **Rotation-safe (in-place).** The cursor anchors on the last forwarded
-//!   `entry_hash`; a truncated/rewritten-in-place file whose anchor is gone is
-//!   re-anchored from the start. Rename-style external logrotate that strands an
-//!   unexported tail in an archive file is NOT drained (the gateway owns this
-//!   append-only log and should not be externally rotated); archive draining is
-//!   a follow-up.
+//! - **Follows the gateway's own rotation (D6).** The cursor anchors on the last
+//!   forwarded `entry_hash` and names its segment; each poll streams from that
+//!   segment through the active file. If retention expired the anchor, export
+//!   re-anchors at the oldest surviving segment's open record, reports
+//!   `reanchored` and counts `mcp_audit_export_segments_skipped_total`.
+//!   External rotation (logrotate, `copytruncate`) is unsupported: it breaks
+//!   the chain.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::security::transparency_log::recompute_entry_hash;
+#[path = "export_segments.rs"]
+mod segments;
 
 /// Which transparency log an entry came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +118,10 @@ pub struct ExportCursor {
     /// Counter of the last forwarded entry (0 at start), for observability.
     #[serde(default)]
     pub last_counter: u64,
+    /// Segment holding the last forwarded entry (D6). Absent in a pre-D6
+    /// cursor, which means "search from the oldest segment".
+    #[serde(default)]
+    pub segment_seq: Option<u64>,
 }
 
 impl Default for ExportCursor {
@@ -123,6 +129,7 @@ impl Default for ExportCursor {
         Self {
             last_entry_hash: "genesis".to_string(),
             last_counter: 0,
+            segment_seq: None,
         }
     }
 }
@@ -224,10 +231,25 @@ impl LogExporter {
         // Scan anchored at the current cursor. If the anchor hash is absent
         // (rotation/truncation removed it), re-anchor and scan from the start.
         let mut reanchored = false;
-        let mut scan = self.scan(&self.cursor.last_entry_hash)?;
+        let mut scan = self.scan(&self.cursor.last_entry_hash, self.cursor.segment_seq)?;
         if !scan.anchor_found && self.cursor.last_entry_hash != "genesis" {
             reanchored = true;
-            scan = self.scan("genesis")?;
+            scan = self.scan("genesis", None)?;
+            // Retention does not wait for the exporter (decision 4): name what
+            // was skipped, never lose it silently.
+            let skipped = self
+                .cursor
+                .segment_seq
+                .map_or(0, |from| scan.oldest.saturating_sub(from));
+            telemetry_metrics::counter!("mcp_audit_export_segments_skipped_total")
+                .increment(skipped);
+            tracing::warn!(
+                from_segment = ?self.cursor.segment_seq,
+                oldest_surviving = scan.oldest,
+                last_exported_counter = self.cursor.last_counter,
+                skipped,
+                "audit export re-anchored: segments expired before they were exported"
+            );
         }
 
         if scan.batch.is_empty() {
@@ -246,6 +268,7 @@ impl LogExporter {
         let next = ExportCursor {
             last_entry_hash: scan.last_hash,
             last_counter: scan.last_counter,
+            segment_seq: scan.last_segment,
         };
         self.persist_cursor(&next)?;
         let forwarded = scan.batch.len();
@@ -256,123 +279,6 @@ impl LogExporter {
             lag_entries: scan.lag,
             reanchored,
         })
-    }
-
-    /// Stream the log from the start, skip to `anchor` (or forward from the
-    /// first entry when `anchor == "genesis"`), verify + collect up to
-    /// `max_batch` entries, and count the remaining backlog as `lag`.
-    ///
-    /// Memory is bounded to one line plus the batch: entries beyond `max_batch`
-    /// are counted, not buffered, and a partial trailing line (no newline yet)
-    /// is left for a later poll rather than parsed.
-    fn scan(&self, anchor: &str) -> Result<Scan, ExportError> {
-        use std::io::{BufRead, BufReader};
-
-        let mut scan = Scan {
-            batch: Vec::new(),
-            last_hash: anchor.to_string(),
-            last_counter: self.cursor.last_counter,
-            lag: 0,
-            anchor_found: anchor == "genesis",
-        };
-        let file = match std::fs::File::open(&self.log_path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(scan),
-            Err(e) => return Err(e.into()),
-        };
-        let mut reader = BufReader::new(file);
-        let mut passed = anchor == "genesis";
-        let mut running_prev = "genesis".to_string();
-        let checkpoint = anchor.to_string();
-        let mut buf: Vec<u8> = Vec::new();
-
-        loop {
-            buf.clear();
-            let n = reader.read_until(b'\n', &mut buf)?;
-            if n == 0 {
-                break; // EOF
-            }
-            if buf.last() != Some(&b'\n') {
-                break; // partial trailing line (racing a writer) — leave for next poll
-            }
-            let raw = &buf[..buf.len() - 1];
-            if raw.iter().all(u8::is_ascii_whitespace) {
-                continue; // blank line
-            }
-
-            // Backlog past the batch cap: count it, don't parse/buffer (bounded).
-            if passed && scan.batch.len() >= self.max_batch {
-                scan.lag += 1;
-                continue;
-            }
-
-            let entry: serde_json::Value = serde_json::from_slice(raw)
-                .map_err(|e| ExportError::Corrupt(format!("{}: {e}", self.log_path.display())))?;
-            let stored_hash = entry
-                .get("entry_hash")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    ExportError::VerificationFailed("entry missing entry_hash".to_string())
-                })?
-                .to_string();
-
-            if !passed {
-                // Skipping to the anchor entry; forward everything after it.
-                if stored_hash == anchor {
-                    passed = true;
-                    scan.anchor_found = true;
-                    running_prev = anchor.to_string();
-                }
-                continue;
-            }
-
-            let prev = entry
-                .get("prev_entry_hash")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            if prev != running_prev {
-                return Err(ExportError::VerificationFailed(format!(
-                    "chain break: prev_entry_hash {prev} != expected {running_prev}"
-                )));
-            }
-            let recomputed = recompute_entry_hash(&entry).map_err(ExportError::Io)?;
-            if recomputed != stored_hash {
-                return Err(ExportError::VerificationFailed(format!(
-                    "tampered entry: recomputed {recomputed} != stored {stored_hash}"
-                )));
-            }
-            // Per-entry HMAC check when a secret is configured (MIK-6700 HMAC.3):
-            // catches a re-chained forgery that leaves a stale `sig`.
-            if let Some(secret) = self.signing_secret.as_deref()
-                && let Err(msg) = crate::security::transparency_log::verify_entry_sig(
-                    &entry,
-                    &stored_hash,
-                    secret.as_bytes(),
-                )
-            {
-                return Err(ExportError::VerificationFailed(format!(
-                    "entry {stored_hash}: {msg}"
-                )));
-            }
-            let counter = entry
-                .get("counter")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            scan.batch.push(ExportEntry {
-                source: self.source,
-                counter,
-                entry_hash: stored_hash.clone(),
-                prev_entry_hash: prev,
-                checkpoint: checkpoint.clone(),
-                raw: entry,
-            });
-            running_prev = stored_hash;
-            scan.last_counter = counter;
-        }
-
-        scan.last_hash = running_prev;
-        Ok(scan)
     }
 
     /// Atomically persist a cursor (temp write → rename). Persisting the NEW
@@ -386,15 +292,6 @@ impl LogExporter {
         std::fs::rename(&tmp, &self.cursor_path)?;
         Ok(())
     }
-}
-
-/// Internal per-poll scan result.
-struct Scan {
-    batch: Vec<ExportEntry>,
-    last_hash: String,
-    last_counter: u64,
-    lag: usize,
-    anchor_found: bool,
 }
 
 /// Best-effort in-memory sink that collects delivered entries (core/testing).

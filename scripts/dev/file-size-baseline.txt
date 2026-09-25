@@ -32,7 +32,6 @@
 1464 src/capability/definition/tests.rs
 1462 src/idempotency.rs
 1457 src/gateway/router/backend_handlers.rs
-1485 src/security/transparency_log.rs
 1431 src/protocol/continuation.rs
 1412 src/gateway/meta_mcp/account_rest_tests.rs
 1407 src/capability/definition/mod.rs
@@ -59,7 +58,6 @@
 1086 src/oauth/client/tests.rs
 1069 src/gateway/server/support.rs
 1053 src/main_tests.rs
-1024 src/control_plane/export.rs
 1023 tests/nfr_obs_3_era_observability.rs
 1021 tests/mik_7272_sub4_adr012_acs.rs
 1006 src/protocol/messages.rs

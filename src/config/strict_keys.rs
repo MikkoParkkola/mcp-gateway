@@ -355,4 +355,21 @@ mod tests {
             "KNOWN_BACKEND_KEYS drifted from BackendConfig"
         );
     }
+
+    /// D6 F14: a misspelt rotation key fails the load and names the key, so
+    /// the defaults never run while the operator believes otherwise.
+    #[test]
+    fn strict_keys_reject_unknown_rotation_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        crate::gateway::test_helpers::write_owner_only(
+            &path,
+            "security:\n  transparency_log:\n    rotation:\n      max_segment_byte: 1\n",
+        )
+        .expect("write config");
+        let err = crate::config::Config::load(Some(&path))
+            .expect_err("a misspelt rotation key must fail the load")
+            .to_string();
+        assert!(err.contains("max_segment_byte"), "{err}");
+    }
 }

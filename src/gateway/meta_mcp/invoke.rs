@@ -4907,7 +4907,7 @@ mod identity_propagation_enforcement_tests {
             enabled: true,
             path: file.path().to_string_lossy().to_string(),
             key_id: "test".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         });
         let logger = Arc::new(TransparencyLogger::open(cfg).expect("logger opens"));
 
@@ -5018,7 +5018,7 @@ mod identity_propagation_enforcement_tests {
             enabled: true,
             path,
             key_id: "test".to_string(),
-            shared_secret: String::new(),
+            ..TransparencyLogConfig::default()
         });
         Arc::new(TransparencyLogger::open(cfg).expect("logger opens"))
     }
@@ -5604,7 +5604,7 @@ mod identity_propagation_enforcement_tests {
                 enabled: true,
                 path,
                 key_id: "test".to_string(),
-                shared_secret: String::new(),
+                ..TransparencyLogConfig::default()
             });
             let logger = Arc::new(
                 TransparencyLogger::open(cfg).expect("open() writes nothing, must succeed"),

@@ -16,6 +16,7 @@
 
 pub mod agent_identity;
 pub mod audit;
+pub mod audit_rotation_config;
 pub mod caller_identity;
 pub mod data_flow;
 #[cfg(feature = "firewall")]

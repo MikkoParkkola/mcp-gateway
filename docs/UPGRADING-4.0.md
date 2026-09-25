@@ -5,7 +5,7 @@ change to your configuration on upgrade. It starts on an unchanged configuration
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37, 39 and 43 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37, 39, 43 and 49 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -997,6 +997,59 @@ named an API-key label rather than a person and skipped every refused or failed 
   `response_hash`.
 - **`mcp-gateway init` writes `security.transparency_log.enabled: true`** under the default
   path `~/.mcp-gateway/transparency/transparency.jsonl`.
+
+## 49. The audit log rotates, and verify spans its segments
+
+With auth on, the audit log is required (item 43). Before this release it grew until its
+volume filled, and then every call was refused with `storage_full`. It now rotates at 64 MiB.
+The active file keeps its path, and sealed segments sit beside it as
+`transparency.jsonl.00000000000000000001` and so on. The gateway keeps 12 sealed segments and
+deletes older ones. For each deletion it first writes an `audit_segment_expired` record into the
+log, so a deletion can be verified, and a missing file with no such record is reported as
+tampering. Set `security.transparency_log.rotation.retain_segments` and `max_segment_bytes`
+(1 MiB to 128 MiB) to change this. Rotation cannot be turned off.
+
+`audit verify <path>` now reads every segment beside `<path>`, even when `<path>` itself is
+missing. Copy or archive the segments together: a segment you delete by hand makes verify fail.
+To keep the log longer, ship it out (SIEM, `control_plane.export`) and size the volume. Disk use
+is at most `(retain_segments + 1) x max_segment_bytes`, plus one record and a 1 MiB reserve.
+
+If the volume still fills, the gateway deletes the oldest sealed segment, records the deletion
+with `reason: storage_full`, and carries on. It keeps a 1 MiB `transparency.jsonl.reserve` file
+beside the log so that record can still be written on a full disk. The reserve exists once the
+log has rotated at least once. Set `rotation.on_disk_full: refuse` to keep every record and go
+unready instead (the item 43 behaviour).
+
+Do not rotate the log with an external tool (logrotate, `copytruncate`, a cron `mv`). Any
+external rotation breaks the hash chain, and verify then reports it as tampering.
+
+Sizing: one tool call writes one or two records of about 1 KiB, so each MiB holds roughly
+500-1000 calls, and the default 832 MiB holds the last 400k-800k calls. For more, set
+`audit.existingClaim` to a larger PersistentVolumeClaim and raise `audit.rotation.retainSegments`.
+The Helm chart refuses to render an emptyDir whose `sizeLimit` cannot hold
+`(retainSegments + 1) x maxSegmentBytes + 1Mi` within 90%.
+
+The governance log (`<control_plane.store_dir>/audit.jsonl`) also rotates, at 16 MiB with 4
+segments kept, so it uses at most 80 MiB. Size the `store_dir` volume for that.
+
+The SIEM exporter (`control_plane.export`) now follows segments across a rotation. If retention
+deletes a segment before it was exported, the exporter re-anchors, reports `reanchored`, and
+counts the skipped segments in `mcp_audit_export_segments_skipped_total`.
+
+The log now carries housekeeping records that SIEM tailers and `control_plane.export`
+consumers see: `audit_segment_sealed`, `audit_segment_opened`, `audit_segment_expired`, and a
+rare `audit_segment_torn_tail_dropped`. A parser that rejects an `event` value it does not know
+must accept these.
+
+Deleting or truncating the active `transparency.jsonl` is now detected. A
+`transparency.jsonl.hwm` file records how far the log got, and verify reports the missing
+counters. After a power loss on the hot invocation path, which flushes but does not fsync,
+verify can report such a gap for records that never reached disk. To verify a copied set that
+has no `.hwm`, run `audit verify --archive <path>`, which reports tail completeness as unchecked.
+On a signed log, `.hwm` is signed too.
+
+A log written before this release is read as segment 0 and verifies unchanged. If it is over
+256 MiB, verify still refuses it; archive it before upgrading.
 
 ## After upgrading
 
