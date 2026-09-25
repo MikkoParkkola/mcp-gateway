@@ -92,6 +92,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`notifications/tools/list_changed` from an admin backend edit reaches only
+  callers of that backend (breaking).** Adding, removing or reviving a backend
+  told every session on the legacy GET stream, so a caller learned when an
+  operator edited a backend it cannot use. On an authenticated gateway the
+  frame now reaches a session only if its key may access the edited backend,
+  re-checked at delivery, so a revoked token is not told. With auth off every
+  session is told. `subscriptions/listen` is unchanged. The unused
+  `notifications/roots/list_changed` sender, which nothing called, is removed.
+  See `docs/UPGRADING-4.0.md` item 24.
 - **`logging/setLevel` over HTTP needs an admin key (breaking).** The meta route
   forwarded the level over the gateway's own credential to every shared backend,
   so any key, including one scoped to a single backend, could switch every
