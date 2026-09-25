@@ -39,6 +39,9 @@ mod order2_fsm;
 mod task_execution_adapter;
 
 mod issue_555_listing_scope;
+/// C7: `/metrics` behind a dedicated scrape token (MIK 7570 METRICS.1).
+#[cfg(feature = "metrics")]
+mod metrics_scrape;
 
 /// The durable task runtime every fixture in this file is built on.
 ///
@@ -2058,70 +2061,6 @@ async fn sse_deprecated_endpoint_returns_jsonrpc_error_with_migration_data() {
         json["error"]["data"]["spec"],
         "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
     );
-}
-
-// =====================================================================
-// /metrics endpoint
-// =====================================================================
-
-#[cfg(feature = "metrics")]
-#[tokio::test]
-async fn metrics_endpoint_returns_200() {
-    let (state, _store) = test_router_app_state().await;
-    let router = create_router(state);
-    let request = axum::http::Request::builder()
-        .method("GET")
-        .uri("/metrics")
-        .body(axum::body::Body::empty())
-        .unwrap();
-
-    let response = router.oneshot(request).await.unwrap();
-
-    // Endpoint must always return 200 (body may be empty when recorder is not
-    // installed in tests, but the route must be reachable).
-    assert_eq!(response.status(), StatusCode::OK);
-}
-
-#[cfg(feature = "metrics")]
-#[tokio::test]
-async fn metrics_endpoint_includes_jsonrpc_request_counter() {
-    crate::metrics::install();
-
-    let (state, _store) = test_router_app_state().await;
-    let router = create_router(state);
-    let request = axum::http::Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(
-            json!({
-                "jsonrpc": "2.0",
-                "id": "metrics-jsonrpc-counter",
-                "method": "metrics/test-counter",
-                "params": {}
-            })
-            .to_string(),
-        ))
-        .unwrap();
-
-    let response = router.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let scrape = axum::http::Request::builder()
-        .method("GET")
-        .uri("/metrics")
-        .body(axum::body::Body::empty())
-        .unwrap();
-    let metrics_response = router.oneshot(scrape).await.unwrap();
-    assert_eq!(metrics_response.status(), StatusCode::OK);
-
-    let body = to_bytes(metrics_response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("mcp_jsonrpc_requests_total"));
-    assert!(text.contains("method=\"metrics/test-counter\""));
-    assert!(text.contains("status=\"error\""));
 }
 
 // =====================================================================
