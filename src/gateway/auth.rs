@@ -160,14 +160,10 @@ impl ResolvedAuthConfig {
         config: &AuthConfig,
         overlay: &crate::config::EnvOverlay,
     ) -> Result<Self> {
+        // An empty credential compares equal to an empty presented token; the
+        // resolvers refuse one (C4, `SecretRef::resolve`), so every caller that
+        // builds this comparator is covered.
         let bearer_token = config.resolve_bearer_token(overlay)?;
-        // An empty credential compares equal to an empty presented token, so it
-        // is refused here, where the comparator is built, for every caller (C4).
-        if bearer_token.as_deref() == Some("") {
-            return Err(crate::Error::ConfigValidation(
-                "auth.bearer_token is empty.".into(),
-            ));
-        }
         let bearer_quota_principal = bearer_token
             .as_deref()
             .map(QuotaPrincipal::configured_bearer);
@@ -192,12 +188,6 @@ impl ResolvedAuthConfig {
             .iter()
             .map(|k| {
                 let key = k.resolve_key(overlay)?;
-                if key.is_empty() {
-                    return Err(crate::Error::ConfigValidation(format!(
-                        "auth.api_keys['{}'].key is empty.",
-                        k.name
-                    )));
-                }
                 let quota_principal = QuotaPrincipal::api_key(&key);
                 Ok(ResolvedApiKey {
                     key,

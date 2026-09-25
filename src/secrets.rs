@@ -98,9 +98,16 @@ impl SecretResolver {
             let var_name = &caps[1];
             let placeholder = &caps[0];
 
+            // Empty is refused like unset, as `SecretRef::resolve` does (C4).
             let value = env
                 .resolve(var_name)
-                .ok_or_else(|| Error::Config(format!("{{env.{var_name}}} is not set")))?;
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    Error::Config(format!(
+                        "{{env.{var_name}}} is not set or is empty{}",
+                        env.absent_files_hint()
+                    ))
+                })?;
             result = result.replace(placeholder, &value);
         }
 

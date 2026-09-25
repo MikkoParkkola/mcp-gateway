@@ -279,7 +279,8 @@ Nested values: `MCP_GATEWAY_SERVER__PORT=8080` sets `server.port`.
 
 Config values support `${VAR}` and `${VAR:-default}` expansion. In an enabled backend's
 `headers` and `env`, and in `capabilities.directories`, a `${VAR}` with no default that is unset
-fails the load; write `${VAR:-}` where empty is intended. An `env:` secret that is unset or empty
+or empty fails the load, and `${VAR:-default}` applies the default to an empty variable too;
+write `${VAR:-}` where empty is intended. An `env:` secret that is unset or empty
 fails too. Use `env_files:` in config to load `.env` files (supports `~` expansion). A listed
 file that does not exist is skipped, and any unresolved-reference error names it.
 
