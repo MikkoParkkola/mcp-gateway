@@ -2182,7 +2182,7 @@ impl MetaMcp {
         // rounds. There is nothing here for a client to answer, so there is
         // nothing to bridge, and the continuation mint below is the whole of
         // the correct behaviour for that shape.
-        if caller.era == crate::protocol::meta::Era::Legacy
+        if (caller.era == crate::protocol::meta::Era::Legacy || caller.verified_identity.is_none())
             && let Some(pending) = interim.clone()
             && !pending.requests.is_empty()
             && let Some(session) = session_id
