@@ -91,7 +91,7 @@ impl TransparencyLogger {
         match first {
             Err(e)
                 if e.kind() == io::ErrorKind::StorageFull
-                    && rot.on_disk_full == OnDiskFull::ExpireOldest =>
+                    && false =>
             {
                 let g = guard(&mut lock, &path)?;
                 self.free_space(inner, &path, g, e)?;
