@@ -500,8 +500,8 @@ config and reports the error.
 - **YAML merge keys (`<<:`) were never applied**, and are now refused as a key named `<<`. Write
   the merged keys out in full.
 
-Every example under `examples/`, the Helm chart's rendered config, the enterprise-alpha manifest
-and the config `mcp-gateway init` writes load unchanged.
+No key in any gateway config under `examples/`, in the Helm chart's rendered config, in the
+enterprise-alpha manifest or in the config `mcp-gateway init` writes is refused.
 
 ## After upgrading
 
