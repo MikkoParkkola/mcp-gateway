@@ -246,6 +246,11 @@ impl HttpGateway {
         }
     }
 
+    /// The config file the child was started with; rewriting it drives a reload.
+    pub fn config_path(&self) -> std::path::PathBuf {
+        self.directory.path().join("gateway.yaml")
+    }
+
     pub fn logs(&self) -> String {
         std::fs::read_to_string(self.directory.path().join("gateway.log")).unwrap_or_default()
     }
