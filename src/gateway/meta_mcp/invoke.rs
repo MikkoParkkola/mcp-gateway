@@ -1128,8 +1128,10 @@ impl MetaMcp {
         self.identity_grant_rule(server, tool, caller.scope(), Emit::Audit)
     }
 
-    /// Validate the per-action attestation token presented on a
-    /// `gateway_invoke` call (MIK-5223, B1-IDENT).
+    /// Validate the per-action attestation token presented at `boundary`
+    /// (MIK-5223, B1-IDENT): `gateway_invoke` for every meta-layer dispatch,
+    /// `direct_route` for `/mcp/{name}`. The label names the boundary in the
+    /// audit record and in the -32002 message.
     ///
     /// Returns `Ok(())` immediately when no validator is attached (the
     /// default), so the attestation path is zero-cost for existing
@@ -1145,11 +1147,11 @@ impl MetaMcp {
     ///
     /// Returns a JSON-RPC -32002 error only in enforce mode when the token is
     /// missing or fails validation.
-    pub(super) fn check_attestation(
+    pub(crate) fn check_attestation(
         &self,
         args: &Value,
         agent_id: Option<&str>,
-        _boundary: &str,
+        boundary: &str,
     ) -> Result<()> {
         let Some(validator) = self.attestation_validator.as_ref() else {
             return Ok(());
@@ -1161,17 +1163,13 @@ impl MetaMcp {
         // authenticity checks still run first, so a forged/expired token is
         // rejected on those grounds regardless of capability.
         let requested = args.get("tool").and_then(Value::as_str).unwrap_or_default();
-        match validator.validate_boundary_call(
-            token,
-            "gateway_invoke",
-            Some(requested),
-            chrono::Utc::now(),
-        ) {
+        match validator.validate_boundary_call(token, boundary, Some(requested), chrono::Utc::now())
+        {
             Ok(_claims) => Ok(()),
             Err(rejection) => match self.attestation_mode {
                 crate::attestation::AttestationMode::Enforce => Err(Error::json_rpc(
                     -32002,
-                    format!("Attestation rejected at gateway_invoke: {rejection}"),
+                    format!("Attestation rejected at {boundary}: {rejection}"),
                 )),
                 crate::attestation::AttestationMode::Observe => {
                     warn!(
@@ -1183,6 +1181,24 @@ impl MetaMcp {
                 }
             },
         }
+    }
+
+    /// Refuse a multi-step plan under enforce (MIK-7570.ATTEST.1).
+    ///
+    /// A playbook or code-mode step is synthesized from a definition and has
+    /// no token slot, so under enforce every step would fail as unattested.
+    /// Saying so once, up front, keeps the refusal from reading as a bad token.
+    pub(super) fn refuse_unattested_plan(&self) -> Result<()> {
+        if self.attestation_validator.is_some()
+            && self.attestation_mode == crate::attestation::AttestationMode::Enforce
+        {
+            return Err(Error::json_rpc(
+                -32002,
+                "Attestation rejected: multi-step plans carry no attestation in 4.0.0; \
+                 call each tool with its own token",
+            ));
+        }
+        Ok(())
     }
 
     /// `gateway_invoke` — invoke a tool on a backend with full tracing, caching,
@@ -3931,6 +3947,7 @@ impl MetaMcp {
         args: &Value,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
+        self.refuse_unattested_plan()?;
         let name = extract_required_str(args, "name")?;
         let arguments = parse_tool_arguments(args)?;
 

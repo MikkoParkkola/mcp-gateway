@@ -2090,11 +2090,8 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
-        let invoke_args = json!({
-            "server": server_name,
-            "tool": tool_name,
-            "arguments": arguments,
-        });
+        let invoke_args =
+            admission::named_tool_envelope(server_name, tool_name, &arguments, caller);
         match self.invoke_tool(&invoke_args, session_id, caller).await {
             Ok(content) => JsonRpcResponse::success_serialized(id, content),
             Err(e) => error_response_preserving_status(id, &e),
