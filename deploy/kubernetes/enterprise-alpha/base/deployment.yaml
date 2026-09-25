@@ -12,11 +12,11 @@ spec:
   # process (UPGRADING-4.0 §37). Change both together or the gateway refuses.
   replicas: 1
   revisionHistoryLimit: 10
+  # Recreate: the config serves the modern protocol, so a surge pod beside the
+  # old one would be a second task store (UPGRADING-4.0 item 37). An upgrade has
+  # a short outage.
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: mcp-gateway

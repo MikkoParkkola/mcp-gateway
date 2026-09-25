@@ -657,6 +657,13 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     ))
 }
 
+/// Every refusal `Gateway::run` asks before it binds, in the order it asks
+/// them. A reload's "restart required" advice asks this same function, so it
+/// cannot promise a restart that the start path would refuse.
+pub fn start_refusal(config: &Config) -> Option<String> {
+    network_bind_refusal(config).or_else(|| replica_state_refusal(config))
+}
+
 /// Per-process state under more than one declared replica (UPGRADING-4.0 §37).
 ///
 /// `server.replicas` is a declaration the Helm chart keeps equal to
@@ -679,8 +686,9 @@ pub fn replica_state_refusal(config: &Config) -> Option<String> {
     }
     if config.accounts.as_ref().is_some_and(|a| a.enabled) {
         reasons.push(
-            "accounts are enabled, and accounts.deployment: single_process custody \
-             holds one process's store and keys. Set replicas: 1.",
+            "accounts.enabled is set, and managed custody (accounts.deployment: \
+             single_process, the only mode) holds one process's store and keys. \
+             Set replicas: 1.",
         );
     }
     if config.server.modern_protocol {

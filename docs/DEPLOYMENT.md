@@ -178,7 +178,14 @@ nor managed accounts is enabled.** Several kinds of state live in one process's
 memory or on its own disk. The gateway cannot see how many replicas run, so the
 count is a declaration, `server.replicas` (default 1), which the Helm chart writes
 from `replicaCount`. Above 1, the gateway refuses to start, and the chart refuses to
-render, when any feature marked "refuses" below is on (UPGRADING-4.0 item 37):
+render, when any feature marked "refuses" below is on (UPGRADING-4.0 item 37).
+
+**Without the chart, declare the count yourself.** A hand-written Deployment,
+compose file or systemd fleet that runs more than one process must set
+`server.replicas` to the number it runs. The default of 1 is a declaration made on
+your behalf, not a detection, so a multi-process deployment that leaves it at 1 is
+never refused.
+
 
 | State | Where it lives | Above one replica |
 |---|---|---|
@@ -189,17 +196,59 @@ render, when any feature marked "refuses" below is on (UPGRADING-4.0 item 37):
 | MCP sessions, elicitations | One process | Degrades: a follow-up routed elsewhere does not find them |
 | Rate-limit buckets, idempotency admission | One process | Degrades: limits and de-duplication apply per replica |
 
-With the key server or accounts enabled, the chart also renders the Deployment with
-`strategy: Recreate`, because a rolling update runs the old and new pod side by
-side. An upgrade then has a short outage. A default install keeps `RollingUpdate`;
-during a rollout the two pods still hold separate task stores, so a task created in
-that window can be lost with the old pod.
+While any of the three is on, the modern protocol included, the chart renders the
+Deployment with `strategy: Recreate`, because a rolling update runs the old and new
+pod side by side, each with its own store. An upgrade then has a short outage. With
+the modern protocol off and neither feature on, the chart keeps `RollingUpdate`.
+The enterprise-alpha manifest uses `Recreate` for the same reason.
 
 `kubectl scale` and a HorizontalPodAutoscaler change the pod count without touching
 `server.replicas`, so neither check sees them. Don't scale this way. In the
 enterprise-alpha manifests, `spec.replicas` in `base/deployment.yaml` and
 `server.replicas` in `base/configmap.yaml` must be changed together; a test checks
 they agree.
+
+To stop scaling at the cluster, an admission rule can deny it. This Kyverno policy is
+an **example**, not shipped or tested here; adapt the selector to your release:
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: mcp-gateway-single-replica
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: one-replica
+      match:
+        any:
+          - resources:
+              kinds: ["Deployment", "Deployment/scale"]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/name: mcp-gateway
+      validate:
+        message: "mcp-gateway holds per-process state; run one replica (UPGRADING-4.0 item 37)."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.replicas || `1` }}"
+                operator: GreaterThan
+                value: 1
+    - name: no-hpa
+      match:
+        any:
+          - resources:
+              kinds: ["HorizontalPodAutoscaler"]
+      validate:
+        message: "mcp-gateway holds per-process state; do not autoscale it."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.scaleTargetRef.name }}"
+                operator: Equals
+                value: "*mcp-gateway*"
+```
 
 The chart and the manifests run the image with a read-only root filesystem. Everything the
 gateway writes under `$HOME` (task records, its data directory, the upgrade stamp, npm/uv

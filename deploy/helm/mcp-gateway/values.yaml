@@ -19,6 +19,8 @@
 # is then served by any of them. The chart writes config.server.replicas from this
 # value, and the gateway refuses to start on the same rules. `kubectl scale` and an
 # HPA change the pod count without the declaration: don't.
+# While any of the three is on, the Deployment uses Recreate: a surge pod would be a
+# second store beside the old one, so an upgrade has a short outage.
 # See docs/DEPLOYMENT.md, "Replica Count and per-process state".
 replicaCount: 1
 

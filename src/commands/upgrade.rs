@@ -303,7 +303,8 @@ chart's ServiceMonitor, never a generic annotation-driven one.",
 FAILS the config load. Clients connect via stdio or HTTP (`POST /mcp`).",
     "More than one replica is refused while state lives in one process: `server.replicas` \
 (default 1) above 1 FAILS STARTUP with the modern protocol on, or with the key server or accounts \
-enabled. The Helm chart now defaults `replicaCount` to 1 and fails the render on the same rules.",
+enabled. The Helm chart now defaults `replicaCount` to 1 and fails the render on the same rules. \
+Without the chart, set `server.replicas` to the processes you run: 1 is a declaration, not a detection.",
 ];
 
 /// Emit the one-time 4.0.0 notice.

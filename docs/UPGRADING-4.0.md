@@ -759,8 +759,13 @@ reaches one pod, and a task created on one pod is not found on another.
   `server.replicas` from it, fails the render on the same rules, and fails when a
   `config.server.replicas` you set disagrees. A `helm upgrade` that carried `replicaCount: 2`
   now fails until you pick one of the remedies above.
-- **Recreate:** with the key server or accounts enabled, the chart renders
-  `strategy: Recreate`, so an upgrade has a short outage. Other installs keep `RollingUpdate`.
+- **Without the chart, set `server.replicas` to the number of processes you run.** The
+  default of 1 is a declaration made on your behalf, not a detection: a hand-written
+  multi-replica deployment that leaves it at 1 is never refused.
+- **Recreate:** while any of the three is on, the modern protocol included (so a default
+  install), the chart renders `strategy: Recreate`, and so does the enterprise-alpha
+  manifest. An upgrade has a short outage. With all three off the chart keeps
+  `RollingUpdate`.
 - **enterprise-alpha:** `base/deployment.yaml` runs one replica and `base/configmap.yaml`
   declares `server.replicas: 1`. Change both together.
 - **`kubectl scale` and an HPA bypass this check**, because they change the pod count without
