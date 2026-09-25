@@ -186,9 +186,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/UPGRADING-4.0.md` item 30.
 - **Attestation `enforce` enforces (breaking).** It refuses, with -32002, a
   call whose token is missing or invalid: `gateway_invoke` (the `attestation`
-  argument), the direct `/mcp/{backend}` route and surfaced tools
-  (`_meta["io.mcp-gateway/attestation"]`, stripped before forwarding).
-  Playbooks and code-mode plans are refused under enforce. Enforce without
+  argument), every method the direct `/mcp/{backend}` route forwards (scoped
+  by tool or prompt name, resource URI, or `"*"`; lists need an authentic
+  token), and surfaced tools, as tasks too (`_meta["io.mcp-gateway/attestation"]`,
+  stripped before forwarding). The direct-route check runs before identity
+  minting. Playbooks and code-mode plans are refused under enforce. Enforce without
   `GATEWAY_ATTESTATION_SIGNING_KEY` fails startup. See
   `docs/UPGRADING-4.0.md` item 46.
 - **A credential over plain HTTP on a network bind refuses the start
