@@ -928,8 +928,8 @@ mod tests {
 
     #[test]
     fn which_command_finds_existing_binary() {
-        // `sh` is universally available on Unix.
-        assert!(which_command("sh"), "sh must be findable on PATH");
+        let bin = if cfg!(windows) { "cmd" } else { "sh" }; // Windows: `cmd.exe`, `;` PATH
+        assert!(which_command(bin), "{bin} must be findable on PATH");
     }
 
     #[test]

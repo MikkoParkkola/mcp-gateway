@@ -1990,7 +1990,7 @@ fn config_naming_env_files(dir: &std::path::Path, entries: &[&str]) -> std::path
     let mut yaml = String::from("env_files:\n");
     for e in entries {
         use std::fmt::Write as _;
-        writeln!(yaml, "  - \"{e}\"").unwrap();
+        writeln!(yaml, "  - '{e}'").unwrap();
     }
     let path = dir.join("gateway.yaml");
     write_owner_only(&path, yaml).unwrap();
@@ -2032,7 +2032,7 @@ async fn envfile_19c_startup_resolves_each_entry_under_the_home_in_force_then_th
         home_a.path(),
         "one.env",
         &format!(
-            "HOME={}\nMCP_GW_TEST_ENVFILE19C_ONE=from-one\n",
+            "HOME='{}'\nMCP_GW_TEST_ENVFILE19C_ONE=from-one\n",
             home_b.path().display()
         ),
     );
@@ -2162,7 +2162,7 @@ async fn envfile_19e_a_reload_assigning_home_reports_restart_required_without_re
     write_owner_only(
         &recorded_path,
         format!(
-            "HOME={}\nMCP_GW_TEST_ENVFILE19E_KEY=rotated-value\n",
+            "HOME='{}'\nMCP_GW_TEST_ENVFILE19E_KEY=rotated-value\n",
             home_b.path().display()
         ),
     )
@@ -2233,7 +2233,7 @@ async fn envfile_19f_neither_half_of_the_conjunction_alone_is_restart_required_o
         write_owner_only(
             &path,
             format!(
-                "HOME={}\nMCP_GW_TEST_ENVFILE19F_A=two\n",
+                "HOME='{}'\nMCP_GW_TEST_ENVFILE19F_A=two\n",
                 elsewhere.path().display()
             ),
         )
@@ -2300,7 +2300,7 @@ async fn envfile_19g_a_reload_restating_the_same_home_reports_restart_required()
         home_a.path(),
         "rot.env",
         &format!(
-            "HOME={}\nMCP_GW_TEST_ENVFILE19G_KEY=startup-value\n",
+            "HOME='{}'\nMCP_GW_TEST_ENVFILE19G_KEY=startup-value\n",
             home_b.path().display()
         ),
     );
@@ -2315,7 +2315,7 @@ async fn envfile_19g_a_reload_restating_the_same_home_reports_restart_required()
     write_owner_only(
         &recorded_path,
         format!(
-            "HOME={}\nMCP_GW_TEST_ENVFILE19G_KEY=rotated-value\n",
+            "HOME='{}'\nMCP_GW_TEST_ENVFILE19G_KEY=rotated-value\n",
             home_b.path().display()
         ),
     )
@@ -2354,7 +2354,7 @@ async fn envfile_19h_a_reload_removing_the_home_assignment_reports_restart_requi
         home_a.path(),
         "rot.env",
         &format!(
-            "HOME={}\nMCP_GW_TEST_ENVFILE19H_KEY=startup-value\n",
+            "HOME='{}'\nMCP_GW_TEST_ENVFILE19H_KEY=startup-value\n",
             home_b.path().display()
         ),
     );
@@ -2411,13 +2411,13 @@ async fn envfile_19i_home_moved_before_a_later_tilde_entry_reports_restart_requi
     let mover = env_file(
         cfg_dir.path(),
         "mover.env",
-        &format!("HOME={}\n", home_b.path().display()),
+        &format!("HOME='{}'\n", home_b.path().display()),
     );
     env_file(
         home_b.path(),
         "late.env",
         &format!(
-            "HOME={}\nMCP_GW_TEST_ENVFILE19I_KEY=startup-value\n",
+            "HOME='{}'\nMCP_GW_TEST_ENVFILE19I_KEY=startup-value\n",
             home_b.path().display()
         ),
     );
@@ -2435,7 +2435,7 @@ async fn envfile_19i_home_moved_before_a_later_tilde_entry_reports_restart_requi
     // WHEN: the first file moves `HOME` somewhere else, leaving the final
     // value untouched — the second file still assigns it back
     home.finish_startup();
-    write_owner_only(&mover, format!("HOME={}\n", home_c.path().display())).unwrap();
+    write_owner_only(&mover, format!("HOME='{}'\n", home_c.path().display())).unwrap();
 
     let ctx = reload_context_with_env(&cfg, &startup);
     let outcome = ctx.reload_outcome().await.unwrap();
@@ -2463,16 +2463,15 @@ async fn envfile_19i_home_moved_before_a_later_tilde_entry_reports_restart_requi
 }
 
 /// ENVFILE.19j — the 19i move DELETED, with startup's restored value equal to
-/// the process environment's.
-///
-/// The case that survives checking the reload overlay alone. Startup moved
+/// the process environment's. The case that survives checking the reload overlay alone. Startup moved
 /// `HOME` before a later `~` entry and a file after it restored the process
 /// home; the reload deletes both lines. Nothing on the reload side assigns
-/// `HOME`, and the value it leaves standing is the process home — the same one
-/// startup ended on — so both an assignment check over the reload overlay and a
+/// `HOME`, and the value it leaves standing is the process home (the same one
+/// startup ended on), so both an assignment check over the reload overlay and a
 /// comparison of final values are silent. A restart would expand the entry
 /// against the process home instead of the moved one. Only startup's OWN
-/// assignment records that the expansion base was ever moved.
+/// assignment records that the expansion base was ever moved. Unix only: no process HOME on Windows.
+#[cfg(unix)]
 #[tokio::test]
 async fn envfile_19j_deleting_the_move_still_reports_when_the_restored_value_is_the_process_home() {
     let process_home = std::env::var("HOME").expect("the process must have a HOME");
@@ -2484,12 +2483,12 @@ async fn envfile_19j_deleting_the_move_still_reports_when_the_restored_value_is_
     let mover = env_file(
         cfg_dir.path(),
         "mover.env",
-        &format!("HOME={}\n", home_b.path().display()),
+        &format!("HOME='{}'\n", home_b.path().display()),
     );
     let late = env_file(
         home_b.path(),
         "late.env",
-        &format!("HOME={process_home}\nMCP_GW_TEST_ENVFILE19J_KEY=startup-value\n"),
+        &format!("HOME='{process_home}'\nMCP_GW_TEST_ENVFILE19J_KEY=startup-value\n"),
     );
     let cfg = config_naming_env_files(cfg_dir.path(), &[mover.to_str().unwrap(), "~/late.env"]);
 
@@ -2546,7 +2545,7 @@ async fn envfile_6b_the_restart_report_names_the_key_and_carries_neither_value()
     write_owner_only(
         &cfg,
         format!(
-            "env_files:\n  - \"{}\"\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"env:{KEY}\"\n",
+            "env_files:\n  - '{}'\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"env:{KEY}\"\n",
             env_path.display()
         ),
     )
@@ -2759,7 +2758,7 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
         let dir = tempfile::tempdir().unwrap();
         let env_path = env_file(dir.path(), "secrets.env", &format!("{key}={old}\n"));
         let cfg = dir.path().join("gateway.yaml");
-        let yaml = format!("env_files:\n  - \"{}\"\n{section}", env_path.display());
+        let yaml = format!("env_files:\n  - '{}'\n{section}", env_path.display());
         write_owner_only(&cfg, &yaml).unwrap();
 
         let home = RecordingHome::new();
@@ -2833,7 +2832,7 @@ fn load_config_patch_refuses_a_substitution_naming_a_defined_key() {
     write_owner_only(
         &config_path,
         format!(
-            "env_files:\n  - \"{}\"\n  - \"{}\"\n",
+            "env_files:\n  - '{}'\n  - '{}'\n",
             defining_path.display(),
             env_path.display()
         ),
