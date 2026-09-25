@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Clients keep their keys, and principals are unchanged. See
   `docs/UPGRADING-4.0.md` item 41.
 
+### Fixed
+
+- **Cost budgets survive a restart.** The gateway loaded `costs.json` at startup and
+  discarded it, so every restart reset the daily cost budgets to zero. Today's spend (UTC)
+  is now reloaded into the budget enforcer; a file saved on an earlier day is ignored.
+  A budget that has blocked stays blocked across a restart until UTC midnight.
+
 ## [4.0.0-beta.1] - 2026-09-25
 
 > **Pre-release.** The first 4.0 beta, cut so 3.x users can start testing 4.0 before the final

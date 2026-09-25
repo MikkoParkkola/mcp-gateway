@@ -1049,6 +1049,9 @@ named an API-key label rather than a person and skipped every refused or failed 
 
 These need no action and have no startup notice.
 
+- **Cost budgets survive a restart.** Today's cost-governance spend is reloaded from
+  `costs.json` at startup, so a restart no longer resets the daily budgets. A budget that
+  has blocked stays blocked until UTC midnight. Each process keeps its own `costs.json`.
 - **Default capability directories are `capabilities` only.** A 3.x gateway also loaded
   a private capability checkout under `$HOME/github` if it existed. If you relied on that,
   add the directory to `capabilities.directories`.
