@@ -271,7 +271,7 @@ fn permissive_schemas_accept_extras() {
             "properties": {"a": {}}, "additionalProperties": true}}}),
         json!({"type": "object", "patternProperties": {"^x": {}}}),
     ] {
-        let args = json!({"n": {"a": 1, "extra": 2}, "x1": 3});
+        let args = json!({"n": {"a": 1, "extra": 2}});
         let args = if schema.get("patternProperties").is_some() {
             json!({"x1": 3})
         } else if schema["properties"].get("n").is_some() {

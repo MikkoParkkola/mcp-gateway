@@ -72,7 +72,8 @@ pub(crate) fn undeclared_keys(
     schema: &Value,
     mode: InputSchemaEnforcement,
 ) -> Vec<KeyFault> {
-    if mode == InputSchemaEnforcement::Off {
+    // `null` is "no schema" (the capability contract); nothing to hold keys to.
+    if mode == InputSchemaEnforcement::Off || schema.is_null() {
         return Vec::new();
     }
     let mut walk = Walk {
@@ -162,6 +163,9 @@ impl<'a> Walk<'a> {
             return done.clone();
         }
         let faults = match value {
+            // A schema that excludes objects is a type question, not a key
+            // one: the type check reports it, not an "undeclared" path.
+            Value::Object(_) if schema.as_object().is_some_and(matches_nothing) => Vec::new(),
             Value::Object(map) => self.object(map, root, schema, path, depth),
             Value::Array(items) => {
                 let mut faults = Vec::new();
