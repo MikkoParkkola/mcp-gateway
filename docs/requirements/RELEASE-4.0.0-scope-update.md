@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 32
+Approved supplemental criteria: 73
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -58,6 +58,54 @@ protocol requirements additionally use the pinned specifications linked below.
 | NFR.RELEASEGATE.1 | Every automated 4.0.0 publishing path rejects unresolved baseline and supplemental criteria and decisions; plan consistency can still pass while work is pending. | VALIDATION |
 | NFR.DEMO.1 | Recorded demonstrations prove mixed-era interaction, reconnectable tasks, isolated personal accounts, useful large-catalogue discovery and error-budget diagnosis/recovery. | VALIDATION |
 | NFR.BUILD.1 | Pin supported reference client/backend versions and feature/build combinations under the existing license split; current critical-path coverage and mutation evidence grades the final integration revision. | VALIDATION |
+
+### Enterprise multi-user and security scope (MIK-7570)
+
+Approved by the operator on 2026-09-24 (decision `enterprise_scope_in_4_0`): the multi-user and security features ship finished in 4.0.0 so enterprise users can adopt it. Designs and landing order are tracked in MIK-7570.
+
+| ID | Required outcome | Delivery package |
+|---|---|---|
+| MIK-7570.CACHE.1 | The response cache never serves one caller's cached result to another caller, on the meta route and the direct route (A0). | ENTERPRISE |
+| GH555.DISCOVERY.1 | Every discovery surface (tools/list, list_tools, list_servers, search, initialize guide and counts, resolve, suggestions, stats, /health, direct-route listing) shows a caller exactly the backends and tools it could invoke (A3). | ENTERPRISE |
+| MIK-7570.CHART.1 | The Helm chart installs and the gateway starts and serves with the chart's default values (B1). | ENTERPRISE |
+| MIK-7570.GOVSTORE.1 | The governance store location is configurable; an explicit unwritable location refuses start, and a read-only store states its reason in the admin API (F6). | ENTERPRISE |
+| GH612.CODEMODE.1 | The Code Mode authorization test asserts that an out-of-scope call is denied, not only which tool names are listed (GH #612). | ENTERPRISE |
+| MIK-7570.IDHEADER.1 | Caller identity headers are honoured only from configured trusted proxies; a client cannot assert another identity by sending them (A8). | ENTERPRISE |
+| MIK-7570.OIDC.1 | OIDC identity rules require an issuer and a verified email; an unverified email or issuer-only rule on a public identity provider confers nothing (A9). | ENTERPRISE |
+| MIK-7570.NOTIFY.1 | Backend notifications reach only the sessions entitled to that backend, not every session (A5b). | ENTERPRISE |
+| MIK-7570.NOTIFY.2 | subscriptions/listen is scoped per caller; an anonymous listener is refused with 401 (A5c). | ENTERPRISE |
+| MIK-7570.LOGLEVEL.1 | Only an admin can change the gateway log level (A7). | ENTERPRISE |
+| MIK-7548.ISOLATION.1 | A test proves one tenant cannot read or act through another tenant's session, credentials or cached results (MIK-7548). | ENTERPRISE |
+| MIK-7570.ADMINGRANT.1 | Grant edits made in the admin panel are either enforced or refused with 409; none is accepted and then ignored (E2-min). | ENTERPRISE |
+| MIK-7570.AGENTGRANT.1 | An exact agent grant is keyed by the verified proof source, not by a bare agent id, with a migration for 3.x grants (A4b, MIK-7526). | ENTERPRISE |
+| MIK-7570.SCHEMA.1 | A tool call carrying nested input keys that the tool's schema does not declare is refused (R2). | ENTERPRISE |
+| MIK-7570.CONFIG.1 | A configuration key the gateway does not recognise is a load error, not silently ignored (C1). | ENTERPRISE |
+| MIK-7570.BACKENDGRANT.1 | A newly added backend is not reachable by any key until granted; an empty backend grant means none (A10). | ENTERPRISE |
+| MIK-7570.CONFIG.2 | The gateway refuses a config file or env file readable by other users (C2). | ENTERPRISE |
+| MIK-7570.TRANSPORT.1 | With auth on and a non-loopback bind, plain HTTP is refused unless the deployment qualifies for the cluster-internal carve-out (C3). | ENTERPRISE |
+| MIK-7570.SECRET.1 | A secret reference that cannot be resolved fails closed at load (C4). | ENTERPRISE |
+| MIK-7570.SECRET.2 | Secrets can be referenced from files with the file: form, with the same fail-closed rules (C9). | ENTERPRISE |
+| MIK-7570.METRICS.1 | /metrics requires authentication when auth is on (C7). | ENTERPRISE |
+| MIK-7570.CONFIG.3 | max_body_size and request_timeout are enforced as documented, or removed (C8). | ENTERPRISE |
+| MIK-7570.REPLICA.1 | The key server and personal accounts refuse to run with more than one replica, and the limit is documented (B2). | ENTERPRISE |
+| MIK-7570.ATTEST.1 | Attestation is off by default and enforce mode refuses what it claims to refuse (C5). | ENTERPRISE |
+| MIK-7570.AUDIT.1 | With auth on, every tool invocation writes an audit record with who, outcome and credential kind; a failed append fails the call closed (D1). | ENTERPRISE |
+| MIK-7570.APIKEY.1 | API keys can be stored as sha256 digests and carry an expiry that is enforced (E4). | ENTERPRISE |
+| MIK-7570.ADMINSSO.1 | Admins can be designated through SSO identity, requiring a verified email (E1). | ENTERPRISE |
+| MIK-7479.STDIO.1 | A stdio backend call that never answers is accounted for and bounded; no call is left waiting indefinitely (MIK-7479). | ENTERPRISE |
+| MIK-7325.RETRY.1 | Retried input responses are validated and never forwarded without a gateway-issued request state (MIK-7325). | ENTERPRISE |
+| MIK-7547.SLOTS.1 | Per-user backend pool slots are capped at 64 per backend; over the cap the call is refused, never shared (MIK-7547). | ENTERPRISE |
+| MIK-7570.BREAKER.1 | Circuit-breaker state is one typed value, so health, UI and metrics agree on an open breaker (B6). | ENTERPRISE |
+| MIK-7570.CHART.2 | The Helm chart supports API-key and OIDC auth modes with secrets and persistent storage (B4). | ENTERPRISE |
+| MIK-7570.AUDIT.2 | Direct-route tool calls write the same invocation audit record as the meta route (D2). | ENTERPRISE |
+| MIK-7570.AUDIT.3 | Grant decisions, including refusals, are audited (D3). | ENTERPRISE |
+| MIK-7570.METRICS.2 | Security-relevant events are exported as metrics without identities in labels (D4). | ENTERPRISE |
+| MIK-7570.SESSION.1 | Dashboard sessions expire after 30 minutes idle and 8 hours absolute, and logout ends them (E5). | ENTERPRISE |
+| MIK-7570.RECONNECT.1 | A managed personal account whose upstream token is rejected gets at most one forced refresh per token revision and then a reconnect prompt (A11). | ENTERPRISE |
+| MIK-7570.OWASP.1 | The published OWASP self-assessment matches the shipped controls (D5). | ENTERPRISE |
+| MIK-7570.PAGING.1 | The backend tool cache follows nextCursor, so tools past a backend's first tools/list page are listed and callable (F3). | ENTERPRISE |
+| MIK-7570.STDIO.1 | A modern-era stdio caller with no verified identity is handled as the reviewed R5 design specifies (R5). | ENTERPRISE |
+| MIK-7570.DOCS.1 | The team deployment guide, backup/restore and key runbook, reconciled upgrade guide and client matrix ship with 4.0.0 (F docs). | ENTERPRISE |
 
 ## Boundaries
 
