@@ -99,6 +99,44 @@ impl AuditOutcome {
         }
     }
 
+    /// The outcome of an HTTP route that audits by status: the admin UI
+    /// (E1-f) and the direct route (D2). `code` is the JSON-RPC code the route
+    /// answered with, when it answered with one; otherwise the kind's
+    /// [`Self::default_code`]. One table, so every such route maps a status
+    /// the same way.
+    ///
+    /// | status | outcome |
+    /// |---|---|
+    /// | 2xx | `ok` |
+    /// | 401, 403 | `denied` |
+    /// | 400, 404 | `invalid` |
+    /// | any other (409 included) | `error` |
+    #[must_use]
+    pub fn from_http_status(status: axum::http::StatusCode, code: Option<i32>) -> Self {
+        use crate::error::rpc_codes;
+        let (kind, default): (fn(i32) -> Self, i32) = match status.as_u16() {
+            200..=299 => return Self::Ok,
+            401 | 403 => (Self::Denied, rpc_codes::INVALID_REQUEST),
+            400 | 404 => (Self::Invalid, rpc_codes::INVALID_PARAMS),
+            _ => (Self::Error, rpc_codes::INTERNAL_ERROR),
+        };
+        kind(code.unwrap_or(default))
+    }
+
+    /// The JSON-RPC code an outcome of this kind carries when the answer had
+    /// none: -32600 denied, -32602 invalid, -32603 error; none for `ok` and
+    /// `tool_error`.
+    #[must_use]
+    pub fn default_code(self) -> Option<i32> {
+        let status = match self {
+            Self::Ok | Self::ToolError => return None,
+            Self::Denied(_) => axum::http::StatusCode::FORBIDDEN,
+            Self::Invalid(_) => axum::http::StatusCode::BAD_REQUEST,
+            Self::Error(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        Self::from_http_status(status, None).error_code()
+    }
+
     /// The `error_code` field value; absent for `ok` and `tool_error`.
     #[must_use]
     pub const fn error_code(self) -> Option<i32> {

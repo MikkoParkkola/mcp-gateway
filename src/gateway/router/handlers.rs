@@ -382,7 +382,7 @@ fn backends_overall_healthy(
 ) -> bool {
     statuses
         .values()
-        .all(|s| s.circuit_state != "Open" && s.healthy)
+        .all(|s| s.circuit_state != crate::failsafe::CircuitState::Open && s.healthy)
 }
 
 /// Health check handler
@@ -1610,6 +1610,7 @@ async fn meta_mcp_dispatch(
                 agent_id,
                 agent_declared,
                 grant_subject,
+                stdio_nonce: None,
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
                 input_capabilities: declared_capabilities,
