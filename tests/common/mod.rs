@@ -139,6 +139,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         firewall: f.firewall,
         agent_identity_config: f.agent_identity,
         control_plane_store: None,
+        control_plane_base: Default::default(),
         live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
         export_status: None,
         transparency_log: None,

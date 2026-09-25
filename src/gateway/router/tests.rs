@@ -142,6 +142,7 @@ async fn test_router_app_state_with(
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_base: Default::default(),
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(config)),
         export_status: None,
         transparency_log: None,
@@ -200,6 +201,7 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_base: Default::default(),
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
@@ -256,6 +258,7 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_base: Default::default(),
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
@@ -335,6 +338,7 @@ async fn test_router_app_state_with_provenance_backend(
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_base: Default::default(),
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
@@ -424,6 +428,7 @@ async fn test_router_app_state_minting_without_route_audit(
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_base: Default::default(),
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
@@ -483,6 +488,7 @@ async fn test_router_app_state_with_ssrf(
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_base: Default::default(),
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
@@ -556,6 +562,7 @@ pub(super) async fn test_router_app_state_with_auth(auth: &AuthConfig) -> Fixtur
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_base: Default::default(),
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
@@ -624,6 +631,7 @@ async fn test_router_app_state_with_auth_and_config(
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_base: Default::default(),
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(config)),
         export_status: None,
         transparency_log: None,

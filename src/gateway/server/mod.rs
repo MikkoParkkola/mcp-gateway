@@ -6,7 +6,7 @@
 // test that drives a real startup must call the same one rather than a copy of
 // its policy.
 pub(crate) mod account_bindings;
-pub(super) mod control_plane_store;
+mod control_plane_store;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod persistence;
@@ -213,7 +213,7 @@ async fn load_configured_identity_grants(
 /// re-anchored entries are signature-verified (SIEM.SIG.1, needs MIK-6700).
 fn spawn_export_task(
     config: &Config,
-    config_path: Option<&std::path::Path>,
+    control_plane_base: &crate::control_plane::role_mapping::ControlPlaneBaseInfo,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) -> Option<Arc<crate::control_plane::ExportStatus>> {
     use crate::control_plane::{
@@ -230,9 +230,7 @@ fn spawn_export_task(
     }
 
     let inv_path = expand_home_path(&config.security.transparency_log.path);
-    let gov_path = control_plane_base(config, config_path)
-        .0
-        .join("audit.jsonl");
+    let gov_path = control_plane_base.path.join("audit.jsonl");
     let secret = config.security.transparency_log.shared_secret.clone();
     let sink_path = expand_home_path(&ecfg.sink_path);
 
@@ -1526,11 +1524,11 @@ impl Gateway {
         );
 
         // SIEM evidence-export background task (MIK-6703). None when disabled.
-        let export_status = spawn_export_task(
-            &self.config,
-            self.config_path.as_deref(),
-            shutdown_tx.subscribe(),
-        );
+        // The control-plane base, resolved once: the export task, the store
+        // and the admin API all name this directory.
+        let control_plane_base = control_plane_base(&self.config, self.config_path.as_deref());
+        let export_status =
+            spawn_export_task(&self.config, &control_plane_base, shutdown_tx.subscribe());
 
         // Wire the config hot-reload *context* into meta_mcp before it moves
         // into AppState. The file watcher that can mutate `live_config` is
@@ -1765,8 +1763,7 @@ impl Gateway {
         #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
         let meta_mcp_for_shutdown = Arc::clone(&meta_mcp);
 
-        let control_plane_store =
-            build_control_plane_store(&self.config, self.config_path.as_deref())?;
+        let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
 
         // The durable task runtime, opened before any listener exists.
         //
@@ -1912,6 +1909,7 @@ impl Gateway {
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
+            control_plane_base,
             tasks: task_service,
             task_executor,
             subscriptions,

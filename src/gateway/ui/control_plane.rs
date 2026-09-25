@@ -15,17 +15,17 @@ use serde::{Deserialize, Serialize};
 
 use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
-use super::super::server::control_plane_store::{BaseSource, control_plane_base};
 use super::errors::auth_required;
+use crate::control_plane::role_mapping::ControlPlaneBaseSource;
 use crate::control_plane::{
     AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent,
-    ControlPlaneAuthorization, ControlPlaneDecisionQueue, ControlPlaneDecisionTargetKind,
-    ControlPlaneDomainCoverage, ControlPlaneFeature, ControlPlaneGrant, ControlPlaneGrantStatus,
-    ControlPlaneHealth, ControlPlaneLicenseTier, ControlPlaneMutation, ControlPlanePolicy,
-    ControlPlaneRbac, ControlPlaneReadOnlyView, ControlPlaneRole, ControlPlaneRoleMappingConfig,
-    ControlPlaneRollbackPlan, ControlPlaneRuntimeHealth, ControlPlaneServer,
-    ControlPlaneServerStatus, ControlPlaneSnapshot, ControlPlaneStore, ControlPlaneTool,
-    ControlPlaneTrustCard, ControlPlaneUser,
+    ControlPlaneAuthorization, ControlPlaneBaseSource, ControlPlaneDecisionQueue,
+    ControlPlaneDecisionTargetKind, ControlPlaneDomainCoverage, ControlPlaneFeature,
+    ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlaneHealth, ControlPlaneLicenseTier,
+    ControlPlaneMutation, ControlPlanePolicy, ControlPlaneRbac, ControlPlaneReadOnlyView,
+    ControlPlaneRole, ControlPlaneRoleMappingConfig, ControlPlaneRollbackPlan,
+    ControlPlaneRuntimeHealth, ControlPlaneServer, ControlPlaneServerStatus, ControlPlaneSnapshot,
+    ControlPlaneStore, ControlPlaneTool, ControlPlaneTrustCard, ControlPlaneUser,
 };
 use crate::discovery::AutoDiscovery;
 use crate::discovery::shadow::{
@@ -135,11 +135,7 @@ async fn control_plane_snapshot(
         &ControlPlaneResponseFlags {
             mutation_enabled: state.control_plane_store.is_some(),
             mutation_disabled_reason: mutation_disabled_reason(&state),
-            base_source: control_plane_base(
-                state.live_config.running(),
-                state.config_path.as_deref(),
-            )
-            .1,
+            base_source: state.control_plane_base.source,
             store_read_degraded,
             export_configured: state.export_status.is_some(),
         },
@@ -286,14 +282,12 @@ fn control_plane_store(state: &AppState) -> Result<&Arc<dyn ControlPlaneStore>, 
     if let Some(store) = &state.control_plane_store {
         return Ok(store);
     }
-    let running = state.live_config.running();
-    if !running.auth.enabled {
+    if !state.live_config.running().auth.enabled {
         return Err("Control-plane store is disabled: auth is off".to_string());
     }
-    let (base, _) = control_plane_base(running, state.config_path.as_deref());
     Err(format!(
         "Control-plane store at '{}' could not be opened; set control_plane.store_dir to a writable directory",
-        base.display()
+        state.control_plane_base.path.display()
     ))
 }
 
@@ -843,7 +837,7 @@ struct ControlPlaneApiResponse {
     mutation_disabled_reason: Option<&'static str>,
     /// Whether the store base came from `control_plane.store_dir` (`explicit`)
     /// or from the config file's location (`default`).
-    base_source: BaseSource,
+    base_source: ControlPlaneBaseSource,
     view: ControlPlaneReadOnlyView,
     decision_queue: ControlPlaneDecisionQueue,
     current_limits: Vec<&'static str>,
@@ -861,7 +855,7 @@ struct ControlPlaneResponseFlags {
     /// See [`ControlPlaneApiResponse`].
     mutation_disabled_reason: Option<&'static str>,
     /// See [`ControlPlaneApiResponse`].
-    base_source: BaseSource,
+    base_source: ControlPlaneBaseSource,
 }
 
 impl ControlPlaneApiResponse {

@@ -4,14 +4,15 @@
 //!
 //! `GET /ui/api/control-plane` carries `mutation_disabled_reason` and
 //! `base_source`, and a mutation's 503 names the cause and the store path.
-//! The store itself is opened at startup (`gateway::server::control_plane_store`);
-//! these cases drive the router with the state that startup leaves behind.
+//! Startup resolves the store base once and carries it in `AppState`; these
+//! cases drive the router with the state that startup leaves behind.
 
 mod common;
 use common::*;
 
 use axum::http::Method;
 use mcp_gateway::config_reload::LiveConfig;
+use mcp_gateway::control_plane::role_mapping::{ControlPlaneBaseInfo, ControlPlaneBaseSource};
 
 const TOKEN: &str = "f6-admin-token";
 
@@ -58,17 +59,19 @@ fn decision() -> Value {
 
 #[tokio::test]
 async fn default_unwritable_store_reports_store_unavailable() {
-    let cfg_dir = tempfile::tempdir().unwrap();
-    // What startup met: the default base is a regular file, so the store
-    // could not open and the gateway serves governance read-only.
-    std::fs::write(cfg_dir.path().join("gateway-control-plane"), b"file").unwrap();
+    // What startup leaves when auth is on and the default base could not be
+    // opened (the unit half, beside `build_control_plane_store`, forces that
+    // with ENOTDIR): no store, and the base it tried.
+    let base = std::path::PathBuf::from("/etc/mcp-gateway/gateway-control-plane");
     let (mut app, _tasks) = state(Fixture {
         auth: auth_with(Vec::new(), Some(TOKEN)),
         ..Fixture::default()
     })
     .await;
-    Arc::get_mut(&mut app).unwrap().config_path = Some(cfg_dir.path().join("gateway.yaml"));
-    let base = cfg_dir.path().join("gateway-control-plane");
+    Arc::get_mut(&mut app).unwrap().control_plane_base = ControlPlaneBaseInfo {
+        path: base.clone(),
+        source: ControlPlaneBaseSource::Default,
+    };
 
     let (status, body) = send(&app, Method::GET, "/ui/api/control-plane", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");

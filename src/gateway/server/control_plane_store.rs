@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Where the control-plane (governance) store lives, and opening it at startup.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use tracing::{info, warn};
@@ -10,17 +10,8 @@ use tracing::{info, warn};
 use super::expand_home_path;
 use crate::config::Config;
 use crate::control_plane::ControlPlaneStore;
+use crate::control_plane::role_mapping::{ControlPlaneBaseInfo, ControlPlaneBaseSource};
 use crate::{Error, Result};
-
-/// Which setting chose the control-plane base directory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(in crate::gateway) enum BaseSource {
-    /// `control_plane.store_dir` names it.
-    Explicit,
-    /// Derived from the config file's location, as before `store_dir` existed.
-    Default,
-}
 
 /// The control-plane base directory (governance store + audit log), and which
 /// setting chose it.
@@ -28,16 +19,19 @@ pub(in crate::gateway) enum BaseSource {
 /// `control_plane.store_dir` wins (`~`-expanded). Otherwise the base is
 /// `<config dir>/<config stem>-control-plane`, so distinct gateway instances do
 /// not share governance state, or `~/.mcp-gateway/control-plane` when no config
-/// path is known. Shared by [`build_control_plane_store`], the SIEM export
-/// wiring (MIK-6703) and the admin API, so all three name the same directory.
-pub(in crate::gateway) fn control_plane_base(
+/// path is known. Resolved once at startup; the store, the SIEM export wiring
+/// (MIK-6703) and the admin API (through `AppState`) all use that one value.
+pub(super) fn control_plane_base(
     config: &Config,
     config_path: Option<&Path>,
-) -> (PathBuf, BaseSource) {
+) -> ControlPlaneBaseInfo {
     if let Some(dir) = &config.control_plane.store_dir {
-        return (expand_home_path(dir), BaseSource::Explicit);
+        return ControlPlaneBaseInfo {
+            path: expand_home_path(dir),
+            source: ControlPlaneBaseSource::Explicit,
+        };
     }
-    let base = config_path.map_or_else(
+    let path = config_path.map_or_else(
         || expand_home_path("~/.mcp-gateway/control-plane"),
         |p| {
             let dir = p.parent().unwrap_or_else(|| Path::new("."));
@@ -45,7 +39,10 @@ pub(in crate::gateway) fn control_plane_base(
             dir.join(format!("{stem}-control-plane"))
         },
     );
-    (base, BaseSource::Default)
+    ControlPlaneBaseInfo {
+        path,
+        source: ControlPlaneBaseSource::Default,
+    }
 }
 
 /// Open the durable control-plane store (grants/policies plus a
@@ -67,11 +64,11 @@ pub(in crate::gateway) fn control_plane_base(
 /// they are signed iff the invocation log is.
 pub(super) fn build_control_plane_store(
     config: &Config,
-    config_path: Option<&Path>,
+    base_info: &ControlPlaneBaseInfo,
 ) -> Result<Option<Arc<dyn ControlPlaneStore>>> {
-    let (base, source) = control_plane_base(config, config_path);
+    let (base, source) = (&base_info.path, base_info.source);
     let path = base.display();
-    if source == BaseSource::Explicit && !base.is_absolute() {
+    if source == ControlPlaneBaseSource::Explicit && !base.is_absolute() {
         return Err(Error::Config(format!(
             "control_plane.store_dir '{path}' must be an absolute path"
         )));
@@ -86,20 +83,20 @@ pub(super) fn build_control_plane_store(
     // An explicit directory is proven writable, not inferred from the audit
     // log's open as a side effect.
     let opened = match source {
-        BaseSource::Explicit => probe_writable(&base)
+        ControlPlaneBaseSource::Explicit => probe_writable(base)
             .map_err(|e| e.to_string())
-            .and_then(|()| open_store(config, &base)),
-        BaseSource::Default => open_store(config, &base),
+            .and_then(|()| open_store(config, base)),
+        ControlPlaneBaseSource::Default => open_store(config, base),
     };
     match (opened, source) {
         (Ok(store), _) => {
             info!(%path, ?source, "control-plane store opened");
             Ok(Some(store))
         }
-        (Err(error), BaseSource::Explicit) => Err(Error::Config(format!(
+        (Err(error), ControlPlaneBaseSource::Explicit) => Err(Error::Config(format!(
             "control_plane.store_dir '{path}' could not be opened: {error}"
         ))),
-        (Err(error), BaseSource::Default) => {
+        (Err(error), ControlPlaneBaseSource::Default) => {
             warn!(
                 %path, ?source, %error,
                 "control-plane store unavailable; governance mutations disabled. Set control_plane.store_dir to a writable directory"
@@ -151,13 +148,16 @@ mod tests {
     /// `Ok(true)` a gateway serving governance mutation, `Ok(false)` one
     /// serving read-only.
     fn start(config: &Config, config_path: &Path) -> Result<bool, String> {
-        super::build_control_plane_store(config, Some(config_path))
-            .map(|store| store.is_some())
-            .map_err(|e| e.to_string())
+        super::build_control_plane_store(
+            config,
+            &super::control_plane_base(config, Some(config_path)),
+        )
+        .map(|store| store.is_some())
+        .map_err(|e| e.to_string())
     }
 
     fn base(config: &Config, config_path: &Path) -> PathBuf {
-        super::control_plane_base(config, Some(config_path)).0
+        super::control_plane_base(config, Some(config_path)).path
     }
 
     /// Write `yaml` as `<dir>/gateway.yaml` and load it the way startup does.
@@ -284,7 +284,8 @@ mod tests {
         };
         let spawn = || {
             let (tx, rx) = tokio::sync::broadcast::channel(1);
-            let status = super::super::spawn_export_task(&config, Some(&path), rx);
+            let base = super::control_plane_base(&config, Some(&path));
+            let status = super::super::spawn_export_task(&config, &base, rx);
             let _ = tx.send(());
             status.is_some()
         };

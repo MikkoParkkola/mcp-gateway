@@ -149,6 +149,7 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
         firewall: None,
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_base: Default::default(),
         live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
         export_status: None,
         transparency_log: None,
