@@ -31,9 +31,56 @@ impl GrantAgent {
     pub(super) fn matches(&self, agent: Option<&OwnedProvenAgentId>) -> bool {
         match self {
             Self::Any => true,
-            Self::Exact(key) => agent.is_some_and(|a| a.as_str() == key.id),
+            Self::Exact(key) => {
+                agent.is_some_and(|a| a.proof() == key.source && a.as_str() == key.id)
+            }
         }
     }
+}
+
+/// The refusal for a grants file holding 3.x bare `exact` rows, naming every
+/// one, or `None` when there are none.
+///
+/// Called only after the typed parse failed, so it explains a refusal and
+/// never admits a row: `GrantAgent` has no bare variant for one to reach
+/// `matches` through. All rows at once, because the CLI's read-modify-write
+/// goes through the same reader and N rows must not cost N attempts. No
+/// source is defaulted and nothing becomes `any`: each would be a guess, and
+/// both widen.
+pub(super) fn bare_exact_refusal(path: &std::path::Path, content: &str) -> Option<String> {
+    use serde_yaml::Value;
+    // JSON is YAML, so one parse covers both encodings. 3.x wrote YAML rows
+    // as a tag (`agent: !exact runner`) and JSON rows as `{"exact": "runner"}`.
+    let file: Value = serde_yaml::from_str(content).ok()?;
+    let rows: Vec<String> = file
+        .get("grants")
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let id = match row.get("agent")? {
+                Value::Tagged(tagged) if tagged.tag == "exact" => tagged.value.as_str(),
+                agent @ Value::Mapping(_) => agent.get("exact").and_then(Value::as_str),
+                _ => None,
+            }?;
+            let grant_id = row
+                .get("grant_id")
+                .and_then(Value::as_str)
+                .unwrap_or("<no grant_id>");
+            Some(format!("grant '{grant_id}' (exact: {id})"))
+        })
+        .collect();
+    (!rows.is_empty()).then(|| {
+        format!(
+            "identity grants file {} keys {} agent binding(s) by a bare id, which does not say \
+             which proof source it came from: {}. Rewrite each as `exact: {{source: mtls, id: \
+             <SAN URI or bare CN>}}` or `exact: {{source: jwt, id: <client_id>}}`, or as `any` \
+             only if every agent of that subject is meant. The gateway will not choose.",
+            path.display(),
+            rows.len(),
+            rows.join(", ")
+        )
+    })
 }
 
 // Identity is `(authority, subject)`. The label is whatever each side had to
