@@ -41,7 +41,7 @@ hosted:
   return_paths: ["/"]
 adapters:
   - kind: openwebui_signed_header
-    installation_id: spark-owui
+    installation_id: bench-owui
     header: X-OpenWebUI-Assertion
     issuer: open-webui
     hmac_secret_ref: env:ADAPTER_A

@@ -29,7 +29,7 @@ CELLS = {
     "E": ("4.0.0", "ccccccc"),
 }
 DIGEST = "sha256:deadbeef"
-NCPU = 20  # Spark's CPU count, and so the declared loadavg envelope.
+NCPU = 20  # bench-host's CPU count, and so the declared loadavg envelope.
 
 
 def summary(p50, p99, *, http_err=0.0, semantic=1.0, checks=1.0):
@@ -483,7 +483,7 @@ def test_degenerate_input():
 def test_archived_run_regrades_as_insufficiency():
     """Verdict wiring: exit 2 AND the recorded reason is insufficiency at n=3.
 
-    The raw artifacts live on Spark; the per-rep p50/p99 that the gate reads
+    The raw artifacts live on bench-host; the per-rep p50/p99 that the gate reads
     are recorded in the archived verdict.json, so the run dir is rebuilt from
     those. This establishes provenance only -- test_resolving_power is the
     correctness oracle.
@@ -719,7 +719,7 @@ def test_oversubscribed_machine_voids_the_run():
     """A rep measured at loadavg >= ncpu voids the RUN, by name.
 
     The 2026-09-21 n=12 run is the case. A three-minute excursion to loadavg 34
-    on Spark's 20 CPUs covered A2, B2 and C2 -- three reps that are consecutive
+    on bench-host's 20 CPUs covered A2, B2 and C2 -- three reps that are consecutive
     in wall-clock, not a rep index the gated cells share -- and took tools-call
     p99 from ~3ms to 58.7 / 75.0 / 33.9ms. /health p99 went 3.1ms -> 69ms in the
     same three reps: it does no routing and no backend round-trip, so the stall

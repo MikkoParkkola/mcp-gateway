@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37, 38 or 39 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39 or 40 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -16,7 +16,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Item 38 refuses the start with its own error, which names the setting, so a notice would
 only repeat it.
 
-**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37, 38 and 39 refuse the gateway's start (item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39 and 40 refuse the gateway's start (item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -51,6 +51,7 @@ upgrading a running deployment.
 | 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
+| 31 | Tool calls with undeclared argument keys are refused | Stop sending the key, or set `input_schema_enforcement: standard` (or `off`) on that backend |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
@@ -61,6 +62,8 @@ upgrading a running deployment.
 | 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
+
+Numbers 18-20 are intentionally unused.
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -148,6 +151,35 @@ previously never reached them.
 
 Send `MCP-Protocol-Version` on stateless requests, or complete `initialize` and reuse the
 session. Either restores caching; neither requires a configuration change.
+
+## 7. An OAuth backend must be on TLS or loopback
+
+The bearer token an OAuth backend's transport attaches is a replayable credential, so it no longer
+goes on the wire in cleartext. `https://` is always accepted; `http://` only when the host is
+loopback (`localhost`, `127.0.0.0/8` or `::1`). Anything else fails the backend with
+`refusing to send an OAuth token in cleartext to <origin>`, and the gateway starts without it.
+`http://[::ffff:127.0.0.1]` counts as non-loopback; use `http://127.0.0.1`.
+
+Put TLS in front of the backend, or move it to a loopback address. There is no opt-out. Backends
+without OAuth may still use plain `http://`.
+
+## 8. A credential-bearing backend on plain `http://` is refused at load
+
+An enabled backend whose `http_url` or `a2a_url` is `http://` to a host off this machine, and
+whose configuration carries a credential, fails the load. Credential-bearing means an `oauth`
+section (even with `enabled: false`), identity propagation, secret injection, any static header,
+or userinfo or a query string in the URL. The error names the backend and never echoes the URL.
+
+Use TLS, or set `allow_cleartext_credentials: true` on that backend to accept the exposure. See
+[REMOTE_BACKENDS.md](REMOTE_BACKENDS.md). The flag does not lift item 7: an OAuth backend on `http://` off loopback is
+still refused, flag or not.
+
+## 9. The savings estimates are gone from stats
+
+The `stats --price` flag, the `gateway_get_stats` `price_per_million` argument, and the
+`tokens_saved` and `estimated_savings_usd` response fields are removed. They were estimates with no
+measured basis. Drop `--price` from scripts, and compute cost from `total_cached_tokens` with your
+own price.
 
 ## 10. Probes read `/livez` and `/readyz`, not `/health`
 
@@ -962,6 +994,9 @@ ever needs the key's hash, so 4.0 stores the digest instead.
 
 These need no action and have no startup notice.
 
+- **Default capability directories are `capabilities` only.** A 3.x gateway also loaded
+  a private capability checkout under `$HOME/github` if it existed. If you relied on that,
+  add the directory to `capabilities.directories`.
 - **Paginated backends show their whole tool catalogue.** The metadata cache now follows
   `nextCursor`, so tools past a backend's first `tools/list` page appear in search, listing
   and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A

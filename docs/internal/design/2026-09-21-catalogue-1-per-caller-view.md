@@ -750,7 +750,7 @@ class of review usually produces.
 `grok-review` was run twice and returned **no verdict**, but not nothing: its
 second run named `has_cached_tools` as a missed accessor before dying, which
 verified (§9.4) and moved the count to sixteen. The first run stalled
-after emitting only a preamble (`~/.claude/data/reviews/runs/grok-20260921T110552Z-11919.md`,
+after emitting only a preamble (`<review-archive>/runs/grok-20260921T110552Z-11919.md`,
 241 bytes, no verdict), the second was re-issued with a narrowed three-question
 prompt. **This design therefore rests on one independent reviewer, not two.**
 Recorded rather than papered over: a second independent pass on §3.1 and §4.2 is
