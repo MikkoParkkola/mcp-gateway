@@ -736,7 +736,7 @@ async fn backend_handler_inner(
     // the same predicate as identity propagation, and BEFORE it: an unattested
     // call must not mint a per-user credential or write a mint audit row. Also
     // ahead of the idempotency guard, so a replay needs a token too.
-    if isolation_guarded {
+    if method == "tools/call" {
         let scope = direct_route_attestation_scope(&method, params.as_ref());
         let agent = client.as_ref().map(|c| c.name.as_str());
         if let Err(e) = state.meta_mcp.check_attestation_scoped(
