@@ -1200,7 +1200,10 @@ impl MetaMcp {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            let traced = self.invoke_tool_traced(args, session_id, caller, &trace_id_clone);
+            // Boxed: the traced future is large, and every caller of
+            // `invoke_tool` would otherwise carry it inline (clippy::large_futures).
+            let traced =
+                Box::pin(self.invoke_tool_traced(args, session_id, caller, &trace_id_clone));
             let (result, dispatch_failure) = audit::with_dispatch_scope(traced).await;
             // Single delivery boundary: unwrap the guard-sealed result.
             let result = result.map(GuardedValue::into_inner);
