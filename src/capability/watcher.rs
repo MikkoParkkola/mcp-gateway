@@ -169,7 +169,6 @@ impl CapabilityWatcher {
                                                 "Hot-reload complete"
                                             );
                                             if let Some(changes) = &changes {
-                                                let _ = changes.send(backend.name.clone());
                                             }
                                         }
                                         Err(e) => {
