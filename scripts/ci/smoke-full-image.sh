@@ -30,14 +30,17 @@ PULL_TIMEOUT=300
 ANSWER="${RUNNER_TEMP:-/tmp}/smoke-full-answer.$$"
 trap 'rm -f "${ANSWER}"' EXIT
 
-# Pull before the first probe. On a runner that has not pulled this digest,
-# `docker run` writes its pull progress to stderr, and run_as_gateway captures
-# stderr as the probe's answer, so `node --version` read "Unable to find image
-# ... v24.x" and failed the major check. smoke-image.sh, run last, also expects
-# the image local (`--pull never`). Bounded like every probe, so a registry that
+# Make the image local before the first probe. On a runner that has not pulled
+# this digest, `docker run` writes its pull progress to stderr, and
+# run_as_gateway captures stderr as the probe's answer, so `node --version` read
+# "Unable to find image ... v24.x" and failed the major check. docker.yml probes
+# a locally loaded `:scan-full` tag that no registry has, so pull only when the
+# image is absent. smoke-image.sh, run last, also expects the image local
+# (`--pull never`). The pull is bounded like every probe, so a registry that
 # stops answering fails the step instead of hanging it.
-if ! timeout -k 10 "${PULL_TIMEOUT}" docker pull --quiet "${IMAGE}" > /dev/null; then
-  echo "::error::${IMAGE}: could not be pulled within ${PULL_TIMEOUT}s"
+if ! docker image inspect "${IMAGE}" > /dev/null 2>&1 \
+  && ! timeout -k 10 "${PULL_TIMEOUT}" docker pull --quiet "${IMAGE}" > /dev/null; then
+  echo "::error::${IMAGE}: not present locally and could not be pulled within ${PULL_TIMEOUT}s"
   exit 1
 fi
 
