@@ -174,6 +174,7 @@ impl ResolvedAuthConfig {
             );
         }
 
+        config.warn_keys_without_backends();
         let api_keys: Vec<ResolvedApiKey> = config
             .api_keys
             .iter()
@@ -405,7 +406,7 @@ pub struct AuthenticatedClient {
     pub name: String,
     /// Rate limit (0 = unlimited)
     pub rate_limit: u32,
-    /// Allowed backends (empty or `["*"]` = all)
+    /// Allowed backends (`["*"]` = all; empty = none)
     pub backends: Vec<String>,
     /// Allowed tools (allowlist if Some). Supports glob patterns.
     pub allowed_tools: Option<Vec<String>>,
@@ -436,7 +437,7 @@ impl AuthenticatedClient {
     /// Check if this client can access a backend
     #[must_use]
     pub fn can_access_backend(&self, backend: &str) -> bool {
-        self.backends.is_empty() || self.backends.iter().any(|b| b == "*" || b == backend)
+        self.backends.iter().any(|b| b == "*" || b == backend)
     }
 
     /// Check if this client can access a tool (per-client scope).
@@ -860,9 +861,8 @@ pub fn session_cookie_value(headers: &axum::http::HeaderMap) -> Option<String> {
 /// cannot tell its operator apart from a web page that rebound a hostname to
 /// loopback, or from any other process running as the same user.
 ///
-/// `backends` stays `["*"]` deliberately. [`AuthenticatedClient::can_access_backend`]
-/// treats an EMPTY list as "all", so clearing the vector would grant everything
-/// while reading like a restriction.
+/// `backends` is `["*"]` because an empty list reaches no backend: with auth
+/// off there is no scope to narrow, so every backend stays reachable.
 #[must_use]
 pub fn anonymous_client() -> AuthenticatedClient {
     AuthenticatedClient {

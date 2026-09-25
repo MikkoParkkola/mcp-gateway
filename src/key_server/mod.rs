@@ -165,7 +165,8 @@ impl KeyServer {
         // full grant for the identity.
         let scopes = self
             .policy
-            .resolve_scopes(&identity, &RequestedScopes::default())?;
+            .resolve_scopes(&identity, &RequestedScopes::default())
+            .ok()?;
 
         let actor = oidc_client_identity_key(&identity);
         let client = AuthenticatedClient {

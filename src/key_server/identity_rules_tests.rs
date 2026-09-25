@@ -159,7 +159,7 @@ fn identity(iss: &str, email: &str) -> VerifiedIdentity {
 fn matches(engine: &PolicyEngine, id: &VerifiedIdentity) -> bool {
     engine
         .resolve_scopes(id, &RequestedScopes::default())
-        .is_some()
+        .is_ok()
 }
 
 const GRANT: &str = "    scopes: { backends: [\"*\"], tools: [\"*\"], rate_limit: 0 }\n";
@@ -185,7 +185,7 @@ async fn unverified_email_does_not_match_email_rule() {
     assert!(
         h.ks.policy
             .resolve_scopes(&id, &RequestedScopes::default())
-            .is_none(),
+            .is_err(),
         "an unverified email must not satisfy an email rule"
     );
     let (status, _) = h.exchange(&token).await;
@@ -202,7 +202,7 @@ async fn missing_email_verified_is_unverified() {
     assert!(
         h.ks.policy
             .resolve_scopes(&id, &RequestedScopes::default())
-            .is_none()
+            .is_err()
     );
 }
 
