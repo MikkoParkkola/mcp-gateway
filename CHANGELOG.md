@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
+  launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
+  and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a
+  backend under a runtime profile is skipped. (#526)
 - `file:/absolute/path` secret references wherever `env:NAME` is accepted. The file is held to the
   item 35 mode rule, capped at 64 KiB, and has one trailing newline stripped. An empty file fails
   the load. A reload reports a rotated file as needing a restart. Capability YAMLs are unchanged.
@@ -21,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
+  It used to wait out the request timeout and report a timeout, with the child's stderr already
+  discarded. The error now names the exit status and points at the gateway log, where one record
+  carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
+  text redacted. The stderr never goes to MCP clients. (#526)
 - **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
   `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
   They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.
