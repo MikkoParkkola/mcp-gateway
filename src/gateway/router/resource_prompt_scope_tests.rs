@@ -275,11 +275,10 @@ async fn scoped_caller_lists_only_its_own_backends_resources_and_prompts() {
 #[tokio::test]
 async fn scoped_caller_cannot_reach_or_detect_another_backends_resources_and_prompts() {
     let f = fixture().await;
-    let uri_methods = [
-        "resources/read",
-        "resources/subscribe",
-        "resources/unsubscribe",
-    ];
+    // `resources/subscribe` and `unsubscribe` are refused before any URI is
+    // resolved (F24; `router::tests::f24_resource_subscribe`), so read is the
+    // one verb left that can probe a URI.
+    let uri_methods = ["resources/read"];
     for method in uri_methods {
         // An out-of-scope URI answers exactly like one nobody owns: neither
         // the backend nor the URI's existence may be probed across scopes.
@@ -345,11 +344,7 @@ async fn required_propagation_backend_is_not_reached_without_the_callers_identit
              {items:?}"
         );
     }
-    for method in [
-        "resources/read",
-        "resources/subscribe",
-        "resources/unsubscribe",
-    ] {
+    for method in ["resources/read"] {
         // Its catalogue is never read over the shared session, so its URI
         // resolves like an absent one rather than being forwarded.
         let absent = answer_for(&f.router, "open-key", method, NOWHERE).await;

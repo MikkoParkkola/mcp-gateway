@@ -129,6 +129,9 @@ pub enum BackendRuntimeState {
 pub struct BackendRegistry {
     /// Backends by name
     backends: DashMap<String, Arc<Backend>>,
+    /// Where a changed backend name goes so listeners hear `tools/list_changed`
+    /// (F24). Unset outside the HTTP server, which is the only mode that delivers it.
+    change_feed: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
     /// Whether shutdown has begun. Set once by [`BackendRegistry::stop_all`] and
     /// never cleared.
     ///
@@ -183,6 +186,7 @@ impl BackendRegistry {
     pub fn new() -> Self {
         Self {
             backends: DashMap::new(),
+            change_feed: std::sync::OnceLock::new(),
             stopping: parking_lot::Mutex::new(false),
             reload: tokio::sync::Mutex::new(()),
         }
@@ -245,8 +249,23 @@ impl BackendRegistry {
             );
             return false;
         }
-        self.backends.insert(backend.name.clone(), backend);
+        let name = backend.name.clone();
+        self.backends.insert(name.clone(), backend);
+        drop(stopping);
+        self.announce_change(&name);
         true
+    }
+
+    /// Route every membership change to one consumer (F24). Set once, by the HTTP server.
+    pub(crate) fn set_change_feed(&self, feed: tokio::sync::mpsc::UnboundedSender<String>) {
+        let _ = self.change_feed.set(feed);
+    }
+
+    /// Report that `name`'s tools changed. A no-op until a feed is set.
+    pub(crate) fn announce_change(&self, name: &str) {
+        if let Some(feed) = self.change_feed.get() {
+            let _ = feed.send(name.to_string());
+        }
     }
 
     /// Get a backend by name
@@ -275,7 +294,11 @@ impl BackendRegistry {
     /// If the backend must be stopped before removal, call `backend.stop()`
     /// first.  Returns `true` when the backend was present and removed.
     pub fn remove(&self, name: &str) -> bool {
-        self.backends.remove(name).is_some()
+        let removed = self.backends.remove(name).is_some();
+        if removed {
+            self.announce_change(name);
+        }
+        removed
     }
 
     /// Stop all backends, concurrently.
