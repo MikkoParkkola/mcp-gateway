@@ -9,7 +9,7 @@
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The eighteen 4.0.0 changes, in the order they are printed.
+/// The twenty-one 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice so a test can assert the notice still carries every item:
 /// a release note that quietly loses one is worse than none, because the operator has read it.
@@ -85,6 +85,9 @@ body on `/mcp` gets HTTP 413, JSON-RPC -32600 (was 400, -32700), and webhooks no
 it), and a failed append refuses calls with 503 and unreadies `/readyz` until it recovers. Records \
 carry `schema_version: 2`, `who` and `outcome`, including refused and failed calls. On Kubernetes \
 the chart's audit volume is an emptyDir: set `audit.existingClaim` to keep the log.",
+    "`/health` now answers 503 `degraded` while any backend's circuit breaker is open; before, \
+only a failing health tracker did. Monitors on `/health` will see it. `/livez` and `/readyz` stay \
+backend-blind, so Kubernetes probes are unaffected.",
     "The audit log now ROTATES at 64 MiB and keeps 12 sealed segments, deleting older ones with \
 a signed `audit_segment_expired` record for each; on a full disk it deletes the oldest sealed \
 segment (`rotation.on_disk_full: refuse` keeps every record and goes unready instead). \

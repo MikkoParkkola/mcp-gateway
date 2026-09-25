@@ -113,6 +113,22 @@ pub(crate) fn read_first_line(path: &Path) -> io::Result<Option<String>> {
         .map(str::to_string))
 }
 
+/// The segment number the active file at `path` holds: the one its open
+/// record names, or, for a pre-D6 log with no open record, `after` (the
+/// newest sealed + 1, or 0). The open record decides because retention or
+/// the disk-full path can leave no sealed sibling to count from.
+pub(crate) fn active_segment_seq(path: &Path, after: u64) -> u64 {
+    read_first_line(path)
+        .ok()
+        .flatten()
+        .and_then(|l| serde_json::from_str::<serde_json::Value>(&l).ok())
+        .filter(|v| {
+            v.get("event").and_then(serde_json::Value::as_str) == Some("audit_segment_opened")
+        })
+        .and_then(|v| v.get("segment_seq").and_then(serde_json::Value::as_u64))
+        .unwrap_or(after)
+}
+
 /// High-water mark: how far the log got, kept outside the active file so a
 /// deleted or truncated active segment is detected (D6 2.13).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,7 +150,13 @@ fn hwm_mac(hw: &HighWater, secret: &[u8], key_id: &str) -> String {
 }
 
 /// Serialise `hw` to its fixed-length form; the MAC is empty without a secret.
-pub(crate) fn encode_hwm(hw: &HighWater, secret: &[u8], key_id: &str) -> Vec<u8> {
+///
+/// # Errors
+///
+/// `InvalidData` naming the length when the mark does not fit the fixed
+/// width (an over-long `entry_hash` from a corrupt tail), rather than writing
+/// a file every reader would then treat as missing.
+pub(crate) fn encode_hwm(hw: &HighWater, secret: &[u8], key_id: &str) -> io::Result<Vec<u8>> {
     let mac = if secret.is_empty() {
         String::new()
     } else {
@@ -145,9 +167,20 @@ pub(crate) fn encode_hwm(hw: &HighWater, secret: &[u8], key_id: &str) -> Vec<u8>
         hw.counter, hw.entry_hash, hw.segment_seq
     );
     let mut out = body.into_bytes();
+    if out.len() > HWM_LEN - 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "audit high-water mark is {} bytes, over its {}-byte width: the log tail's \
+                 entry_hash is malformed",
+                out.len(),
+                HWM_LEN - 1
+            ),
+        ));
+    }
     out.resize(HWM_LEN - 1, b' ');
     out.push(b'\n');
-    out
+    Ok(out)
 }
 
 /// Write `hw` over `<path>.hwm` at offset 0 (one write, fixed length).

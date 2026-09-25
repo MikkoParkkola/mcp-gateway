@@ -623,6 +623,7 @@ fn caller(verified_identity: Option<&VerifiedIdentity>) -> MetaMcpCallerContext<
         // revision-keyed caches behave as they do for a real session.
         protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
+        stdio_nonce: None,
         verified_identity,
         api_key_name: None,
         agent_id: None,
