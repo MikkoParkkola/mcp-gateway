@@ -49,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING: `webhooks.rate_limit` is enforced.** It was parsed and never read. Each
   webhook endpoint now gets its own per-minute budget and answers `429` past it; the
-  default is 100 per minute and `0` disables the limit. See `docs/UPGRADING-4.0.md` item 41.
+  default is 100 per minute and `0` disables the limit. See `docs/UPGRADING-4.0.md` item 42.
 
 - **`server.max_body_size` is enforced on every route (breaking).** It was read
   nowhere: `/mcp` and `/mcp/{name}` hard-coded 10 MiB and every other route,

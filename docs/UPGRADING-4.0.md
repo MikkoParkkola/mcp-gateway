@@ -60,7 +60,7 @@ upgrading a running deployment.
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
 | 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
-| 41 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit |
+| 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -912,7 +912,7 @@ An `env:` reference to a variable that was set but empty passed validation, and 
 `server.metrics_token` is unchanged: an unset or empty variable there still leaves the gateway
 running with `/metrics` closed (item 33). No error prints a secret value.
 
-## 41. `webhooks.rate_limit` is enforced
+## 42. `webhooks.rate_limit` is enforced
 
 Before 4.0 the key was parsed and ignored. Each webhook endpoint now accepts at most
 `rate_limit` requests per minute (burst up to the same number) and answers `429` beyond that,
