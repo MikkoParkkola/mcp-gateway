@@ -1116,6 +1116,10 @@ fn looks_like_jwt(token: &str) -> bool {
 mod backend_grant_tests;
 
 #[cfg(test)]
+#[path = "auth_api_key_digest_tests.rs"]
+mod api_key_digest_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -715,3 +715,7 @@ mod api_key_name_tests {
             .expect("distinct non-empty names are the valid shape");
     }
 }
+
+#[cfg(test)]
+#[path = "api_key_digest_tests.rs"]
+mod api_key_digest_tests;
