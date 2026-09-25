@@ -39,7 +39,7 @@ first time this harness has run. The cache-divergence finding in
 ## Rerun is still VOID — D1, not A/B/C
 
 ```
-$ python3 eval_workload.py ~/perf-workload/runs/2026-09-14-hdrfix-v2
+$ python3 eval_workload.py /home/<redacted>/perf-workload/runs/2026-09-14-hdrfix-v2
 VERDICT: VOID  (exit 3)
   D1: semantic assertion rate below 100%
 ```

@@ -1091,7 +1091,7 @@ AVAILABILITY gap, not a verdict, and never a pass. `<review-tools>/grok-review` 
 `<review-archive>/grok-review-ledger.jsonl` carries six `process_status=ok` rows on 2026-09-06,
 latest 06:35:57Z.
 
-`~/.grok/bin/claude-review` is FORBIDDEN on this branch. It runs Claude Code CLI on Opus 5, every
+`<review-tools>/claude-review` is FORBIDDEN on this branch. It runs Claude Code CLI on Opus 5, every
 change here is Claude-authored, and `--safe-mode` isolates the CONTEXT, not the MODEL — a fresh
 instance carries the identical blind spot. Two workstreams reached for it independently while a
 fleet-wide claim that grok was unavailable was in circulation. That claim was wrong; it is

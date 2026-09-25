@@ -11,7 +11,7 @@ criteria stated as scope.
 | kimi (`synthetic-review`) | **SHIP** — mechanism is sound for a pre-implementation design; the one material gap is that the three criterion rows stay ignored | `<review-archive>/runs/synthetic-20260914T212937Z-9855.md` |
 
 `grok-review` and `glm-review` were both unavailable: the grok CLI is missing at
-`~/.grok/bin/grok`, and the GLM route returns `404 model "hf:zai-org/GLM-5.3-Flash"
+`<review-tools>/grok`, and the GLM route returns `404 model "hf:zai-org/GLM-5.3-Flash"
 not found`. Recorded rather than silently substituted — two reviewers ran, not the
 usual pair.
 

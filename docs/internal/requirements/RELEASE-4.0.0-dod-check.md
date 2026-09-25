@@ -31,7 +31,7 @@ not run, and **OUTSTANDING** means only an operator act can satisfy it.
 ## How this was measured
 
 The cargo gates were run on bench-host in a detached worktree at `5e42f9b3`
-(`~/github/.worktrees/dod-4.0.0`), under the compute-routing rule that keeps heavy builds
+(`/home/<redacted>/github/.worktrees/dod-4.0.0`), under the compute-routing rule that keeps heavy builds
 off the Mac. `a148c94e` is one commit above that tree and changes a single JSON document
 (`docs/requirements/RELEASE-4.0.0-scope-status.json`), so no cargo verdict below is affected by the
 difference. The Python release gates and the secret scan were run on the Mac at `a148c94e` itself.

@@ -165,7 +165,8 @@ section (even with `enabled: false`), identity propagation, secret injection, an
 or userinfo or a query string in the URL. The error names the backend and never echoes the URL.
 
 Use TLS, or set `allow_cleartext_credentials: true` on that backend to accept the exposure. See
-[REMOTE_BACKENDS.md](REMOTE_BACKENDS.md).
+[REMOTE_BACKENDS.md](REMOTE_BACKENDS.md). The flag does not lift item 7: an OAuth backend on `http://` off loopback is
+still refused, flag or not.
 
 ## 9. The savings estimates are gone from stats
 
@@ -833,6 +834,9 @@ reaches one pod, and a task created on one pod is not found on another.
 
 These need no action and have no startup notice.
 
+- **Default capability directories are `capabilities` only.** A 3.x gateway also loaded
+  a private capability checkout under `$HOME/github` if it existed. If you relied on that,
+  add the directory to `capabilities.directories`.
 - **Paginated backends show their whole tool catalogue.** The metadata cache now follows
   `nextCursor`, so tools past a backend's first `tools/list` page appear in search, listing
   and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A

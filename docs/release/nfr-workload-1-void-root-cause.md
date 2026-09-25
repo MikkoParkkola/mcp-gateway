@@ -1,7 +1,7 @@
 # NFR.WORKLOAD.1 VOID: root cause
 
 `eval_workload.py` returned `VERDICT: VOID (exit 3)` on
-`~/perf-workload/run-20260918` with `C1: semantic assertion rate
+`/home/<redacted>/perf-workload/run-20260918` with `C1: semantic assertion rate
 below 100%`. The cause is a gateway behaviour change, not a harness defect and
 not a configuration miss.
 

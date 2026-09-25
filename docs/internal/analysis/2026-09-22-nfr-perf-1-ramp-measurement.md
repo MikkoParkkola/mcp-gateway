@@ -674,8 +674,7 @@ immediately before the run:
 
 **The load source is not what the earlier write-ups assumed.** `ps` during the
 spike shows it is dominated by **self-hosted GitHub Actions runners on this
-same box** — `actions-runner/private-tooling`, `botnaut-engine-2`,
-`botnaut-client` — running `pytest` and `rustc`. The two long-lived processes
+same box** — runners for three other repositories — running `pytest` and `rustc`. The two long-lived processes
 are a floor, not the mechanism. CI is bursty and uncorrelated with anything we
 control, which is a better explanation of the 34% consecutive-rep scatter than
 steady contention, and it is why rule (c) in §1.3 exists.
@@ -717,8 +716,8 @@ Everything below was verified, not assumed:
 report at `docs/internal/evidence/nfr-perf-1-ramp-2026-09-22/`:
 `reps.csv` (per-rep), `analysis.json`, `analysis.txt` (full analyzer output),
 and `reps-v1-slotbug.csv` (the killed first attempt, retained as evidence for
-§1.3). Source paths on the measurement host: `~/perf-workload/results/ramp-v2/`
-and `~/perf-workload/results/ramp-v1-slotbug/`.
+§1.3). Source paths on the measurement host: `<bench-dir>/results/ramp-v2/`
+and `<bench-dir>/results/ramp-v1-slotbug/`.
 
 ### 4.1 Exclusions
 

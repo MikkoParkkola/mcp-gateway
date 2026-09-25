@@ -1,8 +1,8 @@
 # fw_probe 2026-09-16 — raw artefacts (diagnostic probe, NOT a graded run)
 
 ## config.sha256
-8b638a9e7e20d55eaead735dd8761bb78a41c547d21513e52ca7d5ea392fa65e  ~/perf-workload/runs/2026-09-16-fwprobe/cfg/pinned.yaml
-0a8b2dc52b8d4c9d712fb8f158b3697ac07852549184dd68592a2dcdfe7f1d3d  ~/perf-workload/runs/2026-09-16-fwprobe/cfg/ablate.yaml
+8b638a9e7e20d55eaead735dd8761bb78a41c547d21513e52ca7d5ea392fa65e  /home/<redacted>/perf-workload/runs/2026-09-16-fwprobe/cfg/pinned.yaml
+0a8b2dc52b8d4c9d712fb8f158b3697ac07852549184dd68592a2dcdfe7f1d3d  /home/<redacted>/perf-workload/runs/2026-09-16-fwprobe/cfg/ablate.yaml
 
 ## ablate.yaml delta vs pinned.yaml
 16a17,20

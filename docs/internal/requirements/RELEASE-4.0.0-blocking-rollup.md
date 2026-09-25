@@ -1459,7 +1459,7 @@ fully merged router with no enabling flag, and `OriginPolicy::from_live`
 (`src/gateway/router/origin_guard.rs:76`) reads configuration only to decide *which* origins
 are allowed — there is no setting that switches the gate off. That matters because the probed
 instance was not running on the written YAML alone: its startup log shows 196 capabilities
-loaded from `~/github/mcp-gateway-private/capabilities`, a path the probe config never named,
+loaded from a private checkout under `$HOME/github`, a path the probe config never named,
 so an ambient config layer was in force during the measurement. It could not have enabled or
 disabled the guard, because nothing can. What remains is that the install on 39401 has not
 been rebuilt from it, and rebuilding it means restarting the gateway that other sessions are

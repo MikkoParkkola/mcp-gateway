@@ -205,7 +205,7 @@ C/D/E `69ba9e03`/4.0.0, k6 image
 Every pin value is identical to `08-pins-hdrfix-v2.json.txt` and
 `10-pins-modernfix-v1.json.txt`.
 
-The arms were **not** rebuilt. `~/perf-workload/arms/{A,B,C}` are the
+The arms were **not** rebuilt. `/home/<redacted>/perf-workload/arms/{A,B,C}` are the
 binaries built 2026-09-13, with D and E symlinked to C, and each arm's
 `.checkout_sha` was re-read by the runner into `pins.json` at this run's start
 rather than assumed.

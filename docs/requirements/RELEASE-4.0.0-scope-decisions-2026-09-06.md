@@ -42,8 +42,8 @@ The required reference journey is **Open WebUI on bench-host → gateway → Goo
 Workspace**, using two separate personal accounts and an unconnected user.
 The bench-host installation was verified read-only on 2026-09-06: Open WebUI reports
 version 0.9.6, its Docker health is healthy, and `http://bench-host:8090/health`
-returns HTTP 200 with `{"status":true}`. The `airlok-mcpo` and
-`airlok-mcpo-system` containers are also running.
+returns HTTP 200 with `{"status":true}`. Two unrelated MCP
+containers are also running.
 
 Existing installation resolves the environment choice; it does not prove the
 gateway connection, adapter identity propagation or account isolation. Record

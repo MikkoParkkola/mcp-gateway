@@ -160,7 +160,7 @@ five tests with the expected source hash verified before and after execution.
 Both changed lines (203 and 248) were exercised: 2/2 changed-line coverage.
 Whole-module coverage from this five-test scope is 67/208 lines (32.21%); it is
 not a module-wide 95% claim. The replacement receipt is
-`~/codex/tlscert-coverage-r2/summary.json` on bench-host, exported directly
+`/home/<redacted>/codex/tlscert-coverage-r2/summary.json` on bench-host, exported directly
 from the current test binary.
 
 The second cargo-mutants run supplies a valid existing `Error::Config` value:
@@ -171,7 +171,7 @@ certificate-signing usage, remove CRL-signing usage, grant unrelated digital-
 signature usage, and disable leaf AKI. Every fault fails at the corresponding
 DER assertion. The source is restored byte-for-byte and all five tests pass.
 Commands, diffs, actual exits and source hashes are preserved in
-`~/codex/tlscert-mutations-r2/summary.json` and its adjacent logs.
+`/home/<redacted>/codex/tlscert-mutations-r2/summary.json` and its adjacent logs.
 No production `Default` implementation or lint suppression was added.
 
 ## Final code and independent acceptance evidence

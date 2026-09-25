@@ -141,7 +141,7 @@ whose request bytes are identical to these.
 
 ### Verdict
 
-`python3 eval_workload.py ~/perf-workload/runs/2026-09-14-modernfix-v1`,
+`python3 eval_workload.py /home/<redacted>/perf-workload/runs/2026-09-14-modernfix-v1`,
 complete output:
 
 ```

@@ -217,7 +217,7 @@ any interruption, and the rollback is rehearsed in step 4 rather than assumed.
 ## Procedure
 
 ```sh
-cd ~/github/mcp-gateway                       # any checkout carrying scripts/dev/
+cd <repos>/mcp-gateway                       # any checkout carrying scripts/dev/
 OLD=3.4.0-f30539af
 NEW=3.5.1                                     # or 4.0.0-<sha> for a self-built binary
 

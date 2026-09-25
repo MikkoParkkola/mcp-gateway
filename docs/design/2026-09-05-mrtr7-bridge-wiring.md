@@ -1378,7 +1378,7 @@ ruling that cannot be read against the text it ruled on is unauditable.
 
 Round 7 ran on 2026-09-08 against the amended material, both legs fed on
 stdin: `<review-tools>/gpt-review` (Codex, availability restored) and
-`~/.grok/bin/claude-review` (Claude Opus 5, `--safe-mode`). Both processes
+`<review-tools>/claude-review` (Claude Opus 5, `--safe-mode`). Both processes
 exited 0 and both returned SHIP-WITH-FIXES — verdict taken from the ledger row
 and the exit status, never scraped from the body (§PA). `gpt-review` raised two
 findings and one improvement; `claude-review` raised six and four. Every one is

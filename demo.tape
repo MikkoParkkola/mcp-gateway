@@ -21,7 +21,7 @@ Type "# A typical setup — 5 MCP servers, 100+ tools:"
 Enter
 Sleep 1s
 
-Type@20ms "cat ~/github/mcp-gateway/examples/servers.yaml"
+Type@20ms "cat <repos>/mcp-gateway/examples/servers.yaml"
 Enter
 Sleep 8s
 
@@ -90,7 +90,7 @@ Type "# REST APIs without an MCP server? Drop a YAML file:"
 Enter
 Sleep 2s
 
-Type@20ms "head -35 ~/github/mcp-gateway/capabilities/examples/weather.yaml"
+Type@20ms "head -35 <repos>/mcp-gateway/capabilities/examples/weather.yaml"
 Enter
 Sleep 7s
 
@@ -100,11 +100,11 @@ Type "# Hot-reloaded automatically after file changes. No server to build. 100+ 
 Enter
 Sleep 1500ms
 
-Type@20ms "ls ~/github/mcp-gateway/capabilities/*/*.yaml | wc -l"
+Type@20ms "ls <repos>/mcp-gateway/capabilities/*/*.yaml | wc -l"
 Enter
 Sleep 2s
 
-Type@20ms "ls ~/github/mcp-gateway/capabilities/*/"
+Type@20ms "ls <repos>/mcp-gateway/capabilities/*/"
 Enter
 Sleep 4s
 

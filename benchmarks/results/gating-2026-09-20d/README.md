@@ -117,7 +117,7 @@ byte-identical binary; both are report-only and neither is gated.
 
 The 265 raw artifacts — per-rep `*.summary.json`, `*.meta.json`, `*.health.json`, gateway
 stdout/stderr and k6 output — are archived on bench-host at
-`~/perf-workload/results/gating-2026-09-20d/`, outside any checkout so they survive branch
+`<bench-dir>/results/gating-2026-09-20d/`, outside any checkout so they survive branch
 and worktree cleanup. They were produced in the `mcp-gateway-wt-6rep` worktree and copied
 out; do not cite the worktree path.
 

@@ -380,7 +380,7 @@ was automatically removed by cargo-mutants; its full logs remain preserved.
 The retry command was:
 
 ```text
-TMPDIR=~/codex/mcp-gateway-v4-gh452-mutation-r2/tmp cargo mutants --all-features --file src/gateway/router/handlers.rs --file src/gateway/streaming.rs --re 'mcp_delete_handler|remove_session_for' --jobs 1 --jobserver-tasks 6 --copy-target true --output ~/codex/mcp-gateway-v4-gh452-mutation-r2 --cargo-arg=--test --cargo-arg=gh452_session_owner
+TMPDIR=/home/<redacted>/codex/mcp-gateway-v4-gh452-mutation-r2/tmp cargo mutants --all-features --file src/gateway/router/handlers.rs --file src/gateway/streaming.rs --re 'mcp_delete_handler|remove_session_for' --jobs 1 --jobserver-tasks 6 --copy-target true --output /home/<redacted>/codex/mcp-gateway-v4-gh452-mutation-r2 --cargo-arg=--test --cargo-arg=gh452_session_owner
 ```
 
 With cargo-mutants 27.1.0, the unmutated baseline passed and all eleven mutants
@@ -451,7 +451,7 @@ Local driver evidence is under
 scope-review directory: `report.md`, `outcomes.json`, `facts.json`, raw request and
 stream artifacts, and `cleanup-verification.json`. The concise final result is
 `gh452-independent-driver-r2/result.md`. Remote originals remain at
-`~/codex/mcp-gateway-v4-gh452-functional/driver/20260906T145616Z-independent-r2`.
+`/home/<redacted>/codex/mcp-gateway-v4-gh452-functional/driver/20260906T145616Z-independent-r2`.
 
 The isolated increment is committed and pushed as draft PR #484 at the revision
 recorded above. All-feature/all-target Clippy with warnings denied passes, and

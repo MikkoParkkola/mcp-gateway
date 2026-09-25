@@ -114,5 +114,5 @@ resolving anything at this rep count. D and E are report-only and do not enter t
 SHA `5e557e08` and health version 4.0.0 — they are symlinks to C's build, so the C→D
 comparison isolates protocol era against a byte-identical binary. The 145 raw artifacts —
 per-rep `*.summary.json`, `*.meta.json`, `*.health.json`, gateway stdout/stderr and k6
-output — are archived on bench-host at `~/perf-workload/results/gating-2026-09-20c/`, outside
+output — are archived on bench-host at `<bench-dir>/results/gating-2026-09-20c/`, outside
 any checkout so they survive branch and worktree cleanup.

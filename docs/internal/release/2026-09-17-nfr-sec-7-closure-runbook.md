@@ -51,9 +51,9 @@ that the listening process runs a build that has it.
 execs a wrapper, and the wrapper pins the version in two lines:
 
 ```zsh
-# ~/.local/bin/start-mcp-gateway
-typeset -r gateway_binary="~/.local/libexec/mcp-gateway/3.4.0-f30539af/mcp-gateway"
-typeset -r gateway_config="~/.local/libexec/mcp-gateway/3.4.0-f30539af/servers.yaml"
+# /Users/<redacted>/.local/bin/start-mcp-gateway
+typeset -r gateway_binary="/Users/<redacted>/.local/libexec/mcp-gateway/3.4.0-f30539af/mcp-gateway"
+typeset -r gateway_config="/Users/<redacted>/.local/libexec/mcp-gateway/3.4.0-f30539af/servers.yaml"
 ```
 
 Those two lines are the whole deployment control point. Note that `~/.local/bin/mcp-gateway`

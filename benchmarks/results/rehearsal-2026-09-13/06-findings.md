@@ -1,6 +1,6 @@
 # Rehearsal findings — NFR.WORKLOAD.1
 
-Run: `~/perf-workload/runs/2026-09-13-rehearsal` on bench-host. Build exit 0, all five
+Run: `<bench-dir>/runs/2026-09-13-rehearsal` on bench-host. Build exit 0, all five
 arms. Nine reps completed (A0 B0 C0 warm-ups, A1 B1 C1, A2 B2 C2) before the run
 stopped at A3.
 

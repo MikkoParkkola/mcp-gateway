@@ -29,7 +29,7 @@ existed, and the drift checker cannot see the difference — see the runbook.
 **Provenance is the directory name, and that is a known limit.** The binary embeds no
 build commit, so nothing inside it attests which tree produced it. The chain here is:
 the tree at `017c9338` contains `evict_identity_slots` (verified by grep on that tree),
-and this binary was built from that tree in `~/github/mcp-gateway-sec7-build` with the
+and this binary was built from that tree in `<repos>/mcp-gateway-sec7-build` with the
 worktree detached at that sha. Note that `strings` on the binary does **not** find
 `evict_identity_slots` — a release build strips private symbol names, so that absence is
 not evidence either way and must not be read as one.
@@ -94,7 +94,7 @@ build, `launchctl kickstart`, watch ~30s for a restart loop, then re-run step 7 
 
 ```
 $ readlink ~/.local/bin/start-mcp-gateway
-~/.local/libexec/mcp-gateway/3.4.0-f30539af/start-mcp-gateway
+/Users/<redacted>/.local/libexec/mcp-gateway/3.4.0-f30539af/start-mcp-gateway
 ```
 
 Nothing above proves the row. What a spare-port smoke cannot establish is that `launchd`

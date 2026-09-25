@@ -1366,7 +1366,7 @@ fn linear_get_issue_projection_spec_maps_canonical_fields() {
                 "id": "user-1",
                 "name": "alice",
                 "displayName": "Alice Example",
-                "email": "alice@example.com"
+                "email": "alice@x.test"
             },
             "createdAt": "2026-01-01T00:00:00Z",
             "updatedAt": "2026-01-02T00:00:00Z",
@@ -1384,10 +1384,7 @@ fn linear_get_issue_projection_spec_maps_canonical_fields() {
         out["actor"]["display_name"],
         serde_json::json!("Alice Example")
     );
-    assert_eq!(
-        out["actor"]["email"],
-        serde_json::json!("alice@example.com")
-    );
+    assert_eq!(out["actor"]["email"], serde_json::json!("alice@x.test"));
     assert_eq!(
         out["env_time"]["created"],
         serde_json::json!("2026-01-01T00:00:00Z")

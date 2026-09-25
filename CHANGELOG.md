@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The default capability directories no longer include a checkout under `HOME`.**
+  `capabilities.directories` defaulted to `capabilities` plus
+  a private capability checkout under `$HOME/github` whenever it existed, so a
+  gateway loaded capabilities from a path no configuration named. The default is now
+  `capabilities` alone; list any other directory explicitly.
+
 - **A modern `tools/call` without an idempotency key is admitted.** Earlier 4.0
   builds refused it with `-32602` unless the tool was marked read-only, which
   made write tools unusable from standard MCP clients, none of which send the

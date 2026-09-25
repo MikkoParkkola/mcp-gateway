@@ -1355,7 +1355,7 @@ evidence about the criterion; it is evidence about the cases chosen.
 
 Consequence for the release gate: `ABSENT` stands. Closing this row needs the minted
 token and the translate-back, not a commit of what is on disk. The uncommitted diff is
-snapshotted at `~/github/.agent-snapshots/2026-09-11-sub2b-outbound-uncommitted.patch`
+snapshotted at `<repos>/.agent-snapshots/2026-09-11-sub2b-outbound-uncommitted.patch`
 so the parked lane's work survives, and the owning lane has been asked to commit it
 under an honest subject — the routing half landing, not the criterion closing.
 

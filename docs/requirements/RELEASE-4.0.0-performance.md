@@ -216,11 +216,11 @@ Every number above was taken against `origin/main`. `main` carries 3 of the 74
 commits this release cites as evidence; the branch 4.0.0 ships from carries 55.
 The caveat that recorded this said the gap was load-bearing. It was.
 
-Method unchanged — one clone (`~/github/.worktrees/perf-remeasure-4.0.0`), one
+Method unchanged — one clone (`<worktrees>/perf-remeasure-4.0.0`), one
 `CARGO_TARGET_DIR`, one criterion session, 3.5.0 (`32f135a6`) collected first
 and the candidate minutes later on the same box. Only the after ref changed:
 `chore/v4-reconcile-main` (`5eb6982e`). Harness and logs:
-`bench-host:~/bench-logs/v4-perf-releaseline/`.
+`bench-host:<bench-logs>/v4-perf-releaseline/`.
 
 56 comparisons, 27 declared regressions, 11 declared improvements. Six exceed
 the criterion's 5% bound and one exceeds its 10% bound:

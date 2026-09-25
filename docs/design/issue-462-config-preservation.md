@@ -593,7 +593,7 @@ release-wide warning triage. The compiler E0609 is fixed, and its earlier failed
 build log remains evidence rather than being relabeled a behavioral RED.
 
 The remaining DoD work runs from a source/target snapshot at
-`~/codex/mcp-gateway-v4-gh462-dod-20260906`; all six owned source/test
+`/home/<redacted>/codex/mcp-gateway-v4-gh462-dod-20260906`; all six owned source/test
 hashes match external `gh462-source-snapshot.json`. The independent driver's
 candidate executable SHA-256 is
 `5d5220efc6071532d10a57a5125c05e07849b4a84b2c3ee26cfcd4f308c48ddd`.
@@ -657,7 +657,7 @@ The corrected component-only command passed 20/20, with 24 CLI cases filtered:
 
 ```sh
 cargo llvm-cov --all-features --test gh462_config_preservation --jobs 4 \
-  --json --output-path ~/codex/gh462-coverage-component.json \
+  --json --output-path /home/<redacted>/codex/gh462-coverage-component.json \
   -- --skip cli::
 ```
 

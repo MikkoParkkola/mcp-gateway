@@ -13,7 +13,7 @@ it requires; it is not a record that it is closed.
 `stdio_drains_a_captured_notification_into_the_callers_sink`, which passes at HEAD.
 Committing it would land a rework that removes passing coverage on a superseded
 scheme. It is snapshotted at
-`~/github/.agent-snapshots/2026-09-11-sub2b-outbound-uncommitted.patch`
+`<repos>/.agent-snapshots/2026-09-11-sub2b-outbound-uncommitted.patch`
 and the grading is committed in `42f1f7de`.
 
 ## What ADR-014 requires
