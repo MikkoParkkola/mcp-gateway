@@ -169,6 +169,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not own, as with a root-owned Kubernetes projection under `fsGroup`.
   The Helm chart and enterprise-alpha set `fsGroup: 1001` and a `0440` config
   mode. Windows is not checked. See `docs/UPGRADING-4.0.md` item 35.
+- **A secret reference that resolves to nothing fails the load (breaking).**
+  `${VAR}` with no default expanded to `""` when `VAR` was unset, so a missing
+  token was sent upstream as `Authorization: Bearer `. An enabled backend's
+  `headers` and `env`, and `capabilities.directories`, now refuse an unset or
+  empty `${VAR}` with no default, naming every such field in one error;
+  `${VAR:-default}` now also applies the default to an empty variable, as
+  POSIX does, and `${VAR:-}` allows empty on purpose. A disabled backend keeps
+  its text unexpanded. An `env:` secret that is unset or empty, and an empty
+  literal bearer token, API key, agent HS256 secret or key-server admin token,
+  are refused. `{env.X}` templates and capability `auth.key` values error at
+  call time when `X` is unset or empty instead of sending `""`; `{env.X:-}`
+  allows empty on purpose. A `${...}` that is not a `${NAME}` reference is
+  refused. Errors name listed env files that were not
+  found. See `docs/UPGRADING-4.0.md` item 40.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept
