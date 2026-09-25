@@ -227,3 +227,168 @@ fn unrotated_v1_log_verifies_as_segment_zero() {
     assert!(sealed_path(&path, 0).exists());
     assert!(verify(&path, false).ok);
 }
+
+// ── Final-review fixes (grok r1, kimi r1 on #1060) ───────────────────────────
+
+/// The disk-full path can expire the last sealed segment. The active file
+/// then holds segment N with no sibling to count from, and verify must not
+/// read that as tampering.
+#[test]
+fn verify_passes_after_disk_full_drains_every_sealed_segment() {
+    use super::rotation::WriteFault;
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false))
+        .unwrap()
+        .with_failure_policy(crate::security::audit::AuditFailurePolicy::FailClosed);
+    rotate_n(&l, &path, 1);
+    l.arm_write_fault(Some(WriteFault::FullUntilReserveFreed));
+    append(&l, 1);
+    l.arm_write_fault(None);
+    assert!(l.write_faults_fired() > 0);
+    assert!(
+        list_segments(&path).unwrap().is_empty(),
+        "the last sealed segment expired"
+    );
+    assert_eq!(lines(&path)[0]["segment_seq"], 1);
+    let r = verify(&path, false);
+    assert!(r.ok, "{:?}", r.error_message);
+    assert_eq!(r.segments_expired, 1);
+}
+
+/// Altering a middle segment's seal breaks the next file's link.
+#[test]
+fn verify_fails_on_altered_middle_seal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&l, &path, 3);
+    drop(l);
+    let middle = sealed_path(&path, 1);
+    let last = lines(&middle).len() - 1;
+    rewrite_line(&middle, last, |v| v["next_segment_seq"] = 2.into());
+    rewrite_line(&middle, last, |v| {
+        v["timestamp"] = "1970-01-01T00:00:00Z".into();
+    });
+    assert!(!verify(&path, false).ok);
+}
+
+/// Every boundary checks its own named link, not only `prev_entry_hash`: an
+/// open record whose `prev_segment_final_hash` names another seal fails even
+/// with every hash re-chained.
+#[test]
+fn verify_checks_prev_segment_final_hash_at_every_seam() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&l, &path, 3);
+    drop(l);
+    let seg1 = sealed_path(&path, 1);
+    rewrite_line(&seg1, 0, |v| {
+        v["prev_segment_final_hash"] = format!("sha256:{}", "0".repeat(64)).into();
+    });
+    // Re-chain everything after it, so only the seam rule can decide.
+    let rechain = |file: &std::path::Path, from: usize, mut prev: serde_json::Value| {
+        for i in from..lines(file).len() {
+            rewrite_line(file, i, |v| v["prev_entry_hash"] = prev.clone());
+            prev = lines(file)[i]["entry_hash"].clone();
+        }
+        prev
+    };
+    let relink = |file: &std::path::Path, tail: serde_json::Value| {
+        rewrite_line(file, 0, |v| {
+            v["prev_entry_hash"] = tail.clone();
+            v["prev_segment_final_hash"] = tail.clone();
+        });
+        let head = lines(file)[0]["entry_hash"].clone();
+        rechain(file, 1, head)
+    };
+    let head = lines(&seg1)[0]["entry_hash"].clone();
+    let tail = rechain(&seg1, 1, head);
+    let tail = relink(&sealed_path(&path, 2), tail);
+    relink(&path, tail);
+    std::fs::remove_file(segments::sibling(&path, "hwm")).unwrap();
+    let r = verify_segments(&path, &cfg(&path, 12, false), VerifyMode::Archive).unwrap();
+    assert!(!r.ok);
+    assert!(r.error_message.unwrap().contains("prev_segment_final_hash"));
+}
+
+/// A log opened over its retention limit is trimmed on its first append.
+#[test]
+fn retention_runs_at_the_start_of_an_append() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&l, &path, 4);
+    drop(l);
+    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    l.log_invocation("s", "c", "srv", "tiny", "a", "b").unwrap();
+    assert_eq!(
+        list_segments(&path).unwrap().len(),
+        1,
+        "trimmed before any rotation"
+    );
+    assert!(verify(&path, false).ok);
+}
+
+#[test]
+fn oversized_hwm_hash_is_a_named_error() {
+    let mark = segments::HighWater {
+        counter: 1,
+        entry_hash: "x".repeat(400),
+        segment_seq: 0,
+    };
+    let err = segments::encode_hwm(&mark, b"", "test").unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("high-water mark"), "{err}");
+}
+
+/// Rotate once after each of the next `left` verify passes.
+fn arm(l: Arc<TransparencyLogger>, path: std::path::PathBuf, left: u32) {
+    verify::AFTER_STREAM.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            rotate_n(&l, &path, 1);
+            if left > 1 {
+                arm(l, path, left - 1);
+            }
+        }));
+    });
+}
+
+/// A log that rotates under the reader twice in a row is reported as busy,
+/// not as tampered.
+#[test]
+fn verify_reports_a_log_changing_under_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
+    rotate_n(&l, &path, 1);
+    arm(Arc::clone(&l), path.clone(), 2);
+    let err = verify_segments(&path, &cfg(&path, 12, false), VerifyMode::Live).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+    assert!(err.to_string().contains("changed during verification"));
+}
+
+/// The active file vanishing between the listing and the read (a rename by a
+/// live rotation) is a retry, not a failed chain.
+#[test]
+fn verify_retries_when_a_listed_file_vanishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    let (p, gone) = (path.clone(), segments::sibling(&path, "moved"));
+    // Pass 1 lists the active file, which is then renamed away before the
+    // read; pass 2 finds it restored and verifies cleanly.
+    verify::LISTED.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            std::fs::rename(&p, &gone).unwrap();
+            verify::BEFORE_STREAM.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move || std::fs::rename(&gone, &p).unwrap()));
+            });
+        }));
+    });
+    let r = verify(&path, false);
+    assert!(r.ok, "{:?}", r.error_message);
+}

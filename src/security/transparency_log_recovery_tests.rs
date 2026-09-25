@@ -46,7 +46,7 @@ fn hwm_at_seal(path: &Path) -> serde_json::Value {
         entry_hash: seal["entry_hash"].as_str().unwrap().into(),
         segment_seq: 0,
     };
-    segments::write_hwm(path, &segments::encode_hwm(&hw, b"", "test"), true).unwrap();
+    segments::write_hwm(path, &segments::encode_hwm(&hw, b"", "test").unwrap(), true).unwrap();
     seal
 }
 

@@ -318,24 +318,13 @@ fn run_audit_verify(
     archive: bool,
     config_path: Option<&std::path::Path>,
 ) -> ExitCode {
-    use mcp_gateway::security::transparency_log::{
-        VerifyMode, segments::list_segments, verify_segments,
-    };
+    use mcp_gateway::security::transparency_log::{VerifyMode, verify_audit_log};
     let resolve_log_config = resolve_audit_log_config;
-    let missing =
-        |p: &std::path::Path| !p.exists() && list_segments(p).map_or(true, |s| s.is_empty());
     let verify_mode = if archive {
         VerifyMode::Archive
     } else {
         VerifyMode::Live
     };
-    if missing(log_path) {
-        eprintln!(
-            "Error: transparency log not found at {}",
-            log_path.display()
-        );
-        return ExitCode::FAILURE;
-    }
     let log_config = match resolve_log_config(config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -369,7 +358,16 @@ fn run_audit_verify(
             }
         }
     }
-    match verify_segments(log_path, &log_config, verify_mode) {
+    match verify_audit_log(log_path, &log_config, verify_mode) {
+        // Neither the log nor any sealed segment exists (D6: sealed segments
+        // alone are still a log to verify).
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "Error: transparency log not found at {}",
+                log_path.display()
+            );
+            ExitCode::FAILURE
+        }
         Err(e) => {
             eprintln!("Error reading log: {e}");
             ExitCode::FAILURE
@@ -409,10 +407,7 @@ fn run_audit_verify(
 
 /// Dispatch an `audit` subcommand (transparency log chain verification / session query).
 fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -> ExitCode {
-    use mcp_gateway::security::transparency_log::{segments::list_segments, show_session_entries};
-    // Sealed segments alone are still a log to read (D6 2.5).
-    let missing =
-        |p: &std::path::Path| !p.exists() && list_segments(p).map_or(true, |s| s.is_empty());
+    use mcp_gateway::security::transparency_log::show_session_entries;
 
     let resolve_path = resolve_audit_log_path;
 
@@ -423,14 +418,14 @@ fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -
 
         AuditCommand::Show { session, path } => {
             let log_path = resolve_path(path);
-            if missing(&log_path) {
-                eprintln!(
-                    "Error: transparency log not found at {}",
-                    log_path.display()
-                );
-                return ExitCode::FAILURE;
-            }
             match show_session_entries(&log_path, &session) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!(
+                        "Error: transparency log not found at {}",
+                        log_path.display()
+                    );
+                    ExitCode::FAILURE
+                }
                 Err(e) => {
                     eprintln!("Error reading log: {e}");
                     ExitCode::FAILURE
