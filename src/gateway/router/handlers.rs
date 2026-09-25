@@ -1098,6 +1098,17 @@ async fn meta_mcp_dispatch(
         agent_id: agent_identity.proven_agent_id(),
         grant_subject: grant_subject.as_ref(),
     };
+    // Every shared backend's one level, set over the gateway's own credential:
+    // an operator action. Checked before dispatch so a case variant of the
+    // method meets the same refusal as the canonical name.
+    if let Err(e) = require_admin_log_level(
+        &method,
+        scope,
+        router_authorizer.principal.as_deref(),
+        "gateway",
+    ) {
+        return build_error_response(Some(id), e.code, e.message, &session_id, e.status);
+    }
     let mut response = match method.as_str() {
         "subscriptions/listen" => {
             // The single long-lived stream that replaces the GET endpoint.
@@ -1751,15 +1762,9 @@ async fn meta_mcp_dispatch(
                 .await
         }
 
-        // Logging
+        // Logging. Admin standing is checked before this match, for every
+        // spelling of the method (see `require_admin_log_level`).
         "logging/setLevel" => {
-            // Every shared backend's one level, set over the gateway's own
-            // credential: an operator action (see `require_admin_log_level`).
-            if let Err(e) =
-                require_admin_log_level(scope, router_authorizer.principal.as_deref(), "gateway")
-            {
-                return build_error_response(Some(id), e.code, e.message, &session_id, e.status);
-            }
             state
                 .meta_mcp
                 .handle_logging_set_level(id, params.as_ref())

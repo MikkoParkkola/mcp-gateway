@@ -603,18 +603,18 @@ pub(super) async fn backend_handler(
 
     // One backend's level is still shared by every user of that backend, so
     // this route applies the meta route's admin gate before anything forwards.
-    if method == "logging/setLevel"
-        && let Err(e) = require_admin_log_level(
+    // The helper owns the (case-insensitive) method match.
+    if let Err(e) = require_admin_log_level(
+        &method,
+        client.as_ref(),
+        refusal_principal(
             client.as_ref(),
-            refusal_principal(
-                client.as_ref(),
-                oauth_agent_identity.as_ref(),
-                cert_identity.as_ref(),
-            )
-            .as_deref(),
-            &name,
+            oauth_agent_identity.as_ref(),
+            cert_identity.as_ref(),
         )
-    {
+        .as_deref(),
+        &name,
+    ) {
         return build_http_error_response(id, e.code, e.message, e.status);
     }
 
