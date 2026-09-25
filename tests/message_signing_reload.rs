@@ -58,7 +58,7 @@ impl Fixture {
             );
         }
         let env_path = directory.path().join("signing.env");
-        std::fs::write(&env_path, format!(
+        mcp_gateway::gateway::test_helpers::write_owner_only(&env_path, format!(
             "{current_name}='{CURRENT}'\n{previous_name}='{PREVIOUS}'\n{alias_name}='{CURRENT}'\n{previous_alias_name}='{PREVIOUS}'\n{live_name}=before\n"
         )).unwrap();
         let path = directory.path().join("gateway.yaml");
@@ -74,7 +74,11 @@ impl Fixture {
                 "key_id":"reload-current", "require_nonce":true, "replay_window":300
             }}
         });
-        std::fs::write(&path, serde_yaml::to_string(&document).unwrap()).unwrap();
+        mcp_gateway::gateway::test_helpers::write_owner_only(
+            &path,
+            serde_yaml::to_string(&document).unwrap(),
+        )
+        .unwrap();
         let evaluated = Config::load_evaluated(Some(&path)).expect("valid startup fixture");
         if enabled {
             assert_eq!(
@@ -120,11 +124,15 @@ impl Fixture {
     }
 
     fn write_candidate(&self, document: &Value) {
-        std::fs::write(&self.path, serde_yaml::to_string(document).unwrap()).unwrap();
+        mcp_gateway::gateway::test_helpers::write_owner_only(
+            &self.path,
+            serde_yaml::to_string(document).unwrap(),
+        )
+        .unwrap();
     }
 
     fn rotate_env(&self, current: &str, previous: &str) {
-        std::fs::write(
+        mcp_gateway::gateway::test_helpers::write_owner_only(
             &self.env_path,
             format!(
                 "{}='{current}'\n{}='{previous}'\n{}='{CURRENT}'\n{}='{PREVIOUS}'\n{}=after\n",

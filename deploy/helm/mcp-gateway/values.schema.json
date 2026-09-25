@@ -97,6 +97,29 @@
     "resources": {
       "type": "object"
     },
+    "podSecurityContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fsGroup": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Group the kubelet gives mounted volumes; the gateway reads its root-owned config through it (CONFIG.2)."
+        }
+      }
+    },
+    "configVolume": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultMode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 511,
+          "description": "Mode of the projected config file, in decimal: 288 is octal 0440. No world bit, or the gateway refuses the file."
+        }
+      }
+    },
     "config": {
       "type": "object"
     },

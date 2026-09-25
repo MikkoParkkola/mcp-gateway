@@ -123,6 +123,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no validator; set `observe` to keep the audit lines. `enforce` is refused at
   load until it covers the direct route and multi-step plans. See
   `docs/UPGRADING-4.0.md` item 30.
+- **A config or env file other users can read fails the load on Unix
+  (breaking).** A world-readable config drew one warning in the HTTP banner,
+  stdio never checked it, and env files were never checked, though both can
+  hold credentials. Any world bit or group write is now refused, and so is
+  group read on a file the gateway owns. Group read stays allowed on a file it
+  does not own, as with a root-owned Kubernetes projection under `fsGroup`.
+  The Helm chart and enterprise-alpha set `fsGroup: 1001` and a `0440` config
+  mode. Windows is not checked. See `docs/UPGRADING-4.0.md` item 31.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept

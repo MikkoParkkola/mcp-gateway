@@ -3,7 +3,6 @@
 //! Tests for the configuration module.
 
 use std::env;
-use std::io::Write;
 
 use super::*;
 
@@ -14,7 +13,8 @@ fn unreadable_invalid_config_reports_secure_container_remediation_before_parsing
 
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, "this is: [invalid yaml").expect("write invalid config");
+    crate::gateway::test_helpers::write_owner_only(&path, "this is: [invalid yaml")
+        .expect("write invalid config");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
         .expect("remove config read permission");
 
@@ -61,7 +61,8 @@ fn missing_explicit_config_keeps_not_found_diagnostic() {
 fn readable_invalid_config_still_reports_parse_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, "this is: [invalid yaml").expect("write invalid config");
+    crate::gateway::test_helpers::write_owner_only(&path, "this is: [invalid yaml")
+        .expect("write invalid config");
 
     let err = Config::load(Some(&path)).expect_err("invalid YAML must fail parsing");
     let message = err.to_string();
@@ -84,10 +85,11 @@ fn readable_invalid_config_still_reports_parse_error() {
 fn test_load_env_files_sets_env_vars() {
     let dir = tempfile::tempdir().unwrap();
     let env_path = dir.path().join("test.env");
-    let mut f = std::fs::File::create(&env_path).unwrap();
-    writeln!(f, "MCP_GW_TEST_KEY_A=hello_from_env_file").unwrap();
-    writeln!(f, "MCP_GW_TEST_KEY_B=42").unwrap();
-    drop(f);
+    crate::gateway::test_helpers::write_owner_only(
+        &env_path,
+        "MCP_GW_TEST_KEY_A=hello_from_env_file\nMCP_GW_TEST_KEY_B=42\n",
+    )
+    .unwrap();
 
     let overlay = EnvOverlay::from_paths(&[env_path]);
 
@@ -119,13 +121,10 @@ fn test_load_env_files_later_file_overrides_earlier_file() {
     let second_path = dir.path().join("second.env");
     let key = "MCP_GW_TEST_OVERRIDE_KEY";
 
-    let mut first = std::fs::File::create(&first_path).unwrap();
-    writeln!(first, "{key}=from_first").unwrap();
-    drop(first);
-
-    let mut second = std::fs::File::create(&second_path).unwrap();
-    writeln!(second, "{key}=from_second").unwrap();
-    drop(second);
+    crate::gateway::test_helpers::write_owner_only(&first_path, format!("{key}=from_first\n"))
+        .unwrap();
+    crate::gateway::test_helpers::write_owner_only(&second_path, format!("{key}=from_second\n"))
+        .unwrap();
 
     let overlay = EnvOverlay::from_paths(&[first_path, second_path]);
 
@@ -558,7 +557,7 @@ fn validate_accepts_stdio_backend_without_url() {
 fn config_load_rejects_invalid_http_url_from_yaml() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         r#"
 backends:
@@ -923,7 +922,7 @@ fn validate_accepts_identity_propagation_with_disabled_backend_oauth() {
 fn stop_when_idle_for_is_accepted_on_a_gateway_started_backend() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 5m\n",
     )
@@ -947,7 +946,7 @@ fn stop_when_idle_for_is_rejected_on_a_backend_the_gateway_does_not_start() {
     let path = dir.path().join("gateway.yaml");
     // A LOCAL http backend: locality does not grant ownership. The gateway did
     // not start this server and cannot stop it.
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  external:\n    http_url: \"http://127.0.0.1:39400/mcp\"\n    stop_when_idle_for: 5m\n",
     )
@@ -970,7 +969,11 @@ fn stop_when_idle_for_is_rejected_on_a_backend_the_gateway_does_not_start() {
 fn omitting_stop_when_idle_for_leaves_a_backend_running_indefinitely() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, "backends:\n  owned:\n    command: \"echo hi\"\n").expect("write");
+    crate::gateway::test_helpers::write_owner_only(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n",
+    )
+    .expect("write");
 
     let cfg = Config::load(Some(&path)).expect("load");
     assert_eq!(
@@ -987,7 +990,7 @@ fn omitting_stop_when_idle_for_leaves_a_backend_running_indefinitely() {
 fn an_http_backend_without_the_setting_still_loads() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  external:\n    http_url: \"http://127.0.0.1:39400/mcp\"\n",
     )
@@ -1007,7 +1010,7 @@ fn duration_parser_handles_milliseconds() {
     // in every duration field was rejected.
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 1500ms\n",
     )
@@ -1029,7 +1032,7 @@ fn duration_parser_handles_milliseconds() {
 fn retired_key_refused_in_flow_style_mappings() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}",
     )
@@ -1047,7 +1050,7 @@ fn retired_key_refused_in_flow_style_mappings() {
 fn retired_key_name_inside_a_value_loads() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  demo:\n    command: \"echo hi\"\n    description: |\n      idle_timeout: 10m is no longer supported\n",
     )
@@ -1255,13 +1258,19 @@ fn envfile_19_the_overlay_opens_the_tilde_path_startup_recorded() {
     // GIVEN: a home directory holding one env file, named by a `~/...` entry
     let home = tempfile::tempdir().unwrap();
     let env_path = home.path().join("rotating.env");
-    let mut f = std::fs::File::create(&env_path).unwrap();
-    writeln!(f, "MCP_GW_TEST_ENVFILE19_KEY=startup-value-19").unwrap();
-    drop(f);
+    crate::gateway::test_helpers::write_owner_only(
+        &env_path,
+        "MCP_GW_TEST_ENVFILE19_KEY=startup-value-19\n",
+    )
+    .unwrap();
 
     let cfg_dir = tempfile::tempdir().unwrap();
     let cfg_path = cfg_dir.path().join("gateway.yaml");
-    std::fs::write(&cfg_path, "env_files:\n  - \"~/rotating.env\"\n").unwrap();
+    crate::gateway::test_helpers::write_owner_only(
+        &cfg_path,
+        "env_files:\n  - \"~/rotating.env\"\n",
+    )
+    .unwrap();
 
     // WHEN: startup evaluates the config through an injected home
     let startup =
@@ -1345,7 +1354,7 @@ fn envfile_19d_child_resolves_against_dirs_home_dir() {
 
     let cfg_dir = tempfile::tempdir().unwrap();
     let cfg_path = cfg_dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &cfg_path,
         "env_files:\n  - \"~/mcp-gw-test-envfile19d.env\"\n",
     )
@@ -1382,12 +1391,13 @@ fn a_key_deleted_from_an_env_file_stops_resolving_after_a_reload() {
     let dir = tempfile::tempdir().unwrap();
     let env_path = dir.path().join("gateway.env");
     let cfg_path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &cfg_path,
         format!("env_files:\n  - \"{}\"\n", env_path.display()),
     )
     .unwrap();
-    std::fs::write(&env_path, "MCP_GW_TEST_DELETED_KEY=first\n").unwrap();
+    crate::gateway::test_helpers::write_owner_only(&env_path, "MCP_GW_TEST_DELETED_KEY=first\n")
+        .unwrap();
 
     // GIVEN: a startup that resolved the key from the file
     let startup = Config::load_evaluated(Some(&cfg_path)).unwrap();
@@ -1402,7 +1412,8 @@ fn a_key_deleted_from_an_env_file_stops_resolving_after_a_reload() {
 
     // WHEN: the line is deleted and the config is reloaded against the overlay
     // in force, exactly as `config_reload` does it
-    std::fs::write(&env_path, "MCP_GW_TEST_OTHER_KEY=second\n").unwrap();
+    crate::gateway::test_helpers::write_owner_only(&env_path, "MCP_GW_TEST_OTHER_KEY=second\n")
+        .unwrap();
     let reloaded = Config::load_with_overlay(Some(&cfg_path), &startup.env_paths).unwrap();
 
     // THEN: the deleted line's value is gone, and the surviving line is not
@@ -1452,7 +1463,7 @@ fn a_substitution_naming_a_defined_key_is_detected_and_a_quoted_one_is_not() {
 
     for (index, (body, expected, what)) in cases.iter().enumerate() {
         let path = dir.path().join(format!("case{index}.env"));
-        std::fs::write(&path, body).unwrap();
+        crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
         assert_eq!(
             super::env_overlay::substitution_naming_defined_key(
                 &std::fs::read_to_string(&path).unwrap(),
@@ -1606,7 +1617,7 @@ fn the_scanner_sees_every_substitution_dotenvy_expands() {
 fn overlay_env_parses_values_the_way_the_figment_env_provider_did() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("typed.env");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "MCP_GATEWAY_SERVER__PORT=9090\nMCP_GATEWAY_SERVER__ENABLED=true\n",
     )
@@ -1712,9 +1723,10 @@ fn the_scanner_ignores_what_dotenvy_leaves_alone() {
 fn a_literal_load_leaves_an_env_file_override_out_of_the_config() {
     let dir = tempfile::tempdir().expect("tempdir");
     let env_path = dir.path().join("override.env");
-    std::fs::write(&env_path, "MCP_GATEWAY_SERVER__PORT=9090\n").expect("write env file");
+    crate::gateway::test_helpers::write_owner_only(&env_path, "MCP_GATEWAY_SERVER__PORT=9090\n")
+        .expect("write env file");
     let config_path = dir.path().join("config.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &config_path,
         format!(
             "env_files:\n  - {}\nserver:\n  port: 8080\n",
@@ -1810,7 +1822,7 @@ fn a_reference_to_a_key_another_file_owns_is_still_refused() {
 fn gh475_load(yaml: &str) -> Result<Config> {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, yaml).expect("write config");
+    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     Config::load(Some(&path))
 }
 
@@ -2060,7 +2072,7 @@ fn gh475_unknown_capability_key_rejected() {
 fn duration_serialize_preserves_25ms_config_roundtrip() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 25ms\n",
     )
@@ -2075,7 +2087,7 @@ fn duration_serialize_preserves_25ms_config_roundtrip() {
         !yaml.contains("stop_when_idle_for: 0s"),
         "original serializer maps 25ms to 0s; got {yaml}"
     );
-    std::fs::write(&path, &yaml).expect("rewrite");
+    crate::gateway::test_helpers::write_owner_only(&path, &yaml).expect("rewrite");
     let again = Config::load(Some(&path)).expect("reload");
     std::assert_eq!(
         again
@@ -2091,7 +2103,7 @@ fn duration_serialize_preserves_25ms_config_roundtrip() {
 fn duration_serialize_preserves_1250ms_config_roundtrip() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 1250ms\n",
     )
@@ -2106,7 +2118,7 @@ fn duration_serialize_preserves_1250ms_config_roundtrip() {
         !yaml.contains("stop_when_idle_for: 1s"),
         "original serializer maps 1250ms to 1s; got {yaml}"
     );
-    std::fs::write(&path, &yaml).expect("rewrite");
+    crate::gateway::test_helpers::write_owner_only(&path, &yaml).expect("rewrite");
     let again = Config::load(Some(&path)).expect("reload");
     std::assert_eq!(
         again
@@ -2122,7 +2134,7 @@ fn duration_serialize_preserves_1250ms_config_roundtrip() {
 fn duration_serialize_keeps_whole_seconds_as_seconds() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 30s\n",
     )
@@ -2137,7 +2149,7 @@ fn duration_serialize_keeps_whole_seconds_as_seconds() {
         !yaml.contains("30000ms"),
         "must not expand whole seconds to ms; got {yaml}"
     );
-    std::fs::write(&path, &yaml).expect("rewrite");
+    crate::gateway::test_helpers::write_owner_only(&path, &yaml).expect("rewrite");
     let again = Config::load(Some(&path)).expect("reload");
     std::assert_eq!(
         again
@@ -2153,7 +2165,7 @@ fn duration_serialize_keeps_whole_seconds_as_seconds() {
 fn duration_serialize_zero_and_max_whole_seconds() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 0s\n",
     )
@@ -2179,7 +2191,7 @@ fn duration_serialize_zero_and_max_whole_seconds() {
 fn duration_serialize_rejects_sub_ms_and_over_u64_millis() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 1s\n",
     )

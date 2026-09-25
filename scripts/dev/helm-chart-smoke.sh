@@ -134,6 +134,16 @@ grep -qE '^ *value: "?/var/lib/mcp-gateway"?$' <<<"$home_env" \
 grep -qE '^ *readOnlyRootFilesystem: true$' <<<"$dep" \
   || fail "readOnlyRootFilesystem is no longer true"
 
+echo "== helm_config_file_mode_is_readable_without_a_world_bit =="
+# CONFIG.2 refuses a config with a world bit; the projection is root-owned, so
+# the gateway reads it through fsGroup. Both defaults render, and both overrides win.
+grep -qE '^ *fsGroup: 1001$' <<<"$dep" || fail "pod fsGroup default is not 1001"
+grep -qE '^ *defaultMode: 288$' <<<"$dep" || fail "config defaultMode default is not 288 (0440)"
+over="$("$HELM" template t "$CHART" --show-only templates/deployment.yaml \
+  --set podSecurityContext.fsGroup=2002 --set configVolume.defaultMode=256)"
+grep -qE '^ *fsGroup: 2002$' <<<"$over" || fail "podSecurityContext.fsGroup override ignored"
+grep -qE '^ *defaultMode: 256$' <<<"$over" || fail "configVolume.defaultMode override ignored"
+
 [ "$fails" -eq 0 ] || { echo "helm chart smoke: $fails startup check(s) failed" >&2; exit 1; }
 
 echo "helm chart smoke passed"
