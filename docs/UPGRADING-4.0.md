@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 43, 46 or 51 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46 or 51 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -16,8 +16,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Items 38 and 51 refuse the start with their own error, which names the setting, so a notice would
 only repeat it; item 51 also warns once per `role: admin` rule at every load.
 
-**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 43, 46 and 51 refuse the gateway's start (item 43 only with auth on and no working audit log; item 46 only for `enforce` without a signing key). Item 7 permanently fails the backend it names,
-; item 51 only for a `role: admin` rule whose only condition is `domain`; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46 and 51 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -65,6 +64,7 @@ upgrading a running deployment.
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit |
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
+| 44 | `file:` secret references; a literal starting `file:` is now a reference | Point `file:` at an absolute, owner-only (or group-read via `fsGroup`) file; change a literal secret that starts with `file:` |
 | 45 | `/health` answers 503 `degraded` while a backend's circuit breaker is open | Expect it on `/health` monitors; Kubernetes probes (`/livez`, `/readyz`) are unaffected |
 | 46 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
@@ -946,7 +946,7 @@ An `env:` reference to a variable that was set but empty passed validation, and 
   now ends with `(env files listed but not found: <paths>)`, so a mistyped `env_files` path shows
   up next to the variable it failed to supply.
 
-`server.metrics_token` is unchanged: an unset or empty variable there still leaves the gateway
+`server.metrics_token` is unchanged: an unset or empty variable (or an unreadable `file:`, item 44) there still leaves the gateway
 running with `/metrics` closed (item 33). No error prints a secret value.
 
 ## 41. API keys are configured as sha256 digests, with optional expiry
@@ -1043,6 +1043,22 @@ named an API-key label rather than a person and skipped every refused or failed 
   copy of `who.account`. Entries without `schema_version` are v1; both verify in one file.
 - **Refused and failed tool calls now write a record**, and so do cache hits. Expect more
   log volume on a gateway that refuses a lot.
+- **The direct route `POST /mcp/{name}` writes the same invocation record** for every
+  `tools/call`, refused ones included. It used to write none. Each invocation record now
+  carries `route`: `meta` for `gateway_invoke`, `direct` for this route. On a direct
+  record `server` is `{name}`, `request_hash` covers the `params` the caller sent,
+  `response_hash` covers the JSON-RPC body it received, and the correlation key is the
+  caller's W3C trace id, else the trace id. A tools/call too malformed to name a tool is
+  recorded as `invalid` without `tool`. Other methods on this route (`tools/list`, `resources/read`,
+  `prompts/get`) and the agent-identity refusal are not recorded, as on the meta route.
+- **A direct-route `tools/call` with no `params`, no `name`, or an empty `name` is now
+  refused** with HTTP 400 and JSON-RPC -32602 ("tools/call requires params.name"). It used
+  to be forwarded to the backend without the per-tool authorization check, because there
+  was no tool name to check.
+- **On the direct route, a key scoped away from a backend is now refused after the body is
+  read.** It still gets 403 and -32003 for a backend it may not use, including one that
+  does not exist. A body that is not JSON, or a JSON-RPC envelope that does not parse, now
+  gets its 400 first.
 - **`request_hash` covers the whole `gateway_invoke` params the caller sent**, `_full` and
   `_claim` included, and **`response_hash` covers the value `gateway_invoke` returned**,
   after trace, prediction and provenance augmentation. The message-signing `_signature` is
@@ -1052,6 +1068,61 @@ named an API-key label rather than a person and skipped every refused or failed 
   `response_hash`.
 - **`mcp-gateway init` writes `security.transparency_log.enabled: true`** under the default
   path `~/.mcp-gateway/transparency/transparency.jsonl`.
+
+## 44. Secrets can be read from files with `file:`, and a literal starting `file:` is now a reference
+
+Wherever a whole-value secret takes `env:NAME`, it now also takes `file:/absolute/path`:
+`auth.bearer_token`, `auth.api_keys[].key_sha256` (the file holds the digest), `agent_auth.agents[].hs256_secret`,
+`key_server.admin_token`, `security.message_signing.shared_secret` and `previous_secret`,
+`server.metrics_token`, `accounts.keys`, `accounts.adapters[].hmac_secret_ref` and
+`accounts.descriptors[].client_secret_ref`. The secret is the file's content. A descriptor's
+`client_secret_ref` is read each time the client secret is used, as its `env:` form is; every other
+field is read once, at startup.
+
+- **The path must be absolute.** `~`, relative paths and `${VAR}` inside the path are not expanded;
+  `file:secrets/token` fails with `... is not an absolute path.`
+- **The file is held to the item 35 rule**: a file other users can read or change fails the load,
+  and so does a group-readable file this process owns. It must be UTF-8 and at most 64 KiB.
+- **Exactly one trailing newline is stripped** (`\n` or `\r\n`), as `kubectl create secret
+  --from-file` and `echo` add one. Anything beyond that one is part of the secret. A file that is
+  empty after the strip fails, as an empty `env:` value does (item 40).
+- **Breaking:** a literal secret that happens to start with `file:` is now read as a reference.
+  There is no escape syntax; change the secret.
+- **Rotation needs a restart** (except `client_secret_ref`, which picks up the new file on its next
+  use). A reload whose `file:` secret has new content reports
+  `restart required for: file:/path` (the path, never the value) and keeps the running secret.
+- **Aliasing:** an adapter `hmac_secret_ref` and a gateway credential that name the same file (after
+  symlinks resolve), or two files with the same content, are refused, as two `env:` references to
+  one variable are.
+
+Capability YAMLs are unchanged: their `file:/path.json:field` form keeps its own meaning, and a
+capability cannot use `file:` to read a whole file as a secret.
+
+On Kubernetes, mount the Secret as a volume and point the field at the key's file:
+
+```yaml
+# pod spec
+securityContext:
+  fsGroup: 1001            # a group the gateway process is in
+volumes:
+  - name: gateway-secrets
+    secret:
+      secretName: gateway-secrets
+      defaultMode: 0440    # 288 in JSON; group read is how a non-owner reads it
+# container
+volumeMounts:
+  - name: gateway-secrets
+    mountPath: /run/secrets/gateway
+    readOnly: true
+```
+
+```yaml
+# gateway.yaml
+auth:
+  bearer_token: file:/run/secrets/gateway/bearer-token
+```
+
+The Helm chart does not yet mount extra Secret volumes for you.
 
 ## 45. `/health` reports an open circuit breaker
 

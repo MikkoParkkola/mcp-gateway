@@ -317,6 +317,11 @@ impl MessageSigningConfig {
             reference @ crate::config::secret_ref::SecretRef::Env(_) => {
                 reference.resolve(field, overlay).map_err(|_| missing())?
             }
+            // The file's own reason (mode, size, missing) is the diagnostic;
+            // "requires an available environment value" would mislead.
+            reference @ crate::config::secret_ref::SecretRef::File(_) => {
+                reference.resolve(&format!("security.message_signing.{field}"), overlay)?
+            }
         };
         if resolved.len() < 32 || resolved.bytes().all(|byte| byte == 0) {
             return Err(Self::signing_config_error(
