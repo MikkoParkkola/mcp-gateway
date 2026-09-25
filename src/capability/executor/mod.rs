@@ -17,8 +17,6 @@
 //! - `file:/path/to/file.json:field` - JSON file with dot-path field extraction
 //! - `{env.VAR}` - Template format for environment variables
 
-#[cfg(test)]
-mod c4_credential_tests;
 mod credentials;
 pub mod graphql;
 pub mod jsonrpc;

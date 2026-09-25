@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use super::CapabilityExecutor;
+use super::super::CapabilityExecutor;
 use crate::capability::{AuthConfig, CapabilityExecutionContext};
 use crate::config::{EnvOverlay, LiveEnv, ResolvedEnvFiles};
 

@@ -769,3 +769,7 @@ mod cwe532_debug_redaction {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "c4_credential_tests.rs"]
+mod c4_credential_tests;
