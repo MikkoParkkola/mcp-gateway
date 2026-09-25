@@ -177,12 +177,14 @@ fn fixture_answer(request: &Value, sink: &Received) -> Value {
 
 /// Write the config the child will actually read.
 ///
-/// The error budget is put out of reach. None of these rows answers every
-/// question, so on a loaded machine some bridged prompts reach the bridge's
-/// 30s `per_prompt` and end `-32003`. Those endings are charged to the
-/// capability's error budget, whose kill switch then disables the fixture tool,
-/// and every later call is refused `-32000 … temporarily disabled` rather than
-/// admitted: a cascade the rows then misread as a regressed cap. The budget is
+/// The error budget is put out of reach. A 65-call burst runs past the fixture
+/// backend's rate limiter (100 rps, burst 50), and before F23 each refusal was
+/// reported as "Circuit breaker open" and sampled as a failure. The refusals
+/// land before any slow asking dispatch returns, so the capability's first
+/// samples are all failures, its kill switch disables the fixture tool, and
+/// every later call is refused `-32000 … temporarily disabled` rather than
+/// admitted: a cascade the rows then misread as a regressed cap. (Ask expiries,
+/// `-32003` at the bridge's 30s `per_prompt`, are never sampled.) The budget is
 /// not what these rows are about, so it is configured never to evaluate —
 /// `min_samples` equal to the largest window, which no row comes near.
 ///
