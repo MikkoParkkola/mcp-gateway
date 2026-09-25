@@ -80,6 +80,24 @@ fn keys_of_an_unselected_transport_refused() {
     );
 }
 
+/// The gateway's YAML reader never applied merge keys, so `<<:` was a key
+/// nothing read. It is refused like any other, where UPGRADING item 28 says.
+#[test]
+fn merge_key_refused_at_root() {
+    refusal(
+        "defaults: &defaults\n  host: 127.0.0.1\n<<: *defaults\n",
+        &["<<", "defaults"],
+    );
+}
+
+#[test]
+fn merge_key_refused_under_a_backend() {
+    refusal(
+        "backends:\n  x:\n    command: y\n    <<: {timeout: 5s}\n",
+        &["backends.x.<<"],
+    );
+}
+
 #[test]
 fn all_unrecognised_keys_reported_together() {
     refusal(
@@ -100,18 +118,30 @@ fn retired_idle_timeout_refused_with_explanation() {
     );
 }
 
-/// Gateway configs shipped in `examples/`. The two other YAML files there are
-/// a playbook and a capability, which this loader never reads.
-const SHIPPED_EXAMPLES: &[&str] = &[
-    "circuit-breaker.yaml",
-    "config-bundles.yaml",
-    "config-fulcrum.yaml",
-    "gateway-minimal.yaml",
-    "minimal.yaml",
-    "per-client-tool-scopes.yaml",
-    "servers.yaml",
-    "token-exchange-live.yaml",
-];
+/// YAML files in `examples/` that are not gateway configs: a playbook and a
+/// capability, which this loader never reads. Every other `*.yaml` there is
+/// swept, so a new example is covered without an edit here.
+const NOT_GATEWAY_CONFIGS: &[&str] = &["playbook-morning-briefing.yaml", "transform-example.yaml"];
+
+/// Loaded separately below: its `backends:` is null until completed.
+const GATEWAY_FULL: &str = "gateway-full.yaml";
+
+fn shipped_examples(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("read examples/")
+        .map(|entry| {
+            entry
+                .expect("examples/ entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| name.ends_with(".yaml"))
+        .filter(|name| name != GATEWAY_FULL && !NOT_GATEWAY_CONFIGS.contains(&name.as_str()))
+        .collect();
+    names.sort();
+    names
+}
 
 /// Examples that already fail `Config::load` without C1, each with the text of
 /// its error. They stay in the sweep so a C1 refusal of any of them still
@@ -186,7 +216,9 @@ backends: {}
 fn env_root_keys_and_shipped_examples_load() {
     let mut failures = Vec::new();
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-    for name in SHIPPED_EXAMPLES {
+    let names = shipped_examples(&examples);
+    assert!(names.len() >= 8, "examples/ sweep found only {names:?}");
+    for name in &names {
         let result = Config::load(Some(&examples.join(name)));
         let expected = FAILS_BEFORE_C1.iter().find(|(file, _)| file == name);
         match (result, expected) {
@@ -202,7 +234,7 @@ fn env_root_keys_and_shipped_examples_load() {
     // all entries commented out, which is null rather than a map and fails
     // before C1. Loaded with only that line completed, so every other key in
     // it goes through the check.
-    let full = std::fs::read_to_string(examples.join("gateway-full.yaml")).expect("read example");
+    let full = std::fs::read_to_string(examples.join(GATEWAY_FULL)).expect("read example");
     assert!(
         full.contains("\nbackends:\n"),
         "gateway-full.yaml layout changed"
@@ -235,4 +267,68 @@ fn env_root_keys_and_shipped_examples_load() {
         "shipped configs refused:\n{}",
         failures.join("\n")
     );
+}
+
+/// A reload that meets an unrecognised key is refused, and the running config
+/// stays as it was: UPGRADING item 28 and the CHANGELOG promise both.
+#[tokio::test]
+async fn refused_reload_keeps_the_running_config() {
+    use std::{sync::Arc, time::Duration};
+
+    use mcp_gateway::{
+        backend::{Backend, BackendRegistry},
+        config_reload::{LiveConfig, ReloadContext},
+    };
+
+    let (_dir, path, result) =
+        load("backends:\n  keep:\n    command: echo keep\n    description: before\n");
+    let running = result.expect("valid startup config");
+    let registry = Arc::new(BackendRegistry::new());
+    for (name, config) in &running.backends {
+        assert!(registry.register(Arc::new(Backend::new(
+            name,
+            config.clone(),
+            &running.failsafe,
+            Duration::from_secs(60),
+        ))));
+    }
+    let live = Arc::new(LiveConfig::new(running.clone()));
+    let context = ReloadContext::new(
+        path.clone(),
+        Arc::clone(&live),
+        registry,
+        running.failsafe.clone(),
+        Duration::from_secs(60),
+    );
+
+    std::fs::write(
+        &path,
+        "backends:\n  keep:\n    command: echo keep\n    description: after\nserverr: {}\n",
+    )
+    .expect("write candidate");
+    let refusal = context
+        .reload()
+        .await
+        .expect_err("a reload with an unrecognised key must be refused");
+    assert!(
+        refusal.contains("serverr"),
+        "the reload refusal must name the key; got: {refusal}"
+    );
+    assert_eq!(
+        live.get().backends["keep"].description,
+        "before",
+        "a refused reload must keep the running config"
+    );
+
+    // Control: the same edit without the typo is published.
+    std::fs::write(
+        &path,
+        "backends:\n  keep:\n    command: echo keep\n    description: after\n",
+    )
+    .expect("write corrected candidate");
+    context
+        .reload()
+        .await
+        .expect("the corrected config reloads");
+    assert_eq!(live.get().backends["keep"].description, "after");
 }
