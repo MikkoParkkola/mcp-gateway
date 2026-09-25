@@ -68,8 +68,28 @@ CASES = [
         '              --certificate-identity "${IDENTITY}" \\\n'
         "              --certificate-oidc-issuer "
         "'https://token.actions.githubusercontent.com' \\\n"
-        '              "${IMAGE}@${d}"\n',
+        '              "${IMAGE}@${d}" > /dev/null\n',
         "",
+        CAUGHT,
+    ),
+    (
+        "verify-attestation-stdout-back-in-the-log",
+        "ci.yml",
+        "              --certificate-oidc-issuer "
+        "'https://token.actions.githubusercontent.com' \\\n"
+        '              "${IMAGE}@${d}" > /dev/null\n'
+        "          done\n",
+        "              --certificate-oidc-issuer "
+        "'https://token.actions.githubusercontent.com' \\\n"
+        '              "${IMAGE}@${d}"\n'
+        "          done\n",
+        CAUGHT,
+    ),
+    (
+        "verify-step-timeout-deleted",
+        "ci.yml",
+        "        timeout-minutes: 10\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64:",
+        "        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64:",
         CAUGHT,
     ),
     (
