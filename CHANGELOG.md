@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The 4.0 line serves MCP protocol revision 2026-07-28 by default beside 2025-11-25 and earlier:
 stateless `POST /mcp` with no handshake, `server/discover`, retry-based input requests, a
 caller-scoped `subscriptions/listen`, the tasks extension and optional idempotency keys, with
-one replica while it is on (on stdio, `server/discover` lists only the older revisions). For teams, each caller now sees and invokes only what it was granted,
+one replica while it is on. On stdio, `server/discover` lists only the older revisions. For teams, each caller now sees and invokes only what it was granted,
 and cached results, notifications and subscriptions stay per caller. SSO `role_mapping` admin
 rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
 with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
