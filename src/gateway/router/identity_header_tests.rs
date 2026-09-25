@@ -548,4 +548,65 @@ async fn key_server_still_enforces_iat_cap() {
             .await
             .is_none()
     );
+
+    // The `/auth/token` exchange is the other key-server caller.
+    let routes = crate::key_server::handler::key_server_routes(Arc::new(key_server));
+    let exchange = |subject_token: String| {
+        let body = format!(
+            "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={subject_token}"
+        );
+        let request = axum::http::Request::post("/auth/token")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(axum::body::Body::from(body))
+            .unwrap();
+        tower::ServiceExt::oneshot(routes.clone(), request)
+    };
+    assert_eq!(exchange(token(10)).await.unwrap().status(), StatusCode::OK);
+    assert_ne!(exchange(token(600)).await.unwrap().status(), StatusCode::OK);
+}
+
+/// The `security.caller_identity` examples in `docs/identity_grants.md`
+/// parse, load, and (for `trusted_proxy`) resolve a proxy's subject under the
+/// documented authority.
+#[tokio::test]
+async fn documented_caller_identity_examples_load_and_resolve() {
+    const DOC: &str = include_str!("../../../docs/identity_grants.md");
+    let blocks: Vec<crate::config::SecurityConfig> = DOC
+        .split("```yaml\n")
+        .skip(1)
+        .map(|block| textwrap_dedent(block.split("```").next().unwrap()))
+        .filter(|block| block.starts_with("security:\n  caller_identity:"))
+        .map(|block| {
+            let root: serde_yaml::Value = serde_yaml::from_str(&block).unwrap();
+            serde_yaml::from_value(root["security"].clone()).expect("doc example parses")
+        })
+        .collect();
+    assert_eq!(
+        blocks.len(),
+        2,
+        "expected the trusted_proxy and cloudflare_access examples"
+    );
+    for security in &blocks {
+        let mut config = crate::config::Config::default();
+        config.security.caller_identity = security.caller_identity.clone();
+        config.validate().expect("doc example loads");
+    }
+    let proxy = &blocks[0].caller_identity;
+    assert_eq!(proxy.mode, CallerIdentityMode::TrustedProxy);
+    let h = headers(&[(HEADER_GATEWAY_IDENTITY_SUBJECT, "alice")]);
+    let peer_ip = proxy.trusted_proxies[0].to_string();
+    let subject = resolve(&h, Some(peer(&peer_ip)), proxy, None)
+        .await
+        .unwrap();
+    assert_eq!(subject, Some(GrantSubject::new("corp-sso", "alice", None)));
+}
+
+/// Strip the indent a list-nested fenced block carries.
+fn textwrap_dedent(block: &str) -> String {
+    let indent = block.len() - block.trim_start_matches(' ').len();
+    block
+        .lines()
+        .map(|line| line.get(indent..).unwrap_or(line.trim_start()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
