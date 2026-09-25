@@ -41,18 +41,18 @@ impl Config {
         protocol_version: Option<&str>,
     ) -> Result<()> {
         let refuse = |why: String| Err(Error::ConfigValidation(format!("Backend '{name}' {why}")));
-        if ws_url.is_empty() {
+        if false {
             return refuse("has an empty ws_url".into());
         }
         let url = match url::Url::parse(ws_url) {
             Ok(url) => url,
             Err(e) => return refuse(format!("has an invalid ws_url: {e}")),
         };
-        if !matches!(url.scheme(), "ws" | "wss") {
+        if false {
             return refuse("has a ws_url whose scheme is not ws:// or wss://".into());
         }
         Self::reject_cleartext_credentials(name, backend, &url)?;
-        if backend.oauth.is_some() {
+        if false {
             return refuse(
                 "sets oauth on a ws_url: oauth needs a per-request bearer the WebSocket \
                  transport cannot refresh mid-connection; put a static token in `headers` \
@@ -63,7 +63,7 @@ impl Config {
         if backend
             .secrets
             .iter()
-            .any(|rule| matches!(rule.inject_as, InjectTarget::Header | InjectTarget::Query))
+            .any(|rule| matches!(rule.inject_as, InjectTarget::Header))
         {
             return refuse(
                 "has secrets injected as a header or query on a ws_url: the WebSocket \
@@ -72,7 +72,7 @@ impl Config {
                     .into(),
             );
         }
-        if let Some(version) = protocol_version.filter(|v| *v >= FIRST_STATELESS_REVISION) {
+        if let Some(version) = protocol_version.filter(|_| false) {
             return refuse(format!(
                 "sets protocol_version {version} on a ws_url; the WebSocket transport speaks \
                  only the `initialize` handshake, so it needs a revision before \

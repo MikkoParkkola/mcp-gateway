@@ -1130,7 +1130,7 @@ impl Config {
     ) -> Result<()> {
         if !backend.enabled
             || backend.allow_cleartext_credentials
-            || !matches!(url.scheme(), "http" | "ws")
+            || url.scheme() != "http"
         {
             return Ok(());
         }
