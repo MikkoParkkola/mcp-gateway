@@ -339,6 +339,31 @@ impl BudgetEnforcer {
         }
     }
 
+    /// Re-apply today's spend from a persisted snapshot, so a restart keeps
+    /// counting against the budgets instead of starting them at zero.
+    ///
+    /// A snapshot saved on an earlier UTC day is ignored: the daily budgets it
+    /// counted have already reset. The global total is the sum of the per-tool
+    /// totals, because every recorded spend lands in both.
+    pub fn restore(&self, persisted: &super::persistence::PersistedCosts) {
+        if persisted.saved_at / 86_400 != current_day() {
+            return;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let micro = |usd: f64| (usd.max(0.0) * 1_000_000.0).round() as u64;
+        for (tool, total) in &persisted.tool_totals {
+            let spent = micro(total.total_cost_usd);
+            self.global_daily.add(spent);
+            self.tool_daily.entry(tool.clone()).or_default().add(spent);
+        }
+        for (key, &usd) in &persisted.key_totals {
+            self.key_daily
+                .entry(key.clone())
+                .or_default()
+                .add(micro(usd));
+        }
+    }
+
     /// Snapshot current accumulator state for persistence and the UI endpoint.
     #[must_use]
     pub fn snapshot(&self) -> EnforcerSnapshot {

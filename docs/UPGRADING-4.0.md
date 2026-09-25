@@ -802,6 +802,9 @@ reaches one pod, and a task created on one pod is not found on another.
 
 These need no action and have no startup notice.
 
+- **Cost budgets survive a restart.** Today's cost-governance spend is reloaded from
+  `costs.json` at startup, so a restart no longer resets the daily budgets. A budget that
+  has blocked stays blocked until UTC midnight. Each process keeps its own `costs.json`.
 - **Paginated backends show their whole tool catalogue.** The metadata cache now follows
   `nextCursor`, so tools past a backend's first `tools/list` page appear in search, listing
   and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A

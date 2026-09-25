@@ -14,19 +14,20 @@ use serde::{Deserialize, Serialize};
 
 // ── PersistedCosts ────────────────────────────────────────────────────────────
 
-/// All-time cumulative cost data persisted across restarts.
+/// Today's spend (UTC) as of `saved_at`, persisted so a restart keeps the
+/// daily budgets. Reloaded only on the same UTC day it was saved.
 #[cfg(feature = "cost-governance")]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PersistedCosts {
     /// Unix timestamp (seconds) of the last save.
     pub saved_at: u64,
-    /// Per-tool cumulative totals (for historical display in the UI).
+    /// Per-tool spend for the day of `saved_at`.
     pub tool_totals: HashMap<String, ToolTotal>,
-    /// Per-API-key cumulative cost totals.
+    /// Per-API-key spend for the day of `saved_at`.
     pub key_totals: HashMap<String, f64>,
 }
 
-/// Cumulative cost data for a single tool (all-time).
+/// Spend for a single tool on the day of `saved_at`.
 #[cfg(feature = "cost-governance")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolTotal {

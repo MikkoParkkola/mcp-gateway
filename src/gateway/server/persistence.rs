@@ -5,6 +5,13 @@ use std::path::{Path, PathBuf};
 
 use tracing::{info, warn};
 
+#[cfg(feature = "cost-governance")]
+use crate::cost_accounting::{
+    config::CostGovernanceConfig, enforcer::BudgetEnforcer, registry::CostRegistry,
+};
+#[cfg(feature = "cost-governance")]
+use std::sync::Arc;
+
 pub(super) fn standard_data_dir() -> PathBuf {
     crate::config_persistence::gateway_data_dir()
 }
@@ -55,14 +62,10 @@ pub(super) fn save_with_logging<F, E>(
 /// `costs.json` is per-process state: every replica keeps its own copy.
 #[cfg(feature = "cost-governance")]
 pub(super) fn boot_cost_governance(
-    cfg: &crate::cost_accounting::config::CostGovernanceConfig,
+    cfg: &CostGovernanceConfig,
     data_dir: &Path,
-) -> (
-    Option<std::sync::Arc<crate::cost_accounting::registry::CostRegistry>>,
-    Option<std::sync::Arc<crate::cost_accounting::enforcer::BudgetEnforcer>>,
-) {
-    use crate::cost_accounting::{enforcer::BudgetEnforcer, persistence, registry::CostRegistry};
-    use std::sync::Arc;
+) -> (Option<Arc<CostRegistry>>, Option<Arc<BudgetEnforcer>>) {
+    use crate::cost_accounting::persistence;
 
     if !cfg.enabled {
         return (None, None);
@@ -71,11 +74,17 @@ pub(super) fn boot_cost_governance(
     let enforcer = Arc::new(BudgetEnforcer::new(cfg.clone(), Arc::clone(&registry)));
     load_if_exists(
         &data_dir.join("costs.json"),
-        |path| persistence::load(path).map(|_persisted| ()),
+        |path| persistence::load(path).map(|persisted| enforcer.restore(&persisted)),
         "Failed to load persisted cost data",
         "Loaded persisted cost data",
     );
-    info!("Cost governance enabled");
+    let restored = enforcer.snapshot();
+    info!(
+        global_daily_usd = restored.global_daily_usd,
+        tools = restored.tool_daily.len(),
+        keys = restored.key_daily.len(),
+        "Cost governance enabled"
+    );
     (Some(registry), Some(enforcer))
 }
 

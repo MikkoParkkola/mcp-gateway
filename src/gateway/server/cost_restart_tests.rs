@@ -83,10 +83,17 @@ fn spend_saved_on_an_earlier_day_does_not_count_today() {
     cost_persistence::save(&dir.path().join("costs.json"), &persisted).expect("save");
 
     let (_, enforcer) = boot_cost_governance(&governed(), dir.path());
-    let snap = enforcer.expect("enforcer").snapshot();
+    let enforcer = enforcer.expect("enforcer");
+    let snap = enforcer.snapshot();
+    let tool = snap.tool_daily.get("search").copied().unwrap_or(0.0);
+    let key = snap.key_daily.get("dev").copied().unwrap_or(0.0);
     assert!(
-        snap.global_daily_usd.abs() < 1e-12,
+        snap.global_daily_usd.abs() < 1e-12 && tool.abs() < 1e-12 && key.abs() < 1e-12,
         "a snapshot from two days ago must not count against today: {snap:?}"
+    );
+    assert!(
+        enforcer.check("search", Some("dev")).allowed,
+        "0.6 against a fresh day's 1.0 budget must be allowed"
     );
 }
 
