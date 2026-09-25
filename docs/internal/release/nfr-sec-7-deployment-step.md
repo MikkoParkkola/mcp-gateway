@@ -16,7 +16,7 @@ foreign `Origin` and a foreign `Host` with the full tool list because it predate
 | Endpoint | `127.0.0.1:39401` |
 | Binary | `~/.local/libexec/mcp-gateway/3.4.0-f30539af/mcp-gateway` |
 | Running since | 2026-08-29 |
-| Supervised by | `launchd`, `~/Library/LaunchAgents/com.claude.mcp-gateway.plist` |
+| Supervised by | `launchd`, `~/Library/LaunchAgents/com.example.mcp-gateway.plist` |
 | Launcher | `~/.local/bin/start-mcp-gateway`, which hardcodes the `3.4.0-f30539af` binary and config paths on lines 4 and 5 |
 
 `5d25f104`, the commit carrying the guard, is not in `v3.4.0`. The drift checker already

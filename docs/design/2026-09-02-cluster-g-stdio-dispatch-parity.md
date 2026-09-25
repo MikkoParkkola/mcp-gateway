@@ -292,7 +292,7 @@ the same fixture.
 
 ## Review round 1 — two vendors, both SHIP-WITH-FIXES
 
-Reviewed 2026-09-02 by Codex/GPT (`~/.claude/bin/gpt-review`, 5 findings) and by the
+Reviewed 2026-09-02 by Codex/GPT (`<review-tools>/gpt-review`, 5 findings) and by the
 synthetic reviewer (4 findings). Both returned `SHIP-WITH-FIXES`. Grok was not used: it is
 unavailable, and on Grok-authored material it would be the author reviewing the author.
 
@@ -311,8 +311,8 @@ plan, since a caller that is not a transport must have a stated answer for both 
 
 ## Review round 2 — the MRTR row, two vendors, both SHIP-WITH-FIXES
 
-Reviewed 2026-09-03 by Codex/GPT (`~/.claude/bin/gpt-review`, 4 findings + 2 improvements)
-and by Kimi K3 (`~/.claude/bin/kimi-review`, 1 finding + 3 improvements), on the row's diff
+Reviewed 2026-09-03 by Codex/GPT (`<review-tools>/gpt-review`, 4 findings + 2 improvements)
+and by Kimi K3 (`<review-tools>/kimi-review`, 1 finding + 3 improvements), on the row's diff
 plus the three source excerpts inline, since the second reviewer cannot read the tree.
 
 **Both vendors independently found the same defect**, which is the round's strongest

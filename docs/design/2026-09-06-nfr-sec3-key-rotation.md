@@ -68,7 +68,7 @@ session's commit.
 
 The digest is a weaker key than its name suggests, and both rounds show a different face of it.
 Both wrappers compute `sha256(scope-arguments + NUL + staged-file)` — `digest()` at
-`~/.claude/bin/synthetic-review:557`, `digest_material()` at `~/.claude/bin/grok-review:653`,
+`<review-tools>/synthetic-review:557`, `digest_material()` at `<review-tools>/grok-review:653`,
 byte-identical in behaviour. Two consequences, each verified against the ledger rows rather than
 reasoned:
 
@@ -101,7 +101,7 @@ been shown something different. Round 1's shared `3eff9bec…` proves nothing of
 the digest of a scope argument, equal because the argument was equal.
 
 One provenance note for anyone re-checking the table: the GLM leg's row is written to
-`~/.claude/data/kimi-review-ledger.jsonl`, not to `glm-review-ledger.jsonl`. The synthetic
+`<review-archive>/kimi-review-ledger.jsonl`, not to `glm-review-ledger.jsonl`. The synthetic
 wrapper names its ledger after the wrapper, not after the model it drove, so a scope-filtered
 query against the file the model's name suggests returns NOTHING for a row that exists. Query
 by digest, not by filename.

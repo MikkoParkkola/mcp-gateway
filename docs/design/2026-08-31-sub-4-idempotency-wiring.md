@@ -1143,7 +1143,7 @@ design is repaired, not ratified.
 **The ledger row, which is the verdict; the body below is evidence.** `gpt-review`,
 `2026-09-09T09:42:04Z`, `process_status = ok`, `material_bytes = 41911` (the round-10 payload,
 41910 bytes on disk plus the wrapper's newline), output
-`~/.claude/data/reviews/runs/gpt-20260909T093838Z-18506.md`, verdict `SHIP-WITH-FIXES`. Leg 2's
+`<review-archive>/runs/gpt-20260909T093838Z-18506.md`, verdict `SHIP-WITH-FIXES`. Leg 2's
 confirmation pass DID NOT RUN against this material: no `grok-review` ledger row carries
 `material_bytes = 41911`, the two rows around it carry 11009 (revision 8's payload, already
 recorded) and 108, and the local capture holds 247 bytes of preamble with no finding and no

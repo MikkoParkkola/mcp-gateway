@@ -45,7 +45,7 @@ the hazard is what some of them *say*, not that they exist.
 | --- | --- | --- |
 | Names an AI review vendor as an actor | 42 | `gpt-review`, `grok-review`, `kimi-review`, `glm-review` |
 | Narrates the authoring session | 41 | "token scan, this session"; "was commissioned this session" |
-| Names the private tooling repo | 8 | `claude-elite` |
+| Names the private tooling repo | 8 | `private-tooling` |
 | First-person session reference | 1 | "my earlier" / "as I said" |
 
 Union: **71 distinct files** (the classes overlap). By directory: 35 design, 19

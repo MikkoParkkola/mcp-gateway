@@ -205,14 +205,14 @@ apply what both legs specified. The in-flight closure re-check goes back to kimi
 raised the finding, which is the one place the author does not get to declare a finding closed.
 
 **Observation on the review ledger, no action.** A `synthetic-review` row records no model. A kimi
-leg and any other synthetic-model leg are indistinguishable in `~/.claude/data/reviews/runs/`, so
+leg and any other synthetic-model leg are indistinguishable in `<review-archive>/runs/`, so
 the row above cannot prove on its own that the second vendor was kimi — the provenance rests on
 the wrapper (`bin/kimi-review` execs `synthetic-review --model kimi-k3`) plus the run timestamp.
 Recorded, not filed: it is a defect in our tooling and nobody must act on it today.
 
 
 GPT-5.x returned **SHIP** with zero FINDING blocks and four distinct improvements
-(`~/.claude/data/reviews/runs/gpt-20260908T133849Z-53568.md`). Three are folded in above and here.
+(`<review-archive>/runs/gpt-20260908T133849Z-53568.md`). Three are folded in above and here.
 One is rejected, with its reason, because a finding is a lead until it survives its own citation.
 
 **Delete the lifecycle `SWEEP_INTERVAL` (ACCEPTED).** Folded into D6 above.
@@ -241,7 +241,7 @@ The residual GPT was reaching for is real and is already stated: when anomaly de
 map holds keys whose handler reclaims nothing. That is a no-op, not a leak, and the accepted
 improvement above is what stops it being mistaken for a passing test.
 
-**Kimi returned SHIP-WITH-FIXES** (`~/.claude/data/reviews/runs/synthetic-20260908T133850Z-53762.md`;
+**Kimi returned SHIP-WITH-FIXES** (`<review-archive>/runs/synthetic-20260908T133850Z-53762.md`;
 the `synthetic-` prefix is expected — `bin/kimi-review` is a shim that execs `synthetic-review
 --model kimi-k3`). Its one gating finding is the SAME dead `SWEEP_INTERVAL` GPT raised, arrived at
 independently. Both legs converging on one defect is why it is fixed above rather than argued with.

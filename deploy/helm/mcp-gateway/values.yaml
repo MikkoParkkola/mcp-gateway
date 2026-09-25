@@ -52,7 +52,7 @@ podSecurityContext:
   runAsGroup: 1001
   fsGroup: 1001
 
-# Credential mode requires the audit log (UPGRADING-4.0 item 39). It is
+# Credential mode requires the audit log (UPGRADING-4.0 item 43). It is
 # written to /var/lib/mcp-gateway/audit/transparency.jsonl on the `audit`
 # volume (any config.security.transparency_log.path is replaced by it): an
 # emptyDir by default, which DIES WITH THE POD. Set existingClaim to a
