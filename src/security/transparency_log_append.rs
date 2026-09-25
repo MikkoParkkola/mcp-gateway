@@ -86,7 +86,7 @@ impl TransparencyLogger {
         let mut staged = Ok(());
         if inner.seg.sealed > rot.retain_segments as usize {
             let g = guard(&mut lock, &path)?;
-            staged = self.apply_retention(inner, &path, g);
+            staged = Ok(self.apply_retention(inner, &path, g)?);
         }
         let rotated = if staged.is_ok() && inner.seg.has_records && (too_big || too_old) {
             let g = guard(&mut lock, &path)?;
