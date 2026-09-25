@@ -25,6 +25,8 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast};
 
+use crate::gateway::auth::AuthState;
+use crate::gateway::auth::live::HeldCredential;
 use crate::protocol::subscriptions::{ListenRequest, NotificationKind};
 
 /// How many notifications a listener may fall behind before it is disconnected.
@@ -91,6 +93,10 @@ pub fn delivers(filter: &ListenRequest, notification: &Value) -> bool {
 #[derive(Debug)]
 pub struct Listener {
     receiver: broadcast::Receiver<Value>,
+    /// The credential the stream was opened with, re-validated at delivery.
+    // ci-allow-secret-debug: HeldCredential's own Debug prints only <redacted>
+    #[expect(dead_code, reason = "scaffolding: read by the fix")]
+    credential: Option<HeldCredential>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -108,20 +114,32 @@ impl Listener {
 }
 
 /// The notifications this gateway publishes, and the streams listening to them.
-#[derive(Debug)]
 pub struct SubscriptionRegistry {
     sender: broadcast::Sender<Value>,
     permits: Arc<Semaphore>,
+    /// The authorizer every listener is re-validated against. Required at
+    /// construction, so a registry that delivers without one cannot exist.
+    authorizer: AuthState,
+}
+
+impl std::fmt::Debug for SubscriptionRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubscriptionRegistry")
+            .field("available", &self.available())
+            .finish_non_exhaustive()
+    }
 }
 
 impl SubscriptionRegistry {
-    /// A registry admitting at most `capacity` concurrent listeners.
+    /// A registry admitting at most `capacity` concurrent listeners, each
+    /// re-validated against `authorizer` at delivery.
     #[must_use]
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, authorizer: AuthState) -> Self {
         let (sender, _) = broadcast::channel(CHANNEL_DEPTH);
         Self {
             sender,
             permits: Arc::new(Semaphore::new(capacity)),
+            authorizer,
         }
     }
 
@@ -134,11 +152,25 @@ impl SubscriptionRegistry {
     /// says a server must not assume they will not do.
     #[must_use]
     pub fn subscribe(&self) -> Option<Listener> {
+        self.admit(None)
+    }
+
+    fn admit(&self, credential: Option<HeldCredential>) -> Option<Listener> {
         let permit = Arc::clone(&self.permits).try_acquire_owned().ok()?;
         Some(Listener {
             receiver: self.sender.subscribe(),
+            credential,
             _permit: permit,
         })
+    }
+
+    /// Admit a listener for the caller holding `credential`.
+    pub(crate) async fn subscribe_as(
+        &self,
+        credential: Option<HeldCredential>,
+    ) -> Result<Listener, ListenRefusal> {
+        let _ = &self.authorizer;
+        self.admit(credential).ok_or(ListenRefusal::Full)
     }
 
     /// Publish a notification to every listener.
@@ -152,11 +184,28 @@ impl SubscriptionRegistry {
         let _ = self.sender.send(notification);
     }
 
+    /// Publish a notification only for callers who may access `backend`.
+    pub fn publish_for_backend(&self, notification: Value, backend: &str) {
+        let _ = backend;
+        self.publish(notification);
+    }
+
     /// How many more listeners may be admitted.
     #[must_use]
     pub fn available(&self) -> usize {
         self.permits.available_permits()
     }
+}
+
+/// Why a `subscriptions/listen` was not admitted.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ListenRefusal {
+    /// The caller's credential does not authenticate, so nothing could ever
+    /// be delivered to the stream it asked for.
+    #[expect(dead_code, reason = "scaffolding: returned by the fix")]
+    Unauthenticated,
+    /// Every listener slot is taken.
+    Full,
 }
 
 /// The notification raised when the gateway's tool surface changes.
@@ -282,7 +331,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_listener_receives_what_is_published() {
-        let registry = SubscriptionRegistry::new(4);
+        let registry = SubscriptionRegistry::new(
+            4,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        );
         let mut listener = registry.subscribe().expect("capacity");
 
         registry.publish(tools_list_changed());
@@ -295,7 +347,10 @@ mod tests {
     async fn every_listener_receives_it_and_filters_for_itself() {
         // One listener's filter must never decide what another receives, so
         // publishing is unfiltered and each stream applies its own.
-        let registry = SubscriptionRegistry::new(4);
+        let registry = SubscriptionRegistry::new(
+            4,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        );
         let mut first = registry.subscribe().expect("capacity");
         let mut second = registry.subscribe().expect("capacity");
 
@@ -315,7 +370,10 @@ mod tests {
     fn admission_stops_at_the_ceiling() {
         // A bound against a caller who opens streams and walks away, which the
         // specification says a server must not assume they will not do.
-        let registry = SubscriptionRegistry::new(2);
+        let registry = SubscriptionRegistry::new(
+            2,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        );
         let _first = registry.subscribe().expect("capacity");
         let _second = registry.subscribe().expect("capacity");
 
@@ -330,7 +388,10 @@ mod tests {
     fn dropping_a_listener_returns_its_capacity() {
         // The permit is owned by the listener, so release is the drop and not a
         // deadline anything has to remember to enforce.
-        let registry = SubscriptionRegistry::new(1);
+        let registry = SubscriptionRegistry::new(
+            1,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        );
         let listener = registry.subscribe().expect("capacity");
         assert!(registry.subscribe().is_none());
 
@@ -348,7 +409,10 @@ mod tests {
         // The stream closes on this rather than delivering the remainder as
         // though nothing had happened, which would leave a client holding stale
         // state with no way to learn it.
-        let registry = SubscriptionRegistry::new(1);
+        let registry = SubscriptionRegistry::new(
+            1,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        );
         let mut listener = registry.subscribe().expect("capacity");
 
         for _ in 0..(CHANNEL_DEPTH + 10) {

@@ -85,7 +85,10 @@ async fn seed_capturable_task(
     );
     let executor = TaskExecutor::new(
         Arc::clone(&service),
-        Arc::new(SubscriptionRegistry::new(DEFAULT_MAX_LISTENERS)),
+        Arc::new(SubscriptionRegistry::new(
+            DEFAULT_MAX_LISTENERS,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        )),
         1,
     );
     assert!(executor.install_recovery(Arc::new(StubPeer(reply))));

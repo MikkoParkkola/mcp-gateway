@@ -57,6 +57,15 @@ pub(super) struct EventStream {
 }
 
 impl EventStream {
+    /// The body of an admitted listen, read frame by frame.
+    pub(super) fn from_response(response: axum::response::Response) -> Self {
+        Self {
+            body: response.into_body().into_data_stream(),
+            buffer: Vec::new(),
+            ended: false,
+        }
+    }
+
     /// The next JSON payload, bounded by `within`.
     pub(super) async fn next(&mut self, within: Duration) -> StreamEvent {
         let deadline = tokio::time::Instant::now() + within;

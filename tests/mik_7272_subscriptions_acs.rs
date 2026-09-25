@@ -272,7 +272,7 @@ mod http {
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
     use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
     use mcp_gateway::gateway::test_helpers::{
-        AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+        AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
     };
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
     use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
@@ -298,7 +298,7 @@ mod http {
         // One registry, shared between the state the router reads and the
         // executor that publishes: these cases assert on what a listener sees,
         // and two registries would strand every task notification.
-        let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+        let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth)));
         let store_dir = tempfile::tempdir().expect("a private task-store directory");
         let (tasks, task_executor) = open_runtime(
             &store_dir.path().join("tasks"),

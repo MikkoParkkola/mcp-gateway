@@ -17,7 +17,7 @@ pub use mcp_gateway::gateway::proxy::ProxyManager;
 pub use mcp_gateway::gateway::streaming::NotificationMultiplexer;
 pub use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
 pub use mcp_gateway::gateway::test_helpers::{
-    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+    AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
 };
 pub use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 pub use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
@@ -102,7 +102,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
     // One registry, shared between the state the router reads and the executor
     // that publishes: two would send a task's notifications to a listener set
     // no client here is on.
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth)));
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
