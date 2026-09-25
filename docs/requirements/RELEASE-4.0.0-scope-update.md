@@ -106,7 +106,7 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | MIK-7570.RECONNECT.1 | A managed personal account whose upstream token is rejected gets at most one forced refresh per token revision and then a reconnect prompt (A11). | ENTERPRISE |
 | MIK-7570.OWASP.1 | The published OWASP self-assessment matches the shipped controls (D5). | ENTERPRISE |
 | MIK-7570.PAGING.1 | The backend tool cache follows nextCursor, so tools past a backend's first tools/list page are listed and callable (F3). | ENTERPRISE |
-| MIK-7570.STDIO.1 | A modern-era stdio caller that cannot be named is admitted to the input bridge (its elicitation reaches the stdio client) instead of being refused with -32003, pinned in `tests/mik_7212_mrtr7_stdio_acs.rs`; or this criterion is waived by a recorded ruling that moves R5 to 5.0 (R5). | ENTERPRISE |
+| MIK-7570.STDIO.1 | A modern-era stdio caller whose backend asks for input it declared on that request receives an `InputRequiredResult` carrying a redeemable `requestState`, and its retry completes, instead of being refused with -32003; the input bridge stays legacy-only, and a modern call declares per request, never by the `initialize` handshake. Pinned in `tests/r5_stdio_modern_continuation.rs`. Or this criterion is waived by a recorded ruling that moves R5 to a later 4.x release (R5; amended 2026-09-25 by the R5 PR from the coordinator's L0 wording, design R5-design.md rev 3). | ENTERPRISE |
 | MIK-7570.DOCS.1 | The team deployment guide, backup/restore and key runbook, reconciled upgrade guide and client matrix ship with 4.0.0 (F docs). | ENTERPRISE |
 
 ## Boundaries

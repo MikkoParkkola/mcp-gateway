@@ -34,6 +34,12 @@ server:
 
 # Two API keys and no single_user override: AuthConfig::implies_multi_user is
 # true, so the gateway is in the multi-user posture the isolation guard defends.
+# 4.0 refuses auth without an audit log (UPGRADING-4.0 item 43).
+security:
+  transparency_log:
+    enabled: true
+    path: "$RUN_DIR/audit/transparency.jsonl"
+
 auth:
   enabled: true
   api_keys:
@@ -113,14 +119,11 @@ ALICE_CAT="$(catalogue_as "$ALICE_KEY")"
 BOB_CAT="$(catalogue_as "$BOB_KEY")"
 echo "alice catalogue: $ALICE_CAT"
 echo "bob   catalogue: $BOB_CAT"
-# RECORDED AS A GAP, NOT AS A GUARANTEE. The catalogue is NOT account-scoped:
-# both keys get the same list, including the other account's backend and the
-# personally-bound one neither of them may invoke. Credential isolation holds
-# (the rows above and below); what leaks here is metadata -- backend names and
-# descriptions. The row asserts the behaviour as observed so that a build which
-# starts scoping the catalogue makes it FAIL and forces this finding to be
-# revisited rather than quietly closed.
-record "S3.CATALOGUE_IS_NOT_ACCOUNT_SCOPED" "$ALICE_CAT" "$BOB_CAT"
+# The catalogue is scoped to what each key may reach (UPGRADING-4.0 item 15).
+# This row once recorded the opposite, as a known gap, so that a build which
+# started scoping would fail it and force a revisit; 4.0.0-beta.1 does.
+record "S3.ALICE_CATALOGUE_IS_HERS" "alice_notes,personal_inbox" "$ALICE_CAT"
+record "S3.BOB_CATALOGUE_IS_HIS" "bob_notes,personal_inbox" "$BOB_CAT"
 record "S3.CATALOGUE_LISTS_THE_UNINVOKABLE_BACKEND" "personal_inbox present" \
   "$(contains "personal_inbox" "$ALICE_CAT")"
 
