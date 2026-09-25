@@ -97,6 +97,9 @@ fn test_subscriptions(
         key_server,
         dashboard_bootstrap: Arc::default(),
         tls_enabled: false,
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     };
     Arc::new(crate::gateway::subscription_registry::SubscriptionRegistry::new(64, authorizer))
 }
@@ -2643,6 +2646,7 @@ async fn run_step_with_identity(
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
+        stdio_nonce: None,
         verified_identity: None,
         is_admin: client.admin,
         input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -2861,6 +2865,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
+        stdio_nonce: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -3288,6 +3293,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
+        stdio_nonce: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,

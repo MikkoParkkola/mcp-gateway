@@ -15,6 +15,8 @@
 # shellcheck shell=bash
 
 set -uo pipefail
+# 4.0 refuses a config or env file other users can read (UPGRADING-4.0 item 35).
+umask 077
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 BIN="${BIN:?set BIN to the mcp-gateway binary under test}"

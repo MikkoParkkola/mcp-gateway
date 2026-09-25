@@ -63,8 +63,8 @@ pub struct BackendStatus {
     pub tools_cached: usize,
     /// `false` = not enumerated yet, so `tools_cached == 0` means "unknown".
     pub tools_known: bool,
-    /// Circuit breaker state
-    pub circuit_state: String,
+    /// Circuit breaker state. Typed so a comparison cannot miss on casing (B6).
+    pub circuit_state: crate::failsafe::CircuitState,
     /// Total request count
     pub request_count: u64,
     /// Health-tracker liveness (flips false after consecutive failures, e.g.
