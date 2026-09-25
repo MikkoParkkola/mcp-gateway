@@ -29,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+### Security
+
+- **The direct route `POST /mcp/{name}` writes the audit log's invocation record**
+  (MIK-7570.AUDIT.2). Every `tools/call` on it, refused, failed or malformed included,
+  now writes the same `schema_version: 2` record as `gateway_invoke`, with `route:
+  "direct"`; meta-route records carry `route: "meta"`. With auth on, a failed append
+  withholds the result (503, -32005). The backend-scope check now runs after the body is
+  parsed, so its refusal names the tool; it still answers 403 for an unknown backend.
+  A direct-route `tools/call` naming no tool is refused (400, -32602) instead of being
+  forwarded without the per-tool authorization check.
+  See UPGRADING-4.0 item 43.
+
 ## [4.0.0-beta.2] - 2026-09-25
 
 > **Pre-release.** The second 4.0 beta. It is the first beta with container images:

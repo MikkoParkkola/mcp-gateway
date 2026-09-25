@@ -1045,6 +1045,22 @@ named an API-key label rather than a person and skipped every refused or failed 
   copy of `who.account`. Entries without `schema_version` are v1; both verify in one file.
 - **Refused and failed tool calls now write a record**, and so do cache hits. Expect more
   log volume on a gateway that refuses a lot.
+- **The direct route `POST /mcp/{name}` writes the same invocation record** for every
+  `tools/call`, refused ones included. It used to write none. Each invocation record now
+  carries `route`: `meta` for `gateway_invoke`, `direct` for this route. On a direct
+  record `server` is `{name}`, `request_hash` covers the `params` the caller sent,
+  `response_hash` covers the JSON-RPC body it received, and the correlation key is the
+  caller's W3C trace id, else the trace id. A tools/call too malformed to name a tool is
+  recorded as `invalid` without `tool`. Other methods on this route (`tools/list`, `resources/read`,
+  `prompts/get`) and the agent-identity refusal are not recorded, as on the meta route.
+- **A direct-route `tools/call` with no `params`, no `name`, or an empty `name` is now
+  refused** with HTTP 400 and JSON-RPC -32602 ("tools/call requires params.name"). It used
+  to be forwarded to the backend without the per-tool authorization check, because there
+  was no tool name to check.
+- **On the direct route, a key scoped away from a backend is now refused after the body is
+  read.** It still gets 403 and -32003 for a backend it may not use, including one that
+  does not exist. A body that is not JSON, or a JSON-RPC envelope that does not parse, now
+  gets its 400 first.
 - **`request_hash` covers the whole `gateway_invoke` params the caller sent**, `_full` and
   `_claim` included, and **`response_hash` covers the value `gateway_invoke` returned**,
   after trace, prediction and provenance augmentation. The message-signing `_signature` is
