@@ -62,6 +62,9 @@ printf 'server:\n  host: 127.0.0.1\n  port: 39400\n' > "${WORKDIR}/smoke.yaml"
 # case the setting exists to name.
 printf 'server:\n  host: 0.0.0.0\n  port: 39400\n  allow_unauthenticated_network_bind: true\n' \
   > "${WORKDIR}/smoke-external.yaml"
+# The gateway refuses a config other users can read (CONFIG.2). The image runs
+# as UID 1001, which is also the hosted runner's UID, so owner-only is readable.
+chmod 600 "${WORKDIR}/smoke.yaml" "${WORKDIR}/smoke-external.yaml"
 
 # This gate's verdict IS the image's HEALTHCHECK, so an image that declares none
 # has nothing to read: say so in seconds rather than timing out in 90 with a
