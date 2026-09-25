@@ -102,7 +102,7 @@ pub fn build_tls_config(config: &MtlsConfig) -> Result<ServerConfig> {
 /// Returns an error if the file cannot be read or contains no valid PEM
 /// certificate blocks.
 pub fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
-    let pem_data = read_file(path)?;
+    let pem_data = read_file(path, crate::config::CheckedFile::TlsCert)?;
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(pem_data.as_slice())
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| Error::Config(format!("Failed to parse certs from '{path}': {e}")))?;
@@ -123,7 +123,7 @@ pub fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
 /// Returns an error if the file cannot be read, contains no private key, or
 /// the key format is unsupported.
 pub fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>> {
-    let pem_data = read_file(path)?;
+    let pem_data = read_file(path, crate::config::CheckedFile::TlsKey)?;
     let key = PrivateKeyDer::from_pem_slice(pem_data.as_slice()).map_err(|e| {
         // NoItemsFound maps to the "no key" case; all other errors are parse failures.
         match e {
@@ -358,8 +358,10 @@ fn write_private_key(path: &Path, key_pem: &str) -> Result<()> {
 // Private helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn read_file(path: &str) -> Result<Vec<u8>> {
-    fs::read(path).map_err(|e| Error::Config(format!("Cannot read '{path}': {e}")))
+fn read_file(path: &str, what: crate::config::CheckedFile) -> Result<Vec<u8>> {
+    crate::config::read_checked_file(Path::new(path), what)
+        .map(String::into_bytes)
+        .map_err(|e| Error::Config(e.to_string()))
 }
 
 /// Build a `WebPkiClientVerifier` with optional CRL support.
@@ -395,7 +397,7 @@ fn build_client_verifier(
 
 /// Load CRL entries from a PEM file.
 fn load_crls(path: &str) -> Result<Vec<CertificateRevocationListDer<'static>>> {
-    let pem_data = read_file(path)?;
+    let pem_data = read_file(path, crate::config::CheckedFile::TlsCrl)?;
     CertificateRevocationListDer::pem_slice_iter(pem_data.as_slice())
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| Error::Config(format!("Failed to parse CRL from '{path}': {e}")))

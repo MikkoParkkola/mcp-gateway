@@ -234,19 +234,43 @@ pub fn merge_into_config(
     let json_str = serde_json::to_string_pretty(&doc)
         .map_err(|e| format!("JSON serialization failed: {e}"))?;
 
-    // Atomic write: write to a sibling tempfile, then rename.
-    let parent = path.parent().unwrap_or(Path::new("."));
-    let file_name = path.file_name().map_or_else(
-        || "config.json".to_string(),
-        |n| n.to_string_lossy().into_owned(),
-    );
-    let tmp = parent.join(format!(".{file_name}.tmp"));
-    std::fs::write(&tmp, &json_str)
-        .map_err(|e| format!("Cannot write temp file {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .map_err(|e| format!("Cannot rename {} -> {}: {e}", tmp.display(), path.display()))?;
+    let old_mode = file_mode(path);
+    // 0600 from creation, then rename (F18 W4): the client config holds other
+    // servers' `env` secrets, and a scratch file at the umask would hand the
+    // replaced file a looser mode than it had.
+    mcp_gateway::config_persistence::write_text_atomic(path, &json_str)?;
+    if let Some(note) = tightening_notice(path, old_mode) {
+        eprintln!("{note}");
+    }
 
     Ok(action)
+}
+
+/// The one stderr line `merge_into_config` prints when it tightened the file's
+/// mode, or `None` when the file was already 0600 or did not exist.
+fn tightening_notice(path: &Path, old_mode: Option<u32>) -> Option<String> {
+    old_mode.filter(|mode| *mode != 0o600).map(|old| {
+        format!(
+            "Note: {} is now mode 0600 (it holds other servers' secrets); it was {old:04o}.",
+            path.display()
+        )
+    })
+}
+
+/// `path`'s permission bits, or `None` when it does not exist (or off Unix).
+fn file_mode(path: &Path) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::symlink_metadata(path)
+            .ok()
+            .map(|meta| meta.permissions().mode() & 0o777)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 fn merge_into_config_with_safety(
@@ -339,21 +363,14 @@ pub fn rollback_client_config(backup_path: &Path) -> Result<PathBuf, String> {
             .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
     }
 
-    let parent = original_path.parent().unwrap_or(Path::new("."));
-    let file_name = original_path.file_name().map_or_else(
-        || "config.json".to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    );
-    let tmp = parent.join(format!(".{file_name}.rollback.tmp"));
-    std::fs::write(&tmp, &bytes)
-        .map_err(|e| format!("Cannot write rollback temp file {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &original_path).map_err(|e| {
+    // 0600 from creation, then rename, as the merge writes it (F18 W4).
+    let text = String::from_utf8(bytes).map_err(|_| {
         format!(
-            "Cannot rename {} -> {}: {e}",
-            tmp.display(),
-            original_path.display()
+            "Backup {} is not UTF-8; refusing to restore it",
+            backup_path.display()
         )
     })?;
+    mcp_gateway::config_persistence::write_text_atomic(&original_path, &text)?;
 
     Ok(original_path)
 }
@@ -689,15 +706,4 @@ fn export_one_detailed(
             Err(e) => (ExportAction::Failed(e), None),
         }
     }
-}
-
-/// The one stderr line `merge_into_config` prints when it tightened the file's
-/// mode, or `None` when the file was already 0600 or did not exist.
-fn tightening_notice(path: &Path, old_mode: Option<u32>) -> Option<String> {
-    old_mode.filter(|mode| *mode != 0o600).map(|old| {
-        format!(
-            "Note: {} is now mode 0600 (it holds other servers' secrets); it was {old:04o}.",
-            path.display()
-        )
-    })
 }

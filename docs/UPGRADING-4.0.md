@@ -55,7 +55,7 @@ upgrading a running deployment.
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
-| 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
+| 35 | A config, env, key, token or credential file other users can read, or a cert, CRL, grants or control-plane file they can change, is refused (Unix) | `chmod 600` a secret file, `chmod go-w` a trust file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
@@ -749,7 +749,7 @@ authentication, so no client could reach a tool through it.
 - **WebSocket is not a backend transport either.** No backend config reaches the WebSocket client
   in `src/transport/websocket.rs`; backends use stdio, HTTP (Streamable HTTP or SSE) or A2A.
 
-## 35. A config or env file other users can read fails the load
+## 35. A config, env, key or credential file other users can read, or a trust file they can change, is refused
 
 In 3.x a config file readable by other local accounts drew one WARN in the HTTP startup banner,
 stdio never checked it, and env files were never checked at all. Both can hold credentials.
@@ -789,6 +789,40 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
 - **Windows is not checked.** It has no mode bits, and ACL inspection is out of scope.
 - **`mcp-gateway init` already writes `0600`**, so a config it created passes unchanged. One
   written by an older release, or copied into place, may need the `chmod`.
+
+The same rule now covers four more files that hold secrets:
+
+| File | When it is read | A refusal |
+|---|---|---|
+| `mtls.server_key` | at startup | stops the gateway |
+| OAuth token files under `~/.mcp-gateway/oauth/` | each time a backend token is looked up | logs an ERROR and treats the token as absent, so the backend asks for authorisation again. The new token is saved `0600`. |
+| a capability credential `file:/path.json:field` | on each tool call that uses it | fails that call |
+| the CA key given to `mcp-gateway tls issue-server` / `issue-client` as `--ca-key` | when the command runs | the command exits 1 and issues nothing |
+
+Four more files decide whom the gateway trusts. They may stay readable by others, but a file that
+other users can **change** is refused (group- or world-write bit set). Fix: `chmod go-w <file>`.
+
+| File | When it is read | A refusal |
+|---|---|---|
+| `mtls.server_cert`, `mtls.ca_cert`, `mtls.crl_path` | at startup | stops the gateway |
+| the identity-grants file | at startup, on grant reload, and by `mcp-gateway identity` | at startup it stops the gateway if `fail_on_error` is set, otherwise no grants load and personal capabilities fail closed; on reload it is logged and the live grants stay; the CLI exits 1 |
+| control-plane `grants.json` / `policies.json` | on each control-plane read | that operation fails, and nothing is overwritten |
+
+Files the gateway writes itself (grants, control-plane collections, keys from `tls init-ca`, OAuth
+tokens) are created `0600` and pass.
+
+- A key or token that was readable by others may already have been copied. Rotate the key, or revoke
+  the token with the provider, rather than only running `chmod`.
+- OAuth token files written by 3.x may be `0644`. `chmod 600 ~/.mcp-gateway/oauth/*_tokens.json`
+  keeps them, or let the gateway ask for authorisation again. The refusal is logged at ERROR once
+  per file, then at DEBUG, so a busy backend does not flood the log.
+- **Kubernetes:** mount a TLS key Secret the way the chart mounts the config: `defaultMode: 288`
+  (octal `0440`) on the Secret volume, and `podSecurityContext.fsGroup` set to a group the gateway's
+  UID is in (1001 in the image). The file is then `root:1001 0440` and passes. Without them it is
+  `root:root 0644` and is refused.
+- **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it.
+- `mcp-gateway config export` now writes the client config it edits as `0600`, and says so on
+  stderr when that changes the file's mode.
 
 Parent directory permissions, and the `capabilities/` files, are not checked.
 
