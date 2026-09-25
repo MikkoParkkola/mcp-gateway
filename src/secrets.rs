@@ -332,4 +332,29 @@ mod c4_tests {
             .expect_err("an unset {env.X} must not become an empty credential");
         assert!(err.to_string().contains("MCP_GW_C4_NOPE"), "got: {err}");
     }
+
+    #[test]
+    fn env_template_empty_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("c4.env");
+        std::fs::write(&path, "MCP_GW_C4_BLANK_TPL=\n").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
+        let overlay = crate::config::EnvOverlay::from_paths(&[path]);
+        let env = std::sync::Arc::new(crate::config::LiveEnv::new(
+            std::sync::Arc::new(overlay),
+            crate::config::ResolvedEnvFiles::default(),
+        ));
+        let err = SecretResolver::new()
+            .with_env(env)
+            .resolve("Bearer {env.MCP_GW_C4_BLANK_TPL}")
+            .expect_err("an empty {env.X} must not become an empty credential");
+        assert!(
+            err.to_string().contains("MCP_GW_C4_BLANK_TPL"),
+            "got: {err}"
+        );
+    }
 }
