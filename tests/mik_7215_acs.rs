@@ -727,13 +727,11 @@ mod http {
             enabled: true,
             bearer_token: None,
             api_keys: vec![mcp_gateway::config::ApiKeyConfig {
-                key: "admin-key".to_string(),
+                key_sha256: Some(mcp_gateway::config::api_key_digest_spec(b"admin-key")),
                 name: "admin-client".to_string(),
-                rate_limit: 0,
                 backends: vec!["*".to_string()],
-                allowed_tools: None,
-                denied_tools: None,
                 admin: true,
+                ..Default::default()
             }],
             public_paths: Vec::new(),
             client_circuit_breaker: None,
@@ -847,13 +845,11 @@ mod http {
             enabled: true,
             bearer_token: None,
             api_keys: vec![mcp_gateway::config::ApiKeyConfig {
-                key: "admin-key".to_string(),
+                key_sha256: Some(mcp_gateway::config::api_key_digest_spec(b"admin-key")),
                 name: "admin-client".to_string(),
-                rate_limit: 0,
                 backends: vec!["*".to_string()],
-                allowed_tools: None,
-                denied_tools: None,
                 admin: true,
+                ..Default::default()
             }],
             public_paths: Vec::new(),
             client_circuit_breaker: None,
@@ -979,13 +975,11 @@ mod http {
             enabled: true,
             bearer_token: None,
             api_keys: vec![mcp_gateway::config::ApiKeyConfig {
-                key: "admin-key".to_string(),
+                key_sha256: Some(mcp_gateway::config::api_key_digest_spec(b"admin-key")),
                 name: "row17-client".to_string(),
-                rate_limit: 0,
                 backends: vec!["*".to_string()],
-                allowed_tools: None,
-                denied_tools: None,
                 admin: true,
+                ..Default::default()
             }],
             public_paths: Vec::new(),
             client_circuit_breaker: Some(mcp_gateway::config::CircuitBreakerConfig {

@@ -21,7 +21,11 @@ fn test_auth_config_resolution() {
         enabled: true,
         bearer_token: Some("test-token".to_string()),
         api_keys: vec![ApiKeyConfig {
-            key: "api-key-1".to_string(),
+            key: None,
+            key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
+                "api-key-1".as_bytes(),
+            )),
+            expires_at: None,
             name: "Test Client".to_string(),
             rate_limit: 100,
             backends: vec!["tavily".to_string()],
@@ -77,7 +81,11 @@ fn test_api_key_auth_with_restrictions() {
         bearer_token: None,
         api_keys: vec![
             ApiKeyConfig {
-                key: "restricted-key".to_string(),
+                key: None,
+                key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
+                    "restricted-key".as_bytes(),
+                )),
+                expires_at: None,
                 name: "Restricted Client".to_string(),
                 rate_limit: 50,
                 backends: vec!["tavily".to_string(), "brave".to_string()],
@@ -86,7 +94,11 @@ fn test_api_key_auth_with_restrictions() {
                 admin: false,
             },
             ApiKeyConfig {
-                key: "unrestricted-key".to_string(),
+                key: None,
+                key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
+                    "unrestricted-key".as_bytes(),
+                )),
+                expires_at: None,
                 name: "Unrestricted Client".to_string(),
                 rate_limit: 0,
                 backends: vec!["*".to_string()],
@@ -124,7 +136,11 @@ fn test_rate_limiting() {
         enabled: true,
         bearer_token: None,
         api_keys: vec![ApiKeyConfig {
-            key: "rate-limited-key".to_string(),
+            key: None,
+            key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
+                "rate-limited-key".as_bytes(),
+            )),
+            expires_at: None,
             name: "Rate Limited".to_string(),
             rate_limit: 2, // Very low for testing
             backends: vec!["*".to_string()],
@@ -306,7 +322,11 @@ fn test_client_circuit_breaker_is_per_client() {
         bearer_token: None,
         api_keys: vec![
             ApiKeyConfig {
-                key: "client-a-key".to_string(),
+                key: None,
+                key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
+                    "client-a-key".as_bytes(),
+                )),
+                expires_at: None,
                 name: "client-a".to_string(),
                 rate_limit: 0,
                 backends: vec!["*".to_string()],
@@ -315,7 +335,11 @@ fn test_client_circuit_breaker_is_per_client() {
                 admin: false,
             },
             ApiKeyConfig {
-                key: "client-b-key".to_string(),
+                key: None,
+                key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
+                    "client-b-key".as_bytes(),
+                )),
+                expires_at: None,
                 name: "client-b".to_string(),
                 rate_limit: 0,
                 backends: vec!["*".to_string()],
@@ -358,7 +382,11 @@ fn test_client_circuit_breaker_recovers_after_successful_probe() {
         enabled: true,
         bearer_token: None,
         api_keys: vec![ApiKeyConfig {
-            key: "client-key".to_string(),
+            key: None,
+            key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
+                "client-key".as_bytes(),
+            )),
+            expires_at: None,
             name: "recovering-client".to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],

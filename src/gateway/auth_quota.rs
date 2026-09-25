@@ -26,8 +26,9 @@ impl QuotaPrincipal {
         Self::credential(b"configured-bearer", secret.as_bytes())
     }
 
-    pub(crate) fn api_key(secret: &str) -> Self {
-        Self::credential(b"api-key", secret.as_bytes())
+    /// Keyed on the configured digest: the plaintext is not held (E4).
+    pub(crate) fn api_key(digest: &[u8]) -> Self {
+        Self::credential(b"api-key", digest)
     }
 
     /// The one bucket every validated dashboard session shares.

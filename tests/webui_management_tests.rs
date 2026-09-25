@@ -608,13 +608,10 @@ async fn test_control_plane_endpoint_projects_non_admin_api_key_as_auditor() {
         enabled: true,
         bearer_token: None,
         api_keys: vec![ApiKeyConfig {
-            key: "auditor-key".to_string(),
+            key_sha256: Some(mcp_gateway::config::api_key_digest_spec(b"auditor-key")),
             name: "auditor-client".to_string(),
-            rate_limit: 0,
             backends: vec!["docs".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: false,
+            ..Default::default()
         }],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
@@ -1619,13 +1616,10 @@ async fn a_non_admin_api_key_gets_the_redacted_health_view() {
         // at all; without this the case passes without exercising anything.
         public_paths: vec![],
         api_keys: vec![ApiKeyConfig {
-            key: "scoped-key".to_string(),
+            key_sha256: Some(mcp_gateway::config::api_key_digest_spec(b"scoped-key")),
             name: "scoped".to_string(),
-            rate_limit: 0,
             backends: vec!["*".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: false,
+            ..Default::default()
         }],
         ..AuthConfig::default()
     };

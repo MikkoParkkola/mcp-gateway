@@ -998,16 +998,16 @@ fn store_key_b64(byte: u8) -> String {
     base64::engine::general_purpose::STANDARD.encode([byte; 32])
 }
 
-/// An enabled-store config whose adapter and gateway API key resolve through an
-/// `env_files` overlay, with `gateway_key` deciding whether they collide.
+/// Adapter secret and API key digest via `env_files`; `gateway_key` decides a collision.
 fn enabled_store_yaml(dir: &std::path::Path, adapter_secret: &str, gateway_key: &str) -> String {
     let env_path = dir.join("adapter-separation.env");
     write_owner_only(
         &env_path,
         format!(
             "OWUI_SEP_STORE_KEY={}\nOWUI_SEP_ADAPTER_HMAC={adapter_secret}\n\
-             OWUI_SEP_GATEWAY_KEY={gateway_key}\n",
+             OWUI_SEP_GATEWAY_KEY={}\n",
             store_key_b64(0x41),
+            mcp_gateway::config::api_key_digest_spec(gateway_key.as_bytes())
         ),
     )
     .expect("fixture env file must be writable");
@@ -1022,7 +1022,7 @@ auth:
   enabled: true
   api_keys:
     - name: owui-gateway-key
-      key: env:OWUI_SEP_GATEWAY_KEY
+      key_sha256: env:OWUI_SEP_GATEWAY_KEY
 accounts:
   schema_version: accounts.v1
   enabled: true
@@ -1163,7 +1163,7 @@ auth:
 // The three cases above drive `serde_yaml::from_str` + `validate_with_env`
 // directly. That composition is NOT what a gateway runs: `Config::load_evaluated`
 // resolves `env:` secret references INTO the config — inlining
-// `auth.bearer_token` and `auth.api_keys[].key` — and only then validates. On
+// `auth.bearer_token` and `auth.api_keys[].key_sha256` — and only then validates. On
 // that path the structural alias check was handed a gateway credential that no
 // longer said `env:` anything, so it matched nothing; and with the store
 // disabled the material half is skipped by design. One variable named by both an

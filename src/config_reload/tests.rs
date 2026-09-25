@@ -2734,7 +2734,7 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
         ),
         (
             "MCP_GW_TEST_ENVFILE10C_APIKEY",
-            "auth:\n  enabled: true\n  api_keys:\n    - name: k\n      key: \"env:MCP_GW_TEST_ENVFILE10C_APIKEY\"\n",
+            "auth:\n  enabled: true\n  api_keys:\n    - name: k\n      key_sha256: \"env:MCP_GW_TEST_ENVFILE10C_APIKEY\"\n",
         ),
         (
             "MCP_GW_TEST_ENVFILE10C_HS256",
@@ -2747,8 +2747,8 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
     ];
 
     for (key, section) in forms {
-        let old = format!("s3cr3t-10c-{key}-old");
-        let new = format!("s3cr3t-10c-{key}-new");
+        let old = crate::config::api_key_digest_spec(format!("10c-{key}-old").as_bytes());
+        let new = crate::config::api_key_digest_spec(format!("10c-{key}-new").as_bytes());
 
         let dir = tempfile::tempdir().unwrap();
         let env_path = env_file(dir.path(), "secrets.env", &format!("{key}={old}\n"));
@@ -2805,8 +2805,8 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
             );
         } else if key.ends_with("APIKEY") {
             assert_eq!(
-                holder.api_keys.first().map(|k| k.key.as_str()),
-                Some(old.as_str()),
+                holder.api_keys.first().map(|k| hex::encode(k.digest)),
+                old.strip_prefix("sha256:").map(str::to_string),
                 "{key}: the running holder must keep the startup value"
             );
         }

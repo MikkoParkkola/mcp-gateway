@@ -183,11 +183,13 @@ fn gateway_credentials(config: &Config) -> Vec<GatewayCredential<'_>> {
         credentials.push(GatewayCredential::BearerToken(token));
     }
     for (index, api_key) in config.auth.api_keys.iter().enumerate() {
-        credentials.push(GatewayCredential::ApiKey {
-            index,
-            name: api_key.name.as_str(),
-            spec: api_key.key.as_str(),
-        });
+        if let Some(spec) = api_key.key_sha256.as_deref() {
+            credentials.push(GatewayCredential::ApiKeyDigest {
+                index,
+                name: api_key.name.as_str(),
+                spec,
+            });
+        }
     }
     credentials
 }

@@ -377,5 +377,7 @@ pub(crate) fn assert_refusal(result: Result<()>, code: i32, expected: &str) {
 
 /// A real validated-credential bucket key, not a display label.
 pub(crate) fn principal_key(secret: &str) -> String {
-    QuotaPrincipal::api_key(secret).as_store_key().to_owned()
+    QuotaPrincipal::api_key(secret.as_bytes())
+        .as_store_key()
+        .to_owned()
 }

@@ -6,6 +6,7 @@ use std::env;
 
 use serde::{Deserialize, Serialize};
 
+use super::api_key::ApiKeyConfig;
 use super::failsafe::CircuitBreakerConfig;
 use crate::{Error, Result};
 
@@ -219,53 +220,6 @@ impl AuthConfig {
     }
 }
 
-/// API key configuration for multi-client access.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiKeyConfig {
-    /// The API key value (supports `env:VAR_NAME`).
-    pub key: String,
-    /// Name for this client: non-empty, unique across `api_keys`, and the
-    /// key's identity-grant subject (`api_key:<name>`).
-    #[serde(default)]
-    pub name: String,
-    /// Rate limit (requests per minute, 0 = unlimited).
-    #[serde(default)]
-    pub rate_limit: u32,
-    /// Allowed backends. `["*"]` is all; empty or absent is none.
-    #[serde(default)]
-    pub backends: Vec<String>,
-    /// Allowed tools (if Some, ONLY these tools are accessible).
-    /// Supports glob patterns. Acts as an allowlist.
-    #[serde(default)]
-    pub allowed_tools: Option<Vec<String>>,
-    /// Denied tools (if Some, these tools are blocked).
-    /// Supports glob patterns. Acts as a blocklist on top of global policy.
-    #[serde(default)]
-    pub denied_tools: Option<Vec<String>>,
-    /// Whether this API key can use admin-only HTTP UI and management tools.
-    #[serde(default)]
-    pub admin: bool,
-}
-
-impl ApiKeyConfig {
-    /// Resolve the API key (expand env vars).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
-    pub fn resolve_key(&self) -> Result<String> {
-        if let Some(var_name) = self.key.strip_prefix("env:") {
-            env::var(var_name).map_err(|_| {
-                Error::ConfigValidation(format!(
-                    "auth.api_keys[].key references missing environment variable '{var_name}'"
-                ))
-            })
-        } else {
-            Ok(self.key.clone())
-        }
-    }
-}
-
 // ── Agent Auth ─────────────────────────────────────────────────────────────────
 
 /// Configuration for agent-scoped OAuth 2.0 tool permissions (issue #80).
@@ -374,7 +328,11 @@ mod multi_user_tests {
 
     fn api_key(name: &str) -> ApiKeyConfig {
         ApiKeyConfig {
-            key: format!("k-{name}"),
+            key: None,
+            key_sha256: Some(super::super::api_key::api_key_digest_spec(
+                format!("k-{name}").as_bytes(),
+            )),
+            expires_at: None,
             name: name.to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
@@ -478,7 +436,11 @@ mod single_user_principal_tests {
 
     fn api_key(name: &str) -> ApiKeyConfig {
         ApiKeyConfig {
-            key: format!("k-{name}"),
+            key: None,
+            key_sha256: Some(super::super::api_key::api_key_digest_spec(
+                format!("k-{name}").as_bytes(),
+            )),
+            expires_at: None,
             name: name.to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
@@ -663,7 +625,11 @@ mod api_key_name_tests {
             .iter()
             .enumerate()
             .map(|(index, name)| ApiKeyConfig {
-                key: format!("secret-{index}"),
+                key: None,
+                key_sha256: Some(super::super::api_key::api_key_digest_spec(
+                    format!("secret-{index}").as_bytes(),
+                )),
+                expires_at: None,
                 name: (*name).to_string(),
                 rate_limit: 0,
                 backends: vec!["*".to_string()],
