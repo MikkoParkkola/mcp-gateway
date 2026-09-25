@@ -305,18 +305,39 @@ fn parse_agent_binding(agent: Option<String>, any_agent: bool) -> Result<GrantAg
         (Some(_), true) => Err("--agent and --any-agent are mutually exclusive".to_string()),
         (Some(agent), false) => parse_agent_key(&agent).map(GrantAgent::Exact),
         (None, true) => Ok(GrantAgent::Any),
-        (None, false) => Err("pass --agent AGENT_ID or --any-agent".to_string()),
+        (None, false) => Err("pass --agent mtls:<id> | jwt:<id>, or --any-agent".to_string()),
     }
 }
 
+/// `mtls:<id>` or `jwt:<id>`. An unqualified id is refused rather than given
+/// a default source: a wrong guess grants the other namespace.
 fn parse_agent_key(agent: &str) -> Result<GrantAgentKey, String> {
     let (source, id) = match agent.split_once(':') {
         Some(("jwt", id)) => (ProofSource::VerifiedJwtSubject, id),
         Some(("mtls", id)) => (ProofSource::MutualTls, id),
-        _ => (ProofSource::VerifiedJwtSubject, agent),
+        Some(("declared", _)) => {
+            return Err(format!(
+                "--agent {agent}: a declared label is not proof and cannot hold a grant; \
+                 use mtls:<id> or jwt:<id>"
+            ));
+        }
+        _ => {
+            return Err(format!(
+                "--agent {agent} must name its proof source: mtls:<SAN URI or bare CN> or \
+                 jwt:<client_id>"
+            ));
+        }
     };
-    if id.trim().is_empty() {
+    let id = id.trim();
+    if id.is_empty() {
         return Err(format!("--agent {agent}: the id after the source is empty"));
+    }
+    // The selected mTLS id is the first SAN URI, else the bare CN; a DN
+    // fragment never matches a caller, so writing one would mint a dead grant.
+    if source == ProofSource::MutualTls && id.contains('=') && !id.contains("://") {
+        return Err(format!(
+            "--agent {agent}: use the SAN URI or the bare CN value, not a DN fragment"
+        ));
     }
     Ok(GrantAgentKey {
         source,

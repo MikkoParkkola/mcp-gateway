@@ -184,23 +184,51 @@ async fn any_and_qualified_grant_files_round_trip() {
     }
 }
 
-/// The spellings UPGRADING tells an operator to hand-write load as the key.
-#[tokio::test]
-async fn hand_written_qualified_rows_load_in_both_yaml_forms() {
+async fn hand_edited(name: &str, rewrites: [(&str, &str); 2]) -> IdentityGrantFile {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("grants.yaml");
-    let body = std::fs::read_to_string(fixture("grants-3.4.0.yaml"))
-        .unwrap()
-        .replace(
-            "agent: !exact runner",
-            "agent: {exact: {source: jwt, id: runner}}",
-        )
-        .replace(
-            "agent: !exact build-bot",
-            "agent: !exact {source: mtls, id: build-bot}",
-        );
+    let path = dir.path().join(name);
+    let mut body = std::fs::read_to_string(fixture(name)).unwrap();
+    for (from, to) in rewrites {
+        assert!(body.contains(from), "{name}: fixture lacks {from}");
+        body = body.replace(from, to);
+    }
     std::fs::write(&path, body).unwrap();
-    let file = read_identity_grants_file(&path).await.unwrap();
+    read_identity_grants_file(&path).await.unwrap()
+}
+
+/// The rewrites UPGRADING tells an operator to make by hand load as the key:
+/// the YAML tag form (a YAML `{exact: ...}` map is refused by serde_yaml, in
+/// 3.x as now) and the JSON map form.
+#[tokio::test]
+async fn hand_rewritten_3x_rows_load_as_qualified_keys() {
+    let yaml = hand_edited(
+        "grants-3.4.0.yaml",
+        [
+            ("!exact runner", "!exact {source: jwt, id: runner}"),
+            ("!exact build-bot", "!exact {source: mtls, id: build-bot}"),
+        ],
+    )
+    .await;
+    let json = hand_edited(
+        "grants-3.4.0.json",
+        [
+            (
+                r#""exact": "runner""#,
+                r#""exact": {"source": "jwt", "id": "runner"}"#,
+            ),
+            (
+                r#""exact": "build-bot""#,
+                r#""exact": {"source": "mtls", "id": "build-bot"}"#,
+            ),
+        ],
+    )
+    .await;
+    for file in [yaml, json] {
+        assert_agents(&file);
+    }
+}
+
+fn assert_agents(file: &IdentityGrantFile) {
     let agents: Vec<_> = file.grants.iter().map(|g| g.agent.clone()).collect();
     assert_eq!(
         agents,
