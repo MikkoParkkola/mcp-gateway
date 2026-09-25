@@ -157,14 +157,23 @@ async fn each_surface_advertises_only_what_it_delivers() {
     }
 }
 
+const DELIVERY_SOURCE: &str = include_str!("f24_tools_changed_delivery.rs");
+
 #[test]
 fn every_advertised_flag_has_a_delivery_probe() {
     for (index, (object, field)) in FLAGS.iter().enumerate() {
         if HTTP_EXPECTED[index] || STDIO_EXPECTED[index] {
             let flag = format!("{object}.{field}");
+            let probe = DELIVERY_PROBES
+                .iter()
+                .find(|(name, _)| *name == flag)
+                .unwrap_or_else(|| panic!("{flag} is advertised, no delivery probe"));
+            // The named probe must exist, so a rename cannot leave this pointing nowhere.
+            let test_fn = probe.1.rsplit("::").next().expect("probe name");
             assert!(
-                DELIVERY_PROBES.iter().any(|(name, _)| *name == flag),
-                "{flag} is advertised, no delivery probe"
+                DELIVERY_SOURCE.contains(&format!("async fn {test_fn}(")),
+                "{flag}: probe `{}` is not in f24_tools_changed_delivery.rs",
+                probe.1
             );
         }
     }

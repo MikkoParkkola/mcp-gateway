@@ -57,7 +57,7 @@ served. `resources/subscribe` and `resources/unsubscribe` are refused (coordinat
 **Mechanism and tests.** One enum, `ChangeFeed { Http, None }`, selects the flag set. It is
 passed into `handle_initialize` and `discover_document` and set at the four call sites: HTTP
 `initialize`, HTTP `server/discover`, stdio `initialize` and stdio `server/discover`. The mode is
-bound once, on `MetaMcp` when the HTTP or the stdio server is built, and `build_server_capabilities` reads it. The test
+bound once, on `MetaMcp` when the HTTP server is built (stdio keeps the default, `None`), and `build_server_capabilities` reads it. The test
 drives all four surfaces and compares against a flag set written literally in the test,
 never read from production. Every flag a surface reports as true needs a delivery probe in
 the same test file, one that fires the producer and sees the notification arrive. A flag
@@ -73,9 +73,9 @@ the honest answer (breaking: item 52).
 
 **Breaks.**
 - The legacy `initialize` result is no longer byte-identical to 3.5.0. The MIK-7217 goldens
-  stay as captured from 3.5.0. The test applies the documented delta before comparing:
-  three flags on HTTP, four on stdio (`nfr_compat_2`). Recapturing would make them agree with
-  the change instead of pinning it.
+  stay as captured from 3.5.0. The test applies the documented three-flag delta before
+  comparing. `nfr_compat_2` pins no capability flag, so it needs none. Recapturing would make
+  the goldens agree with the change instead of pinning it.
 - UPGRADING-4.0 item 52.
 - Out of scope: capabilities a backend reports on the direct route `/mcp/{name}`, which are
   the backend's own.

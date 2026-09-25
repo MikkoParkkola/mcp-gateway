@@ -1218,6 +1218,11 @@ control_plane:
   gateway does not deliver resources/updated", instead of being forwarded to the backend.
   To see changes, poll `resources/list` or `resources/read`.
 
+Not covered: a backend's own `notifications/tools/list_changed` is still not relayed (the
+gateway's listing refreshes from its metadata cache), and on the direct route `/mcp/{name}`
+`resources/subscribe` still reaches the backend, whose `resources/updated` the gateway does
+not relay. Poll there too.
+
 The legacy `initialize` result differs from 3.5.0 in exactly those three flags (and, over
 stdio, `tools.listChanged`).
 
