@@ -123,6 +123,9 @@ or SIEM/OTel sinks.
 
 - `admin`: can read, review, approve, and mutate grants or policies. The grant
   and policy routes pass RBAC and then refuse with 409 (see above).
+  A `role: admin` rule also makes that identity a gateway admin on every other
+  admin surface (meta-tools and `/ui/api/*`), and a `role: admin` rule whose
+  only condition is `domain` fails to load. See `docs/MULTI_USER.md`.
 - `security_reviewer`: can read inventory/evidence and record reviews, but cannot mutate grants or policies.
 - `developer`: can read inventory/evidence.
 - `auditor`: read-only inventory/evidence role.

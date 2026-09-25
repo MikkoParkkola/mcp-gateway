@@ -1801,6 +1801,7 @@ impl Gateway {
                     dashboard_bootstrap: Arc::clone(&dashboard_bootstrap),
                     // Only the session cookie reads this; re-validation sets none.
                     tls_enabled: false,
+                    live_config: Arc::clone(&live_config),
                 },
             ),
         );
