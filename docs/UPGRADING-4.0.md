@@ -1,11 +1,11 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35 or 36 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37 or 38 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27 and 30-34 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34 and 37 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -13,10 +13,10 @@ changes to the license and to a removed CLI surface rather than to running behav
 7 and 8 are decided per backend, so there is no single moment at startup at which
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
-Item 36 refuses the start with its own error, which names the setting, so a notice would
+Item 38 refuses the start with its own error, which names the setting, so a notice would
 only repeat it.
 
-**Items 2, 8, 12, 13, 27, 29, 30, 34, 35 and 36 refuse the gateway's start (item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 36 only for a credential over plain HTTP on a network bind without mTLS). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37 and 38 refuse the gateway's start (item 37 only above one declared replica; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -55,7 +55,9 @@ upgrading a running deployment.
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
-| 36 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
+| 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
+| 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
+| 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -391,18 +393,15 @@ Task records live in the `state` volume. An `emptyDir` survives a container rest
 that is replaced (rollout, eviction, reschedule) starts empty. This release has no
 chart setting for a persistent volume.
 
-Each pod has its own `state` volume, and both shipped defaults run two pods: `replicaCount: 2`
-in the chart's `values.yaml` and `replicas: 2` in the enterprise-alpha `base/deployment.yaml`.
-The Service has no session affinity. A task created on one pod is unknown to the other, so a
-poll, cancel or result request routed to the other pod answers as if the task did not exist.
-If your clients use the task API, set `replicaCount: 1` (or `replicas: 1`) until shared task
-storage exists.
+Each pod has its own `state` volume, so a task created on one pod is unknown to another. Both
+shipped defaults now run one pod, and more than one is refused while the task surface is on
+(item 37).
 
 The control-plane store still sits next to the config on
 the read-only ConfigMap mount, so governance mutations stay off in a chart install (one WARN at
 startup). That is tracked separately.
 
-Both still serve the bearer token over plain HTTP inside the cluster. Item 36 makes that a
+Both still serve the bearer token over plain HTTP inside the cluster. Item 38 makes that a
 declared choice, `cleartext_http: cluster_internal`, rather than a silent one.
 ## 22. The governance store location is configurable
 
@@ -568,7 +567,9 @@ server:
 ```
 
 A warning names the backend and tool of a modern un-keyed call, at most once per
-tool per 10 minutes.
+tool per 10 minutes. The gateway remembers at most 1024 (backend, tool) pairs
+for this; when full it forgets expired pairs first, then the oldest, so a tool
+it forgot can warn again inside the 10 minutes.
 
 ## 29. A config key the gateway does not read fails the load
 
@@ -734,8 +735,10 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   commands that do not serve print a warning and skip the file.
 - **Helm:** the chart now sets `podSecurityContext.fsGroup: 1001` and
   `configVolume.defaultMode: 288` (octal `0440`), so the projected config is `root:1001 0440`.
-  Without them the projection is `root:root 0644` and is refused. If you run another UID, or a mesh
-  injects its own group, override both values together.
+  Without them the projection is `root:root 0644` and is refused. `fsGroup` renders only as 1001,
+  the image's group: any other value, root included, fails `helm template` (item 36), so a mesh
+  that injects its own group is not supported. Keep `defaultMode` at `288`: the gateway reads
+  the root-owned file through group read, and a world bit is refused.
 - **enterprise-alpha:** `base/deployment.yaml` carries the same `fsGroup` and `defaultMode`.
 - **Docker Compose:** the bind-mounted `gateway.yaml` keeps its host mode and owner, and the
   container runs as UID 1001. `chmod 600` it and `chown 1001` it; that passes whoever your host
@@ -752,7 +755,50 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
 
 Parent directory permissions, and the `capabilities/` files, are not checked.
 
-## 36. A credential over plain HTTP on a network bind refuses the start
+## 36. The Helm chart pins its pod identity and caps its `state` volume
+
+- **`podSecurityContext.runAsUser`, `runAsGroup` and `fsGroup` accept only 1001**, the image's
+  UID/GID. The values schema refuses any other value, root included, so `helm lint` and
+  `helm template` fail; a template guard refuses it again when schema validation is skipped.
+  Item 35's config read relies on that `fsGroup`. **Remove any `fsGroup` or `runAsUser`
+  override** you set for item 35 or an earlier chart; a mesh that injects its own group is not
+  supported.
+- **The `state` emptyDir under HOME has a `sizeLimit` of `1Gi`.** A pod whose task store and
+  npm/uv caches outgrow it is evicted and restarts empty. Raise it with
+  `--set stateVolume.sizeLimit=4Gi`; the value is required. enterprise-alpha's
+  `base/deployment.yaml` carries the same `1Gi`.
+- **enterprise-alpha stops mounting a service account token.** The gateway never calls the
+  Kubernetes API; run `mcp-gateway kubernetes` from a place that has kubectl credentials.
+
+## 37. More than one replica is refused while per-process state is on
+
+Key-server tokens, managed accounts custody and task records each live in one process. Behind
+a Service with no session affinity, a token minted on one pod is a 401 on another, a revoke
+reaches one pod, and a task created on one pod is not found on another.
+
+- **New `server.replicas`, default 1, is declared, not observed.** Above 1, startup refuses
+  with a reason per feature: `key_server.enabled` (the `InMemoryTokenStore`), enabled
+  `accounts` (`single_process` custody), and `server.modern_protocol`, on by default, which
+  serves the tasks extension. Set `replicas: 1`, or turn the modern protocol off with the
+  key server and accounts off.
+- **Helm chart:** `replicaCount` now defaults to 1 (it was 2). The chart writes
+  `server.replicas` from it, fails the render on the same rules, and fails when a
+  `config.server.replicas` you set disagrees. A `helm upgrade` that carried `replicaCount: 2`
+  now fails until you pick one of the remedies above.
+- **Without the chart, set `server.replicas` to the number of processes you run.** The
+  default of 1 is a declaration made on your behalf, not a detection: a hand-written
+  multi-replica deployment that leaves it at 1 is never refused.
+- **Recreate:** while any of the three is on, the modern protocol included (so a default
+  install), the chart renders `strategy: Recreate`, and so does the enterprise-alpha
+  manifest. An upgrade has a short outage. With all three off the chart keeps
+  `RollingUpdate`.
+- **enterprise-alpha:** `base/deployment.yaml` runs one replica and `base/configmap.yaml`
+  declares `server.replicas: 1`. Change both together.
+- **`kubectl scale` and an HPA bypass this check**, because they change the pod count without
+  the declaration. Don't scale that way. See `docs/DEPLOYMENT.md`, "Replica Count and
+  per-process state".
+
+## 38. A credential over plain HTTP on a network bind refuses the start
 
 In 3.x a gateway with `auth.enabled` bound to `0.0.0.0` served bearer tokens and API keys over
 plain HTTP without a word. It now refuses to serve when all of these hold:

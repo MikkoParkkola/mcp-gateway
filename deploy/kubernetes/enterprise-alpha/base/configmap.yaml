@@ -23,6 +23,10 @@ data:
       # /metrics answers only this token, never the auth bearer. A missing
       # variable does not stop startup; /metrics then answers 401.
       metrics_token: "env:MCP_GATEWAY_METRICS_TOKEN"
+      # Equal to spec.replicas in base/deployment.yaml; kustomize cannot copy it.
+      # Above 1 the gateway refuses to start with the modern protocol on, or with
+      # key_server or accounts enabled (UPGRADING-4.0 §37).
+      replicas: 1
       # Bearer tokens reach this pod in plain HTTP over the cluster network,
       # which the gateway refuses unless told who protects them (C3). Honest
       # only while public_url above is the Service name and the Service stays

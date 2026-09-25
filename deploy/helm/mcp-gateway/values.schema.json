@@ -101,12 +101,35 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "runAsUser": {
+          "type": "integer",
+          "description": "Must be 1001, the image's gateway UID/GID; any other value fails the render.",
+          "const": 1001
+        },
+        "runAsGroup": {
+          "type": "integer",
+          "description": "Must be 1001, the image's gateway UID/GID; any other value fails the render.",
+          "const": 1001
+        },
         "fsGroup": {
           "type": "integer",
-          "minimum": 0,
-          "description": "Group the kubelet gives mounted volumes; the gateway reads its root-owned config through it (CONFIG.2)."
+          "description": "Must be 1001, the image's gateway GID; any other value fails the render. The gateway reads its root-owned config through this group (CONFIG.2).",
+          "const": 1001
         }
       }
+    },
+    "stateVolume": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sizeLimit": {
+          "type": "string",
+          "description": "sizeLimit of the state emptyDir (HOME); past it the kubelet evicts the pod."
+        }
+      },
+      "required": [
+        "sizeLimit"
+      ]
     },
     "configVolume": {
       "type": "object",

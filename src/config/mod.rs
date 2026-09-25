@@ -1326,6 +1326,12 @@ pub struct ServerConfig {
     /// which must keep it; any new export of this struct must redact it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_token: Option<String>,
+    /// How many processes serve this config: DECLARED, not observed. Nothing
+    /// in a pod can see its replica count, and `kubectl scale` or an HPA
+    /// changes it without touching config, so the Helm chart writes it from
+    /// `replicaCount`. Above 1, startup refuses the per-process state
+    /// (`support::replica_state_refusal`, UPGRADING-4.0 §37).
+    pub replicas: u32,
     /// Whether plain HTTP may carry credentials on a network bind (C3,
     /// UPGRADING-4.0). See [`CleartextHttp`].
     #[serde(default, skip_serializing_if = "CleartextHttp::is_refuse")]
@@ -1393,6 +1399,7 @@ impl Default for ServerConfig {
             metrics_token: None,
             cleartext_http: CleartextHttp::Refuse,
             cluster_domain: None,
+            replicas: 1,
         }
     }
 }
@@ -1418,6 +1425,7 @@ impl std::fmt::Debug for ServerConfig {
             )
             .field("cleartext_http", &self.cleartext_http)
             .field("cluster_domain", &self.cluster_domain)
+            .field("replicas", &self.replicas)
             .finish()
     }
 }

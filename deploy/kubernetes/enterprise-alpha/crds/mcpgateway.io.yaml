@@ -29,8 +29,8 @@ spec:
               properties:
                 replicas:
                   type: integer
-                  minimum: 2
-                  default: 2
+                  minimum: 1
+                  default: 1
                 service:
                   type: object
                   required: ["port"]

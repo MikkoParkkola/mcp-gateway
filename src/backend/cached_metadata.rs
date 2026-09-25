@@ -103,10 +103,27 @@ impl<T> CachedMetadata<T> {
         if state.generation != generation {
             return;
         }
+        Self::store_locked(&mut state, value, on_stored);
+    }
+
+    /// The one store both writers share, run under the caller's write guard
+    /// so `on_stored`'s derived state is published with the value.
+    fn store_locked(state: &mut CachedMetadataState<T>, value: Arc<T>, on_stored: impl FnOnce()) {
         on_stored();
         state.value = Some(value);
         state.cached_at = Some(Instant::now());
         state.ever_populated = true;
+    }
+
+    /// Store `value` now, whatever the slot holds and whether or not a fill
+    /// is on the wire. For a list the caller was shown in full, which is newer
+    /// than anything cached or in flight: the generation moves, so a fill
+    /// already on the wire lands for its own caller but cannot overwrite this.
+    /// `on_stored` runs under the write guard, as in [`Self::store_if_current`].
+    pub(crate) fn replace(&self, value: T, on_stored: impl FnOnce()) {
+        let mut state = self.state.write();
+        Self::store_locked(&mut state, Arc::new(value), on_stored);
+        state.generation = state.generation.wrapping_add(1);
     }
 
     /// Not `value.is_some()`: `invalidate_if` clears the value, so that would
