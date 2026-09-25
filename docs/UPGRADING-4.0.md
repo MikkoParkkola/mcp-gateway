@@ -44,6 +44,7 @@ upgrading a running deployment.
 | 24 | `notifications/tools/list_changed` from backend edits reaches only callers of that backend | None; a key that must hear about every backend needs `backends: ["*"]` |
 | 25 | Admin-panel grant, policy and decision writes return 409 | Change grants with `mcp-gateway identity grants`, policies in `security.*`; keep the old store files |
 | 26 | `subscriptions/listen` needs a credential and is scoped to it | Send a credential with the listen request; re-subscribe after a token is revoked or expires |
+| 27 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -485,6 +486,21 @@ by the same rule as item 24. The credential is re-checked at each notification t
 receive; a listener whose credential was revoked or has expired is closed at that point instead.
 Re-subscribe with a fresh credential. Task notifications keep their open-time ownership rule. A
 revoked listener on a quiet gateway holds its slot until the next notification it would receive.
+
+## 27. Attestation is off by default, and a bad mode fails startup
+
+In 3.x an unset `GATEWAY_ATTESTATION_MODE` attached an observe-mode validator, and any value
+the gateway did not recognise, `enforce` included, logged a warning and fell back to observe.
+A deployment that set `enforce` ran unenforced and was told so only in a log line.
+
+- **The default is off.** Unset, empty or `off` attaches no validator, so no
+  `attestation_observe_reject` audit lines are written. Set `GATEWAY_ATTESTATION_MODE=observe`
+  to keep them.
+- **`enforce` fails startup.** It is not available in this build: the direct `/mcp/{name}` route
+  and multi-step plans carry no token, so an enforce limited to `gateway_invoke` would not
+  refuse what it claims to. The error names `observe` and `off`.
+- **Any other value fails startup** with an error naming the value. The value is still trimmed and
+  matched case-insensitively, so `Observe` and ` OFF ` keep working.
 
 ## After upgrading
 

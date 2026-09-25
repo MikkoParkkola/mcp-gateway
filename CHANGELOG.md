@@ -92,6 +92,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Attestation is off by default, and `enforce` or an unrecognised
+  `GATEWAY_ATTESTATION_MODE` fails startup (breaking).** An unset mode used to
+  attach an observe-mode validator, and every unrecognised value, `enforce`
+  included, fell back to observe with a warning, so a deployment that asked
+  for enforcement silently ran without it. Unset, empty or `off` now attaches
+  no validator; set `observe` to keep the audit lines. `enforce` is refused at
+  load until it covers the direct route and multi-step plans. See
+  `docs/UPGRADING-4.0.md` item 27.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept
