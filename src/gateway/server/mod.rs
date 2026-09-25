@@ -985,6 +985,7 @@ impl Gateway {
         // validator (pure no-op). Enforce is intentionally not yet a wired mode.
         if let Some((validator, mode)) =
             crate::attestation::attestation_wiring_from_overlay(&self.env.get())
+                .map_err(Error::Config)?
         {
             info!(
                 ?mode,
