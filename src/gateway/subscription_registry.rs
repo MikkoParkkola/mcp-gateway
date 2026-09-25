@@ -26,7 +26,7 @@ use serde_json::Value;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast};
 
 use crate::gateway::auth::AuthState;
-use crate::gateway::auth::live::HeldCredential;
+use crate::gateway::auth::live::{Audience, Delivery, HeldCredential, delivery};
 use crate::protocol::subscriptions::{ListenRequest, NotificationKind};
 
 /// How many notifications a listener may fall behind before it is disconnected.
@@ -90,14 +90,33 @@ pub fn delivers(filter: &ListenRequest, notification: &Value) -> bool {
 ///
 /// Holds its permit, so capacity returns when the stream is dropped and not a
 /// moment later.
-#[derive(Debug)]
 pub struct Listener {
-    receiver: broadcast::Receiver<Value>,
+    receiver: broadcast::Receiver<Published>,
     /// The credential the stream was opened with, re-validated at delivery.
     // ci-allow-secret-debug: HeldCredential's own Debug prints only <redacted>
-    #[expect(dead_code, reason = "scaffolding: read by the fix")]
     credential: Option<HeldCredential>,
+    authorizer: AuthState,
     _permit: OwnedSemaphorePermit,
+}
+
+impl std::fmt::Debug for Listener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Listener").finish_non_exhaustive()
+    }
+}
+
+/// A published notification and who it is for.
+#[derive(Clone, Debug)]
+pub(crate) struct Published {
+    pub(crate) notification: Value,
+    audience: OwnedAudience,
+}
+
+/// The owned twin of [`Audience`], carried through the channel.
+#[derive(Clone, Debug)]
+enum OwnedAudience {
+    Backend(String),
+    Any,
 }
 
 impl Listener {
@@ -108,14 +127,23 @@ impl Listener {
     /// Returns the broadcast error so the caller can distinguish a closed
     /// channel from a lagging reader; both end the stream, for different
     /// reasons the caller logs differently.
-    pub async fn recv(&mut self) -> Result<Value, broadcast::error::RecvError> {
+    pub(crate) async fn recv(&mut self) -> Result<Published, broadcast::error::RecvError> {
         self.receiver.recv().await
+    }
+
+    /// What delivering `published` to this listener's caller should do now.
+    pub(crate) async fn delivery(&self, published: &Published) -> Delivery {
+        let audience = match &published.audience {
+            OwnedAudience::Backend(backend) => Audience::Backend(backend),
+            OwnedAudience::Any => Audience::Any,
+        };
+        delivery(&self.authorizer, self.credential.as_ref(), audience).await
     }
 }
 
 /// The notifications this gateway publishes, and the streams listening to them.
 pub struct SubscriptionRegistry {
-    sender: broadcast::Sender<Value>,
+    sender: broadcast::Sender<Published>,
     permits: Arc<Semaphore>,
     /// The authorizer every listener is re-validated against. Required at
     /// construction, so a registry that delivers without one cannot exist.
@@ -143,7 +171,9 @@ impl SubscriptionRegistry {
         }
     }
 
-    /// Admit a listener, or `None` when the ceiling is reached.
+    /// Admit a listener that presented no credential, or `None` when the
+    /// ceiling is reached. With authentication on it is closed at its first
+    /// delivery; the HTTP route refuses such a caller before this point.
     ///
     /// The permit **is** the admission: acquiring it is one atomic operation,
     /// so two concurrent requests cannot both observe room and both take it. A
@@ -160,6 +190,7 @@ impl SubscriptionRegistry {
         Some(Listener {
             receiver: self.sender.subscribe(),
             credential,
+            authorizer: self.authorizer.clone(),
             _permit: permit,
         })
     }
@@ -169,7 +200,11 @@ impl SubscriptionRegistry {
         &self,
         credential: Option<HeldCredential>,
     ) -> Result<Listener, ListenRefusal> {
-        let _ = &self.authorizer;
+        // Checked before the permit: a stream nothing could ever reach would
+        // only hold a slot.
+        if delivery(&self.authorizer, credential.as_ref(), Audience::Any).await == Delivery::Dead {
+            return Err(ListenRefusal::Unauthenticated);
+        }
         self.admit(credential).ok_or(ListenRefusal::Full)
     }
 
@@ -181,13 +216,19 @@ impl SubscriptionRegistry {
         // An error means nobody is listening, which is ordinary rather than a
         // failure — the gateway's tool surface changes whether or not a modern
         // client is watching.
-        let _ = self.sender.send(notification);
+        self.send(notification, OwnedAudience::Any);
+    }
+
+    fn send(&self, notification: Value, audience: OwnedAudience) {
+        let _ = self.sender.send(Published {
+            notification,
+            audience,
+        });
     }
 
     /// Publish a notification only for callers who may access `backend`.
     pub fn publish_for_backend(&self, notification: Value, backend: &str) {
-        let _ = backend;
-        self.publish(notification);
+        self.send(notification, OwnedAudience::Backend(backend.to_owned()));
     }
 
     /// How many more listeners may be admitted.
@@ -202,7 +243,6 @@ impl SubscriptionRegistry {
 pub(crate) enum ListenRefusal {
     /// The caller's credential does not authenticate, so nothing could ever
     /// be delivered to the stream it asked for.
-    #[expect(dead_code, reason = "scaffolding: returned by the fix")]
     Unauthenticated,
     /// Every listener slot is taken.
     Full,
@@ -339,7 +379,11 @@ mod tests {
 
         registry.publish(tools_list_changed());
 
-        let received = listener.recv().await.expect("a published notification");
+        let received = listener
+            .recv()
+            .await
+            .expect("a published notification")
+            .notification;
         assert_eq!(received["method"], "notifications/tools/list_changed");
     }
 
@@ -357,11 +401,11 @@ mod tests {
         registry.publish(tools_list_changed());
 
         assert_eq!(
-            first.recv().await.expect("first")["method"],
+            first.recv().await.expect("first").notification["method"],
             "notifications/tools/list_changed"
         );
         assert_eq!(
-            second.recv().await.expect("second")["method"],
+            second.recv().await.expect("second").notification["method"],
             "notifications/tools/list_changed"
         );
     }
