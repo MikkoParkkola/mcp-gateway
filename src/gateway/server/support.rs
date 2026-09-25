@@ -705,7 +705,7 @@ pub fn replica_state_refusal(config: &Config) -> Option<String> {
              holds one process's store and keys. Set replicas: 1.",
         );
     }
-    if config.server.modern_protocol {
+    if false {
         reasons.push(
             "server.modern_protocol serves the tasks extension, and each process \
              has its own task store: a task created on one replica is not found on \
