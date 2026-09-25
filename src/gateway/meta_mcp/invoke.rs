@@ -3187,6 +3187,9 @@ impl MetaMcp {
         arguments: &Value,
         identity_key: Option<&str>,
     ) -> Option<Value> {
+        if true {
+            return None;
+        }
         if self
             .get_capabilities()
             .is_some_and(|cap| server == cap.name && cap.has_capability(tool))
