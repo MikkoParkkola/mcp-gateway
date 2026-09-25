@@ -50,6 +50,7 @@ fn mik_5223_caps_2_enforce_rejects_read_token_on_write_tool() {
         .check_attestation(
             &json!({"server": "s", "tool": "write", "attestation": token}),
             Some("agent-9"),
+            "gateway_invoke",
         )
         .unwrap_err();
     // THEN the call is rejected with the attestation JSON-RPC code -32002
@@ -61,6 +62,7 @@ fn mik_5223_caps_2_enforce_rejects_read_token_on_write_tool() {
     let ok = mm.check_attestation(
         &json!({"server": "s", "tool": "read", "attestation": token_with(vec!["read".to_string()])}),
         Some("agent-9"),
+        "gateway_invoke",
     );
     assert!(ok.is_ok());
 }
@@ -75,6 +77,7 @@ fn mik_5223_caps_3_observe_logs_capability_mismatch_without_blocking() {
     let res = mm.check_attestation(
         &json!({"server": "s", "tool": "write", "attestation": token}),
         Some("agent-9"),
+        "gateway_invoke",
     );
     // THEN the call is NOT blocked...
     assert!(res.is_ok());
@@ -95,7 +98,7 @@ fn no_validator_is_a_no_op_even_without_token() {
     // WHEN a call carries no attestation token
     // THEN the gate passes (zero-cost no-op, byte-identical to before)
     assert!(
-        mm.check_attestation(&json!({"server": "s", "tool": "t"}), None)
+        mm.check_attestation(&json!({"server": "s", "tool": "t"}), None, "gateway_invoke")
             .is_ok()
     );
 }
@@ -109,6 +112,7 @@ fn observe_mode_passes_invalid_token_but_audits_it() {
     let res = mm.check_attestation(
         &json!({"server": "s", "tool": "t", "attestation": "forged.token"}),
         Some("agent-9"),
+        "gateway_invoke",
     );
     // THEN the call is NOT blocked (observe never breaks traffic)...
     assert!(res.is_ok());
@@ -126,7 +130,7 @@ fn enforce_mode_rejects_missing_token_fail_closed() {
     let mm = make_meta_mcp().with_attestation(Arc::clone(&v), AttestationMode::Enforce);
     // WHEN a call presents NO attestation token
     let err = mm
-        .check_attestation(&json!({"server": "s", "tool": "t"}), None)
+        .check_attestation(&json!({"server": "s", "tool": "t"}), None, "gateway_invoke")
         .unwrap_err();
     // THEN the call is rejected with the attestation JSON-RPC code
     let msg = err.to_string();
@@ -144,6 +148,7 @@ fn enforce_mode_rejects_forged_token() {
         .check_attestation(
             &json!({"server": "s", "tool": "t", "attestation": "bad.signature"}),
             Some("agent-9"),
+            "gateway_invoke",
         )
         .unwrap_err();
     // THEN it is rejected, and the forgery attempt is audited
@@ -161,6 +166,7 @@ fn enforce_mode_admits_valid_token() {
     let res = mm.check_attestation(
         &json!({"server": "s", "tool": "t", "attestation": token}),
         Some("agent-9"),
+        "gateway_invoke",
     );
     // THEN the call is admitted and the success is counted (no rejection)
     assert!(res.is_ok());
@@ -179,6 +185,7 @@ fn observe_mode_admits_valid_token_without_auditing() {
     let res = mm.check_attestation(
         &json!({"server": "s", "tool": "t", "attestation": token}),
         Some("agent-9"),
+        "gateway_invoke",
     );
     // THEN it passes and counts as a successful validation
     assert!(res.is_ok());
@@ -204,6 +211,7 @@ fn resolved_observe_wiring_admits_under_capability_token_and_audits() {
     let res = mm.check_attestation(
         &json!({"server": "s", "tool": "write", "attestation": "forged.token"}),
         Some("agent-9"),
+        "gateway_invoke",
     );
     assert!(res.is_ok(), "observe must never block the call");
     assert_eq!(validator.rejections_total(), 1);
@@ -220,7 +228,7 @@ fn resolved_off_wiring_is_a_pure_no_op() {
     ));
     let mm = make_meta_mcp(); // no attestation attached, as off would leave it
     assert!(
-        mm.check_attestation(&json!({"server": "s", "tool": "t"}), None)
+        mm.check_attestation(&json!({"server": "s", "tool": "t"}), None, "gateway_invoke")
             .is_ok()
     );
 }

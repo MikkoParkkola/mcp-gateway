@@ -183,14 +183,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explanation. `MCP_GATEWAY_*` environment variables are not checked. Reloads
   run the same check and keep the running config on refusal. See
   UPGRADING-4.0.md item 29.
-- **Attestation is off by default, and `enforce` or an unrecognised
+- **Attestation is off by default, and an unrecognised
   `GATEWAY_ATTESTATION_MODE` fails startup (breaking).** An unset mode used to
   attach an observe-mode validator, and every unrecognised value, `enforce`
   included, fell back to observe with a warning, so a deployment that asked
   for enforcement silently ran without it. Unset, empty or `off` now attaches
-  no validator; set `observe` to keep the audit lines. `enforce` is refused at
-  load until it covers the direct route and multi-step plans. See
+  no validator; set `observe` to keep the audit lines. See
   `docs/UPGRADING-4.0.md` item 30.
+- **Attestation `enforce` enforces (breaking).** It refuses, with -32002, a
+  call whose token is missing or invalid: `gateway_invoke` (the `attestation`
+  argument), the direct `/mcp/{backend}` route and surfaced tools
+  (`_meta["io.mcp-gateway/attestation"]`, stripped before forwarding).
+  Playbooks and code-mode plans are refused under enforce. Enforce without
+  `GATEWAY_ATTESTATION_SIGNING_KEY` fails startup. See
+  `docs/UPGRADING-4.0.md` item 46.
 - **A credential over plain HTTP on a network bind refuses the start
   (breaking).** With `auth`, `agent_auth` or the key server on, a non-loopback
   bind or `public_url`, and no mTLS, the gateway refuses to serve, and a reload

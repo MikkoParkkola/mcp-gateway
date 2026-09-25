@@ -32,6 +32,8 @@ use tower::ServiceExt;
 
 use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targets_for_call};
 
+/// MIK-7570.ATTEST.1: enforce on the direct route and on surfaced tools.
+mod attestation_routes;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
 mod meta_firewall_verdict;

@@ -156,6 +156,13 @@ fn apply_backend_tool_call_security(
     }
 }
 
+/// Remove the attestation token from `params._meta` and return it if a string.
+fn take_attestation_token(params: Option<&mut Value>) -> Option<String> {
+    let meta = params?.get_mut("_meta")?.as_object_mut()?;
+    let token = meta.remove(crate::protocol::mrtr::ATTESTATION_META)?;
+    token.as_str().map(str::to_owned)
+}
+
 /// Build a `403 Forbidden` JSON-RPC error response for security rejections.
 fn backend_security_error(id: &RequestId, message: &str) -> (StatusCode, Json<Value>) {
     build_http_error_response(Some(id.clone()), -32600, message, StatusCode::FORBIDDEN)
@@ -546,12 +553,15 @@ pub(super) async fn backend_handler(
     };
 
     // Parse request
-    let (id, method, params) = match parse_request(&json_request) {
+    let (id, method, mut params) = match parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
             return build_http_response(&response, StatusCode::BAD_REQUEST);
         }
     };
+    // Out of the owned params before anything reads or forwards them, so no
+    // arm (sanitized, passthrough, no-tool, other methods) sends it upstream.
+    let attestation = take_attestation_token(params.as_mut());
 
     let protocol_header = inbound_headers
         .get("mcp-protocol-version")
@@ -824,6 +834,21 @@ pub(super) async fn backend_handler(
             e.to_string(),
             StatusCode::FORBIDDEN,
         );
+    }
+
+    // MIK-7570.ATTEST.1: attested like `gateway_invoke`, for every tools/call
+    // shape, and ahead of the idempotency guard so a replay needs a token too.
+    if method == "tools/call" {
+        let tool = params.as_ref().and_then(|p| p.get("name")).cloned();
+        let envelope = json!({"tool": tool, "attestation": attestation});
+        let agent = client.as_ref().map(|c| c.name.as_str());
+        if let Err(e) = state
+            .meta_mcp
+            .check_attestation(&envelope, agent, "direct_route")
+        {
+            let (code, message) = (e.to_rpc_code(), e.to_string());
+            return build_http_error_response(Some(id), code, message, StatusCode::FORBIDDEN);
+        }
     }
 
     // MIK-7272.SUB.4: the bypass re-enforces the idempotency guard locally, the
