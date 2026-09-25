@@ -74,4 +74,27 @@ data:
     {{- if and (gt $replicas 1) $reasons }}
     {{- fail (printf "replicaCount is %d, and per-process state cannot be shared between pods: %s" $replicas $reasons) }}
     {{- end }}
+    {{- /* C3: plain HTTP carrying the bearer token. cluster_internal is honest
+           only while the port stays inside the cluster and callers dial the
+           Service name, so publishing it any other way fails the render. */}}
+    {{- $cleartext := include "mcp-gateway.cleartextHttp" . }}
+    {{- if $cleartext }}
+    {{- $_ := set $cfg.server "cleartext_http" $cleartext }}
+    {{- end }}
+    {{- if eq $cleartext "cluster_internal" }}
+    {{- $fix := "set server.cleartextHttp=tls_terminated_upstream when an ingress or proxy terminates TLS in front of the gateway" }}
+    {{- if ne .Values.service.type "ClusterIP" }}
+    {{- fail (printf "service.type %s publishes the gateway's plain-HTTP port outside the cluster, but server.cleartextHttp is cluster_internal: %s." .Values.service.type $fix) }}
+    {{- end }}
+    {{- $url := trim (toString ($cfg.server.public_url | default "")) }}
+    {{- $host := "" }}
+    {{- if $url }}
+    {{- $host = regexReplaceAll ":[0-9]+$" (urlParse $url).host "" }}
+    {{- end }}
+    {{- $domain := $cfg.server.cluster_domain | default "cluster.local" }}
+    {{- $svc := printf "%s.%s.svc" (include "mcp-gateway.fullname" .) .Release.Namespace }}
+    {{- if not (regexMatch (printf "^%s(\\.%s)?$" (regexQuoteMeta $svc) (regexQuoteMeta $domain)) $host) }}
+    {{- fail (printf "config.server.public_url host %s is not this release's Service name %s[.%s], but server.cleartextHttp is cluster_internal: %s." ($host | default "(unset or empty)") $svc $domain $fix) }}
+    {{- end }}
+    {{- end }}
     {{- toYaml $cfg | nindent 4 }}
