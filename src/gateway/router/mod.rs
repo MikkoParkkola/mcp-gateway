@@ -61,6 +61,8 @@ mod direct_list_scope_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 #[cfg(test)]
+mod log_level_admin_tests;
+#[cfg(test)]
 mod probe_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
