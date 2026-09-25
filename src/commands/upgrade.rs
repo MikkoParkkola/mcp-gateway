@@ -607,7 +607,7 @@ pub fn run_upgrade_command(dry_run: bool, quiet: bool, config_dir: Option<&Path>
             };
             match ctx.run() {
                 Ok(n) => {
-                    print_upgrade_summary(installed, current, n, dry_run, quiet);
+                    print_upgrade_summary(&installed, &current, n, dry_run, quiet);
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
@@ -619,7 +619,13 @@ pub fn run_upgrade_command(dry_run: bool, quiet: bool, config_dir: Option<&Path>
     }
 }
 
-fn print_upgrade_summary(old: SemVer, new: SemVer, _migrations: usize, dry_run: bool, quiet: bool) {
+fn print_upgrade_summary(
+    old: &SemVer,
+    new: &SemVer,
+    _migrations: usize,
+    dry_run: bool,
+    quiet: bool,
+) {
     if quiet {
         return;
     }
