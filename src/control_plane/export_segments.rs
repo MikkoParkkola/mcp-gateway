@@ -29,7 +29,10 @@ pub(super) struct Scan {
 /// file is the newest sealed + 1 (0 for an unrotated log).
 fn files(log_path: &Path, from: Option<u64>) -> std::io::Result<Vec<(u64, PathBuf, bool)>> {
     let sealed = list_segments(log_path)?;
-    let active_seq = sealed.last().map_or(0, |s| s.seq + 1);
+    let active_seq = match sealed.last() {
+        Some(s) => s.seq + 1,
+        None => crate::security::transparency_log::segments::active_segment_seq(log_path, 0),
+    };
     let mut out: Vec<(u64, PathBuf, bool)> = sealed
         .into_iter()
         .filter(|s| from.is_none_or(|f| s.seq >= f))

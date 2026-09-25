@@ -320,7 +320,12 @@ fn forged_hwm_fails_signed_verify() {
         segment_seq: 1,
     };
     // Rewritten without the key: an empty MAC.
-    segments::write_hwm(&path, &segments::encode_hwm(&forged, b"", "test"), true).unwrap();
+    segments::write_hwm(
+        &path,
+        &segments::encode_hwm(&forged, b"", "test").unwrap(),
+        true,
+    )
+    .unwrap();
     assert!(!verify(&path, true).ok);
 }
 

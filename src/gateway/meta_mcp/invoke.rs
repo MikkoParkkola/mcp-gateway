@@ -392,6 +392,21 @@ fn json_is_populated(value: &Value) -> bool {
     }
 }
 
+impl crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
+    /// Who a continuation minted or redeemed for this caller is bound to.
+    ///
+    /// The one derivation both the mint and the redeem read, so the two cannot
+    /// name one caller two ways.
+    pub(crate) fn principal_source(&self) -> crate::protocol::mrtr::PrincipalSource<'_> {
+        match self.stdio_nonce {
+            Some(nonce) => crate::protocol::mrtr::PrincipalSource::Stdio {
+                nonce: nonce.bytes(),
+            },
+            None => crate::protocol::mrtr::PrincipalSource::Credential(self.verified_identity),
+        }
+    }
+}
+
 /// Seal one interim exchange into a continuation this caller can redeem, or
 /// `None` when it cannot be bound (MRTR.2).
 ///
@@ -399,8 +414,8 @@ fn json_is_populated(value: &Value) -> bool {
 /// redeem it, and there is no honest name for a caller the gateway cannot
 /// identify: a placeholder would be shared with every other such caller, so the
 /// envelope would satisfy its own binding check while binding nothing. See
-/// `mrtr::principal_fingerprint` for which credential schemes are constructible
-/// today and why the others are not.
+/// `mrtr::source_fingerprint` for which credential schemes are constructible
+/// today (a verified agent, and the stdio client) and why the others are not.
 ///
 /// A keyring refusal — budget exhausted, envelope too large — lands here too,
 /// and so does a full in-flight table. The cause is logged and not returned,
@@ -422,7 +437,7 @@ async fn mint_continuation(
         .begin_exchange(
             server.to_string(),
             backend_request_state,
-            crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)?,
+            crate::protocol::mrtr::source_fingerprint(caller.principal_source())?,
             crate::protocol::mrtr::original_request_digest(server, tool, arguments),
             crate::protocol::continuation::now_unix_secs(),
         )
@@ -687,11 +702,12 @@ async fn redeem_retry(
             rejected_continuation(&error)
         })?;
 
-    // The same fingerprint the mint bound to, derived the same way. A caller the
-    // gateway cannot name cannot match one it could: `principal_fingerprint`
-    // returns `None` for exactly the credential schemes no continuation is ever
-    // minted for, so there is no handle here for such a caller to hold.
-    let Some(fingerprint) = crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)
+    // The same fingerprint the mint bound to, derived the same way — both read
+    // `caller.principal_source()`. A caller the gateway cannot name cannot match
+    // one it could: `source_fingerprint` returns `None` for exactly the
+    // credential schemes no continuation is ever minted for, so there is no
+    // handle here for such a caller to hold.
+    let Some(fingerprint) = crate::protocol::mrtr::source_fingerprint(caller.principal_source())
     else {
         warn!(
             server,
@@ -2267,22 +2283,13 @@ impl MetaMcp {
                 // which is what this path did before the bridge was wired in
                 // front of it.
                 //
-                // This arm does NOT reach stdio, and the reason is worth naming
-                // because no test enforces it. It takes both halves: the guard
-                // above admits nothing with an empty request map, so whatever
-                // gets here has questions in it, and `plan` — which refuses
-                // requests that are present and undeclared — then refuses every
-                // one of them, because `stdio_caller_context` declares
-                // `Declared::NONE`. `run` calls `plan` before `ask`, so that
-                // refusal lands as `Refused` one step before any delivery is
-                // attempted, never as `NoSession`. That is what keeps the
-                // deliberate stdio refusal documented on `NoClientChannel`
-                // intact, and MIK-7387 the only thing that lifts it. The two
-                // halves are pinned separately and joined by nothing:
-                // `MIK-7212.WIRE.10` in the MRTR.7 test plan is that missing
-                // row. Until it lands, an edit to either half breaks this
-                // silently, so change `Declared::NONE` or `plan`'s position and
-                // re-read this arm.
+                // Stdio does not reach this arm. The serve loop passes a live
+                // channel (MIK-7387), so its legacy caller is asked in-band;
+                // the dispatchers outside it (a batch, `dispatch_single`)
+                // carry `NoClientChannel` but declare `Declared::NONE`, so
+                // `plan` refuses as `Refused` before any delivery is tried. A
+                // stdio context that did fall through would mint, bound by its
+                // process nonce (MIK-7570.STDIO.1).
                 //
                 // ponytail: `run` walks rounds internally and a session lost on
                 // round two surfaces the same way, so the mint would replay
@@ -5264,6 +5271,7 @@ mod identity_propagation_enforcement_tests {
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
+            stdio_nonce: None,
             verified_identity: None,
             api_key_name: None,
             agent_id: None,
@@ -5342,6 +5350,7 @@ mod identity_propagation_enforcement_tests {
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
+            stdio_nonce: None,
             verified_identity: None,
             api_key_name: None,
             agent_id: None,
@@ -5426,6 +5435,7 @@ mod identity_propagation_enforcement_tests {
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
+            stdio_nonce: None,
             verified_identity: None,
             api_key_name: None,
             agent_id: None,
@@ -5477,6 +5487,7 @@ mod identity_propagation_enforcement_tests {
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
+            stdio_nonce: None,
             verified_identity: Some(&id),
             api_key_name: None,
             agent_id: None,
@@ -5522,6 +5533,7 @@ mod identity_propagation_enforcement_tests {
             agent_id: None,
             agent_declared: None,
             grant_subject: None,
+            stdio_nonce: None,
             verified_identity: None,
             is_admin: false,
             input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -5564,6 +5576,7 @@ mod identity_propagation_enforcement_tests {
             is_modern: false,
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
+            stdio_nonce: None,
             verified_identity: Some(&id),
             api_key_name: None,
             agent_id: None,

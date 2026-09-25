@@ -128,6 +128,38 @@ Order matters — put the narrow rules first, because the first rule that
 matches is the only one that applies. There is no implicit allow-all rule at the
 end: an identity that matches nothing gets nothing.
 
+### Admins from your identity provider
+
+Scopes never make anyone an admin. A person signed in through the key server is
+a gateway admin when a `control_plane.role_mapping` rule says `role: admin` for
+them:
+
+```yaml
+control_plane:
+  role_mapping:
+    rules:
+      - { issuer: <your-idp-issuer>, group: <your-admin-group>, role: admin }
+```
+
+That grants every admin surface: the admin meta-tools (kill, revive, reload,
+stats, webhook status), the `/ui/api/*` admin routes and the control plane.
+
+- Use `group`, the identity provider's admin group. `email` suits a small team
+  and matches only a verified address. A `role: admin` rule whose only condition
+  is `domain` fails to load: "everyone at corp.com is an admin" is almost never
+  meant.
+- The rule is issuer-scoped: the same group name from another issuer grants
+  nothing.
+- The mapping is read on every request, so a reload that removes the rule
+  revokes admin on the next request, including for tokens issued earlier.
+- Only a key-server identity (an exchanged token or a delegated bearer) can be
+  an admin this way. `trusted_proxy` and `cloudflare_access` header identities
+  and mTLS certificates cannot.
+- The static bearer and `api_keys[].admin: true` stay admin. They are the
+  break-glass path.
+- Each `role: admin` rule logs one warning when the config loads, naming the
+  rule index, the issuer and the kind of condition.
+
 ## 3. Who the backend thinks is calling
 
 Identity propagation is per backend and opt-in. A backend without it keeps
