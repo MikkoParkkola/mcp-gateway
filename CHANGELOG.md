@@ -47,6 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Helm chart and the enterprise-alpha manifests start.** They never had,
+  since the chart arrived in #292: `serve --host` exited 2, `backends: []` failed
+  the map-typed config, and the task store could not open under a read-only
+  root with no writable `HOME`. Ahead of all three, the kubelet refused the pod
+  because the image names its user and `runAsNonRoot` needs a number. The args
+  drop the subcommand, `backends` is `{}`, the pod mounts an `emptyDir` `state`
+  volume at `/var/lib/mcp-gateway` with `HOME` pointing at it, and the pod runs
+  as UID 1001. A new CI step installs the chart on the PR's own image in kind
+  and requires Ready and `/livez` 200; the existing kind job drives `pause` and
+  could not see any of this. See `docs/UPGRADING-4.0.md` item 21.
+
 - **The `-full` variant's smoke gate bounds every probe.** Four of its six probes
   resolve over the network — npx and uvx fetch a package, git fetches a remote —
   and none was bounded. On a runner whose resolver stops answering, the gate
