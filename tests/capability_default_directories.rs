@@ -17,8 +17,10 @@ use mcp_gateway::config::CapabilityConfig;
 #[test]
 fn default_capability_directories_ignore_a_private_checkout_under_home() {
     let home = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir_all(home.path().join("github/mcp-gateway-private/capabilities"))
-        .expect("create the private checkout path");
+    // A sibling checkout under HOME, named after this crate, as a developer
+    // machine would have it. Nothing in config names it.
+    let sibling = format!("github/{}-private/capabilities", env!("CARGO_PKG_NAME"));
+    std::fs::create_dir_all(home.path().join(sibling)).expect("create a sibling checkout");
     // SAFETY: the only test in this binary; nothing else reads the environment.
     unsafe { std::env::set_var("HOME", home.path()) };
 

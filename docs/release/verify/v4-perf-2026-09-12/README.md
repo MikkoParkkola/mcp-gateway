@@ -2,7 +2,8 @@
 
 Raw Criterion output for the `NFR.PERF.1` re-measurement, copied off `bench-host` on
 2026-09-13 so the evidence outlives one machine. `run.sh` is the script that produced
-both logs, verbatim. The logs carry a `.txt` extension because `.gitignore` excludes
+both logs; its three host paths are now `WT`, `LOG` and `CARGO_TARGET_DIR` variables with
+defaults under `$HOME`, and the commands are unchanged. The logs carry a `.txt` extension because `.gitignore` excludes
 `*.log`; an earlier commit added this directory without them and the exclusion dropped
 them silently, which is the failure mode a checksum list exists to make visible.
 

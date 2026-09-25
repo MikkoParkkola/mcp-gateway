@@ -217,7 +217,7 @@ any interruption, and the rollback is rehearsed in step 4 rather than assumed.
 ## Procedure
 
 ```sh
-cd <repos>/mcp-gateway                       # any checkout carrying scripts/dev/
+cd "$(git rev-parse --show-toplevel)"        # run from any checkout carrying scripts/dev/
 OLD=3.4.0-f30539af
 NEW=3.5.1                                     # or 4.0.0-<sha> for a self-built binary
 
@@ -272,7 +272,7 @@ ln -sfn ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway ~/.local/bin/start-m
 launchctl kickstart -k gui/$(id -u)/com.example.mcp-gateway
 
 # 6. Watch for a restart loop for ~30s (KeepAlive Crashed + ThrottleInterval 10)
-tail -f <log-dir>/mcp-gateway.error.log    # repeating startup banner => roll back
+tail -f "$LOG_DIR/mcp-gateway.error.log"    # LOG_DIR: the plist's StandardErrorPath dir; repeating banner => roll back
 
 # 7. Grading evidence, then the three things the drift check cannot see
 python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp
@@ -293,7 +293,7 @@ Optionally repoint the stale sibling symlink `~/.local/bin/mcp-gateway` (still
 `3.4.0-851cc03f`) so a bare CLI `--version` stops disagreeing with what is serving.
 
 Step 3 goes through the launcher because the launcher is what `launchd` runs: it sources
-`~/.secrets.env` and `~/.config/mcp-gateway/secrets.env` first, so a bare binary invocation starts
+the operator's env files first (on the 3.4.0 host these were two files under `$HOME`), so a bare binary invocation starts
 every backend credential-less and its failures mean nothing. What the smoke proves is
 that the binary runs on this machine, that the 3.4.0 config still parses, and that the
 guard fires on the wire. What it does not prove is backend health under the real data
