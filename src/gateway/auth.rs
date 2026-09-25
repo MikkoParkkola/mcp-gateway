@@ -1119,6 +1119,18 @@ mod backend_grant_tests;
 mod tests {
     use super::*;
 
+    #[test]
+    fn empty_bearer_refused_by_try_from_config() {
+        let config = AuthConfig {
+            enabled: true,
+            bearer_token: Some(String::new()),
+            ..AuthConfig::default()
+        };
+        let err = ResolvedAuthConfig::try_from_config(&config)
+            .expect_err("an empty bearer would match an empty presented token");
+        assert!(err.to_string().contains("empty"), "got: {err}");
+    }
+
     // ── Anonymous identity (CWE-346) ──────────────────────────────────────────
     //
     // With auth off every caller is anonymous. Anonymous must reach ordinary

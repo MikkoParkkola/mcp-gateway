@@ -315,3 +315,16 @@ mod tests {
         assert!(!result.contains("{env.PATH}"));
     }
 }
+
+#[cfg(test)]
+mod c4_tests {
+    use super::*;
+
+    #[test]
+    fn env_template_unset_errors() {
+        let err = SecretResolver::new()
+            .resolve("Bearer {env.MCP_GW_C4_NOPE}")
+            .expect_err("an unset {env.X} must not become an empty credential");
+        assert!(err.to_string().contains("MCP_GW_C4_NOPE"), "got: {err}");
+    }
+}
