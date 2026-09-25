@@ -268,7 +268,7 @@ impl Backend {
         // below does -- meta-MCP invoke and the router's direct backend route
         // both funnel through this function, and minting in one dispatcher
         // would leave the sibling route forwarding the caller's token.
-        let params = substitute_progress_token(params);
+        let params = params;
 
         // SEP-2243 (MIK-7214.HEADER.5): mirror the arguments a tool's schema
         // declares onto `Mcp-Param-*` headers. This sits here, not in each
