@@ -482,6 +482,11 @@ async fn ws_delivers_a_progress_notification_to_the_call_that_supplied_the_token
         .expect("the caller's sink must hold the progress frame");
     assert_eq!(got.method, "notifications/progress");
     assert_eq!(progress_value(&got), Some(&json!(1)));
+    assert_eq!(
+        got.params.as_ref().and_then(|p| p.get("progressToken")),
+        Some(&json!("tok-a")),
+        "the frame reaches the caller with the token it carried"
+    );
 }
 
 /// S-03 over WebSocket: two calls in flight on one socket. The progress
@@ -565,4 +570,81 @@ async fn ws_drops_a_notification_it_cannot_attribute_to_a_call() {
         rx.try_recv().is_err(),
         "only the attributable frame may arrive"
     );
+}
+
+/// A token retires with its call: a later call on the same socket that
+/// reuses it registers afresh and receives its own progress. A leaked
+/// registration would make the second call's progress vanish into the first
+/// call's closed sink.
+#[tokio::test]
+async fn ws_a_retired_progress_token_can_be_registered_again() {
+    let url = mock_backend(|req| vec![progress(Some("tok-a"), 1), response_to(&req)]).await;
+    let t = connected(&url).await;
+    for round in 0..2 {
+        let (call, mut rx) = crate::transport::notification_sink::scope(
+            t.request("tools/call", Some(call_params("tok-a"))),
+        );
+        tokio::time::timeout(WAIT, call)
+            .await
+            .expect("the call must not hang")
+            .expect("the call must succeed");
+        let got = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("round {round}: progress must arrive: {e:?}"));
+        assert_eq!(progress_value(&got), Some(&json!(1)));
+        assert!(
+            t.inner.progress_destinations.is_empty(),
+            "round {round}: the registration retires with its call"
+        );
+    }
+}
+
+/// Vacant-only: while one call holds a token, a second call that supplies the
+/// same token owns nothing. The holder keeps its progress, the second call
+/// gets none, and finishing the second call does not retire the holder's
+/// registration.
+#[tokio::test]
+async fn ws_a_live_token_is_never_rerouted_to_a_second_call() {
+    let mut first: Option<Value> = None;
+    let url = mock_backend(move |req| {
+        let Some(other) = first.take() else {
+            first = Some(req);
+            return Vec::new();
+        };
+        // Finish the second call first, whichever order the two arrived in.
+        let (second, holder) = if req["params"]["name"] == "second" {
+            (req, other)
+        } else {
+            (other, req)
+        };
+        vec![
+            response_to(&second),
+            progress(Some("tok-a"), 7),
+            response_to(&holder),
+        ]
+    })
+    .await;
+    let t = connected(&url).await;
+
+    let (a_call, mut a_rx) = crate::transport::notification_sink::scope(
+        t.request("tools/call", Some(call_params("tok-a"))),
+    );
+    let (b_call, mut b_rx) = crate::transport::notification_sink::scope(async {
+        // Let A register first, so B is the call that finds the token taken.
+        tokio::task::yield_now().await;
+        let mut params = call_params("tok-a");
+        params["name"] = json!("second");
+        t.request("tools/call", Some(params)).await
+    });
+    let (a, b) = tokio::time::timeout(WAIT, async { tokio::join!(a_call, b_call) })
+        .await
+        .expect("both calls must complete");
+    a.expect("call A must succeed");
+    b.expect("call B must succeed");
+
+    let got = a_rx
+        .try_recv()
+        .expect("the holder keeps its progress after the second call finished");
+    assert_eq!(progress_value(&got), Some(&json!(7)));
+    assert!(b_rx.try_recv().is_err(), "the second call owns nothing");
 }
