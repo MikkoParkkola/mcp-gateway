@@ -145,9 +145,25 @@ fn nested_invented() -> Value {
     json!({"edits": [{"oldText": "a", "newText": "b", "type": "replace"}]})
 }
 
+/// The tool result the caller sees. `gateway_invoke` carries the backend's
+/// result as JSON text inside its own envelope, as it does for a capability
+/// refusal; the direct route returns it as the JSON-RPC result itself.
+fn tool_result(body: &Value) -> Value {
+    body["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|t| serde_json::from_str::<Value>(t).ok())
+        .filter(|inner| inner.get("isError").is_some())
+        .unwrap_or_else(|| body["result"].clone())
+}
+
+fn is_error(body: &Value) -> bool {
+    tool_result(body)["isError"] == json!(true)
+}
+
 fn is_refusal(body: &Value) -> bool {
-    body["result"]["isError"] == json!(true)
-        && body["result"]["content"][0]["text"]
+    let result = tool_result(body);
+    result["isError"] == json!(true)
+        && result["content"][0]["text"]
             .as_str()
             .is_some_and(|t| t.contains("edits[0].type"))
 }
@@ -172,7 +188,7 @@ async fn mcp_top_level_invented_key_refused() {
         invoke(&json!({"edits": [], "exfil": 1})),
     )
     .await;
-    assert_eq!(body["result"]["isError"], json!(true), "{body}");
+    assert!(is_error(&body), "{body}");
     assert!(fx.calls.lock().is_empty(), "the backend saw the call");
 }
 
@@ -203,7 +219,7 @@ async fn enforcement_off_forwards_invented_keys() {
     };
     let fx = fixture(config, true).await;
     let (_, body) = post(&fx.router, "/mcp/edits", direct(&nested_invented())).await;
-    assert_ne!(body["result"]["isError"], json!(true), "{body}");
+    assert!(!is_error(&body), "{body}");
     assert_eq!(fx.calls.lock().len(), 1);
 }
 
@@ -212,7 +228,7 @@ async fn enforcement_off_forwards_invented_keys() {
 async fn cold_slot_forwards_and_counts() {
     let fx = fixture(BackendConfig::default(), false).await;
     let (_, body) = post(&fx.router, "/mcp/edits", direct(&nested_invented())).await;
-    assert_ne!(body["result"]["isError"], json!(true), "{body}");
+    assert!(!is_error(&body), "{body}");
     assert_eq!(fx.calls.lock().len(), 1, "a cold slot must forward");
 }
 
@@ -223,7 +239,7 @@ async fn mcp_args_forwarded_byte_identical() {
     let fx = fixture(BackendConfig::default(), true).await;
     let args = json!({"edits": [], "note": null, "count": "5"});
     let (_, body) = post(&fx.router, "/mcp", invoke(&args)).await;
-    assert_ne!(body["result"]["isError"], json!(true), "{body}");
+    assert!(!is_error(&body), "{body}");
     let calls = fx.calls.lock();
     assert_eq!(calls.len(), 1, "{body}");
     assert_eq!(calls[0]["arguments"], args);
@@ -241,7 +257,7 @@ async fn injected_secret_key_not_refused() {
     );
     let fx = fixture_with(BackendConfig::default(), true, Some(injector)).await;
     let (_, body) = post(&fx.router, "/mcp", invoke(&json!({"edits": []}))).await;
-    assert_ne!(body["result"]["isError"], json!(true), "{body}");
+    assert!(!is_error(&body), "{body}");
     let calls = fx.calls.lock();
     assert_eq!(calls.len(), 1, "{body}");
     assert!(
@@ -273,7 +289,7 @@ fn refused_call_is_not_counted_as_an_invocation() {
     });
     assert!(is_refusal(&refused), "{refused}");
     let (before, valid) = valid;
-    assert_ne!(valid["result"]["isError"], json!(true), "{valid}");
+    assert!(!is_error(&valid), "{valid}");
     let counted = |text: &str| {
         text.lines()
             .any(|l| l.starts_with("mcp_tool_invocations_total"))
