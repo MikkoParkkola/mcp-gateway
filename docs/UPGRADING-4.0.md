@@ -53,6 +53,7 @@ upgrading a running deployment.
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
+| 36 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -747,6 +748,39 @@ reads the file. That is the case for a root-owned Kubernetes projection with `fs
   written by an older release, or copied into place, may need the `chmod`.
 
 Parent directory permissions, and the `capabilities/` files, are not checked.
+
+## 36. A secret reference that resolves to nothing fails the load
+
+In 3.x an unset or empty secret became an empty credential without a word. `${GITHUB_TOKEN}`
+with `GITHUB_TOKEN` unset expanded to `""`, so the backend was sent `Authorization: Bearer `.
+An `env:` reference to a variable that was set but empty passed validation, and so did a literal
+`bearer_token: ""`. A `{env.X}` template in a capability, webhook or injected credential sent
+`""` when `X` was unset. Each of these now fails instead.
+
+- **`${VAR}` with no default must be set** in the `headers` and `env` of every enabled backend
+  and in `capabilities.directories`. The error names the field and the variable:
+  `backends.github.headers.Authorization references ${GITHUB_TOKEN}, which is not set and has
+  no default. Set it, or write ${GITHUB_TOKEN:-} to allow empty.` `${VAR:-}` is the way to say
+  empty is intended, and `${VAR:-text}` still falls back to `text`.
+- **A disabled backend is not expanded.** Its `${VAR}` text stays as written, so a variable only
+  a disabled backend needs does not stop startup. Enabling it from the admin panel writes the
+  file and reloads; while the variable is unset that reload fails, names the variable, and the
+  running config is kept.
+- **An empty secret is refused like a missing one.** `auth.bearer_token`, `auth.api_keys[].key`,
+  `agent_auth.agents[].hs256_secret` and `key_server.admin_token` written as `env:NAME` fail when
+  `NAME` is unset or empty: `auth.api_keys['ci'].key references environment variable 'CI_KEY',
+  which is empty; empty secrets are refused.` A literal `bearer_token: ""` or `key: ""` fails
+  too (`auth.bearer_token is empty.`), including when the auth config is built outside the
+  loader.
+- **`{env.X}` templates fail at call time.** Capability, webhook and injection templates resolve
+  when they are used, not at load, so the tool call or webhook delivery errors
+  (`{env.X} is not set`) instead of sending an empty credential.
+- **A listed env file that does not exist is still allowed**, but every unresolved-reference error
+  now ends with `(env files listed but not found: <paths>)`, so a mistyped `env_files` path shows
+  up next to the variable it failed to supply.
+
+`server.metrics_token` is unchanged: an unset or empty variable there still leaves the gateway
+running with `/metrics` closed (item 33). No error prints a secret value.
 
 ## After upgrading
 
