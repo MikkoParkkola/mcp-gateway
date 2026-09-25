@@ -209,7 +209,7 @@ async fn add_backend(
         }
     };
 
-    // The reload registered it, and registration announces (F24).
+    state.announce_tools_changed(&req.name).await;
 
     (
         StatusCode::CREATED,
