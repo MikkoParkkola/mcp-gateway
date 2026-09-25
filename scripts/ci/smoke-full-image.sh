@@ -21,6 +21,7 @@ IMAGE="${1:?usage: smoke-full-image.sh <image-ref>}"
 PROBE_TIMEOUT=60
 SOLVE_TIMEOUT=180
 REMOTE_TIMEOUT=120
+PULL_TIMEOUT=300
 
 # Probe output lands here rather than in a command substitution: `fail` has to
 # report and exit from this shell, and inside a substitution it would only exit
@@ -33,11 +34,15 @@ trap 'rm -f "${ANSWER}"' EXIT
 # `docker run` writes its pull progress to stderr, and run_as_gateway captures
 # stderr as the probe's answer, so `node --version` read "Unable to find image
 # ... v24.x" and failed the major check. smoke-image.sh, run last, also expects
-# the image local (`--pull never`).
-docker pull --quiet "${IMAGE}" > /dev/null
+# the image local (`--pull never`). Bounded like every probe, so a registry that
+# stops answering fails the step instead of hanging it.
+if ! timeout -k 10 "${PULL_TIMEOUT}" docker pull --quiet "${IMAGE}" > /dev/null; then
+  echo "::error::${IMAGE}: could not be pulled within ${PULL_TIMEOUT}s"
+  exit 1
+fi
 
 run_as_gateway() {
-  docker run --rm --user 1001:1001 --entrypoint sh "${IMAGE}" \
+  docker run --rm --user 1001:1001 --pull never --entrypoint sh "${IMAGE}" \
     -c "timeout -k 10 ${1} ${2}" > "${ANSWER}" 2>&1
 }
 
