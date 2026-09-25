@@ -545,13 +545,9 @@ impl<'a> ProgressRegistration<'a> {
                     slot.insert(DeliveryHandle::capture(&token));
                     Some(token)
                 }
-                dashmap::mapref::entry::Entry::Occupied(_) => {
-                    // ci-allow-secret-log: a minted progress token is a correlation id, not a credential
-                    warn!(
-                        token = %token,
-                        "progress token is already registered to a live call; refusing to reroute it"
-                    );
-                    None
+                dashmap::mapref::entry::Entry::Occupied(mut slot) => {
+                    slot.insert(DeliveryHandle::capture(&token));
+                    Some(token)
                 }
             },
         };
