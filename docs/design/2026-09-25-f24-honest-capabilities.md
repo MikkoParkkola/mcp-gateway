@@ -38,8 +38,8 @@ notifications. It advertises `listChanged: true` anyway.
 | `prompts.listChanged` | **false** | **false** | **false** |
 
 The `resources` and `prompts` objects stay, because their list, read and get methods are
-served. `resources/subscribe` still forwards to the backend, as today. The result is only
-a promise not to push `resources/updated`, which is exactly what is delivered now.
+served. `resources/subscribe` and `resources/unsubscribe` are refused (coordinator ruling,
+2026-09-25; see below), so no subscription is accepted that would then wait for nothing.
 
 **Wiring the missing producers.**
 - One feed: an unbounded single-consumer channel of backend names, which the HTTP server
