@@ -29,6 +29,7 @@ server:
 
 auth:
   enabled: false                  # Enable auth (set true for networked deployments)
+                                  # true requires security.transparency_log below (UPGRADING-4.0 item 43)
 
   # Bearer token for simple auth.
   # Options: "auto" (random, logged at startup), "env:VAR_NAME", or a literal string.
@@ -52,6 +53,18 @@ auth:
   # Paths that bypass authentication.
   public_paths:
     - /health
+
+# --- Audit log ---
+# Tamper-evident, hash-chained record of every tool call: who (credential kind,
+# key fingerprint, verified issuer and subject), outcome, request and response
+# hashes. Required when auth.enabled is true; the load fails without it. With
+# auth on, a failed append refuses calls with 503 until an append succeeds.
+# security:
+#   transparency_log:
+#     enabled: true
+#     path: "~/.mcp-gateway/transparency/transparency.jsonl"
+#     key_id: "default"
+#     shared_secret: "${MCP_GATEWAY_TRANSPARENCY_SECRET}"   # optional HMAC per entry
 
 # --- Meta-MCP ---
 

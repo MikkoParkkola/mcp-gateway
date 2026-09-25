@@ -183,6 +183,13 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
             "    - \"/health\"\n",
             "    - \"/mcp\"\n",
             "\n",
+            "# Auth is on, so every tool call is recorded in a tamper-evident audit\n",
+            "# log (required; see docs/UPGRADING-4.0.md). Default path:\n",
+            "# ~/.mcp-gateway/transparency/transparency.jsonl\n",
+            "security:\n",
+            "  transparency_log:\n",
+            "    enabled: true\n",
+            "\n",
             "# Meta-MCP mode - exposes a compact gateway tool surface\n",
             "# Common deployment: 11 tools (9 minimum, 17 with every optional tool configured)\n",
             "# Keeps prompt overhead low by discovering backend tools on demand\n",
@@ -710,6 +717,24 @@ mod admin_credential_tests {
         assert!(
             token.len() >= 6 + 42,
             "too short to be 32 random bytes: {token}"
+        );
+    }
+
+    /// D1-T12. The starter config turns auth on, and D1-a refuses auth
+    /// without the audit log, so the template must enable the log (D1-e) for
+    /// a fresh install to load at all.
+    #[test]
+    fn init_config_loads_under_d1() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        let code = super::run_init_command(&path, false, InitProfile::Local);
+        assert_eq!(code, std::process::ExitCode::SUCCESS, "init must succeed");
+
+        let config = mcp_gateway::config::Config::load(Some(&path))
+            .expect("a fresh init config must load and validate under D1-a");
+        assert!(
+            config.security.transparency_log.enabled,
+            "auth is on in the starter config, so the audit log must be too"
         );
     }
 }

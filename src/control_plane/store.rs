@@ -709,7 +709,10 @@ impl FileControlPlaneStore {
     /// processes never write the same counter) and fsyncs for durability.
     fn append_audit_locked(&self, event: &ControlPlaneAuditEvent) -> StoreResult<()> {
         self.audit
-            .append_event_synced(audit_fields(event))
+            .append_event_synced(
+                audit_fields(event),
+                &crate::security::audit::AuditEnvelope::governance(&event.actor_id),
+            )
             .map(|_| ())
             .map_err(StoreError::from)
     }

@@ -81,4 +81,8 @@ Without the chart, set `server.replicas` to the processes you run: 1 is a declar
     "`server.request_timeout`, never enforced, is removed and now FAILS the config load; bound \
 calls with per-backend `timeout`. `server.max_body_size` is enforced on every route: an oversize \
 body on `/mcp` gets HTTP 413, JSON-RPC -32600 (was 400, -32700), and webhooks now accept up to it.",
+    "With auth on, `security.transparency_log.enabled: true` is REQUIRED (the load FAILS without \
+it), and a failed append refuses calls with 503 and unreadies `/readyz` until it recovers. Records \
+carry `schema_version: 2`, `who` and `outcome`, including refused and failed calls. On Kubernetes \
+the chart's audit volume is an emptyDir: set `audit.existingClaim` to keep the log.",
 ];

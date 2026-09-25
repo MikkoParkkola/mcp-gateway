@@ -136,7 +136,7 @@ today's behaviour: the gateway's static credential, shared by everyone.
 ```yaml
 security:
   transparency_log:
-    enabled: true                     # mandatory when any backend sets required: true
+    enabled: true                     # required whenever auth is on
     path: "~/.mcp-gateway/transparency/transparency.jsonl"
 
 backends:
@@ -369,7 +369,13 @@ only raise it.
   enforcement point the scopes in section 2 are expressed against.
 - `admin_token` set, so revocation exists before you need it — and remember it
   does not reach raw provider tokens in delegated mode.
-- `security.transparency_log.enabled: true` if any backend sets `required: true`.
+- `security.transparency_log.enabled: true` on a writable path. With auth on it
+  is required: the config refuses to load without it, and a log that stops
+  appending refuses calls with 503 until it recovers (UPGRADING-4.0 section 43).
+  Each record names the caller by credential kind, key fingerprint and, for a
+  verified user, `(issuer, sub)`, and records refused and failed calls too. On
+  Kubernetes give the log a PersistentVolumeClaim (`audit.existingClaim`) or
+  export it, because the chart's default `emptyDir` dies with the pod.
 
 ## Related
 

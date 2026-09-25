@@ -1018,6 +1018,9 @@ env_files:
   - {}
 server:
   port: 18777
+security:
+  transparency_log:
+    enabled: true
 auth:
   enabled: true
   api_keys:
@@ -1126,6 +1129,9 @@ env_files:
   - {}
 server:
   port: 18778
+security:
+  transparency_log:
+    enabled: true
 auth:
   enabled: true
   bearer_token: env:OWUI_SEP_ALIASED
@@ -1197,6 +1203,9 @@ env_files:
   - {}
 server:
   port: 18779
+security:
+  transparency_log:
+    enabled: true
 auth:
   enabled: true
   bearer_token: {bearer_ref}

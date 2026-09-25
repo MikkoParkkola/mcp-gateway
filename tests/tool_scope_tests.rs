@@ -24,6 +24,7 @@ fn test_no_tool_restrictions() {
         denied_tools: None,
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     // All tools should be allowed (fallback to global policy)
@@ -49,6 +50,7 @@ fn test_allowlist_exact_match() {
         denied_tools: None,
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     // Tools in allowlist should be permitted
@@ -85,6 +87,7 @@ fn test_allowlist_glob_patterns() {
         denied_tools: None,
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     // Tools matching glob patterns should be allowed
@@ -120,6 +123,7 @@ fn test_denylist_exact_match() {
         ]),
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     // Tools in denylist should be blocked
@@ -159,6 +163,7 @@ fn test_denylist_glob_patterns() {
         denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     // Tools matching deny patterns should be blocked
@@ -196,6 +201,7 @@ fn test_qualified_name_matching() {
         denied_tools: None,
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     // Qualified match: filesystem:read_file allowed, but not on other servers
@@ -231,6 +237,7 @@ fn test_allowlist_and_denylist_combination() {
         ]),
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     // In allowlist AND NOT in denylist: allowed
@@ -295,6 +302,7 @@ fn test_empty_allowlist() {
         denied_tools: None,
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     // All tools should be denied with empty allowlist
@@ -315,6 +323,7 @@ fn test_empty_denylist() {
         denied_tools: Some(vec![]), // Empty denylist = no additional blocks
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     // Empty denylist should not block anything (falls back to global policy)
@@ -339,6 +348,7 @@ fn test_pattern_matching_edge_cases() {
         denied_tools: None,
         admin: false,
         authenticated: true,
+        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
     };
 
     // Prefix glob works

@@ -78,6 +78,9 @@ auth:
 
 # Global tool policy (applies to ALL clients)
 security:
+  # Auth is on, so the tamper-evident audit log is required (UPGRADING-4.0).
+  transparency_log:
+    enabled: true
   tool_policy:
     enabled: true
     default_action: allow
