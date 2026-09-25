@@ -54,6 +54,11 @@ use crate::protocol::subscriptions::{ListenRequest, NotificationKind};
 #[path = "notifications_helpers.rs"]
 mod helpers;
 
+// A5c: `subscriptions/listen` scoped per caller. A child for the same reason
+// as `helpers`, and so it reads the same stream reader.
+#[path = "listen_scope.rs"]
+mod listen_scope;
+
 use helpers::{
     ReleasedOnDrop, SUBSCRIPTION_ID_META, TASK_NOTIFICATION, assert_only_its_own_task,
     assert_receives_nothing, expect_message, open_listen, task_notification,

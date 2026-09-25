@@ -11,7 +11,7 @@
 
 use mcp_gateway::config::Config;
 use mcp_gateway::gateway::Gateway;
-use mcp_gateway::gateway::test_helpers::{CallerStanding, InvokeScope};
+use mcp_gateway::gateway::test_helpers::{CallerStanding, InvokeScope, auth_state};
 use mcp_gateway::protocol::RequestId;
 use serde_json::json;
 
@@ -95,7 +95,7 @@ async fn test_stdio_initialize_produces_valid_response() {
     // test holds for its own lifetime: the store leases the directory while the
     // service lives, so `store_dir` stays bound to the end of the test rather
     // than being dropped once the runtime is open.
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth)));
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
