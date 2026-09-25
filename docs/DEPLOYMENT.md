@@ -400,6 +400,8 @@ server {
         proxy_read_timeout 300s;
     }
     location /health  { proxy_pass http://mcp_gateway; }
+    location /livez   { proxy_pass http://mcp_gateway; }
+    location /readyz  { proxy_pass http://mcp_gateway; }
     location /ui      { proxy_pass http://mcp_gateway; }
     # /metrics checks its own bearer (server.metrics_token); pass the
     # Authorization header through. The allow-list is defence in depth.

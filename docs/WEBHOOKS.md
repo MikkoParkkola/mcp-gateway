@@ -1,6 +1,6 @@
 # Webhook Receiver Documentation
 
-The MCP Gateway includes a powerful webhook receiver system that allows external services to push events into the gateway, which then distributes them as MCP notifications to all connected clients via Server-Sent Events (SSE).
+The MCP Gateway includes a powerful webhook receiver system that allows external services to push events into the gateway, which then delivers them as notifications over Server-Sent Events (SSE). A webhook notifies only when it sets `notify: true`, and then only sessions whose credential may access the capability backend.
 
 ## Overview
 
@@ -20,7 +20,6 @@ The MCP Gateway includes a powerful webhook receiver system that allows external
 - **Multiple Webhook Support**: Single capability can define multiple webhook endpoints
 - **Automatic Route Registration**: Webhooks are automatically registered when capabilities load
 - **Hot-Reload Support**: Webhook definitions reload when capability files change
-- **Rate Limiting**: Configurable rate limiting per webhook endpoint
 - **Secret Management**: Supports environment variables, keychain, and other secret sources
 
 ## Configuration
@@ -234,7 +233,7 @@ curl -X POST http://localhost:39400/webhooks/linear/issues \
 Connect to the SSE stream to receive webhook notifications:
 
 ```bash
-curl -N http://localhost:39400/mcp
+curl -N -H "Accept: text/event-stream" http://localhost:39400/mcp
 ```
 
 You'll see:
@@ -251,7 +250,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 1. **Always use HMAC validation**: Set `require_signature: true` in production
 2. **Use environment variables for secrets**: Never commit secrets to version control
 3. **Use HTTPS in production**: Webhook payloads should be encrypted in transit
-4. **Rate limiting**: Configure appropriate rate limits to prevent abuse
+4. **Rate limiting**: `webhooks.rate_limit` is not enforced yet; limit webhook traffic at your reverse proxy
 5. **Validate payload structure**: Use the transform to extract only expected fields
 6. **Monitor webhook logs**: Check gateway logs for failed signature validations
 
@@ -297,7 +296,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 
 2. Check SSE connection is established:
    ```bash
-   curl -N http://localhost:39400/mcp
+   curl -N -H "Accept: text/event-stream" http://localhost:39400/mcp
    ```
 
 3. Verify `notify: true` in webhook definition (it defaults to `false`)
@@ -317,7 +316,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 ## Limitations
 
 - Maximum payload size: Configured by `server.max_body_size` (default 10MB)
-- Rate limiting applies per endpoint (not globally)
+- No rate limiting: `webhooks.rate_limit` is parsed but not enforced
 - Signature validation uses HMAC-SHA256 only (no other algorithms)
 - Template extraction uses simple dot-notation (not full JSONPath)
 
