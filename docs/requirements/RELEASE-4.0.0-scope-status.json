@@ -520,11 +520,13 @@
     },
     {
       "id": "GH612.CODEMODE.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/meta_mcp/search_ranking_authz_tests.rs:597-628"
+      ],
+      "note": "Graded 2026-09-25 (test-only, PR #799, CI green at 8c3e57b0). code_mode_forbidden_heavily_used_tool_loses_to_an_allowed_one now asserts total_available == 1, matching its classic-route sibling, pinning the COMBINED Code Mode enforcement in collect_code_mode_capability_matches (src/gateway/meta_mcp/search.rs): profile.tool_allowed and may_invoke's RoutingProfile::check (visibility.rs:58-60) both gate the same tool_filter, so each layer is covered by the other (defense in depth). Delete-the-branch on Spark: removing either layer alone stays GREEN; removing both together turns RED with total_available == 2 (want 1), restored after the run. GH612's acceptance criterion 2 (\"removing tool_allowed alone reddens the test\") predates A3 (#774), which added the second layer; on the merged tree that single-layer removal is a false premise, and the test instead pins that the two layers together deny the tool."
     },
     {
       "id": "MIK-7570.IDHEADER.1",

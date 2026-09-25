@@ -615,6 +615,11 @@ async fn code_mode_forbidden_heavily_used_tool_loses_to_an_allowed_one() {
         .unwrap();
 
     assert_eq!(
+        response["total_available"], 1,
+        "the forbidden tool must not be counted as a candidate on the Code Mode \
+         route either"
+    );
+    assert_eq!(
         tool_names(&response),
         vec![format!("{CAP_BACKEND}:{QUERY}")],
         "an allowed relevant tool must outlast a forbidden tool with 10^12 uses \

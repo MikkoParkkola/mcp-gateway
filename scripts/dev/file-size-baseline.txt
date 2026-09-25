@@ -48,7 +48,7 @@
 1261 src/oauth/storage.rs
 1252 src/backend/lifecycle.rs
 1178 src/trust/lab.rs
-1177 src/gateway/meta_mcp/search_ranking_authz_tests.rs
+1182 src/gateway/meta_mcp/search_ranking_authz_tests.rs
 1170 src/gateway/streaming.rs
 1141 src/gateway/task_service/store.rs
 1138 tests/mik_7214_header_9_acs.rs
