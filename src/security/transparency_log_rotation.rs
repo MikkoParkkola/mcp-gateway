@@ -78,6 +78,8 @@ pub(super) struct SegState {
     pub(super) id: (u64, u64),
     /// Whether the active file holds more than its open record.
     pub(super) has_records: bool,
+    /// Sealed segments beside the active file, as last listed.
+    pub(super) sealed: usize,
 }
 
 /// Unix seconds now, plus a test offset.
@@ -286,11 +288,12 @@ pub(super) fn recover(
         };
         segments::write_hwm(
             path,
-            &segments::encode_hwm(&mark, secret, &config.key_id),
+            &segments::encode_hwm(&mark, secret, &config.key_id)?,
             true,
         )?;
     }
     state.seg.id = file_id(&state.file.metadata()?);
+    state.seg.sealed = segments::list_segments(path)?.len();
     segments::sync_dir(path)?;
     Ok(state)
 }
@@ -333,6 +336,7 @@ fn resume_active(
             opened_at,
             id: (0, 0),
             has_records: first != read_last_nonempty_line(path)?.unwrap_or_default(),
+            sealed: sealed.len(),
         },
         file,
         counter,
@@ -362,6 +366,7 @@ pub(super) fn open_after_seal(
         opened_at: now,
         id: (0, 0),
         has_records: false,
+        sealed: sealed.len(),
     };
     let Some(newest) = sealed.last() else {
         let hw_counter = hw.map_or(0, |h| h.counter);

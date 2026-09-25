@@ -8,11 +8,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Smallest accepted `max_segment_bytes` (1 MiB).
-pub const MIN_SEGMENT_BYTES: u64 = 1024 * 1024;
+pub(crate) const MIN_SEGMENT_BYTES: u64 = 1024 * 1024;
 /// Largest accepted `max_segment_bytes` (128 MiB): half the 256 MiB bound of
 /// the audit reader, so a full segment plus its seal plus one oversized record
 /// (itself capped at 4 MiB) stays readable.
-pub const MAX_SEGMENT_BYTES: u64 = 128 * 1024 * 1024;
+pub(crate) const MAX_SEGMENT_BYTES: u64 = 128 * 1024 * 1024;
 
 /// What an append does when the volume returns ENOSPC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -56,7 +56,7 @@ impl RotationConfig {
     /// The governance log's fixed rotation (D6 section 2.12): 16 MiB x 4,
     /// at most 80 MiB, inheriting the operator's `on_disk_full`.
     #[must_use]
-    pub fn governance(on_disk_full: OnDiskFull) -> Self {
+    pub(crate) fn governance(on_disk_full: OnDiskFull) -> Self {
         Self {
             max_segment_bytes: 16 * 1024 * 1024,
             max_segment_age_secs: 0,
@@ -70,7 +70,7 @@ impl RotationConfig {
     /// # Errors
     ///
     /// [`crate::Error::ConfigValidation`] naming the offending key.
-    pub fn validate(&self) -> crate::Result<()> {
+    pub(crate) fn validate(&self) -> crate::Result<()> {
         if !(MIN_SEGMENT_BYTES..=MAX_SEGMENT_BYTES).contains(&self.max_segment_bytes) {
             return Err(crate::Error::ConfigValidation(format!(
                 "security.transparency_log.rotation.max_segment_bytes must be between \

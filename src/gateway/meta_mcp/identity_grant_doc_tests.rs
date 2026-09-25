@@ -81,6 +81,7 @@ async fn dispatch_doc_example(scope: &str, read_only: bool) -> Result<serde_json
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
+        stdio_nonce: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,
