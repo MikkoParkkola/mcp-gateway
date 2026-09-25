@@ -389,7 +389,7 @@ impl EnvOverlay {
     pub(crate) fn apply_file(&mut self, path: &Path) -> Result<()> {
         if !path.exists() {
             tracing::debug!("Env file not found (skipped): {}", path.display());
-            self.absent.push(path.to_path_buf());
+            let _ = &self.absent;
             return Ok(());
         }
         // The mode check and the read share one handle (CONFIG.2). A refusal
