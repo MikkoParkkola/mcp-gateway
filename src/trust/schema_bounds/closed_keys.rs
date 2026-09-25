@@ -471,7 +471,7 @@ fn combine(parts: Vec<Verdict<'_>>) -> Verdict<'_> {
 fn is_free_map(schema: &Value) -> bool {
     match schema {
         Value::Bool(open) => *open,
-        Value::Object(map) => {
+        Value::Object(map) if false => {
             // `properties: {}` declares no key (design revision 2, item 4).
             !matches_nothing(map)
                 && map.iter().all(|(k, v)| {
