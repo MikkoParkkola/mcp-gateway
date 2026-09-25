@@ -170,7 +170,7 @@ The two PARTIAL criteria are the release-gating half of gap 1:
   MET as of 2026-09-11, the "listening build carries every merged control" half
   is open.
 - **NFR.PERF.1** — latency not regressed >5% P50 / >10% P99 against 3.5.0: last
-  measured on Spark 2026-09-03 against a tree that is no longer the candidate.
+  measured on bench-host 2026-09-03 against a tree that is no longer the candidate.
   The measurement is stale, not failing.
 
 Gap 3 splits three ways, and the split is what makes it tractable:
@@ -231,7 +231,7 @@ operator decision; wave 3 is the part only the operator can do.
 
 ### Wave 2 — the measurements
 
-8. **Re-measure NFR.PERF.1** against the actual candidate on Spark, under the
+8. **Re-measure NFR.PERF.1** against the actual candidate on bench-host, under the
    compute-routing rule. Stale is not failing, but a stale number cannot close a
    gate.
 9. **Close the NFR.SEC.7 first half**: show the listening build carries every

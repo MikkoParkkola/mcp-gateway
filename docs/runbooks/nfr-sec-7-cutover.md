@@ -19,7 +19,7 @@ this runbook existing closes nothing.
 | Binary | `~/.local/libexec/mcp-gateway/3.4.0-f30539af/mcp-gateway`, Mach-O arm64 |
 | Reported version | `/health` → `{"status":"healthy","version":"3.4.0","backends":{"all_healthy":true,"count":32}}` |
 | Symptom | `POST /mcp` with `Origin: http://drift-check.invalid` → **200** with the tool list |
-| Supervised by | `launchd`, `~/Library/LaunchAgents/com.claude.mcp-gateway.plist` |
+| Supervised by | `launchd`, `~/Library/LaunchAgents/com.example.mcp-gateway.plist` |
 | Launcher | `~/.local/bin/start-mcp-gateway` → **symlink** into the version directory; the script hardcodes binary and config on lines 4–5 |
 | Data directory | `~/.mcp-gateway/`, `version.stamp` already `4.0.0` |
 
@@ -129,7 +129,7 @@ a binary swap plus a symlink flip.
 No macOS build carrying `5d25f104` exists on disk. Swept 2026-09-19 across every
 mcp-gateway checkout and worktree: three `target/` trees exist, two of them debug builds
 in other agents' worktrees and one with no binary at all, and **no `release/` binary
-anywhere**. Spark cannot produce one either — spark is `Linux … aarch64`, the install is
+anywhere**. bench-host cannot produce one either — bench-host is `Linux … aarch64`, the install is
 Mach-O arm64.
 
 | Option | Artifact | Cost |
@@ -200,7 +200,7 @@ status row is not evidence about what ran:
 
 | Probe | What it actually was | Evidence |
 |---|---|---|
-| 2026-09-13, port 39411 | a release binary of `bd1adbb4` **on spark** — a Linux aarch64 host — left over from the performance benchmark run, started on a free loopback port in the spark worktree | `docs/internal/release/verify/sec7-drift-probe-2026-09-13.md`; `docs/internal/release/v4.0.0-burndown-tracker.md:190-202` |
+| 2026-09-13, port 39411 | a release binary of `bd1adbb4` **on bench-host** — a Linux aarch64 host — left over from the performance benchmark run, started on a free loopback port in the bench-host worktree | `docs/internal/release/verify/sec7-drift-probe-2026-09-13.md`; `docs/internal/release/v4.0.0-burndown-tracker.md:190-202` |
 | 2026-09-11, port 39466 | "a gateway built from the release tree", machine unstated | **no preserved transcript.** `docs/release/verify/` holds no 2026-09-11 file, the commit that landed the checker (`9a3d9cbe`) records no run, and the design doc records none. Ledger prose only |
 
 So: no artifact has ever been installed into `~/.local/libexec/mcp-gateway/<version>/`,
@@ -217,7 +217,7 @@ any interruption, and the rollback is rehearsed in step 4 rather than assumed.
 ## Procedure
 
 ```sh
-cd ~/github/mcp-gateway                       # any checkout carrying scripts/dev/
+cd "$(git rev-parse --show-toplevel)"        # run from any checkout carrying scripts/dev/
 OLD=3.4.0-f30539af
 NEW=3.5.1                                     # or 4.0.0-<sha> for a self-built binary
 
@@ -269,10 +269,10 @@ readlink ~/.local/bin/start-mcp-gateway   # must name $OLD: the rollback command
 ln -sfn ~/.local/libexec/mcp-gateway/$NEW/start-mcp-gateway ~/.local/bin/start-mcp-gateway
 
 # 5. Restart under launchd — this interrupts every connected MCP client
-launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway
+launchctl kickstart -k gui/$(id -u)/com.example.mcp-gateway
 
 # 6. Watch for a restart loop for ~30s (KeepAlive Crashed + ThrottleInterval 10)
-tail -f ~/.claude/logs/mcp-gateway.error.log    # repeating startup banner => roll back
+tail -f "$LOG_DIR/mcp-gateway.error.log"    # LOG_DIR: the plist's StandardErrorPath dir; repeating banner => roll back
 
 # 7. Grading evidence, then the three things the drift check cannot see
 python3 scripts/dev/check-control-drift.py http://127.0.0.1:39401/mcp
@@ -293,7 +293,7 @@ Optionally repoint the stale sibling symlink `~/.local/bin/mcp-gateway` (still
 `3.4.0-851cc03f`) so a bare CLI `--version` stops disagreeing with what is serving.
 
 Step 3 goes through the launcher because the launcher is what `launchd` runs: it sources
-`~/.secrets.env` and `~/.claude/secrets.env` first, so a bare binary invocation starts
+the operator's env files first (on the 3.4.0 host these were two files under `$HOME`), so a bare binary invocation starts
 every backend credential-less and its failures mean nothing. What the smoke proves is
 that the binary runs on this machine, that the 3.4.0 config still parses, and that the
 guard fires on the wire. What it does not prove is backend health under the real data
@@ -351,7 +351,7 @@ against it.
 ln -sfn ~/.local/libexec/mcp-gateway/4.0.0-438583c1/start-mcp-gateway ~/.local/bin/start-mcp-gateway
 # or all the way back to 3.4.0
 ln -sfn ~/.local/libexec/mcp-gateway/3.4.0-f30539af/start-mcp-gateway ~/.local/bin/start-mcp-gateway
-launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway
+launchctl kickstart -k gui/$(id -u)/com.example.mcp-gateway
 ```
 
 Run one `ln` line, then the kickstart.

@@ -47,12 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The default capability directories no longer include a checkout under `HOME`.**
+  `capabilities.directories` defaulted to `capabilities` plus
+  a private capability checkout under `$HOME/github` whenever it existed, so a
+  gateway loaded capabilities from a path no configuration named. The default is now
+  `capabilities` alone; list any other directory explicitly.
+
 - **`server.max_body_size` is enforced on every route (breaking).** It was read
   nowhere: `/mcp` and `/mcp/{name}` hard-coded 10 MiB and every other route,
   webhooks included, used the framework's 2 MiB default. An oversize body now
   gets HTTP 413 everywhere; on `/mcp` and `/mcp/{name}` the JSON-RPC code is
   -32600 (was 400, JSON-RPC -32700). `max_body_size: 0` now fails the load.
   See UPGRADING-4.0.md item 39.
+
 - **A modern `tools/call` without an idempotency key is admitted.** Earlier 4.0
   builds refused it with `-32602` unless the tool was marked read-only, which
   made write tools unusable from standard MCP clients, none of which send the

@@ -40,7 +40,7 @@ Ledger binding used `{ printf '\0'; cat payload_partN.diff; } | sha256sum`
 
 Every material_sha256 matches across vendors per part (same payload reviewed
 by both). Full grok ledger row for p2 (representative, others follow the same
-shape): `{"ts":"2026-09-08T17:46:18Z","repo":"/Users/mikko/github/.worktrees/mcp-2026-protocol","head":"6f4e511ff3130fdc253aa0a699c49fbdd902cdc4","verdict":"SHIP-WITH-FIXES","material_sha256":"3b2635a664b3b32826fdd6a3df7f3994cc41b38d87b38509ec61b7e5e391fa4e","material_bytes":85550,"process_status":"ok","output":"/Users/mikko/.claude/data/reviews/runs/grok-20260908T173321Z-5987.md"}`
+shape): `{"ts":"2026-09-08T17:46:18Z","repo":"<worktrees>/mcp-2026-protocol","head":"6f4e511ff3130fdc253aa0a699c49fbdd902cdc4","verdict":"SHIP-WITH-FIXES","material_sha256":"3b2635a664b3b32826fdd6a3df7f3994cc41b38d87b38509ec61b7e5e391fa4e","material_bytes":85550,"process_status":"ok","output":"<review-archive>/runs/grok-20260908T173321Z-5987.md"}`
 
 Grok per-part verdict one-liners (verbatim):
 - p1: "SHIP -- the new tests pin real production surfaces...I found no defect that fires in this environment"
@@ -138,7 +138,7 @@ reconstructed claim, these are recorded here as:
 that were confirmed against source at the time, covering material in payload
 parts among p1–p6 (exact parts not recoverable). The full evidence, if
 needed, is in the session transcript at
-`/Users/mikko/.claude/projects/-Users-mikko-github--worktrees-mcp-2026-protocol/8198129a-cb14-4a80-bcc4-3390717c2845.jsonl`
+`<session-transcript>`
 (pre-compaction portion). Re-running gpt-review on the same payload parts
 and re-verifying at source is the reliable way to recover these rather than
 trusting a reconstructed summary.

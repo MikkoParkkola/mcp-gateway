@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NFR.WORKLOAD.1 runner. Spark only; nothing here runs on the Mac.
+# NFR.WORKLOAD.1 runner. bench-host only; nothing here runs on the Mac.
 #
 # Two defects from the NFR.PERF.1 rehearsal void are fixed by construction:
 #   D1  every k6 output goes to its own path. The JSON-lines stream, the text
@@ -114,7 +114,7 @@ ARMS_DIR="${ARMS_DIR:-$HOME/perf-workload/arms}"
 
 die() { echo "void: $*" >&2; exit 3; }
 
-# Spark is Linux and has sha256sum; the fallback keeps the script runnable for
+# bench-host is Linux and has sha256sum; the fallback keeps the script runnable for
 # a dry read on a Mac rather than dying on the first digest.
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"
@@ -122,7 +122,7 @@ sha256_of() {
 }
 
 # --- machine conditions -----------------------------------------------------
-# Spark is shared -- 57 other users during the 2026-09-21 run -- so a rep can
+# bench-host is shared -- 57 other users during the 2026-09-21 run -- so a rep can
 # measure the machine's run queue instead of the gateway. The 2026-09-21 run
 # did exactly that: a three-minute excursion to loadavg 34 on 20 CPUs put
 # tools-call p99 at 58.7ms in A2, 75.0ms in B2 and 33.9ms in C2 against a body
@@ -366,7 +366,7 @@ PY
   # a cell that skips it is measured on a colder page cache than its siblings.
   for cell in A B C D E; do run_rep "$cell" "${cell}0" "$run" warmup; done
 
-  # Measured, interleaved, and in a fresh order every rep. Spark is shared, so
+  # Measured, interleaved, and in a fresh order every rep. bench-host is shared, so
   # the arms must see the same machine conditions rather than consecutive
   # blocks of time. D and E are in this loop for that reason and no other:
   # running them as a trailing block gave them a different machine. In the
