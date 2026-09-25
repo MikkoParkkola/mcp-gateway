@@ -76,6 +76,9 @@ mod r2_identity_keys_tests;
 mod r2_input_keys_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+/// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
+#[cfg(test)]
+mod sso_admin_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -254,6 +257,7 @@ fn build_auth_state(state: &Arc<AppState>) -> AuthState {
     AuthState {
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
+        live_config: Arc::clone(&state.live_config),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
         tls_enabled: {
             let c = state.live_config.get();

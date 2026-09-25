@@ -33,6 +33,12 @@ server:
   host: "127.0.0.1"
   port: $PORT
 
+# 4.0 refuses auth without an audit log (UPGRADING-4.0 item 43).
+security:
+  transparency_log:
+    enabled: true
+    path: "$RUN_DIR/audit/transparency.jsonl"
+
 auth:
   enabled: true
   single_user: true
