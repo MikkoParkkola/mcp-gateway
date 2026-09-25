@@ -1146,6 +1146,7 @@ mod role_wiring_tests {
             denied_tools: None,
             admin,
             authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
         }
     }
 

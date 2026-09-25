@@ -627,17 +627,21 @@ pub(crate) fn audit_identity_propagation(
         fields.insert("reason".into(), reason.into());
     }
 
-    logger.append_event(fields).map(|_| ()).map_err(|e| {
-        tracing::warn!(
-            backend,
-            action, error = %e,
-            "Failed to write identity-propagation audit entry (transparency log); \
-             fail-closed on idp_mint"
-        );
-        PropagationError::AuditFailed(format!(
-            "transparency-log write failed for action '{action}' on backend '{backend}': {e}"
-        ))
-    })
+    let envelope = crate::security::audit::AuditEnvelope::identity_propagation(action, subject);
+    logger
+        .append_event(fields, &envelope)
+        .map(|_| ())
+        .map_err(|e| {
+            tracing::warn!(
+                backend,
+                action, error = %e,
+                "Failed to write identity-propagation audit entry (transparency log); \
+                 fail-closed on idp_mint"
+            );
+            PropagationError::AuditFailed(format!(
+                "transparency-log write failed for action '{action}' on backend '{backend}': {e}"
+            ))
+        })
 }
 
 #[cfg(test)]

@@ -255,6 +255,31 @@ over="$("$HELM" template t "$CHART" --show-only templates/deployment.yaml \
   --set configVolume.defaultMode=256)"
 grep -qE '^ *defaultMode: 256$' <<<"$over" || fail "configVolume.defaultMode override ignored"
 
+echo "== helm_credential_render_has_writable_audit_path =="
+# D1-T20. Credential mode turns auth on, and auth on requires the audit log
+# (UPGRADING-4.0), so the chart renders one on a writable `audit` volume:
+# an emptyDir by default, the operator's claim with audit.existingClaim.
+grep -qE '^ *transparency_log:$' <<<"$cm" || fail "credential render has no transparency_log"
+tlog="$(grep -A3 -E '^ *transparency_log:$' <<<"$cm" || true)"
+grep -qE '^ *enabled: true$' <<<"$tlog" || fail "transparency_log is not enabled"
+grep -qE '^ *path: /var/lib/mcp-gateway/audit/' <<<"$tlog" \
+  || fail "transparency_log.path is not under /var/lib/mcp-gateway/audit"
+grep -qE '^ *mountPath: /var/lib/mcp-gateway/audit$' <<<"$dep" || fail "no audit mount"
+audit_vol="$(grep -A3 -E '^ *- name: audit$' <<<"$dep" || true)"
+grep -qE '^ *emptyDir:' <<<"$audit_vol" || fail "default audit volume is not an emptyDir"
+grep -qE '^ *sizeLimit: 1Gi$' <<<"$audit_vol" || fail "audit emptyDir has no 1Gi sizeLimit"
+claim="$("$HELM" template t "$CHART" --show-only templates/deployment.yaml \
+  --set audit.existingClaim=x)"
+claim_vol="$(grep -A3 -E '^ *- name: audit$' <<<"$claim" || true)"
+grep -qE '^ *claimName: "?x"?$' <<<"$claim_vol" || fail "audit.existingClaim does not mount the claim"
+grep -qE '^ *fsGroup: 1001$' <<<"$claim" || fail "existingClaim render lost fsGroup; uid 1001 cannot write the PVC"
+moved="$("$HELM" template t "$CHART" --show-only templates/configmap.yaml \
+  --set config.security.transparency_log.path=/tmp/elsewhere.jsonl)"
+grep -q '/tmp/elsewhere.jsonl' <<<"$moved" && fail "a configured log path moved the log off the audit volume"
+mesh_all="$("$HELM" template t "$CHART" --set auth.mode=mesh)"
+grep -q 'transparency_log' <<<"$mesh_all" && fail "mesh mode renders an audit log"
+grep -qE '^ *- name: audit$' <<<"$mesh_all" && fail "mesh mode renders an audit volume"
+
 # C3: credential mode serves bearer tokens over plain HTTP on 0.0.0.0, which the
 # gateway refuses unless server.cleartext_http names who protects them. The
 # chart's answer is cluster_internal, honest only while the port stays inside
