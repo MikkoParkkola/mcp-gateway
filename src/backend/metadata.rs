@@ -4,15 +4,18 @@
 //! prompts, each backed by a single-flight [`super::cached_metadata::CachedMetadata`]
 //! slot on [`super::Backend`].
 
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tracing::debug;
 
 use super::Backend;
 use super::annotations::prepare_tool_metadata;
 use super::cached_metadata::CachedMetadata;
 use super::pool::PoolKey;
+use super::{CACHE_LIST_DRAIN_BUDGET, LIST_MAX_PAGES};
 use crate::Error;
 use crate::Result;
 use crate::protocol::{
@@ -95,9 +98,7 @@ impl Backend {
     /// upstream catalogue (MIK 7570 PAGING.1 design §2.D).
     #[must_use]
     pub(crate) fn cached_tools_truncated(&self) -> bool {
-        self.tools_slot(None)
-            .tools_truncated
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.tools_slot(None).tools_truncated.load(Ordering::SeqCst)
     }
 
     /// Both under one guard; use wherever the two travel together.
@@ -189,6 +190,8 @@ impl Backend {
         select: S,
         method: &str,
         kind: &'static str,
+        list_key: &'static str,
+        truncated_flag: Option<fn(&super::pool::PooledEntry) -> &AtomicBool>,
         extra_headers: &[(String, String)],
         parse: F,
     ) -> Result<Arc<Vec<T>>>
@@ -224,39 +227,118 @@ impl Backend {
         let lease = self.begin_internal_activity_for(&key);
         let entry = Arc::clone(lease.entry());
         select(&entry)
-            .get_or_fetch_shared(self.cache_ttl, || async {
-                let transport = self.ensure_entry_started(&key).await?;
-                let response = transport
-                    .request_with_headers(
-                        method,
-                        None,
-                        fetch_headers,
-                        identity_key,
-                        // A `*/list` is in the side-effect-free allowlist
-                        // (`transport::SIDE_EFFECT_FREE_METHODS`), so a retried
-                        // fetch cannot duplicate an upstream effect.
-                        crate::transport::ResendPermission::Permitted,
-                    )
-                    .await?;
-                if let Some(error) = response.error {
-                    return Err(Error::json_rpc(error.code, error.message));
-                }
-                let items = if let Some(result) = response.result {
-                    parse(result, &entry)?
-                } else {
-                    Vec::new()
-                };
+            .get_or_fetch_shared_then(
+                self.cache_ttl,
+                || async {
+                    let transport = self.ensure_entry_started(&key).await?;
+                    // DRAIN EVERY PAGE, THEN PARSE ONCE (MIK 7570 PAGING.1).
+                    // `parse` has side effects (the tools family rewrites
+                    // `resend_permitted`), so a per-page parse would keep only
+                    // the last page's retry set. Page 1 sends `params = None`,
+                    // so a single-page backend sees byte-identical traffic.
+                    let started = tokio::time::Instant::now();
+                    let mut merged: Option<Value> = None;
+                    let mut cursor: Option<String> = None;
+                    let mut sent: HashSet<String> = HashSet::new();
+                    let mut stop: Option<&'static str> = None;
+                    let mut kept = 0usize;
+                    for page in 0.. {
+                        if page == LIST_MAX_PAGES {
+                            stop = Some("page_cap");
+                            break;
+                        }
+                        if page > 0 && started.elapsed() >= CACHE_LIST_DRAIN_BUDGET {
+                            stop = Some("fill_budget");
+                            break;
+                        }
+                        let params = cursor.clone().map(|c| json!({ "cursor": c }));
+                        let response = transport
+                            .request_with_headers(
+                                method,
+                                params,
+                                fetch_headers,
+                                identity_key,
+                                // A `*/list` is in the side-effect-free allowlist
+                                // (`transport::SIDE_EFFECT_FREE_METHODS`), so a
+                                // retried fetch cannot duplicate an upstream effect.
+                                crate::transport::ResendPermission::Permitted,
+                            )
+                            .await?;
+                        // A transient page error fails the whole fill, so the
+                        // last complete catalogue stays readable (design E).
+                        if let Some(error) = response.error {
+                            return Err(Error::json_rpc(error.code, error.message));
+                        }
+                        let Some(mut result) = response.result else {
+                            break;
+                        };
+                        let next = result
+                            .as_object_mut()
+                            .and_then(|m| m.remove("nextCursor"))
+                            .and_then(|v| v.as_str().map(str::to_owned));
+                        match merged.as_mut() {
+                            None => merged = Some(result),
+                            Some(acc) => {
+                                let items = result
+                                    .get_mut(list_key)
+                                    .and_then(Value::as_array_mut)
+                                    .map(std::mem::take)
+                                    .unwrap_or_default();
+                                if let Some(list) =
+                                    acc.get_mut(list_key).and_then(Value::as_array_mut)
+                                {
+                                    list.extend(items);
+                                }
+                            }
+                        }
+                        kept += 1;
+                        let Some(next) = next else { break };
+                        if !sent.insert(next.clone()) {
+                            stop = Some("cursor_repeat");
+                            break;
+                        }
+                        cursor = Some(next);
+                    }
+                    // A structural stop keeps the fresh pages, marked truncated:
+                    // retrying cannot produce a complete list (design D, F, G).
+                    if let Some(reason) = stop {
+                        telemetry_metrics::counter!(
+                            "mcp_backend_list_truncated_total",
+                            "backend" => self.name.clone(),
+                            "reason" => reason
+                        )
+                        .increment(1);
+                        tracing::warn!(
+                            backend = %self.name,
+                            method,
+                            reason,
+                            pages_kept = kept,
+                            "Backend list drain stopped early; catalogue truncated"
+                        );
+                    }
+                    let items = match merged {
+                        Some(result) => parse(result, &entry)?,
+                        None => Vec::new(),
+                    };
 
-                debug!(
-                    backend = %self.name,
-                    kind,
-                    count = items.len(),
-                    per_user = identity_key.is_some(),
-                    "Backend metadata cached"
-                );
+                    debug!(
+                        backend = %self.name,
+                        kind,
+                        count = items.len(),
+                        per_user = identity_key.is_some(),
+                        "Backend metadata cached"
+                    );
 
-                Ok(items)
-            })
+                    Ok((items, stop.is_some()))
+                },
+                |truncated| {
+                    // Written only once the store is accepted, and on every
+                    // accepted store, so a complete fill clears it (design D).
+                    if let Some(flag) = truncated_flag {
+                        flag(&entry).store(truncated, Ordering::SeqCst);
+                    }
+                },
+            )
             .await
     }
 
@@ -294,6 +376,8 @@ impl Backend {
             |entry| &entry.tools_cache,
             "tools/list",
             "tools",
+            "tools",
+            Some(tools_truncated_flag),
             extra_headers,
             |result, entry| {
                 let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
@@ -397,6 +481,8 @@ impl Backend {
             |entry| &entry.resources_cache,
             "resources/list",
             "resources",
+            "resources",
+            None,
             extra_headers,
             |result, _| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
         )
@@ -438,6 +524,8 @@ impl Backend {
             |entry| &entry.resource_templates_cache,
             "resources/templates/list",
             "resource_templates",
+            "resourceTemplates",
+            None,
             extra_headers,
             |result, _| {
                 Ok(
@@ -484,6 +572,8 @@ impl Backend {
             |entry| &entry.prompts_cache,
             "prompts/list",
             "prompts",
+            "prompts",
+            None,
             extra_headers,
             |result, _| Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts),
         )
@@ -500,4 +590,10 @@ impl Backend {
             .await
             .map(|prompts| prompts.as_ref().clone())
     }
+}
+
+/// The tools family's truncated flag; the other three families keep their
+/// pages without one (MIK 7570 PAGING.1 design D).
+fn tools_truncated_flag(entry: &super::pool::PooledEntry) -> &AtomicBool {
+    &entry.tools_truncated
 }
