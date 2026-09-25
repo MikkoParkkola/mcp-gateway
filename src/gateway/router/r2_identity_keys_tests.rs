@@ -115,6 +115,20 @@ struct Gateway {
     alpha: Seen,
     shared: Seen,
     _store: tempfile::TempDir,
+    _audit: [tempfile::NamedTempFile; 2],
+}
+
+/// A logger on `file`. A per-user mint is refused without an audit sink, so
+/// the fixture needs one on each route that mints.
+fn transparency_logger(file: &tempfile::NamedTempFile) -> Arc<crate::security::TransparencyLogger> {
+    let config = crate::security::TransparencyLogConfig {
+        enabled: true,
+        path: file.path().to_string_lossy().to_string(),
+        key_id: "r2".to_string(),
+        shared_secret: String::new(),
+    };
+    let logger = crate::security::TransparencyLogger::open(Arc::new(config));
+    Arc::new(logger.expect("transparency logger opens"))
 }
 
 async fn gateway() -> Gateway {
@@ -151,14 +165,21 @@ async fn gateway() -> Gateway {
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
-    let meta = MetaMcp::new(Arc::clone(&state_mut.backends));
+    let (meta_audit, route_audit) = (
+        tempfile::NamedTempFile::new().expect("tempfile"),
+        tempfile::NamedTempFile::new().expect("tempfile"),
+    );
+    let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.set_identity_propagation(Arc::new(PerIdentityMint));
+    meta.enable_transparency_log(transparency_logger(&meta_audit));
     state_mut.meta_mcp = Arc::new(meta);
+    state_mut.transparency_log = Some(transparency_logger(&route_audit));
     Gateway {
         router: create_router(state),
         alpha,
         shared,
         _store: store,
+        _audit: [meta_audit, route_audit],
     }
 }
 
