@@ -287,7 +287,7 @@ impl ResolvedAuthConfig {
         }
 
         // API keys: hash once, compare digests in constant time (no timing oracle).
-        let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
+        let presented = <sha2::Sha224 as sha2::Digest>::digest(token.as_bytes());
         for key in &self.api_keys {
             if presented.as_slice().ct_eq(key.digest.as_slice()).into() {
                 // After the match: an expired key is never an authenticated caller.
