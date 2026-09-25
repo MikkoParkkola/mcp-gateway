@@ -150,6 +150,25 @@ mod tests {
         assert!(std::env::var(ATTESTATION_MODE_ENV).is_err());
     }
 
+    /// MIK-7570.ATTEST.1: the refusals hold on the env-file path too, not only
+    /// on the pure core, so an env file cannot turn `enforce` back into observe.
+    #[test]
+    fn an_env_file_mode_of_enforce_or_an_unknown_value_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for (raw, expect) in [
+            ("enforce", "not available in this build"),
+            ("enforcee", "enforcee"),
+        ] {
+            let env_file = dir.path().join(format!("{raw}.env"));
+            std::fs::write(&env_file, format!("{ATTESTATION_MODE_ENV}={raw}\n")).unwrap();
+            let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
+            let err = attestation_wiring_from_overlay(&overlay)
+                .map(|w| w.map(|(_, mode)| mode))
+                .expect_err("an env-file mode must be refused like a process one");
+            assert!(err.contains(expect), "{raw}: {err}");
+        }
+    }
+
     /// MIK-7570.ATTEST.1: with nothing set, no validator is built.
     #[test]
     fn unset_mode_attaches_no_validator() {

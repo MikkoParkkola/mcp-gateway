@@ -6,6 +6,8 @@
 // test that drives a real startup must call the same one rather than a copy of
 // its policy.
 pub(crate) mod account_bindings;
+#[cfg(test)]
+mod attestation_start_tests;
 mod control_plane_store;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
