@@ -299,6 +299,7 @@ async fn recover_from_upstream(
             agent_id: caller.agent_id,
             agent_declared: None,
             grant_subject: caller.grant_subject.clone(),
+            stdio_nonce: None,
             verified_identity: caller.verified_identity,
             is_admin: caller.is_admin,
             input_capabilities: caller.input_capabilities,

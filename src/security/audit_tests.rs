@@ -233,3 +233,43 @@ async fn non_invoke_writer_gets_trace_id() {
     let minted = all[1]["trace_id"].as_str().unwrap_or_default();
     assert!(minted.starts_with("gw-"), "{}", all[1]);
 }
+
+/// E1-f / D2: the shared HTTP-status table, every row, with and without a
+/// code from the answer.
+#[test]
+fn http_status_maps_to_outcome() {
+    use axum::http::StatusCode as S;
+    let rows = [
+        (S::OK, None, ("ok", None)),
+        (S::NO_CONTENT, Some(-32600), ("ok", None)),
+        (S::UNAUTHORIZED, None, ("denied", Some(-32600))),
+        (S::FORBIDDEN, None, ("denied", Some(-32600))),
+        (S::FORBIDDEN, Some(-32004), ("denied", Some(-32004))),
+        (S::BAD_REQUEST, None, ("invalid", Some(-32602))),
+        (S::NOT_FOUND, None, ("invalid", Some(-32602))),
+        (S::CONFLICT, None, ("error", Some(-32603))),
+        (S::SERVICE_UNAVAILABLE, None, ("error", Some(-32603))),
+        (
+            S::INTERNAL_SERVER_ERROR,
+            Some(-32005),
+            ("error", Some(-32005)),
+        ),
+        (S::METHOD_NOT_ALLOWED, None, ("error", Some(-32603))),
+    ];
+    for (status, code, want) in rows {
+        let got = AuditOutcome::from_http_status(status, code);
+        assert_eq!((got.label(), got.error_code()), want, "{status} {code:?}");
+    }
+    let defaults = [
+        AuditOutcome::Ok,
+        AuditOutcome::ToolError,
+        AuditOutcome::Denied(1),
+        AuditOutcome::Invalid(1),
+        AuditOutcome::Error(1),
+    ]
+    .map(AuditOutcome::default_code);
+    assert_eq!(
+        defaults,
+        [None, None, Some(-32600), Some(-32602), Some(-32603)]
+    );
+}

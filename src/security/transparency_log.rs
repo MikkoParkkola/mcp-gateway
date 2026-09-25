@@ -80,13 +80,20 @@ mod degraded;
 mod append;
 #[path = "transparency_log_rotation.rs"]
 mod rotation;
+/// Test seam for the write-fault injector, for tests outside this module.
+#[cfg(test)]
+pub(crate) mod rotation_fault {
+    pub(crate) use super::rotation::WriteFault;
+}
 #[path = "transparency_log_segments.rs"]
-pub mod segments;
+pub(crate) mod segments;
 #[path = "transparency_log_verify.rs"]
 mod verify;
+#[cfg(test)]
+pub(crate) use verify::verify_segments;
 pub use verify::{
-    VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_log,
-    verify_log_signed, verify_segments,
+    VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_audit_log,
+    verify_log, verify_log_signed,
 };
 
 use crate::security::audit::{AuditEnvelope, AuditWho};
