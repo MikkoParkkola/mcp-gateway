@@ -9,11 +9,11 @@ Status: implemented. Design reviewed (grok and kimi SHIP-WITH-FIXES, fixes folde
 
 ## Problem
 
-NFR.WORKLOAD.1 has no graded result at the release tip: every re-run on spark
+NFR.WORKLOAD.1 has no graded result at the release tip: every re-run on bench-host
 has voided on host load. Latency cannot be measured on that host, but executed
 instructions can, and they are insensitive to load.
 
-Gateway-only user-space instructions per `tools/call`, measured on spark with
+Gateway-only user-space instructions per `tools/call`, measured on bench-host with
 the harness's own config (`RUST_LOG=error`, the pinned `gateway_invoke` →
 `workload_probe` request, paced at 200 req/s, 3000 calls, zero errors):
 

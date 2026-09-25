@@ -66,7 +66,7 @@ identity:
     - "2025-06-18"
     - "2025-11-25"
   license: MIT
-  maintainer: mikko@mcpgateway.io
+  maintainer: maintainer@example.com
 ```
 
 ### 3.2 Capabilities

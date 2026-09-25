@@ -223,7 +223,7 @@ row, not closure of it.
 ## Review status
 
 `grok-review` returned a verdict on this design: **SHIP-WITH-FIXES**
-(`~/.claude/data/reviews/runs/grok-20260911T055118Z-19273.md`). Two HIGH findings and
+(`<review-archive>/runs/grok-20260911T055118Z-19273.md`). Two HIGH findings and
 two improvements; the disposition of each:
 
 - **Direct route bypasses the mint** (HIGH). Verified at source and **fixed**: D1 moved

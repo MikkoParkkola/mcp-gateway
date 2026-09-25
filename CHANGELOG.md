@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0-beta.1] - 2026-09-25
+
+> **Pre-release.** The first 4.0 beta, cut so 3.x users can start testing 4.0 before the final
+> release. It is not feature complete: the criteria still open for 4.0.0 are listed under
+> *Known gaps* in [`docs/release/4.0.0-beta.1-notes.md`](docs/release/4.0.0-beta.1-notes.md).
+> It contains every entry below this heading and everything in the `[4.0.0]` section further
+> down, which describes the 4.0 line and is not yet released as a final version. Breaking
+> changes from 3.x are listed in [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md).
+> Install it by exact version (`cargo install mcp-gateway --version 4.0.0-beta.1`,
+> `npm install @mikkoparkkola/mcp-gateway@next`, `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.1`);
+> no stable channel (`latest`, Homebrew, the MCP Registry) moves to it.
+
 ### Added
 
 - **A `-full` image variant carrying the runtimes stdio backends spawn.**
@@ -46,6 +58,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing refusal text.
 
 ### Fixed
+
+- **The default capability directories no longer include a checkout under `HOME`.**
+  `capabilities.directories` defaulted to `capabilities` plus
+  a private capability checkout under `$HOME/github` whenever it existed, so a
+  gateway loaded capabilities from a path no configuration named. The default is now
+  `capabilities` alone; list any other directory explicitly.
+
+- **`server.max_body_size` is enforced on every route (breaking).** It was read
+  nowhere: `/mcp` and `/mcp/{name}` hard-coded 10 MiB and every other route,
+  webhooks included, used the framework's 2 MiB default. An oversize body now
+  gets HTTP 413 everywhere; on `/mcp` and `/mcp/{name}` the JSON-RPC code is
+  -32600 (was 400, JSON-RPC -32700). `max_body_size: 0` now fails the load.
+  See UPGRADING-4.0.md item 39.
 
 - **A modern `tools/call` without an idempotency key is admitted.** Earlier 4.0
   builds refused it with `-32602` unless the tool was marked read-only, which
@@ -140,7 +165,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`_meta["io.mcp-gateway/attestation"]`, stripped before forwarding).
   Playbooks and code-mode plans are refused under enforce. Enforce without
   `GATEWAY_ATTESTATION_SIGNING_KEY` fails startup. See
-  `docs/UPGRADING-4.0.md` item 38.
+  `docs/UPGRADING-4.0.md` item 46.
+- **A credential over plain HTTP on a network bind refuses the start
+  (breaking).** With `auth`, `agent_auth` or the key server on, a non-loopback
+  bind or `public_url`, and no mTLS, the gateway refuses to serve, and a reload
+  into that state is refused. `server.cleartext_http` names the protection
+  instead: `tls_terminated_upstream`, `cluster_internal` (Service-name
+  `public_url` only) or `host_local_publish`, each logged at WARN on every
+  start. The Helm chart (`server.cleartextHttp`), enterprise-alpha and compose
+  set it. See `docs/UPGRADING-4.0.md` item 38.
 - **`/metrics` requires a dedicated scrape token (breaking).** It sat outside
   authentication and its labels name your backends. It now answers only
   `Bearer <server.metrics_token>` and returns 401 otherwise, the admin bearer
@@ -156,6 +189,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not own, as with a root-owned Kubernetes projection under `fsGroup`.
   The Helm chart and enterprise-alpha set `fsGroup: 1001` and a `0440` config
   mode. Windows is not checked. See `docs/UPGRADING-4.0.md` item 35.
+- **A secret reference that resolves to nothing fails the load (breaking).**
+  `${VAR}` with no default expanded to `""` when `VAR` was unset, so a missing
+  token was sent upstream as `Authorization: Bearer `. An enabled backend's
+  `headers` and `env`, and `capabilities.directories`, now refuse an unset or
+  empty `${VAR}` with no default, naming every such field in one error;
+  `${VAR:-default}` now also applies the default to an empty variable, as
+  POSIX does, and `${VAR:-}` allows empty on purpose. A disabled backend keeps
+  its text unexpanded. An `env:` secret that is unset or empty, and an empty
+  literal bearer token, API key, agent HS256 secret or key-server admin token,
+  are refused. `{env.X}` templates and capability `auth.key` values error at
+  call time when `X` is unset or empty instead of sending `""`; `{env.X:-}`
+  allows empty on purpose. A `${...}` that is not a `${NAME}` reference is
+  refused. Errors name listed env files that were not
+  found. See `docs/UPGRADING-4.0.md` item 40.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept
@@ -254,6 +301,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`server.request_timeout` (breaking).** Nothing read it; each call is bounded by
+  its backend's `timeout`. A config that still sets it now fails to load with an
+  explanation. See UPGRADING-4.0.md item 39.
 - **The inbound WebSocket listener and `server.ws_port` (breaking).** The
   listener only echoed text frames back; it served no MCP, ran outside the
   Origin/Host guard and had no auth. A config that still sets `server.ws_port`
@@ -2092,7 +2142,8 @@ credential path.
 - Configuration via YAML with Pydantic validation
 - systemd/launchd service templates
 
-[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...HEAD
+[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.1...HEAD
+[4.0.0-beta.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0-beta.1
 [4.0.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0
 [3.5.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.4.0...v3.5.0

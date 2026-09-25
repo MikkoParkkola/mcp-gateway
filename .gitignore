@@ -72,3 +72,4 @@ scratchpad_*/
 
 # Local archive of superseded work; never part of the release artifact
 .archive/
+.symphony/

@@ -206,8 +206,8 @@ or new public API is planned.
 | Is there a reusable literal, validating loader? | Read `load_existing_or_default`, `load_literal`, and `finish`: yes, including semantic validation. | Reuse; do not create a parser. |
 | Can an unreadable parent be mistaken for absence here? | Read `Path::exists` usage; a temporary owner-only fixture run as UID 501 returned `stat_errno=13` after removing directory search permission. | Use error-preserving metadata classification and test permission failure. |
 | Can setup be driven without touching real client config? | Read `scan_claude_code` and `claude_code_config_path`: it reads `.claude.json` under `dirs::home_dir`; existing subprocess fixtures isolate `HOME`. | Drive the real binary with temporary HOME/current directory and sanitized gateway/discovery environment. |
-| Does the current implementation already reject the reproduction? | Resolved by Spark RED run: malformed and semantic fixtures executed the forbidden closure through both context and no-context mutation paths. | Both production mutation loads require repair; implementation still waits for test review. |
-| Can OS permission fixtures actually deny access on the validation runner? | Resolved on Spark: real open/metadata permission-denial assertions passed and no case was ignored. | Use this non-root lane; never count a skipped permission case as acceptance evidence. |
+| Does the current implementation already reject the reproduction? | Resolved by bench-host RED run: malformed and semantic fixtures executed the forbidden closure through both context and no-context mutation paths. | Both production mutation loads require repair; implementation still waits for test review. |
+| Can OS permission fixtures actually deny access on the validation runner? | Resolved on bench-host: real open/metadata permission-denial assertions passed and no case was ignored. | Use this non-root lane; never count a skipped permission case as acceptance evidence. |
 
 DoR applicability (CODE, critical data handling): testable ACs, reuse search,
 production wiring, alternatives, fail-fast, risk, security, rollback, and delivery
@@ -223,10 +223,10 @@ state remains owned by the gateway (B2/B3); existing loader/writer are reused (B
 Root release delivery owns issue field synchronization, reviews, CI, and merge;
 none is claimed complete by this design.
 
-Canonical process and DoD were read from `~/.claude/rules-source/workflows/`.
+Canonical process and DoD were read from `<private-rules>/workflows/`.
 The process's `_reference/workflows/quality-gates-dor.md` pointer is missing;
 the full DoR was read from
-`/Users/mikko/github/claude-elite/rules-source/workflows/quality-gates-dor.md`.
+`<private-rules>/workflows/quality-gates-dor.md`.
 
 ## Test plan and release evidence
 
@@ -316,7 +316,7 @@ Independent tests-as-tests closure subsequently approved this suite in r3 (recei
 
 ### Regression-first execution receipt
 
-Spark built the default-feature revision with these test additions before any
+bench-host built the default-feature revision with these test additions before any
 GH462 behavior implementation. `cargo test --test gh462_config_preservation --
 --nocapture` exited 101: 22 assertion failures, 8 passes, 0 ignored. Failures
 demonstrated closure execution on invalid input (CONFIG.1/.2/.3), metadata errors
@@ -409,7 +409,7 @@ rechecks remain pending.
 
 ### Repaired-suite regression-first execution receipt (r2)
 
-Root synchronized the repaired tests to Spark before runtime behavior changes.
+Root synchronized the repaired tests to bench-host before runtime behavior changes.
 `cargo test --test gh462_config_preservation -- --nocapture` compiled and exited
 101: 41 cases, 29 assertion failures, 12 passes, 0 ignored. Failures attribute to
 forbidden mutation closure execution (both context paths and every invalid/I/O
@@ -462,7 +462,7 @@ vendors' narrow closure recheck are required before implementation.
 
 ### Final test-repair execution receipt (r3)
 
-Spark compiled both suites before any GH462 runtime implementation. Integration
+bench-host compiled both suites before any GH462 runtime implementation. Integration
 `cargo test --test gh462_config_preservation -- --nocapture` exited 101:
 44 tests, 29 intended assertion failures, 15 passes, 0 ignored. All four
 independently named missing/valid mutation controls pass. The isolated admin
@@ -525,7 +525,7 @@ independent functional driving, final review, and release DoD remain pending.
 
 ### All-feature integration GREEN
 
-Root ran the implemented candidate on Spark with all features. Raw log
+Root ran the implemented candidate on bench-host with all features. Raw log
 `mcp-gateway-v4-gh462-green.log` reports 44 passed, 0 failed, 0 ignored. Every
 CONFIG.1–6 integration case now passes, including all previously red preservation
 cases, ordinary/client-configuring setup, and literal-reference/environment
@@ -538,7 +538,7 @@ specified in external `gh462-validation-plan.md`. The AC-only isolated-driver
 brief is external `gh462-functional-brief.md`; it contains no implementation or
 test diff. Local parser-only cargo-mutants candidate listings are discovery,
 not executed mutants or a score. Coverage and mutation execution require root's
-Spark slot and preserve the other increments' targets/profiles.
+bench-host slot and preserve the other increments' targets/profiles.
 
 
 ### Adjacent build-matrix repair — Small peer-reviewed increment
@@ -571,13 +571,13 @@ or brittle text test. DoR: exact failure/target/risk and decisive checks known;
 no user-intent unknown, no migration or live deployment. Root peer-reviewed and
 approved this Small design/test approach before editing. GitNexus reports LOW
 for tracked_sections, with direct consumers pending_restart_fields and the
-existing tracked-section regression. Root grants four Spark build jobs in the
+existing tracked-section regression. Root grants four bench-host build jobs in the
 main tree; other mutation work is in an independent copied tree.
 
 
 ### Focused regression and BUILD.1 receipts
 
-Raw Spark logs confirm: binary GH462 4/4; config-persistence 13/13;
+Raw bench-host logs confirm: binary GH462 4/4; config-persistence 13/13;
 config-reload 78/78; setup 8/8; add/remove 13/13; discovery-write 2/2. All are
 zero-failure, zero-ignored runs. These groups preceded the attribute-only
 build-matrix repair. After that repair, `--no-default-features --features webui`
@@ -593,7 +593,7 @@ release-wide warning triage. The compiler E0609 is fixed, and its earlier failed
 build log remains evidence rather than being relabeled a behavioral RED.
 
 The remaining DoD work runs from a source/target snapshot at
-`/home/mikko/codex/mcp-gateway-v4-gh462-dod-20260906`; all six owned source/test
+`/home/<redacted>/codex/mcp-gateway-v4-gh462-dod-20260906`; all six owned source/test
 hashes match external `gh462-source-snapshot.json`. The independent driver's
 candidate executable SHA-256 is
 `5d5220efc6071532d10a57a5125c05e07849b4a84b2c3ee26cfcd4f308c48ddd`.
@@ -657,7 +657,7 @@ The corrected component-only command passed 20/20, with 24 CLI cases filtered:
 
 ```sh
 cargo llvm-cov --all-features --test gh462_config_preservation --jobs 4 \
-  --json --output-path /home/mikko/codex/gh462-coverage-component.json \
+  --json --output-path /home/<redacted>/codex/gh462-coverage-component.json \
   -- --skip cli::
 ```
 

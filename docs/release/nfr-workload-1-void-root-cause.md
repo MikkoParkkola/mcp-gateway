@@ -1,7 +1,7 @@
 # NFR.WORKLOAD.1 VOID: root cause
 
 `eval_workload.py` returned `VERDICT: VOID (exit 3)` on
-`/home/mikko/perf-workload/run-20260918` with `C1: semantic assertion rate
+`/home/<redacted>/perf-workload/run-20260918` with `C1: semantic assertion rate
 below 100%`. The cause is a gateway behaviour change, not a harness defect and
 not a configuration miss.
 
@@ -26,7 +26,7 @@ is a complete answer proving the process is alive. `record_unserved_probe`
 escalates on the third in a row (`UNSERVED_ESCALATION = 3`, `:33`). Escalation
 trips the circuit breaker, which then rejects every subsequent `tools/call`.
 
-Observed on an independently reproduced run (gateway log `/tmp/c12.log`, Spark):
+Observed on an independently reproduced run (gateway log `/tmp/c12.log`, bench-host):
 
     11:45:20  Health probe was not served  method="ping" code=-32601 consecutive=1
     11:45:30  Health probe was not served  method="ping" code=-32601 consecutive=2
@@ -128,5 +128,5 @@ Consequences for the two findings:
 
 The gate stays at `built`. Promoting it needs a re-measured throughput number
 taken against a build that contains `d11bf4a1`, with non-empty server-side
-capture. That run is a heavy workload benchmark and belongs on Spark, not on
+capture. That run is a heavy workload benchmark and belongs on bench-host, not on
 the Mac holding the shared build lock.

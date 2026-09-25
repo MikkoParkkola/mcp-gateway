@@ -463,7 +463,7 @@ fn matching_env_file_returns_path_when_event_matches_watched_env_file() {
     use notify::{EventKind, event::ModifyKind};
 
     // GIVEN: an event for a watched env file
-    let env_path = std::path::PathBuf::from("/home/user/.claude/secrets.env");
+    let env_path = std::path::PathBuf::from("/home/user/.config/mcp-gateway/secrets.env");
     let event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
         paths: vec![env_path.clone()],
@@ -480,7 +480,7 @@ fn matching_env_file_returns_none_when_path_not_in_watch_list() {
     use notify::{EventKind, event::ModifyKind};
 
     // GIVEN: an event for a file not in the watch list
-    let watched = std::path::PathBuf::from("/home/user/.claude/secrets.env");
+    let watched = std::path::PathBuf::from("/home/user/.config/mcp-gateway/secrets.env");
     let other = std::path::PathBuf::from("/tmp/other.env");
     let event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
@@ -496,7 +496,7 @@ fn matching_env_file_returns_none_for_remove_event() {
     use notify::{EventKind, event::RemoveKind};
 
     // GIVEN: a Remove event on a watched env file
-    let env_path = std::path::PathBuf::from("/home/user/.claude/secrets.env");
+    let env_path = std::path::PathBuf::from("/home/user/.config/mcp-gateway/secrets.env");
     let event = notify::Event {
         kind: EventKind::Remove(RemoveKind::File),
         paths: vec![env_path.clone()],
@@ -1374,19 +1374,19 @@ async fn a_refused_reload_applies_nothing_at_all() {
 async fn a_reload_that_does_not_open_the_tools_still_applies() {
     // GIVEN: a gateway whose RUNNING config already closes the tool surface.
     //
-    // Taken from the running config and not from the file on purpose: reading it
-    // from the file is the mistake the refusal exists to prevent, so a
-    // regression case written that way would pass by making it.
+    // From the running config, not the file: reading it from the file is the
+    // mistake the refusal prevents, and a case written that way passes by it.
     let mut running = Config::default();
     running.auth.enabled = true;
     running.auth.bearer_token = Some("secret".to_string());
+    running.server.cleartext_http = crate::config::CleartextHttp::TlsTerminatedUpstream;
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
     // WHEN: the same public URL is declared, over tools that need a credential
     write_owner_only(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
     )
     .unwrap();
     let ctx = posture_context(&path, running);
@@ -1612,7 +1612,7 @@ async fn a_file_that_a_restart_would_accept_is_not_reported_as_one_to_revert() {
     // half needs a restart while the public_url half would take effect at once.
     write_owner_only(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
     .unwrap();
     let ctx = posture_context(&path, clean_running());
@@ -1652,7 +1652,7 @@ async fn tightening_public_paths_in_the_same_edit_does_not_mask_it() {
     // halves of the correct fix, written together
     write_owner_only(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
     .unwrap();
     let ctx = posture_context(&path, running);
@@ -1686,7 +1686,7 @@ async fn a_refusal_reads_as_a_sentence_on_both_branches() {
     // next start too, the second is accepted by one.
     for file in [
         "server:\n  public_url: \"https://gw.example.com\"\n",
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gateway.yaml");
@@ -2761,9 +2761,8 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
         home.finish_startup();
 
         // The holder, built once at startup, exactly as the gateway builds it.
-        let holder =
-            crate::gateway::auth::ResolvedAuthConfig::try_from_config(&startup.config.auth)
-                .unwrap();
+        let (auth, env) = (&startup.config.auth, &startup.overlay);
+        let holder = crate::gateway::auth::ResolvedAuthConfig::try_from_config(auth, env).unwrap();
 
         // WHEN: only the env file's value changes. The config file is rewritten
         // BYTE-IDENTICALLY, so the tracked-section reporting that already exists

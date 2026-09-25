@@ -8,6 +8,7 @@
 pub(crate) mod account_bindings;
 #[cfg(test)]
 mod attestation_start_tests;
+mod cleartext;
 mod control_plane_store;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
@@ -25,7 +26,8 @@ mod support;
 // would be IN FORCE, so it goes through the overlay. A restart-only edit asks
 // what the NEXT START does with the file, which is the startup check itself —
 // the same function the bind path calls, named here for the caller.
-pub(crate) use support::{reload_posture_refusal, start_refusal as next_start_refusal};
+pub(crate) use cleartext::reload_posture_refusal;
+pub(crate) use support::start_refusal as next_start_refusal;
 mod warmstart;
 
 use std::net::SocketAddr;
@@ -1508,7 +1510,10 @@ impl Gateway {
             Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
         multiplexer.spawn_reaper_on(Arc::clone(&session_lifecycle));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-        let auth_config = Arc::new(ResolvedAuthConfig::try_from_config(&self.config.auth)?);
+        let auth_config = Arc::new(ResolvedAuthConfig::try_from_config(
+            &self.config.auth,
+            self.env.startup(),
+        )?);
 
         // Wire webhook registry into MetaMcp for gateway_webhook_status.
         if self.config.webhooks.enabled {
@@ -1565,7 +1570,7 @@ impl Gateway {
         let key_server = if self.config.key_server.enabled {
             let mut ks_config = self.config.key_server.clone();
             // Resolve admin token (expand env:VAR_NAME)
-            ks_config.admin_token = ks_config.resolve_admin_token()?;
+            ks_config.admin_token = ks_config.resolve_admin_token(self.env.startup())?;
 
             let cleanup_interval = std::time::Duration::from_secs(ks_config.cleanup_interval_secs);
             let ks = Arc::new(KeyServer::new(ks_config));
@@ -1590,7 +1595,7 @@ impl Gateway {
         // Build agent registry from config.
         let agent_registry = Arc::new(AgentRegistry::new());
         for def in &self.config.agent_auth.agents {
-            let secret = def.resolved_hs256_secret()?;
+            let secret = def.resolved_hs256_secret(self.env.startup())?;
             agent_registry.register(AgentDefinition {
                 client_id: def.client_id.clone(),
                 name: def.name.clone(),
@@ -2009,6 +2014,9 @@ impl Gateway {
                  callers on the network that it has not authenticated. Authentication \
                  is expected to terminate in front of it."
             );
+        }
+        if let Some(warning) = cleartext::cleartext_http_warning(&self.config) {
+            warn!("{warning}");
         }
 
         // Bound ONCE, here, and handed to whichever path serves it.

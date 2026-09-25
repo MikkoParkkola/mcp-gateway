@@ -267,7 +267,7 @@ against a checkpoint.
 | Test plan | ✅ | ✅ | ✅ | ✅ |
 | New deps named (build-cost tier) | none beyond Helm tooling | `rustix` promoted transitive→direct (0 new compile) | none | none (sink is std/http) |
 | Reuse-first (ADR-006) | manifests | TransparencyLogger | MIK-6648 | TransparencyLogger |
-| Mac-buildable (no Spark) | ✅ | ✅ | ✅ | ✅ |
+| Mac-buildable (no bench-host) | ✅ | ✅ | ✅ | ✅ |
 
 Sequencing: A and B are independent and highest-value (deploy story + persistence
 foundation). C depends on MIK-6648 (merged). D depends on B's audit wiring.

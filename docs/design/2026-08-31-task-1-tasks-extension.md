@@ -757,8 +757,8 @@ isolated reviewer cannot read a rules file it has no filesystem for.
 
 | leg | vendor | verdict |
 |---|---|---|
-| 1 | `~/.claude/bin/gpt-review` (Codex/GPT-5.x) | **SHIP-WITH-FIXES** — "task identity, subscription authorization, and lifecycle routing are not yet safely specified" |
-| 2 | `~/.claude/bin/grok-review` | **SHIP-WITH-FIXES** — "the verification pass left the EXT.1 seam and the SUB.4 keying premise describing a tree that no longer exists, and it dismissed a `tasks/update` MUST that does change the handler" |
+| 1 | `<review-tools>/gpt-review` (Codex/GPT-5.x) | **SHIP-WITH-FIXES** — "task identity, subscription authorization, and lifecycle routing are not yet safely specified" |
+| 2 | `<review-tools>/grok-review` | **SHIP-WITH-FIXES** — "the verification pass left the EXT.1 seam and the SUB.4 keying premise describing a tree that no longer exists, and it dismissed a `tasks/update` MUST that does change the handler" |
 
 Neither verdict is evidence. Every finding below was verified at source before anything was
 written; the ones that died on inspection are recorded as dead, not quietly dropped.

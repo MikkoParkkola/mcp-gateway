@@ -31,43 +31,17 @@ use std::process::ExitCode;
 
 #[path = "upgrade_backend_grant_notice.rs"]
 mod backend_grant_notice;
+#[path = "upgrade_notice_items.rs"]
+mod notice_items;
 #[path = "upgrade_webhook_notice.rs"]
 mod webhook_notice;
+use notice_items::NOTICE_4_0_0_ITEMS;
 
 // ── Semver comparison ─────────────────────────────────────────────────────────
 
-/// A parsed semantic version triple `(major, minor, patch)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SemVer {
-    major: u32,
-    minor: u32,
-    patch: u32,
-}
-
-impl SemVer {
-    /// Parse a semver string of the form `"MAJOR.MINOR.PATCH"`.
-    ///
-    /// Pre-release suffixes (e.g. `"-alpha.1"`) are stripped before parsing so
-    /// that `"3.0.0-alpha.1"` is treated as `"3.0.0"`.
-    pub fn parse(s: &str) -> Option<Self> {
-        let base = s.split('-').next().unwrap_or(s);
-        let mut parts = base.splitn(3, '.');
-        let major = parts.next()?.parse().ok()?;
-        let minor = parts.next()?.parse().ok()?;
-        let patch = parts.next()?.parse().ok()?;
-        Some(Self {
-            major,
-            minor,
-            patch,
-        })
-    }
-}
-
-impl std::fmt::Display for SemVer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
-    }
-}
+#[path = "upgrade_semver.rs"]
+mod stamp_version;
+pub use stamp_version::SemVer;
 
 // ── Migration registry ────────────────────────────────────────────────────────
 
@@ -232,80 +206,7 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 }
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
-// v4.0.0 carries the changes listed below: each can surprise an operator, and
-// no config edit can pre-empt any of them. The list is the count.
-// A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
-
-/// The sixteen 4.0.0 changes, in the order they are printed.
-///
-/// Pinned as a slice so a test can assert the notice still carries every item:
-/// a release note that quietly loses one is worse than none, because the operator has read it.
-const NOTICE_4_0_0_ITEMS: &[&str] = &[
-    "OAuth credentials are now stored per issuer, so 3.x tokens are no longer \
-read where they sit. By default each OAuth backend re-authenticates once, on \
-its next use: expect one authorization prompt per backend, and no config \
-change is needed. To keep a credential instead, run `mcp-gateway accounts \
-migrate-credentials --descriptor-id ID --legacy-issuer URL` per backend, which \
-is offline and refuses rather than guessing. Either way your 3.x token files \
-are left untouched in `~/.mcp-gateway/oauth/` at mode 0600. Delete them once \
-every backend has re-authorized or migrated AND been used successfully: a \
-migrated credential is still the same grant, so the first refresh against a \
-provider that rotates refresh tokens retires the copy in the old file.",
-    "A malformed line in an `env_files` file now FAILS STARTUP instead of being \
-skipped silently. A typo that used to cost one missing variable now costs a \
-refused start, and says which line.",
-    "Protocol version 2024-10-07 is no longer advertised. Clients that only \
-speak it must upgrade; 2025-03-26 and later are unaffected.",
-    "Rate-limited backend responses (HTTP 429 and equivalents) no longer count \
-against the error budgets or the circuit breaker (GH #475). A throttled backend \
-is no longer auto-killed for being busy.",
-    "A response is cached only under a protocol revision the gateway can \
-identify. A stateless POST that sends no `MCP-Protocol-Version` header and \
-never completes `initialize` is no longer served from cache, so that traffic \
-reaches your backends and the gateway's own rate limits now apply to calls that \
-previously never got that far. Nothing errors: the symptom is throughput and \
-backend load. Send the header on stateless requests, or complete `initialize` \
-and reuse the session.",
-    webhook_notice::ITEM,
-    "`logging/setLevel` over HTTP now needs an admin key, because it sets the \
-log level of every shared backend for every user. Other callers are refused \
-with HTTP 403, and with auth off nobody is admin, so it is refused for everyone. \
-Stdio is unchanged. To receive fewer log messages, declare a level in each \
-request's `_meta` instead.",
-    "On an authenticated gateway, `notifications/tools/list_changed` from an \
-admin backend edit now reaches only sessions whose key may access that backend; \
-a session that presented no credential is not told. With auth off, every \
-session is told, as before.",
-    "Grant, policy and decision writes to the admin panel's control-plane API \
-now return HTTP 409, because nothing enforced that store. Change grants with \
-`mcp-gateway identity grants` and policies with `security.sanitize_input` / \
-`security.ssrf_protection`. Keep the old store files: 4.1 re-imports them as drafts.",
-    "On an authenticated gateway, `subscriptions/listen` without a credential \
-that authenticates is refused with HTTP 401, including on a public `/mcp`. A \
-listener is told about `tools/list_changed` only for backends its key may \
-access, and its stream closes once its credential is revoked or expires; \
-re-subscribe with a fresh one. With auth off, nothing changes.",
-    "An identity-grants row bound to `exact: <id>` is refused at load, and the \
-error lists every such row. Rewrite each as `!exact {source: mtls, id: ...}` or \
-`!exact {source: jwt, id: ...}`; the gateway will not pick the source. Until \
-then personal capabilities fail closed. `identity grants grant --agent` takes \
-`mtls:<id>` or `jwt:<id>`.",
-    "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set (set `observe` to keep the \
-audit lines). `enforce` now refuses unattested calls, playbooks and code mode, and needs a \
-signing key; enforce with no key, or any unrecognised value, now FAILS STARTUP.",
-    "A tool call carrying an argument key its schema does not declare, at any depth, is \
-refused with `isError: true`; relax it with `input_schema_enforcement: standard` or `off`.",
-    backend_grant_notice::ITEM,
-    "`/metrics` now requires `server.metrics_token` (HTTP 401 until set; the admin bearer is \
-refused). A missing `env:` variable does not stop startup. Scrape with a dedicated job or the \
-chart's ServiceMonitor, never a generic annotation-driven one.",
-    "The inbound WebSocket listener, which only echoed frames, is removed: `server.ws_port` now \
-FAILS the config load. Clients connect via stdio or HTTP (`POST /mcp`).",
-    "More than one replica is refused while state lives in one process: `server.replicas` \
-(default 1) above 1 FAILS STARTUP with the modern protocol on, or with the key server or accounts \
-enabled. The Helm chart now defaults `replicaCount` to 1 and fails the render on the same rules. \
-Without the chart, set `server.replicas` to the processes you run: 1 is a declaration, not a detection.",
-];
+// The items live in `upgrade_notice_items.rs`; this prints them once.
 
 /// Emit the one-time 4.0.0 notice.
 ///
@@ -425,10 +326,10 @@ static WHATS_NEW: &[WhatsNew] = &[
 /// Print "What's new" items for all versions strictly after `from` and up to `current`.
 ///
 /// Skipped on fresh install (nobody needs a changelog on first run).
-fn print_whats_new(from: SemVer, current: SemVer) {
+fn print_whats_new(from: &SemVer, current: &SemVer) {
     let items: Vec<&str> = WHATS_NEW
         .iter()
-        .filter(|w| SemVer::parse(w.version).is_some_and(|v| v > from && v <= current))
+        .filter(|w| SemVer::parse(w.version).is_some_and(|v| &v > from && v <= current.release()))
         .flat_map(|w| w.items.iter().copied())
         .collect();
 
@@ -465,7 +366,7 @@ impl UpgradeContext<'_> {
 
     fn run(&self) -> std::io::Result<usize> {
         if !self.quiet {
-            print_whats_new(self.old_ver, self.new_ver);
+            print_whats_new(&self.old_ver, &self.new_ver);
         }
 
         let migrations = self.applicable_migrations();
@@ -540,8 +441,8 @@ fn check_upgrade_with(data_dir: &Path, notices: &mut impl std::io::Write) -> std
         std::cmp::Ordering::Less => {
             let ctx = UpgradeContext {
                 data_dir,
-                old_ver: installed,
-                new_ver: current,
+                old_ver: installed.clone(),
+                new_ver: current.clone(),
                 dry_run: false,
                 quiet: true,
             };
@@ -629,14 +530,14 @@ pub fn run_upgrade_command(dry_run: bool, quiet: bool, config_dir: Option<&Path>
         std::cmp::Ordering::Less => {
             let ctx = UpgradeContext {
                 data_dir: &dir,
-                old_ver: installed,
-                new_ver: current,
+                old_ver: installed.clone(),
+                new_ver: current.clone(),
                 dry_run,
                 quiet,
             };
             match ctx.run() {
                 Ok(n) => {
-                    print_upgrade_summary(installed, current, n, dry_run, quiet);
+                    print_upgrade_summary(&installed, &current, n, dry_run, quiet);
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
@@ -648,7 +549,13 @@ pub fn run_upgrade_command(dry_run: bool, quiet: bool, config_dir: Option<&Path>
     }
 }
 
-fn print_upgrade_summary(old: SemVer, new: SemVer, _migrations: usize, dry_run: bool, quiet: bool) {
+fn print_upgrade_summary(
+    old: &SemVer,
+    new: &SemVer,
+    _migrations: usize,
+    dry_run: bool,
+    quiet: bool,
+) {
     if quiet {
         return;
     }
@@ -667,60 +574,14 @@ mod upgrade_notice_tests;
 mod upgrade_webhook_notice_tests;
 
 #[cfg(test)]
+#[path = "upgrade_prerelease_tests.rs"]
+mod prerelease_tests;
+
+#[cfg(test)]
 mod tests {
+    use super::prerelease_tests::stamp_4_0_0;
     use super::*;
     use tempfile::TempDir;
-
-    // ── SemVer::parse ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn semver_parse_valid_triple_succeeds() {
-        // GIVEN: a valid semver string
-        // WHEN: parsed
-        // THEN: all three fields are populated
-        let v = SemVer::parse("2.9.1").unwrap();
-        assert_eq!(
-            v,
-            SemVer {
-                major: 2,
-                minor: 9,
-                patch: 1
-            }
-        );
-    }
-
-    #[test]
-    fn semver_parse_strips_prerelease_suffix() {
-        let v = SemVer::parse("3.0.0-alpha.1").unwrap();
-        assert_eq!(
-            v,
-            SemVer {
-                major: 3,
-                minor: 0,
-                patch: 0
-            }
-        );
-    }
-
-    #[test]
-    fn semver_parse_invalid_returns_none() {
-        assert!(SemVer::parse("not-a-version").is_none());
-        assert!(SemVer::parse("1.2").is_none());
-        assert!(SemVer::parse("").is_none());
-    }
-
-    #[test]
-    fn semver_ordering_is_correct() {
-        let v1 = SemVer::parse("1.0.0").unwrap();
-        let v2 = SemVer::parse("2.0.0").unwrap();
-        let v3 = SemVer::parse("2.1.0").unwrap();
-        let v4 = SemVer::parse("2.1.1").unwrap();
-
-        assert!(v1 < v2);
-        assert!(v2 < v3);
-        assert!(v3 < v4);
-        assert_eq!(v1, SemVer::parse("1.0.0").unwrap());
-    }
 
     // ── stamp read/write ──────────────────────────────────────────────────────
 
@@ -793,9 +654,12 @@ mod tests {
         write_stamp(&stamp_path(dir.path()), "0.1.0").unwrap();
         // WHEN: check_upgrade is called
         check_upgrade(dir.path()).unwrap();
-        // THEN: stamp is updated to current version (no migrations, so direct update)
         let v = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
-        assert_eq!(v, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            v,
+            env!("CARGO_PKG_VERSION"),
+            "the stamp keeps the prerelease"
+        );
     }
 
     #[test]
@@ -856,10 +720,13 @@ mod tests {
         write_stamp(&stamp_path(dir.path()), "0.1.0").unwrap();
         // WHEN: upgrade runs (quiet so no stdout noise in test)
         let code = run_upgrade_command(false, true, Some(dir.path()));
-        // THEN: stamp updated, exit SUCCESS
         assert_eq!(code, ExitCode::SUCCESS);
         let v = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
-        assert_eq!(v, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            v,
+            env!("CARGO_PKG_VERSION"),
+            "the stamp keeps the prerelease"
+        );
     }
 
     #[test]
@@ -969,7 +836,7 @@ mod tests {
         let v2100 = SemVer::parse("2.10.0").unwrap();
         let has_entries = WHATS_NEW
             .iter()
-            .any(|w| SemVer::parse(w.version) == Some(v2100));
+            .any(|w| SemVer::parse(w.version).as_ref() == Some(&v2100));
         // THEN: at least one entry exists
         assert!(has_entries, "WHATS_NEW should have entries for v2.10.0");
     }
@@ -1194,9 +1061,9 @@ mod tests {
         // advances to the current binary version
         check_upgrade(dir.path()).unwrap();
         let stamp_after_first = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
-        // GH475.MIG.2: pinned to the literal so a future version bump cannot
-        // silently stop testing the 4.0.0 behaviour this case was written for.
-        assert_eq!(stamp_after_first, "4.0.0");
+        // GH475.MIG.2: exactly 4.0.0 plus this build's own prerelease, so a
+        // version bump still reds the 4.0.0 behaviour this case pins.
+        assert_eq!(stamp_after_first, stamp_4_0_0());
         let content_after_first = std::fs::read_to_string(&yaml).unwrap();
         assert_eq!(content_after_first, original);
 
@@ -1208,7 +1075,7 @@ mod tests {
         // branch (idempotency guaranteed by the version stamp, not by the
         // migration's own logic).
         let stamp_after_second = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
-        assert_eq!(stamp_after_second, "4.0.0");
+        assert_eq!(stamp_after_second, stamp_4_0_0());
         let content_after_second = std::fs::read_to_string(&yaml).unwrap();
         assert_eq!(content_after_second, original);
     }
@@ -1225,20 +1092,20 @@ mod tests {
         write_stamp(&stamp_path(dir.path()), "3.9.0").unwrap();
 
         check_upgrade(dir.path()).unwrap();
-        // GH475.MIG.2: pinned to the literal, not env!("CARGO_PKG_VERSION") —
-        // that macro tracks whatever version this crate happens to be next,
-        // so it would keep passing after a version bump while no longer
-        // proving anything about the 4.0.0 upgrade this case exists to cover.
+        // GH475.MIG.2: pinned to the literal 4.0.0, not env!("CARGO_PKG_VERSION")
+        // — that macro tracks whatever version this crate happens to be next.
+        // Only the prerelease (`-beta.1`) comes from the manifest; see
+        // `prerelease_tests::stamp_4_0_0`.
         assert_eq!(
             read_stamp(&stamp_path(dir.path())).unwrap().unwrap(),
-            "4.0.0"
+            stamp_4_0_0()
         );
         assert_eq!(std::fs::read_to_string(&yaml).unwrap(), original);
 
         check_upgrade(dir.path()).unwrap();
         assert_eq!(
             read_stamp(&stamp_path(dir.path())).unwrap().unwrap(),
-            "4.0.0"
+            stamp_4_0_0()
         );
         assert_eq!(
             std::fs::read_to_string(&yaml).unwrap(),

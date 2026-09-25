@@ -5,7 +5,7 @@
     "gateway_version": "mcp-gateway 4.0.0",
     "binary_sha256": "6e38ee5f55e2eabc5bc751c3dc42a7b0e92a4171d435b78341c3615f2d1acd70",
     "build_sha_confidence": "assumption",
-    "provenance": "SCENARIOS 1, 3 AND 5. The binary was copied from a peer worktree's target/debug tree (/Users/mikko/github/.worktrees/v4-codeql-record/target/debug/mcp-gateway) because that machine had too little free disk to build. The binary embeds no commit SHA and the crate has no build.rs, so the source revision behind it is an ASSUMPTION, not a measurement -- hence build_sha_confidence. The sha256 above is measured and pins the exact bytes those three recordings ran against. See docs/release/demo/corroboration-2026-09-21.json for the run that reproduced all 25 of their rows from a named commit.",
+    "provenance": "SCENARIOS 1, 3 AND 5. The binary was copied from a peer worktree's target/debug tree (<worktrees>/v4-codeql-record/target/debug/mcp-gateway) because that machine had too little free disk to build. The binary embeds no commit SHA and the crate has no build.rs, so the source revision behind it is an ASSUMPTION, not a measurement -- hence build_sha_confidence. The sha256 above is measured and pins the exact bytes those three recordings ran against. See docs/release/demo/corroboration-2026-09-21.json for the run that reproduced all 25 of their rows from a named commit.",
     "scope": "Scenarios 1, 3 and 5 only. Scenarios 2 and 4 were recorded later, on a different host and a different binary, and carry their own binary_sha256, source_commit and build_sha_confidence in their versions blocks; theirs is 'measured', this one is not."
   },
   "scenarios": [
@@ -97,7 +97,7 @@
         "build_sha_confidence": "measured",
         "build_profile": "debug",
         "host": "Linux aarch64",
-        "provenance": "Built on the Spark box from a tree rsynced out of this worktree at 88e160d2c873eaf748d75785ea69d5212d1f9206. The binary embeds no commit SHA and the crate has no build.rs, so the source revision is established by comparing the build INPUTS instead of trusting a label: the 606 files under src/, plus Cargo.toml and Cargo.lock, hash to the same content digest 3104b06e9d33c536 on both sides (`git ls-tree -r 88e160d2` blob ids locally, `git hash-object` on the Spark tree). That makes build_sha_confidence 'measured' for these two scenarios, unlike the top-level block, which describes the earlier macOS binary behind scenarios 1, 3 and 5.",
+        "provenance": "Built on the bench-host box from a tree rsynced out of this worktree at 88e160d2c873eaf748d75785ea69d5212d1f9206. The binary embeds no commit SHA and the crate has no build.rs, so the source revision is established by comparing the build INPUTS instead of trusting a label: the 606 files under src/, plus Cargo.toml and Cargo.lock, hash to the same content digest 3104b06e9d33c536 on both sides (`git ls-tree -r 88e160d2` blob ids locally, `git hash-object` on the bench-host tree). That makes build_sha_confidence 'measured' for these two scenarios, unlike the top-level block, which describes the earlier macOS binary behind scenarios 1, 3 and 5.",
         "gateway": "mcp-gateway 4.0.0",
         "client_protocol_version": "2026-07-28",
         "peer_protocol_version": "2025-06-18",
@@ -275,7 +275,7 @@
         "build_sha_confidence": "measured",
         "build_profile": "debug",
         "host": "Linux aarch64",
-        "provenance": "Built on the Spark box from a tree rsynced out of this worktree at 88e160d2c873eaf748d75785ea69d5212d1f9206. The binary embeds no commit SHA and the crate has no build.rs, so the source revision is established by comparing the build INPUTS instead of trusting a label: the 606 files under src/, plus Cargo.toml and Cargo.lock, hash to the same content digest 3104b06e9d33c536 on both sides (`git ls-tree -r 88e160d2` blob ids locally, `git hash-object` on the Spark tree). That makes build_sha_confidence 'measured' for these two scenarios, unlike the top-level block, which describes the earlier macOS binary behind scenarios 1, 3 and 5.",
+        "provenance": "Built on the bench-host box from a tree rsynced out of this worktree at 88e160d2c873eaf748d75785ea69d5212d1f9206. The binary embeds no commit SHA and the crate has no build.rs, so the source revision is established by comparing the build INPUTS instead of trusting a label: the 606 files under src/, plus Cargo.toml and Cargo.lock, hash to the same content digest 3104b06e9d33c536 on both sides (`git ls-tree -r 88e160d2` blob ids locally, `git hash-object` on the bench-host tree). That makes build_sha_confidence 'measured' for these two scenarios, unlike the top-level block, which describes the earlier macOS binary behind scenarios 1, 3 and 5.",
         "gateway": "mcp-gateway 4.0.0",
         "client_protocol_version": "2025-06-18",
         "catalogue": "the repository's own capabilities/, examples/ excluded",

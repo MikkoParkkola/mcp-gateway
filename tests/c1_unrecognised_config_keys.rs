@@ -262,6 +262,7 @@ security:
     scan_requests: true
     scan_responses: true
 server:
+  cleartext_http: cluster_internal
   host: 0.0.0.0
   port: 39400
   public_url: http://mcp-gateway.default.svc.cluster.local:39400
@@ -286,6 +287,7 @@ const ENTERPRISE_ALPHA: &str = "server:
   host: 0.0.0.0
   port: 39400
   public_url: \"http://mcp-gateway.mcp-gateway.svc.cluster.local:39400\"
+  cleartext_http: cluster_internal
 auth:
   enabled: true
   bearer_token: \"env:MCP_GATEWAY_TOKEN\"
@@ -310,6 +312,20 @@ fn env_root_keys_and_shipped_examples_load() {
     for name in &names {
         // Through a 0600 copy: a git checkout is 0644, which CONFIG.2 refuses.
         let body = std::fs::read_to_string(examples.join(name)).expect("read example");
+        // C4 refuses an unset `${VAR}` in an enabled backend, so the variables
+        // the examples ask the operator to set are set, as an operator would.
+        let vars = tempfile::tempdir().expect("tempdir");
+        let body = if body.contains("${") && !body.contains("\nenv_files:") {
+            let env = vars.path().join("example.env");
+            mcp_gateway::gateway::test_helpers::write_owner_only(
+                &env,
+                "TAVILY_API_KEY=example-tavily-key\nCONTEXT7_TOKEN=example-context7-token\n",
+            )
+            .expect("write env file");
+            format!("env_files: [\"{}\"]\n{body}", env.display())
+        } else {
+            body
+        };
         let (_dir, _path, result) = load(&body);
         let expected = FAILS_BEFORE_C1.iter().find(|(file, _)| file == name);
         match (result, expected) {
@@ -422,4 +438,32 @@ async fn refused_reload_keeps_the_running_config() {
         .await
         .expect("the corrected config reloads");
     assert_eq!(live.get().backends["keep"].description, "after");
+}
+
+/// C8: `server.request_timeout` was never enforced; a config still carrying it
+/// must fail to load and point at the per-backend `timeout` that does bound calls.
+#[test]
+fn removed_request_timeout_is_refused() {
+    let message = refusal(
+        "server:\n  request_timeout: 30s\n",
+        &["server.request_timeout"],
+    );
+    for part in [
+        "removed in 4.0",
+        "never enforced",
+        "per-backend `timeout`",
+        "Remove server.request_timeout",
+    ] {
+        assert!(
+            message.contains(part),
+            "retired request_timeout refusal must say `{part}`; got: {message}"
+        );
+    }
+    // UPGRADING item 39 quotes the refusal verbatim; a reworded message must
+    // update the guide too.
+    let quote = "`server.request_timeout` is retired: the server-wide request timeout was \
+                 removed in 4.0; it was never enforced. Calls are bounded by the per-backend \
+                 `timeout`. Remove server.request_timeout.";
+    assert!(message.contains(quote), "got: {message}");
+    assert!(include_str!("../docs/UPGRADING-4.0.md").contains(quote));
 }

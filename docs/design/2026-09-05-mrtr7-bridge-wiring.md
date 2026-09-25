@@ -17,7 +17,7 @@ latter. Findings disposed below.
 
 Round 5 (2026-09-06) is reviewed by the pair the release board binds instead:
 `grok-review` and `kimi-review`. Reviewer identity verified rather than assumed —
-`~/.claude/bin/kimi-review` is a 1.1K transition shim that `exec`s
+`<review-tools>/kimi-review` is a 1.1K transition shim that `exec`s
 `synthetic-review --model "${KIMI_REVIEW_MODEL:-kimi-k3}"`. Same wrapper binary
 as the round-2/3 open-weights leg, DIFFERENT model: that leg ran `glm-5.3`, this
 one runs `kimi-k3`. The pair is therefore two distinct models, not one wrapper
@@ -1377,8 +1377,8 @@ ruling that cannot be read against the text it ruled on is unauditable.
 ### Review provenance for this round
 
 Round 7 ran on 2026-09-08 against the amended material, both legs fed on
-stdin: `~/.claude/bin/gpt-review` (Codex, availability restored) and
-`~/.grok/bin/claude-review` (Claude Opus 5, `--safe-mode`). Both processes
+stdin: `<review-tools>/gpt-review` (Codex, availability restored) and
+`<review-tools>/claude-review` (Claude Opus 5, `--safe-mode`). Both processes
 exited 0 and both returned SHIP-WITH-FIXES — verdict taken from the ledger row
 and the exit status, never scraped from the body (§PA). `gpt-review` raised two
 findings and one improvement; `claude-review` raised six and four. Every one is

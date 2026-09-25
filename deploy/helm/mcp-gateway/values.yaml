@@ -29,7 +29,7 @@ image:
   repository: mikkoparkkola/mcp-gateway
   # Prefer a digest for immutable, supply-chain-safe deploys (set by A5/6684).
   # When `digest` is set it takes precedence over `tag`.
-  tag: "4.0.0"
+  tag: "4.0.0-beta.1"
   digest: ""
   pullPolicy: IfNotPresent
 
@@ -98,6 +98,23 @@ auth:
   existingSecret: mcp-gateway-auth
   secretKey: token
 
+# credential mode only. The bearer token crosses the pod's 0.0.0.0 bind in
+# plain HTTP, and the gateway refuses that unless server.cleartext_http names
+# who protects it (UPGRADING-4.0, C3). Rendered as that key:
+#
+#   cluster_internal         (default) callers reach the pod only over the
+#                            cluster network, by its Service name. The chart
+#                            then renders an ingress-only NetworkPolicy
+#                            (below) even with networkPolicy.enabled false,
+#                            and refuses to render a NodePort/LoadBalancer
+#                            Service or a config.server.public_url other than
+#                            this release's Service name. WARNs every start.
+#   tls_terminated_upstream  an ingress or proxy terminates TLS in front of the
+#                            pod. Set this when public_url is an ingress host.
+#   refuse                   no plain HTTP: the pod starts only with mtls on.
+server:
+  cleartextHttp: cluster_internal
+
 # Gateway config rendered into a ConfigMap and mounted read-only.
 config:
   server:
@@ -133,9 +150,13 @@ serviceAccount:
 rbac:
   create: false
 
-# NetworkPolicy is opt-in. When enabled it is WORKLOAD-SCOPED (selects only the
-# gateway's own pods) and restrictive: ingress limited to the service port,
-# egress limited to HTTPS + DNS. It is NOT a namespace-wide default-deny — that
+# NetworkPolicy is opt-in, except that credential mode with
+# server.cleartextHttp: cluster_internal (the default) always renders an
+# INGRESS-ONLY policy (ingress limited to the service port, egress untouched so
+# backends on any port stay reachable): the cluster network is then the trust
+# boundary for the bearer token. With enabled: true it is WORKLOAD-SCOPED
+# (selects only the gateway's own pods) and restrictive: ingress limited to the
+# service port, egress limited to HTTPS + DNS. It is NOT a namespace-wide default-deny — that
 # affects other workloads and is the cluster operator's responsibility.
 networkPolicy:
   enabled: false
