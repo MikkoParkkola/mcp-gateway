@@ -96,10 +96,7 @@ pub(crate) fn authorize_backend(
     match client {
         Some(client) if !client.can_access_backend(server) => Err(AuthorizationError::forbidden(
             -32003,
-            format!(
-                "Client '{}' not authorized for backend '{server}'",
-                client.name
-            ),
+            client.backend_refusal(server),
         )),
         _ => Ok(()),
     }

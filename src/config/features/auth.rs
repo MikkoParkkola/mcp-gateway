@@ -143,17 +143,13 @@ impl AuthConfig {
 }
 
 impl AuthConfig {
-    /// One WARN per non-admin key that lists no backends: it now reaches none
-    /// (BACKENDGRANT.1), where 3.x read an empty list as all. An admin key is
-    /// skipped because a UI-only admin key with no backends is meaningful.
+    /// One WARN per key that lists no backends: it now reaches none
+    /// (BACKENDGRANT.1), where 3.x read an empty list as all. Admin keys are
+    /// included; the wording tells a UI-only admin key it may ignore it.
     pub(crate) fn warn_keys_without_backends(&self) {
-        for key in self
-            .api_keys
-            .iter()
-            .filter(|k| !k.admin && k.backends.is_empty())
-        {
+        for key in self.api_keys.iter().filter(|k| k.backends.is_empty()) {
             tracing::warn!(
-                "auth.api_keys['{}'] lists no backends and reaches none; 3.x treated this as all. Set backends: [\"*\"] to keep that.",
+                "auth.api_keys['{}'] lists no backends and reaches none (3.x treated this as all); if this key needs backend access, set backends: [\"*\"] or list them",
                 key.name
             );
         }

@@ -440,6 +440,25 @@ impl AuthenticatedClient {
         self.backends.iter().any(|b| b == "*" || b == backend)
     }
 
+    /// The refusal text when this client may not reach `backend`.
+    ///
+    /// An empty grant names that cause and not the backend, so the answer is
+    /// the same whether or not the backend exists.
+    pub(crate) fn backend_refusal(&self, backend: &str) -> String {
+        if self.backends.is_empty() {
+            format!(
+                "Client '{}' has no backends granted: an empty `backends` list reaches none \
+                 (docs/UPGRADING-4.0.md section 32)",
+                self.name
+            )
+        } else {
+            format!(
+                "Client '{}' not authorized for backend '{backend}'",
+                self.name
+            )
+        }
+    }
+
     /// Check if this client can access a tool (per-client scope).
     ///
     /// Logic:

@@ -555,10 +555,7 @@ pub(super) async fn backend_handler(
         return build_http_error_response(
             None,
             -32003,
-            format!(
-                "Client '{}' not authorized for backend '{}'",
-                client.name, name
-            ),
+            client.backend_refusal(&name),
             StatusCode::FORBIDDEN,
         );
     }

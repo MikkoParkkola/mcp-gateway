@@ -5,7 +5,7 @@ change to your configuration on upgrade. It starts on an unchanged configuration
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27 and 30 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30 and 32 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -625,8 +625,8 @@ A deployment that set `enforce` ran unenforced and was told so only in a log lin
 In 3.x an `auth.api_keys[]` entry without `backends` (or with `backends: []`) reached every
 backend, including one added later. It now reaches none: `"*"` is the only wildcard. Add
 `backends: ["*"]` for the old behaviour, or list the backends the key needs. The gateway starts
-either way and logs one warning per non-admin key with no backends, naming the key. An admin key
-with no backends is not warned about, because a UI-only admin key is a meaningful setup.
+either way, prints this item in the one-time 4.0.0 notice, and logs one warning per key with no
+backends, naming the key. An admin key that only manages the UI can ignore that warning.
 
 The same applies to `key_server.policies[].scopes.backends`: a rule without it now grants no
 backend, and the key server refuses to issue the token (403 `no_backends_granted`) instead of
