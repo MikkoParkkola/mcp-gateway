@@ -175,6 +175,11 @@ fn direct_route_attestation_scope<'a>(
     params: Option<&'a Value>,
 ) -> crate::attestation::validator::AttestationScope<'a> {
     use crate::attestation::validator::AttestationScope;
+    if matches!(method, "resources/read" | "prompts/get" | "tools/call")
+        && params.is_none_or(|p| p.get("uri").is_none() && p.get("name").is_none())
+    {
+        return AttestationScope::AuthenticOnly;
+    }
     let field = |name: &str| {
         let value = params.and_then(|p| p.get(name));
         value.and_then(Value::as_str).unwrap_or_default()
