@@ -50,8 +50,10 @@ trap cleanup EXIT
 diagnose() {
   echo "== diagnostics ==" >&2
   "$KUBECTL" get pods -n "$NAMESPACE" -o wide >&2 || true
-  "$KUBECTL" describe pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" \
-    | tail -40 >&2 || true
+  # Warning events carry the kubelet's own reason (e.g. a non-numeric image
+  # user under runAsNonRoot), which a truncated describe can cut off.
+  "$KUBECTL" get events -n "$NAMESPACE" --field-selector type=Warning \
+    -o custom-columns=REASON:.reason,MESSAGE:.message 2>/dev/null | sort -u | tail -20 >&2 || true
   for pod in $("$KUBECTL" get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" \
       -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
     echo "-- $pod (previous) --" >&2
