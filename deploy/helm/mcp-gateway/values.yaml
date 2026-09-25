@@ -89,7 +89,7 @@ config:
       scan_responses: true
   # A map keyed by backend name, never a list: `backends: []` fails the config
   # load and the pod exits 1.
-  backends: {}
+  backends: []
 
 serviceAccount:
   create: true

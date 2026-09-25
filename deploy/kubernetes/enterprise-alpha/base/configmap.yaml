@@ -36,4 +36,4 @@ data:
         enabled: true
         scan_requests: true
         scan_responses: true
-    backends: {}
+    backends: []

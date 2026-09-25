@@ -44,6 +44,7 @@ spec:
           # No `serve`: --host/--port are top-level flags and the subcommand
           # takes only --stdio, so `serve --host` exits 2 before reading config.
           args:
+            - "serve"
             - "--config"
             - "/etc/mcp-gateway/gateway.yaml"
             - "--host"
