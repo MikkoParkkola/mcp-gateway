@@ -20,10 +20,10 @@ use crate::key_server::{KeyServer, TemporaryToken};
 
 const AUTH_ON: &str = "enabled: true
 api_keys:
-  - key: key-alpha
+  - key_sha256: sha256:39a00d29356083a9c9d65c14652350d61b11d5d2e8582da510887c8e11be08c8
     name: k1
     backends: [alpha]
-  - key: key-beta
+  - key_sha256: sha256:8fd493b2a681a4810d9fd40526a9de960deb255e7bfbb1c4d509d06d6da6ff5b
     name: k2
     backends: [beta]
 ";

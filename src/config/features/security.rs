@@ -72,6 +72,26 @@ impl Default for TransparencyLogConfig {
     }
 }
 
+impl TransparencyLogConfig {
+    /// 4.0.0 item D1-a: with auth on, the audit log is required. There is no
+    /// opt-out: a gateway with no authenticated users has no one to audit.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::ConfigValidation`] when auth is on and the log is off or
+    /// has a blank path.
+    pub(crate) fn validate_required_by_auth(&self, auth_enabled: bool) -> crate::Result<()> {
+        if auth_enabled && (!self.enabled || self.path.trim().is_empty()) {
+            return Err(crate::Error::ConfigValidation(
+                "auth is enabled, so security.transparency_log must be enabled with a writable \
+                 path (docs/UPGRADING-4.0.md section 43)"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 // ── MessageSigningConfig ──────────────────────────────────────────────────────
 
 /// Configuration for inter-agent HMAC-SHA256 message signing (ADR-001).

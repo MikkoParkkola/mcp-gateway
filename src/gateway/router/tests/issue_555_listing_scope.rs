@@ -167,7 +167,9 @@ fn grant_to_u1() -> IdentityGrant {
 
 pub(super) fn key(name: &str, backends: &[&str]) -> ApiKeyConfig {
     ApiKeyConfig {
-        key: name.to_string(),
+        key: None,
+        key_sha256: Some(crate::config::api_key_digest_spec(name.as_bytes())),
+        expires_at: None,
         name: name.to_string(),
         rate_limit: 0,
         backends: backends.iter().map(|b| (*b).to_string()).collect(),

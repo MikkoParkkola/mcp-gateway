@@ -1305,7 +1305,7 @@ async fn enabling_auth_in_the_same_edit_does_not_mask_the_exposure() {
     // started admitting the new host.
     write_owner_only(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
     .unwrap();
     let ctx = posture_context(&path, clean_running());
@@ -1386,7 +1386,7 @@ async fn a_reload_that_does_not_open_the_tools_still_applies() {
     // WHEN: the same public URL is declared, over tools that need a credential
     write_owner_only(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
     )
     .unwrap();
     let ctx = posture_context(&path, running);
@@ -1415,7 +1415,7 @@ async fn a_published_but_not_running_auth_value_does_not_mask_it_either() {
     let path = dir.path().join("gateway.yaml");
     write_owner_only(
         &path,
-        "auth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
     .unwrap();
     let ctx = posture_context(&path, clean_running());
@@ -1435,7 +1435,7 @@ async fn a_published_but_not_running_auth_value_does_not_mask_it_either() {
     // snapshot that disagrees with what is running
     write_owner_only(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
     .unwrap();
 
@@ -1587,7 +1587,7 @@ async fn a_blank_public_path_in_force_is_tools_open_and_refuses() {
     // WHEN: the file supplies the other half — a name it is reached by
     write_owner_only(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n    - \"\"\n",
+        "server:\n  public_url: \"https://gw.example.com\"\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n    - \"\"\n",
     )
     .unwrap();
     let ctx = posture_context(&path, running);
@@ -1612,7 +1612,7 @@ async fn a_file_that_a_restart_would_accept_is_not_reported_as_one_to_revert() {
     // half needs a restart while the public_url half would take effect at once.
     write_owner_only(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
     .unwrap();
     let ctx = posture_context(&path, clean_running());
@@ -1652,7 +1652,7 @@ async fn tightening_public_paths_in_the_same_edit_does_not_mask_it() {
     // halves of the correct fix, written together
     write_owner_only(
         &path,
-        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     )
     .unwrap();
     let ctx = posture_context(&path, running);
@@ -1686,7 +1686,7 @@ async fn a_refusal_reads_as_a_sentence_on_both_branches() {
     // next start too, the second is accepted by one.
     for file in [
         "server:\n  public_url: \"https://gw.example.com\"\n",
-        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+        "server:\n  public_url: \"https://gw.example.com\"\n  cleartext_http: tls_terminated_upstream\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gateway.yaml");
@@ -2544,7 +2544,7 @@ async fn envfile_6b_the_restart_report_names_the_key_and_carries_neither_value()
     write_owner_only(
         &cfg,
         format!(
-            "env_files:\n  - \"{}\"\nauth:\n  enabled: true\n  bearer_token: \"env:{KEY}\"\n",
+            "env_files:\n  - \"{}\"\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"env:{KEY}\"\n",
             env_path.display()
         ),
     )
@@ -2725,16 +2725,17 @@ async fn envfile_6c_a_malformed_line_on_a_reload_names_file_line_and_category_on
 /// env-file-only rotation it exists to catch went unreported.
 #[tokio::test]
 async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_only_key() {
+    let digest = |v: &str| crate::config::api_key_digest_spec(v.as_bytes());
     // The four forms funnelled through `validate_env_reference`
     // (`src/config/mod.rs:627,630,637,645`).
     let forms: [(&str, &str); 4] = [
         (
             "MCP_GW_TEST_ENVFILE10C_BEARER",
-            "auth:\n  enabled: true\n  bearer_token: \"env:MCP_GW_TEST_ENVFILE10C_BEARER\"\n",
+            "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: \"env:MCP_GW_TEST_ENVFILE10C_BEARER\"\n",
         ),
         (
             "MCP_GW_TEST_ENVFILE10C_APIKEY",
-            "auth:\n  enabled: true\n  api_keys:\n    - name: k\n      key: \"env:MCP_GW_TEST_ENVFILE10C_APIKEY\"\n",
+            "security:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  api_keys:\n    - name: k\n      key_sha256: \"env:MCP_GW_TEST_ENVFILE10C_APIKEY\"\n",
         ),
         (
             "MCP_GW_TEST_ENVFILE10C_HS256",
@@ -2747,8 +2748,11 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
     ];
 
     for (key, section) in forms {
-        let old = format!("s3cr3t-10c-{key}-old");
-        let new = format!("s3cr3t-10c-{key}-new");
+        let mut old = format!("s3cr3t-10c-{key}-old");
+        let mut new = format!("s3cr3t-10c-{key}-new");
+        if key.ends_with("APIKEY") {
+            (old, new) = (digest(&old), digest(&new));
+        }
 
         let dir = tempfile::tempdir().unwrap();
         let env_path = env_file(dir.path(), "secrets.env", &format!("{key}={old}\n"));
@@ -2788,14 +2792,9 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
             "{key}: the report leaked a value; got {report}"
         );
 
-        // AND: the resolved holder still carries the STARTUP value.
-        //
-        // Asserted through `ResolvedAuthConfig` for the two forms it owns. The
-        // `agent_auth` and `key_server` forms have no separately reachable
-        // resolved holder in this crate's test surface; for those two this case
-        // asserts the outcome half only, and the holder half rides on the same
-        // mechanism (nothing rebuilds a startup-resolved holder). Stated rather
-        // than approximated.
+        // AND: the resolved holder still carries the STARTUP value. Asserted through `ResolvedAuthConfig` for its two forms; `agent_auth`
+        // and `key_server` have no reachable resolved holder here, so for them
+        // this asserts the outcome half only. Stated rather than approximated.
         if key.ends_with("BEARER") {
             assert_eq!(
                 holder.bearer_token.as_deref(),
@@ -2804,8 +2803,8 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
             );
         } else if key.ends_with("APIKEY") {
             assert_eq!(
-                holder.api_keys.first().map(|k| k.key.as_str()),
-                Some(old.as_str()),
+                holder.api_keys.first().map(|k| hex::encode(k.digest)),
+                old.strip_prefix("sha256:").map(str::to_string),
                 "{key}: the running holder must keep the startup value"
             );
         }

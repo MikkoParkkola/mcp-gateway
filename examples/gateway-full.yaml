@@ -29,26 +29,42 @@ server:
 
 auth:
   enabled: false                  # Enable auth (set true for networked deployments)
+                                  # true requires security.transparency_log below (UPGRADING-4.0 item 43)
 
   # Bearer token for simple auth.
   # Options: "auto" (random, logged at startup), "env:VAR_NAME", or a literal string.
   # bearer_token: "auto"
 
-  # API keys for multi-client access with per-client restrictions.
-  # `env:VAR_NAME` secret references must exist at startup.
+  # API keys for multi-client access with per-client restrictions. The config
+  # holds each key's sha256 digest, never the key:
+  #   printf %s "$KEY" | mcp-gateway hash-key   # prints sha256:<64 hex>
+  # `env:VAR_NAME` references (holding the digest) must exist at startup.
   # api_keys:
-  #   - key: "env:CLIENT_A_KEY"
+  #   - key_sha256: "env:CLIENT_A_KEY_SHA256"
   #     name: "Client A"
   #     rate_limit: 100           # Requests per minute (0 = unlimited)
   #     backends: ["tavily"]      # Backends this key reaches; empty or omitted = none
   #     admin: false              # Set true only for UI/config management keys
-  #   - key: "my-literal-key"
+  #   - key_sha256: "sha256:<64 lowercase hex from hash-key>"
   #     name: "Client B"
+  #     expires_at: "2027-01-01T00:00:00Z"  # Optional; refused with 401 after this
   #     backends: ["*"]           # All backends ("*" is the only wildcard)
 
   # Paths that bypass authentication.
   public_paths:
     - /health
+
+# --- Audit log ---
+# Tamper-evident, hash-chained record of every tool call: who (credential kind,
+# key fingerprint, verified issuer and subject), outcome, request and response
+# hashes. Required when auth.enabled is true; the load fails without it. With
+# auth on, a failed append refuses calls with 503 until an append succeeds.
+# security:
+#   transparency_log:
+#     enabled: true
+#     path: "~/.mcp-gateway/transparency/transparency.jsonl"
+#     key_id: "default"
+#     shared_secret: "${MCP_GATEWAY_TRANSPARENCY_SECRET}"   # optional HMAC per entry
 
 # --- Meta-MCP ---
 

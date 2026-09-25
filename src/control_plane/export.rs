@@ -653,7 +653,8 @@ mod tests {
         let mut m = serde_json::Map::new();
         m.insert("kind".into(), "control_plane_audit".into());
         m.insert("event_id".into(), id.into());
-        l.append_event(m).expect("append governance event");
+        l.append_event(m, &crate::security::audit::AuditEnvelope::gateway())
+            .expect("append governance event");
     }
 
     /// Sink that always rejects (simulates SIEM outage / backpressure).
