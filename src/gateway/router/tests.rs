@@ -2588,6 +2588,7 @@ fn scoped_client(
         admin: false,
         principal: format!("principal-{name}"),
         authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     }
 }
 
@@ -2629,6 +2630,7 @@ async fn run_step_with_identity(
         execution: None,
         credential_principal: None,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,
         protocol_revision: None,
         authorizer: &authorizer,
@@ -2846,6 +2848,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         execution: None,
         credential_principal: None,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,
         protocol_revision: None,
         authorizer: &authorizer,
@@ -3079,6 +3082,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
     let anonymous = AuthenticatedClient {
         quota_principal: None,
         authenticated: false,
+        credential_kind: crate::security::audit::CredentialKind::None,
         ..scoped_client("public", vec!["*".into()], None)
     };
     assert_eq!(
@@ -3271,6 +3275,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         execution: None,
         credential_principal: None,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,
         protocol_revision: None,
         authorizer: &authorizer,

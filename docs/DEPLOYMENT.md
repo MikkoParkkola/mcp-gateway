@@ -557,7 +557,7 @@ The exporter preserves unrelated client settings, creates a sibling backup befor
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/livez` | GET | Same as `/health` | 200 while the process serves; never reads backend health. Liveness probes and container healthchecks |
-| `/readyz` | GET | Same as `/health` | 200 once config is loaded and the listener is up; never reads backend health. Readiness and startup probes |
+| `/readyz` | GET | Same as `/health` | 200 once config is loaded and the listener is up; never reads backend health. 503 while the audit log cannot append (auth on; it retries one bounded probe append per request, UPGRADING-4.0 item 43). Readiness and startup probes |
 | `/health` | GET | No (public by default) | Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
 | `/ui/api/status` | GET | Redacted unless admin | JSON API for dashboards; counts only without an admin credential |
 
