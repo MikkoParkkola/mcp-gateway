@@ -1281,6 +1281,9 @@ pub struct ServerConfig {
     pub host: String,
     /// Port to listen on.
     pub port: u16,
+    /// MUTANT: un-retired, silently accepted.
+    #[serde(default)]
+    pub ws_port: Option<u16>,
     /// Request timeout.
     #[serde(with = "humantime_serde")]
     pub request_timeout: Duration,
@@ -1336,6 +1339,7 @@ impl Default for ServerConfig {
             modern_protocol: true,
             host: "127.0.0.1".to_string(),
             port: 39400,
+            ws_port: None,
             request_timeout: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,
