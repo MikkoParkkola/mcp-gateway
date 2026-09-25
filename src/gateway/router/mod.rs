@@ -65,6 +65,8 @@ mod log_level_admin_tests;
 #[cfg(test)]
 mod probe_tests;
 #[cfg(test)]
+mod r2_input_keys_tests;
+#[cfg(test)]
 mod resource_prompt_scope_tests;
 #[cfg(test)]
 mod tests;
