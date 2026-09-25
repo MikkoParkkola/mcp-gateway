@@ -14,7 +14,8 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 Items 38 and 51 refuse the start with their own error, which names the setting, so a notice would
-only repeat it; item 51 also warns once per `role: admin` rule at every load.
+only repeat it; item 51 also warns once per `role: admin` rule at every load. Item 60 is decided per
+capability file, and a file it affects is refused at load with an error that names it.
 
 **Items 2, 8, 12, 13, 16, 17, 27, 29, 30, 34, 35, 37, 38, 39, 40, 41, 43, 44, 46 and 51 refuse the gateway's start (item 41 only for an API key configured as plaintext `key`; item 43 only with auth on and no working audit log; item 44 only for a secret written as `file:...` that names a missing, loose, oversized or empty file; item 46 only for `enforce` without a signing key; item 51 only for a `role: admin` rule whose only condition is `domain`; item 16 only while `trust_caller_identity_headers` is still set; item 17 only for a `key_server` rule without a configured issuer or with a blank matcher; item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS; item 40 only for a secret reference that resolves to nothing or to an empty value). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
@@ -69,6 +70,7 @@ upgrading a running deployment.
 | 46 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
 | 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
+| 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
 
 Numbers 18-20 are intentionally unused.
 
@@ -1225,6 +1227,28 @@ not relay. Poll there too.
 
 The legacy `initialize` result differs from 3.5.0 in exactly those three flags (and, over
 stdio, `tools.listChanged`).
+
+## 60. Capability pins read CRLF line endings as LF
+
+A capability's `sha256:` pin used to be computed over the file's raw bytes. A pinned file that
+Git checked out with CRLF line endings on Windows (`core.autocrlf`), or that an editor re-saved
+with them, hashed differently, and the capability was refused as tampered ("Capability hash
+mismatch (rug-pull protection)") although nothing in it had changed. Now the hash reads each
+CRLF pair as LF before it is computed. YAML reads the two as the same line break, so the two
+files are the same capability. A lone CR that is not part of a CRLF pair is still content, and
+it still changes the hash.
+
+Pins over LF files, which covers every capability this repository ships, are unchanged.
+
+**Action, Windows only:** a pin you made with `mcp-gateway cap pin` over a file that had CRLF
+line endings at the time was computed over those bytes, and it stops matching. Re-pin the file:
+
+```sh
+mcp-gateway cap pin path/to/capability.yaml
+```
+
+To reproduce a pin from a shell, strip the CR of each CRLF first:
+`sed 's/\r$//' capability.yaml | grep -v '^sha256:' | sha256sum`.
 
 ## After upgrading
 
