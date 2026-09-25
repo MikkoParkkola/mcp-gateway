@@ -235,7 +235,7 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The eleven 4.0.0 changes, in the order they are printed.
+/// The twelve 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -290,11 +290,16 @@ error lists every such row. Rewrite each as `!exact {source: mtls, id: ...}` or 
 `!exact {source: jwt, id: ...}`; the gateway will not pick the source. Until \
 then personal capabilities fail closed. `identity grants grant --agent` takes \
 `mtls:<id>` or `jwt:<id>`.",
+    "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set, so an \
+unset mode no longer writes `attestation_observe_reject` audit lines; set \
+`observe` to keep them. `enforce` and any other unrecognised value now FAIL \
+STARTUP instead of falling back to observe: `enforce` is not available in this \
+build.",
 ];
 
 /// Emit the one-time 4.0.0 notice.
 ///
-/// Reads nothing, because none of the eleven items depends on what the config
+/// Reads nothing, because none of the twelve items depends on what the config
 /// says. It marks the webhook item as delivered so a later start does not
 /// repeat it.
 ///
