@@ -706,7 +706,7 @@ async fn redeem_retry(
     // one it could: `source_fingerprint` returns `None` for exactly the
     // credential schemes no continuation is ever minted for, so there is no
     // handle here for such a caller to hold.
-    let Some(fingerprint) = crate::protocol::mrtr::source_fingerprint(caller.principal_source())
+    let Some(fingerprint) = crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)
     else {
         warn!(
             server,
