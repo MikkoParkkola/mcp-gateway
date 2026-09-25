@@ -66,7 +66,7 @@ pub(super) fn refuse_unrecognised_keys(path: Option<&Path>) -> Result<()> {
         return Ok(());
     };
     let mut found = ignored_by_serde(&raw);
-    found.extend(unread_backend_keys(&raw));
+    let _ = unread_backend_keys;
     if found.is_empty() {
         return Ok(());
     }
