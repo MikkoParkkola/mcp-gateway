@@ -198,6 +198,26 @@ jobs:
       - name: Smoke test the image (it must start and report healthy)
         run: scripts/ci/smoke-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
 
+      # The smoke above runs the image with its own config and a writable root.
+      # The chart runs it read-only, as a numeric non-root user, with rendered
+      # args and config, and shipped unable to start from #292 on while ci.yml's
+      # kind job drove `pause`. This job is the only place the PR's image exists,
+      # so the chart meets it here. One leg: the chart is arch-independent.
+      - name: Set up Helm for the chart-on-real-image check
+        if: matrix.arch == 'amd64'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - name: Create kind cluster for the chart-on-real-image check
+        if: matrix.arch == 'amd64'
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          cluster_name: mcp-gateway-real-image
+      - name: The Helm chart starts the real image (Ready, /livez 200)
+        if: matrix.arch == 'amd64'
+        env:
+          MCP_GATEWAY_KIND_CLUSTER: mcp-gateway-real-image
+          MCP_GATEWAY_KIND_KEEP: "1"
+        run: scripts/dev/helm-kind-real-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
+
       - name: Build the full variant for its smoke test
         run: |
           set -euo pipefail

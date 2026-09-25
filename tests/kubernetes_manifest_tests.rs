@@ -474,3 +474,61 @@ fn container_healthchecks_dial_loopback_by_address() {
         assert!(!text.contains("localhost:39400/health"), "{name}");
     }
 }
+
+/// The container `args` the enterprise-alpha Deployment hands the image.
+///
+/// Kubernetes `args` follow the image ENTRYPOINT (`mcp-gateway`), so argv[0]
+/// is prepended here exactly as the kubelet would.
+fn enterprise_alpha_argv() -> Vec<String> {
+    let deployment = docs(DEPLOYMENT).remove(0);
+    let args = deployment["spec"]["template"]["spec"]["containers"][0]["args"]
+        .as_sequence()
+        .expect("the gateway container declares args");
+    std::iter::once("mcp-gateway".to_string())
+        .chain(args.iter().map(|a| a.as_str().expect("string arg").to_string()))
+        .collect()
+}
+
+/// The shipped args parse. `--host`/`--port` are top-level flags, not
+/// `global`, so `serve --host` exited 2 before reading any config: the
+/// manifests could never start (#292 onwards).
+#[test]
+fn enterprise_alpha_args_parse() {
+    use clap::Parser as _;
+    let argv = enterprise_alpha_argv();
+    let parsed = mcp_gateway::cli::Cli::try_parse_from(&argv);
+    assert!(
+        parsed.is_ok(),
+        "the enterprise-alpha args {argv:?} must parse: {}",
+        parsed.err().map(|e| e.to_string()).unwrap_or_default()
+    );
+}
+
+/// The shipped `gateway.yaml` survives the loader `serve` uses, with the
+/// `env:` reference it declares resolved. `backends` is a map in `Config`;
+/// the manifest shipped a sequence, which is a fatal load error.
+#[test]
+fn enterprise_alpha_config_loads() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let config = docs(BASE_CONFIGMAP)
+        .into_iter()
+        .next()
+        .expect("configmap document");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, str_at(&config, &["data", "gateway.yaml"])).expect("write config");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let env = dir.path().join("secret.env");
+    std::fs::write(&env, format!("MCP_GATEWAY_TOKEN={}\n", "k".repeat(48))).expect("write env");
+    std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+
+    let loaded = mcp_gateway::config::Config::load_evaluated(Some(&path));
+    let evaluated = match loaded {
+        Ok(evaluated) => evaluated,
+        Err(e) => panic!("the enterprise-alpha gateway.yaml must load: {e}"),
+    };
+    let overlay = mcp_gateway::config::EnvOverlay::from_paths(&[env]);
+    if let Err(e) = evaluated.config.validate_with_env(&overlay) {
+        panic!("the enterprise-alpha gateway.yaml must validate: {e}");
+    }
+}
