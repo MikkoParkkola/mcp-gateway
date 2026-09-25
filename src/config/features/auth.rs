@@ -143,6 +143,18 @@ impl AuthConfig {
 }
 
 impl AuthConfig {
+    /// One WARN per key that lists no backends: it now reaches none
+    /// (BACKENDGRANT.1), where 3.x read an empty list as all. Admin keys are
+    /// included; the wording tells a UI-only admin key it may ignore it.
+    pub(crate) fn warn_keys_without_backends(&self) {
+        for key in self.api_keys.iter().filter(|k| k.backends.is_empty()) {
+            tracing::warn!(
+                "auth.api_keys['{}'] lists no backends and reaches none (3.x treated this as all); if this key needs backend access, set backends: [\"*\"] or list them",
+                key.name
+            );
+        }
+    }
+
     /// Refuse API keys whose names are empty, padded, or shared.
     ///
     /// A key's name is its identity-grant subject (`api_key:<name>`), so two
@@ -219,7 +231,7 @@ pub struct ApiKeyConfig {
     /// Rate limit (requests per minute, 0 = unlimited).
     #[serde(default)]
     pub rate_limit: u32,
-    /// Allowed backends (empty = all backends).
+    /// Allowed backends. `["*"]` is all; empty or absent is none.
     #[serde(default)]
     pub backends: Vec<String>,
     /// Allowed tools (if Some, ONLY these tools are accessible).
@@ -251,12 +263,6 @@ impl ApiKeyConfig {
         } else {
             Ok(self.key.clone())
         }
-    }
-
-    /// Check if this key has access to a backend.
-    #[must_use]
-    pub fn can_access_backend(&self, backend: &str) -> bool {
-        self.backends.is_empty() || self.backends.iter().any(|b| b == "*" || b == backend)
     }
 }
 
@@ -371,7 +377,7 @@ mod multi_user_tests {
             key: format!("k-{name}"),
             name: name.to_string(),
             rate_limit: 0,
-            backends: Vec::new(),
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,
@@ -475,7 +481,7 @@ mod single_user_principal_tests {
             key: format!("k-{name}"),
             name: name.to_string(),
             rate_limit: 0,
-            backends: Vec::new(),
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,
@@ -660,7 +666,7 @@ mod api_key_name_tests {
                 key: format!("secret-{index}"),
                 name: (*name).to_string(),
                 rate_limit: 0,
-                backends: Vec::new(),
+                backends: vec!["*".to_string()],
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,

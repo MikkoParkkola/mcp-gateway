@@ -63,6 +63,7 @@ auth:
   api_keys:
     - name: owui
       key: {API_KEY}
+      backends: ["*"]
 backends:
   {BACKEND}:
     http_url: https://drive.invalid/mcp

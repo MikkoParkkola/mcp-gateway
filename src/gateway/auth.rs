@@ -174,6 +174,7 @@ impl ResolvedAuthConfig {
             );
         }
 
+        config.warn_keys_without_backends();
         let api_keys: Vec<ResolvedApiKey> = config
             .api_keys
             .iter()
@@ -405,7 +406,7 @@ pub struct AuthenticatedClient {
     pub name: String,
     /// Rate limit (0 = unlimited)
     pub rate_limit: u32,
-    /// Allowed backends (empty or `["*"]` = all)
+    /// Allowed backends (`["*"]` = all; empty = none)
     pub backends: Vec<String>,
     /// Allowed tools (allowlist if Some). Supports glob patterns.
     pub allowed_tools: Option<Vec<String>>,
@@ -436,7 +437,26 @@ impl AuthenticatedClient {
     /// Check if this client can access a backend
     #[must_use]
     pub fn can_access_backend(&self, backend: &str) -> bool {
-        self.backends.is_empty() || self.backends.iter().any(|b| b == "*" || b == backend)
+        self.backends.iter().any(|b| b == "*" || b == backend)
+    }
+
+    /// The refusal text when this client may not reach `backend`.
+    ///
+    /// An empty grant names that cause and not the backend, so the answer is
+    /// the same whether or not the backend exists.
+    pub(crate) fn backend_refusal(&self, backend: &str) -> String {
+        if self.backends.is_empty() {
+            format!(
+                "Client '{}' has no backends granted: an empty `backends` list reaches none \
+                 (docs/UPGRADING-4.0.md section 32)",
+                self.name
+            )
+        } else {
+            format!(
+                "Client '{}' not authorized for backend '{backend}'",
+                self.name
+            )
+        }
     }
 
     /// Check if this client can access a tool (per-client scope).
@@ -860,9 +880,8 @@ pub fn session_cookie_value(headers: &axum::http::HeaderMap) -> Option<String> {
 /// cannot tell its operator apart from a web page that rebound a hostname to
 /// loopback, or from any other process running as the same user.
 ///
-/// `backends` stays `["*"]` deliberately. [`AuthenticatedClient::can_access_backend`]
-/// treats an EMPTY list as "all", so clearing the vector would grant everything
-/// while reading like a restriction.
+/// `backends` is `["*"]` because an empty list reaches no backend: with auth
+/// off there is no scope to narrow, so every backend stays reachable.
 #[must_use]
 pub fn anonymous_client() -> AuthenticatedClient {
     AuthenticatedClient {
@@ -1093,6 +1112,10 @@ fn looks_like_jwt(token: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "auth_backend_grant_tests.rs"]
+mod backend_grant_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1187,7 +1210,7 @@ mod tests {
                 quota_principal: QuotaPrincipal::api_key("api-key-SECRET-VALUE"),
                 name: "client-a".to_string(),
                 rate_limit: 60,
-                backends: vec![],
+                backends: vec!["*".to_string()],
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,
@@ -1260,7 +1283,7 @@ mod tests {
                 quota_principal: QuotaPrincipal::api_key("apikey-EXACT"),
                 name: "client-ct".to_string(),
                 rate_limit: 10,
-                backends: vec![],
+                backends: vec!["*".to_string()],
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,
@@ -1340,7 +1363,7 @@ mod tests {
 
         let client_b = config.validate_token("key2").unwrap();
         assert_eq!(client_b.name, "Client B");
-        assert!(client_b.can_access_backend("anything"));
+        assert!(!client_b.can_access_backend("anything"));
 
         assert!(config.validate_token("wrong").is_none());
     }
@@ -1372,56 +1395,6 @@ mod tests {
         assert!(config.check_rate_limit("unknown_client"));
     }
 
-    #[test]
-    fn test_backend_access_control() {
-        let client_restricted = AuthenticatedClient {
-            quota_principal: None,
-            principal: String::new(),
-            name: "restricted".to_string(),
-            rate_limit: 0,
-            backends: vec!["tavily".to_string(), "brave".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: false,
-            authenticated: true,
-        };
-
-        let client_unrestricted = AuthenticatedClient {
-            quota_principal: None,
-            principal: String::new(),
-            name: "unrestricted".to_string(),
-            rate_limit: 0,
-            backends: vec![], // empty = all access
-            allowed_tools: None,
-            denied_tools: None,
-            admin: false,
-            authenticated: true,
-        };
-
-        let client_wildcard = AuthenticatedClient {
-            quota_principal: None,
-            principal: String::new(),
-            name: "wildcard".to_string(),
-            rate_limit: 0,
-            backends: vec!["*".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: false,
-            authenticated: true,
-        };
-
-        // Restricted client
-        assert!(client_restricted.can_access_backend("tavily"));
-        assert!(client_restricted.can_access_backend("brave"));
-        assert!(!client_restricted.can_access_backend("context7"));
-
-        // Unrestricted client (empty backends = all)
-        assert!(client_unrestricted.can_access_backend("anything"));
-
-        // Wildcard client
-        assert!(client_wildcard.can_access_backend("anything"));
-    }
-
     // ── Tool scope tests ──────────────────────────────────────────────────
 
     #[test]
@@ -1431,7 +1404,7 @@ mod tests {
             principal: String::new(),
             name: "unrestricted".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,
@@ -1450,7 +1423,7 @@ mod tests {
             principal: String::new(),
             name: "restricted".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: Some(vec!["search_web".to_string(), "read_file".to_string()]),
             denied_tools: None,
             admin: false,
@@ -1473,7 +1446,7 @@ mod tests {
             principal: String::new(),
             name: "search_only".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
             denied_tools: None,
             admin: false,
@@ -1502,7 +1475,7 @@ mod tests {
             principal: String::new(),
             name: "no_writes".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: Some(vec!["write_file".to_string(), "delete_file".to_string()]),
             admin: false,
@@ -1525,7 +1498,7 @@ mod tests {
             principal: String::new(),
             name: "no_filesystem".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
             admin: false,
@@ -1558,7 +1531,7 @@ mod tests {
             principal: String::new(),
             name: "specific_server".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: Some(vec![
                 "filesystem:read_file".to_string(),
                 "search_*".to_string(),
@@ -1583,7 +1556,7 @@ mod tests {
             principal: String::new(),
             name: "complex".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: Some(vec!["filesystem_*".to_string(), "search_*".to_string()]),
             denied_tools: Some(vec![
                 "filesystem_write".to_string(),
@@ -1624,7 +1597,7 @@ mod tests {
             principal: String::new(),
             name: "frontend".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: Some(vec!["search_*".to_string()]),
             denied_tools: None,
             admin: false,
@@ -1644,7 +1617,7 @@ mod tests {
             principal: String::new(),
             name: "restricted_bot".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: Some(vec!["exec_*".to_string()]),
             admin: false,

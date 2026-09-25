@@ -1322,7 +1322,7 @@ pub struct ServerConfig {
     /// Whether a modern `tools/call` must carry `_meta`
     /// `io.mcp-gateway/idempotency-key` (ADR-012 addendum, UPGRADING-4.0 §28).
     pub idempotency_key: IdempotencyKeyMode,
-    /// Bearer token a scraper presents to `/metrics` (UPGRADING-4.0 §32): a
+    /// Bearer token a scraper presents to `/metrics` (UPGRADING-4.0 §33): a
     /// literal or `env:VAR`, resolved by [`ServerConfig::resolve_metrics_token`].
     /// Under `server`, not `auth`, because a mesh deployment has no `auth`
     /// section and still needs scraping. The admin bearer never opens

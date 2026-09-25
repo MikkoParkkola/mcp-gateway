@@ -89,7 +89,7 @@ fn test_api_key_auth_with_restrictions() {
                 key: "unrestricted-key".to_string(),
                 name: "Unrestricted Client".to_string(),
                 rate_limit: 0,
-                backends: vec![], // empty = all access
+                backends: vec!["*".to_string()],
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,
@@ -110,7 +110,7 @@ fn test_api_key_auth_with_restrictions() {
     assert!(client.can_access_backend("brave"));
     assert!(!client.can_access_backend("context7"));
 
-    // Unrestricted client
+    // Wildcard client
     let client = resolved.validate_token("unrestricted-key").unwrap();
     assert_eq!(client.name, "Unrestricted Client");
     assert_eq!(client.rate_limit, 0);
@@ -127,7 +127,7 @@ fn test_rate_limiting() {
             key: "rate-limited-key".to_string(),
             name: "Rate Limited".to_string(),
             rate_limit: 2, // Very low for testing
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,
@@ -252,11 +252,11 @@ fn test_client_backend_access_patterns() {
     assert!(wildcard_client.can_access_backend("anything"));
     assert!(wildcard_client.can_access_backend("tavily"));
 
-    // Empty backends = all access
-    let all_access_client = AuthenticatedClient {
+    // Empty backends = no backend (BACKENDGRANT.1)
+    let no_backends_client = AuthenticatedClient {
         quota_principal: None,
         principal: String::new(),
-        name: "all".to_string(),
+        name: "none".to_string(),
         rate_limit: 0,
         backends: vec![],
         allowed_tools: None,
@@ -264,7 +264,7 @@ fn test_client_backend_access_patterns() {
         admin: false,
         authenticated: true,
     };
-    assert!(all_access_client.can_access_backend("anything"));
+    assert!(!no_backends_client.can_access_backend("anything"));
 
     // Specific backends only
     let restricted_client = AuthenticatedClient {
@@ -309,7 +309,7 @@ fn test_client_circuit_breaker_is_per_client() {
                 key: "client-a-key".to_string(),
                 name: "client-a".to_string(),
                 rate_limit: 0,
-                backends: vec![],
+                backends: vec!["*".to_string()],
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,
@@ -318,7 +318,7 @@ fn test_client_circuit_breaker_is_per_client() {
                 key: "client-b-key".to_string(),
                 name: "client-b".to_string(),
                 rate_limit: 0,
-                backends: vec![],
+                backends: vec!["*".to_string()],
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,
@@ -361,7 +361,7 @@ fn test_client_circuit_breaker_recovers_after_successful_probe() {
             key: "client-key".to_string(),
             name: "recovering-client".to_string(),
             rate_limit: 0,
-            backends: vec![],
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,

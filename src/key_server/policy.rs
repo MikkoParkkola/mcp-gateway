@@ -33,7 +33,7 @@
 //! allows (the common case).
 
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::config::KeyServerPolicyConfig;
 
@@ -47,23 +47,37 @@ pub struct PolicyEngine {
 
 impl PolicyEngine {
     /// Build the engine from the ordered rule list from configuration.
+    ///
+    /// Warns once per rule that lists no backends: it now grants none
+    /// (BACKENDGRANT.1), where 3.x read an empty list as all.
     #[must_use]
     pub fn new(rules: Vec<KeyServerPolicyConfig>) -> Self {
+        for (index, rule) in rules.iter().enumerate() {
+            if rule.scopes.backends.is_empty() {
+                warn!(
+                    "key_server.policies[{index}] (issuer {}) grants no backends, so the key server \
+                     refuses its tokens; 3.x treated this as all. Set scopes.backends: [\"*\"] to keep that.",
+                    rule.match_criteria.issuer
+                );
+            }
+        }
         Self { rules }
     }
 
     /// Resolve the effective scopes for a verified identity.
     ///
-    /// Evaluates rules in order; returns the scopes of the first matching rule.
-    /// If no rule matches, or the request has no overlap with the matching
-    /// rule's backends or tools, returns `None` (the caller should reject the
-    /// request).
-    #[must_use]
+    /// Evaluates rules in order and applies the first matching rule.
+    ///
+    /// # Errors
+    ///
+    /// [`ScopeRefusal::NoBackendsGranted`] when the matched grant reaches no
+    /// backend; [`ScopeRefusal::Denied`] when no rule matches or the request
+    /// has no overlap with the rule's tools.
     pub fn resolve_scopes(
         &self,
         identity: &VerifiedIdentity,
         requested: &RequestedScopes,
-    ) -> Option<TokenScopes> {
+    ) -> Result<TokenScopes, ScopeRefusal> {
         for rule in &self.rules {
             let criteria = MatchCriteria {
                 domain: rule.match_criteria.domain.clone(),
@@ -86,8 +100,19 @@ impl PolicyEngine {
             }
         }
         debug!(email = %identity.email, "No policy rule matched");
-        None
+        Err(ScopeRefusal::Denied)
     }
+}
+
+/// Why no token is issued for a verified identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeRefusal {
+    /// No rule matched, or the request has no overlap with the rule's tools.
+    Denied,
+    /// The matched grant reaches no backend: the rule lists none, or the
+    /// request names none it lists. A token that reaches nothing is never
+    /// minted.
+    NoBackendsGranted,
 }
 
 /// Scopes requested by the client in the token exchange request.
@@ -134,20 +159,32 @@ fn matches_rule(criteria: &MatchCriteria, identity: &VerifiedIdentity) -> bool {
 /// If the client requests a specific subset (`requested` is non-empty), only
 /// grant what intersects. An empty `requested` means "grant everything".
 ///
-/// Returns `None` when a non-empty request intersects to nothing: an empty
-/// list in [`TokenScopes`] means "all", so issuing it would widen the grant.
-fn apply_intersection(policy: &PolicyScopes, requested: &RequestedScopes) -> Option<TokenScopes> {
+/// Refuses with `NoBackendsGranted` whenever the result lists no backend,
+/// whatever the cause: an empty backend list reaches nothing. Tools keep empty
+/// = all, so a tool request that intersects to nothing is refused instead of
+/// widened.
+fn apply_intersection(
+    policy: &PolicyScopes,
+    requested: &RequestedScopes,
+) -> Result<TokenScopes, ScopeRefusal> {
     let backends = intersect_scope_list(&policy.backends, &requested.backends);
-    let tools = intersect_scope_list(&policy.tools, &requested.tools);
+    // An empty policy tool list still means every tool on the granted backends.
+    let tools = if policy.tools.is_empty() {
+        requested.tools.clone()
+    } else {
+        intersect_scope_list(&policy.tools, &requested.tools)
+    };
 
-    if (backends.is_empty() && !requested.backends.is_empty())
-        || (tools.is_empty() && !requested.tools.is_empty())
-    {
-        debug!("Requested scopes do not overlap the matched policy");
-        return None;
+    if backends.is_empty() {
+        debug!("Matched policy grants no backend for this request");
+        return Err(ScopeRefusal::NoBackendsGranted);
+    }
+    if tools.is_empty() && !requested.tools.is_empty() {
+        debug!("Requested tools do not overlap the matched policy");
+        return Err(ScopeRefusal::Denied);
     }
 
-    Some(TokenScopes {
+    Ok(TokenScopes {
         backends,
         tools,
         rate_limit: policy.rate_limit,
@@ -159,13 +196,14 @@ fn apply_intersection(policy: &PolicyScopes, requested: &RequestedScopes) -> Opt
 /// `policy` = what the policy grants.
 /// `requested` = what the client asked for.
 ///
-/// - If `policy` is empty or contains `"*"`, it means "all" — so whatever the
-///   client requests (or everything if client requested nothing).
+/// - An empty `policy` grants nothing; only `"*"` means "all", and then the
+///   client gets whatever it requests (or `policy` itself if it requested
+///   nothing).
 /// - If `requested` is empty, the client wants everything the policy grants.
 /// - Otherwise, return only items that appear in both lists (wildcards in
 ///   `policy` are respected).
 fn intersect_scope_list(policy: &[String], requested: &[String]) -> Vec<String> {
-    let policy_is_wildcard = policy.is_empty() || policy.iter().any(|p| p == "*");
+    let policy_is_wildcard = policy.iter().any(|p| p == "*");
 
     if requested.is_empty() {
         // Client wants everything: return policy's list as-is.
@@ -215,7 +253,7 @@ pub struct MatchCriteria {
 /// Scopes granted by a policy rule.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PolicyScopes {
-    /// Allowed backends (empty or `["*"]` = all).
+    /// Allowed backends (`["*"]` = all; empty = none).
     #[serde(default)]
     pub backends: Vec<String>,
     /// Allowed tools (empty or `["*"]` = all).
@@ -346,7 +384,7 @@ mod tests {
         let scopes = engine.resolve_scopes(&identity, &RequestedScopes::default());
 
         // THEN: no match
-        assert!(scopes.is_none());
+        assert_eq!(scopes.err(), Some(ScopeRefusal::Denied));
     }
 
     #[test]
@@ -372,7 +410,7 @@ mod tests {
         let scopes = engine.resolve_scopes(&identity, &RequestedScopes::default());
 
         // THEN: match
-        assert!(scopes.is_some());
+        assert!(scopes.is_ok());
         assert_eq!(scopes.unwrap().rate_limit, 0);
     }
 
@@ -403,7 +441,7 @@ mod tests {
         let scopes = engine.resolve_scopes(&identity, &RequestedScopes::default());
 
         // THEN: match via group membership
-        assert!(scopes.is_some());
+        assert!(scopes.is_ok());
     }
 
     // ── intersect_scope_list ──────────────────────────────────────────────
@@ -422,16 +460,12 @@ mod tests {
     }
 
     #[test]
-    fn intersect_empty_policy_returns_requested() {
-        // GIVEN: empty policy (meaning "all"), client requests specific
+    fn intersect_empty_policy_grants_nothing() {
+        // BACKENDGRANT.1: an empty policy list grants none; only "*" is a
+        // wildcard.
         let policy: Vec<String> = vec![];
         let requested = vec!["tavily".to_string()];
-
-        // WHEN: intersect
-        let result = intersect_scope_list(&policy, &requested);
-
-        // THEN: policy is wildcard, grant what was requested
-        assert_eq!(result, vec!["tavily"]);
+        assert!(intersect_scope_list(&policy, &requested).is_empty());
     }
 
     #[test]
@@ -488,7 +522,7 @@ mod tests {
 
     // ── Out-of-policy requests fail closed ────────────────────────────────
 
-    fn resolve_restricted(backends: &[&str], tools: &[&str]) -> Option<TokenScopes> {
+    fn resolve_restricted(backends: &[&str], tools: &[&str]) -> Result<TokenScopes, ScopeRefusal> {
         let engine = make_engine(vec![github_actions_rule()]);
         let identity = make_identity(
             "runner@github.invalid",
@@ -504,16 +538,16 @@ mod tests {
 
     #[test]
     fn resolve_scopes_rejects_backend_request_outside_restricted_policy() {
-        // An empty backend list in TokenScopes means "all backends", so a
-        // request that intersects to nothing must be refused, not widened.
+        // A request that intersects to no backend reaches nothing, so no
+        // token is minted for it.
         let scopes = resolve_restricted(&["nope"], &[]);
-        assert!(scopes.is_none(), "expected rejection, got {scopes:?}");
+        assert_eq!(scopes.err(), Some(ScopeRefusal::NoBackendsGranted));
     }
 
     #[test]
     fn resolve_scopes_rejects_tool_request_outside_restricted_policy() {
         let scopes = resolve_restricted(&[], &["nope"]);
-        assert!(scopes.is_none(), "expected rejection, got {scopes:?}");
+        assert_eq!(scopes.err(), Some(ScopeRefusal::Denied));
     }
 
     #[test]
@@ -541,5 +575,62 @@ mod tests {
         let scopes = engine.resolve_scopes(&identity, &requested).unwrap();
         assert_eq!(scopes.backends, vec!["x"]);
         assert_eq!(scopes.tools, vec!["x"]);
+    }
+
+    // ── BACKENDGRANT.1: an empty policy backend list grants none ─────────
+
+    fn rule_with_backends(backends: &[&str]) -> KeyServerPolicyConfig {
+        KeyServerPolicyConfig {
+            match_criteria: PolicyMatchConfig {
+                issuer: "https://idp.invalid".to_string(),
+                ..PolicyMatchConfig::default()
+            },
+            scopes: PolicyScopesConfig {
+                backends: backends.iter().map(|b| (*b).to_string()).collect(),
+                ..PolicyScopesConfig::default()
+            },
+        }
+    }
+
+    fn resolve_with(backends: &[&str], requested: &[&str]) -> Result<TokenScopes, ScopeRefusal> {
+        let engine = make_engine(vec![rule_with_backends(backends)]);
+        let identity = make_identity("u@corp.invalid", "https://idp.invalid", &[]);
+        let requested = RequestedScopes {
+            backends: requested.iter().map(|b| (*b).to_string()).collect(),
+            tools: vec![],
+        };
+        engine.resolve_scopes(&identity, &requested)
+    }
+
+    #[test]
+    fn policy_without_backends_grants_none() {
+        let scopes = resolve_with(&[], &[]);
+        assert_eq!(scopes.err(), Some(ScopeRefusal::NoBackendsGranted));
+    }
+
+    #[test]
+    fn policy_without_backends_refuses_specific_request() {
+        let scopes = resolve_with(&[], &["github"]);
+        assert_eq!(scopes.err(), Some(ScopeRefusal::NoBackendsGranted));
+    }
+
+    #[test]
+    fn policy_wildcard_still_grants_request() {
+        let scopes = resolve_with(&["*"], &["github"]).expect("wildcard grants");
+        assert_eq!(scopes.backends, vec!["github"]);
+        let scopes = resolve_with(&["*"], &[]).expect("wildcard grants");
+        assert_eq!(scopes.backends, vec!["*"]);
+    }
+
+    #[test]
+    fn policy_rule_without_backends_warns_at_load() {
+        let (_, logs) = crate::security::firewall::response_tests::audit::capture_warnings(|| {
+            make_engine(vec![rule_with_backends(&["*"]), rule_with_backends(&[])])
+        });
+        assert_eq!(logs.matches("grants no backends").count(), 1, "{logs}");
+        assert!(
+            logs.contains("key_server.policies[1]") && logs.contains("https://idp.invalid"),
+            "the WARN names the rule index and issuer: {logs}"
+        );
     }
 }

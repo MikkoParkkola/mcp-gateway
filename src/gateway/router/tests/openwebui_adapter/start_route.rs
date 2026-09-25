@@ -77,6 +77,7 @@ auth:
   api_keys:
     - name: owui
       key: {API_KEY}
+      backends: ["*"]
 accounts:
   schema_version: accounts.v1
   enabled: false

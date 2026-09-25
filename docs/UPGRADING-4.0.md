@@ -5,7 +5,7 @@ change to your configuration on upgrade. It starts on an unchanged configuration
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27 and 30-32 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27 and 30-33 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -49,7 +49,8 @@ upgrading a running deployment.
 | 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
-| 32 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
+| 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
+| 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -172,7 +173,8 @@ now receives the event only if its API key may access the capability backend
 Nothing errors: a webhook that relied on the old default is still received and acknowledged, and
 its response reports `"notified": false`. Add `notify: true` to each webhook that should reach
 MCP sessions, and give the keys that should see those events access to the capability backend.
-An API key whose `backends` list is `["*"]` or empty is unaffected by the scoping.
+An API key whose `backends` list is `["*"]` is unaffected by the scoping; one with no `backends`
+reaches no backend at all (item 32).
 
 The check runs at delivery, against the credential the session was opened with: a key-server
 token that is revoked or expires stops receiving on its open stream. With authentication on, a
@@ -644,7 +646,23 @@ backend tool errors included, and reports that step's index as a failed step. Be
 ran the remaining steps. This matches the chain's documented contract, "stops at the first
 error".
 
-## 32. `/metrics` requires its own scrape token
+## 32. An API key or key-server rule with no `backends` reaches no backend
+
+In 3.x an `auth.api_keys[]` entry without `backends` (or with `backends: []`) reached every
+backend, including one added later. It now reaches none: `"*"` is the only wildcard. Add
+`backends: ["*"]` for the old behaviour, or list the backends the key needs. The gateway starts
+either way, prints this item in the one-time 4.0.0 notice, and logs one warning per key with no
+backends, naming the key. An admin key that only manages the UI can ignore that warning.
+
+The same applies to `key_server.policies[].scopes.backends`: a rule without it now grants no
+backend, and the key server refuses to issue the token (403 `no_backends_granted`) instead of
+issuing an all-backends one. A rule that matches no identity still answers 403 `access_denied`,
+so the two are told apart. Each such rule is warned about at startup with its index and issuer.
+A token request whose `backends:` scope names none of the rule's backends is also refused with
+`no_backends_granted`. Tool lists are unchanged: an empty `tools` still means every tool on the
+granted backends.
+
+## 33. `/metrics` requires its own scrape token
 
 In 3.x `/metrics` sat outside authentication and answered anyone who could reach the port,
 and its labels name your backends. It now answers only `Authorization: Bearer <token>` where

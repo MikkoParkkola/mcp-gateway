@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 use super::meta_tools::payload;
-use super::{Auth, Fixture, call_tool, fixture, rpc};
+use super::{Auth, Fixture, call_tool, fixture, post, rpc};
 use crate::gateway::authz::ToolAuthorizer;
 use crate::gateway::router::authorization::RouterAuthorizer;
 use crate::gateway::test_helpers::CallerStanding;
@@ -173,4 +173,51 @@ async fn mtls_denied_backend_is_not_named() {
         !names.iter().any(|n| n == "beta"),
         "mTLS-denied backend named: {names:?}"
     );
+}
+
+/// BACKENDGRANT.1: a key that lists no backends is refused on `tools/call`
+/// before dispatch, by the backend rule and not a tool rule; the same call
+/// with a `"*"` key is served, so the refusal is the grant and nothing else.
+#[tokio::test]
+async fn api_key_without_backends_is_forbidden_on_tools_call() {
+    let f = fixture(Auth::Keys).await;
+    let call = json!({ "name": "alpha_read", "arguments": {} });
+    let (status, body) = post(
+        &f.router,
+        "/mcp/alpha",
+        Some("bare-key"),
+        "tools/call",
+        call.clone(),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], json!(-32003), "{body}");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("no backends") && message.contains("UPGRADING-4.0.md section 32"),
+        "the refusal names the empty grant and the upgrade note: {body}"
+    );
+    // The same refusal for a backend that does not exist: the message must not
+    // tell a caller with no grant which backends are configured.
+    let (status, absent) = post(
+        &f.router,
+        "/mcp/no-such-backend",
+        Some("bare-key"),
+        "tools/call",
+        call.clone(),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{absent}");
+    assert_eq!(absent["error"], body["error"], "existence leaked: {absent}");
+
+    let (status, body) = post(
+        &f.router,
+        "/mcp/alpha",
+        Some("open-key"),
+        "tools/call",
+        call,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert!(body.get("error").is_none(), "a \"*\" key is served: {body}");
 }

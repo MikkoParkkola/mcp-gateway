@@ -1141,7 +1141,7 @@ mod role_wiring_tests {
             quota_principal: None,
             name: "c".to_string(),
             rate_limit: 0,
-            backends: Vec::new(),
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin,

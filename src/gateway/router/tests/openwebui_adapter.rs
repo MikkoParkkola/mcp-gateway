@@ -32,8 +32,10 @@ auth:
   api_keys:
     - name: owui
       key: fixture-named-api-key
+      backends: ["*"]
     - name: other
       key: fixture-other-api-key
+      backends: ["*"]
 accounts:
   schema_version: accounts.v1
   enabled: false
@@ -203,6 +205,7 @@ auth:
   api_keys:
     - name: owui
       key: fixture-named-api-key
+      backends: ["*"]
 accounts:
   schema_version: accounts.v1
   enabled: false

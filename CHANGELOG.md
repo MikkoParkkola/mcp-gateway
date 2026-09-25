@@ -129,7 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   included. A missing `env:` variable leaves the gateway running with
   `/metrics` closed. The Helm chart advertises `/metrics` only when
   `metrics.existingSecret` is set and can render a ServiceMonitor. See
-  `docs/UPGRADING-4.0.md` item 32.
+  `docs/UPGRADING-4.0.md` item 33.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept

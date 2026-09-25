@@ -30,6 +30,7 @@ auth:
     - key: "env:FRONTEND_API_KEY"
       name: "Frontend App"
       rate_limit: 100
+      backends: ["*"]        # 4.0: a key reaches only the backends it lists
       # Allowlist: ONLY these tools are accessible (deny all others)
       allowed_tools:
         - "search_*"        # All search tools (search_web, search_local, etc.)
@@ -42,13 +43,15 @@ auth:
     - key: "env:ADMIN_API_KEY"
       name: "Admin"
       rate_limit: 0
+      backends: ["*"]        # 4.0: a key reaches only the backends it lists
       admin: true             # Required for Web UI mutations and management meta-tools
-      # No restrictions = full access (falls back to global policy)
+      # All backends and tools (tools still fall back to global policy)
 
     # Restricted bot: No filesystem or execution tools
     - key: "env:BOT_API_KEY"
       name: "Bot"
       rate_limit: 50
+      backends: ["*"]        # 4.0: a key reaches only the backends it lists
       # Denylist: These tools are blocked (allow all others)
       denied_tools:
         - "filesystem_*"    # Block all filesystem tools
@@ -61,6 +64,7 @@ auth:
     - key: "env:DATA_READER_KEY"
       name: "Data Reader"
       rate_limit: 200
+      backends: ["*"]        # 4.0: a key reaches only the backends it lists
       allowed_tools:
         - "database_*"      # Allow all database tools
         - "filesystem_*"    # Allow all filesystem tools
