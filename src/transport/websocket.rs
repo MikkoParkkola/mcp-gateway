@@ -334,7 +334,7 @@ impl WebSocketTransport {
                     "WebSocket connect failed: header `{name}` is not a valid HTTP header"
                 )));
             };
-            let _ = (name, value);
+            let _ = (&mut request, name, value);
         }
 
         let (ws_stream, _response) = tokio::time::timeout(self.timeout, connect_async(request))
@@ -375,7 +375,7 @@ impl WebSocketTransport {
             .request(
                 "initialize",
                 Some(serde_json::json!({
-                    "protocolVersion": PROTOCOL_VERSION,
+                    "protocolVersion": { let _ = &self.protocol_version; PROTOCOL_VERSION },
                     "capabilities": {},
                     "clientInfo": {
                         "name": "mcp-gateway",
