@@ -510,6 +510,9 @@ config and reports the error.
 - **`backends.<name>.idle_timeout` is refused.** It was retired in 3.x and only warned. It never
   had an effect. The error names it and says why. Delete it, or use `stop_when_idle_for` on a
   backend declared with a `command`.
+- **`backends.<name>.circuit_breaker` is refused.** `examples/circuit-breaker.yaml` showed it
+  until 4.0, but nothing read it: every backend's breaker has always used
+  `failsafe.circuit_breaker`. Delete the block; tune the global settings instead.
 - **A key that belongs to a feature the binary was built without** (`cost_governance`, or a
   backend's `a2a_url` and `a2a_agent_card_path`) is named as such rather than as a misspelling.
   Release images carry both features.
