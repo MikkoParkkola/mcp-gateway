@@ -1872,6 +1872,8 @@ pub mod humantime_serde;
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+mod secret_ref_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
