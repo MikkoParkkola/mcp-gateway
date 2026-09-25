@@ -348,10 +348,6 @@ impl Backend {
     /// carrying an accessor nothing calls.
     #[cfg(test)]
     #[must_use]
-    #[expect(
-        dead_code,
-        reason = "direct-route caller lands with the resend plumbing"
-    )]
     pub(crate) fn resend_permitted_snapshot(&self) -> std::collections::HashSet<String> {
         self.tools_slot(None).resend_permitted.read().clone()
     }
