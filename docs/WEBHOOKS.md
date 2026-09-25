@@ -32,7 +32,7 @@ webhooks:
   enabled: true                # Enable webhook receiver system
   base_path: /webhooks         # Base path for all webhook endpoints
   require_signature: true      # Require HMAC validation (recommended)
-  rate_limit: 100             # Requests per minute per endpoint
+  rate_limit: 100             # Parsed but not enforced yet
 ```
 
 ### Capability Definition
@@ -50,7 +50,7 @@ webhooks:
     path: /linear/issues
     method: POST
 
-    # Secret for HMAC validation (supports {env.VAR}, keychain:name)
+    # Secret for HMAC validation (supports {env.VAR}, {keychain.NAME})
     secret: "{env.LINEAR_WEBHOOK_SECRET}"
     signature_header: "Linear-Signature"
 
@@ -100,23 +100,12 @@ If no `data` mapping is specified, the entire webhook payload is included in the
 
 ## MCP Notification Format
 
-Transformed webhooks are sent as MCP notifications via SSE:
+Transformed webhooks are sent on the SSE stream (`GET /mcp`) as an event named after the
+event type. The data is the notification itself, not a JSON-RPC frame:
 
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "notifications/webhook",
-  "params": {
-    "source": "linear_integration",
-    "event_type": "linear.issue.created",
-    "data": {
-      "issue_id": "LIN-123",
-      "title": "Fix bug in authentication",
-      "assignee": "Alice"
-    },
-    "received_at": "2026-02-19T14:30:00Z"
-  }
-}
+```
+event: linear.issue.created
+data: {"source":"linear_integration","event_type":"linear.issue.created","data":{"issue_id":"LIN-123","title":"Fix bug in authentication","assignee":"Alice"}}
 ```
 
 ## HMAC Signature Validation
@@ -137,12 +126,9 @@ signature_header: "X-Hub-Signature-256"
 signature_header: "Linear-Signature"
 ```
 
-**Stripe**: `Stripe-Signature: t=<timestamp>,v1=<hex>`
-```yaml
-signature_header: "Stripe-Signature"
-```
-
-The gateway automatically handles both `sha256=<hex>` and `<hex>` formats.
+The header value must be the HMAC-SHA256 of the raw body as hex, optionally prefixed with
+`sha256=`. Schemes that sign something other than the raw body, such as Stripe's
+`t=<timestamp>,v1=<hex>`, are not supported.
 
 ### Secret Management
 
@@ -152,11 +138,8 @@ Webhook secrets should NEVER be hardcoded in YAML files. Use environment variabl
 # Environment variable (recommended)
 secret: "{env.LINEAR_WEBHOOK_SECRET}"
 
-# macOS Keychain
-secret: "keychain:linear-webhook-secret"
-
-# Linux secret-tool
-secret: "keychain:linear-webhook-secret"
+# macOS Keychain or Linux secret-tool
+secret: "{keychain.linear-webhook-secret}"
 ```
 
 Set the environment variable before starting the gateway:
@@ -186,7 +169,7 @@ webhooks:
 
 **Setup in Linear**:
 1. Go to Settings → API → Webhooks
-2. Create webhook: `http://your-gateway:39401/webhooks/linear/issues`
+2. Create webhook: `http://your-gateway:39400/webhooks/linear/issues`
 3. Set signing secret
 4. Select events: Issue created, updated, deleted
 
@@ -209,7 +192,7 @@ webhooks:
 
 **Setup in GitHub**:
 1. Repository → Settings → Webhooks → Add webhook
-2. Payload URL: `http://your-gateway:39401/webhooks/github/events`
+2. Payload URL: `http://your-gateway:39400/webhooks/github/events`
 3. Content type: `application/json`
 4. Set secret
 5. Select events: Issues, Pull requests, etc.
@@ -220,7 +203,7 @@ webhooks:
 
 ```bash
 # Test webhook without signature (if require_signature: false)
-curl -X POST http://localhost:39401/webhooks/linear/issues \
+curl -X POST http://localhost:39400/webhooks/linear/issues \
   -H "Content-Type: application/json" \
   -d '{
     "action": "created",
@@ -240,7 +223,7 @@ payload='{"action":"created","data":{"id":"LIN-123"}}'
 signature=$(echo -n "$payload" | openssl dgst -sha256 -hmac "$secret" | cut -d' ' -f2)
 
 # Send request
-curl -X POST http://localhost:39401/webhooks/linear/issues \
+curl -X POST http://localhost:39400/webhooks/linear/issues \
   -H "Content-Type: application/json" \
   -H "Linear-Signature: $signature" \
   -d "$payload"
@@ -251,7 +234,7 @@ curl -X POST http://localhost:39401/webhooks/linear/issues \
 Connect to the SSE stream to receive webhook notifications:
 
 ```bash
-curl -N http://localhost:39401/mcp
+curl -N http://localhost:39400/mcp
 ```
 
 You'll see:
@@ -283,7 +266,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 
 2. Verify the webhook is accessible:
    ```bash
-   curl -X POST http://localhost:39401/webhooks/linear/issues
+   curl -X POST http://localhost:39400/webhooks/linear/issues
    ```
 
 3. Check capability is loaded:
@@ -314,7 +297,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 
 2. Check SSE connection is established:
    ```bash
-   curl -N http://localhost:39401/mcp
+   curl -N http://localhost:39400/mcp
    ```
 
 3. Verify `notify: true` in webhook definition (it defaults to `false`)
@@ -410,4 +393,4 @@ transform:
 | `enabled` | boolean | true | Enable webhook system |
 | `base_path` | string | "/webhooks" | Base URL path |
 | `require_signature` | boolean | true | Require HMAC validation |
-| `rate_limit` | number | 100 | Requests per minute |
+| `rate_limit` | number | 100 | Accepted but not enforced yet |
