@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `file:/absolute/path` secret references wherever `env:NAME` is accepted. The file is held to the
+  item 35 mode rule, capped at 64 KiB, and has one trailing newline stripped. An empty file fails
+  the load. A reload reports a rotated file as needing a restart. Capability YAMLs are unchanged.
+  A literal secret starting with `file:` is now a reference (breaking; UPGRADING-4.0 item 44).
+  (C9, MIK-7570.SECRET.2)
+
 ### Changed
 
 ### Fixed
@@ -22,6 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capability reload, admin UI, revive), as a standard `message` event on the 2025 GET
   stream rather than the gateway's envelope, and is `false` over stdio. See UPGRADING-4.0
   item 52.
+
+### Security
+
+- **The direct route `POST /mcp/{name}` writes the audit log's invocation record**
+  (MIK-7570.AUDIT.2). Every `tools/call` on it, refused, failed or malformed included,
+  now writes the same `schema_version: 2` record as `gateway_invoke`, with `route:
+  "direct"`; meta-route records carry `route: "meta"`. With auth on, a failed append
+  withholds the result (503, -32005). The backend-scope check now runs after the body is
+  parsed, so its refusal names the tool; it still answers 403 for an unknown backend.
+  A direct-route `tools/call` naming no tool is refused (400, -32602) instead of being
+  forwarded without the per-tool authorization check.
+  See UPGRADING-4.0 item 43.
 
 ## [4.0.0-beta.2] - 2026-09-25
 
