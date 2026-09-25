@@ -312,6 +312,20 @@ fn env_root_keys_and_shipped_examples_load() {
     for name in &names {
         // Through a 0600 copy: a git checkout is 0644, which CONFIG.2 refuses.
         let body = std::fs::read_to_string(examples.join(name)).expect("read example");
+        // C4 refuses an unset `${VAR}` in an enabled backend, so the variables
+        // the examples ask the operator to set are set, as an operator would.
+        let vars = tempfile::tempdir().expect("tempdir");
+        let body = if body.contains("${") && !body.contains("\nenv_files:") {
+            let env = vars.path().join("example.env");
+            mcp_gateway::gateway::test_helpers::write_owner_only(
+                &env,
+                "TAVILY_API_KEY=example-tavily-key\nCONTEXT7_TOKEN=example-context7-token\n",
+            )
+            .expect("write env file");
+            format!("env_files: [\"{}\"]\n{body}", env.display())
+        } else {
+            body
+        };
         let (_dir, _path, result) = load(&body);
         let expected = FAILS_BEFORE_C1.iter().find(|(file, _)| file == name);
         match (result, expected) {
