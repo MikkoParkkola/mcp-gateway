@@ -1603,7 +1603,7 @@ mod ownership {
         let absent =
             post_unattributed(Arc::clone(&fixture.state), listen(38, "no-such-task")).await;
 
-        assert_eq!(owned.0, StatusCode::UNAUTHORIZED, "{}", owned.1);
+        assert_eq!(owned.0, axum::http::StatusCode::UNAUTHORIZED, "{}", owned.1);
         assert_eq!(owned.0, absent.0, "the status must not depend on the id");
         assert_eq!(
             owned.1["error"]["code"], absent.1["error"]["code"],
