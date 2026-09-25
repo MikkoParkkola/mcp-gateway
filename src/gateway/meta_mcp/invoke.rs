@@ -1014,17 +1014,13 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             Err(error) => error,
         };
         // A11-c: a 401 on a managed credential forces at most one refresh.
-        let error = match self.managed {
-            Some(managed) if is_upstream_unauthorized(&error) => {
-                managed.after_upstream_401(error).await
-            }
-            _ => error,
-        };
         let classified = classify_bridged_dispatch_error(&error);
-        if crate::personal_accounts::refusal::marked(&error).is_some()
-            || crate::personal_accounts::refusal::upstream_rejection(&error).is_some()
+        // Every error that reached the 401 site is parked, marked or not, so
+        // the call site answers it as the first dispatch would.
+        if let Some(managed) = self.managed
+            && is_upstream_unauthorized(&error)
         {
-            *self.account_refusal.lock() = Some(error);
+            *self.account_refusal.lock() = Some(managed.after_upstream_401(error).await);
         }
         Err(classified)
     }
@@ -2156,38 +2152,10 @@ impl MetaMcp {
                 {
                     reservation.release();
                 }
-                // The caller gets a tool result, but the audit record says
-                // `error` with this code (D1-d.2: a backend failure).
-                audit::note_dispatch_failure(&e);
-                // Classify the error and convert to a structured tool-level
-                // error response.  This keeps `isError + content + recovery`
-                // in the tool result body rather than promoting to a JSON-RPC
-                // protocol error, which gives the LLM actionable recovery
-                // guidance without breaking the MCP framing.
-                let (category, detail) = classify_dispatch_error(&e);
-                let mut hint = recovery_for(
-                    category,
-                    RecoveryContext {
-                        tool: Some(tool),
-                        backend: Some(server),
-                        detail: Some(&detail),
-                        ..Default::default()
-                    },
-                );
-                if let Some(rejection) = crate::personal_accounts::refusal::upstream_rejection(&e) {
-                    hint.error_code = rejection.error_code.to_owned();
-                    hint.retry = rejection.retry;
-                }
                 // Still record the error budget failure (already done above via
                 // `record_error_budget`).  The idempotency reservation is left
                 // for the commit below unless the refusal was pre-dispatch.
-                attach_recovery(
-                    json!({
-                        "isError": true,
-                        "content": [{"type": "text", "text": e.to_string()}],
-                    }),
-                    hint,
-                )
+                dispatch_error_result(&e, tool, server)
             }
         };
 
@@ -2402,30 +2370,13 @@ impl MetaMcp {
                         reservation.commit(&uncertain_side_effect());
                     }
                     let refused = account_refusal.lock().take().expect("checked above");
-                    let Some(rejection) =
-                        crate::personal_accounts::refusal::upstream_rejection(&refused)
-                    else {
+                    if crate::personal_accounts::refusal::marked(&refused).is_some() {
                         return self.with_connect_offer(Err(refused), verified_identity).await;
-                    };
-                    // The same answer as an unbridged 401 (the dispatch Err arm):
-                    // a tool result whose hint says whether a retry can help.
-                    let mut hint = recovery_for(
-                        ErrorCategory::BackendError,
-                        RecoveryContext {
-                            tool: Some(tool),
-                            backend: Some(server),
-                            ..Default::default()
-                        },
-                    );
-                    hint.error_code = rejection.error_code.to_owned();
-                    hint.retry = rejection.retry;
-                    return Ok(attach_recovery(
-                        json!({
-                            "isError": true,
-                            "content": [{"type": "text", "text": refused.to_string()}],
-                        }),
-                        hint,
-                    ));
+                    }
+                    // Anything else the 401 site produced (a rejection mark, or
+                    // a custody refusal connecting cannot fix) answers exactly
+                    // as the same failure on the first dispatch would.
+                    return Ok(dispatch_error_result(&refused, tool, server));
                 }
                 Err(error) => {
                     // A round that reached the backend may have acted, so its
@@ -4071,6 +4022,37 @@ impl MetaMcp {
 // ============================================================================
 // Recovery classification helpers
 // ============================================================================
+
+/// A dispatched failure as the caller receives it: a tool result, not a
+/// JSON-RPC protocol error, carrying `isError`, the text and a recovery hint,
+/// so the model gets actionable guidance without breaking the MCP framing.
+/// The audit record still says `error` with the failure's code (D1-d.2). A11:
+/// an upstream-rejection mark sets the hint's code and retry flag. Shared by
+/// the first dispatch and a bridged continuation, so both answer alike.
+fn dispatch_error_result(e: &Error, tool: &str, server: &str) -> Value {
+    audit::note_dispatch_failure(e);
+    let (category, detail) = classify_dispatch_error(e);
+    let mut hint = recovery_for(
+        category,
+        RecoveryContext {
+            tool: Some(tool),
+            backend: Some(server),
+            detail: Some(&detail),
+            ..Default::default()
+        },
+    );
+    if let Some(rejection) = crate::personal_accounts::refusal::upstream_rejection(e) {
+        hint.error_code = rejection.error_code.to_owned();
+        hint.retry = rejection.retry;
+    }
+    attach_recovery(
+        json!({
+            "isError": true,
+            "content": [{"type": "text", "text": e.to_string()}],
+        }),
+        hint,
+    )
+}
 
 /// Map a dispatch [`Error`] to an [`ErrorCategory`] and a human-readable detail
 /// string suitable for embedding in a [`RecoveryHint`].

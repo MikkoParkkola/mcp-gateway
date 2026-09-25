@@ -165,12 +165,52 @@ async fn bridged_continuation_401_forces_the_refresh() {
     let error = Box::pin(execute_bridged(&meta, "mail", Some(&identity("alice"))))
         .await
         .expect_err("a revoked grant on the continuation must refuse");
-    assert_ne!(
+    assert_eq!(
         error.to_rpc_code(),
-        -32003,
-        "the reconnect refusal, not the generic bridged-exchange refusal: {error}"
+        -32603,
+        "the unmarked reconnect refusal (Error::Config), not the generic bridged -32003: {error}"
     );
     assert!(marked(&error).is_none(), "passed through with_connect_offer: {error}");
     assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
     assert_eq!(dispatches.count(), 2, "the first call and the one continuation");
+}
+
+/// T17b: a rotation on the continuation answers as the first dispatch would:
+/// a tool result whose hint says a retry presents the new token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bridged_continuation_401_with_live_grant_says_retry() {
+    let custody = custody_with_steps(
+        &[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))],
+        ROTATED_TOKEN,
+        &[ProviderStep::Rotate(ROTATED_TOKEN)],
+    );
+    let installed = custody.installed();
+    let (meta, dispatches) = gateway(
+        &[("mail", Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &installed,
+        &slots(&[("alice", WORK)]),
+    );
+    dispatches.script(&[
+        Answer::Result(serde_json::json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "k1": {
+                    "method": "elicitation/create",
+                    "params": {"message": "Which folder?", "requestedSchema": {"type": "object"}}
+                }
+            },
+            "requestState": "backend-state-a11b"
+        })),
+        Answer::Status(401),
+    ]);
+
+    let result = Box::pin(execute_bridged(&meta, "mail", Some(&identity("alice"))))
+        .await
+        .expect("a rotation on the continuation is reported as a tool result");
+    assert_eq!(result.get("isError").and_then(serde_json::Value::as_bool), Some(true), "{result}");
+    assert_eq!(result["recovery"]["error_code"], "UPSTREAM_AUTH_REJECTED", "{result}");
+    assert_eq!(result["recovery"]["retry"], true, "{result}");
+    assert_eq!(custody.refreshes(), 1);
+    assert_eq!(dispatches.count(), 2);
 }
