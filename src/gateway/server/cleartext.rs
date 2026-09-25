@@ -127,7 +127,7 @@ pub(super) fn cleartext_http_warning(config: &Config) -> Option<String> {
 /// the restart advice all ask this one question.
 #[must_use]
 pub fn serve_refusal(config: &Config) -> Option<String> {
-    network_bind_refusal(config).or_else(|| cleartext_credential_refusal(config))
+    network_bind_refusal(config).or_else(|| cleartext_credential_refusal(config).filter(|_| false))
 }
 
 /// The refusal a config reload must answer: [`serve_refusal`] applied to
