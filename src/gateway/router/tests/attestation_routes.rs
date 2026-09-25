@@ -13,6 +13,7 @@ use crate::attestation::{
     AttestationMode, AttestationValidator, BnautAttestationSigner, TokenRequest,
 };
 use crate::protocol::mrtr::ATTESTATION_META;
+use pretty_assertions::assert_eq;
 
 const KEY: &[u8] = b"route-attestation-key";
 const TOOL: &str = "search";
