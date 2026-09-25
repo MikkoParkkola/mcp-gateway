@@ -1885,6 +1885,38 @@ class WorkflowWiring(unittest.TestCase):
         ]
         self.assertEqual(env_of(block), ["DIGEST: real"])
 
+    def test_the_verify_step_is_bounded_and_keeps_payloads_out_of_the_log(self):
+        # v4.0.0-beta.2 (run 36193916273): `cosign verify-attestation` writes
+        # the whole base64 SBOM attestation to stdout — about 52 MB across the
+        # six digests, single lines up to 14.5 MB — and the step never
+        # finished, so the release tags were never published. The verdict is
+        # the exit status and the summary on stderr, so stdout goes to
+        # /dev/null (stderr stays: it is the evidence), and the step carries
+        # its own timeout so a stall fails in minutes rather than in 6 hours.
+        stdout_dropped = re.compile(r"(?:^|\s)1?>\s*/dev/null(?:\s|$)")
+        verifying = 0
+        for block in steps("ci.yml", "docker-manifest"):
+            pieces = [
+                piece
+                for command in joined(block)
+                for piece in segments(shell(command))
+                if COSIGN_VERIFY.match(piece)
+            ]
+            if not pieces:
+                continue
+            verifying += 1
+            self.assertTrue(
+                any(re.match(r"^\s+timeout-minutes:\s*\d+\s*$", line) for line in block),
+                f"ci.yml: {block[0].strip()} has no step timeout-minutes",
+            )
+            for piece in pieces:
+                self.assertRegex(
+                    piece,
+                    stdout_dropped,
+                    f"ci.yml: cosign verify stdout reaches the log: {piece}",
+                )
+        self.assertTrue(verifying, "ci.yml: docker-manifest verifies nothing")
+
     def test_no_signing_or_gate_step_is_allowed_to_fail(self):
         # `continue-on-error` keeps the job green when the step fails. On a
         # step that signs, verifies, starts the image, or runs the gate, that
