@@ -106,12 +106,28 @@ pub(super) fn build_control_plane_store(
     }
 }
 
-/// Create, fsync and remove a marker file in `dir`.
+/// Create, write, fsync and remove a marker file in `dir`.
+///
+/// Whatever already sits at the marker's name is unlinked first (unlink never
+/// follows a symlink), and the marker is opened `create_new`, so a planted
+/// symlink cannot turn the probe into a write elsewhere. The marker is removed
+/// on every path, and any failure is returned.
 fn probe_writable(dir: &Path) -> std::io::Result<()> {
+    use std::io::Write;
+
     std::fs::create_dir_all(dir)?;
     let marker = dir.join(".write-probe");
-    std::fs::File::create(&marker)?.sync_all()?;
-    std::fs::remove_file(&marker)
+    let _ = std::fs::remove_file(&marker);
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+        .and_then(|mut file| {
+            file.write_all(b"probe")?;
+            file.sync_all()
+        });
+    let removed = std::fs::remove_file(&marker);
+    written.and(removed)
 }
 
 fn open_store(
