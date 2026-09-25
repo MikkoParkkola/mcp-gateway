@@ -1,7 +1,7 @@
 name: MRTR.7b full burst
 
 # MIK-7479: the ticket's exact scenario (1026 stdio calls against a client that
-# never answers) takes about eight minutes, so it runs here rather than in the
+# never answers) is given up to eight and a half minutes, so it runs here rather than in the
 # per-PR Tests job, which skips it. Nightly from the default branch, on demand,
 # and on a PR carrying the `mrtr7b-full-burst` label.
 on:

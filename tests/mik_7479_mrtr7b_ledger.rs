@@ -16,8 +16,9 @@
 //! for X is its terminal; any later one is a **duplicate**, a protocol
 //! violation of its own, never a second terminal.
 //!
-//! The full 1026-call burst takes about eight minutes on a correct gateway, so
-//! it runs in its own workflow (`mrtr7b-full-burst.yml`), and the per-PR job
+//! The full 1026-call burst is given up to eight and a half minutes (sixteen
+//! admission waves of ask timeouts, if every accepted call asks), so it runs
+//! in its own workflow (`mrtr7b-full-burst.yml`), and the per-PR job
 //! skips it. Locally: `cargo test --test mik_7479_mrtr7b_ledger -- --skip
 //! mik_7479_full_burst`.
 
@@ -510,27 +511,36 @@ fn assert_capture_worked(run: &Run) {
     );
 }
 
-/// A pass has to mean "drained behind unanswered asks": the asks expired,
-/// wave after wave, and one client's silence cost nobody else the capability.
+/// What a correct gateway does with a burst from a client that never answers:
+/// every call that asked ends in the expired-ask `-32003`, and the rest are
+/// refused fast by admission or the per-backend rate limiter. What it must not
+/// do is let one client's silence disable the capability, or open the breaker,
+/// for every caller.
 ///
-/// Expired asks are not failures of the backend (the bridge's timeout returns
-/// outside `accounted_dispatch`, `meta_mcp/invoke.rs`), so nothing in this burst
-/// may trip the per-capability error budget. Before F23 it did: the per-backend
-/// rate limiter's instant refusals were sampled as failures ahead of the slow
-/// asking dispatches, and the capability was auto-disabled for every caller.
+/// Expired asks are not backend failures (the bridge's timeout returns outside
+/// `accounted_dispatch`, `meta_mcp/invoke.rs`), and a rate-limit refusal is not
+/// one either. Before F23 the limiter's instant refusals were sampled as
+/// failures ahead of the slow asking dispatches, surfaced as "Circuit breaker
+/// open", and auto-disabled the capability.
 fn assert_drained_behind_unanswered_asks(run: &Run) {
     let disabled = run.kind("error -32000: JSON-RPC error -32000: Capability");
+    let breaker = run.kind("result: Circuit breaker open");
     assert_eq!(
-        disabled,
-        0,
-        "one client's unanswered asks disabled the capability for everyone: {}",
+        (disabled, breaker),
+        (0, 0),
+        "one client's unanswered asks cost every caller the capability \
+         (disabled, breaker-open terminals): {}",
         run.report()
     );
-    let cap = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
     assert!(
-        run.kind("error -32003") >= cap,
-        "fewer than {cap} calls ended in an expired ask, so the burst did not drain \
-         behind a full admission wave: {}",
+        run.asks > 0,
+        "no call asked, so nothing drained: {}",
+        run.report()
+    );
+    assert_eq!(
+        run.kind("error -32003"),
+        run.asks,
+        "every call that asked must end in its expired ask, once: {}",
         run.report()
     );
 }
@@ -553,7 +563,7 @@ async fn ac_mrtr_7b_draining_client_accounts_for_every_call() {
 }
 
 /// MIK-7479.STDIO.1, per PR: a client that never answers still gets exactly one
-/// terminal frame for each of 194 calls, once the asks ahead of them expire.
+/// terminal frame for each of 194 calls.
 #[tokio::test]
 async fn ac_mrtr_7b_every_call_reaches_one_terminal_frame() {
     let calls = PER_PR_LAST_ID - FIRST_CALL_ID + 1;
@@ -568,8 +578,9 @@ async fn ac_mrtr_7b_every_call_reaches_one_terminal_frame() {
 }
 
 /// The ticket's exact scenario: 1026 calls, the excess past the inflight cap
-/// refused `-32000`, the rest drained behind unanswered asks. About eight
-/// minutes, so it runs in `mrtr7b-full-burst.yml` and the per-PR job skips it.
+/// refused `-32000`, the rest asking or refused by the rate limiter. Up to
+/// eight and a half minutes, so it runs in `mrtr7b-full-burst.yml` and the
+/// per-PR job skips it.
 #[tokio::test]
 async fn mik_7479_full_burst_every_call_reaches_one_terminal_frame() {
     let last_id = FIRST_CALL_ID + INFLIGHT_CAP + 1;
