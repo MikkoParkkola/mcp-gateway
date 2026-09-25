@@ -175,10 +175,12 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
     let file = serde_json::from_str::<IdentityGrantFile>(&content)
         .or_else(|_| serde_yaml::from_str::<IdentityGrantFile>(&content))
         .map_err(|e| {
-            format!(
-                "failed to parse identity grants file {}: {e}",
-                path.display()
-            )
+            matching::bare_exact_refusal(path, &content).unwrap_or_else(|| {
+                format!(
+                    "failed to parse identity grants file {}: {e}",
+                    path.display()
+                )
+            })
         })?;
 
     if file.schema_version != IDENTITY_GRANTS_FILE_SCHEMA_VERSION {
@@ -880,7 +882,7 @@ fn build_lease_proposal(
         subject: identity.clone(),
         agent: request.agent_id.as_ref().map_or(GrantAgent::Any, |agent| {
             GrantAgent::Exact(GrantAgentKey {
-                source: crate::security::ProofSource::MutualTls,
+                source: agent.proof(),
                 id: agent.as_str().to_string(),
             })
         }),

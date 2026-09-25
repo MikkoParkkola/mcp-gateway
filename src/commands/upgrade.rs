@@ -231,16 +231,11 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
 //
-// v4.0.0 carries nine changes an operator can be surprised by, none of which a
-// config edit can pre-empt: two need an action (re-authenticate, fix an env
-// file), one removes an advertised protocol version, one changes what the
-// error budgets count, one stops caching unidentified revisions, one makes
-// webhook notifications opt-in, one makes `logging/setLevel` admin-only, one
-// scopes `tools/list_changed` from backend edits, and one refuses admin-panel
-// grant and policy writes that were never enforced.
+// v4.0.0 carries the changes listed below: each can surprise an operator, and
+// no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The nine 4.0.0 changes, in the order they are printed.
+/// The ten 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -285,11 +280,16 @@ session is told, as before. `subscriptions/listen` is unchanged.",
 now return HTTP 409, because nothing enforced that store. Change grants with \
 `mcp-gateway identity grants` and policies with `security.sanitize_input` / \
 `security.ssrf_protection`. Keep the old store files: 4.1 re-imports them as drafts.",
+    "An identity-grants row bound to `exact: <id>` is refused at load, and the \
+error lists every such row. Rewrite each as `!exact {source: mtls, id: ...}` or \
+`!exact {source: jwt, id: ...}`; the gateway will not pick the source. Until \
+then personal capabilities fail closed. `identity grants grant --agent` takes \
+`mtls:<id>` or `jwt:<id>`.",
 ];
 
 /// Emit the one-time 4.0.0 notice.
 ///
-/// Reads nothing, because none of the nine items depends on what the config
+/// Reads nothing, because none of the ten items depends on what the config
 /// says. It marks the webhook item as delivered so a later start does not
 /// repeat it.
 ///
