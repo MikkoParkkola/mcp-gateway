@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::account_resolver_fixture::{
+use super::super::account_resolver_fixture::{
     ALICE_WORK_TOKEN, Bind, Custody, Descriptors, Dispatches, ProviderStep, ROTATED_TOKEN, WORK,
     account_key, custody_with_steps, gateway, grant, identity, slots,
 };

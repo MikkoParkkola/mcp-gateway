@@ -176,3 +176,9 @@ async fn body_text_401_in_200_is_not_detected() {
         .expect("a 200 passes through whatever its body says");
     assert_eq!(custody.refreshes(), 0);
 }
+
+#[path = "upstream_401_mcp_tests.rs"]
+mod mcp_route;
+
+#[path = "upstream_401_direct_tests.rs"]
+mod direct_route;
