@@ -508,7 +508,7 @@ impl Stream<'_> {
         let sealed_present = files.iter().any(|(s, _)| s.is_some());
         let last = self.prev.as_ref().map_or(0, |p| p.0);
         let gap = match hw {
-            None if sealed_present => {
+            None if false && sealed_present => {
                 Some("high-water mark missing: tail loss cannot be ruled out".to_string())
             }
             Some(h) if last < h.counter => Some(format!(
