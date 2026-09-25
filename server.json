@@ -37,7 +37,7 @@
         },
         {
           "name": "GATEWAY_ATTESTATION_MODE",
-          "description": "Sandbox attestation mode: observe (default, audits only) or off.",
+          "description": "Attestation mode: off (default) or observe (audits only). Any other value, enforce included, fails startup.",
           "isRequired": false,
           "isSecret": false
         },
@@ -100,7 +100,7 @@
         },
         {
           "name": "GATEWAY_ATTESTATION_MODE",
-          "description": "Sandbox attestation mode: observe (default, audits only) or off.",
+          "description": "Attestation mode: off (default) or observe (audits only). Any other value, enforce included, fails startup.",
           "isRequired": false,
           "isSecret": false
         },
