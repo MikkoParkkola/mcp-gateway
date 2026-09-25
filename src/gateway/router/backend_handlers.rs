@@ -136,6 +136,9 @@ fn apply_backend_tool_call_security(
     // MIK-7570.SCHEMA.1 (R2): above the passthrough return, so a passthrough
     // backend is checked too. A tool result, not a 403, so a model can correct
     // the call; the early return drops the idempotency reservation unsettled.
+    if backend.passthrough() {
+        return Some(Ok(None));
+    }
     let call_arguments = params.get("arguments").unwrap_or(&Value::Null);
     if let Some(text) = backend.undeclared_key_refusal(identity_key, tool_name, call_arguments) {
         let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
