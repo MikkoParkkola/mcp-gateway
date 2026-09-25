@@ -175,16 +175,14 @@ fn direct_route_attestation_scope<'a>(
     params: Option<&'a Value>,
 ) -> crate::attestation::validator::AttestationScope<'a> {
     use crate::attestation::validator::AttestationScope;
-    fn field<'a>(params: Option<&'a Value>, name: &str) -> &'a str {
-        params
-            .and_then(|p| p.get(name))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-    }
+    let field = |name: &str| {
+        let value = params.and_then(|p| p.get(name));
+        value.and_then(Value::as_str).unwrap_or_default()
+    };
     match method {
-        "tools/call" | "prompts/get" => AttestationScope::Capability(field(params, "name")),
+        "tools/call" | "prompts/get" => AttestationScope::Capability(field("name")),
         "resources/read" | "resources/subscribe" | "resources/unsubscribe" => {
-            AttestationScope::Capability(field(params, "uri"))
+            AttestationScope::Capability(field("uri"))
         }
         "tools/list"
         | "resources/list"
@@ -574,7 +572,7 @@ async fn backend_handler_inner(
         Err(refusal) => return refusal,
     };
 
-    let json_request: Value = match serde_json::from_slice(&body_bytes) {
+    let mut json_request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {
             return build_http_error_response(
@@ -590,16 +588,17 @@ async fn backend_handler_inner(
     // malformed tools/call is recorded as `invalid` too.
     *call = direct_audit::DirectCall::of(&json_request, client.as_ref(), grant_subject.as_ref());
 
+    // After the audit hash (D2-e: params as sent), before anything else reads
+    // the request: parse, telemetry and every forwarding arm see no token.
+    let attestation = take_attestation_token(json_request.get_mut("params"));
+
     // Parse request
-    let (id, method, mut params) = match parse_request(&json_request) {
+    let (id, method, params) = match parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
             return build_http_response(&response, StatusCode::BAD_REQUEST);
         }
     };
-    // Out of the owned params before anything reads or forwards them, so no
-    // arm (sanitized, passthrough, no-tool, other methods) sends it upstream.
-    let attestation = take_attestation_token(params.as_mut());
 
     // D2-b: scope is checked after the parse, so its refusal names the tool,
     // and before the backend lookup, so a scoped key gets 403 for an unknown

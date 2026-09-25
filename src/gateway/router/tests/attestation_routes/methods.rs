@@ -221,6 +221,7 @@ async fn direct_route_token_never_forwarded_any_method() {
         let token = token_with(&[URI_A, "p", TOOL]);
         for (method, params) in [
             ("resources/read", json!({"uri": URI_A})),
+            ("resources/subscribe", json!({"uri": URI_A})),
             ("prompts/get", json!({"name": "p"})),
             ("tools/call", json!({"name": TOOL, "arguments": {}})),
         ] {
@@ -228,7 +229,7 @@ async fn direct_route_token_never_forwarded_any_method() {
             assert_admitted(method, &json);
         }
         let forwarded = transport.all.lock().unwrap().len();
-        assert_eq!(forwarded, 3, "passthrough={passthrough}");
+        assert_eq!(forwarded, 4, "passthrough={passthrough}");
         assert_raw_token_never_forwarded(&transport, &token);
     }
 }
@@ -341,4 +342,51 @@ async fn direct_route_refusal_precedes_identity_minting() {
             );
         }
     }
+}
+
+/// Owner ruling, option A: the gateway relays no `resources/updated`, so an
+/// attested subscription has no update stream for the token's expiry to cut.
+/// A positive pin, green at head by design: the backend publishes an update
+/// during an admitted subscribe, and the direct route hands the client none.
+/// If this ever delivers, subscription expiry needs a design.
+#[tokio::test]
+async fn direct_route_attested_subscribe_relays_no_resource_update() {
+    let (router, transport, _store) = enforced().await;
+    let (status, json) = rpc(
+        &router,
+        "/mcp/demo",
+        "resources/subscribe",
+        json!({"uri": URI_A}),
+        Some(&token_with(&[URI_A])),
+    )
+    .await;
+    assert_admitted("attested subscribe", &json);
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let forwarded: Vec<String> = transport
+        .all
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(m, _)| m.clone())
+        .collect();
+    assert_eq!(
+        forwarded,
+        vec!["resources/subscribe".to_string()],
+        "the backend saw the subscribe"
+    );
+    assert!(
+        transport
+            .published_in_scope
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "positive control: the update was published inside the request scope"
+    );
+    assert_eq!(
+        json["id"], 7,
+        "one JSON-RPC response for the subscribe: {json}"
+    );
+    assert!(json.get("result").is_some(), "{json}");
+    assert!(
+        !json.to_string().contains("resources/updated"),
+        "no update may reach the client: {json}"
+    );
 }

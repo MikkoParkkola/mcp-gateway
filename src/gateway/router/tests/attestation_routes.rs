@@ -25,6 +25,9 @@ const TOOL: &str = "search";
 struct RecordingTransport {
     seen: Mutex<Vec<Option<Value>>>,
     all: Mutex<Vec<(String, Option<Value>)>>,
+    /// Set when a subscribe published its update inside a live request scope,
+    /// the positive control for the option-A pin.
+    published_in_scope: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
@@ -36,6 +39,21 @@ impl Transport for RecordingTransport {
             .push((method.to_string(), params.clone()));
         if method == "tools/call" {
             self.seen.lock().unwrap().push(params);
+        }
+        if method == "resources/subscribe" {
+            // What an HTTP backend's response stream does (`sse_decoder.rs`):
+            // an update published while the subscribe is in flight. A mint
+            // succeeds only inside a scope, so it proves the publish was live.
+            let live = crate::transport::notification_sink::mint_progress_token(&json!(0));
+            self.published_in_scope
+                .store(live.is_some(), std::sync::atomic::Ordering::SeqCst);
+            crate::transport::notification_sink::publish(vec![
+                crate::protocol::JsonRpcNotification {
+                    jsonrpc: "2.0".to_string(),
+                    method: "notifications/resources/updated".to_string(),
+                    params: Some(json!({"uri": "file:///a"})),
+                },
+            ]);
         }
         let result = match method {
             "tools/list" => json!({"tools": []}),

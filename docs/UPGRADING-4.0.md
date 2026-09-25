@@ -1151,8 +1151,9 @@ tool.
 - **Where the token goes.** In the `attestation` argument on `gateway_invoke`, including
   signed calls. In `params._meta["io.mcp-gateway/attestation"]` on the direct
   `/mcp/{backend}` route and on surfaced tools called by name. The gateway strips the
-  `_meta` key before forwarding on the direct route, for every method and for passthrough
-  backends too, so no backend receives the token.
+  `_meta` key on the direct route before anything but the audit hash reads the request, for
+  every method and for passthrough backends too, so neither protocol telemetry nor any
+  backend receives the token.
 - **The error names the boundary**: `Attestation rejected at gateway_invoke` on the meta
   route, `at direct_route` on `/mcp/{backend}`. The direct route checks the token before
   identity-propagation minting and before the idempotency guard, so an unattested call
@@ -1178,10 +1179,13 @@ tool.
 - **Playbooks and code mode are refused.** Under enforce, `gateway_run_playbook` and
   `gateway_execute` answer -32002 "multi-step plans carry no attestation in 4.0.0", keyed
   or not. Their steps are synthesized and carry no token. Call each tool with its own token.
-- **A subscription does not outlive its token, because the gateway relays no updates.** No
-  backend `notifications/resources/updated` reaches a client through the gateway, on either
-  route, so an attested `resources/subscribe` opens no data flow that the token's expiry
-  would have to end. This is a limitation that predates 4.0.0, not a change.
+- **A subscription does not outlive its token, because no update outlives the call that
+  carried it.** The gateway keeps no subscription state and relays no later
+  `notifications/resources/updated`. The direct route discards every backend notification.
+  The meta route streams a notification to a client only while the call that raised it is in
+  flight, and a stdio backend's notifications reach a caller only as progress on its own
+  call. So an attested `resources/subscribe` opens no data flow that the token's expiry
+  would have to end. This limitation predates 4.0.0; it is not a change.
 
 ## 51. SSO admin rules now grant full gateway admin
 
