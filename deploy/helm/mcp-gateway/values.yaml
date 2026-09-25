@@ -32,7 +32,7 @@ service:
   port: 39400
 
 # These two work as one pair. The gateway refuses a config file that other
-# users can read (UPGRADING-4.0 item 34), and the configMap projection is
+# users can read (UPGRADING-4.0 item 35), and the configMap projection is
 # root-owned. With fsGroup the kubelet makes it root:<fsGroup>, and a 0440 mode
 # lets the gateway read it through that group while no world bit is set.
 # fsGroup must be a group the gateway's UID is in: 1001 is the image's user.

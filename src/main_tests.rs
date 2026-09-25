@@ -886,19 +886,6 @@ fn cli_plugin_install_requires_name_argument() {
     assert!(result.is_err());
 }
 
-#[test]
-fn cli_ws_port_absent_means_none_in_config_default() {
-    let config = Config::default();
-    assert!(config.server.ws_port.is_none());
-}
-
-#[test]
-fn cli_ws_port_present_in_config_enables_ws_listener() {
-    let mut config = Config::default();
-    config.server.ws_port = Some(39401);
-    assert_eq!(config.server.ws_port, Some(39401));
-}
-
 // MIK-6700 review #2: `audit verify` must FAIL CLOSED on a config load error,
 // never silently downgrade to hash-only. An explicit --config path that does
 // not exist is a load error, so resolve_audit_log_config returns Err (the

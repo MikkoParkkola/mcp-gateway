@@ -54,7 +54,6 @@ pub mod trace;
 #[cfg(feature = "webui")]
 pub mod ui;
 pub mod webhooks;
-mod ws_listener;
 
 pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};
 // One owner for "is this host loopback", reachable crate-wide. `mod router` is

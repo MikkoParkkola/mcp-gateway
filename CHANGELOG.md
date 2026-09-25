@@ -137,7 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group read on a file the gateway owns. Group read stays allowed on a file it
   does not own, as with a root-owned Kubernetes projection under `fsGroup`.
   The Helm chart and enterprise-alpha set `fsGroup: 1001` and a `0440` config
-  mode. Windows is not checked. See `docs/UPGRADING-4.0.md` item 34.
+  mode. Windows is not checked. See `docs/UPGRADING-4.0.md` item 35.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept
@@ -233,6 +233,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enumerates `tools/list` and refuses to call anything absent from it will stop
   reaching these six until the corresponding feature is configured. See
   `docs/design/2026-09-16-meta-tool-surface-compaction.md`.
+
+### Removed
+
+- **The inbound WebSocket listener and `server.ws_port` (breaking).** The
+  listener only echoed text frames back; it served no MCP, ran outside the
+  Origin/Host guard and had no auth. A config that still sets `server.ws_port`
+  now fails to load with an explanation. Clients connect over HTTP
+  (`POST /mcp`) or stdio. See UPGRADING-4.0.md item 34.
+- **WebSocket is not a configurable backend transport.** Earlier entries and
+  the README listed it, but `TransportConfig` offers only stdio, HTTP
+  (Streamable HTTP or SSE) and A2A, and no config path builds the WebSocket
+  client in `src/transport/websocket.rs`. The docs no longer list it.
 
 ## [4.0.0] - 2026-09-19
 

@@ -232,16 +232,14 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 }
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
-//
 // v4.0.0 carries the changes listed below: each can surprise an operator, and
 // no config edit can pre-empt any of them. The list is the count.
 // A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The fifteen 4.0.0 changes, in the order they are printed.
+/// The sixteen 4.0.0 changes, in the order they are printed.
 ///
-/// Pinned as a slice rather than prose so a test can assert the notice still
-/// carries every item: a release note that quietly loses one is worse than
-/// none, because the operator has already read it.
+/// Pinned as a slice so a test can assert the notice still carries every item:
+/// a release note that quietly loses one is worse than none, because the operator has read it.
 const NOTICE_4_0_0_ITEMS: &[&str] = &[
     "OAuth credentials are now stored per issuer, so 3.x tokens are no longer \
 read where they sit. By default each OAuth backend re-authenticates once, on \
@@ -301,6 +299,8 @@ refused with `isError: true`; relax it with `input_schema_enforcement: standard`
     "`/metrics` now requires `server.metrics_token` (HTTP 401 until set; the admin bearer is \
 refused). A missing `env:` variable does not stop startup. Scrape with a dedicated job or the \
 chart's ServiceMonitor, never a generic annotation-driven one.",
+    "The inbound WebSocket listener, which only echoed frames, is removed: `server.ws_port` now \
+FAILS the config load. Clients connect via stdio or HTTP (`POST /mcp`).",
 ];
 
 /// Emit the one-time 4.0.0 notice.
