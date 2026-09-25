@@ -376,3 +376,184 @@ async fn send_message_succeeds_with_live_channel() {
     let msg = rx.try_recv().unwrap();
     assert_eq!(msg, Message::Text("hello".into()));
 }
+
+// =========================================================================
+// Progress routing — parity with the stdio transport (F16).
+//
+// One WebSocket carries every call to the backend, so, as on stdout, the
+// progress token the call supplied is the whole correlation. These tests
+// drive a real socket: a mock backend answers `initialize`, then replies to
+// each later request with the frames its script returns, in order.
+// =========================================================================
+
+const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+async fn mock_backend(mut script: impl FnMut(Value) -> Vec<Value> + Send + 'static) -> String {
+    use futures::{SinkExt, StreamExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let (mut write, mut read) = ws.split();
+        while let Some(Ok(msg)) = read.next().await {
+            let Message::Text(text) = msg else { continue };
+            let frame: Value = serde_json::from_str(&text).unwrap();
+            let replies = if frame["method"] == "initialize" {
+                vec![response_to(&frame)]
+            } else if frame.get("id").is_some() {
+                script(frame)
+            } else {
+                Vec::new()
+            };
+            for reply in replies {
+                if write
+                    .send(Message::Text(reply.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+    });
+    url
+}
+
+async fn connected(url: &str) -> Arc<WebSocketTransport> {
+    let t = WebSocketTransport::new(url);
+    tokio::time::timeout(WAIT, t.connect())
+        .await
+        .expect("connect must not hang")
+        .expect("the mock backend must initialize");
+    t
+}
+
+fn response_to(request: &Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": request["id"], "result": { "content": [] } })
+}
+
+fn progress(token: Option<&str>, progress: u64) -> Value {
+    let mut params = json!({ "progress": progress });
+    if let Some(token) = token {
+        params["progressToken"] = json!(token);
+    }
+    json!({ "jsonrpc": "2.0", "method": "notifications/progress", "params": params })
+}
+
+fn call_params(token: &str) -> Value {
+    json!({ "name": "slow", "_meta": { "progressToken": token } })
+}
+
+fn progress_value(n: &JsonRpcNotification) -> Option<&Value> {
+    n.params.as_ref().and_then(|p| p.get("progress"))
+}
+
+/// S-02 over WebSocket: a progress frame the backend emits during a call,
+/// carrying that call's token, reaches that call's notification sink.
+#[tokio::test]
+async fn ws_delivers_a_progress_notification_to_the_call_that_supplied_the_token() {
+    let url = mock_backend(|req| vec![progress(Some("tok-a"), 1), response_to(&req)]).await;
+    let t = connected(&url).await;
+
+    let (call, mut rx) = crate::transport::notification_sink::scope(
+        t.request("tools/call", Some(call_params("tok-a"))),
+    );
+    let response = tokio::time::timeout(WAIT, call)
+        .await
+        .expect("the call must not hang")
+        .expect("the call must succeed");
+    assert!(response.result.is_some());
+
+    // The I/O loop dispatches frames in order, so the progress frame was
+    // delivered before the response that completed the call.
+    let got = rx
+        .try_recv()
+        .expect("the caller's sink must hold the progress frame");
+    assert_eq!(got.method, "notifications/progress");
+    assert_eq!(progress_value(&got), Some(&json!(1)));
+}
+
+/// S-03 over WebSocket: two calls in flight on one socket. The progress
+/// frame reaches the call whose token it carries and no other.
+///
+/// Each call has its own scope, so a misroute lands on a different
+/// receiver; the positive half keeps the negative half from passing only
+/// because nothing is ever delivered.
+#[tokio::test]
+async fn ws_does_not_deliver_another_calls_progress_token() {
+    let mut first: Option<Value> = None;
+    let url = mock_backend(move |req| {
+        // Answer nothing until both calls are in flight, whichever order
+        // they arrive in; then emit tok-a's progress and answer both.
+        let Some(other) = first.take() else {
+            first = Some(req);
+            return Vec::new();
+        };
+        vec![
+            progress(Some("tok-a"), 3),
+            response_to(&req),
+            response_to(&other),
+        ]
+    })
+    .await;
+    let t = connected(&url).await;
+
+    let (a_call, mut a_rx) = crate::transport::notification_sink::scope(
+        t.request("tools/call", Some(call_params("tok-a"))),
+    );
+    let (b_call, mut b_rx) = crate::transport::notification_sink::scope(
+        t.request("tools/call", Some(call_params("tok-b"))),
+    );
+    let (a, b) = tokio::time::timeout(WAIT, async { tokio::join!(a_call, b_call) })
+        .await
+        .expect("both calls must complete");
+    a.expect("call A must succeed");
+    b.expect("call B must succeed");
+
+    let got = a_rx.try_recv().expect("tok-a's caller must be reached");
+    assert_eq!(progress_value(&got), Some(&json!(3)));
+    assert!(
+        b_rx.try_recv().is_err(),
+        "tok-b's caller must not receive tok-a's progress"
+    );
+}
+
+/// A notification with no attributable token is dropped: a token-less
+/// progress frame, and a non-progress method stamped with the caller's token
+/// (stdio admits progress only, so a token cannot smuggle a log message past
+/// the caller's level filter). The attributable frame sent after them is the
+/// positive control.
+#[tokio::test]
+async fn ws_drops_a_notification_it_cannot_attribute_to_a_call() {
+    let url = mock_backend(|req| {
+        vec![
+            progress(None, 1),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/message",
+                "params": { "progressToken": "tok-a", "level": "debug", "data": "x" }
+            }),
+            progress(Some("tok-a"), 2),
+            response_to(&req),
+        ]
+    })
+    .await;
+    let t = connected(&url).await;
+
+    let (call, mut rx) = crate::transport::notification_sink::scope(
+        t.request("tools/call", Some(call_params("tok-a"))),
+    );
+    tokio::time::timeout(WAIT, call)
+        .await
+        .expect("the call must not hang")
+        .expect("the call must succeed");
+
+    let got = rx.try_recv().expect("the attributable frame must arrive");
+    assert_eq!(progress_value(&got), Some(&json!(2)));
+    assert!(
+        rx.try_recv().is_err(),
+        "only the attributable frame may arrive"
+    );
+}
