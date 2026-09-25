@@ -39,8 +39,9 @@ use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
+use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
 use mcp_gateway::gateway::test_helpers::{
-    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+    AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
 };
 use mcp_gateway::idempotency::{
     CheckOutcome, GuardOutcome, IN_FLIGHT_TIMEOUT, IdempotencyCache, IdempotencyReservation,
@@ -335,8 +336,7 @@ async fn route_state() -> (Arc<AppState>, tempfile::TempDir) {
     // One registry, shared between the state the router reads and the executor
     // that publishes: two would send a task's notifications to a listener set
     // no client here is on.
-    let subscriptions =
-        Arc::new(mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth)));
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),

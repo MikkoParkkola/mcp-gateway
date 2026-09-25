@@ -25,6 +25,8 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast};
 
+use crate::gateway::auth::AuthState;
+use crate::gateway::auth::live::{Audience, Delivery, HeldCredential, delivery};
 use crate::protocol::subscriptions::{ListenRequest, NotificationKind};
 
 /// How many notifications a listener may fall behind before it is disconnected.
@@ -88,10 +90,33 @@ pub fn delivers(filter: &ListenRequest, notification: &Value) -> bool {
 ///
 /// Holds its permit, so capacity returns when the stream is dropped and not a
 /// moment later.
-#[derive(Debug)]
 pub struct Listener {
-    receiver: broadcast::Receiver<Value>,
+    receiver: broadcast::Receiver<Published>,
+    /// The credential the stream was opened with, re-validated at delivery.
+    // ci-allow-secret-debug: HeldCredential's own Debug prints only <redacted>
+    credential: Option<HeldCredential>,
+    authorizer: AuthState,
     _permit: OwnedSemaphorePermit,
+}
+
+impl std::fmt::Debug for Listener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Listener").finish_non_exhaustive()
+    }
+}
+
+/// A published notification and who it is for.
+#[derive(Clone, Debug)]
+pub(crate) struct Published {
+    pub(crate) notification: Value,
+    audience: OwnedAudience,
+}
+
+/// The owned twin of [`Audience`], carried through the channel.
+#[derive(Clone, Debug)]
+enum OwnedAudience {
+    Backend(String),
+    Any,
 }
 
 impl Listener {
@@ -102,30 +127,53 @@ impl Listener {
     /// Returns the broadcast error so the caller can distinguish a closed
     /// channel from a lagging reader; both end the stream, for different
     /// reasons the caller logs differently.
-    pub async fn recv(&mut self) -> Result<Value, broadcast::error::RecvError> {
+    pub(crate) async fn recv(&mut self) -> Result<Published, broadcast::error::RecvError> {
         self.receiver.recv().await
+    }
+
+    /// What delivering `published` to this listener's caller should do now.
+    pub(crate) async fn delivery(&self, published: &Published) -> Delivery {
+        let audience = match &published.audience {
+            OwnedAudience::Backend(backend) => Audience::Backend(backend),
+            OwnedAudience::Any => Audience::Any,
+        };
+        delivery(&self.authorizer, self.credential.as_ref(), audience).await
     }
 }
 
 /// The notifications this gateway publishes, and the streams listening to them.
-#[derive(Debug)]
 pub struct SubscriptionRegistry {
-    sender: broadcast::Sender<Value>,
+    sender: broadcast::Sender<Published>,
     permits: Arc<Semaphore>,
+    /// The authorizer every listener is re-validated against. Required at
+    /// construction, so a registry that delivers without one cannot exist.
+    authorizer: AuthState,
+}
+
+impl std::fmt::Debug for SubscriptionRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubscriptionRegistry")
+            .field("available", &self.available())
+            .finish_non_exhaustive()
+    }
 }
 
 impl SubscriptionRegistry {
-    /// A registry admitting at most `capacity` concurrent listeners.
+    /// A registry admitting at most `capacity` concurrent listeners, each
+    /// re-validated against `authorizer` at delivery.
     #[must_use]
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, authorizer: AuthState) -> Self {
         let (sender, _) = broadcast::channel(CHANNEL_DEPTH);
         Self {
             sender,
             permits: Arc::new(Semaphore::new(capacity)),
+            authorizer,
         }
     }
 
-    /// Admit a listener, or `None` when the ceiling is reached.
+    /// Admit a listener that presented no credential, or `None` when the
+    /// ceiling is reached. With authentication on it is closed at its first
+    /// delivery; the HTTP route refuses such a caller before this point.
     ///
     /// The permit **is** the admission: acquiring it is one atomic operation,
     /// so two concurrent requests cannot both observe room and both take it. A
@@ -134,11 +182,30 @@ impl SubscriptionRegistry {
     /// says a server must not assume they will not do.
     #[must_use]
     pub fn subscribe(&self) -> Option<Listener> {
+        self.admit(None)
+    }
+
+    fn admit(&self, credential: Option<HeldCredential>) -> Option<Listener> {
         let permit = Arc::clone(&self.permits).try_acquire_owned().ok()?;
         Some(Listener {
             receiver: self.sender.subscribe(),
+            credential,
+            authorizer: self.authorizer.clone(),
             _permit: permit,
         })
+    }
+
+    /// Admit a listener for the caller holding `credential`.
+    pub(crate) async fn subscribe_as(
+        &self,
+        credential: Option<HeldCredential>,
+    ) -> Result<Listener, ListenRefusal> {
+        // Checked before the permit: a stream nothing could ever reach would
+        // only hold a slot.
+        if delivery(&self.authorizer, credential.as_ref(), Audience::Any).await == Delivery::Dead {
+            return Err(ListenRefusal::Unauthenticated);
+        }
+        self.admit(credential).ok_or(ListenRefusal::Full)
     }
 
     /// Publish a notification to every listener.
@@ -149,7 +216,19 @@ impl SubscriptionRegistry {
         // An error means nobody is listening, which is ordinary rather than a
         // failure — the gateway's tool surface changes whether or not a modern
         // client is watching.
-        let _ = self.sender.send(notification);
+        self.send(notification, OwnedAudience::Any);
+    }
+
+    fn send(&self, notification: Value, audience: OwnedAudience) {
+        let _ = self.sender.send(Published {
+            notification,
+            audience,
+        });
+    }
+
+    /// Publish a notification only for callers who may access `backend`.
+    pub fn publish_for_backend(&self, notification: Value, backend: &str) {
+        self.send(notification, OwnedAudience::Backend(backend.to_owned()));
     }
 
     /// How many more listeners may be admitted.
@@ -157,6 +236,16 @@ impl SubscriptionRegistry {
     pub fn available(&self) -> usize {
         self.permits.available_permits()
     }
+}
+
+/// Why a `subscriptions/listen` was not admitted.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ListenRefusal {
+    /// The caller's credential does not authenticate, so nothing could ever
+    /// be delivered to the stream it asked for.
+    Unauthenticated,
+    /// Every listener slot is taken.
+    Full,
 }
 
 /// The notification raised when the gateway's tool surface changes.
@@ -282,12 +371,19 @@ mod tests {
 
     #[tokio::test]
     async fn a_listener_receives_what_is_published() {
-        let registry = SubscriptionRegistry::new(4);
+        let registry = SubscriptionRegistry::new(
+            4,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        );
         let mut listener = registry.subscribe().expect("capacity");
 
         registry.publish(tools_list_changed());
 
-        let received = listener.recv().await.expect("a published notification");
+        let received = listener
+            .recv()
+            .await
+            .expect("a published notification")
+            .notification;
         assert_eq!(received["method"], "notifications/tools/list_changed");
     }
 
@@ -295,18 +391,21 @@ mod tests {
     async fn every_listener_receives_it_and_filters_for_itself() {
         // One listener's filter must never decide what another receives, so
         // publishing is unfiltered and each stream applies its own.
-        let registry = SubscriptionRegistry::new(4);
+        let registry = SubscriptionRegistry::new(
+            4,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        );
         let mut first = registry.subscribe().expect("capacity");
         let mut second = registry.subscribe().expect("capacity");
 
         registry.publish(tools_list_changed());
 
         assert_eq!(
-            first.recv().await.expect("first")["method"],
+            first.recv().await.expect("first").notification["method"],
             "notifications/tools/list_changed"
         );
         assert_eq!(
-            second.recv().await.expect("second")["method"],
+            second.recv().await.expect("second").notification["method"],
             "notifications/tools/list_changed"
         );
     }
@@ -315,7 +414,10 @@ mod tests {
     fn admission_stops_at_the_ceiling() {
         // A bound against a caller who opens streams and walks away, which the
         // specification says a server must not assume they will not do.
-        let registry = SubscriptionRegistry::new(2);
+        let registry = SubscriptionRegistry::new(
+            2,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        );
         let _first = registry.subscribe().expect("capacity");
         let _second = registry.subscribe().expect("capacity");
 
@@ -330,7 +432,10 @@ mod tests {
     fn dropping_a_listener_returns_its_capacity() {
         // The permit is owned by the listener, so release is the drop and not a
         // deadline anything has to remember to enforce.
-        let registry = SubscriptionRegistry::new(1);
+        let registry = SubscriptionRegistry::new(
+            1,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        );
         let listener = registry.subscribe().expect("capacity");
         assert!(registry.subscribe().is_none());
 
@@ -348,7 +453,10 @@ mod tests {
         // The stream closes on this rather than delivering the remainder as
         // though nothing had happened, which would leave a client holding stale
         // state with no way to learn it.
-        let registry = SubscriptionRegistry::new(1);
+        let registry = SubscriptionRegistry::new(
+            1,
+            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        );
         let mut listener = registry.subscribe().expect("capacity");
 
         for _ in 0..(CHANNEL_DEPTH + 10) {

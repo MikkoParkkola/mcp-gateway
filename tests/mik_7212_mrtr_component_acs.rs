@@ -44,7 +44,7 @@ use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
 use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
 use mcp_gateway::gateway::test_helpers::{
-    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+    AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
 };
 use mcp_gateway::key_server::oidc::VerifiedIdentity;
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
@@ -99,7 +99,7 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
     let continuation = meta_mcp.continuation();
 
     // One registry, shared with the executor that publishes through it.
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth)));
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),

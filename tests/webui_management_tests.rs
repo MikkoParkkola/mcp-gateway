@@ -45,7 +45,8 @@ use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
 use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
 use mcp_gateway::gateway::test_helpers::{
-    AppState, MetaMcp, StoreLimits, TaskExecutor, TaskService, create_router, open_runtime,
+    AppState, MetaMcp, StoreLimits, TaskExecutor, TaskService, auth_state, create_router,
+    open_runtime,
 };
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
@@ -107,7 +108,7 @@ async fn make_app_state(
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
 
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&admin_auth_config()));
+    let authorizer = auth_state(&admin_auth_config());
 
     let tool_policy = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default()));
     let mtls_policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()));
@@ -121,7 +122,7 @@ async fn make_app_state(
 
     let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
 
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64, authorizer.clone()));
     let (task_service, task_executor, store_dir) = task_runtime(&subscriptions).await;
 
     let state = Arc::new(AppState {
@@ -134,7 +135,7 @@ async fn make_app_state(
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config,
+        auth_config: authorizer.auth_config,
         key_server: None,
         tool_policy,
         mtls_policy,
@@ -186,7 +187,7 @@ async fn make_app_state_with_reload(
         config.streaming.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&admin_auth_config()));
+    let authorizer = auth_state(&admin_auth_config());
     let tool_policy = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default()));
     let mtls_policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()));
     let inflight = Arc::new(tokio::sync::Semaphore::new(100));
@@ -206,7 +207,7 @@ async fn make_app_state_with_reload(
 
     let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
 
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64, authorizer.clone()));
     let (task_service, task_executor, store_dir) = task_runtime(&subscriptions).await;
 
     (
@@ -220,7 +221,7 @@ async fn make_app_state_with_reload(
             multiplexer,
             proxy_manager,
             streaming_config: config.streaming.clone(),
-            auth_config,
+            auth_config: authorizer.auth_config,
             key_server: None,
             tool_policy,
             mtls_policy,

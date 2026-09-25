@@ -1058,7 +1058,8 @@ async fn meta_mcp_dispatch(
     // wants, so the empty notification filter is synthesised rather than
     // refused. Ownership narrows the stream in silence: a task another
     // principal owns must be indistinguishable from one that never existed, and
-    // a refusal would announce the difference.
+    // a refusal would announce the difference. A caller with no credential
+    // under authentication is refused at the listen arm, whatever ids it names.
     let mut params = params;
     if method == "subscriptions/listen" {
         let ids = listened_task_ids(params.as_ref());
@@ -1126,6 +1127,7 @@ async fn meta_mcp_dispatch(
     }
     let mut response = match method.as_str() {
         "subscriptions/listen" => {
+            use crate::gateway::subscription_registry::ListenRefusal;
             // The single long-lived stream that replaces the GET endpoint.
             //
             // Returns EARLY with an SSE body rather than falling through to the
@@ -1151,14 +1153,34 @@ async fn meta_mcp_dispatch(
             // away — the specification says a server must not assume otherwise
             // — so this ceiling is a resource bound, and one checked as a count
             // before subscribing can be raced past by concurrent callers.
-            let Some(listener) = state.subscriptions.subscribe() else {
-                return build_error_response(
-                    Some(id),
-                    -32003,
-                    "too many open subscriptions",
-                    &session_id,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                );
+            //
+            // A caller whose credential does not authenticate is refused before
+            // a permit is taken: nothing could ever be delivered to its stream,
+            // so admitting it would only hold one of the slots.
+            let listener = match state
+                .subscriptions
+                .subscribe_as(crate::gateway::auth::live::held_credential(&headers))
+                .await
+            {
+                Ok(listener) => listener,
+                Err(ListenRefusal::Unauthenticated) => {
+                    return build_error_response(
+                        Some(id),
+                        -32001,
+                        "subscriptions/listen requires a credential that authenticates",
+                        &session_id,
+                        StatusCode::UNAUTHORIZED,
+                    );
+                }
+                Err(ListenRefusal::Full) => {
+                    return build_error_response(
+                        Some(id),
+                        -32003,
+                        "too many open subscriptions",
+                        &session_id,
+                        StatusCode::SERVICE_UNAVAILABLE,
+                    );
+                }
             };
 
             // The request's own id, never minted: the specification defines the

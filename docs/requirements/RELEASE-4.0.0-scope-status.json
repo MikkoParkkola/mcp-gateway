@@ -566,11 +566,16 @@
     },
     {
       "id": "MIK-7570.NOTIFY.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/tests/task_execution_adapter/listen_scope.rs",
+        "src/gateway/auth_live.rs",
+        "src/gateway/subscription_registry.rs",
+        "src/gateway/streaming.rs"
+      ],
+      "note": "Graded 2026-09-25 (A5c). Green CI run 36105619323 at fc2b151a (rebased on 9d352d38): 6988 passed, 0 failed across 115 binaries; clippy pedantic, file-size and Kani green. Red first: run 36104514068 at c0df6ca3 failed exactly the 5 new cells (lib 5549 passed, 5 failed): tools_list_changed_reaches_only_listeners_in_scope_for_the_backend (L1), a_listener_whose_token_is_revoked_is_closed_at_next_delivery (L2), an_uncredentialed_listen_under_auth_on_is_refused_before_a_permit (L3), delivery_is_dead_for_a_revoked_token and delivery_is_out_of_scope_for_a_live_token_without_the_backend; the auth-off cell (L4) and the uncredentialed tools/call control stayed green. Delete-the-branch, one line each: delivery never OutOfScope reddens L1 and A5b row 1 (tools_list_changed_reaches_only_sessions_in_scope_for_the_changed_backend), proving one shared rule; publish_for_backend publishing to Any reddens L1; Dead continuing instead of closing reddens L2; removing the open-time check reddens L3. U2 is N/A: the authorizer is required at registry construction (design Revision 2), so a registry without one cannot exist. MIK-7272.TASK.1.19 amended: its forward guard asserted an unattributed listen is never refused, which the ratified 401 decision supersedes; it now asserts the 401 is identical for a live and an absent task id. Residuals: an idle revoked listener holds its slot until its next wanted notification (no reaper by design); task ownership is checked at open only; A5b's auth-reload residual is inherited, since both authorizers hold the startup auth_config."
     },
     {
       "id": "MIK-7570.LOGLEVEL.1",
