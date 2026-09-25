@@ -432,7 +432,7 @@ fn record_unkeyed(is_modern: bool, read_only: bool, (server, tool): (&str, &str)
         "era" => if is_modern { "modern" } else { "legacy" },
         "read_only_hint" => if read_only { "true" } else { "false" }
     )
-    .increment(1);
+    .increment(0);
     if !is_modern {
         return;
     }
