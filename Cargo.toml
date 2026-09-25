@@ -171,6 +171,8 @@ metrics-exporter-prometheus = { version = "0.18", optional = true }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
+# `test-util` for `start_paused`: the list-drain budget cell (MIK 7570).
+tokio = { version = "1.52", features = ["test-util"] }
 tokio-test = "0.4"
 pretty_assertions = "1.4"
 tempfile = "3.14"

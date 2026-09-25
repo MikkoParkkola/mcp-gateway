@@ -3652,8 +3652,16 @@ impl MetaMcp {
 
         let all_backends = self.backends.all();
         // Publish completeness: an unenumerated backend contributes 0.
-        let tools_known = all_backends.iter().all(|b| b.cached_tools_known());
-        let mut total_tools: usize = all_backends.iter().map(|b| b.cached_tools_count()).sum();
+        // A truncated drain publishes a lower bound, not a complete total.
+        // List and flag under one guard, so a fill landing between the reads
+        // cannot pair a truncated count with a clear flag.
+        let mut tools_known = true;
+        let mut total_tools: usize = 0;
+        for b in &all_backends {
+            let (tools, truncated) = b.cached_tools_snapshot_and_truncated();
+            tools_known &= b.cached_tools_known() && !truncated;
+            total_tools += tools.len();
+        }
         if let Some(cap) = self.get_capabilities() {
             total_tools += cap.get_tools().len();
         }

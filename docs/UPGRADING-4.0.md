@@ -624,6 +624,18 @@ A deployment that set `enforce` ran unenforced and was told so only in a log lin
 - Re-authorize OAuth backends at a time you choose rather than on a user's first call.
 - If startup is refused, read the error — item 2 is the one that refuses rather than warns.
 
+## Other behaviour changes
+
+These need no action and have no startup notice.
+
+- **Paginated backends show their whole tool catalogue.** The metadata cache now follows
+  `nextCursor`, so tools past a backend's first `tools/list` page appear in search, listing
+  and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A
+  drain that stops early keeps what was read, reports its tool count as "at least", and
+  increments `mcp_backend_list_truncated_total{backend,reason}`, where `reason` is
+  `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`) or
+  `fill_budget` (120 s spent).
+
 ## Rolling back
 
 Downgrading to 3.x loads the same `gateway.yaml`, because 4.0.0 never edited it. The upgrade

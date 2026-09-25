@@ -149,16 +149,22 @@ impl MetaMcp {
             .filter(|b| self.admits_backend(&b.name, scope, session_id))
             .collect();
         let known = backends.iter().filter(|b| b.cached_tools_known()).count();
+        // A truncated drain is still "known" (enumerated), but its count is a
+        // lower bound, never exact (MIK 7570 PAGING.1 design D). List and flag
+        // are read under one guard so a fill landing between cannot tear them.
+        let mut truncated = false;
         let admitted: usize = backends
             .iter()
             .map(|b| {
-                b.get_cached_tools_snapshot()
+                let (tools, cut) = b.cached_tools_snapshot_and_truncated();
+                truncated |= cut;
+                tools
                     .iter()
                     .filter(|t| self.may_invoke(&b.name, &t.name, scope, session_id).is_ok())
                     .count()
             })
             .sum();
-        let mut total = if known == backends.len() {
+        let mut total = if known == backends.len() && !truncated {
             ToolTotal::Exact(admitted)
         } else if known == 0 {
             ToolTotal::Unknown

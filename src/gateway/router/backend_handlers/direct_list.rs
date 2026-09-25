@@ -25,8 +25,10 @@ use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
-/// Pages drained before the route reports the catalogue as too long.
-pub(super) const DIRECT_LIST_MAX_PAGES: usize = 32;
+/// Pages drained before the route reports the catalogue as too long. Defined
+/// from the one shared cap (MIK 7570 PAGING.1 design §2.C) so this route and
+/// the backend metadata cache drain cannot fall out of step.
+pub(super) const DIRECT_LIST_MAX_PAGES: usize = crate::backend::LIST_MAX_PAGES;
 
 /// Drain the upstream catalogue into one `{tools}` result.
 ///

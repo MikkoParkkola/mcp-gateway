@@ -12,6 +12,17 @@ use tokio::sync::Semaphore;
 use crate::config::BackendConfig;
 use crate::runtime::RuntimePlan;
 
+/// Pages drained from one backend's paginated `*/list` fill before the drain
+/// stops and marks the slot truncated (MIK 7570 PAGING.1, design §2.C).
+/// The direct route's `DIRECT_LIST_MAX_PAGES` is defined from this constant
+/// so the two independent drains share one cap.
+pub(crate) const LIST_MAX_PAGES: usize = 32;
+
+/// Wall-clock budget for one paginated `*/list` fill, across every page
+/// (design §2.G, revision 2). Checked between pages, never mid-request, so
+/// the in-flight permit is held for at most this plus one page's timeout.
+const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
+
 mod annotations;
 mod cached_metadata;
 mod era;
@@ -239,6 +250,8 @@ pub(crate) struct CleanupState {
     pub(crate) handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
+#[cfg(test)]
+mod list_paging_tests;
 #[cfg(test)]
 mod pool_tests;
 #[cfg(test)]
