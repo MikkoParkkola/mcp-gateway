@@ -564,7 +564,7 @@ async fn key_server_still_enforces_iat_cap() {
     let policy = KeyServerPolicyConfig {
         match_criteria: PolicyMatchConfig {
             domain: Some("corp.example".to_string()),
-            issuer: None,
+            issuer: "https://idp.example".to_string(),
             email: None,
             group: None,
         },
@@ -595,7 +595,8 @@ async fn key_server_still_enforces_iat_cap() {
     let token = |iat_ago| {
         idp.sign(&json!({
             "iss": "https://idp.example", "sub": "alice", "aud": "client",
-            "email": "alice@corp.example", "iat": now() - iat_ago, "exp": now() + 3600,
+            "email": "alice@corp.example", "email_verified": true,
+            "iat": now() - iat_ago, "exp": now() + 3600,
         }))
     };
     assert!(
