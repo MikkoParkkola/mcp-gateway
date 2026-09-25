@@ -62,7 +62,8 @@ YAML
 # The gateway refuses a config other users can read (CONFIG.2).
 chmod 600 "$tmp/gateway.yaml"
 
-"$bin" --config "$tmp/gateway.yaml" >"$tmp/gateway.log" 2>&1 &
+# Its own HOME: the task store and data dir must not be the operator's.
+HOME="$tmp" "$bin" --config "$tmp/gateway.yaml" >"$tmp/gateway.log" 2>&1 &
 server_pid=$!
 
 # It either serves or it is gone. Poll the process rather than the port: the
