@@ -580,7 +580,7 @@ pub struct MetaMcp {
 
     /// Which caller identity headers are honoured, and from whom. Off by
     /// default because direct clients can otherwise spoof headers.
-    caller_identity: crate::config::CallerIdentityConfig,
+    caller_identity: crate::security::caller_identity::CallerIdentityConfig,
     /// Verifier for `Cf-Access-Jwt-Assertion`, built iff the mode is
     /// `cloudflare_access`.
     access_verifier: Option<Arc<crate::key_server::OidcVerifier>>,
@@ -674,7 +674,7 @@ impl MetaMcp {
             attestation_mode: crate::attestation::AttestationMode::Observe,
             identity_grants: Arc::new(RwLock::new(LocalIdentityGrantStore::new())),
             policy_epoch: Arc::new(AtomicU64::new(0)),
-            caller_identity: crate::config::CallerIdentityConfig::default(),
+            caller_identity: crate::security::caller_identity::CallerIdentityConfig::default(),
             access_verifier: None,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             #[cfg(feature = "firewall")]
@@ -871,13 +871,27 @@ impl MetaMcp {
 
     /// Set which caller identity headers are honoured (`security.caller_identity`).
     #[must_use]
-    pub fn with_caller_identity(mut self, config: crate::config::CallerIdentityConfig) -> Self {
-        self.access_verifier = (config.mode == crate::config::CallerIdentityMode::CloudflareAccess)
+    pub fn with_caller_identity(
+        mut self,
+        config: crate::security::caller_identity::CallerIdentityConfig,
+    ) -> Self {
+        self.access_verifier = (config.mode
+            == crate::security::caller_identity::CallerIdentityMode::CloudflareAccess)
             .then(|| {
                 Arc::new(crate::key_server::OidcVerifier::cloudflare_access(
                     &config.cloudflare_access,
                 ))
             });
+        if config.mode == crate::security::caller_identity::CallerIdentityMode::TrustedProxy {
+            // The allowlist proves the request came through a proxy, not that
+            // the proxy wrote the header; that half is the proxy's job.
+            tracing::warn!(
+                authority = %config.authority,
+                proxies = config.trusted_proxies.len(),
+                "caller_identity trusted_proxy: each proxy MUST strip or overwrite \
+                 client-supplied X-Gateway-Identity-* headers"
+            );
+        }
         self.caller_identity = config;
         self
     }
@@ -1342,7 +1356,9 @@ impl MetaMcp {
     }
 
     /// The caller identity header configuration.
-    pub(crate) const fn caller_identity(&self) -> &crate::config::CallerIdentityConfig {
+    pub(crate) const fn caller_identity(
+        &self,
+    ) -> &crate::security::caller_identity::CallerIdentityConfig {
         &self.caller_identity
     }
 

@@ -10,12 +10,16 @@ use std::net::SocketAddr;
 
 use axum::http::{HeaderMap, StatusCode};
 
-use crate::config::{CallerIdentityConfig, CallerIdentityMode};
+use tracing::warn;
+
+use crate::config::KeyServerOidcConfig;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::OidcVerifier;
+use crate::key_server::TokenAgeCap;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
+use crate::security::caller_identity::{CallerIdentityConfig, CallerIdentityMode};
 
 const HEADER_GATEWAY_IDENTITY: &str = "x-gateway-identity";
 const HEADER_GATEWAY_IDENTITY_AUTHORITY: &str = "x-gateway-identity-authority";
@@ -28,7 +32,6 @@ const HEADER_IDENTITY_MAX_LEN: usize = 512;
 
 /// Why a request's identity headers were refused. Each maps to one status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(dead_code, reason = "constructed once the header checks land")]
 pub(super) enum IdentityHeaderRefusal {
     /// `trusted_proxy`: an identity header from a peer not in `trusted_proxies`.
     UntrustedPeer,
@@ -79,6 +82,15 @@ pub(super) fn identity_refusal_response(
 
 /// Resolve the caller's grant subject. Precedence: verified OIDC > header
 /// identity > mTLS > OAuth agent.
+///
+/// The header identity is checked FIRST, even when OIDC will win: a spoofed
+/// or malformed header is refused whatever else the request proves, and an
+/// outranked valid one is counted, not silently dropped.
+///
+/// # Errors
+///
+/// An [`IdentityHeaderRefusal`] when the headers break the mode's rules.
+/// Every refusal is counted and logged without the header value.
 pub(super) async fn caller_grant_subject(
     verified_identity: Option<&VerifiedIdentity>,
     headers: &HeaderMap,
@@ -88,17 +100,131 @@ pub(super) async fn caller_grant_subject(
     cert_identity: Option<&CertIdentity>,
     oauth_agent_identity: Option<&OAuthAgentIdentity>,
 ) -> Result<Option<GrantSubject>, IdentityHeaderRefusal> {
-    let _ = (peer, access_verifier, HEADER_CF_ACCESS_JWT);
-    let trust_identity_headers = config.mode != CallerIdentityMode::Off;
-    Ok(verified_identity
-        .and_then(grant_subject_from_verified_identity)
-        .or_else(|| {
-            trust_identity_headers
-                .then(|| grant_subject_from_trusted_headers(headers))
-                .flatten()
-        })
+    let header_identity = match config.mode {
+        CallerIdentityMode::Off => Ok(None),
+        CallerIdentityMode::TrustedProxy => trusted_proxy_identity(headers, peer, config),
+        CallerIdentityMode::CloudflareAccess => {
+            cloudflare_access_identity(headers, access_verifier).await
+        }
+    }
+    .inspect_err(|refusal| {
+        telemetry_metrics::counter!(
+            "mcp_identity_header_refused_total",
+            "reason" => refusal.reason()
+        )
+        .increment(1);
+        warn!(mode = ?config.mode, reason = refusal.reason(), "caller identity header refused");
+    })?;
+
+    if let Some(verified) = verified_identity.and_then(grant_subject_from_verified_identity) {
+        if header_identity.is_some() {
+            ignored("oidc_precedence");
+        }
+        return Ok(Some(verified));
+    }
+    Ok(header_identity
         .or_else(|| cert_identity.and_then(grant_subject_from_cert_identity))
         .or_else(|| oauth_agent_identity.and_then(grant_subject_from_oauth_agent)))
+}
+
+fn ignored(reason: &'static str) {
+    telemetry_metrics::counter!("mcp_identity_header_ignored_total", "reason" => reason)
+        .increment(1);
+}
+
+const GATEWAY_IDENTITY_HEADERS: [&str; 4] = [
+    HEADER_GATEWAY_IDENTITY,
+    HEADER_GATEWAY_IDENTITY_AUTHORITY,
+    HEADER_GATEWAY_IDENTITY_LABEL,
+    HEADER_GATEWAY_IDENTITY_SUBJECT,
+];
+
+fn any_present(headers: &HeaderMap, names: &[&str]) -> bool {
+    names.iter().any(|name| headers.contains_key(*name))
+}
+
+/// `trusted_proxy`: subject and label from a peer in `trusted_proxies`,
+/// under the configured authority. `Cf-Access-*` is not read here.
+fn trusted_proxy_identity(
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+    config: &CallerIdentityConfig,
+) -> Result<Option<GrantSubject>, IdentityHeaderRefusal> {
+    if any_present(headers, &[HEADER_CF_ACCESS_USER_ID, HEADER_CF_ACCESS_EMAIL]) {
+        ignored("cf_access_in_trusted_proxy");
+    }
+    if !any_present(headers, &GATEWAY_IDENTITY_HEADERS) {
+        return Ok(None);
+    }
+    // No `ConnectInfo` is no proven peer (the reading of `auth.rs`).
+    let trusted = peer.is_some_and(|peer| {
+        let peer = peer.ip().to_canonical();
+        config
+            .trusted_proxies
+            .iter()
+            .any(|entry| entry.to_canonical() == peer)
+    });
+    if !trusted {
+        return Err(IdentityHeaderRefusal::UntrustedPeer);
+    }
+    if any_present(
+        headers,
+        &[HEADER_GATEWAY_IDENTITY, HEADER_GATEWAY_IDENTITY_AUTHORITY],
+    ) {
+        return Err(IdentityHeaderRefusal::RemovedHeader);
+    }
+    let label = strict_header(headers, HEADER_GATEWAY_IDENTITY_LABEL)?;
+    Ok(strict_header(headers, HEADER_GATEWAY_IDENTITY_SUBJECT)?
+        .map(|subject| GrantSubject::new(config.authority.clone(), subject, label)))
+}
+
+/// `cloudflare_access`: the identity is a verified `Cf-Access-Jwt-Assertion`
+/// and nothing else. It stays a grant subject: it never becomes a
+/// `VerifiedIdentity`, so it cannot reach propagation or key-server policy.
+async fn cloudflare_access_identity(
+    headers: &HeaderMap,
+    verifier: Option<&OidcVerifier>,
+) -> Result<Option<GrantSubject>, IdentityHeaderRefusal> {
+    if any_present(headers, &GATEWAY_IDENTITY_HEADERS) {
+        return Err(IdentityHeaderRefusal::WrongModeHeader);
+    }
+    let Some(assertion) = strict_header(headers, HEADER_CF_ACCESS_JWT)? else {
+        return if any_present(headers, &[HEADER_CF_ACCESS_USER_ID, HEADER_CF_ACCESS_EMAIL]) {
+            Err(IdentityHeaderRefusal::AccessAssertion)
+        } else {
+            Ok(None)
+        };
+    };
+    // A missing verifier is a wiring fault; it refuses rather than trusts.
+    let verifier = verifier.ok_or(IdentityHeaderRefusal::AccessAssertion)?;
+    let age = KeyServerOidcConfig {
+        token_age: TokenAgeCap::ExpOnly,
+    };
+    let identity = verifier
+        .verify(&assertion, &age)
+        .await
+        .map_err(|_| IdentityHeaderRefusal::AccessAssertion)?;
+    grant_subject_from_verified_identity(&identity)
+        .map(Some)
+        .ok_or(IdentityHeaderRefusal::AccessAssertion)
+}
+
+/// One identity header, strictly: absent or blank is `None`; repeated, not
+/// UTF-8, or over [`HEADER_IDENTITY_MAX_LEN`] bytes is refused, never
+/// truncated or first-wins.
+fn strict_header(headers: &HeaderMap, name: &str) -> Result<Option<String>, IdentityHeaderRefusal> {
+    let mut values = headers.get_all(name).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() || value.len() > HEADER_IDENTITY_MAX_LEN {
+        return Err(IdentityHeaderRefusal::Malformed);
+    }
+    let text = value
+        .to_str()
+        .map_err(|_| IdentityHeaderRefusal::Malformed)?
+        .trim();
+    Ok((!text.is_empty()).then(|| text.to_string()))
 }
 
 /// Build the grant subject an OIDC-verified caller is authorized as.
@@ -139,21 +265,6 @@ pub(crate) fn grant_subject_from_verified_identity(
     ))
 }
 
-fn grant_subject_from_trusted_headers(headers: &HeaderMap) -> Option<GrantSubject> {
-    let explicit_subject = header_text(headers, HEADER_GATEWAY_IDENTITY_SUBJECT)
-        .or_else(|| header_text(headers, HEADER_GATEWAY_IDENTITY));
-    let cloudflare_subject = header_text(headers, HEADER_CF_ACCESS_USER_ID)
-        .or_else(|| header_text(headers, HEADER_CF_ACCESS_EMAIL));
-
-    let subject = explicit_subject.or(cloudflare_subject)?;
-    let authority = header_text(headers, HEADER_GATEWAY_IDENTITY_AUTHORITY)
-        .unwrap_or_else(|| "trusted_header".to_string());
-    let label = header_text(headers, HEADER_GATEWAY_IDENTITY_LABEL)
-        .or_else(|| header_text(headers, HEADER_CF_ACCESS_EMAIL));
-
-    Some(GrantSubject::new(authority, subject, label))
-}
-
 fn grant_subject_from_cert_identity(identity: &CertIdentity) -> Option<GrantSubject> {
     let subject = identity
         .san_uris
@@ -171,13 +282,6 @@ fn grant_subject_from_oauth_agent(identity: &OAuthAgentIdentity) -> Option<Grant
     let label = trimmed_non_empty(&identity.agent_name);
 
     Some(GrantSubject::new("agent_oauth", subject, label))
-}
-
-fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .and_then(trimmed_non_empty)
 }
 
 fn trimmed_non_empty(value: &str) -> Option<String> {

@@ -48,6 +48,18 @@ use policy::RequestedScopes;
 
 pub use audit::AuditEvent;
 pub use oidc::{JwksCache, OidcVerifier};
+
+/// The age bound a verifier applies on top of `exp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenAgeCap {
+    /// Refuse a token whose `iat` is more than this many seconds ago
+    /// (replay bound for key-server and delegated-bearer tokens).
+    MaxIat(u64),
+    /// `exp` (with the verifier's leeway) is the only bound. A Cloudflare
+    /// Access assertion's `iat` is the session start, so an `iat` cap would
+    /// lock every Access user out minutes after login.
+    ExpOnly,
+}
 pub use policy::PolicyEngine;
 pub use store::{InMemoryTokenStore, TemporaryToken, TokenStore};
 
@@ -136,7 +148,7 @@ impl KeyServer {
         token: &str,
     ) -> Option<(AuthenticatedClient, VerifiedIdentity)> {
         let oidc_config = KeyServerOidcConfig {
-            token_age: crate::config::TokenAgeCap::MaxIat(self.config.max_oidc_token_age_secs),
+            token_age: crate::key_server::TokenAgeCap::MaxIat(self.config.max_oidc_token_age_secs),
         };
         let identity = match self.oidc.verify(token, &oidc_config).await {
             Ok(id) => id,
