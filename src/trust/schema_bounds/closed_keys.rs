@@ -76,6 +76,7 @@ pub(crate) fn undeclared_keys(
         return Vec::new();
     }
     let mut walk = Walk {
+        schema: std::marker::PhantomData,
         standard: mode == InputSchemaEnforcement::Standard,
         visits: 0,
         limit: None,
@@ -114,6 +115,8 @@ enum Verdict<'a> {
 }
 
 struct Walk<'a> {
+    /// Ties the requirements built during the walk to the schema's lifetime.
+    schema: std::marker::PhantomData<&'a Value>,
     standard: bool,
     visits: usize,
     limit: Option<KeyFault>,
