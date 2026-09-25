@@ -130,7 +130,7 @@ async fn gateway(owui: &FakeOwui, starts: u32) -> Gateway {
 async fn gateway_on(owui: &FakeOwui, starts: u32, fixture: RevokeFixture) -> Gateway {
     let dir = tempfile::tempdir().unwrap();
     let env = dir.path().join("adapter.env");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &env,
         format!("OWUI_ROUTE_HMAC={HMAC}\nOWUI_ROUTE_STORE=UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n"),
     )

@@ -23,7 +23,7 @@ use tempfile::TempDir;
 #[allow(dead_code)]
 fn minimal_gateway_yaml(dir: &TempDir) -> PathBuf {
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
         r#"server:
   host: "127.0.0.1"
@@ -54,7 +54,7 @@ fn config_export_merge_idempotent() {
     let client_config = dir.path().join("client.json");
 
     // Initial content with an unrelated key.
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         &client_config,
         r#"{"otherApp": {"setting": true}, "mcpServers": {}}"#,
     )

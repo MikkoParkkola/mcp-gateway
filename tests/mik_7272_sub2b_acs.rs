@@ -275,7 +275,7 @@ async fn spawn_fixture_backend() -> (String, Received, Arc<Semaphore>) {
 }
 
 fn write_config(home: &Path, backend_url: &str) {
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
             "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n"
@@ -800,7 +800,7 @@ async fn s03_progress_stdio_each_call_sees_only_its_own_token() {
 const BEARER: &str = "sub2b-operator-token";
 
 fn write_http_config(home: &Path, backend_url: &str, port: u16) {
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
             "server:\n  host: \"127.0.0.1\"\n  port: {port}\n\

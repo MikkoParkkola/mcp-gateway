@@ -53,7 +53,7 @@ fn write_command_config(home: &Path) -> std::path::PathBuf {
         .replace("__LOG__", &log.display().to_string())
         .replace("__RELEASE__", &release.display().to_string());
     std::fs::write(&script, body).expect("write command peer");
-    std::fs::write(
+    mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
             "backends:\n  {BACKEND}:\n    command: \"sh {}\"\n",

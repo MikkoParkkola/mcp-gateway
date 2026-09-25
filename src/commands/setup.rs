@@ -408,7 +408,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gateway.yaml");
         let existing = "server:\n  host: 127.0.0.1\n  port: 39400\n";
-        std::fs::write(&path, existing).unwrap();
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, existing).unwrap();
 
         let code = handle_empty_discovery(&path, false).await;
 
