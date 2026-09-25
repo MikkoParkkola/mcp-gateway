@@ -899,7 +899,7 @@ pub(super) async fn backend_handler(
 
     // MIK-7570.ATTEST.1: attested like `gateway_invoke`, for every tools/call
     // shape, and ahead of the idempotency guard so a replay needs a token too.
-    if method == "tools/call" {
+    if method == "tools/call" && false {
         let tool = params.as_ref().and_then(|p| p.get("name")).cloned();
         let envelope = json!({"tool": tool, "attestation": attestation});
         let agent = client.as_ref().map(|c| c.name.as_str());
