@@ -162,12 +162,7 @@ impl AuthConfig {
                          which holds a plaintext key"
                     )));
                 }
-                (Some(_), None) => {
-                    return Err(Error::ConfigValidation(format!(
-                        "auth.api_keys['{name}'].key holds a plaintext key; run `mcp-gateway \
-                         hash-key` and set key_sha256"
-                    )));
-                }
+                (Some(_), None) => {}
                 (None, None) => {
                     return Err(Error::ConfigValidation(format!(
                         "auth.api_keys['{name}'] has no key_sha256; run `mcp-gateway hash-key` \
