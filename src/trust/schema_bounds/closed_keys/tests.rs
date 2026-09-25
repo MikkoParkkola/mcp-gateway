@@ -292,4 +292,85 @@ fn permissive_schemas_accept_extras() {
 fn required_without_properties_is_a_free_map() {
     let schema = json!({"type": "object", "required": ["a"]});
     assert!(!refused(&schema, &json!({"a": 1})));
+    // F14b: a free map accepts extras too, not only the named key.
+    assert!(!refused(&schema, &json!({"a": 1, "b": 2})));
+}
+
+/// F14d: `additionalItems` governs the elements past a tuple `items`, so an
+/// invented key in one of them is refused like one inside the tuple.
+#[test]
+fn additional_items_are_descended() {
+    let schema = json!({
+        "type": "object",
+        "properties": {"xs": {
+            "type": "array",
+            "items": [{"type": "string"}],
+            "additionalItems": closed(&json!({"a": {}}))
+        }}
+    });
+    assert!(refused(&schema, &json!({"xs": ["s", {"b": 1}]})));
+    assert!(!refused(&schema, &json!({"xs": ["s", {"a": 1}]})));
+}
+
+/// F14e: a `$ref` to a free map is a free map, as the same schema inlined is.
+/// A close on the level holding the `$ref` still refuses.
+#[test]
+fn a_ref_to_a_free_map_is_a_free_map() {
+    let schema = json!({
+        "$defs": {"free": {"type": "object"}},
+        "type": "object",
+        "properties": {
+            "open": {"$ref": "#/$defs/free"},
+            "shut": {"$ref": "#/$defs/free", "additionalProperties": false}
+        }
+    });
+    assert!(!refused(&schema, &json!({"open": {"anything": 1}})));
+    assert!(refused(&schema, &json!({"shut": {"anything": 1}})));
+}
+
+/// F14e under a combinator: an `anyOf` branch that is a `$ref` to a free map
+/// opens the level exactly as the same branch inlined does.
+#[test]
+fn a_ref_to_a_free_map_in_any_of_matches_the_inlined_form() {
+    let shut = closed(&json!({"a": {}}));
+    let by_ref = json!({
+        "$defs": {"free": {"type": "object"}},
+        "anyOf": [{"$ref": "#/$defs/free"}, shut]
+    });
+    let inlined = json!({"anyOf": [{"type": "object"}, shut]});
+    for schema in [&by_ref, &inlined] {
+        assert!(!refused(schema, &json!({"b": 1})), "{schema}");
+    }
+}
+
+/// F14e with `$id`: a level carrying its own `$id` resolves its `$ref`
+/// against itself, not the outer document. Here the outer `free` is closed
+/// and the inner one open, so only the inner base admits the extra key.
+#[test]
+fn a_ref_under_an_id_resolves_against_that_level() {
+    let schema = json!({
+        "$defs": {"free": closed(&json!({"a": {}}))},
+        "type": "object",
+        "properties": {"opts": {
+            "$id": "urn:example:opts",
+            "$defs": {"free": {"type": "object"}},
+            "$ref": "#/$defs/free"
+        }}
+    });
+    assert!(!refused(&schema, &json!({"opts": {"b": 1}})));
+}
+
+/// An unresolvable `$ref` stays refused under `closed`, with or without an
+/// `$id`, and a pointer that only the outer document could satisfy does not
+/// resolve under an inner `$id`.
+#[test]
+fn an_unresolvable_ref_under_an_id_stays_refused() {
+    let missing = json!({"$id": "urn:example:x", "$ref": "#/$defs/missing"});
+    assert!(refused(&missing, &json!({"b": 1})));
+    let outer_only = json!({
+        "$defs": {"free": {"type": "object"}},
+        "type": "object",
+        "properties": {"opts": {"$id": "urn:example:opts", "$ref": "#/$defs/free"}}
+    });
+    assert!(refused(&outer_only, &json!({"opts": {"b": 1}})));
 }

@@ -562,7 +562,9 @@ server:
 ```
 
 A warning names the backend and tool of a modern un-keyed call, at most once per
-tool per 10 minutes.
+tool per 10 minutes. The gateway remembers at most 1024 (backend, tool) pairs
+for this; when full it forgets expired pairs first, then the oldest, so a tool
+it forgot can warn again inside the 10 minutes.
 
 ## 29. A config key the gateway does not read fails the load
 

@@ -590,7 +590,13 @@ fn mcp_refusal_text_is_bounded_for_a_huge_schema() {
         crate::config::InputSchemaEnforcement::Closed,
     )
     .expect("the invented key is refused");
-    assert!(text.len() <= 8 * 1024, "{} bytes", text.len());
+    // F14c: the exact bound, not a loose 8 KiB one.
+    let bound = super::MAX_REFUSAL_BYTES + super::TRUNCATION_SUFFIX.len();
+    assert!(text.len() <= bound, "{} bytes", text.len());
+    assert!(
+        text.ends_with(super::TRUNCATION_SUFFIX),
+        "the cut is marked"
+    );
     assert!(
         text.contains("invented"),
         "the violation itself must survive the cap"
