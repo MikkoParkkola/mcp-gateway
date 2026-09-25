@@ -76,13 +76,23 @@ impl CountingOverlay {
     }
 }
 
-impl SecretOverlay for CountingOverlay {
+impl CountingOverlay {
     fn resolve(&self, name: &str) -> Option<String> {
         self.looked_up.borrow_mut().push(name.to_string());
         self.values
             .iter()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.clone())
+    }
+}
+
+impl SecretOverlay for CountingOverlay {
+    fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String> {
+        // `env:` through this fake; `file:` and literals as production does.
+        match reference.strip_prefix("env:") {
+            Some(name) => Ok(self.resolve(name)),
+            None => crate::config::EnvOverlay::none().resolve_reference(field, reference),
+        }
     }
 }
 
@@ -566,4 +576,28 @@ fn an_absolute_directory_with_a_parent_component_is_refused_without_reading_secr
             "authority_dir ParentDir must be refused before any overlay read"
         );
     }
+}
+
+/// C9: an account key may be a `file:` reference, as Kubernetes mounts one.
+/// It is read through the C2-checked reader, not the environment.
+#[test]
+fn account_key_accepts_file_ref() {
+    let tmp = root();
+    let key_file = tmp.path().join("current.key");
+    crate::gateway::test_helpers::write_owner_only(&key_file, format!("{KEY_B64}\n"))
+        .expect("write key");
+    let reference = format!("file:{}", key_file.display());
+    let mut config = valid(tmp.path());
+    config.keys.insert("current".into(), reference.clone());
+    let env = overlay();
+
+    let resolved = refuse_scaffold(resolve(Some(&config), &env), "file: account key")
+        .expect("a 0600 file: key resolves")
+        .expect("accounts present");
+    assert_eq!(
+        resolved.store.keys.get("current").map(Vec::as_slice),
+        Some(CURRENT_KEY.as_slice())
+    );
+    assert_eq!(env.lookups(), vec![RETIRED_VAR.to_string()]);
+    assert!(resolved.secret_refs_read.contains(&reference));
 }

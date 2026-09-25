@@ -7,9 +7,15 @@
 //! same case: an empty credential is never a deliberate one, and on the
 //! comparison side an empty bearer matches an empty presented token.
 //!
-//! Callers classify only `Literal(_)` versus "a reference". They never match a
-//! reference arm, so a new arm (C9 adds `File`) changes only this file.
+//! Most callers classify only `Literal(_)` versus "a reference". The few that
+//! match an arm (reload recording, `server.metrics_token`, message signing) do
+//! so because their failure contract differs from `resolve`'s.
+//!
+//! `file:/abs/path` (C9, SECRET.2) reads the secret from a file, the way
+//! Kubernetes delivers one: the C2 mode rule on the handle it reads, at most
+//! 64 KiB, UTF-8, one trailing newline stripped, and empty refused.
 
+use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -22,6 +28,8 @@ use crate::{Error, Result};
 pub(crate) enum SecretRef<'a> {
     /// `env:NAME`: the value `NAME` holds in the overlay.
     Env(&'a str),
+    /// `file:PATH`: the content of the file at `PATH`, which must be absolute.
+    File(&'a Path),
     /// Anything else: the text itself is the secret.
     Literal(&'a str),
 }
@@ -31,8 +39,13 @@ impl<'a> SecretRef<'a> {
     /// [`SecretRef::resolve`].
     #[must_use]
     pub(crate) fn parse(text: &'a str) -> Self {
-        text.strip_prefix("env:")
-            .map_or(Self::Literal(text), Self::Env)
+        if let Some(name) = text.strip_prefix("env:") {
+            Self::Env(name)
+        } else if let Some(path) = text.strip_prefix("file:") {
+            Self::File(Path::new(path))
+        } else {
+            Self::Literal(text)
+        }
     }
 
     /// The secret `field` holds. Unset and empty are both refused, for a
@@ -62,8 +75,79 @@ impl<'a> SecretRef<'a> {
                 ))),
                 Some(value) => Ok(value),
             },
+            Self::File(path) => read_file_ref(field, path),
         }
     }
+}
+
+/// The secret a `file:` reference names. See the module docs for the rules.
+///
+/// # Errors
+///
+/// [`Error::ConfigValidation`] naming `field` and the path when the path is not
+/// absolute, the file cannot be read, other users may read or change it, it is
+/// over 64 KiB or not UTF-8, or it holds nothing but a newline.
+pub(crate) fn read_file_ref(field: &str, path: &Path) -> Result<String> {
+    let shown = path.display();
+    // `~` and relative paths are refused, not resolved: a secret's location
+    // must not depend on the working directory or on whose HOME is set.
+    if !path.is_absolute() {
+        return Err(Error::ConfigValidation(format!(
+            "{field} references file:{shown}, which is not an absolute path."
+        )));
+    }
+    let text = read_bounded(path).map_err(|e| {
+        let why = match e {
+            Error::Config(m) | Error::ConfigValidation(m) => m,
+            other => other.to_string(),
+        };
+        Error::ConfigValidation(format!("{field} references file:{shown}: {why}"))
+    })?;
+    // Exactly one: `kubectl create secret --from-file` and `echo` add one, and
+    // anything beyond it is part of the secret.
+    let value = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
+        .unwrap_or(&text);
+    if value.is_empty() {
+        return Err(Error::ConfigValidation(format!(
+            "{field} references file:{shown}, which is empty; empty secrets are refused."
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+#[cfg(unix)]
+fn read_bounded(path: &Path) -> Result<String> {
+    super::secret_file::read_secret_file(path, super::secret_file::SecretFile::Reference)
+}
+
+/// No mode bits to judge off Unix (as C2); the size and UTF-8 rules still hold.
+#[cfg(not(unix))]
+fn read_bounded(path: &Path) -> Result<String> {
+    use std::io::Read as _;
+    const LIMIT: u64 = 64 * 1024;
+    let cannot = |e: std::io::Error| {
+        Error::Config(format!("Cannot read secret file {}: {e}", path.display()))
+    };
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(cannot)?
+        .take(LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(cannot)?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(Error::Config(format!(
+            "Refusing to load secret file {}: it is larger than 64 KiB, the limit for one secret.",
+            path.display()
+        )));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        Error::Config(format!(
+            "Cannot read secret file {}: it is not UTF-8.",
+            path.display()
+        ))
+    })
 }
 
 /// `${VAR}` and `${VAR:-default}`. The only copy of this pattern.
