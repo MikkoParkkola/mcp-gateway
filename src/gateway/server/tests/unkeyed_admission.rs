@@ -103,7 +103,7 @@ fn recorder() -> (
 }
 
 /// T1 + T9: the default admits an un-keyed modern mutation, once, counted with
-/// exactly {era, read_only_hint} and no principal label.
+/// exactly `{era, read_only_hint}` and no principal label.
 #[tokio::test]
 async fn t1_unkeyed_modern_mutation_is_admitted_by_default() {
     let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Optional).await;
