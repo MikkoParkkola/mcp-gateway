@@ -1,7 +1,7 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35 or 37 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37 or 38 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
@@ -14,7 +14,7 @@ changes to the license and to a removed CLI surface rather than to running behav
 the binary could know whether a given deployment is affected. Item 10 changes the shipped
 deployment files, not the binary's behaviour on an existing route, and so does item 21.
 
-**Items 2, 8, 12, 13, 27, 29, 30, 34, 35 and 37 refuse the gateway's start (item 37 only above one declared replica; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37 and 38 refuse the gateway's start (item 37 only above one declared replica; item 38 only for `enforce` without a signing key; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -48,13 +48,14 @@ upgrading a running deployment.
 | 27 | Exact agent grants name their proof source | Rewrite each bare `exact` grant as `!exact {source: mtls, id}` or `!exact {source: jwt, id}`; give `known_agents` entries a source |
 | 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
-| 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
+| 30 | Attestation is off by default; unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
+| 38 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -616,9 +617,7 @@ A deployment that set `enforce` ran unenforced and was told so only in a log lin
 - **The default is off.** Unset, empty or `off` attaches no validator, so no
   `attestation_observe_reject` audit lines are written. Set `GATEWAY_ATTESTATION_MODE=observe`
   to keep them.
-- **`enforce` fails startup.** It is not available in this build: the direct `/mcp/{name}` route
-  and multi-step plans carry no token, so an enforce limited to `gateway_invoke` would not
-  refuse what it claims to. The error names `observe` and `off`.
+- **`enforce` enforces.** See item 38.
 - **Any other value fails startup** with an error naming the value. The value is still trimmed and
   matched case-insensitively, so `Observe` and ` OFF ` keep working.
 - **A 3.x `enforce` setting always behaved as observe.** To keep what it actually did, set
@@ -791,6 +790,32 @@ reaches one pod, and a task created on one pod is not found on another.
 - **`kubectl scale` and an HPA bypass this check**, because they change the pod count without
   the declaration. Don't scale that way. See `docs/DEPLOYMENT.md`, "Replica Count and
   per-process state".
+
+## 38. Attestation `enforce` enforces on every route
+
+In 3.x `enforce` ran as observe (item 30). In 4.0.0 `GATEWAY_ATTESTATION_MODE=enforce` refuses,
+with JSON-RPC -32002, every call whose token is missing, forged, expired or not scoped to the
+tool.
+
+- **It needs `GATEWAY_ATTESTATION_SIGNING_KEY`.** Enforce with an unset, empty or
+  whitespace-only key fails startup: without a key every call would be refused.
+- **Where the token goes.** In the `attestation` argument on `gateway_invoke`, including
+  signed calls. In `params._meta["io.mcp-gateway/attestation"]` on the direct
+  `/mcp/{backend}` route and on surfaced tools called by name. The gateway strips the
+  `_meta` key before forwarding on the direct route, for every method and for passthrough
+  backends too, so no backend receives the token.
+- **The error names the boundary**: `Attestation rejected at gateway_invoke` on the meta
+  route, `at direct_route` on `/mcp/{backend}`. The direct route checks the token before
+  the idempotency guard, so a replayed call needs a valid token as well.
+- **Tasks.** A task-mode `gateway_invoke` re-checks its original token when the worker
+  dispatches it, so a queued task needs a token that outlives the queue. A surfaced tool run
+  as a task has no token at dispatch and is refused. Task recovery reads need a fresh token in
+  `_meta["io.mcp-gateway/recovery"].attestation`.
+- **Playbooks and code mode are refused.** Under enforce, `gateway_run_playbook` and
+  `gateway_execute` answer -32002 "multi-step plans carry no attestation in 4.0.0", keyed
+  or not. Their steps are synthesized and carry no token. Call each tool with its own token.
+- **Only `tools/call` is checked on the direct route.** `resources/read`, `prompts/get` and
+  other methods are forwarded without an attestation check.
 
 ## After upgrading
 

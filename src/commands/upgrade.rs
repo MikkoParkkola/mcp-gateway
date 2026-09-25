@@ -290,9 +290,9 @@ error lists every such row. Rewrite each as `!exact {source: mtls, id: ...}` or 
 `!exact {source: jwt, id: ...}`; the gateway will not pick the source. Until \
 then personal capabilities fail closed. `identity grants grant --agent` takes \
 `mtls:<id>` or `jwt:<id>`.",
-    "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set: an unset mode no longer \
-writes `attestation_observe_reject` audit lines (set `observe` to keep them), and `enforce` or \
-any unrecognised value now FAILS STARTUP instead of falling back to observe.",
+    "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set (set `observe` to keep the \
+audit lines). `enforce` now refuses unattested calls, playbooks and code mode, and needs a \
+signing key; enforce with no key, or any unrecognised value, now FAILS STARTUP.",
     "A tool call carrying an argument key its schema does not declare, at any depth, is \
 refused with `isError: true`; relax it with `input_schema_enforcement: standard` or `off`.",
     backend_grant_notice::ITEM,
