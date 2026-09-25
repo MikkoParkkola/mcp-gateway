@@ -71,8 +71,13 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
     }
     let json = serde_json::to_string_pretty(costs)
         .map_err(|e| crate::Error::Config(format!("Failed to serialize costs: {e}")))?;
-    std::fs::write(path, json)
+    // Write then rename, so a crash mid-write leaves the previous file, not a
+    // truncated one that fails to parse and restarts the budgets at zero.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)
         .map_err(|e| crate::Error::Config(format!("Failed to write costs: {e}")))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| crate::Error::Config(format!("Failed to replace costs: {e}")))?;
     tracing::info!(path = %path.display(), "Saved cost data");
     Ok(())
 }
@@ -146,6 +151,10 @@ mod tests {
         costs.key_totals.insert("dev_key".to_string(), 2.50);
 
         save(&path, &costs).unwrap();
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "the temp file is renamed away"
+        );
         let loaded = load(&path).unwrap();
 
         assert_eq!(loaded.saved_at, 1_700_000_000);
