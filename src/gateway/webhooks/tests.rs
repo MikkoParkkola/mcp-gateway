@@ -16,7 +16,7 @@ use crate::gateway::streaming::NotificationMultiplexer;
 
 // ── helpers ───────────────────────────────────────────────────────────
 
-fn make_multiplexer() -> Arc<NotificationMultiplexer> {
+pub(super) fn make_multiplexer() -> Arc<NotificationMultiplexer> {
     Arc::new(NotificationMultiplexer::new(
         Arc::new(BackendRegistry::new()),
         StreamingConfig::default(),
@@ -209,7 +209,7 @@ fn transform_payload_with_data_mapping() {
 
 // ── WebhookRegistry ───────────────────────────────────────────────────
 
-fn make_capability_with_webhooks(
+pub(super) fn make_capability_with_webhooks(
     name: &str,
     webhook_paths: &[(&str, &str, bool)],
 ) -> crate::capability::CapabilityDefinition {

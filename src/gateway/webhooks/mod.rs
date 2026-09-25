@@ -613,3 +613,5 @@ fn extract_json_path<'a>(path: &str, payload: &'a Value) -> Option<&'a Value> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod rate_limit_tests;
