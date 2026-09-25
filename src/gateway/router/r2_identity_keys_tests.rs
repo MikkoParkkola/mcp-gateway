@@ -151,7 +151,7 @@ async fn gateway() -> Gateway {
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
-    let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
+    let meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.set_identity_propagation(Arc::new(PerIdentityMint));
     state_mut.meta_mcp = Arc::new(meta);
     Gateway {
