@@ -105,10 +105,13 @@ impl OwnedCallerContext {
         self.session_id.as_deref()
     }
 
-    /// Rebuild the dispatch funnel. Retry metadata is not forwarded: admission
-    /// already reserved the key in `Mode::Task`. Only the creating request's
-    /// attestation token rides along, for the funnel to re-check. Confirmation is honestly
-    /// unavailable on the worker. Capabilities are the creating request's.
+    /// Rebuild the dispatch funnel.
+    ///
+    /// - Retry metadata is not forwarded: admission already reserved the key
+    ///   in `Mode::Task`. The one exception is the creating request's
+    ///   attestation token, which the funnel re-checks at dispatch.
+    /// - Confirmation is unavailable on the worker.
+    /// - Capabilities are the creating request's.
     pub(crate) fn dispatch_context<'a>(
         &'a self,
         _state: &'a AppState,
