@@ -4,7 +4,7 @@ From any 3.x release. No migration edits your `gateway.yaml`, and the gateway ma
 change to your configuration on upgrade. It loads unchanged unless items 8 or 12 refuse it.
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23 and 24 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11 and 23-25 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -42,6 +42,7 @@ upgrading a running deployment.
 | 22 | The governance store location is configurable | None; set `control_plane.store_dir` if the config directory is read-only |
 | 23 | `logging/setLevel` on `/mcp` and `/mcp/{name}` needs an admin key | Send it with an admin key, or declare a level per request in `_meta` |
 | 24 | `notifications/tools/list_changed` from backend edits reaches only callers of that backend | None; a key that must hear about every backend needs `backends: ["*"]` |
+| 25 | `subscriptions/listen` needs a credential and is scoped to it | Send a credential with the listen request; re-subscribe after a token is revoked or expires |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -438,8 +439,27 @@ told. A session that presented no credential is told nothing. With authenticatio
 session is told, as before.
 
 Nothing errors: a client that is no longer told keeps its cached tool list until it next calls
-`tools/list`. Listeners on `subscriptions/listen` are still told about every edit; scoping that
-stream is a separate change.
+`tools/list`. Listeners on `subscriptions/listen` are scoped the same way; see item 25.
+
+## 25. `subscriptions/listen` needs a credential and is scoped to it
+
+Authenticated gateways only; with authentication off nothing changes.
+
+In 3.x every `subscriptions/listen` stream shared one channel with no caller identity: each
+listener received every `notifications/tools/list_changed`, whatever backend had changed, and a
+listener whose token was later revoked or expired kept receiving until it disconnected.
+
+A listen request now needs a credential that authenticates. Without one it is refused with HTTP 401
+and JSON-RPC error `-32001` before it takes one of the 256 listener slots. **This hits the default
+install:** the starter config enables authentication and lists `/mcp` under `public_paths`, so an
+anonymous listener there now gets 401 instead of a stream. Other methods on a public `/mcp` are
+unchanged.
+
+`notifications/tools/list_changed` reaches only listeners whose key may access the changed backend,
+by the same rule as item 24. The credential is re-checked at each notification the listener would
+receive; a listener whose credential was revoked or has expired is closed at that point instead.
+Re-subscribe with a fresh credential. Task notifications keep their open-time ownership rule. A
+revoked listener on a quiet gateway holds its slot until the next notification it would receive.
 
 ## After upgrading
 

@@ -92,13 +92,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
+  Every listen stream shared one channel with no caller identity, so each
+  listener was told about every backend's tool changes, and a revoked token kept
+  its stream. On an authenticated gateway a listen without a credential that
+  authenticates is now refused with HTTP 401 (`-32001`) before it takes a slot,
+  including on the starter config's public `/mcp`. `tools/list_changed` reaches
+  only listeners whose key may access the changed backend, re-checked at each
+  delivery by the rule the legacy stream uses; a revoked or expired credential
+  closes the stream. With auth off every listener is told. See
+  `docs/UPGRADING-4.0.md` item 25.
 - **`notifications/tools/list_changed` from an admin backend edit reaches only
   callers of that backend (breaking).** Adding, removing or reviving a backend
   told every session on the legacy GET stream, so a caller learned when an
   operator edited a backend it cannot use. On an authenticated gateway the
   frame now reaches a session only if its key may access the edited backend,
   re-checked at delivery, so a revoked token is not told. With auth off every
-  session is told. `subscriptions/listen` is unchanged. The unused
+  session is told. `subscriptions/listen` is scoped by item 25. The unused
   `notifications/roots/list_changed` sender, which nothing called, is removed.
   See `docs/UPGRADING-4.0.md` item 24.
 - **`logging/setLevel` over HTTP needs an admin key (breaking).** The meta route
