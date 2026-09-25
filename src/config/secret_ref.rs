@@ -105,10 +105,7 @@ pub(crate) fn read_file_ref(field: &str, path: &Path) -> Result<String> {
     })?;
     // Exactly one: `kubectl create secret --from-file` and `echo` add one, and
     // anything beyond it is part of the secret.
-    let value = text
-        .strip_suffix("\r\n")
-        .or_else(|| text.strip_suffix('\n'))
-        .unwrap_or(&text);
+    let value = text.trim_end_matches(['\r', '\n']);
     if value.is_empty() {
         return Err(Error::ConfigValidation(format!(
             "{field} references file:{shown}, which is empty; empty secrets are refused."
