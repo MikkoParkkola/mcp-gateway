@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [@terafin](https://github.com/terafin) in [#695](https://github.com/MikkoParkkola/mcp-gateway/pull/695))
 
 ### Changed
+- **`notifications/tools/list_changed` from an admin backend edit reaches only
+  callers of that backend (breaking).** Adding, removing or reviving a backend
+  told every session on the legacy GET stream, so a caller learned when an
+  operator edited a backend it cannot use. On an authenticated gateway the
+  frame now reaches a session only if its key may access the edited backend,
+  re-checked at delivery, so a revoked token is not told. With auth off every
+  session is told. `subscriptions/listen` is unchanged. The unused
+  `notifications/roots/list_changed` sender is removed. See
+  `docs/UPGRADING-4.0.md` item 23.
 - **A tool count is no longer reported as `0` before a backend has been
   enumerated.** `gateway_list_servers`, the `initialize` preamble and the
   `gateway_list_tools` / `gateway_search_tools` descriptions all derive their
