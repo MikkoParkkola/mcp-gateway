@@ -8,13 +8,19 @@
 # nameOverride: ""
 # fullnameOverride: ""
 
-# Two replicas are correct for the default configuration, which has the gateway's
-# `server.modern_protocol` switch ON as of 4.0.0. Continuation key material is
-# generated per process and never shared, so a continuation cannot be spent twice
-# across replicas. The cost is that a retry succeeds only on the replica that minted
-# it and is refused elsewhere; set this to 1 if you need every retry to be served.
-# See docs/DEPLOYMENT.md, "Replica Count and `server.modern_protocol`".
-replicaCount: 2
+# One replica. More than one fails the render while any state lives in a single
+# process (UPGRADING-4.0 §37):
+# - config.server.modern_protocol, on by default, serves the tasks extension, and
+#   each pod has its own task store, so a task created on one pod is not found on
+#   another;
+# - config.key_server.enabled keeps issued tokens and revocations in one process;
+# - config.accounts.enabled holds single_process custody.
+# With modern_protocol false and neither feature on, more replicas render; a retry
+# is then served by any of them. The chart writes config.server.replicas from this
+# value, and the gateway refuses to start on the same rules. `kubectl scale` and an
+# HPA change the pod count without the declaration: don't.
+# See docs/DEPLOYMENT.md, "Replica Count and per-process state".
+replicaCount: 1
 
 image:
   registry: ghcr.io

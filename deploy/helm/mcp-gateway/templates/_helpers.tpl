@@ -47,3 +47,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s/%s:%s" $reg $repo (.Values.image.tag | default .Chart.AppVersion) -}}
 {{- end -}}
 {{- end -}}
+
+{{/* Key-server tokens or accounts custody, held in one process's memory
+     (UPGRADING-4.0 §37). Non-empty when either is on. */}}
+{{- define "mcp-gateway.inMemoryAuthState" -}}
+{{- $cfg := .Values.config | default dict -}}
+{{- if or (dig "key_server" "enabled" false $cfg) (dig "accounts" "enabled" false $cfg) -}}true{{- end -}}
+{{- end -}}

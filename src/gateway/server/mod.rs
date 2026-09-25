@@ -1995,6 +1995,10 @@ impl Gateway {
             error!("{reason}");
             return Err(Error::Config(reason));
         }
+        if let Some(reason) = support::replica_state_refusal(&self.config) {
+            error!("{reason}");
+            return Err(Error::Config(reason));
+        }
 
         // Warned on EVERY start while the escape hatch is set, and not only when
         // authentication is off. The narrower condition missed the shape the

@@ -41,7 +41,7 @@
 1357 src/capability/backend.rs
 1329 tests/security_tests.rs
 1320 tests/openwebui_adapter_config.rs
-1324 src/commands/upgrade.rs
+1327 src/commands/upgrade.rs
 1281 src/gateway/meta_mcp/search_disclosure_e2e.rs
 1277 src/oauth/client/mod.rs
 1272 tests/mik_7212_mrtr7_stdio_acs.rs
@@ -57,8 +57,8 @@
 1090 src/control_plane/mod.rs
 1086 src/gateway/server/warmstart.rs
 1086 src/oauth/client/tests.rs
+1069 src/gateway/server/support.rs
 1053 src/main_tests.rs
-1028 src/gateway/server/support.rs
 1023 src/control_plane/export.rs
 1023 tests/nfr_obs_3_era_observability.rs
 1021 tests/mik_7272_sub4_adr012_acs.rs

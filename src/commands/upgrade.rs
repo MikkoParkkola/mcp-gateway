@@ -301,6 +301,9 @@ refused). A missing `env:` variable does not stop startup. Scrape with a dedicat
 chart's ServiceMonitor, never a generic annotation-driven one.",
     "The inbound WebSocket listener, which only echoed frames, is removed: `server.ws_port` now \
 FAILS the config load. Clients connect via stdio or HTTP (`POST /mcp`).",
+    "More than one replica is refused while state lives in one process: `server.replicas` \
+(default 1) above 1 FAILS STARTUP with the modern protocol on, or with the key server or accounts \
+enabled. The Helm chart now defaults `replicaCount` to 1 and fails the render on the same rules.",
 ];
 
 /// Emit the one-time 4.0.0 notice.

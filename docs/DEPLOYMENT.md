@@ -171,47 +171,49 @@ mcp-gateway setup export --target all --config gateway.yaml
 
 Applied exports print any backup file and a rollback command. Use that rollback command before deleting or hand-editing a generated client config.
 
-## Replica Count and `server.modern_protocol`
+## Replica Count and per-process state
 
-**A single replica is no longer required while `server.modern_protocol` is on —
-but a retry only succeeds on the replica that minted the continuation.** The
-consumed-continuation ledger and the mint counter are process-local. Each
-process now generates its own continuation key at startup and shares it with
-nobody, so a continuation opens only on the replica that minted it and no other
-replica can spend it a second time — but a retry that lands elsewhere is
-refused rather than served, and a restart invalidates every continuation
-outstanding against the process it replaced.
+**Run one replica unless `server.modern_protocol` is off and neither the key server
+nor managed accounts is enabled.** Several kinds of state live in one process's
+memory or on its own disk. The gateway cannot see how many replicas run, so the
+count is a declaration, `server.replicas` (default 1), which the Helm chart writes
+from `replicaCount`. Above 1, the gateway refuses to start, and the chart refuses to
+render, when any feature marked "refuses" below is on (UPGRADING-4.0 item 37):
 
-This trade-off binds only on the modern protocol path — and as of 4.0.0 that path
-is **on by default**. `server.modern_protocol` defaults to `true`, so a stock
-multi-replica deployment is subject to the retry-affinity behaviour above from the
-first request. Set `modern_protocol: false` to opt out, and with it off there is no
-such consideration at all: scale horizontally as the rest of this document describes.
+| State | Where it lives | Above one replica |
+|---|---|---|
+| Key-server tokens and revocations | `InMemoryTokenStore`, one process | **Refuses** when `key_server.enabled`: a token minted on one replica is a 401 on another, and a revoke reaches one |
+| Managed accounts custody | `accounts.deployment: single_process`, one process's store and keys | **Refuses** when `accounts.enabled` |
+| Task records (tasks extension) | Each pod's task store, under the `state` volume | **Refuses** while `server.modern_protocol` is on (the default), the only path that reaches it: a task created on one pod is not found on another |
+| Continuations (retries) | Per-process key material and ledger | Degrades: a retry succeeds only on the replica that minted it |
+| MCP sessions, elicitations | One process | Degrades: a follow-up routed elsewhere does not find them |
+| Rate-limit buckets, idempotency admission | One process | Degrades: limits and de-duplication apply per replica |
 
-Earlier drafts of this section said the switch was off by default. That was true
-until 2026-09-04 and is no longer.
+With the key server or accounts enabled, the chart also renders the Deployment with
+`strategy: Recreate`, because a rolling update runs the old and new pod side by
+side. An upgrade then has a short outage. A default install keeps `RollingUpdate`;
+during a rollout the two pods still hold separate task stores, so a task created in
+that window can be lost with the old pod.
 
-The shipped Helm chart and Kubernetes manifests default to two replicas, and that
-default stays correct with the switch on. Set `replicaCount: 1` only if you need
-every retry to be served rather than origin-pinned; it is a trade, not a fix.
+`kubectl scale` and a HorizontalPodAutoscaler change the pod count without touching
+`server.replicas`, so neither check sees them. Don't scale this way. In the
+enterprise-alpha manifests, `spec.replicas` in `base/deployment.yaml` and
+`server.replicas` in `base/configmap.yaml` must be changed together; a test checks
+they agree.
 
 The chart and the manifests run the image with a read-only root filesystem. Everything the
 gateway writes under `$HOME` (task records, its data directory, the upgrade stamp, npm/uv
 caches) goes to a `state` volume at `/var/lib/mcp-gateway`, an `emptyDir` that survives a container
 restart and starts empty in a replaced pod. `config.backends` is a map keyed by backend name.
-The volume is per pod, and the defaults run two (`replicaCount: 2` in the chart,
-`replicas: 2` in the enterprise-alpha manifest) behind a Service with no session affinity, so a
-task created on one pod is not found by a follow-up routed to the other. Task API callers need
-one replica until shared task storage exists (see `docs/UPGRADING-4.0.md` item 21).
 
-If you need both horizontal scale and the 2026-07-28 revision: MIK-7312 settled
-the mechanism as per-process key material rather than the shared store this
-document previously pointed at, so a multi-replica deployment refuses a retry on
-every replica but the minting one instead of serving it twice. Whether that is
-acceptable is a deployment decision, not a correctness one. Do not work around it
-with a sticky-session load balancer: continuations are presented by whichever
-client holds one, they travel in the request body, and session affinity does not
-constrain which replica that reaches.
+**Continuations with more than one replica.** This applies only with
+`server.modern_protocol` on, so today only to a single replica unless you set it off.
+MIK-7312 settled the mechanism as per-process key material rather than a shared store:
+a continuation opens only on the replica that minted it, no other replica can spend it
+a second time, and a restart invalidates every continuation outstanding against the
+process it replaced. Do not work around it with a sticky-session load balancer:
+continuations are presented by whichever client holds one, they travel in the request
+body, and session affinity does not constrain which replica that reaches.
 
 ## Kubernetes Enterprise Alpha
 
@@ -1066,13 +1068,13 @@ Two things worth knowing before you shrink it:
 | Secrets | `/etc/mcp-gateway/env` |
 | TLS certs | `/etc/mcp-gateway/tls/` |
 
-The gateway is **stateless**. No database. Redeploy the binary with the same config to restore full functionality. Startup takes ~8ms; backends reconnect automatically; tool caches repopulate on first request.
+The gateway uses no database. Its state is per process (see "Replica Count and per-process state"): key-server tokens, sessions and continuations are lost on restart, and task records survive only as long as their volume. Redeploy the binary with the same config to restore the service. Startup takes ~8ms; backends reconnect automatically; tool caches repopulate on first request.
 
 ## Scaling
 
 A single instance handles thousands of RPS with sub-2ms routing overhead. This is sufficient for virtually all use cases.
 
-For horizontal scaling (organizational isolation, not throughput): each instance is independent with no shared state. Sticky sessions are not required. Stdio backends run per-instance; HTTP/SSE backends can be shared across instances.
+For horizontal scaling (organizational isolation, not throughput): run separate instances, each with its own config and clients. Instances share nothing, so one logical gateway behind a load balancer is limited by "Replica Count and per-process state". Stdio backends run per-instance; HTTP/SSE backends can be shared across instances.
 
 ### Resource Tuning
 

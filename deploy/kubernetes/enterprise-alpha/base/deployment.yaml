@@ -7,7 +7,10 @@ metadata:
     app.kubernetes.io/part-of: mcp-gateway-enterprise
     mcp-gateway.io/license-tier: enterprise
 spec:
-  replicas: 2
+  # One, and base/configmap.yaml declares the same in server.replicas: the
+  # modern protocol's task store, key-server tokens and accounts custody are per
+  # process (UPGRADING-4.0 §37). Change both together or the gateway refuses.
+  replicas: 1
   revisionHistoryLimit: 10
   strategy:
     type: RollingUpdate
