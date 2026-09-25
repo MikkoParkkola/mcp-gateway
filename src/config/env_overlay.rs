@@ -100,6 +100,7 @@ impl std::fmt::Debug for EnvOverlay {
             .field("owned_keys", &self.owned)
             .field("var_count", &self.vars.len())
             .field("source_count", &self.sources.len())
+            .field("absent_files", &self.absent)
             .finish()
     }
 }
