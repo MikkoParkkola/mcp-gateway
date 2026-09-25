@@ -28,7 +28,8 @@ impl Backend {
         if mode == InputSchemaEnforcement::Off {
             return None;
         }
-        let Some(cached) = self.get_cached_tool_for(identity_key, tool) else {
+        let _ = identity_key;
+        let Some(cached) = self.get_cached_tool_for(None, tool) else {
             crate::trust::closed_keys::count("input_schema_unknown");
             return None;
         };
