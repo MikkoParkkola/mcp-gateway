@@ -221,6 +221,12 @@ async fn task_store_under_readonly_home_is_fatal() {
     // Root ignores the mode bits, so the premise cannot be observed there.
     if fs::write(home.join("probe"), b"").is_ok() {
         fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+        // A skip in CI would make this pin pass without testing anything, so
+        // CI must run it unprivileged; only a local root shell may skip.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI runs this test as a uid that ignores directory modes, so it proves nothing"
+        );
         eprintln!("skipped: running with a uid that ignores directory modes");
         return;
     }
