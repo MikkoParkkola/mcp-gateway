@@ -136,7 +136,7 @@ fn shipped_examples(dir: &Path) -> Vec<String> {
                 .to_string_lossy()
                 .into_owned()
         })
-        .filter(|name| name.ends_with(".yaml"))
+        .filter(|name| Path::new(name).extension().is_some_and(|ext| ext == "yaml"))
         .filter(|name| name != GATEWAY_FULL && !NOT_GATEWAY_CONFIGS.contains(&name.as_str()))
         .collect();
     names.sort();
