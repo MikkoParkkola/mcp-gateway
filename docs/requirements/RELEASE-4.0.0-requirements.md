@@ -78,7 +78,7 @@ Verification codes: **T** automated test · **M** measurement · **I** inspectio
 
 | ID | Requirement | Source | Verify |
 |---|---|---|---|
-| MIK-7217.DISCOVER.1a | The gateway MUST implement `server/discover` on every transport over which it **serves MCP** — today stdio and Streamable HTTP. Its WebSocket listener echoes frames and serves no MCP (`src/gateway/ws_listener.rs:6,27,70`, verified 2026-08-29), so it is out of scope until it does. | Spec: *"servers MUST implement this RPC"* | T, D |
+| MIK-7217.DISCOVER.1a | The gateway MUST implement `server/discover` on every transport over which it **serves MCP** — today stdio and Streamable HTTP. Its inbound WebSocket listener only echoed frames and served no MCP; 4.0 removed it (F15), and `server.ws_port` is a retired config key. | Spec: *"servers MUST implement this RPC"* | T, D |
 | MIK-7217.DISCOVER.1b | The discovery document MUST advertise supported protocol versions, capabilities and identity. | Spec: *"servers MUST implement this RPC"* | T, D |
 | MIK-7217.DISCOVER.2 | `server/discover` MUST be answerable without any prior handshake, session or credential exchange beyond the transport's own authentication. | Spec: usable as a pre-request probe | T |
 | MIK-7217.DISCOVER.3 | Adding discovery MUST NOT alter the behaviour of the existing handshake path. Given a 2025 client, When it sends `initialize`, Then its result is byte-identical to 3.5.0's. | Ticket stop-the-line: additive or the implementation is wrong | T |
