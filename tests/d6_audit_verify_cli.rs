@@ -9,7 +9,21 @@ use std::process::Command;
 use std::sync::Arc;
 
 use mcp_gateway::security::TransparencyLogger;
-use mcp_gateway::security::transparency_log::{RotationConfig, TransparencyLogConfig, segments};
+use mcp_gateway::security::transparency_log::{RotationConfig, TransparencyLogConfig};
+
+/// Sealed segments beside `path`: `<name>.` plus 20 digits.
+fn sealed_count(path: &Path) -> usize {
+    let name = path.file_name().unwrap().to_string_lossy().into_owned() + ".";
+    std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.strip_prefix(&name)
+                .is_some_and(|s| s.len() == 20 && s.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .count()
+}
 
 fn write_log(path: &Path) {
     let rotation = RotationConfig {
@@ -25,7 +39,7 @@ fn write_log(path: &Path) {
     }))
     .unwrap();
     let mut i = 0;
-    while segments::list_segments(path).unwrap().len() < 3 {
+    while sealed_count(path) < 3 {
         l.log_invocation("s", "c", "srv", &format!("t{i}"), "a", "b")
             .unwrap();
         i += 1;

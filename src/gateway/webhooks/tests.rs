@@ -16,14 +16,14 @@ use crate::gateway::streaming::NotificationMultiplexer;
 
 // ── helpers ───────────────────────────────────────────────────────────
 
-fn make_multiplexer() -> Arc<NotificationMultiplexer> {
+pub(super) fn make_multiplexer() -> Arc<NotificationMultiplexer> {
     Arc::new(NotificationMultiplexer::new(
         Arc::new(BackendRegistry::new()),
         StreamingConfig::default(),
     ))
 }
 
-fn make_definition(notify: bool) -> WebhookDefinition {
+pub(super) fn make_definition(notify: bool) -> WebhookDefinition {
     WebhookDefinition {
         path: "/test".to_string(),
         method: "POST".to_string(),
@@ -34,7 +34,7 @@ fn make_definition(notify: bool) -> WebhookDefinition {
     }
 }
 
-fn make_handler_state(
+pub(super) fn make_handler_state(
     multiplexer: Arc<NotificationMultiplexer>,
     definition: WebhookDefinition,
 ) -> WebhookHandlerState {
@@ -50,6 +50,7 @@ fn make_handler_state(
         stats: Arc::new(EndpointStats::default()),
         env: Arc::new(crate::config::LiveEnv::default()),
         backend: "capabilities".to_string(),
+        limiter: None,
     }
 }
 
@@ -209,7 +210,7 @@ fn transform_payload_with_data_mapping() {
 
 // ── WebhookRegistry ───────────────────────────────────────────────────
 
-fn make_capability_with_webhooks(
+pub(super) fn make_capability_with_webhooks(
     name: &str,
     webhook_paths: &[(&str, &str, bool)],
 ) -> crate::capability::CapabilityDefinition {
@@ -548,6 +549,9 @@ fn authorizer(
         key_server,
         dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tls_enabled: false,
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     }
 }
 

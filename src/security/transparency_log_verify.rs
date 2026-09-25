@@ -108,10 +108,11 @@ pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
 ///
 /// # Errors
 ///
-/// A segment cannot be read.
+/// `NotFound` when neither the log nor any sealed segment exists, or a
+/// segment cannot be read.
 pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<Value>> {
     let mut results = Vec::new();
-    for (_, file) in log_files(path)? {
+    for (_, file) in existing_log_files(path)? {
         let content = bounded_read_to_string(&file, MAX_AUDIT_READ_BYTES)?;
         for raw in content.lines().filter(|l| !l.trim().is_empty()) {
             match serde_json::from_str::<Value>(raw.trim()) {
@@ -126,6 +127,36 @@ pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<Value>
     Ok(results)
 }
 
+/// The log's files, or `NotFound` when there is nothing to read at all.
+fn existing_log_files(path: &Path) -> io::Result<Vec<(Option<u64>, PathBuf)>> {
+    let files = log_files(path)?;
+    if files.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no audit log or sealed segment at {}", path.display()),
+        ));
+    }
+    Ok(files)
+}
+
+/// The one library entry point for `audit verify`: the whole log at `path`,
+/// across its sealed segments, in `mode`, with the per-entry HMAC checked
+/// when `config` carries a secret (D6 2.5).
+///
+/// # Errors
+///
+/// `NotFound` when neither the log nor any sealed segment exists;
+/// `Interrupted` when the log rotated under the reader twice in a row
+/// (retry); any read error.
+pub fn verify_audit_log(
+    path: &Path,
+    config: &TransparencyLogConfig,
+    mode: VerifyMode,
+) -> io::Result<VerifyResult> {
+    existing_log_files(path)?;
+    verify_segments(path, config, mode)
+}
+
 /// Verify the whole log at `path`: every segment as one stream, seams,
 /// expiry anchors and (live mode) tail completeness against `.hwm`. Runs
 /// even when the active file is absent. Restarts once if a live rotation
@@ -134,28 +165,58 @@ pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<Value>
 /// # Errors
 ///
 /// A segment cannot be read, or an entry is not valid JSON.
-pub fn verify_segments(
+pub(crate) fn verify_segments(
     path: &Path,
     config: &TransparencyLogConfig,
     mode: VerifyMode,
 ) -> io::Result<VerifyResult> {
     let secret = config.shared_secret.as_bytes();
+    let changed = || {
+        io::Error::new(
+            io::ErrorKind::Interrupted,
+            "log changed during verification (a live rotation); retry",
+        )
+    };
     let mut attempt = 0;
     loop {
+        #[cfg(test)]
+        BEFORE_STREAM.with(|h| {
+            let taken = h.borrow_mut().take();
+            if let Some(f) = taken {
+                f();
+            }
+        });
         // `.hwm` is written after its record, so reading it first means a live
         // append can only leave the stream ahead of it, never behind.
         let hw = segments::read_hwm(path, secret, &config.key_id);
         let files = log_files(path)?;
+        #[cfg(test)]
+        LISTED.with(|h| {
+            let taken = h.borrow_mut().take();
+            if let Some(f) = taken {
+                f();
+            }
+        });
         let result = Stream::new(if secret.is_empty() {
             None
         } else {
             Some(secret)
         })
-        .run(&files, hw.as_ref(), mode)?;
+        .run(&files, hw.as_ref(), mode);
         let files_after = log_files(path)?;
         let seqs = |f: &[(Option<u64>, PathBuf)]| f.iter().map(|(s, _)| *s).collect::<Vec<_>>();
-        if seqs(&files) == seqs(&files_after) || attempt == 1 {
-            return Ok(result);
+        let stable = seqs(&files) == seqs(&files_after);
+        match result {
+            // A file listed a moment ago vanished: a rotation renamed it.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+            Ok(result) if stable => return Ok(result),
+            Ok(_) => {}
+        }
+        if attempt == 1 {
+            // Twice in a row the log moved under the reader: that is a busy
+            // log, not evidence of tampering.
+            return Err(changed());
         }
         attempt += 1;
     }
@@ -163,6 +224,12 @@ pub fn verify_segments(
 
 #[cfg(test)]
 thread_local! {
+    /// Runs once after a pass lists the files, before it reads them.
+    pub(crate) static LISTED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+    /// Runs once before a pass lists and streams the files.
+    pub(crate) static BEFORE_STREAM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
     /// Runs once after the last file is streamed: the tests append here to
     /// prove `.hwm` is read before the stream, not after it.
     pub(crate) static AFTER_STREAM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
@@ -235,7 +302,13 @@ impl<'a> Stream<'a> {
         // The previous file: its segment, path, and the seal it ended with.
         let mut before: Option<(u64, &Path, Option<u64>)> = None;
         for (index, (seq, file)) in files.iter().enumerate() {
-            let expected = seq.unwrap_or_else(|| newest_sealed.map_or(0, |n| n + 1));
+            // With sealed siblings the active file must be the next segment;
+            // with none left (retention or the disk-full path took them) its
+            // open record names it, and the expiry anchor pins the link.
+            let expected = seq.unwrap_or_else(|| match newest_sealed {
+                Some(n) => n + 1,
+                None => segments::active_segment_seq(file, 0),
+            });
             let content = bounded_read_to_string(file, MAX_AUDIT_READ_BYTES)?;
             let mut sealed_here: Option<u64> = None;
             for (ln, raw) in content.lines().filter(|l| !l.trim().is_empty()).enumerate() {
@@ -293,7 +366,8 @@ impl<'a> Stream<'a> {
         }
         #[cfg(test)]
         AFTER_STREAM.with(|hook| {
-            if let Some(f) = hook.borrow_mut().take() {
+            let taken = hook.borrow_mut().take();
+            if let Some(f) = taken {
                 f();
             }
         });
@@ -404,6 +478,7 @@ impl Stream<'_> {
                 ),
             ));
         }
+        self.check_seam_link(entry, counter, prev_seq, prev_file, file)?;
         let seal_counter = self.prev.as_ref().map_or(0, |p| p.0);
         if counter > seal_counter + 1 {
             return Err((
@@ -417,6 +492,33 @@ impl Stream<'_> {
             ));
         }
         Ok(())
+    }
+
+    /// Every boundary names its link: the open record's
+    /// `prev_segment_final_hash` must be the seal it follows, or a chain does
+    /// not check its own links.
+    fn check_seam_link(
+        &self,
+        entry: &Value,
+        counter: u64,
+        prev_seq: u64,
+        prev_file: &Path,
+        file: &Path,
+    ) -> Verdict {
+        let seal_hash = self.prev.as_ref().map_or("", |p| p.1.as_str());
+        if field_str(entry, "prev_segment_final_hash") == Some(seal_hash) {
+            return Ok(());
+        }
+        Err((
+            Some(counter),
+            format!(
+                "{} names prev_segment_final_hash {:?}, but segment {prev_seq} ({}) sealed with \
+                 {seal_hash}",
+                file.display(),
+                field_str(entry, "prev_segment_final_hash"),
+                prev_file.display()
+            ),
+        ))
     }
 
     fn check_open_seq(entry: &Value, counter: u64, expected: u64, file: &Path) -> Verdict {

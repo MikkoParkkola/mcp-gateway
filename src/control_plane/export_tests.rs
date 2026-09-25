@@ -555,3 +555,22 @@ fn export_from_genesis_cursor_after_expiry() {
     assert_eq!(first.raw["event"], "audit_segment_opened");
     assert_eq!(first.raw["segment_seq"], sealed(&log)[0]);
 }
+
+/// kimi r1 on #1060: after the disk-full path expires the last sealed
+/// segment, the active file is still segment N, not 0.
+#[test]
+fn export_names_the_active_segment_after_a_disk_full_drain() {
+    use crate::security::transparency_log::rotation_fault::WriteFault;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = small_logger(&log, 12, "");
+    until_sealed(&l, &log, 0);
+    l.arm_write_fault(Some(WriteFault::FullUntilReserveFreed));
+    gov_event(&l, "after-full");
+    l.arm_write_fault(None);
+    assert!(sealed(&log).is_empty(), "the only sealed segment expired");
+    let sink = CollectingSink::new();
+    let mut exp = exporter(dir.path(), ExportSource::Governance, &log);
+    exp.poll(&sink).expect("drained log exports");
+    assert_eq!(exp.cursor().segment_seq, Some(1));
+}
