@@ -76,7 +76,7 @@ impl TemporaryToken {
 /// Scopes granted to a temporary token.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TokenScopes {
-    /// Allowed backends. Empty slice means "all backends".
+    /// Allowed backends. `["*"]` means all; an empty slice means none.
     pub backends: Vec<String>,
     /// Allowed tools. Empty slice means "all tools on allowed backends".
     pub tools: Vec<String>,

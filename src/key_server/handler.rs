@@ -51,7 +51,7 @@ use super::{
     KeyServer,
     audit::{self, AuditEvent},
     oidc::VerifiedIdentity,
-    policy::RequestedScopes,
+    policy::{RequestedScopes, ScopeRefusal},
     store::{InMemoryTokenStore, TemporaryToken},
 };
 use crate::config::KeyServerOidcConfig;
@@ -215,19 +215,36 @@ async fn exchange_token(
     // Parse requested scopes from scope string
     let requested = parse_scope_string(&body.scope);
 
-    // Resolve policy (let..else is cleaner than match + early return)
-    let Some(scopes) = ks.policy.resolve_scopes(&identity, &requested) else {
-        warn!(email = %identity.email, "No policy matched");
-        let ev = AuditEvent::denied(
-            format!("no policy matched for {}", identity.email),
-            client_ip,
-        );
-        audit::emit(&ev);
-        return error_response(
-            StatusCode::FORBIDDEN,
-            "access_denied",
-            "No access policy matched for this identity",
-        );
+    let scopes = match ks.policy.resolve_scopes(&identity, &requested) {
+        Ok(scopes) => scopes,
+        Err(ScopeRefusal::NoBackendsGranted) => {
+            warn!(email = %identity.email, "Matched policy grants no backend");
+            let ev = AuditEvent::denied(
+                format!("policy grants no backend to {}", identity.email),
+                client_ip,
+            );
+            audit::emit(&ev);
+            return error_response(
+                StatusCode::FORBIDDEN,
+                "no_backends_granted",
+                "The matching key_server policy rule grants no backends. Add the backends \
+                 it needs to that rule's scopes.backends, or [\"*\"] for all \
+                 (docs/UPGRADING-4.0.md section 30).",
+            );
+        }
+        Err(ScopeRefusal::Denied) => {
+            warn!(email = %identity.email, "No policy matched");
+            let ev = AuditEvent::denied(
+                format!("no policy matched for {}", identity.email),
+                client_ip,
+            );
+            audit::emit(&ev);
+            return error_response(
+                StatusCode::FORBIDDEN,
+                "access_denied",
+                "No access policy matched for this identity",
+            );
+        }
     };
 
     // Enforce max tokens per identity

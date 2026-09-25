@@ -306,7 +306,8 @@ pub struct PolicyMatchConfig {
 /// Scopes granted by a policy rule.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PolicyScopesConfig {
-    /// Allowed backends. `["*"]` or empty = all.
+    /// Allowed backends. `["*"]` = all; empty or absent = none, and the key
+    /// server refuses to issue a token for the rule.
     #[serde(default)]
     pub backends: Vec<String>,
     /// Allowed tools. `["*"]` or empty = all.
