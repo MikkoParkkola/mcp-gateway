@@ -285,6 +285,63 @@ pub(super) fn decide_tool_target<'a>(
     }
 }
 
+/// The backend-level half of [`decide_tool_target`], decided silently: may
+/// this caller be told `server` exists (A3)?
+///
+/// The API-key backend scope is per backend, so a cold cache does not hide a
+/// backend it admits. Agent-auth scope and mTLS policy are per tool, so under
+/// either the backend is admitted only if some cached tool passes them, which
+/// fails closed on a cold cache: the name appears once a tool it could invoke
+/// is known. With agent auth on, no validated identity admits nothing, as
+/// invocation refuses every tool.
+fn backend_admitted(
+    state: &AppState,
+    client: Option<&AuthenticatedClient>,
+    oauth_agent_identity: Option<&OAuthAgentIdentity>,
+    cert_identity: Option<&CertIdentity>,
+    server: &str,
+) -> bool {
+    if crate::gateway::authz::authorize_backend(client, server).is_err() {
+        return false;
+    }
+    let mtls = !state.mtls_policy.is_empty();
+    let agent = if state.agent_auth.enabled {
+        let Some(identity) = oauth_agent_identity else {
+            return false;
+        };
+        Some(identity)
+    } else {
+        None
+    };
+    if agent.is_none() && !mtls {
+        return true;
+    }
+    backend_tool_names(state, server).iter().any(|tool| {
+        agent.is_none_or(|id| {
+            check_scopes(&id.scopes, &id.client_id, server, tool, &Action::Execute).is_ok()
+        }) && (!mtls
+            || state.mtls_policy.evaluate(cert_identity, server, tool) != PolicyDecision::Deny)
+    })
+}
+
+/// The names of `server`'s known tools: an MCP backend's cache, or the
+/// capability backend's definitions. Empty for an unknown or cold backend.
+fn backend_tool_names(state: &AppState, server: &str) -> Vec<String> {
+    if let Some(backend) = state.backends.get(server) {
+        return backend
+            .get_cached_tools_snapshot()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+    }
+    state
+        .meta_mcp
+        .get_capabilities()
+        .filter(|cap| cap.name == server)
+        .map(|cap| cap.get_tools().into_iter().map(|t| t.name).collect())
+        .unwrap_or_default()
+}
+
 fn target_from_invoke_arguments(arguments: &Value) -> Option<OwnedToolTarget> {
     Some(OwnedToolTarget {
         server: arguments.get("server")?.as_str()?.to_string(),
@@ -402,7 +459,13 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
     }
 
     fn admits_backend(&self, server: &str) -> bool {
-        crate::gateway::authz::authorize_backend(self.client, server).is_ok()
+        backend_admitted(
+            self.state,
+            self.client,
+            self.oauth_agent_identity,
+            self.cert_identity,
+            server,
+        )
     }
 
     fn transport(&self) -> Transport {
