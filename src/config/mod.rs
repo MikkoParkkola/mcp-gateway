@@ -9,6 +9,7 @@
 pub(crate) mod account_bindings;
 mod env_overlay;
 mod features;
+mod strict_keys;
 
 use std::{
     collections::{BTreeSet, HashMap},
@@ -539,6 +540,9 @@ impl Config {
         let mut config: Self = figment
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
+        // Before any validation, so a misspelt key is reported rather than the
+        // validation error its absence causes.
+        strict_keys::refuse_unrecognised_keys(path)?;
         // ORDER MATTERS, AND IT DID NOT BEFORE.
         //
         // `expand_env_vars` below INLINES `auth.bearer_token` and
@@ -577,75 +581,12 @@ impl Config {
             Expansion::Literal => BTreeSet::new(),
         };
         config.validate_with_env(&overlay)?;
-        Self::warn_on_retired_keys(path);
         Ok(Evaluated {
             config,
             overlay: std::sync::Arc::new(overlay),
             env_paths,
             secret_refs,
         })
-    }
-
-    /// Configuration keys that were removed. Left loadable on purpose: parsing
-    /// tolerates extra keys, so an old file keeps working.
-    const RETIRED_KEYS: &'static [(&'static str, &'static str)] = &[(
-        "idle_timeout",
-        "backend idle hibernation was never implemented; this key is now removed \
-         and has no effect. Delete it from your config — a command that rewrites \
-         the config will drop it silently along with any surrounding comments.",
-    )];
-
-    /// Retired keys present in the config file at `path`, as (key, explanation).
-    ///
-    /// Returns findings rather than logging directly so the detector is testable.
-    /// Parsing is tolerant of extra keys, which is exactly what let `idle_timeout`
-    /// sit in real configs looking effective: accepted, documented as
-    /// "hibernate after N idle", and read by nothing but a `Debug` impl. Ignoring
-    /// it silently now would repeat that mistake more quietly.
-    pub(crate) fn retired_keys_in_file(path: &Path) -> Vec<(&'static str, &'static str)> {
-        let Ok(raw) = std::fs::read_to_string(path) else {
-            return Vec::new();
-        };
-        Self::retired_keys_in_str(&raw)
-    }
-
-    /// Structural scan, split out so tests exercise the shipped logic.
-    ///
-    /// Parses the document and looks for the retired name as an actual mapping
-    /// key under `backends.<name>` — where every real occurrence of
-    /// `idle_timeout` lived. An earlier line-oriented version missed flow-style
-    /// mappings (`backends: {demo: {idle_timeout: 10m}}`), which load fine and
-    /// would therefore have gone unwarned, and could fire on the key's name
-    /// appearing inside a block scalar. Both are real configs; a detector that
-    /// is honest only about the spellings it happens to recognise is the same
-    /// failure this commit removes.
-    pub(crate) fn retired_keys_in_str(raw: &str) -> Vec<(&'static str, &'static str)> {
-        // Unparseable YAML never reaches here through `Config::load`, which
-        // fails on it first. Nothing useful to say about a file we cannot read.
-        let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(raw) else {
-            return Vec::new();
-        };
-        let Some(backends) = doc.get("backends").and_then(serde_yaml::Value::as_mapping) else {
-            return Vec::new();
-        };
-        Self::RETIRED_KEYS
-            .iter()
-            .filter(|(key, _)| {
-                backends.values().any(|backend| {
-                    backend
-                        .as_mapping()
-                        .is_some_and(|fields| fields.keys().any(|k| k.as_str() == Some(*key)))
-                })
-            })
-            .copied()
-            .collect()
-    }
-
-    fn warn_on_retired_keys(path: Option<&Path>) {
-        let Some(path) = path else { return };
-        for (key, why) in Self::retired_keys_in_file(path) {
-            tracing::warn!(config = %path.display(), key = %key, "retired config key: {}", why);
-        }
     }
 
     /// The config file alone, with no environment layered over it.

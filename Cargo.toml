@@ -80,6 +80,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_json_canonicalizer = "0.3.2"
 serde_yaml = "0.9"
+# Collects the config keys serde skipped, so an unrecognised key is a load
+# error (C1) without a strict attribute on every config struct.
+serde_ignored = "0.1.14"
 
 # Configuration
 figment = { version = "0.10", features = ["yaml", "env"] }
