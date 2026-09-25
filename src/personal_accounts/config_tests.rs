@@ -567,3 +567,27 @@ fn an_absolute_directory_with_a_parent_component_is_refused_without_reading_secr
         );
     }
 }
+
+/// C9: an account key may be a `file:` reference, as Kubernetes mounts one.
+/// It is read through the C2-checked reader, not the environment.
+#[test]
+fn account_key_accepts_file_ref() {
+    let tmp = root();
+    let key_file = tmp.path().join("current.key");
+    crate::gateway::test_helpers::write_owner_only(&key_file, format!("{KEY_B64}\n"))
+        .expect("write key");
+    let reference = format!("file:{}", key_file.display());
+    let mut config = valid(tmp.path());
+    config.keys.insert("current".into(), reference.clone());
+    let env = overlay();
+
+    let resolved = refuse_scaffold(resolve(Some(&config), &env), "file: account key")
+        .expect("a 0600 file: key resolves")
+        .expect("accounts present");
+    assert_eq!(
+        resolved.store.keys.get("current").map(Vec::as_slice),
+        Some(CURRENT_KEY.as_slice())
+    );
+    assert_eq!(env.lookups(), vec![RETIRED_VAR.to_string()]);
+    assert!(resolved.secret_refs_read.contains(&reference));
+}

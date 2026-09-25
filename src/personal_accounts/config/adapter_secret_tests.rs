@@ -15,7 +15,9 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use super::{AccountsConfigError, AdapterConfig, AdapterKind, resolve_secrets};
+use super::{
+    AccountsConfigError, AdapterConfig, AdapterKind, resolve_runtime_secrets, resolve_secrets,
+};
 // The overlay contract lives one level up, in `config.rs`.
 use super::super::SecretOverlay;
 
@@ -370,4 +372,102 @@ fn adapter_secret_equal_to_api_key_is_refused() {
 
     assert!(gateway_reuse_credential(&error, 0).contains("owui-gateway-key"));
     assert_no_material_leaked(&error, &[key.as_str(), &digest[7..]]);
+}
+
+// ── C9: `file:` references ────────────────────────────────────────────────────
+
+/// Writes `body` owner-only under `dir` and returns its `file:` reference.
+fn file_ref(dir: &std::path::Path, name: &str, body: &str) -> String {
+    let path = dir.join(name);
+    crate::gateway::test_helpers::write_owner_only(&path, body).expect("write secret");
+    format!("file:{}", path.display())
+}
+
+fn file_adapter(installation_id: &str, reference: &str) -> AdapterConfig {
+    AdapterConfig {
+        hmac_secret_ref: reference.to_string(),
+        ..adapter(installation_id, "UNUSED")
+    }
+}
+
+#[test]
+fn adapter_secret_accepts_file_ref() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let secret = secret_32('f');
+    let reference = file_ref(dir.path(), "hmac", &format!("{secret}\n"));
+    let adapters = [file_adapter("desk", &reference)];
+    super::validate(&adapters).expect("a file: reference is a reference");
+    let overlay = FakeOverlay::new(&[]);
+    let material = resolve_runtime_secrets(&adapters, &overlay, &no_store_keys())
+        .expect("a 0600 file resolves");
+    assert_eq!(material, vec![secret.into_bytes()]);
+    assert!(
+        overlay.reads().is_empty(),
+        "a file: reference reads no variable"
+    );
+}
+
+#[test]
+fn file_alias_across_slots_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let reference = file_ref(dir.path(), "shared", &secret_32('s'));
+    let dotted = reference.replace("/shared", "/./shared");
+    let error = validate_no_gateway_reference_alias(
+        &[file_adapter("desk", &dotted)],
+        &[GatewayCredential::BearerToken(&reference)],
+    )
+    .expect_err("one file named by both slots is one secret");
+    assert_eq!(gateway_reuse_credential(&error, 0), "auth.bearer_token");
+}
+
+/// A Kubernetes Secret volume reaches each key through a `..data` symlink, so
+/// two spellings of one mounted file must still alias.
+#[cfg(unix)]
+#[test]
+fn file_alias_through_a_symlink_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let reference = file_ref(dir.path(), "token", &secret_32('k'));
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(dir.path().join("token"), &link).expect("symlink");
+    let error = validate_no_gateway_reference_alias(
+        &[file_adapter("desk", &format!("file:{}", link.display()))],
+        &[GatewayCredential::BearerToken(&reference)],
+    )
+    .expect_err("a symlinked spelling of one file is one secret");
+    assert_eq!(gateway_reuse_credential(&error, 0), "auth.bearer_token");
+}
+
+#[test]
+fn file_material_reuse_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = secret_32('m');
+    let bearer = file_ref(dir.path(), "bearer", &shared);
+    let hmac = file_ref(dir.path(), "hmac", &format!("{shared}\n"));
+    let adapters = [file_adapter("desk", &hmac)];
+    let credentials = [GatewayCredential::BearerToken(&bearer)];
+    validate_no_gateway_reference_alias(&adapters, &credentials)
+        .expect("two paths pass the structural check");
+    let error = validate_no_gateway_material_reuse(&adapters, &FakeOverlay::new(&[]), &credentials)
+        .expect_err("two files holding one value are one secret");
+    assert_eq!(gateway_reuse_credential(&error, 0), "auth.bearer_token");
+    assert_no_material_leaked(&error, &[shared.as_str()]);
+}
+
+/// C9: a descriptor's `client_secret_ref` may be a `file:` reference, read at
+/// use through the gateway's own overlay; a literal is still refused.
+#[test]
+fn env_secrets_resolve_a_file_client_secret() {
+    use crate::personal_accounts::provider::{EnvSecrets, SecretSource as _};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("client-secret");
+    crate::gateway::test_helpers::write_owner_only(&path, "c9-client-secret\n")
+        .expect("write secret");
+    let secrets = EnvSecrets::new(std::sync::Arc::new(crate::config::LiveEnv::default()));
+    assert_eq!(
+        secrets
+            .resolve(&format!("file:{}", path.display()))
+            .as_deref(),
+        Some("c9-client-secret")
+    );
+    assert_eq!(secrets.resolve("c9-literal"), None);
 }

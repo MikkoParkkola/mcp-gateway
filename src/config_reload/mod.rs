@@ -2290,6 +2290,8 @@ mod grant_delta;
 
 #[cfg(test)]
 mod c4_enable_tests;
+#[cfg(test)]
+mod c9_file_ref_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;

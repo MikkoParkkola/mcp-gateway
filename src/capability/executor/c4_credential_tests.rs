@@ -42,3 +42,40 @@ async fn empty_capability_credential_refused_in_every_env_form() {
         );
     }
 }
+
+/// C9 leaves capability YAMLs out of the `file:` secret grammar: a third-party
+/// capability must not read an arbitrary gateway-owned file and send it
+/// upstream. The capability `file:` keeps its own `path.json:field` meaning.
+#[tokio::test]
+async fn capability_file_ref_stays_literal() {
+    let (dir, executor) = executor_with_blank_var();
+    let json = dir.path().join("cred.json");
+    crate::gateway::test_helpers::write_owner_only(&json, r#"{"token":"c9-field"}"#)
+        .expect("write json");
+    let fetch = |key: String| {
+        let auth = AuthConfig {
+            key,
+            ..AuthConfig::default()
+        };
+        let executor = &executor;
+        async move {
+            executor
+                .fetch_credential(&auth, &CapabilityExecutionContext::default())
+                .await
+        }
+    };
+    assert_eq!(
+        fetch(format!("file:{}:token", json.display()))
+            .await
+            .unwrap(),
+        "c9-field",
+        "the capability grammar extracts a JSON field"
+    );
+    let whole = fetch("file:/etc/passwd".to_string())
+        .await
+        .expect_err("a whole-file secret is not a capability credential");
+    assert!(
+        whole.to_string().contains("Invalid file credential format"),
+        "{whole}"
+    );
+}
