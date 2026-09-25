@@ -90,6 +90,10 @@ asserts the behaviour as observed, so a build that starts scoping the catalogue
 makes the row FAIL and forces the finding to be revisited rather than quietly
 closed. Whether this is a defect or accepted behaviour is an owner decision.
 
+*2026-09-25:* the row fired as designed. 4.0.0-beta.1 scopes the catalogue per key
+(UPGRADING-4.0 item 15), so the script now asserts that scoping instead, as
+`S3.ALICE_CATALOGUE_IS_HERS` and `S3.BOB_CATALOGUE_IS_HIS`. The recordings above are unchanged.
+
 **The ADR-008 INV-2 refusal is spelled twice.**
 `src/gateway/meta_mcp/invoke.rs:1430-1440` builds its own `-32001` saying "one
 user's **token**"; `enforce_oauth_isolation_for` at

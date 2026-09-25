@@ -7,7 +7,6 @@
 //! - Simhash: fingerprint computation, Hamming distance, index query
 //! - Cache key: SHA-256 derivation, stable tool ordering, schema fingerprint
 //! - `McpFrame`: JSON parsing for request / response / notification frames
-//! - `SandboxEnforcer`: per-invocation policy checks (allowed, denied, expired)
 //! - `InputScanner`: injection pattern scanning on clean and malicious args     [firewall]
 //! - Redactor: credential detection and in-place redaction of response JSON   [firewall]
 //! - `BudgetEnforcer`: pre-invoke cost check (`DashMap` + atomics, target <0.1ms) [cost-governance]
@@ -20,7 +19,6 @@ use serde_json::{Value, json};
 use mcp_gateway::{
     gateway::test_helpers::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint},
     protocol::Tool,
-    session_sandbox::{SandboxEnforcer, SessionSandbox},
     simhash::{SimhashIndex, hamming_distance, simhash},
     tool_registry::ToolRegistry,
     transport::McpFrame,
@@ -249,98 +247,6 @@ fn bench_mcp_frame(c: &mut Criterion) {
     group.bench_function("parse_ping", |b| {
         b.iter(|| McpFrame::from_text(r#"{"type":"ping"}"#).expect("valid ping"));
     });
-
-    group.finish();
-}
-
-// ── SandboxEnforcer benchmarks ────────────────────────────────────────────────
-
-fn bench_session_sandbox(c: &mut Criterion) {
-    use std::time::Duration;
-
-    let mut group = c.benchmark_group("session_sandbox");
-
-    // Unrestricted sandbox — fastest path (no limit checks skip atomics on max_calls=0)
-    {
-        let enforcer = SandboxEnforcer::new(SessionSandbox::default());
-        group.bench_function("check_unrestricted", |b| {
-            b.iter(|| enforcer.check("any_backend", "any_tool", 512).unwrap());
-        });
-    }
-
-    // All limits set, all passing (full evaluation path).
-    // Use iter_batched to get a fresh enforcer each sample — the call counter
-    // must not exhaust max_calls across the millions of iterations criterion runs.
-    {
-        let sandbox = SessionSandbox {
-            max_calls: 0, // unlimited, but all other checks are exercised
-            max_duration: Duration::from_secs(3600),
-            allowed_backends: Some(vec!["allowed_backend".to_string()]),
-            denied_tools: vec!["exec".to_string(), "shell".to_string()],
-            max_payload_bytes: 65_536,
-        };
-        group.bench_function("check_all_limits_passing", |b| {
-            b.iter_batched(
-                || SandboxEnforcer::new(sandbox.clone()),
-                |e| e.check("allowed_backend", "web_search", 1024).unwrap(),
-                BatchSize::SmallInput,
-            );
-        });
-    }
-
-    // Denied tool path — returns Err on third check (tool denylist)
-    {
-        let sandbox = SessionSandbox {
-            max_calls: 0,
-            max_duration: Duration::ZERO,
-            allowed_backends: None,
-            denied_tools: vec!["forbidden_tool".to_string()],
-            max_payload_bytes: 0,
-        };
-        group.bench_function("check_tool_denied", |b| {
-            b.iter_batched(
-                || SandboxEnforcer::new(sandbox.clone()),
-                |e| e.check("any", "forbidden_tool", 0).unwrap_err(),
-                BatchSize::SmallInput,
-            );
-        });
-    }
-
-    // Backend not allowed — returns Err on second check (backend allowlist)
-    {
-        let sandbox = SessionSandbox {
-            max_calls: 0,
-            max_duration: Duration::ZERO,
-            allowed_backends: Some(vec!["allowed".to_string()]),
-            denied_tools: vec![],
-            max_payload_bytes: 0,
-        };
-        group.bench_function("check_backend_denied", |b| {
-            b.iter_batched(
-                || SandboxEnforcer::new(sandbox.clone()),
-                |e| e.check("disallowed", "any_tool", 0).unwrap_err(),
-                BatchSize::SmallInput,
-            );
-        });
-    }
-
-    // Payload too large
-    {
-        let sandbox = SessionSandbox {
-            max_calls: 0,
-            max_duration: Duration::ZERO,
-            allowed_backends: None,
-            denied_tools: vec![],
-            max_payload_bytes: 1024,
-        };
-        group.bench_function("check_payload_too_large", |b| {
-            b.iter_batched(
-                || SandboxEnforcer::new(sandbox.clone()),
-                |e| e.check("any", "any_tool", 2048).unwrap_err(),
-                BatchSize::SmallInput,
-            );
-        });
-    }
 
     group.finish();
 }
@@ -803,7 +709,6 @@ criterion_group!(
     bench_simhash,
     bench_cache_key,
     bench_mcp_frame,
-    bench_session_sandbox,
     bench_input_scanner,
     bench_redactor,
     bench_budget_enforcer,
