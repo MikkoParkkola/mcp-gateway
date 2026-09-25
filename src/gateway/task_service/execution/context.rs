@@ -34,6 +34,8 @@ pub(crate) struct OwnedCallerContext {
     /// Whether the creating request authenticated. Carried, never inferred:
     /// with authentication off `credential_principal` is a non-empty constant.
     authentication: Authentication,
+    /// How the creating request presented its credential (D1-c audit `who`).
+    credential_kind: crate::security::audit::CredentialKind,
     is_admin: bool,
     input_capabilities: Declared,
     session_id: Option<String>,
@@ -53,6 +55,7 @@ impl OwnedCallerContext {
         verified_identity: Option<VerifiedIdentity>,
         credential_principal: String,
         authentication: Authentication,
+        credential_kind: crate::security::audit::CredentialKind,
         is_admin: bool,
         input_capabilities: Declared,
         session_id: Option<String>,
@@ -70,6 +73,7 @@ impl OwnedCallerContext {
             verified_identity,
             credential_principal,
             authentication,
+            credential_kind,
             is_admin,
             input_capabilities,
             session_id,
@@ -110,6 +114,7 @@ impl OwnedCallerContext {
             // cannot be a weaker principal than the request's.
             credential_principal: Some(self.credential_principal.as_str()),
             authentication: self.authentication,
+            credential_kind: self.credential_kind,
             // No second lease. The worker's execution is admitted durably in
             // `Mode::Task`, and a `Mode::Sync` lease on the same principal and
             // key would refuse the very task it was taken for; there is also no

@@ -183,6 +183,7 @@ fn ctx() -> MetaMcpCallerContext<'static> {
         execution: None,
         credential_principal: None,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,
         protocol_revision: None,
         authorizer: &AllowAll,
