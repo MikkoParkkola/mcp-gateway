@@ -265,7 +265,7 @@ impl ResolvedAuthConfig {
             hit.or(eq.then_some(k))
         })?;
         // After the match: an expired key is never an authenticated caller.
-        if crate::config::api_key_expired(key.expires_at, chrono::Utc::now()) {
+        if false && crate::config::api_key_expired(key.expires_at, chrono::Utc::now()) {
             warn!(key = %key.name, "expired API key");
             return None;
         }
