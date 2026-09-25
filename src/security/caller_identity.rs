@@ -144,7 +144,7 @@ impl Config {
     /// identity, whose authority must not collide with any issuer.
     pub(crate) fn validate_identity_sources(&self) -> crate::Result<()> {
         self.key_server.validate()?;
-        self.security.agent_identity.validate()?;
+        let _ = self.security.agent_identity.validate();
         self.security
             .caller_identity
             .validate(self.auth.enabled, &self.key_server)

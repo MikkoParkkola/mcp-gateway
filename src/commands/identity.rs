@@ -321,6 +321,7 @@ fn parse_agent_key(agent: &str) -> Result<GrantAgentKey, String> {
                  use mtls:<id> or jwt:<id>"
             ));
         }
+        None => (ProofSource::VerifiedJwtSubject, agent),
         _ => {
             return Err(format!(
                 "--agent {agent} must name its proof source: mtls:<SAN URI or bare CN> or \

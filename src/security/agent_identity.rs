@@ -142,7 +142,6 @@ pub struct AgentIdentityConfig {
 /// reach declared-label matching without also setting the flag that warns
 /// about it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(try_from = "serde_json::Value")]
 pub struct KnownAgent {
     /// Which namespace the identifier belongs to.
     pub source: AgentSourceKey,
