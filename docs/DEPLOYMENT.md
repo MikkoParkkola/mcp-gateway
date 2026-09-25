@@ -333,7 +333,12 @@ Config merges from three sources (later overrides earlier):
 
 Nested values: `MCP_GATEWAY_SERVER__PORT=8080` sets `server.port`.
 
-Config values support `${VAR}` and `${VAR:-default}` expansion. Use `env_files:` in config to load `.env` files (supports `~` expansion; missing files silently skipped).
+Config values support `${VAR}` and `${VAR:-default}` expansion. In an enabled backend's
+`headers` and `env`, and in `capabilities.directories`, a `${VAR}` with no default that is unset
+or empty fails the load, and `${VAR:-default}` applies the default to an empty variable too;
+write `${VAR:-}` where empty is intended. An `env:` secret that is unset or empty
+fails too. Use `env_files:` in config to load `.env` files (supports `~` expansion). A listed
+file that does not exist is skipped, and any unresolved-reference error names it.
 
 A **malformed** line in an env file is not skipped: it fails startup, naming the file,
 the line number and the category of fault. The offending line is never echoed, because
@@ -552,7 +557,7 @@ The exporter preserves unrelated client settings, creates a sibling backup befor
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/livez` | GET | Same as `/health` | 200 while the process serves; never reads backend health. Liveness probes and container healthchecks |
-| `/readyz` | GET | Same as `/health` | 200 once config is loaded and the listener is up; never reads backend health. 503 while the audit log cannot append (auth on; it retries one bounded probe append per request, UPGRADING-4.0 item 39). Readiness and startup probes |
+| `/readyz` | GET | Same as `/health` | 200 once config is loaded and the listener is up; never reads backend health. 503 while the audit log cannot append (auth on; it retries one bounded probe append per request, UPGRADING-4.0 item 43). Readiness and startup probes |
 | `/health` | GET | No (public by default) | Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
 | `/ui/api/status` | GET | Redacted unless admin | JSON API for dashboards; counts only without an admin credential |
 

@@ -514,7 +514,7 @@ do I.
 ## 7. The failing tests, verbatim
 
 Module: `src/gateway/meta_mcp/catalogue_isolation_tests.rs`, built and run on
-Spark (the Mac is under disk pressure with three agents on it).
+bench-host (the Mac is under disk pressure with three agents on it).
 
 ```
 running 4 tests

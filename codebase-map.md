@@ -24,5 +24,4 @@ Auto-generated table of contents for `mcp-gateway/`. Scan before opening files. 
 | `scripts/` | contains: helm-airgap-smoke.sh, helm-supply-chain-smoke.sh, helm-chart-smoke.sh |
 | `src/` | contains: jwks.rs, invoke.rs, mod.rs |
 | `tests/` | contains: stdio_tests.rs, webui_management_tests.rs, auth_tests.rs |
-| `tickets/` | contains: measure.md |
 | `tools/` | contains: agent-bus-demo.sh |

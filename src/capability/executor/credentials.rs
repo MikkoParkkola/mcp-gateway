@@ -223,12 +223,17 @@ impl CapabilityExecutor {
         }
 
         if let Some(var_name) = key.strip_prefix("env:") {
-            self.env.get().resolve(var_name).ok_or_else(|| {
-                Error::Config(format!(
-                    "Environment variable '{}' not set (required for {})",
-                    var_name, auth.description
-                ))
-            })
+            // Empty is refused like unset, as `SecretRef::resolve` does (C4).
+            self.env
+                .get()
+                .resolve(var_name)
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| {
+                    Error::Config(format!(
+                        "Environment variable '{}' not set or empty (required for {})",
+                        var_name, auth.description
+                    ))
+                })
         } else if let Some(keychain_key) = key.strip_prefix("keychain:") {
             self.fetch_from_keychain(keychain_key).await
         } else if let Some(provider) = key.strip_prefix("oauth:") {
@@ -241,13 +246,18 @@ impl CapabilityExecutor {
             self.env
                 .get()
                 .resolve(var_name)
-                .ok_or_else(|| Error::Config(format!("Environment variable '{var_name}' not set")))
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| {
+                    Error::Config(format!(
+                        "Environment variable '{var_name}' not set or empty"
+                    ))
+                })
         } else if key.is_empty() {
             Err(Error::Config("No credential key configured".to_string()))
         } else if Self::looks_like_env_var_name(key) {
-            self.env.get().resolve(key).ok_or_else(|| {
+            self.env.get().resolve(key).filter(|v| !v.is_empty()).ok_or_else(|| {
                 Error::Config(format!(
-                    "Environment variable '{key}' not set. Set it with: export {key}=your_key"
+                    "Environment variable '{key}' not set or empty. Set it with: export {key}=your_key"
                 ))
             })
         } else {
@@ -759,3 +769,7 @@ mod cwe532_debug_redaction {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "c4_credential_tests.rs"]
+mod c4_credential_tests;

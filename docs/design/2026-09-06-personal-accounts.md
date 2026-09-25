@@ -20,7 +20,7 @@ status/receipt annotation follows those reviews and changes no reviewed contract
 FOR: let users of one gateway connect and use their own downstream accounts,
 including clients that need gateway-managed OAuth, without cross-user credentials,
 connections, discovery metadata or results. The operator-approved reference is
-Open WebUI 0.9.6 on Spark → gateway → Google Workspace. All seven ACCOUNTS
+Open WebUI 0.9.6 on bench-host → gateway → Google Workspace. All seven ACCOUNTS
 criteria in the [scope update](../requirements/RELEASE-4.0.0-scope-update.md)
 remain gating; the [test matrix](2026-09-06-personal-accounts-test-plan.md) is the
 falsifiable acceptance map.
@@ -530,7 +530,7 @@ Count tombstones in store capacity. Refuse an over-capacity new grant before
 acknowledgment without evicting authority or another user's grant. S15 benchmarks
 the largest valid authority admitted by both configured limits and separately a
 byte-binding configuration; do not pad the schema with ignored fields to claim a
-larger valid fixture. On the pinned Spark persistent-volume deployment, the
+larger valid fixture. On the pinned bench-host persistent-volume deployment, the
 design thresholds are p99 durable mutation completion at most 250 ms, at least
 10 durable refresh commits/second sustained for 120 seconds, and authority
 load/reconciliation ready within 5 seconds after process start. Mutation latency
@@ -599,7 +599,7 @@ deployment-specific obligations remain with the operator's existing governance.
 
 Gateway code introduces no telemetry export of personal content and no new data
 destination beyond configured Open WebUI, gateway, OAuth provider/backend and
-audit/backup sinks. Spark's physical location and Google's processing regions are
+audit/backup sinks. bench-host's physical location and Google's processing regions are
 not inferred from hostnames. Use existing configured destinations and deployment
 transfer arrangements; do not silently create a new region or external sink.
 Erase/revoke removes active token payloads and cached personal data immediately
@@ -624,7 +624,7 @@ destinations or retention is recorded before applying that setting.
 | 2. Resolution/wiring | Existing router/direct/meta credential boundaries, backend descriptor, REST executor, server strategy installation | Real mock HTTP backend records A/B tokens; unconnected C sends no request, even with operator token present |
 | 3. Contextual metadata | Backend metadata/cache, pool, tool registry and discovery; coordinate with search owner | A/B return different names and same-name different schemas; stale fill after revoke is rejected |
 | 4. Consent/client | Gateway hosted routes plus verified OWUI browser identity bridge | HTTP/browser exchange rejects stolen/cancelled/replayed journey; same principal succeeds through actual client route |
-| 5. Release proof | Real-account fixture, operator docs/config example, migration/rollback rehearsal | Exact release candidate on Spark passes two-account and unconnected-user journey; independent driver records results |
+| 5. Release proof | Real-account fixture, operator docs/config example, migration/rollback rehearsal | Exact release candidate on bench-host passes two-account and unconnected-user journey; independent driver records results |
 
 Each increment follows reviewed design → reviewed test plan → failing tests
 reviewed as tests → implementation → targeted checks → self-QA → independent
@@ -683,7 +683,7 @@ NFR budgets; attach measured results rather than estimating improvement.
 
 | Question | Status/owner | Decisive check and trigger | If it fails |
 |---|---|---|---|
-| Which reference client and service? | Resolved by operator; linked scope decision | Open WebUI on Spark → gateway → Google Workspace, two accounts plus unconnected user | No re-selection is required |
+| Which reference client and service? | Resolved by operator; linked scope decision | Open WebUI on bench-host → gateway → Google Workspace, two accounts plus unconnected user | No re-selection is required |
 | Does OWUI support native MCP and emit a stable signed subject? | Resolved at v0.9.6 source, links above; installed request path unverified | Coordinator checks installed code/version and captures synthetic gateway-bound request before A06/live JOURNEY.1; source-pinned A01–A05 can proceed independently | Use a minimal explicit adapter; preserve user identity; do not trust unsigned headers |
 | How does the consent browser authenticate as that same OWUI principal? | Deferred to release coordinator; blocks hosted adapter design finalization | Inspect version-pinned browser auth routes and test a same-session identity bridge before increment 4 test review | Implement a small authenticated bridge or provision a verified gateway-login identity link; never replace it with email matching/state possession |
 | Are the Google OAuth app, exact HTTPS callback and two test users ready? | Deferred to release coordinator/operator-owned setup; blocks live consent only | Inspect non-secret deployed configuration before real-account run; request one missing setup decision at a time if needed | Keep synthetic tests valid and live acceptance pending; do not use operator's existing shared token |

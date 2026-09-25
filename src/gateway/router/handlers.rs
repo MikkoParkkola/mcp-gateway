@@ -559,17 +559,9 @@ async fn meta_mcp_dispatch(
     };
 
     // Parse JSON body
-    let body_bytes = match axum::body::to_bytes(http_request.into_body(), 10 * 1024 * 1024).await {
+    let body_bytes = match super::helpers::read_body(http_request).await {
         Ok(bytes) => bytes,
-        Err(e) => {
-            return build_http_error_response(
-                None,
-                -32700,
-                format!("Failed to read body: {e}"),
-                StatusCode::BAD_REQUEST,
-            )
-            .into_response();
-        }
+        Err(refusal) => return refusal.into_response(),
     };
 
     let mut request: Value = match serde_json::from_slice(&body_bytes) {

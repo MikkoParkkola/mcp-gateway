@@ -257,7 +257,7 @@ acting as a network proxy.**
 | Token-cost target for Code Mode: <1,000 tokens for 52-tool scenario | ✅ | 563 tokens measured — beats Cloudflare's 600 empirical target |
 | Shadow MCP detection design cites ≥3 selector types | ✅ | 8 selectors documented: host, URI, 6 body patterns |
 | Gap analysis covers all 5 Cloudflare components with LEAD/MATCH/LAG | ✅ | Table above — 5 components, explicit verdicts |
-| Three cross-issue comments posted | See note | Comment drafted for issue #132; cross-links to claude-elite #797, #1074, Linear MIK-2938 |
+| Three cross-issue comments posted | See note | Comment drafted for issue #132; cross-links to private-tooling #797, #1074, Linear MIK-2938 |
 
 **DoD verdict: PASS** — all measurable ACs satisfied.
 

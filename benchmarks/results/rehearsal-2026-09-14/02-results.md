@@ -1,6 +1,6 @@
 # Rehearsal 2 — measured numbers
 
-Run directory: `/home/mikko/perf-workload/runs/2026-09-14-rehearsal2` (Spark).
+Run directory: `/home/<redacted>/perf-workload/runs/2026-09-14-rehearsal2` (bench-host).
 All 15 measured reps completed; `MEASURE2_EXIT=0`. The three warm-up reps
 (A0/B0/C0) are discarded by the runner and are not below.
 
@@ -36,7 +36,7 @@ the client speaks.
 ## Verdict
 
 ```
-$ python3 benchmarks/workload/eval_workload.py /home/mikko/perf-workload/runs/2026-09-14-rehearsal2
+$ python3 benchmarks/workload/eval_workload.py /home/<redacted>/perf-workload/runs/2026-09-14-rehearsal2
 VERDICT: VOID  (exit 3)
   C1: semantic assertion rate below 100%
 EVAL_EXIT=3

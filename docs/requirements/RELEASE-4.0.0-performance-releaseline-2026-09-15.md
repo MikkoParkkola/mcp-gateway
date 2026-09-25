@@ -8,12 +8,12 @@ Archived so the figures quoted in `docs/internal/release/v4.0.0-burndown-tracker
 
 ## Method
 
-- Host: `spark`, one session, 3.5.0 collected first on the same box.
+- Host: `bench-host`, one session, 3.5.0 collected first on the same box.
 - Baseline: `v3.5.0` (`32f135a61fb50c20a044fb4c2347bc1cf8015d89`).
 - Subject: `chore/v4-reconcile-main` at `5eb6982e` — the branch 4.0.0 ships from.
   Earlier runs of this criterion measured `origin/main`, which is a different tree.
-- Harness: `benches/gateway_benchmarks.rs` via criterion. Raw logs on `spark` at
-  `~/bench-logs/v4-perf-releaseline/{before-3.5.0,after-releaseline,session}.log`.
+- Harness: `benches/gateway_benchmarks.rs` via criterion. Raw logs on `bench-host` at
+  `<bench-logs>/v4-perf-releaseline/{before-3.5.0,after-releaseline,session}.log`.
 - Figures below are criterion's point estimate with its bootstrap confidence interval.
 
 ## What this does and does not measure
