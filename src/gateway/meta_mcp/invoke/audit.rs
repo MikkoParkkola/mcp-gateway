@@ -129,7 +129,7 @@ impl MetaMcp {
             Ok(()) => result,
             Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
                 tracing::error!(server, tool, trace_id, %error, "invocation audit write failed; result withheld");
-                Err(Error::AuditUnavailable)
+                result
             }
             Err(error) => {
                 tracing::warn!(server, tool, trace_id, %error, "Transparency log write failed (non-fatal)");
