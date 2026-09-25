@@ -169,6 +169,7 @@ pub async fn run_doctor_command(
     fix: bool,
     config_path: Option<&Path>,
     format: OutputFormat,
+    stdio_probe: StdioProbe,
 ) -> ExitCode {
     if format != OutputFormat::Json {
         println!("Gateway Doctor");
@@ -204,9 +205,11 @@ pub async fn run_doctor_command(
 
     // ── 5. Stdio backends (spawn check) ───────────────────────────────────
     for (name, backend) in config.enabled_backends() {
-        if let Some(result) = check_stdio_backend(name, &backend.transport) {
-            results.push(result);
-        }
+        let result = match stdio_probe {
+            StdioProbe::Locate => check_stdio_backend(name, &backend.transport),
+            StdioProbe::Start => start_stdio::start_stdio_backend(name, backend).await,
+        };
+        results.extend(result);
     }
 
     // ── 6. AI client configuration ─────────────────────────────────────────
@@ -702,6 +705,10 @@ fn which_command(bin: &str) -> bool {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[path = "doctor/start_stdio.rs"]
+mod start_stdio;
+pub use start_stdio::StdioProbe;
 
 #[cfg(test)]
 #[path = "doctor/runtime_tests.rs"]

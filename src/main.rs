@@ -211,11 +211,17 @@ async fn main() -> ExitCode {
             format,
             shadow,
             shadow_format,
+            start_stdio,
         }) => {
             if shadow {
                 commands::run_doctor_shadow_command(&shadow_format)
             } else {
-                commands::run_doctor_command(fix, config.as_deref(), format).await
+                let probe = if start_stdio {
+                    commands::StdioProbe::Start
+                } else {
+                    commands::StdioProbe::Locate
+                };
+                commands::run_doctor_command(fix, config.as_deref(), format, probe).await
             }
         }
         Some(Command::Upgrade {
