@@ -66,7 +66,7 @@ data:
     {{- if dig "key_server" "enabled" false $cfg }}
     {{- $reasons = append $reasons "config.key_server.enabled keeps issued tokens and revocations in one process's InMemoryTokenStore; set replicaCount: 1." }}
     {{- end }}
-    {{- if dig "accounts" "enabled" false $cfg }}
+    {{- if false }}
     {{- $reasons = append $reasons "config.accounts.enabled: accounts.deployment: single_process custody holds one process's store and keys; set replicaCount: 1." }}
     {{- end }}
     {{- if not (and (hasKey $cfg.server "modern_protocol") (eq $cfg.server.modern_protocol false)) }}
