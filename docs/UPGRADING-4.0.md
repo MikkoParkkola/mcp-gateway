@@ -541,6 +541,9 @@ config and reports the error.
 - **`backends.<name>.circuit_breaker` is refused.** `examples/circuit-breaker.yaml` showed it
   until 4.0, but nothing read it: every backend's breaker has always used
   `failsafe.circuit_breaker`. Delete the block; tune the global settings instead.
+- **A backend that names two transports is refused.** `command` and `http_url` together loaded as
+  a stdio backend and ignored `http_url`, `streamable_http` and any `a2a_*` key. The error names
+  each ignored key and the key that selected the transport. Keep one transport per backend.
 - **A key that belongs to a feature the binary was built without** (`cost_governance`, or a
   backend's `a2a_url` and `a2a_agent_card_path`) is named as such rather than as a misspelling.
   Release images carry both features.
