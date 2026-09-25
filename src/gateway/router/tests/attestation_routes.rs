@@ -20,20 +20,32 @@ const TOOL: &str = "search";
 
 /// Records the params of every forwarded request, so a test can assert both
 /// that a refused call never dispatched and that a served one lost the token.
+/// `seen` holds `tools/call` params; `all` holds every method with its params.
 #[derive(Default)]
 struct RecordingTransport {
     seen: Mutex<Vec<Option<Value>>>,
+    all: Mutex<Vec<(String, Option<Value>)>>,
 }
 
 #[async_trait]
 impl Transport for RecordingTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+        self.all
+            .lock()
+            .unwrap()
+            .push((method.to_string(), params.clone()));
         if method == "tools/call" {
             self.seen.lock().unwrap().push(params);
         }
+        let result = match method {
+            "tools/list" => json!({"tools": []}),
+            "resources/list" => json!({"resources": []}),
+            "prompts/list" => json!({"prompts": []}),
+            _ => json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        };
         Ok(JsonRpcResponse::success_serialized(
             RequestId::Number(1),
-            json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+            result,
         ))
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
@@ -48,12 +60,16 @@ impl Transport for RecordingTransport {
 }
 
 fn token_for(tool: &str) -> String {
+    token_with(&[tool])
+}
+
+fn token_with(capabilities: &[&str]) -> String {
     BnautAttestationSigner::new(KEY.to_vec(), "route")
         .issue(
             &TokenRequest {
                 agent_identity: "agent".to_string(),
                 task_uuid: uuid::Uuid::new_v4(),
-                capabilities: vec![tool.to_string()],
+                capabilities: capabilities.iter().map(|c| (*c).to_string()).collect(),
             },
             chrono::Utc::now(),
             chrono::TimeDelta::minutes(5),
@@ -87,12 +103,22 @@ async fn router_with(
             server: "demo".to_string(),
             tool: TOOL.to_string(),
         }]);
-    if let Some(mode) = mode {
-        let validator = Arc::new(AttestationValidator::new(BnautAttestationSigner::new(
-            KEY.to_vec(),
-            "route",
-        )));
-        meta = meta.with_attestation(validator, mode);
+    // Enforce comes from an env file through the overlay, as a deployment's
+    // does; observe is hand-built because no test here depends on its parse.
+    match mode {
+        Some(AttestationMode::Enforce) => {
+            let key = std::str::from_utf8(KEY).expect("utf-8 key");
+            let (validator, mode) = crate::attestation::wiring::enforce_from_env_file(key, "route");
+            meta = meta.with_attestation(validator, mode);
+        }
+        Some(mode) => {
+            let validator = Arc::new(AttestationValidator::new(BnautAttestationSigner::new(
+                KEY.to_vec(),
+                "route",
+            )));
+            meta = meta.with_attestation(validator, mode);
+        }
+        None => {}
     }
     Arc::get_mut(&mut state)
         .expect("the fixture state is not shared yet")
@@ -119,6 +145,47 @@ async fn call(router: &axum::Router, uri: &str, token: Option<&str>) -> (StatusC
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// POST one JSON-RPC request with any method and params, adding the token
+/// under `_meta` when given.
+async fn rpc(
+    router: &axum::Router,
+    uri: &str,
+    method: &str,
+    mut params: Value,
+    token: Option<&str>,
+) -> (StatusCode, Value) {
+    if let Some(token) = token {
+        params["_meta"] = json!({ (ATTESTATION_META): token });
+    }
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params}).to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+/// The raw token string must not appear in any forwarded payload, under any key.
+fn assert_raw_token_never_forwarded(transport: &RecordingTransport, token: &str) {
+    for (method, params) in transport.all.lock().unwrap().iter() {
+        let text = params.as_ref().map(Value::to_string).unwrap_or_default();
+        assert!(
+            !text.contains(token),
+            "{method} forwarded the token: {text}"
+        );
+        assert!(
+            !text.contains(ATTESTATION_META),
+            "{method} forwarded the key: {text}"
+        );
+    }
 }
 
 /// No forwarded request may carry the attestation key anywhere.
@@ -202,3 +269,6 @@ async fn observe_still_never_blocks() {
     }
     assert_eq!(transport.seen.lock().unwrap().len(), 2);
 }
+
+/// Part 3: every forwarding method on the direct route.
+mod methods;
