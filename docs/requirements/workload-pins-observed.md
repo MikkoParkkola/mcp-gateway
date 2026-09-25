@@ -16,7 +16,7 @@ table therefore blocks human ratification, not execution.
 | k6 image (`grafana/k6:0.54.0`) | `sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755` |
 
 Resolved from the Docker Hub registry API with no local daemon, then pulled by digest on
-Spark. Void condition 9 was observed firing twice before any measurement: an unset digest
+bench-host. Void condition 9 was observed firing twice before any measurement: an unset digest
 and a tag-shaped digest each exit 3.
 
 ## Harness artefacts (sha256)

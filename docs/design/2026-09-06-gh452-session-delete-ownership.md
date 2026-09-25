@@ -145,7 +145,7 @@ API keys and pass them through authentication middleware. Obtain IDs through
 legacy GET/POST requests; do not seed an owner string or fabricate an authenticated
 extension. Use the legacy protocol version explicitly so the modern stateless
 path cannot make an ownership assertion vacuously pass. Do not depend on live
-backends, account credentials, or Spark for this increment.
+backends, account credentials, or bench-host for this increment.
 
 The issue's original `MIK.SESSION.1-4` identifiers map respectively to the foreign,
 owner, indistinguishability and router coverage rows below. The release's single
@@ -178,9 +178,9 @@ The coordinator reports the following receipts as SHIP-WITH-FIXES on the same
 original material:
 
 - GPT: `gpt-20260906T125419Z-64997`, evidence at
-  `/Users/mikko/.claude/data/reviews/runs/gpt-20260906T125419Z-64997.md`.
+  `<review-archive>/runs/gpt-20260906T125419Z-64997.md`.
 - Grok: `grok-20260906T125419Z-64996`, evidence at
-  `/Users/mikko/.claude/data/reviews/runs/grok-20260906T125419Z-64996.md`.
+  `<review-archive>/runs/grok-20260906T125419Z-64996.md`.
 
 Both found the public-route gap; `src/commands/mod.rs:176-180` confirms that the
 init template lists `/mcp` publicly. Disposition for both findings: **fix it in
@@ -206,7 +206,7 @@ Confirmation receipts reported by the coordinator: GPT
 `gpt-20260906T130728Z-98459` and Grok `grok-20260906T130729Z-98458`, both SHIP with
 successful process exits. Both reviewed material SHA-256
 `5de39d7d1ceab1bf1749971626438c2f351ce0660a158233a14cb965c765d1fa` (49,074 bytes).
-Evidence files are under `/Users/mikko/.claude/data/reviews/runs/` with those names
+Evidence files are under `<review-archive>/runs/` with those names
 and `.md` suffixes. Grok's requested wording clarifications are incorporated:
 `.4`'s status matrix follows the auth gate, auth-disabled callers do not receive
 401, and file size may require focused extraction of existing tests.
@@ -219,13 +219,13 @@ edge is absent from the graph. No behavior edit is authorized by this test stage
 ## Tests-as-tests review and red evidence
 
 The coordinator ran `cargo test --all-features --test gh452_session_owner --jobs 6
--- --nocapture` on Spark before any production repair. Compilation succeeded;
+-- --nocapture` on bench-host before any production repair. Compilation succeeded;
 exit 101 reported five passing controls and five assertion failures. The failing
 cases observed cross-owner 204 versus required 404, foreign versus unknown
 response differences, same-name credential confusion, foreign termination among
 competing requests, and anonymous public 404 versus required 401. This is intended
 pre-fix evidence, not release acceptance. Exact log:
-`/Users/mikko/Documents/Codex/2026-09-06/mcp-gateway-v4-scope-review/gh452-red.log`.
+`<local-evidence>/2026-09-06/mcp-gateway-v4-scope-review/gh452-red.log`.
 
 The separate test review used run ID `mcp-v4-session-tests-20260906-r1`. Both
 authoritative ledger rows and actual wrapper exits were checked: process status
@@ -233,7 +233,7 @@ authoritative ledger rows and actual wrapper exits were checked: process status
 `f78959a99c8befa953907831de461a123583517c5ca0e5ee5f3f648d659edf0a`.
 Receipts: GPT `gpt-20260906T133105Z-54875` (SHIP-WITH-FIXES), Grok
 `grok-20260906T133105Z-54870` (SHIP); full outputs are in
-`/Users/mikko/.claude/data/reviews/runs/` with `.md` suffixes.
+`<review-archive>/runs/` with `.md` suffixes.
 
 | Review finding or improvement | Source check and disposition |
 |---|---|
@@ -245,10 +245,10 @@ Receipts: GPT `gpt-20260906T133105Z-54875` (SHIP-WITH-FIXES), Grok
 | Share the state constructor with `nfr_sec1_controls.rs` (Grok). | **Observation.** That constructor is private to another test binary and configures a modern-protocol fixture. There is no reusable public fixture today. This increment follows the established `AppState` pattern; extracting a shared constructor would change another test suite and is not necessary to close the authorization gap. |
 
 The repaired file contains eleven tests; its source has been formatted and its
-diff checked. The coordinator's second Spark run compiled and exited 101 with
+diff checked. The coordinator's second bench-host run compiled and exited 101 with
 six passes and five assertion failures, including the new authenticated nonowner
 of a public session (actual 204, required 404). Exact evidence:
-`/Users/mikko/Documents/Codex/2026-09-06/mcp-gateway-v4-scope-review/gh452-red-r2.log`.
+`<local-evidence>/2026-09-06/mcp-gateway-v4-scope-review/gh452-red-r2.log`.
 The contention case passed this run and failed the first, which confirms its
 classification as a concurrency regression/control, not a deterministic pre-fix
 falsifier or proof of atomicity. The owner-check and public-identity cases provide
@@ -264,7 +264,7 @@ exact submitted material is 107,360 bytes, SHA-256
 `144eaa8ba1339e7e535ebcaa4e6ed0b645e1246f92201f6d64b652f6abe1d1b7`.
 The current test-file hash was checked against that frozen material after both
 reviews returned. Complete receipts are under
-`/Users/mikko/.claude/data/reviews/runs/` with the named `.md` files.
+`<review-archive>/runs/` with the named `.md` files.
 
 Neither confirmation returned a blocking finding. The remaining suggestions are
 recorded as observations: direct unit cases for the future removal helper repeat
@@ -329,15 +329,15 @@ confirm `.7`'s credential gate precedes header lookup, `.1`'s shared owner reach
 the new removal operation, and `.6`'s lookup/comparison/removal hold the same guard
 without an await. These source checks do not replace runtime acceptance.
 
-The synchronized Spark green run passed all eleven cases under
+The synchronized bench-host green run passed all eleven cases under
 `cargo test --all-features --test gh452_session_owner --jobs 6 -- --nocapture`.
 The fourteen existing owner, streaming and reaper regressions also passed under
 `cargo test --all-features --lib gateway::streaming --jobs 6 -- --nocapture`.
 Logs are `mcp-gateway-v4-gh452-green.log` and
 `mcp-gateway-v4-gh452-streaming-green.log` under
-`/Users/mikko/Documents/Codex/2026-09-06/mcp-gateway-v4-scope-review/`.
+`<local-evidence>/2026-09-06/mcp-gateway-v4-scope-review/`.
 Read-only SHA-256 checks confirmed both modified source files and the acceptance
-test on Spark match the local review input. The real-route failures recorded
+test on bench-host match the local review input. The real-route failures recorded
 before implementation now pass, including the public-session nonowner case.
 
 Self-QA inspected the final diff, checked formatting/wiring and read both runtime
@@ -351,7 +351,7 @@ behavior change was necessary after green.
 Final code review run `mcp-v4-session-code-20260906-r1` returned SHIP from both
 vendors. Authoritative receipts are `gpt-20260906T141238Z-56965` and
 `grok-20260906T141238Z-56960` under
-`/Users/mikko/.claude/data/reviews/runs/`, with `.md` suffixes. Both ledger rows
+`<review-archive>/runs/`, with `.md` suffixes. Both ledger rows
 have process status `ok`, both actual wrapper exits are 0, and their material
 SHA-256 and byte count match:
 `a17a0e734df4de71159ca47cff63d88b7e7d3eeecf1fc9294fabc636e9362c1c`,
@@ -370,7 +370,7 @@ have these dispositions:
 ### Mutation evidence
 
 The first copied-tree mutation attempt failed during its unmutated baseline:
-Spark's `/tmp` tmpfs ran out of space. Cargo exited 101 and cargo-mutants exited
+bench-host's `/tmp` tmpfs ran out of space. Cargo exited 101 and cargo-mutants exited
 4; **no mutants were tested and no score is attributed to that attempt**. It also
 revealed that trailing libtest arguments did not select the baseline build
 target. The retry set a task-specific `TMPDIR` on the spacious `/home` disk and
@@ -380,7 +380,7 @@ was automatically removed by cargo-mutants; its full logs remain preserved.
 The retry command was:
 
 ```text
-TMPDIR=/home/mikko/codex/mcp-gateway-v4-gh452-mutation-r2/tmp cargo mutants --all-features --file src/gateway/router/handlers.rs --file src/gateway/streaming.rs --re 'mcp_delete_handler|remove_session_for' --jobs 1 --jobserver-tasks 6 --copy-target true --output /home/mikko/codex/mcp-gateway-v4-gh452-mutation-r2 --cargo-arg=--test --cargo-arg=gh452_session_owner
+TMPDIR=/home/<redacted>/codex/mcp-gateway-v4-gh452-mutation-r2/tmp cargo mutants --all-features --file src/gateway/router/handlers.rs --file src/gateway/streaming.rs --re 'mcp_delete_handler|remove_session_for' --jobs 1 --jobserver-tasks 6 --copy-target true --output /home/<redacted>/codex/mcp-gateway-v4-gh452-mutation-r2 --cargo-arg=--test --cargo-arg=gh452_session_owner
 ```
 
 With cargo-mutants 27.1.0, the unmutated baseline passed and all eleven mutants
@@ -407,12 +407,12 @@ negations and bypassed/reversed removal result handling.
 Complete logs, per-mutant diffs, `mutants.json`, `outcomes.json` and actual process
 receipts are preserved outside the repository in:
 
-- `/Users/mikko/Documents/Codex/2026-09-06/mcp-gateway-v4-scope-review/gh452-mutation-r1-infrastructure-failure/`
-- `/Users/mikko/Documents/Codex/2026-09-06/mcp-gateway-v4-scope-review/gh452-mutation-r2/`
+- `<local-evidence>/2026-09-06/mcp-gateway-v4-scope-review/gh452-mutation-r1-infrastructure-failure/`
+- `<local-evidence>/2026-09-06/mcp-gateway-v4-scope-review/gh452-mutation-r2/`
 
 ### Coverage, independent functional drive and remaining release gates
 
-The coordinator installed and verified cargo-llvm-cov 0.9.0 on Spark and ran
+The coordinator installed and verified cargo-llvm-cov 0.9.0 on bench-host and ran
 `cargo llvm-cov --all-features --test gh452_session_owner --jobs 4 --json`.
 Both changed functions have all 56 source regions covered (56/56, 100%),
 excluding dependency tracing-macro regions. This is source-region coverage,
@@ -451,7 +451,7 @@ Local driver evidence is under
 scope-review directory: `report.md`, `outcomes.json`, `facts.json`, raw request and
 stream artifacts, and `cleanup-verification.json`. The concise final result is
 `gh452-independent-driver-r2/result.md`. Remote originals remain at
-`/home/mikko/codex/mcp-gateway-v4-gh452-functional/driver/20260906T145616Z-independent-r2`.
+`/home/<redacted>/codex/mcp-gateway-v4-gh452-functional/driver/20260906T145616Z-independent-r2`.
 
 The isolated increment is committed and pushed as draft PR #484 at the revision
 recorded above. All-feature/all-target Clippy with warnings denied passes, and

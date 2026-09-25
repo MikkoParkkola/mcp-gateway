@@ -458,7 +458,7 @@ OUT/ledger audit. None is claimed as passed.
   34062367993 on config SHA `bfa16dc3` compiled 4,058 library cases and returned
   4,052 passed, two B08/B09 assertion failures, four ignored, exit 101. The same
   relevant production blobs and test bodies are present in base `0d4df3c0`.
-  The private Spark rebuild now independently confirms B08/B09 assertion RED and one staging control PASS (exit 101); see `order2-prerequisite-base-red-r2.log`.
+  The private bench-host rebuild now independently confirms B08/B09 assertion RED and one staging control PASS (exit 101); see `order2-prerequisite-base-red-r2.log`.
 - Scope/dependencies: only `MetaMcp::set_state`, its refusal text, and
   `MetaMcp::current_search_state`; the existing `session_key` helper and four
   discovery consumers already exist. Tests and these two design files accompany
@@ -610,7 +610,7 @@ No new algorithm or patent/license claim is introduced. The unavailable
 by the successful current metadata and installed CycloneDX tool, with failures
 retained in the audit receipt. This PR still requires its own CI run before merge.
 
-Evidence locator for this increment: `/Users/mikko/Documents/Codex/2026-09-06/mcp-gateway-v4-scope-review/order2-prerequisite-evidence-index.json`. It names exact artifact paths and SHA-256 values; each review manifest also binds its own immutable material.
+Evidence locator for this increment: `<local-evidence>/2026-09-06/mcp-gateway-v4-scope-review/order2-prerequisite-evidence-index.json`. It names exact artifact paths and SHA-256 values; each review manifest also binds its own immutable material.
 
 
 Readiness closure: GPT r4 SHIP (actual exit 0, material

@@ -88,7 +88,7 @@ def finite_number(value):
 def check_envelope(rep: str, meta: dict, pins: dict) -> None:
     """Void the run when a rep was measured on an oversubscribed machine.
 
-    Spark is shared. A rep whose window ran at loadavg >= the CPU count timed
+    bench-host is shared. A rep whose window ran at loadavg >= the CPU count timed
     the run queue, not the gateway -- observed on 2026-09-21, where a
     three-minute excursion to loadavg 34 on 20 CPUs took tools-call p99 from
     ~3ms to 58.7ms in A2, 75.0ms in B2 and 33.9ms in C2.
@@ -198,7 +198,7 @@ def check_rep(run: Path, rep: str, pins: dict) -> dict:
         # Reported beside the latencies, never gating. The envelope above is a
         # NECESSARY condition, not a certificate of a quiet machine: a rep
         # measured at loadavg 17.7 of 20 CPUs clears it and still returned p99
-        # 20.5ms against a quiet-machine 2.6ms (hand-run on spark, 2026-09-21).
+        # 20.5ms against a quiet-machine 2.6ms (hand-run on bench-host, 2026-09-21).
         # So when a cell reads INCONCLUSIVE, the conditions it drew are in the
         # same artifact as the width that made it inconclusive.
         "load1_max": (
@@ -276,7 +276,7 @@ def spread(values):
     """Min-to-max range over the smallest rep. Reported, never gating.
 
     This is the statistic #614 removed from the gate, kept as a diagnostic
-    because it is what makes a dirty Spark run legible: a cell whose range
+    because it is what makes a dirty bench-host run legible: a cell whose range
     blows out while its interval stays tight is a machine-conditions story,
     not a code story. It is a range, so it widens with every added rep -- the
     reason it cannot decide anything, and the reason it is still worth seeing.

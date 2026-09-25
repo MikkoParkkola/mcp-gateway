@@ -70,6 +70,6 @@ Versions of `mcp-gateway` released **before** v2.11 are entirely MIT-licensed an
 
 ## References
 
-- ADR-001: `claude-elite/docs/adr/ADR-001-ip-strategy.md` (Path C decision)
+- ADR-001: IP strategy, Path C decision (maintainer's private record)
 - Linear: MIK-3024 (umbrella), MIK-3034, MIK-3035, MIK-3036
 - PolyForm Project: search "PolyForm Noncommercial 1.0.0"

@@ -445,8 +445,8 @@ is applied above.
 
 | Reviewer | Verdict | Date | Output |
 |---|---|---|---|
-| Codex (`gpt-review`) | SHIP-WITH-FIXES | 2026-09-12 | `~/.claude/data/reviews/runs/gpt-20260912T143110Z-53608.md` |
-| Synthetic (`kimi-review`) | SHIP-WITH-FIXES | 2026-09-12 | `~/.claude/data/reviews/runs/synthetic-20260912T143312Z-65777.md` |
+| Codex (`gpt-review`) | SHIP-WITH-FIXES | 2026-09-12 | `<review-archive>/runs/gpt-20260912T143110Z-53608.md` |
+| Synthetic (`kimi-review`) | SHIP-WITH-FIXES | 2026-09-12 | `<review-archive>/runs/synthetic-20260912T143312Z-65777.md` |
 
 Findings and disposition:
 

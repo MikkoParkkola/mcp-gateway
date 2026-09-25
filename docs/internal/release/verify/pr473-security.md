@@ -28,14 +28,14 @@ Files: `src/idempotency.rs`, `src/oauth/{callback,client/mod,client/tests,metada
 
 ## Ledger rows
 
-Vendor 1 — `~/.claude/data/gpt-review-ledger.jsonl`, model `codex-default`:
+Vendor 1 — `<review-archive>/gpt-review-ledger.jsonl`, model `codex-default`:
 
 | half | ts | verdict | material_sha256 | process_status |
 |---|---|---|---|---|
 | a | 2026-09-08T16:27:45Z | SHIP-WITH-FIXES | `1f3fc219fd665bc1425b30d665444bc345143ff2bab7bf5737f6a5e0ef258408` | ok |
 | b | 2026-09-08T16:26:55Z | SHIP-WITH-FIXES | `f87ddbf6497915099b47c0ed56259960ff5a7575d8eb9b49d6688fc1c1d37c4f` | ok |
 
-Vendor 2 — `~/.claude/data/grok-review-ledger.jsonl`:
+Vendor 2 — `<review-archive>/grok-review-ledger.jsonl`:
 
 | half | ts | verdict | material_sha256 | process_status |
 |---|---|---|---|---|

@@ -415,7 +415,10 @@ fn check_admin_auth(ks: &KeyServer, headers: &HeaderMap) -> Result<(), axum::res
         });
 
     // Constant-time comparison to prevent timing side-channels
-    let matches = provided.is_some_and(|p| p.as_bytes().ct_eq(admin_token.as_bytes()).into());
+    // An empty admin token is refused at load (C4); refusing it here too means
+    // a KeyServer built in code never accepts `Authorization: Bearer `.
+    let matches = !admin_token.is_empty()
+        && provided.is_some_and(|p| p.as_bytes().ct_eq(admin_token.as_bytes()).into());
 
     if matches {
         Ok(())
@@ -480,6 +483,19 @@ fn error_response(status: StatusCode, error: &str, message: &str) -> axum::respo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_admin_token_never_authenticates() {
+        // Defence in depth behind the load-time refusal: a KeyServer built in
+        // code with an empty admin token must not accept an empty bearer.
+        let ks = KeyServer::new(crate::config::KeyServerConfig {
+            admin_token: Some(String::new()),
+            ..crate::config::KeyServerConfig::default()
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer ".parse().expect("header"));
+        assert!(check_admin_auth(&ks, &headers).is_err());
+    }
 
     #[test]
     fn debug_output_redacts_exchange_tokens() {

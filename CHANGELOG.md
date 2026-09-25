@@ -45,7 +45,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routing it needs. Omitting `accounts.hosted` mounts no route and changes no
   existing refusal text.
 
+- **With auth on, the tool-call audit log is required and fails closed
+  (breaking).** An auth-enabled config without `security.transparency_log.enabled:
+  true` fails to load, and a log that cannot open stops startup. Every entry
+  carries `schema_version: 2`, `trace_id`, `outcome`, `error_code` and `who`
+  (credential kind, key fingerprint, verified issuer and subject; never an email).
+  Refused and failed calls are recorded. A failed append answers HTTP 503 /
+  JSON-RPC -32005 and unreadies `/readyz` until an append succeeds. The Helm
+  chart and enterprise-alpha mount a writable `audit` volume. The log is not
+  rotated yet. See UPGRADING-4.0.md item 43.
+
 ### Fixed
+
+- **The default capability directories no longer include a checkout under `HOME`.**
+  `capabilities.directories` defaulted to `capabilities` plus
+  a private capability checkout under `$HOME/github` whenever it existed, so a
+  gateway loaded capabilities from a path no configuration named. The default is now
+  `capabilities` alone; list any other directory explicitly.
+
+- **`server.max_body_size` is enforced on every route (breaking).** It was read
+  nowhere: `/mcp` and `/mcp/{name}` hard-coded 10 MiB and every other route,
+  webhooks included, used the framework's 2 MiB default. An oversize body now
+  gets HTTP 413 everywhere; on `/mcp` and `/mcp/{name}` the JSON-RPC code is
+  -32600 (was 400, JSON-RPC -32700). `max_body_size: 0` now fails the load.
+  See UPGRADING-4.0.md item 39.
 
 - **A modern `tools/call` without an idempotency key is admitted.** Earlier 4.0
   builds refused it with `-32602` unless the tool was marked read-only, which
@@ -158,6 +181,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not own, as with a root-owned Kubernetes projection under `fsGroup`.
   The Helm chart and enterprise-alpha set `fsGroup: 1001` and a `0440` config
   mode. Windows is not checked. See `docs/UPGRADING-4.0.md` item 35.
+- **A secret reference that resolves to nothing fails the load (breaking).**
+  `${VAR}` with no default expanded to `""` when `VAR` was unset, so a missing
+  token was sent upstream as `Authorization: Bearer `. An enabled backend's
+  `headers` and `env`, and `capabilities.directories`, now refuse an unset or
+  empty `${VAR}` with no default, naming every such field in one error;
+  `${VAR:-default}` now also applies the default to an empty variable, as
+  POSIX does, and `${VAR:-}` allows empty on purpose. A disabled backend keeps
+  its text unexpanded. An `env:` secret that is unset or empty, and an empty
+  literal bearer token, API key, agent HS256 secret or key-server admin token,
+  are refused. `{env.X}` templates and capability `auth.key` values error at
+  call time when `X` is unset or empty instead of sending `""`; `{env.X:-}`
+  allows empty on purpose. A `${...}` that is not a `${NAME}` reference is
+  refused. Errors name listed env files that were not
+  found. See `docs/UPGRADING-4.0.md` item 40.
 - **`subscriptions/listen` needs a credential and is scoped to it (breaking).**
   Every listen stream shared one channel with no caller identity, so each
   listener was told about every backend's tool changes, and a revoked token kept
@@ -256,6 +293,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`server.request_timeout` (breaking).** Nothing read it; each call is bounded by
+  its backend's `timeout`. A config that still sets it now fails to load with an
+  explanation. See UPGRADING-4.0.md item 39.
 - **The inbound WebSocket listener and `server.ws_port` (breaking).** The
   listener only echoed text frames back; it served no MCP, ran outside the
   Origin/Host guard and had no auth. A config that still sets `server.ws_port`

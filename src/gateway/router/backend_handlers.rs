@@ -518,16 +518,9 @@ pub(super) async fn backend_handler(
     }
 
     // Parse JSON body
-    let body_bytes = match axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024).await {
+    let body_bytes = match super::helpers::read_body(request).await {
         Ok(bytes) => bytes,
-        Err(e) => {
-            return build_http_error_response(
-                None,
-                -32700,
-                format!("Failed to read body: {e}"),
-                StatusCode::BAD_REQUEST,
-            );
-        }
+        Err(refusal) => return refusal,
     };
 
     let json_request: Value = match serde_json::from_slice(&body_bytes) {

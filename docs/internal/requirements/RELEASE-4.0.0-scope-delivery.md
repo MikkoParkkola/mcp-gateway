@@ -38,7 +38,7 @@ claim that a particular agent has accepted it. No extra agents are assigned here
 | SAFETY | #462 config read-modify-write; #452 legacy session handler; gateway signing startup/config | Current implementation inventory | Invalid-config byte preservation, owner/nonowner behavior, enabled-signing startup behavior through production entry points |
 | BRIDGE | MIK-7387 stdio loop/writer; MIK-7388 production pending ownership | MIK-7212 HTTP/MRTR contract; stdio design and estimate | Existing stdio ACs enabled and passing; live peer cancellation and both applicable bridge directions |
 | TASKS | Tasks executor/store, routes, notification integration and lifecycle | Stable public dispatch and identity context; reviewed persistence/recovery design | Full task lifecycle, reconnect/restart fault tests and no silent side-effect replay |
-| ACCOUNTS | B/C storage/consent fallback, credential resolution, MIK-7334 cache isolation | Selected Open WebUI on Spark → gateway → Google Workspace journey; revised ADR-008/6746 boundary; reusable identity/connection implementations | Two-account journey, refresh/revoke/restart, public route parity and no shared fallback |
+| ACCOUNTS | B/C storage/consent fallback, credential resolution, MIK-7334 cache isolation | Selected Open WebUI on bench-host → gateway → Google Workspace journey; revised ADR-008/6746 boundary; reusable identity/connection implementations | Two-account journey, refresh/revoke/restart, public route parity and no shared fallback |
 | DISCOVERY | MIK-3274 ranker; existing tiered disclosure, derived exposure, schemas and surfaced tools | Frozen held-out baseline; current authorization/cache context | Outcome improvement plus exact/glob/authorization regression controls |
 | OPERATIONS | MIK-7235 catalogue policy; MIK-6710 audit read implementation | Pin selection criteria; audit filtering/work-bound design | Valid pins/exclusions and bounded audit work with equivalent results |
 | VALIDATION | Conformance, workloads, upgrade, current critical-path quality, demos and all publishing gates | Integrated packages | Recorded evidence applicable to the final release candidate |
@@ -67,7 +67,7 @@ current owner. No calendar estimate is inferred from ticket ROI or test count.
   old custom passthrough header does not prove a standard client auth flow.
 - Account adapter: for the selected Open WebUI journey, reconcile MIK-6207/6209 against
   current verified identity plumbing and remove wrong-repository administrative
-  ACs. Reuse the existing Spark deployment after recording its configuration and
+  ACs. Reuse the existing bench-host deployment after recording its configuration and
   versions. Validate an actual distinct identity per request through any mcpo
   hop; running bridge containers alone do not prove the acceptance route.
 - Ranking: measure before changing the algorithm; freeze thresholds and corpus

@@ -1,11 +1,11 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37, 38 or 39 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37, 38, 39 or 43 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34, 37 and 39 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37, 39 and 43 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -16,7 +16,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Item 38 refuses the start with its own error, which names the setting, so a notice would
 only repeat it.
 
-**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37, 38 and 39 refuse the gateway's start (item 37 only above one declared replica; item 39 only with auth on and no working audit log; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37, 38, 39 and 43 refuse the gateway's start (item 37 only above one declared replica; item 43 only with auth on and no working audit log; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -51,6 +51,7 @@ upgrading a running deployment.
 | 28 | A modern `tools/call` without an idempotency key is admitted, unprotected | None by default; set `server.idempotency_key: required` once your modern clients send keys |
 | 29 | A config key the gateway does not read fails the load | Fix the spelling of, or delete, each key the error names |
 | 30 | Attestation is off by default; `enforce` and unrecognised modes fail startup | Set `GATEWAY_ATTESTATION_MODE=observe` to keep the audit lines; remove `enforce` |
+| 31 | Tool calls with undeclared argument keys are refused | Stop sending the key, or set `input_schema_enforcement: standard` (or `off`) on that backend |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
 | 34 | The inbound WebSocket listener is gone; `server.ws_port` fails the load | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
@@ -58,7 +59,11 @@ upgrading a running deployment.
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
-| 39 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
+| 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
+| 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
+| 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
+
+Numbers 18-20 are intentionally unused.
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -147,6 +152,35 @@ previously never reached them.
 Send `MCP-Protocol-Version` on stateless requests, or complete `initialize` and reuse the
 session. Either restores caching; neither requires a configuration change.
 
+## 7. An OAuth backend must be on TLS or loopback
+
+The bearer token an OAuth backend's transport attaches is a replayable credential, so it no longer
+goes on the wire in cleartext. `https://` is always accepted; `http://` only when the host is
+loopback (`localhost`, `127.0.0.0/8` or `::1`). Anything else fails the backend with
+`refusing to send an OAuth token in cleartext to <origin>`, and the gateway starts without it.
+`http://[::ffff:127.0.0.1]` counts as non-loopback; use `http://127.0.0.1`.
+
+Put TLS in front of the backend, or move it to a loopback address. There is no opt-out. Backends
+without OAuth may still use plain `http://`.
+
+## 8. A credential-bearing backend on plain `http://` is refused at load
+
+An enabled backend whose `http_url` or `a2a_url` is `http://` to a host off this machine, and
+whose configuration carries a credential, fails the load. Credential-bearing means an `oauth`
+section (even with `enabled: false`), identity propagation, secret injection, any static header,
+or userinfo or a query string in the URL. The error names the backend and never echoes the URL.
+
+Use TLS, or set `allow_cleartext_credentials: true` on that backend to accept the exposure. See
+[REMOTE_BACKENDS.md](REMOTE_BACKENDS.md). The flag does not lift item 7: an OAuth backend on `http://` off loopback is
+still refused, flag or not.
+
+## 9. The savings estimates are gone from stats
+
+The `stats --price` flag, the `gateway_get_stats` `price_per_million` argument, and the
+`tokens_saved` and `estimated_savings_usd` response fields are removed. They were estimates with no
+measured basis. Drop `--price` from scripts, and compute cost from `total_cached_tokens` with your
+own price.
+
 ## 10. Probes read `/livez` and `/readyz`, not `/health`
 
 `/health` answers 503 whenever the health tracker marks any backend down. The Helm chart and
@@ -161,7 +195,7 @@ gate refuses on a `0.0.0.0` bind with no `public_url`, so the image reported its
 - `/readyz` answers 200 once the config has loaded and the listener is up. Use it for readiness
   and startup. It deliberately does not fail on a backend: there is no per-backend `required`
   setting, and one unreachable upstream is not a reason to take the gateway out of rotation.
-  Since item 39 it does fail, with 503, while an auth-enabled gateway's audit log cannot append.
+  Since item 43 it does fail, with 503, while an auth-enabled gateway's audit log cannot append.
 
 Both are public exactly when `/health` is. A config that lists only `/health` under
 `auth.public_paths` exposes all three, and one that omits `/health` requires a credential on all
@@ -848,7 +882,70 @@ The shipped deployments keep starting (item 21):
 - **compose:** sets `MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish` beside its loopback
   publish.
 
-## 39. With auth on, the audit log is required and fails closed
+## 39. `server.request_timeout` fails the load, and `server.max_body_size` is enforced
+
+In 3.x neither key did anything. No server-wide timeout existed: each call is bounded by its
+backend's `timeout`. `/mcp` and `/mcp/{name}` capped bodies at a hard-coded 10 MiB, and every
+other route, webhooks included, used the framework's 2 MiB default.
+
+- **`server.request_timeout` is removed and now stops startup; delete it.** It never did
+  anything. Set per-backend `timeout` to bound calls. The load fails, on start and on reload,
+  and the error includes:
+
+  ```text
+  `server.request_timeout` is retired: the server-wide request timeout was removed in 4.0; it was never enforced. Calls are bounded by the per-backend `timeout`. Remove server.request_timeout.
+  ```
+- **`server.max_body_size` is now enforced on every route**, read once at startup
+  (default 10 MiB). `0` would refuse every body, so it now fails the load; set a positive byte
+  count.
+- **An oversize body on `/mcp` and `/mcp/{name}` now gets HTTP 413 with JSON-RPC -32600**
+  ("Request body exceeds server.max_body_size"), where it used to get 400 with JSON-RPC -32700.
+  Clients that matched on -32700 must also handle 413 / -32600.
+- **Routes that parsed with a framework extractor (webhooks, key server, admin UI) now accept up
+  to the 10 MiB default**, up from 2 MiB. Lower `server.max_body_size` if you relied on that.
+
+## 40. A secret reference that resolves to nothing fails the load
+
+In 3.x an unset or empty secret became an empty credential without a word. `${GITHUB_TOKEN}`
+with `GITHUB_TOKEN` unset expanded to `""`, so the backend was sent `Authorization: Bearer `.
+An `env:` reference to a variable that was set but empty passed validation, and so did a literal
+`bearer_token: ""`. A `{env.X}` template in a capability, webhook or injected credential sent
+`""` when `X` was unset. Each of these now fails instead.
+
+- **`${VAR}` with no default must be set and non-empty** in the `headers` and `env` of every
+  enabled backend and in `capabilities.directories`. The error names the field and the variable:
+  `backends.github.headers.Authorization references ${GITHUB_TOKEN}, which is not set (or is
+  empty) and has no default. Set it, or write ${GITHUB_TOKEN:-} to allow empty.` One load reports
+  every such reference, together with every `env:` secret below that does not resolve. A `${`
+  that is not a `${NAME}` reference (names are uppercase, as in `${github_token}` written
+  lowercase) is refused too, instead of being sent verbatim. As in a POSIX shell, `${VAR:-text}` falls back to
+  `text` when `VAR` is unset **or empty** (3.x used the default only when unset), and `${VAR:-}`
+  is the way to say empty is intended.
+- **A disabled backend is not expanded.** Its `${VAR}` text stays as written, so a variable only
+  a disabled backend needs does not stop startup. Enabling it from the admin panel writes the
+  file and reloads; while the variable is unset that reload fails, names the variable, and the
+  running config is kept. The file already says `enabled: true`, so set the variable (or disable
+  the backend again) before the next restart, which would otherwise refuse to start.
+- **An empty secret is refused like a missing one.** `auth.bearer_token`, `auth.api_keys[].key`,
+  `agent_auth.agents[].hs256_secret` and `key_server.admin_token` written as `env:NAME` fail when
+  `NAME` is unset or empty: `auth.api_keys['ci'].key references environment variable 'CI_KEY',
+  which is empty; empty secrets are refused.` An empty literal in any of these four fails too
+  (`auth.bearer_token is empty.`), including when the config is built in code rather than
+  loaded, and the key server never accepts an empty admin bearer.
+- **`{env.X}` templates fail at call time.** Capability, webhook and injection templates resolve
+  when they are used, not at load, so the tool call or webhook delivery errors
+  (`{env.X} is not set or is empty`) instead of sending an empty credential. Write `{env.X:-}`
+  where empty is intended. A credential injection rule whose `{env.X}` is unset used to be
+  skipped; the call now fails. A capability `auth.key` (`env:X`, `{env.X}` or a bare `X`) whose
+  variable is set but empty fails the call too.
+- **A listed env file that does not exist is still allowed**, but every unresolved-reference error
+  now ends with `(env files listed but not found: <paths>)`, so a mistyped `env_files` path shows
+  up next to the variable it failed to supply.
+
+`server.metrics_token` is unchanged: an unset or empty variable there still leaves the gateway
+running with `/metrics` closed (item 33). No error prints a secret value.
+
+## 43. With auth on, the audit log is required and fails closed
 
 An authenticated gateway used to run with no tool-call audit, and when the log did run it
 named an API-key label rather than a person and skipped every refused or failed call.
@@ -911,6 +1008,9 @@ named an API-key label rather than a person and skipped every refused or failed 
 
 These need no action and have no startup notice.
 
+- **Default capability directories are `capabilities` only.** A 3.x gateway also loaded
+  a private capability checkout under `$HOME/github` if it existed. If you relied on that,
+  add the directory to `capabilities.directories`.
 - **Paginated backends show their whole tool catalogue.** The metadata cache now follows
   `nextCursor`, so tools past a backend's first `tools/list` page appear in search, listing
   and counts. One refresh of a paginated backend costs up to 32 list requests or 120 s. A

@@ -57,7 +57,7 @@ This started as "let's see what a sovereign Goose fork looks like" and ended as 
 
 - `feat(hooks): Claude-Code-compatible hook system` — 8 events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `Notification`, `PreCompact`), JSON-over-stdin, language-agnostic.
 - `feat(mcp): hebb + metacognition shipped as default extensions` — persistent memory (hebb) and reasoning verification (metacognition) are on by default from the first run. Seeded from `init-config.yaml` only if the user has no config yet; user config wins.
-- `feat(skills): YAML frontmatter skills system ported from claude-elite` — skills auto-discovered by keyword, so they compose rather than requiring the agent to know their names.
+- `feat(skills): YAML frontmatter skills system ported from private-tooling` — skills auto-discovered by keyword, so they compose rather than requiring the agent to know their names.
 - `feat(plan-mode): two-pass execution with approval gate` and `feat(plan-mode): wire PlanModeController into live agent loop` — draft, approve, execute. Wired into the live loop, not a separate CLI mode.
 - `feat(constitutional): wire Python gate as PreToolUse hook` and `config(hooks): enable strict_mode=True in constitutional gate hook` — every tool call passes through the gate described in §4.
 

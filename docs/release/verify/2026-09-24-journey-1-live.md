@@ -3,8 +3,8 @@
 Gateway: `mcp-gateway 4.0.0` built from `438583c15866598653fa4a3de7c4c4ace9de851f`
 (release line tip), default features, `cargo build --release --locked`, binary sha256
 `5f5271e4be000bbf57b55109c3f00fa7bfea416a52df684d083c69a74660eb18`, listening on
-127.0.0.1:39430 behind the Cloudflare tunnel rule `chat.raxor.ai ^/accounts/v1/`.
-Open WebUI 0.11.4 (`sha256:4ff8bcc8...`) at https://chat.raxor.ai behind Cloudflare Access.
+127.0.0.1:39430 behind the Cloudflare tunnel rule `chat.example.com ^/accounts/v1/`.
+Open WebUI 0.11.4 (`sha256:4ff8bcc8...`) at https://chat.example.com behind Cloudflare Access.
 Provider: Google, scope `gmail.readonly`, `access_type=offline`, `prompt=consent`, PKCE S256.
 Driver: agent-browser on a copy of the operator's Chrome profile. The BROWSER legs
 (connect, deny, expired, replay, reconnect) ran for real through Cloudflare Access and
@@ -38,7 +38,7 @@ Times are UTC. Personal e-mail addresses are replaced by the labels G1 and G2.
 | 16 | Gateway handling of a provider-rejected token | B's call returns Google's 401 as a tool result with `isError: false`; the gateway keeps releasing token_revision 2 until its expiry time (about 16:31) instead of treating the 401 as a signal to refresh or ask for reconnect | GAP, tracked separately |
 | 17 | LATE REPLAY | 15:34:22, 70 min after use, A's consumed callback re-delivered -> "already used" (not "expired"); journey status `connected`, `replay_refused: true`, `replay_refusals: 2` | PASS |
 | 18 | RECONNECT A after revoke | 15:35:03 real consent -> "connected"; A returns data (resultSizeEstimate 3) | PASS |
-| 19 | ROLLBACK (L04) on a restored copy | Store snapshot `accounts-backup-20260924T173529.tgz` restored into `live-l04/`, config copied with all paths repointed, port 39431, `accounts.hosted` removed. DOCUMENTED ROLLBACK IS INCOMPLETE: the gateway refuses to start, `accounts.adapters[0]: session requires accounts.hosted; without it no bridge is mounted`. With the adapter `session` block also removed it starts; `/accounts/v1/{journeys,callback,journeys/<id>/start,connections/<id>}` all 404 (403 at the Host guard for chat.raxor.ai); a never-connected user is refused with no connect link; B's preserved grant is still released (`token_revision=2`), i.e. rollback keeps grants usable rather than mapping them to a shared credential | PASS after doc fix; doc defect found |
+| 19 | ROLLBACK (L04) on a restored copy | Store snapshot `accounts-backup-20260924T173529.tgz` restored into `live-l04/`, config copied with all paths repointed, port 39431, `accounts.hosted` removed. DOCUMENTED ROLLBACK IS INCOMPLETE: the gateway refuses to start, `accounts.adapters[0]: session requires accounts.hosted; without it no bridge is mounted`. With the adapter `session` block also removed it starts; `/accounts/v1/{journeys,callback,journeys/<id>/start,connections/<id>}` all 404 (403 at the Host guard for chat.example.com); a never-connected user is refused with no connect link; B's preserved grant is still released (`token_revision=2`), i.e. rollback keeps grants usable rather than mapping them to a shared credential | PASS after doc fix; doc defect found |
 
 ## Final build e2c34b78 (after #756), two separate Google accounts
 

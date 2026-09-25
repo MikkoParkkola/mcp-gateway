@@ -118,4 +118,4 @@ per-cycle denominator and key ratios (kept cycles marked *):
 
 --- sensitivity: two-sided rule (b) would drop no kept cycle ---
 
-wrote /home/mikko/perf-workload/results/ramp-v2/analysis.json
+wrote /home/<redacted>/perf-workload/results/ramp-v2/analysis.json

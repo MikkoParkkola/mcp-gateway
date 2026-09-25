@@ -50,7 +50,7 @@ fn an_env_agent_secret_is_judged_on_what_it_resolves_to() {
         .validate()
         .expect_err("an env: secret resolving to empty was accepted");
     assert!(
-        err.to_string().contains("svc") && err.to_string().contains("0 bytes"),
+        err.to_string().contains("svc") && err.to_string().contains("empty"),
         "the message must name the agent and what it resolved to: {err}"
     );
 

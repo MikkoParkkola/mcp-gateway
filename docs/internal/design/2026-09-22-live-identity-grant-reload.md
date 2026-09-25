@@ -18,7 +18,7 @@ this work asserted the opposite and the source does not support it.
 Evidence markers: **V** verified at the cited line, **I** inferred, **A** assumption.
 
 **Branch caveat — raised, and discharged.** Every line number below was verified on
-`docs/pkg1-runtime-evidence` (worktree `/Users/mikko/github/.worktrees/relcheck`), while the
+`docs/pkg1-runtime-evidence` (worktree `<worktrees>/relcheck`), while the
 briefing named `docs/ranking-1-release-line`. That skew has since been checked: the two
 branches have **zero `src/` difference**, so every `file:line` anchor here holds on the release
 line as written. Recorded rather than deleted, so a later reader knows the question was asked

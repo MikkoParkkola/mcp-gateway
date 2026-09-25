@@ -10,7 +10,7 @@
     "build_sha_confidence": "measured",
     "cargo_profile": "release",
     "toolchain": "cargo 1.98.1 / rustc 1.98.1",
-    "host": "Linux 6.17.0-1014-nvidia aarch64 (spark)",
+    "host": "Linux 6.17.0-1014-nvidia aarch64 (bench-host)",
     "note": "The crate embeds no commit SHA (no build.rs), so --version reports only 4.0.0. source_sha is external bookkeeping: the commit the archived tree was exported from."
   },
   "comparison": "Every row below was compared field-by-field (expected, actual, status) against the committed driver output in docs/release/demo/.",

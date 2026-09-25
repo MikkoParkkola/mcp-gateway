@@ -174,7 +174,7 @@ received metadata instead of accepting a later conflicting document.
 For capacity, retain tombstones while admitting the largest valid authority at
 the count/byte limits, then refuse one extra grant without losing acknowledged
 state. Separately lower the byte cap so it is the binding limit on valid entries;
-do not manufacture unsupported padding. On the pinned Spark persistent volume,
+do not manufacture unsupported padding. On the pinned bench-host persistent volume,
 offer 11 refreshes/second across distinct live grants after a 5-second warmup,
 then measure a fixed 120-second window. Pass requires at least 1200 durable
 completions inside that window, at least 100 completions in every sliding
@@ -276,7 +276,7 @@ alias may be advertised. For the path-bearing fixture the root alias returns 404
 L01: Pin gateway revision/artifact, OWUI 0.9.6 image digest, actual adapter route,
 Google app/config revision and exact HTTPS callback. Use two designated test
 accounts and an unconnected user, with least-privilege scopes. Do not dump env,
-databases, tokens or personal documents as evidence. The already healthy Spark
+databases, tokens or personal documents as evidence. The already healthy bench-host
 installation establishes availability only.
 
 L02: An independent driver uses the running release candidate as a user: connect
