@@ -19,10 +19,14 @@ spec:
     metadata:
       labels:
         {{- include "mcp-gateway.selectorLabels" . | nindent 8 }}
+      {{- /* /metrics answers only server.metrics_token, so advertising it
+             without that token would scrape every stock install to up=0. */}}
+      {{- if .Values.metrics.existingSecret }}
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/path: "/metrics"
         prometheus.io/port: {{ .Values.service.port | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "mcp-gateway.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
@@ -81,6 +85,17 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.auth.existingSecret | quote }}
                   key: {{ .Values.auth.secretKey | quote }}
+            {{- end }}
+            {{- if .Values.metrics.existingSecret }}
+            # The scrape token /metrics answers (server.metrics_token). A
+            # missing value, or a missing Secret, does not stop startup;
+            # /metrics then answers 401.
+            - name: MCP_GATEWAY_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.metrics.existingSecret | quote }}
+                  key: {{ .Values.metrics.secretKey | quote }}
+                  optional: true
             {{- end }}
           volumeMounts:
             - name: config

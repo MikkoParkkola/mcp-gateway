@@ -43,6 +43,11 @@ data:
            namespace, so it declares them; set config.server.public_url to the
            ingress hostname when one fronts this pod. Exactly ONE name is
            admitted and it must be the one callers use. */}}
+    {{- /* Under server, not auth: mesh mode unsets auth, and scraping must
+           survive that. */}}
+    {{- if .Values.metrics.existingSecret }}
+    {{- $_ := set $cfg.server "metrics_token" "env:MCP_GATEWAY_METRICS_TOKEN" }}
+    {{- end }}
     {{- if not $cfg.server.public_url }}
     {{- $_ := set $cfg.server "public_url" (printf "http://%s.%s.svc.cluster.local:%v" (include "mcp-gateway.fullname" .) .Release.Namespace .Values.service.port) }}
     {{- end }}
