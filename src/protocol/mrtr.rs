@@ -32,6 +32,11 @@ use serde_json::Value;
 /// be claimed by the next implementation to want one.
 pub const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
 
+/// The `params._meta` key carrying a per-action attestation token on a call
+/// that has no `attestation` argument of its own: a surfaced tool on `/mcp`
+/// and any `tools/call` on the direct `/mcp/{name}` route (MIK-7570.ATTEST.1).
+pub(crate) const ATTESTATION_META: &str = "io.mcp-gateway/attestation";
+
 /// The out-of-band fields of a `tools/call` — the retry pair, and the
 /// idempotency key.
 ///
@@ -71,6 +76,10 @@ pub struct RetryFields {
     /// two. An unusable idempotency key is named here for the same reason: run
     /// unprotected, it is the duplicate the client asked to be spared.
     pub malformed: Vec<&'static str>,
+    /// The attestation token from `params._meta[ATTESTATION_META]`, if a
+    /// string. Carried here for the reason `idempotency_key` is: it is the one
+    /// sibling of `arguments` that reaches the invoke funnel. Never forwarded.
+    pub(crate) attestation: Option<String>,
 }
 
 /// The absence of any retry fields.
@@ -84,6 +93,7 @@ pub static NO_RETRY: RetryFields = RetryFields {
     request_state: None,
     idempotency_key: None,
     malformed: Vec::new(),
+    attestation: None,
 };
 
 impl RetryFields {
@@ -137,6 +147,11 @@ impl RetryFields {
                 .map(str::to_string),
             idempotency_key,
             malformed,
+            attestation: params
+                .get("_meta")
+                .and_then(|m| m.get(ATTESTATION_META))
+                .and_then(Value::as_str)
+                .map(str::to_string),
         }
     }
 

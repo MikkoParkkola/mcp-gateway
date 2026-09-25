@@ -45,7 +45,7 @@ use tracing::warn;
 use crate::config::Config;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::config::{
-    AdapterRuntime, GatewayCredential, SecretOverlay, adapter_header_names, resolve_adapter_runtime,
+    AdapterRuntime, SecretOverlay, adapter_header_names, resolve_adapter_runtime,
 };
 
 use super::auth::NamedApiKey;
@@ -108,11 +108,9 @@ impl OpenWebUiAdapterState {
             return None;
         }
 
-        // Built here rather than borrowed from the loader: `Config` keeps its
-        // credential list private to the config module, and the adapter must be
-        // compared against the credentials AS CONFIGURED (borrowed text), never
-        // against a resolved `auto` bearer that differs per call.
-        let credentials = gateway_credentials(config);
+        // The loader's own list, so the two cannot drift: credentials AS
+        // CONFIGURED (borrowed text), never a resolved `auto` bearer.
+        let credentials = config.gateway_credentials();
 
         let trusted = match resolve_adapter_runtime(accounts, overlay, &credentials) {
             Ok(runtimes) => {
@@ -174,22 +172,6 @@ impl OpenWebUiAdapterState {
         let candidates = self.inner.trusted.get(&name)?;
         resolve_identity(candidates, api_key_name, token).ok()
     }
-}
-
-/// The gateway authentication credentials as configured, for the no-reuse rule.
-fn gateway_credentials(config: &Config) -> Vec<GatewayCredential<'_>> {
-    let mut credentials: Vec<GatewayCredential<'_>> = Vec::new();
-    if let Some(token) = config.auth.bearer_token.as_deref() {
-        credentials.push(GatewayCredential::BearerToken(token));
-    }
-    for (index, api_key) in config.auth.api_keys.iter().enumerate() {
-        credentials.push(GatewayCredential::ApiKey {
-            index,
-            name: api_key.name.as_str(),
-            spec: api_key.key.as_str(),
-        });
-    }
-    credentials
 }
 
 fn header_name(raw: &str) -> Option<HeaderName> {

@@ -66,7 +66,9 @@ pub(super) const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
 /// construction — a fixture that removes the condition it observes.
 pub(super) fn two_principal_auth() -> AuthConfig {
     let key = |k: &str, name: &str, admin: bool| ApiKeyConfig {
-        key: k.to_string(),
+        key: None,
+        key_sha256: Some(crate::config::api_key_digest_spec(k.as_bytes())),
+        expires_at: None,
         name: name.to_string(),
         rate_limit: 0,
         // Named rather than empty: an empty list is "every backend", and the

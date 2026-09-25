@@ -32,6 +32,8 @@ use tower::ServiceExt;
 
 use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targets_for_call};
 
+/// MIK-7570.ATTEST.1: enforce on the direct route and on surfaced tools.
+mod attestation_routes;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
 mod meta_firewall_verdict;
@@ -670,7 +672,9 @@ fn scoped_auth_config(admin: bool) -> AuthConfig {
         enabled: true,
         bearer_token: None,
         api_keys: vec![ApiKeyConfig {
-            key: "scoped-key".to_string(),
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec("scoped-key".as_bytes())),
+            expires_at: None,
             name: "scoped-client".to_string(),
             rate_limit: 0,
             backends: vec!["demo".to_string()],
@@ -2588,6 +2592,7 @@ fn scoped_client(
         admin: false,
         principal: format!("principal-{name}"),
         authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     }
 }
 
@@ -2629,6 +2634,7 @@ async fn run_step_with_identity(
         execution: None,
         credential_principal: None,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,
         protocol_revision: None,
         authorizer: &authorizer,
@@ -2847,6 +2853,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         execution: None,
         credential_principal: None,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,
         protocol_revision: None,
         authorizer: &authorizer,
@@ -3081,6 +3088,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
     let anonymous = AuthenticatedClient {
         quota_principal: None,
         authenticated: false,
+        credential_kind: crate::security::audit::CredentialKind::None,
         ..scoped_client("public", vec!["*".into()], None)
     };
     assert_eq!(
@@ -3273,6 +3281,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         execution: None,
         credential_principal: None,
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,
         protocol_revision: None,
         authorizer: &authorizer,
