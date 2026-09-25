@@ -185,7 +185,7 @@ pub(super) fn task_intent_for_call(
                 .filter(|id| !id.is_empty())
                 .map(str::to_owned),
             req.protocol_revision.map(str::to_owned),
-            req.retry.attestation.clone(),
+            None,
         ),
         // One builder, shared with the confirmation gate's read-only committed
         // lookup, and the SAME owner string the read arms use. Two renderings
