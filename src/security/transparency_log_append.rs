@@ -351,8 +351,8 @@ impl TransparencyLogger {
         self.hooks
             .expiry_in_flight
             .store(false, std::sync::atomic::Ordering::Release);
-        written?;
         std::fs::remove_file(&seg.path)?;
+        written?;
         segments::sync_dir(path)?;
         telemetry_metrics::counter!("mcp_audit_segments_expired_total", "reason" => reason)
             .increment(1);
