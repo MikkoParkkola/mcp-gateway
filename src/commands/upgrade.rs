@@ -231,14 +231,14 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
 //
-// v4.0.0 carries six changes an operator can be surprised by, none of which a
+// v4.0.0 carries seven changes an operator can be surprised by, none of which a
 // config edit can pre-empt: two need an action (re-authenticate, fix an env
 // file), one removes an advertised protocol version, one changes what the
-// error budgets count, one stops caching unidentified revisions, and one makes
-// webhook notifications opt-in. A 3.x `gateway.yaml` loads unchanged, so this
-// migration never edits the file — it reports, once, on the first 4.0.0 start.
+// error budgets count, one stops caching unidentified revisions, one makes
+// webhook notifications opt-in, and one makes `logging/setLevel` admin-only.
+// A 3.x `gateway.yaml` loads unchanged, so this migration never edits the file — it reports, once, on the first 4.0.0 start.
 
-/// The six 4.0.0 changes, in the order they are printed.
+/// The seven 4.0.0 changes, in the order they are printed.
 ///
 /// Pinned as a slice rather than prose so a test can assert the notice still
 /// carries every item: a release note that quietly loses one is worse than
@@ -270,11 +270,16 @@ previously never got that far. Nothing errors: the symptom is throughput and \
 backend load. Send the header on stateless requests, or complete `initialize` \
 and reuse the session.",
     webhook_notice::ITEM,
+    "`logging/setLevel` over HTTP now needs an admin key, because it sets the \
+log level of every shared backend for every user. Other callers are refused \
+with HTTP 403, and with auth off nobody is admin, so it is refused for everyone. \
+Stdio is unchanged. To receive fewer log messages, declare a level in each \
+request's `_meta` instead.",
 ];
 
 /// Emit the one-time 4.0.0 notice.
 ///
-/// Reads nothing, because none of the six items depends on what the config
+/// Reads nothing, because none of the seven items depends on what the config
 /// says. It marks the webhook item as delivered so a later start does not
 /// repeat it.
 ///

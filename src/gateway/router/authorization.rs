@@ -149,6 +149,46 @@ pub(super) fn require_admin_tool_access(
     ))
 }
 
+/// Admin gate for `logging/setLevel` on both HTTP routes.
+///
+/// A shared backend is one process with one log level, and the forward rides
+/// the gateway's own credential, so setting it is an operator action whether
+/// it arrives on the meta route (every shared backend) or the direct route
+/// (one). The per-caller need is met by the level declared in each request's
+/// `_meta`. -32600 matches [`require_admin_tool_access`], so clients see one
+/// admin-denial shape. The refusal is audited here so the routes cannot drift.
+///
+/// `method` is matched case-insensitively: a backend that matches names
+/// loosely acts on `logging/SETLEVEL` as it does on the canonical name, so a
+/// case variant is the same request and must not slip past the gate. Any other
+/// method passes.
+pub(super) fn require_admin_log_level(
+    method: &str,
+    client: Option<&AuthenticatedClient>,
+    principal: Option<&str>,
+    server: &str,
+) -> Result<(), AuthorizationError> {
+    if !method.eq_ignore_ascii_case("logging/setLevel")
+        || CallerStanding::of_client(client) == CallerStanding::Admin
+    {
+        return Ok(());
+    }
+    let e = AuthorizationError::forbidden(
+        -32600,
+        "logging/setLevel sets backend log levels for every user of the gateway and \
+         requires admin access; to receive fewer messages, declare a level in the \
+         request `_meta`",
+    );
+    crate::gateway::authz::audit_refusal(
+        Transport::Http,
+        principal,
+        server,
+        "logging/setLevel",
+        &e.message,
+    );
+    Err(e)
+}
+
 pub(super) fn authorize_tool_target(
     state: &AppState,
     client: Option<&AuthenticatedClient>,

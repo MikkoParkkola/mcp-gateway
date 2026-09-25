@@ -16,7 +16,7 @@ use tracing::{debug, info, warn};
 use super::AppState;
 use super::authorization::{
     CallerStanding, RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call,
-    is_admin_meta_tool, refusal_principal, require_admin_tool_access,
+    is_admin_meta_tool, refusal_principal, require_admin_log_level, require_admin_tool_access,
 };
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
@@ -1113,6 +1113,17 @@ async fn meta_mcp_dispatch(
         agent_id: agent_identity.proven_agent_id(),
         grant_subject: grant_subject.as_ref(),
     };
+    // Every shared backend's one level, set over the gateway's own credential:
+    // an operator action. Checked before dispatch so a case variant of the
+    // method meets the same refusal as the canonical name.
+    if let Err(e) = require_admin_log_level(
+        &method,
+        scope,
+        router_authorizer.principal.as_deref(),
+        "gateway",
+    ) {
+        return build_error_response(Some(id), e.code, e.message, &session_id, e.status);
+    }
     let mut response = match method.as_str() {
         "subscriptions/listen" => {
             // The single long-lived stream that replaces the GET endpoint.
@@ -1766,7 +1777,8 @@ async fn meta_mcp_dispatch(
                 .await
         }
 
-        // Logging
+        // Logging. Admin standing is checked before this match, for every
+        // spelling of the method (see `require_admin_log_level`).
         "logging/setLevel" => {
             state
                 .meta_mcp
