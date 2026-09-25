@@ -701,11 +701,14 @@
     },
     {
       "id": "MIK-7570.METRICS.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/tests/metrics_scrape.rs",
+        "scripts/dev/helm-chart-smoke.sh"
+      ],
+      "note": "Graded 2026-09-25 (C7). /metrics answers only Bearer <server.metrics_token>, compared in constant time; anything else, the admin bearer included, gets 401 with WWW-Authenticate: Bearer, and no token admits nobody. Clause coverage in src/gateway/router/tests/metrics_scrape.rs: no header, wrong token and admin bearer by metrics_without_token_is_401, metrics_wrong_token_is_401 and metrics_admin_bearer_is_401; unset token by metrics_unset_token_is_401; a missing or empty env: variable loads and 401s by metrics_token_missing_env_starts_and_401s, which also refuses the literal env: spelling; the scrape token cannot open /mcp by metrics_token_cannot_open_mcp. Positive controls metrics_token_env_resolves and metrics_right_token_serves_series (body carries mcp_jsonrpc_requests_total). Chart: helm_metrics_scrape_follows_secret in scripts/dev/helm-chart-smoke.sh. Red CI run 36129233518 failed exactly the five 401 tests with the controls green. UPGRADING-4.0 item 32."
     },
     {
       "id": "MIK-7570.CONFIG.3",
