@@ -528,11 +528,15 @@
     },
     {
       "id": "MIK-7570.IDHEADER.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/router/identity_header_tests.rs",
+        "src/security/caller_identity.rs",
+        "tests/a0_per_caller_cache.rs"
+      ],
+      "note": "Graded 2026-09-25 (A8). Green CI run 36095000591 at a6078a9d (rebased on a9d891db). Only configured trusted proxies are honoured: untrusted_peer_identity_header_is_refused (src/gateway/router/identity_header_tests.rs:225), missing_connect_info_is_untrusted (:356), and HTTP 403 before dispatch or idempotency on both routes: meta_route_refuses_untrusted_peer_identity_header and direct_route_refuses_untrusted_peer_identity_header (tests/a0_per_caller_cache.rs:695, :727). A client cannot assert another identity: caller_cannot_set_authority (:238), cf_user_headers_without_assertion_are_refused (:404), cf_assertion_wrong_aud_or_signature_is_refused (:433), cf_mode_ignores_user_id_header_for_subject (:454), access_assertion_with_wrong_issuer_is_refused (:531), overlong_or_repeated_header_is_refused (:271); positive controls realistic_size_access_assertion_is_accepted (:499) and mode_off_ignores_all_identity_headers (:303). Unsafe configs refuse to load: config_rejects_unsafe_caller_identity and removed_trust_flag_is_a_load_error (src/security/caller_identity.rs:195, :309). Red first: CI 36084907545 (19 A8 cells), 36087909263 (Access assertion over 512 bytes), 36094475535 (padded authority). Delete-the-branch on Spark: removing the peer check, the -Authority refusal, the aud or signature check, the byte bound, the off-mode guard, the loopback rule, either to_canonical or deny_unknown_fields, or swapping TokenAgeCap on any caller reddens its named cell; restoring the 512-byte bound on the Access assertion reddens :499. Owed: the A8.7 live Cloudflare Access check."
     },
     {
       "id": "MIK-7570.OIDC.1",
