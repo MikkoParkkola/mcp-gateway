@@ -1226,6 +1226,42 @@ not relay. Poll there too.
 The legacy `initialize` result differs from 3.5.0 in exactly those three flags (and, over
 stdio, `tools.listChanged`).
 
+## 61. A backend that refuses a managed account's token forces one refresh, then a reconnect
+
+In 3.x and in the 4.0 betas, a managed personal account (`accounts.descriptors`,
+`mode: personal_managed`) was refreshed only when its token expired. If the provider revoked
+the grant earlier, every call returned a generic backend error that said "retry", with the
+same dead token each time, for up to the token's lifetime, which is often an hour.
+
+- **The first HTTP 401 from the backend forces one refresh of that account's token.** If the
+  provider answers `invalid_grant`, the account is marked reconnect-required and the call is
+  refused with the reconnect offer (JSON-RPC -32001 on `gateway_invoke`, HTTP 403 and -32003
+  on `/mcp/{backend}`), exactly as an expired grant is today.
+- **Otherwise the caller is told whether a retry can help.** The tool result's `recovery`
+  (or, on `/mcp/{backend}`, the error's `data`) carries `error_code: UPSTREAM_AUTH_REJECTED`
+  with `retry: true` when the token rotated or the provider was unreachable, and
+  `UPSTREAM_AUTH_REJECTED_PERSISTENT` with `retry: false` when this token was already
+  force-refreshed and the backend still refuses it. That is a scope or permission problem,
+  not a dead token. The gateway retries nothing automatically.
+- **At most one forced refresh per token revision, across restarts.** The revision is
+  recorded in the account store before the provider is asked, whatever it answers. A
+  backend that refuses every token costs one provider round trip per token revision.
+- **Only the status decides.** A 200 result whose text says "401" is passed through as it is
+  today.
+- **A 401 or 403 from any HTTP backend is no longer retried.** Retrying repeats the refusal
+  with the same credential. A 429, a 5xx, a 400 and a 404 are retried as before. A 404 and a
+  400 still re-initialize an expired MCP session. Chain steps follow the same rule.
+- **Not covered:** backend-level OAuth (`backends.<name>.oauth`), which is planned for 4.1,
+  external (token-exchange) descriptors, and a 401 inside an elicitation continuation. There,
+  the caller's next call forces the refresh.
+
+**Rolling back to an earlier 4.0 beta is not supported once a forced refresh has happened.**
+The account store's authority file then records `forced_revision` for that account. An
+earlier 4.0 binary refuses an authority file with a field it does not know, so its account
+custody does not start, and with it the gateway. The file is sealed, so the field cannot be
+removed by hand. It is removed for an account when that account's token next rotates or the
+user reconnects. Rolling back to 3.x is unaffected: 3.x does not read the account store.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.
@@ -1259,3 +1295,6 @@ leaves the 3.x token files in place — its migration prints the notice and stam
 and touches no credential (`src/commands/upgrade.rs:264`). A rollback therefore picks those
 files back up rather than prompting again, unless the tokens expired in the meantime. What 4.0.0
 wrote under the per-issuer key is simply not read by 3.x.
+
+Within 4.0, a rollback to an earlier beta is unsupported once a managed account has had a
+forced refresh (item 61): that beta cannot open the account store and refuses to start.
