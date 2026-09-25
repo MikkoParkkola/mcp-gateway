@@ -240,7 +240,13 @@ impl CapabilityExecutor {
             self.fetch_oauth_token(provider, auth.token_endpoint.as_deref())
                 .await
         } else if let Some(file_spec) = key.strip_prefix("file:") {
-            self.fetch_from_file(file_spec)
+            {
+                let _ = file_spec;
+                crate::config::EnvOverlay::none()
+                    .resolve_reference("capability", key)
+                    .map(Option::unwrap_or_default)
+                    .map_err(Error::Config)
+            }
         } else if key.starts_with("{env.") && key.ends_with('}') {
             let var_name = &key[5..key.len() - 1];
             self.env
