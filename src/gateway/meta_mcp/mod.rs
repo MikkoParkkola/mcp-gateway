@@ -2641,6 +2641,9 @@ mod authz_tests;
 #[cfg(test)]
 #[path = "search_disclosure_e2e.rs"]
 mod search_disclosure_e2e;
+#[cfg(test)]
+#[path = "list_paging_e2e.rs"]
+mod list_paging_e2e;
 
 #[cfg(test)]
 #[path = "trace_correlation_tests.rs"]
