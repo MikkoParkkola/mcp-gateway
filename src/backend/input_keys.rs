@@ -80,10 +80,14 @@ impl Backend {
         let entry = Arc::clone(lease.entry());
         let _ = entry
             .tools_cache
-            .get_or_fetch_shared(self.cache_ttl, || {
-                let tools = parsed.clone();
-                async move { Ok(tools) }
-            })
+            .get_or_fetch_shared_then(
+                self.cache_ttl,
+                || {
+                    let tools = parsed.clone();
+                    async move { Ok((tools, ())) }
+                },
+                |()| {},
+            )
             .await;
     }
 }
