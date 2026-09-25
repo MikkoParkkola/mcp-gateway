@@ -79,6 +79,13 @@ impl TransparencyLogger {
         let too_big = active_bytes + line.len() as u64 + 1 > rot.max_segment_bytes;
         let too_old = rot.max_segment_age_secs > 0
             && now >= inner.seg.opened_at.saturating_add(rot.max_segment_age_secs);
+        // Retention also runs before the append, not only after a rotation:
+        // a log opened over the limit (retain_segments lowered, or a crash
+        // mid-retention) is trimmed on its first write.
+        if inner.seg.sealed > rot.retain_segments as usize {
+            let g = guard(&mut lock, &path)?;
+            self.apply_retention(inner, &path, g)?;
+        }
         let rotated = if inner.seg.has_records && (too_big || too_old) {
             let g = guard(&mut lock, &path)?;
             self.rotate(inner, &path, g, now)
@@ -217,12 +224,13 @@ impl TransparencyLogger {
             entry_hash: inner.last_entry_hash.clone(),
             segment_seq: inner.seg.seq,
         };
-        let bytes = segments::encode_hwm(
+        let written = segments::encode_hwm(
             &mark,
             self.config.shared_secret.as_bytes(),
             &self.config.key_id,
-        );
-        if let Err(e) = segments::write_hwm(path, &bytes, sync) {
+        )
+        .and_then(|bytes| segments::write_hwm(path, &bytes, sync));
+        if let Err(e) = written {
             tracing::warn!(error = %e, "audit log: high-water mark not written");
         }
     }
@@ -306,6 +314,7 @@ impl TransparencyLogger {
             self.expire(inner, path, seg, "retention", g)?;
         }
         let left = segments::list_segments(path)?.len();
+        inner.seg.sealed = left;
         #[allow(clippy::cast_precision_loss)]
         telemetry_metrics::gauge!("mcp_audit_segments").set(left as f64 + 1.0);
         Ok(())
