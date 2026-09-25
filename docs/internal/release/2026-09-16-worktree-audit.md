@@ -5,11 +5,11 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 # Worktree audit — 2026-09-16
 
-Read-only audit of every git worktree under `/Users/mikko/github/` except
+Read-only audit of every git worktree under `<repos>/` except
 `.worktrees/v4-codeql-record` (in active use by this session, excluded per
 instruction) and the audit itself. All 46 worktrees below share one remote —
 `https://github.com/MikkoParkkola/mcp-gateway.git` — none belong to
-`claude-elite`.
+`private-tooling`.
 
 Method: `git status --porcelain` line count (Dirty), `git log --oneline
 origin/main..<ref>` count after `git fetch origin main` (Unpushed), and
@@ -71,19 +71,19 @@ those are held rather than assumed safe).
 | `.worktrees/v4-merge` | `merge/v4-integration-main` | 222 | 0 | 222 dirty/untracked path(s) | 2026-09-12T15:26:41 | 2026-09-12T16:05:29 | HOLD — unmerged work |
 | `.worktrees/v4-ranking-fuzzy` | `feat/v4-ranking-fuzzy` | 0 | 3 | 3 commits ahead of origin/main; no PR found | 2026-09-12T16:45:32 | 2026-09-12T16:06:24 | HOLD — unmerged work |
 | `.worktrees/v4-reconcile-main` | `chore/v4-reconcile-main` | 1 | 52 | 1 dirty/untracked path(s) | 2026-09-15T06:51:30 | 2026-09-15T13:00:38 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-a0266aa2b70162072` | `worktree-agent-a0266aa2b70162072` | 0 | 1 | 1 commits ahead of origin/main; no PR found | 2026-09-14T11:47:53 | 2026-09-14T14:41:51 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-a04ce0c0a7a322de4` | `feat/v4-stdio-production-caller` | 0 | 24 | 24 commits ahead of origin/main; no PR found | 2026-09-15T02:19:31 | 2026-09-15T08:09:53 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-a35c004d2490365f5` | `control4-lifecycle-local` | 0 | 5 | 5 commits ahead of origin/main; no PR found | 2026-09-12T21:16:12 | 2026-09-12T20:55:35 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-a3dd3d0587d226ef7` | `task1-caller` | 1 | 125 | 1 dirty/untracked path(s) | 2026-09-09T15:14:22 | 2026-09-09T17:22:37 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-a40d82882bcded359` | `lane/error-budgets` | 0 | 120 | 120 commits ahead of origin/main; no PR found | 2026-09-09T14:50:46 | 2026-09-09T15:32:38 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-a5558e53face6d4d0` | detached `cbd224f023f6` | 0 | 138 | 138 commits ahead but detached HEAD (sha cbd224f0), no branch/PR to check | 2026-09-09T20:26:17 | 2026-09-09T17:35:02 | HOLD — cannot prove |
-| `mcp-gateway/.claude/worktrees/agent-a789be86c8c8986b6` | `worktree-agent-a789be86c8c8986b6` | 0 | 5 | 5 commits ahead of origin/main; no PR found | 2026-09-14T12:10:43 | 2026-09-14T14:41:54 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-a8d6614e7e57e901d` | `feat/v4-workload-harness` | 0 | 29 | 29 commits ahead of origin/main; no PR found | 2026-09-16T17:40:57 | 2026-09-14T19:49:40 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-aa567effdf9c7d36d` | `work/nfr-workload-1-d` | 0 | 22 | 22 commits ahead of origin/main; no PR found | 2026-09-14T20:04:37 | 2026-09-14T20:32:10 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-ad2d9a22dbbb4861b` | `lane/roots-wiring` | 0 | 120 | 120 commits ahead of origin/main; no PR found | 2026-09-09T15:16:21 | 2026-09-09T15:56:00 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-adc064167cca1f31c` | `work/nfr-workload-1` | 0 | 21 | 21 commits ahead of origin/main; no PR found | 2026-09-14T13:08:18 | 2026-09-14T20:31:37 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-addd0edf8e609b355` | `stdio-keystone-rebase` | 0 | 15 | 15 commits ahead of origin/main; no PR found | 2026-09-14T19:07:55 | 2026-09-14T19:50:19 | HOLD — unmerged work |
-| `mcp-gateway/.claude/worktrees/agent-af357ba01f09a457f` | `feat/v4-mrtr-bridge-wiring` | 1 | 6 | 1 dirty/untracked path(s) | 2026-09-12T20:39:29 | 2026-09-12T19:50:34 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-a0266aa2b70162072` | `worktree-agent-a0266aa2b70162072` | 0 | 1 | 1 commits ahead of origin/main; no PR found | 2026-09-14T11:47:53 | 2026-09-14T14:41:51 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-a04ce0c0a7a322de4` | `feat/v4-stdio-production-caller` | 0 | 24 | 24 commits ahead of origin/main; no PR found | 2026-09-15T02:19:31 | 2026-09-15T08:09:53 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-a35c004d2490365f5` | `control4-lifecycle-local` | 0 | 5 | 5 commits ahead of origin/main; no PR found | 2026-09-12T21:16:12 | 2026-09-12T20:55:35 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-a3dd3d0587d226ef7` | `task1-caller` | 1 | 125 | 1 dirty/untracked path(s) | 2026-09-09T15:14:22 | 2026-09-09T17:22:37 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-a40d82882bcded359` | `lane/error-budgets` | 0 | 120 | 120 commits ahead of origin/main; no PR found | 2026-09-09T14:50:46 | 2026-09-09T15:32:38 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-a5558e53face6d4d0` | detached `cbd224f023f6` | 0 | 138 | 138 commits ahead but detached HEAD (sha cbd224f0), no branch/PR to check | 2026-09-09T20:26:17 | 2026-09-09T17:35:02 | HOLD — cannot prove |
+| `<agent-worktrees>/agent-a789be86c8c8986b6` | `worktree-agent-a789be86c8c8986b6` | 0 | 5 | 5 commits ahead of origin/main; no PR found | 2026-09-14T12:10:43 | 2026-09-14T14:41:54 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-a8d6614e7e57e901d` | `feat/v4-workload-harness` | 0 | 29 | 29 commits ahead of origin/main; no PR found | 2026-09-16T17:40:57 | 2026-09-14T19:49:40 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-aa567effdf9c7d36d` | `work/nfr-workload-1-d` | 0 | 22 | 22 commits ahead of origin/main; no PR found | 2026-09-14T20:04:37 | 2026-09-14T20:32:10 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-ad2d9a22dbbb4861b` | `lane/roots-wiring` | 0 | 120 | 120 commits ahead of origin/main; no PR found | 2026-09-09T15:16:21 | 2026-09-09T15:56:00 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-adc064167cca1f31c` | `work/nfr-workload-1` | 0 | 21 | 21 commits ahead of origin/main; no PR found | 2026-09-14T13:08:18 | 2026-09-14T20:31:37 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-addd0edf8e609b355` | `stdio-keystone-rebase` | 0 | 15 | 15 commits ahead of origin/main; no PR found | 2026-09-14T19:07:55 | 2026-09-14T19:50:19 | HOLD — unmerged work |
+| `<agent-worktrees>/agent-af357ba01f09a457f` | `feat/v4-mrtr-bridge-wiring` | 1 | 6 | 1 dirty/untracked path(s) | 2026-09-12T20:39:29 | 2026-09-12T19:50:34 | HOLD — unmerged work |
 
 
 ## Proposed removals
@@ -96,4 +96,4 @@ No `bin/safe-delete-branch` invocations are proposed.
 
 - SAFE TO REMOVE: 0
 - HOLD — unmerged work: 45
-- HOLD — cannot prove: 1 (`mcp-gateway/.claude/worktrees/agent-a5558e53face6d4d0`, detached HEAD, no branch name for PR lookup)
+- HOLD — cannot prove: 1 (`<agent-worktrees>/agent-a5558e53face6d4d0`, detached HEAD, no branch name for PR lookup)

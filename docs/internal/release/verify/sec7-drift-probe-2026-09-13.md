@@ -3,7 +3,7 @@
 A re-probe, not a first one — the row records a two-way verification on 2026-09-11. What
 is new is the revision: a release build of `bd1adbb4` (`origin/main`), the same revision
 the performance re-measurement was taken against, started on a free loopback port on
-`spark` and probed by the checker on that tree.
+`bench-host` and probed by the checker on that tree.
 
 ```
 $ python3 scripts/dev/check-control-drift.py http://127.0.0.1:39411/mcp

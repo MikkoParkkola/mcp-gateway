@@ -20,7 +20,7 @@ toward heavy net-new architecture that the codebase did not need:
   cluster. → ADR-004.
 
 In both cases the wishlist framing hid existing primitives and led toward
-weeks of Spark-bound builds. A code-first "what do we already have / what is the
+weeks of bench-host-bound builds. A code-first "what do we already have / what is the
 actual need" pass converted them into days of Mac-buildable reuse.
 
 Two more remaining tickets show the same pattern:
@@ -45,7 +45,7 @@ For each ticket, before writing code, answer:
 3. **What portfolio primitive covers it?** (SurrealDB before a new DB; existing
    crates before new dependencies.)
 4. **Only then:** the minimum new code, and name any new third-party dependency
-   plus its build-cost tier (Mac-buildable vs Spark-bound heavy compile).
+   plus its build-cost tier (Mac-buildable vs bench-host-bound heavy compile).
 
 A ticket that fails gate 1 (no demand) moves to **Blocked** with a written
 demand-gate condition rather than being built on spec.

@@ -4,15 +4,15 @@
 
 | leg | vendor | verdict | authority |
 |---|---|---|---|
-| 1 | grok-review | **SHIP** | wrapper trailer `grok-review: verdict SHIP` + run file `~/.claude/data/reviews/runs/grok-20260907T040205Z-5615.md` |
-| 2 | synthetic-review | **SHIP-WITH-FIXES** | wrapper trailer `synthetic-review: verdict SHIP-WITH-FIXES` + run file `~/.claude/data/reviews/runs/synthetic-20260907T040210Z-6148.md` |
+| 1 | grok-review | **SHIP** | wrapper trailer `grok-review: verdict SHIP` + run file `<review-archive>/runs/grok-20260907T040205Z-5615.md` |
+| 2 | synthetic-review | **SHIP-WITH-FIXES** | wrapper trailer `synthetic-review: verdict SHIP-WITH-FIXES` + run file `<review-archive>/runs/synthetic-20260907T040210Z-6148.md` |
 
 NOT a ledger row, and the shortfall is named rather than dressed up. §PA wants a ledger
 row plus a process exit status; neither exists for any of the four runs on this page.
-`~/.claude/data/reviews/paired-ledger.jsonl` holds only `airlok-mac` rows -- these
+`<review-archive>/paired-ledger.jsonl` holds only `another-host` rows -- these
 wrappers write no row at all -- and this session never captured the wrappers' exit codes.
 What IS observed: each wrapper emitted its own verdict trailer, and each wrote a run file
-under `~/.claude/data/reviews/runs/`. That is trailer-plus-artifact authority, which is
+under `<review-archive>/runs/`. That is trailer-plus-artifact authority, which is
 WEAKER than the standard §PA sets, and it is recorded as weaker instead of asserted as
 equivalent. A verdict doc that scraped its own authority would be the exact failure §PA
 was written for.
@@ -151,8 +151,8 @@ the payload on stdin. That is the only reason two runs exist per vendor.
 
 | leg | vendor | verdict | authority |
 |---|---|---|---|
-| confirm 1 | grok-review | **SHIP** | trailer `grok-review: verdict SHIP` + `~/.claude/data/reviews/runs/grok-20260907T044146Z-14807.md` |
-| confirm 2 | synthetic-review | **SHIP-WITH-FIXES** | trailer `synthetic-review: verdict SHIP-WITH-FIXES` + `~/.claude/data/reviews/runs/synthetic-20260907T044146Z-14808.md` |
+| confirm 1 | grok-review | **SHIP** | trailer `grok-review: verdict SHIP` + `<review-archive>/runs/grok-20260907T044146Z-14807.md` |
+| confirm 2 | synthetic-review | **SHIP-WITH-FIXES** | trailer `synthetic-review: verdict SHIP-WITH-FIXES` + `<review-archive>/runs/synthetic-20260907T044146Z-14808.md` |
 
 Grok: improvements 1 and 2 **CLOSED** — "a miss or JSON-RPC error can no longer pass",
 "the arms differ only in `auth.enabled`" — and holding the rename until the `.10` ruling
@@ -187,7 +187,7 @@ arity) — not this change's, reported not chased, per RED-SIGNAL TRIAGE.
 
 ## What each leg could actually READ — verified at source
 
-`~/.claude/bin/synthetic-review` posts the prompt to a bare
+`<review-tools>/synthetic-review` posts the prompt to a bare
 `chat/completions` endpoint (`BASE=https://api.synthetic.new/openai/v1`, line 106;
 `urllib.request.urlopen` at line 214). No tool loop, no filesystem. Its own preamble
 tells the reviewer "you may still read it read-only by absolute path" — for THIS

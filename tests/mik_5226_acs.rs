@@ -206,7 +206,7 @@ fn ac_2_mik_new_runtime_d_2_compiler_descriptor_gviso() {
 
 // ── AC.3: MIK-NEW.RUNTIME-D.3 Test matrix ────────────────────────────────
 
-/// MIK-NEW.RUNTIME-D.3 Test matrix: same 10-task agent workload runs identically on Spark and on operator Mac; identical attestation + memory bridge + audit trail (cross-references RUNTIME-A/B)
+/// MIK-NEW.RUNTIME-D.3 Test matrix: same 10-task agent workload runs identically on bench-host and on operator Mac; identical attestation + memory bridge + audit trail (cross-references RUNTIME-A/B)
 #[test]
 fn ac_3_mik_new_runtime_d_3_test_matrix_same_10_task_ag() {
     let compiler = Compiler::new();

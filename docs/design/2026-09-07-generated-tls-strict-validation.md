@@ -8,7 +8,7 @@ SHIP; independent strict mTLS and isolated rollout/rollback acceptance passed.
 The isolated increment passes all 72 selected tests and all-feature/all-target
 Clippy with warnings denied. CI and integration remain open.
 
-Owner ticket: [MIK-7212](https://linear.app/parm/issue/MIK-7212/critical-proxy-drops-mrtr-inputresponses-and-requeststate-write-the).
+Owner ticket: [MIK-7212](https://linear.app/example/issue/MIK-7212/critical-proxy-drops-mrtr-inputresponses-and-requeststate-write-the).
 All four `MIK-7212.TLSCERT` acceptance checkboxes are in its description.
 
 FOR: unblock the 4.0 HTTP/TLS independent acceptance drive by making newly
@@ -64,7 +64,7 @@ issue_leaf has 7, in mTLS and TLS CLI flows. Verify both server and client issua
 | MIK-7212.TLSCERT.4 | Rehearse side-by-side CA generation, overlapping trust distribution, leaf cutover and rollback in isolated directories/services. System/acceptance, upgrade. | Preserve hashes of old material; new strict mTLS succeeds only after new trust and leaf distribution. Existing legacy-client access remains verifiable with CA-verified curl, and reverting the isolated service to retained old material restores the original legacy connection. Do not claim strict clients work with the malformed old generation. |
 
 Tests precede implementation and receive their own review. Portable DER assertions
-run in normal Rust tests. OpenSSL and Python checks run in the Spark release lane;
+run in normal Rust tests. OpenSSL and Python checks run in the bench-host release lane;
 missing or older tooling is a blocked check, never a silent pass. Cheapest next
 check is the DER regression against unchanged production, then strict chain and
 real TLS validation after repair. Any additional strict-validator failure is
@@ -111,7 +111,7 @@ issuing a new leaf alone does not repair that CA. The operator procedure is:
    a user's existing trust automatically.
 
 MIK-7212.TLSCERT.4 exercises steps 1–4 using isolated service instances. The
-documentation explains step 5 as an operator action; no live Spark service or
+documentation explains step 5 as an operator action; no live bench-host service or
 user trust store is changed during validation.
 Run focused mTLS regressions and formatting/lint checks, then integrate evidence
 into W01. This design grants no release, merge or deployment verdict.
@@ -160,7 +160,7 @@ five tests with the expected source hash verified before and after execution.
 Both changed lines (203 and 248) were exercised: 2/2 changed-line coverage.
 Whole-module coverage from this five-test scope is 67/208 lines (32.21%); it is
 not a module-wide 95% claim. The replacement receipt is
-`/home/mikko/codex/tlscert-coverage-r2/summary.json` on Spark, exported directly
+`/home/<redacted>/codex/tlscert-coverage-r2/summary.json` on bench-host, exported directly
 from the current test binary.
 
 The second cargo-mutants run supplies a valid existing `Error::Config` value:
@@ -171,7 +171,7 @@ certificate-signing usage, remove CRL-signing usage, grant unrelated digital-
 signature usage, and disable leaf AKI. Every fault fails at the corresponding
 DER assertion. The source is restored byte-for-byte and all five tests pass.
 Commands, diffs, actual exits and source hashes are preserved in
-`/home/mikko/codex/tlscert-mutations-r2/summary.json` and its adjacent logs.
+`/home/<redacted>/codex/tlscert-mutations-r2/summary.json` and its adjacent logs.
 No production `Default` implementation or lint suppression was added.
 
 ## Final code and independent acceptance evidence

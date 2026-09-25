@@ -44,7 +44,7 @@ Measured against this tree on 2026-09-17:
 |---|---|
 | What the tape displays | `cat /tmp/gw-demo/client-config.json`, `meta-tools.txt`, `backends.txt` (`demo.tape:45,55,72`) |
 | Are those fixtures in the repo? | No. `rg -uu --hidden --no-ignore -l 'gw-demo' .` returns `demo.tape` alone |
-| Is the tape worktree-portable? | No. It hardcodes `~/github/mcp-gateway/...` (`demo.tape:24,93,103,107`) |
+| Is the tape worktree-portable? | No. It hardcodes `<repos>/mcp-gateway/...` (`demo.tape:24,93,103,107`) |
 | Does it exercise the gateway? | No. Every frame is `cat`, `ls`, `wc` or `python3 benchmarks/token_savings.py` |
 | Any recording job in CI? | No. `rg -uu -n -i 'vhs\|demo\|\.tape\|recording' .github/workflows/` returns no lines |
 | Any asciicast in tree? | No. `fd -uu -e tape -e cast .` returns `demo.tape` only |
@@ -306,7 +306,7 @@ decision without its reason gets re-litigated by the next reader.
    diff. A gate that cannot read its own artifact is decoration.
 2. **Scenario 2 records on any Unix host, with the synthetic peer**, citing the
    existing pinned-SDK workflow beside it (`.github/workflows/task-sdk-recovery.yml`).
-   Reason: standing up Linux CI or Spark capacity for one row costs more than the
+   Reason: standing up Linux CI or bench-host capacity for one row costs more than the
    row is worth, and the pinned-SDK driver refusing to run off Linux
    (`scripts/test-task-sdk-recovery.sh:8`) is a property of that driver, not of
    the requirement.

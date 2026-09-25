@@ -452,10 +452,10 @@ nobody had taken up.
 
 | round | leg | vendor | verdict | evidence |
 |---|---|---|---|---|
-| 1 | 1 | Kimi K3 (`synthetic-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/synthetic-20260906T065936Z-43480.md`, rc=0 |
-| 1 | 2 | Grok (`grok-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/grok-20260906T065932Z-42426.md`, rc=0 |
-| 2 | 1 | Kimi K3 | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/synthetic-20260906T072511Z-35490.md`, rc=0 — K1-K4 all **CLOSED**; one new finding on the repair |
-| 2 | 2 | Grok | **SHIP** | `~/.claude/data/reviews/runs/grok-20260906T072510Z-35222.md`, rc=0 — F1 and F2 **CLOSED**, no new finding |
+| 1 | 1 | Kimi K3 (`synthetic-review`) | SHIP-WITH-FIXES | `<review-archive>/runs/synthetic-20260906T065936Z-43480.md`, rc=0 |
+| 1 | 2 | Grok (`grok-review`) | SHIP-WITH-FIXES | `<review-archive>/runs/grok-20260906T065932Z-42426.md`, rc=0 |
+| 2 | 1 | Kimi K3 | SHIP-WITH-FIXES | `<review-archive>/runs/synthetic-20260906T072511Z-35490.md`, rc=0 — K1-K4 all **CLOSED**; one new finding on the repair |
+| 2 | 2 | Grok | **SHIP** | `<review-archive>/runs/grok-20260906T072510Z-35222.md`, rc=0 — F1 and F2 **CLOSED**, no new finding |
 | 1-2 | — | Codex/GPT (`gpt-review`) | **MISSING** | rc=0 but no verdict and no run file: `ERROR: You've hit your usage limit … try again at Sep 12th, 2026`. Per §PA a nonzero-or-absent row is `MISSING`, never a scraped verdict |
 
 **Stated deviation.** The shared pair for a Claude-authored change is `gpt-review` + `grok-review`.
@@ -539,8 +539,8 @@ supplied as context only and neither leg was asked to re-review it.
 
 | leg | vendor | verdict | evidence |
 |---|---|---|---|
-| 1 | Kimi K3 (`kimi-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/synthetic-20260906T073535Z-21028.md`, rc=0 |
-| 2 | Grok (`grok-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/grok-20260906T073535Z-20881.md`, rc=0 |
+| 1 | Kimi K3 (`kimi-review`) | SHIP-WITH-FIXES | `<review-archive>/runs/synthetic-20260906T073535Z-21028.md`, rc=0 |
+| 2 | Grok (`grok-review`) | SHIP-WITH-FIXES | `<review-archive>/runs/grok-20260906T073535Z-20881.md`, rc=0 |
 | — | Codex/GPT (`gpt-review`) | **MISSING** | still usage-limited until 2026-09-12; same deviation as the design rounds above |
 
 **Q1 compliance, stated rather than assumed.** §P2 requires a plan review to answer both its

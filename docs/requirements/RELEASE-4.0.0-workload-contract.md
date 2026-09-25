@@ -269,7 +269,7 @@ measured:              A1 B1 C1  A2 B2 C2  A3 B3 C3
 then:                  D1 E1  D2 E2  D3 E3
 ```
 
-Interleaved because Spark is shared and other sessions' jobs land on it. One
+Interleaved because bench-host is shared and other sessions' jobs land on it. One
 gateway listening at a time. Before each rep, `GET /health` version must match
 that cell by **exact string** — 3.5.0 and 3.5.1 differ only by patch, so a
 prefix match is not sufficient.
@@ -308,7 +308,7 @@ Each arm keeps its own `Cargo.lock`. These builds run outside CI's
 `RUSTFLAGS: -Dwarnings`, so the branch's known dead-code red does not block
 measurement.
 
-All builds and all reps run on Spark via `spark-run --bg`. Nothing in this
+All builds and all reps run on bench-host via `bench-run --bg`. Nothing in this
 contract runs on the Mac.
 
 ## 10. What this will not establish

@@ -8,7 +8,7 @@ against `docs/internal/design/2026-09-03-cluster-a-coverage-audit.md` and the MR
 
 `grok-review` (the DoD-canonical second vendor) returned 402 Payment Required on every attempt.
 `kimi-review` — now a shim to `synthetic-review`, a generalized open-weights HTTP reviewer
-(`~/.claude/bin/synthetic-review`, model `kimi-k3` on the `synthetic.new` API) — substitutes as the
+(`<review-tools>/synthetic-review`, model `kimi-k3` on the `synthetic.new` API) — substitutes as the
 second leg. Of the four reviewers this repo's process names (gpt-review, grok-review,
 claude-opus-5, kimi-review), **kimi-review ranks last for weight**. Treat its findings as leads to
 verify, not as a vote equal to the other three. Every finding below was checked at source before
@@ -17,7 +17,7 @@ being carried into this report; the verified/unverified breakdown is in its own 
 ## Leg 1 — gpt-review (earlier draft, since revised)
 
 `gpt-review` returned **SHIP-WITH-FIXES** against an earlier draft of the same plan
-(`~/.claude/data/reviews/runs/gpt-20260902T092227Z-89649.md`, 2026-09-02 09:22 UTC), with findings
+(`<review-archive>/runs/gpt-20260902T092227Z-89649.md`, 2026-09-02 09:22 UTC), with findings
 against MRTR.1, MRTR.2, MRTR.3 (twice — an invalid oracle plus a missing before-use assertion),
 MRTR.4, MRTR.5 (twice), MRTR.7, MRTR.9, MRTR.9a and MRTR.10a. The plan on disk today already
 carries a "What review changed" section and a "What self-QA found" section that read as direct
@@ -32,7 +32,7 @@ leg 1 saw.
 `kimi-review < payload > output; echo EXIT_CODE=$?` exited 0 and its captured `$?` was `0`; two
 independent `Monitor` polls of the output file both matched the `EXIT_CODE=0` marker; and
 `synthetic-review`'s own persisted ledger copy of the run
-(`~/.claude/data/reviews/runs/synthetic-20260903T005324Z-11023.md`) is byte-identical to the
+(`<review-archive>/runs/synthetic-20260903T005324Z-11023.md`) is byte-identical to the
 review body captured in the redirected output file. A stray `EXIT_CODE=65` line trailing the
 output file is leftover from an earlier, abandoned launch attempt against the same file path
 (the wrong-launch-method attempt described below) — it postdates the real run's own `EXIT_CODE=0`

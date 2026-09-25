@@ -7,7 +7,7 @@ in somebody's home directory is not evidence anybody else can check.
 
 ## Red — the rate before the fix
 
-Command, on Spark, at `2b1f2690`:
+Command, on bench-host, at `2b1f2690`:
 
 ```
 cargo test --lib -- --nocapture   # 8 consecutive full-suite runs
@@ -44,7 +44,7 @@ answer can no longer be `never`.
 
 ## Green — the rate after the fix
 
-Command, on Spark, at `b6836a02`:
+Command, on bench-host, at `b6836a02`:
 
 ```
 for i in $(seq 12); do echo "=== run $i ==="; cargo test --lib; done

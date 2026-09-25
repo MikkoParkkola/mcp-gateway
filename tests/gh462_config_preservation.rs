@@ -196,7 +196,7 @@ fn reference_config(home: &Path) -> Config {
     config.env_files = vec![env_file.display().to_string()];
     config.auth.enabled = true;
     config.auth.bearer_token = Some("env:GH462_REFERENCE_TOKEN".into());
-    // Auth on requires the audit log (UPGRADING-4.0 item 39).
+    // Auth on requires the audit log (UPGRADING-4.0 item 43).
     config.security.transparency_log.enabled = true;
     config.security.transparency_log.path = home.join("audit.jsonl").display().to_string();
     config
