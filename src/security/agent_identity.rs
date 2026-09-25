@@ -142,11 +142,68 @@ pub struct AgentIdentityConfig {
 /// reach declared-label matching without also setting the flag that warns
 /// about it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "serde_json::Value")]
 pub struct KnownAgent {
     /// Which namespace the identifier belongs to.
     pub source: AgentSourceKey,
     /// The identifier, within that namespace.
     pub id: String,
+}
+
+/// The accepted shape, parsed after the bare-string check below.
+#[derive(Deserialize)]
+struct QualifiedKnownAgent {
+    source: AgentSourceKey,
+    id: String,
+}
+
+impl TryFrom<serde_json::Value> for KnownAgent {
+    type Error = String;
+
+    /// A bare string would otherwise fail as serde's generic "expected struct",
+    /// which does not say what to write instead.
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        if let serde_json::Value::String(id) = &value {
+            return Err(format!(
+                "known_agents entry {id:?} must declare its proof source: write \
+                 {{source: mtls, id: {id:?}}} or {{source: jwt, id: {id:?}}}"
+            ));
+        }
+        let QualifiedKnownAgent { source, id } =
+            serde_json::from_value(value).map_err(|e| format!("known_agents entry: {e}"))?;
+        Ok(Self { source, id })
+    }
+}
+
+impl AgentIdentityConfig {
+    /// A `declared` allowlist entry is enforceable only under the hatch, so
+    /// with enforcement on and the hatch off it refuses load rather than
+    /// sitting inert until a request finds it. With enforcement off it is
+    /// dormant and only warned about.
+    pub(crate) fn validate(&self) -> crate::Result<()> {
+        let declared: Vec<&str> = self
+            .known_agents
+            .iter()
+            .filter(|entry| entry.source == AgentSourceKey::Declared)
+            .map(|entry| entry.id.as_str())
+            .collect();
+        if declared.is_empty() || self.allow_unverified_agent_identity {
+            return Ok(());
+        }
+        if !self.enabled {
+            tracing::warn!(
+                entries = ?declared,
+                "agent_identity.known_agents has declared entries, dormant while agent_identity \
+                 is disabled; enabling it without allow_unverified_agent_identity refuses them"
+            );
+            return Ok(());
+        }
+        Err(crate::Error::ConfigValidation(format!(
+            "agent_identity.known_agents entries {declared:?} use source: declared, which only \
+             agent_identity.allow_unverified_agent_identity: true admits; key them by mtls or \
+             jwt, or set the flag"
+        )))
+    }
 }
 
 /// The namespace an allowlist entry names.
@@ -729,3 +786,7 @@ mod tests;
 #[cfg(test)]
 #[path = "agent_identity_falsifier_tests.rs"]
 mod falsifier_tests;
+
+#[cfg(test)]
+#[path = "agent_identity_load_tests.rs"]
+mod load_tests;

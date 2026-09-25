@@ -102,6 +102,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delivery by the rule the legacy stream uses; a revoked or expired credential
   closes the stream. With auth off every listener is told. See
   `docs/UPGRADING-4.0.md` item 26.
+- **An exact identity grant names the agent's proof source (breaking).** A grant
+  bound to `agent: {exact: runner}` admitted any caller whose proven id was
+  `runner`, so a JWT `sub` and an mTLS subject that happened to match shared
+  the grant. The binding is now `!exact {source: mtls|jwt, id}` and matches
+  only a caller proven by that source. A 3.x bare row is refused at load, and
+  the error lists every such row with its replacement; the gateway does not
+  pick a source or widen to `any`. `identity grants grant --agent` takes
+  `mtls:<id>` or `jwt:<id>`. `known_agents` rejects a bare string, naming the
+  source it must declare, and a `source: declared` entry refuses load when
+  agent identity is enabled without `allow_unverified_agent_identity`.
+  See `docs/UPGRADING-4.0.md` item 27.
 - **`notifications/tools/list_changed` from an admin backend edit reaches only
   callers of that backend (breaking).** Adding, removing or reviving a backend
   told every session on the legacy GET stream, so a caller learned when an

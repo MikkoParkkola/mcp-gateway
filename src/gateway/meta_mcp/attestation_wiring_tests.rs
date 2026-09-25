@@ -249,7 +249,10 @@ async fn invoke_docs_search(meta: &MetaMcp) -> serde_json::Value {
         Some("session-1"),
         &allow_all_ctx_named(
             Some("alice"),
-            Some(crate::security::ProvenAgentId::for_test("agent-1")),
+            Some(crate::security::ProvenAgentId::for_test(
+                "agent-1",
+                crate::security::ProofSource::MutualTls,
+            )),
         ),
     )
     .await

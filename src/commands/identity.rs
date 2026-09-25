@@ -11,9 +11,10 @@ use chrono::{DateTime, Duration, Utc};
 use mcp_gateway::{
     cli::{IdentityCommand, IdentityGrantScopeArg, IdentityGrantsCommand, output::OutputFormat},
     identity_grants::{
-        GrantAgent, GrantScope, GrantSubject, IdentityGrant, IdentityGrantFile,
+        GrantAgent, GrantAgentKey, GrantScope, GrantSubject, IdentityGrant, IdentityGrantFile,
         read_identity_grants_file,
     },
+    security::ProofSource,
 };
 use serde_json::json;
 
@@ -302,10 +303,46 @@ fn parse_subject_spec(
 fn parse_agent_binding(agent: Option<String>, any_agent: bool) -> Result<GrantAgent, String> {
     match (trim_optional(agent), any_agent) {
         (Some(_), true) => Err("--agent and --any-agent are mutually exclusive".to_string()),
-        (Some(agent), false) => Ok(GrantAgent::Exact(agent)),
+        (Some(agent), false) => parse_agent_key(&agent).map(GrantAgent::Exact),
         (None, true) => Ok(GrantAgent::Any),
-        (None, false) => Err("pass --agent AGENT_ID or --any-agent".to_string()),
+        (None, false) => Err("pass --agent mtls:<id> | jwt:<id>, or --any-agent".to_string()),
     }
+}
+
+/// `mtls:<id>` or `jwt:<id>`. An unqualified id is refused rather than given
+/// a default source: a wrong guess grants the other namespace.
+fn parse_agent_key(agent: &str) -> Result<GrantAgentKey, String> {
+    let (source, id) = match agent.split_once(':') {
+        Some(("jwt", id)) => (ProofSource::VerifiedJwtSubject, id),
+        Some(("mtls", id)) => (ProofSource::MutualTls, id),
+        Some(("declared", _)) => {
+            return Err(format!(
+                "--agent {agent}: a declared label is not proof and cannot hold a grant; \
+                 use mtls:<id> or jwt:<id>"
+            ));
+        }
+        _ => {
+            return Err(format!(
+                "--agent {agent} must name its proof source: mtls:<SAN URI or bare CN> or \
+                 jwt:<client_id>"
+            ));
+        }
+    };
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(format!("--agent {agent}: the id after the source is empty"));
+    }
+    // The selected mTLS id is the first SAN URI, else the bare CN; a DN
+    // fragment never matches a caller, so writing one would mint a dead grant.
+    if source == ProofSource::MutualTls && id.contains('=') && !id.contains("://") {
+        return Err(format!(
+            "--agent {agent}: use the SAN URI or the bare CN value, not a DN fragment"
+        ));
+    }
+    Ok(GrantAgentKey {
+        source,
+        id: id.to_string(),
+    })
 }
 
 fn parse_expiry(
@@ -376,7 +413,7 @@ fn subject_summary(subject: &GrantSubject) -> String {
 fn agent_summary(agent: &GrantAgent) -> String {
     match agent {
         GrantAgent::Any => "any".to_string(),
-        GrantAgent::Exact(agent_id) => agent_id.clone(),
+        GrantAgent::Exact(key) => key.to_string(),
     }
 }
 
@@ -523,11 +560,38 @@ mod tests {
     #[test]
     fn agent_binding_requires_explicit_exact_or_any() {
         assert!(parse_agent_binding(None, false).is_err());
-        assert!(parse_agent_binding(Some("agent-a".to_string()), true).is_err());
-        assert_eq!(
-            parse_agent_binding(Some("agent-a".to_string()), false).unwrap(),
-            GrantAgent::Exact("agent-a".to_string())
-        );
+        assert!(parse_agent_binding(Some("jwt:agent-a".to_string()), true).is_err());
         assert_eq!(parse_agent_binding(None, true).unwrap(), GrantAgent::Any);
+    }
+
+    /// T33: an unqualified `--agent` names both prefixes; a declared label and
+    /// a DN fragment are refused, since neither is a selected proven id.
+    #[test]
+    fn an_unqualified_agent_flag_is_refused_naming_both_prefixes() {
+        let error = parse_agent_binding(Some("runner".to_string()), false).unwrap_err();
+        assert!(error.contains("mtls:") && error.contains("jwt:"), "{error}");
+        for value in ["declared:x", "mtls:CN=x", "jwt:", "mtls:"] {
+            assert!(
+                parse_agent_binding(Some(value.to_string()), false).is_err(),
+                "{value} must be refused"
+            );
+        }
+    }
+
+    /// C33: the accepted spellings, one per source.
+    #[test]
+    fn a_qualified_agent_flag_keys_the_grant_by_source_and_id() {
+        for (value, source) in [
+            ("jwt:runner", ProofSource::VerifiedJwtSubject),
+            ("mtls:runner", ProofSource::MutualTls),
+        ] {
+            let agent = parse_agent_binding(Some(value.to_string()), false).unwrap();
+            let expected = GrantAgentKey {
+                source,
+                id: "runner".to_string(),
+            };
+            assert_eq!(agent, GrantAgent::Exact(expected), "{value}");
+            assert_eq!(agent_summary(&agent), value);
+        }
     }
 }

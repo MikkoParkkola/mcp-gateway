@@ -4095,7 +4095,10 @@ mod tests {
         IdentityGrantFile::new(vec![IdentityGrant {
             grant_id: "grant-startup-1".to_string(),
             subject: subject.clone(),
-            agent: GrantAgent::Exact("agent-a".to_string()),
+            agent: GrantAgent::Exact(crate::identity_grants::GrantAgentKey {
+                source: crate::security::ProofSource::MutualTls,
+                id: "agent-a".to_string(),
+            }),
             capability: "personal_calendar".to_string(),
             tool: Some("read_day".to_string()),
             scope: GrantScope::Read,

@@ -486,6 +486,34 @@ receive; a listener whose credential was revoked or has expired is closed at tha
 Re-subscribe with a fresh credential. Task notifications keep their open-time ownership rule. A
 revoked listener on a quiet gateway holds its slot until the next notification it would receive.
 
+## 27. Exact agent grants name their proof source
+
+In 3.x an identity grant bound to `agent: {exact: runner}` (written `agent: !exact runner` in
+YAML) matched any caller whose proven agent id was `runner`. An mTLS subject and an agent-JWT
+`sub` are separate namespaces, so a grant written for one also admitted the other.
+
+A grants-file row with a bare `exact` id is now refused at load, and the error lists every such
+row. Rewrite each one yourself; the gateway will not choose:
+
+```yaml
+agent: !exact {source: mtls, id: "spiffe://TRUST_DOMAIN/runner"}  # SAN URI, else the bare CN
+agent: !exact {source: jwt, id: runner}                            # the agent's client_id
+agent: any                                 # only if every agent of the subject is meant
+```
+
+In a JSON grants file the same row is `"agent": {"exact": {"source": "jwt", "id": "runner"}}`.
+
+Until the file is fixed, personal capabilities fail closed: startup fails under
+`fail_on_error: true`, and a hot reload keeps the previous grants. This applies whatever
+`security.agent_identity.enabled` says.
+
+`identity grants grant --agent` needs `mtls:<id>` or `jwt:<id>`; a bare id, `declared:<id>` and
+a DN fragment such as `mtls:CN=runner` are refused.
+
+`security.agent_identity.known_agents` rejects a bare string and names the sources it may use.
+A `source: declared` entry refuses load when `agent_identity.enabled` is true and
+`allow_unverified_agent_identity` is false; with agent identity disabled it loads with a warning.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.

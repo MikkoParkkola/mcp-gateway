@@ -2,8 +2,88 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! What matches what when a grant is evaluated.
 
-use super::{GrantScope, GrantSubject};
+use serde::{Deserialize, Serialize};
+
+use super::{GrantAgent, GrantScope, GrantSubject};
 use crate::capability::CapabilityDefinition;
+use crate::security::{OwnedProvenAgentId, ProofSource};
+
+/// The proven agent an exact grant names: `{source: mtls|jwt, id}`.
+///
+/// The source is part of the key because an mTLS subject and a JWT `sub` that
+/// stringify the same are two principals. [`ProofSource`] has no `declared`
+/// value, so a grant keyed to a self-declared label cannot be written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantAgentKey {
+    /// The namespace `id` belongs to.
+    pub source: ProofSource,
+    /// The proven id: SAN URI or bare CN for mTLS, `sub` for JWT.
+    pub id: String,
+}
+
+impl std::fmt::Display for GrantAgentKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.source, self.id)
+    }
+}
+
+impl GrantAgent {
+    pub(super) fn matches(&self, agent: Option<&OwnedProvenAgentId>) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Exact(key) => {
+                agent.is_some_and(|a| a.proof() == key.source && a.as_str() == key.id)
+            }
+        }
+    }
+}
+
+/// The refusal for a grants file holding 3.x bare `exact` rows, naming every
+/// one, or `None` when there are none.
+///
+/// Called only after the typed parse failed, so it explains a refusal and
+/// never admits a row: `GrantAgent` has no bare variant for one to reach
+/// `matches` through. All rows at once, because the CLI's read-modify-write
+/// goes through the same reader and N rows must not cost N attempts. No
+/// source is defaulted and nothing becomes `any`: each would be a guess, and
+/// both widen.
+pub(super) fn bare_exact_refusal(path: &std::path::Path, content: &str) -> Option<String> {
+    use serde_yaml::Value;
+    // JSON is YAML, so one parse covers both encodings. 3.x wrote YAML rows
+    // as a tag (`agent: !exact runner`) and JSON rows as `{"exact": "runner"}`.
+    let file: Value = serde_yaml::from_str(content).ok()?;
+    let rows: Vec<String> = file
+        .get("grants")
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let id = match row.get("agent")? {
+                Value::Tagged(tagged) if tagged.tag == "exact" => tagged.value.as_str(),
+                agent @ Value::Mapping(_) => agent.get("exact").and_then(Value::as_str),
+                _ => None,
+            }?;
+            let grant_id = row
+                .get("grant_id")
+                .and_then(Value::as_str)
+                .unwrap_or("<no grant_id>");
+            Some(format!("grant '{grant_id}' (exact {id})"))
+        })
+        .collect();
+    (!rows.is_empty()).then(|| {
+        format!(
+            "identity grants file {} keys {} agent binding(s) by a bare id, which does not say \
+             which proof source it came from: {}. Rewrite each as `agent: !exact {{source: mtls, \
+             id: <SAN URI or bare CN>}}` or `agent: !exact {{source: jwt, id: <client_id>}}` \
+             (JSON: `\"agent\": {{\"exact\": {{\"source\": \"jwt\", \"id\": ...}}}}`), or as \
+             `agent: any` only if every agent of that subject is meant. The gateway will not \
+             choose.",
+            path.display(),
+            rows.len(),
+            rows.join(", ")
+        )
+    })
+}
 
 // Identity is `(authority, subject)`. The label is whatever each side had to
 // hand — an API key's name at runtime, a person's name in a grant file — so

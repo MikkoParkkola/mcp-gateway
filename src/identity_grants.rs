@@ -14,6 +14,8 @@ use std::path::Path;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::security::OwnedProvenAgentId;
+
 /// Stable local grant-file schema version.
 pub const IDENTITY_GRANTS_FILE_SCHEMA_VERSION: &str = "identity_grants.v1";
 
@@ -59,17 +61,8 @@ impl GrantSubject {
 pub enum GrantAgent {
     /// Grant applies to any agent acting for the subject.
     Any,
-    /// Grant applies only to this exact agent identifier.
-    Exact(String),
-}
-
-impl GrantAgent {
-    fn matches(&self, agent_id: Option<&str>) -> bool {
-        match self {
-            Self::Any => true,
-            Self::Exact(expected) => agent_id.is_some_and(|actual| actual == expected),
-        }
-    }
+    /// Grant applies only to this exact proven agent: source and id.
+    Exact(GrantAgentKey),
 }
 
 /// Capability exposure class.
@@ -107,6 +100,7 @@ pub enum GrantScope {
 
 #[path = "identity_grants_matching.rs"]
 mod matching;
+pub use matching::GrantAgentKey;
 
 /// One durable grant row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,10 +175,12 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
     let file = serde_json::from_str::<IdentityGrantFile>(&content)
         .or_else(|_| serde_yaml::from_str::<IdentityGrantFile>(&content))
         .map_err(|e| {
-            format!(
-                "failed to parse identity grants file {}: {e}",
-                path.display()
-            )
+            matching::bare_exact_refusal(path, &content).unwrap_or_else(|| {
+                format!(
+                    "failed to parse identity grants file {}: {e}",
+                    path.display()
+                )
+            })
         })?;
 
     if file.schema_version != IDENTITY_GRANTS_FILE_SCHEMA_VERSION {
@@ -288,7 +284,7 @@ impl IdentityGrant {
     fn covers(
         &self,
         identity: &GrantSubject,
-        agent_id: Option<&str>,
+        agent_id: Option<&OwnedProvenAgentId>,
         capability: &str,
         tool: Option<&str>,
         scope: &GrantScope,
@@ -311,8 +307,8 @@ impl IdentityGrant {
 pub struct IdentityGrantRequest {
     /// Caller identity, when the transport authenticated one.
     pub identity: Option<GrantSubject>,
-    /// Calling agent id, when available.
-    pub agent_id: Option<String>,
+    /// Calling agent, with the source that proved it, when one was proven.
+    pub agent_id: Option<OwnedProvenAgentId>,
     /// Capability identifier.
     pub capability: String,
     /// Optional concrete tool name.
@@ -394,8 +390,8 @@ pub enum GrantToolRisk {
 pub struct GrantRecommendationRequest {
     /// Caller identity, when the transport authenticated one.
     pub identity: Option<GrantSubject>,
-    /// Calling agent id, when available.
-    pub agent_id: Option<String>,
+    /// Calling agent, with the source that proved it, when one was proven.
+    pub agent_id: Option<OwnedProvenAgentId>,
     /// Capability identifier.
     pub capability: String,
     /// Optional concrete tool name.
@@ -517,7 +513,7 @@ pub struct GrantRecommendationAuditEvent {
     /// Caller subject, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<GrantSubject>,
-    /// Agent id, when known.
+    /// Proven agent rendered `source:id` (for example `mtls:runner`), when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     /// Capability identifier.
@@ -550,7 +546,7 @@ pub struct IdentityGrantAuditEvent {
     /// Caller subject, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<GrantSubject>,
-    /// Agent id, when known.
+    /// Proven agent rendered `source:id` (for example `mtls:runner`), when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     /// Capability identifier.
@@ -672,7 +668,7 @@ impl LocalIdentityGrantStore {
         let matching_grant = self.grants.values().find(|grant| {
             grant.covers(
                 identity,
-                request.agent_id.as_deref(),
+                request.agent_id.as_ref(),
                 &request.capability,
                 request.tool.as_deref(),
                 &request.scope,
@@ -829,7 +825,7 @@ impl LocalIdentityGrantStore {
                 allowed,
                 reason,
                 subject: request.identity.clone(),
-                agent_id: request.agent_id.clone(),
+                agent_id: request.agent_id.as_ref().map(OwnedProvenAgentId::qualified),
                 capability: request.capability.clone(),
                 tool: request.tool.clone(),
                 scope: request.scope.clone(),
@@ -860,7 +856,7 @@ impl LocalIdentityGrantStore {
                 decision,
                 reason,
                 subject: request.identity.clone(),
-                agent_id: request.agent_id.clone(),
+                agent_id: request.agent_id.as_ref().map(OwnedProvenAgentId::qualified),
                 capability: request.capability.clone(),
                 tool: request.tool.clone(),
                 scope: request.scope.clone(),
@@ -884,12 +880,12 @@ fn build_lease_proposal(
 
     GrantLeaseProposal {
         subject: identity.clone(),
-        agent: request
-            .agent_id
-            .as_ref()
-            .map_or(GrantAgent::Any, |agent_id| {
-                GrantAgent::Exact(agent_id.clone())
-            }),
+        agent: request.agent_id.as_ref().map_or(GrantAgent::Any, |agent| {
+            GrantAgent::Exact(GrantAgentKey {
+                source: agent.proof(),
+                id: agent.as_str().to_string(),
+            })
+        }),
         capability: request.capability.clone(),
         tool: request.tool.clone(),
         scope: request.scope.clone(),
@@ -903,3 +899,7 @@ fn build_lease_proposal(
 #[cfg(test)]
 #[path = "identity_grants_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "identity_grants_agent_key_tests.rs"]
+mod agent_key_tests;
