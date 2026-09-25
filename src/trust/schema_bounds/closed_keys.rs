@@ -201,7 +201,10 @@ impl<'a> Walk<'a> {
             };
             match self.verdict(root, schema, name, depth, false) {
                 Verdict::Accept(req) => faults.extend(self.value(item, &req, &at, depth + 1)),
-                Verdict::Undecided if self.standard || is_free_map(schema) => {}
+                Verdict::Undecided
+                    if self.standard
+                        || is_free_map(schema)
+                        || ref_to_free_map(root, schema, depth) => {}
                 Verdict::Undecided | Verdict::Refuse | Verdict::MatchesNothing => {
                     faults.push(KeyFault::Undeclared(at));
                 }
@@ -261,7 +264,7 @@ impl<'a> Walk<'a> {
             Value::Object(map) => map,
             _ => return Verdict::Undecided,
         };
-        if in_any && is_free_map(schema) {
+        if in_any && (is_free_map(schema) || ref_to_free_map(root, schema, hops)) {
             return Verdict::Accept(Req::Free);
         }
         if matches_nothing(map) {
@@ -415,8 +418,9 @@ impl<'a> Walk<'a> {
         match prefix.and_then(|p| p.get(index)) {
             Some(item) => all.push(Req::Schema(root, item)),
             None => match map.get("items") {
+                // Draft-07 tuple form: elements past it are `additionalItems`'.
                 Some(Value::Array(legacy)) => {
-                    if let Some(item) = legacy.get(index) {
+                    if let Some(item) = legacy.get(index).or_else(|| map.get("additionalItems")) {
                         all.push(Req::Schema(root, item));
                     }
                 }
@@ -475,14 +479,38 @@ fn is_free_map(schema: &Value) -> bool {
         Value::Bool(open) => *open,
         Value::Object(map) => {
             // `properties: {}` declares no key (design revision 2, item 4).
-            !matches_nothing(map)
-                && map.iter().all(|(k, v)| {
-                    KEY_NEUTRAL.contains(&k.as_str())
-                        || (k == "properties" && v.as_object().is_some_and(Map::is_empty))
-                })
+            !matches_nothing(map) && map.iter().all(|(k, v)| key_neutral(k, v))
         }
         _ => false,
     }
+}
+
+fn key_neutral(keyword: &str, value: &Value) -> bool {
+    KEY_NEUTRAL.contains(&keyword)
+        || (keyword == "properties" && value.as_object().is_some_and(Map::is_empty))
+}
+
+/// `{$ref: X}` with only key-neutral siblings, where X is a free map or another
+/// such `$ref`: as free as X inlined. A sibling that closes the level (say
+/// `additionalProperties: false`) is not neutral, and its Refuse is decided
+/// before this is asked. Bounded by [`MAX_DEPTH`] like any `$ref` descent.
+fn ref_to_free_map<'a>(root: &'a Value, schema: &'a Value, hops: usize) -> bool {
+    let Some(map) = schema.as_object() else {
+        return false;
+    };
+    let Some(Value::String(pointer)) = map.get("$ref") else {
+        return false;
+    };
+    let root = if map.get("$id").is_some_and(Value::is_string) {
+        schema
+    } else {
+        root
+    };
+    hops < MAX_DEPTH
+        && !matches_nothing(map)
+        && map.iter().all(|(k, v)| k == "$ref" || key_neutral(k, v))
+        && resolve(root, pointer)
+            .is_some_and(|target| is_free_map(target) || ref_to_free_map(root, target, hops + 1))
 }
 
 /// `enum: []`, or a `type` that excludes `object`.

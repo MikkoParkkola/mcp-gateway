@@ -521,3 +521,60 @@ fn stdio_principal_admits_a_keyed_mutation_and_anonymous_http_still_cannot() {
         );
     }
 }
+
+/// Live keys stamped one millisecond apart from `base`, filling the warn cap.
+fn warn_map_at_cap(base: std::time::Instant) -> WarnedAt {
+    (0..UNKEYED_WARN_CAP)
+        .map(|i| {
+            let at = base + std::time::Duration::from_millis(u64::try_from(i).expect("small"));
+            (("s".to_owned(), format!("t{i}")), at)
+        })
+        .collect()
+}
+
+/// F12a, a pin: a cap full of live entries loses only its oldest.
+#[test]
+fn first_warn_at_a_live_cap_evicts_only_the_oldest() {
+    let base = std::time::Instant::now();
+    let mut warned = warn_map_at_cap(base);
+    let now = base + std::time::Duration::from_secs(1);
+
+    assert!(first_warn(&mut warned, "s", "new", now));
+
+    assert_eq!(warned.len(), UNKEYED_WARN_CAP);
+    assert!(!warned.contains_key(&("s".to_owned(), "t0".to_owned())));
+    assert!(warned.contains_key(&("s".to_owned(), "t1".to_owned())));
+    assert!(warned.contains_key(&("s".to_owned(), "new".to_owned())));
+}
+
+/// F12a, a pin: expired entries go first, every one of them, and no live
+/// entry is evicted while an expired one remains.
+#[test]
+fn first_warn_at_a_cap_evicts_expired_entries_before_live_ones() {
+    let base = std::time::Instant::now();
+    let mut warned = warn_map_at_cap(base);
+    // t0 and t1 are the two oldest; restamp everything else as live at `now`.
+    let now = base + UNKEYED_WARN_INTERVAL + std::time::Duration::from_secs(1);
+    for (key, at) in &mut warned {
+        if key.1 != "t0" && key.1 != "t1" {
+            *at = now;
+        }
+    }
+
+    assert!(first_warn(&mut warned, "s", "new", now));
+
+    assert_eq!(warned.len(), UNKEYED_WARN_CAP - 1, "both expired went");
+    assert!(!warned.contains_key(&("s".to_owned(), "t0".to_owned())));
+    assert!(!warned.contains_key(&("s".to_owned(), "t1".to_owned())));
+    assert!(warned.contains_key(&("s".to_owned(), "t2".to_owned())));
+}
+
+/// F12b, a pin: two distinct tools each get their warn; a repeat does not.
+#[test]
+fn first_warn_fires_once_per_distinct_tool() {
+    let now = std::time::Instant::now();
+    let mut warned = WarnedAt::new();
+    assert!(first_warn(&mut warned, "s", "a", now));
+    assert!(first_warn(&mut warned, "s", "b", now));
+    assert!(!first_warn(&mut warned, "s", "a", now));
+}

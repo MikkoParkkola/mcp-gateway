@@ -55,9 +55,10 @@ impl Backend {
     /// what it was shown. Without this, a caller that lists only on the direct
     /// route reads a cold slot on every call and is forwarded unchecked.
     ///
-    /// Fills an empty or stale slot only; a fresher discovery fill stands. A
-    /// page fetched under a caller's own credential never lands in the shared
-    /// slot, which every caller reads.
+    /// Replaces the slot even when a discovery fill is still fresh: this list
+    /// is the one the caller was shown last, and it was drained in full, so it
+    /// also clears the slot's truncated mark. A page fetched under a caller's
+    /// own credential never lands in the shared slot, which every caller reads.
     pub(crate) async fn remember_listed_tools(
         &self,
         identity_key: Option<&str>,
@@ -79,22 +80,19 @@ impl Backend {
         let _ = super::prepare_tool_metadata(&self.name, &mut parsed);
         let lease = self.begin_internal_activity_for(&key);
         let entry = Arc::clone(lease.entry());
-        let _ = entry
-            .tools_cache
-            .get_or_fetch_shared_then(
-                self.cache_ttl,
-                || {
-                    let tools = parsed.clone();
-                    async move { Ok((tools, ())) }
-                },
-                |()| {},
-            )
-            .await;
+        // A store, not a fill: it must not depend on the slot reading as
+        // stale, nor queue behind a discovery fill already on the wire.
+        entry.tools_cache.replace(parsed, || {
+            entry
+                .tools_truncated
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use serde_json::json;
@@ -121,5 +119,109 @@ mod tests {
         backend.remember_listed_tools(None, false, &listed).await;
         let refusal = backend.undeclared_key_refusal(None, "edit", &json!({"b": 1}));
         assert!(refusal.is_some(), "the valid tool was not remembered");
+    }
+
+    fn edit_declaring(key: &str) -> serde_json::Value {
+        json!({"name": "edit", "inputSchema": {"type": "object",
+            "properties": {key: {"type": "string"}}}})
+    }
+
+    /// F14a: a fully drained direct list replaces a still-fresh discovery fill
+    /// in the caller's slot, so calls are judged against what the caller was
+    /// last shown. A credentialed page still never reaches the shared slot.
+    #[tokio::test]
+    async fn a_drained_direct_list_overwrites_a_fresh_discovery_fill() {
+        let backend = Backend::new(
+            "edits",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        let lease = backend.begin_internal_activity_for(&crate::backend::PoolKey::Shared);
+        let discovered: crate::protocol::Tool =
+            serde_json::from_value(edit_declaring("a")).expect("a tool");
+        lease
+            .entry()
+            .tools_cache
+            .get_or_fetch_shared(Duration::from_secs(600), || {
+                let tools = vec![discovered.clone()];
+                async move { Ok(tools) }
+            })
+            .await
+            .expect("the discovery fill");
+        lease.entry().tools_truncated.store(true, Ordering::SeqCst);
+
+        backend
+            .remember_listed_tools(None, true, &[edit_declaring("b")])
+            .await;
+        let judged = |key: &str| backend.undeclared_key_refusal(None, "edit", &json!({key: 1}));
+        assert!(
+            judged("a").is_none(),
+            "a credentialed page reached the shared slot"
+        );
+        assert!(judged("b").is_some(), "the discovery fill still stands");
+
+        backend
+            .remember_listed_tools(None, false, &[edit_declaring("b")])
+            .await;
+        assert!(
+            judged("b").is_none(),
+            "the drained list must replace the fresh discovery fill"
+        );
+        assert!(judged("a").is_some());
+        assert!(
+            !backend.cached_tools_snapshot_and_truncated().1,
+            "a drained list is complete; the truncated mark must not survive it"
+        );
+    }
+
+    /// F14a, item 4: the replacement is a store, not a fill that reads the
+    /// slot as stale. It neither queues behind a discovery fill already on
+    /// the wire nor loses to it when that fill lands afterwards.
+    #[tokio::test]
+    async fn a_drained_direct_list_beats_an_in_flight_discovery_fill() {
+        let backend = Backend::new(
+            "edits",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        let lease = backend.begin_internal_activity_for(&crate::backend::PoolKey::Shared);
+        let entry = std::sync::Arc::clone(lease.entry());
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let discovered: crate::protocol::Tool =
+            serde_json::from_value(edit_declaring("a")).expect("a tool");
+        let fill = tokio::spawn({
+            let (started, release) = (started.clone(), release.clone());
+            async move {
+                entry
+                    .tools_cache
+                    .get_or_fetch_shared(Duration::from_secs(600), || {
+                        let (started, release) = (started.clone(), release.clone());
+                        let tools = vec![discovered.clone()];
+                        async move {
+                            started.notify_one();
+                            release.notified().await;
+                            Ok(tools)
+                        }
+                    })
+                    .await
+            }
+        });
+        started.notified().await;
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            backend.remember_listed_tools(None, false, &[edit_declaring("b")]),
+        )
+        .await
+        .expect("the direct list must not wait for an in-flight fill");
+        release.notify_one();
+        fill.await.expect("join").expect("the discovery fill");
+
+        let judged = |key: &str| backend.undeclared_key_refusal(None, "edit", &json!({key: 1}));
+        assert!(judged("b").is_none(), "the later-landing fill overwrote it");
+        assert!(judged("a").is_some());
     }
 }

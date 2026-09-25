@@ -254,3 +254,33 @@ async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
         "W: an unrelated grant must still allow after the watcher reload"
     );
 }
+
+/// F11b — a pin of UPGRADING §27: a hot reload of a file holding a 3.x bare
+/// `exact` row is refused, publishes nothing, and the live grants still apply.
+#[tokio::test]
+async fn a_bare_exact_row_reload_keeps_the_previous_grants() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("grants.json");
+    let mut row = serde_json::to_value(revoked(grant("g1", "alice", "cal"))).expect("row");
+    row["agent"] = serde_json::json!({"exact": "runner"});
+    let file = serde_json::json!({
+        "schema_version": crate::identity_grants::IDENTITY_GRANTS_FILE_SCHEMA_VERSION,
+        "grants": [row],
+    });
+    std::fs::write(&path, file.to_string()).expect("write");
+    let (store, epoch, sink) = live_store(&path);
+    let ctx = ctx(sink);
+
+    let refusal = reload_bounded(&ctx)
+        .await
+        .expect("a wired sink reports")
+        .expect_err("F11b: a bare exact row must not reload");
+
+    assert!(refusal.contains("g1"), "{refusal}");
+    assert_eq!(epoch.load(Ordering::Acquire), 0, "nothing was published");
+    assert!(
+        allows(&store, "alice", "cal"),
+        "the live grant still applies"
+    );
+    assert!(allows(&store, "bob", "mail"));
+}
