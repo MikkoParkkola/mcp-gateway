@@ -1,11 +1,11 @@
 # Upgrading to 4.0.0
 
 From any 3.x release. No migration edits your `gateway.yaml`, and the gateway makes no automatic
-change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37 or 38 refuses it
+change to your configuration on upgrade. It starts on an unchanged configuration unless one of items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37, 38 or 39 refuses it
 (listed in bold below).
 
 On the first `serve` after the upgrade, the gateway prints a one-time notice to stderr listing
-items 1-4, 6, 11, 23-27, 30-34 and 37 below, then stamps the new version. The notice is printed rather than logged, so
+items 1-4, 6, 11, 23-27, 30-34, 37 and 39 below, then stamps the new version. The notice is printed rather than logged, so
 `--log-level error` and `RUST_LOG` filters cannot swallow it.
 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
@@ -16,7 +16,7 @@ deployment files, not the binary's behaviour on an existing route, and so does i
 Item 38 refuses the start with its own error, which names the setting, so a notice would
 only repeat it.
 
-**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37 and 38 refuse the gateway's start (item 37 only above one declared replica; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS). Item 7 permanently fails the backend it names,
+**Items 2, 8, 12, 13, 27, 29, 30, 34, 35, 37, 38 and 39 refuse the gateway's start (item 37 only above one declared replica; item 39 only while `server.request_timeout` is set; item 27 for a bare `exact` grant under `fail_on_error: true` or a `declared` known agent with agent identity on; item 30 only for a bad `GATEWAY_ATTESTATION_MODE`; item 38 only for a credential over plain HTTP on a network bind without mTLS). Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those first if you are
 upgrading a running deployment.
 
@@ -58,6 +58,7 @@ upgrading a running deployment.
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `podSecurityContext` override; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
+| 39 | `server.request_timeout` fails the load; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -845,6 +846,28 @@ The shipped deployments keep starting (item 21):
   `public_url`. Change both together if an ingress fronts the pod.
 - **compose:** sets `MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish` beside its loopback
   publish.
+
+## 39. `server.request_timeout` fails the load, and `server.max_body_size` is enforced
+
+In 3.x neither key did anything. No server-wide timeout existed: each call is bounded by its
+backend's `timeout`. `/mcp` and `/mcp/{name}` capped bodies at a hard-coded 10 MiB, and every
+other route, webhooks included, used the framework's 2 MiB default.
+
+- **`server.request_timeout` is removed and now stops startup; delete it.** It never did
+  anything. Set per-backend `timeout` to bound calls. The load fails, on start and on reload,
+  and the error includes:
+
+  ```text
+  `server.request_timeout` is retired: the server-wide request timeout was removed in 4.0; it was never enforced. Calls are bounded by the per-backend `timeout`. Remove server.request_timeout.
+  ```
+- **`server.max_body_size` is now enforced on every route**, read once at startup
+  (default 10 MiB). `0` would refuse every body, so it now fails the load; set a positive byte
+  count.
+- **An oversize body on `/mcp` and `/mcp/{name}` now gets HTTP 413 with JSON-RPC -32600**
+  ("Request body exceeds server.max_body_size"), where it used to get 400 with JSON-RPC -32700.
+  Clients that matched on -32700 must also handle 413 / -32600.
+- **Routes that parsed with a framework extractor (webhooks, key server, admin UI) now accept up
+  to the 10 MiB default**, up from 2 MiB. Lower `server.max_body_size` if you relied on that.
 
 ## After upgrading
 
