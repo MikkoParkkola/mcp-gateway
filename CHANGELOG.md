@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0-beta.2] - 2026-09-25
+
+> **Pre-release.** The second 4.0 beta. It is the first beta with container images:
+> `v4.0.0-beta.1` published to GitHub, crates.io and npm, but its image was never promoted
+> because the tag's container smoke test failed (fixed in #1018), so
+> `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.1` does not exist. Like beta.1 it is not
+> feature complete: the criteria still open for 4.0.0 are listed under *Known gaps* in
+> [`docs/release/4.0.0-beta.2-notes.md`](docs/release/4.0.0-beta.2-notes.md). It contains
+> every entry below this heading, everything in `[4.0.0-beta.1]`, and the `[4.0.0]` section
+> further down, which describes the 4.0 line and is not yet released as a final version.
+> Breaking changes from 3.x are listed in [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md).
+> Install it by exact version (`cargo install mcp-gateway --version 4.0.0-beta.2`,
+> `npm install @mikkoparkkola/mcp-gateway@next`, `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.2`);
+> no stable channel (`latest`, Homebrew, the MCP Registry) moves to it.
+
+### Added
+
+- **With auth on, the tool-call audit log is required and fails closed
+  (breaking).** An auth-enabled config without `security.transparency_log.enabled:
+  true` fails to load, and a log that cannot open stops startup. Every entry
+  carries `schema_version: 2`, `trace_id`, `outcome`, `error_code` and `who`
+  (credential kind, key fingerprint, verified issuer and subject; never an email).
+  Refused and failed calls are recorded. A failed append answers HTTP 503 /
+  JSON-RPC -32005 and unreadies `/readyz` until an append succeeds. The Helm
+  chart and enterprise-alpha mount a writable `audit` volume. The log is not
+  rotated yet. See UPGRADING-4.0.md item 43.
+
 ### Changed
 
 - **API keys are configured as sha256 digests, with an optional expiry
@@ -27,7 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > changes from 3.x are listed in [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md).
 > Install it by exact version (`cargo install mcp-gateway --version 4.0.0-beta.1`,
 > `npm install @mikkoparkkola/mcp-gateway@next`, `ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.1`);
-> no stable channel (`latest`, Homebrew, the MCP Registry) moves to it.
+> no stable channel (`latest`, Homebrew, the MCP Registry) moves to it. No container image was
+> published for beta.1; see `[4.0.0-beta.2]`.
 
 ### Added
 
@@ -66,16 +94,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/MULTI_USER.md` for the full configuration and the reverse-proxy
   routing it needs. Omitting `accounts.hosted` mounts no route and changes no
   existing refusal text.
-
-- **With auth on, the tool-call audit log is required and fails closed
-  (breaking).** An auth-enabled config without `security.transparency_log.enabled:
-  true` fails to load, and a log that cannot open stops startup. Every entry
-  carries `schema_version: 2`, `trace_id`, `outcome`, `error_code` and `who`
-  (credential kind, key fingerprint, verified issuer and subject; never an email).
-  Refused and failed calls are recorded. A failed append answers HTTP 503 /
-  JSON-RPC -32005 and unreadies `/readyz` until an append succeeds. The Helm
-  chart and enterprise-alpha mount a writable `audit` volume. The log is not
-  rotated yet. See UPGRADING-4.0.md item 43.
 
 ### Fixed
 
@@ -2156,7 +2174,8 @@ credential path.
 - Configuration via YAML with Pydantic validation
 - systemd/launchd service templates
 
-[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.1...HEAD
+[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.2...HEAD
+[4.0.0-beta.2]: https://github.com/MikkoParkkola/mcp-gateway/compare/v4.0.0-beta.1...v4.0.0-beta.2
 [4.0.0-beta.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0-beta.1
 [4.0.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v4.0.0
 [3.5.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.0...v3.5.1
