@@ -206,7 +206,7 @@ pub(crate) fn build_server_capabilities(
             resolve: Some(true),
         }),
         resources: Some(ResourcesCapability {
-            subscribe: false,
+            subscribe: true,
             list_changed: false,
         }),
         prompts: Some(PromptsCapability {
