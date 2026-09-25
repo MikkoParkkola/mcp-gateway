@@ -443,4 +443,124 @@ mod tests {
             None
         );
     }
+
+    // ── E1: admin rules grant gateway admin (4.0.0, MIK-7570.ADMINSSO.1) ──
+
+    fn admin_by_domain() -> ControlPlaneRoleRule {
+        rule(
+            "https://idp.corp",
+            None,
+            None,
+            Some("corp.com"),
+            ControlPlaneRole::Admin,
+        )
+    }
+
+    /// E1-T7: "everyone at corp.com is a gateway admin" fails to load, both as
+    /// a mapping and through the whole config's validation.
+    #[test]
+    fn domain_only_admin_rule_fails_to_load() {
+        let m = ControlPlaneRoleMappingConfig {
+            rules: vec![
+                rule(
+                    "https://idp.corp",
+                    Some("ops"),
+                    None,
+                    None,
+                    ControlPlaneRole::Auditor,
+                ),
+                admin_by_domain(),
+            ],
+        };
+        let error = m.validate().expect_err("a domain-only admin rule is refused");
+        let text = error.to_string();
+        assert!(
+            text.contains("rule 1") && text.contains("domain"),
+            "names the rule and the discriminator: {text}"
+        );
+
+        let config: crate::config::Config = serde_yaml::from_str(
+            "control_plane:\n  role_mapping:\n    rules:\n      \
+             - { issuer: \"https://idp.corp\", domain: \"corp.com\", role: admin }\n",
+        )
+        .expect("the YAML parses");
+        assert!(
+            config.validate().is_err(),
+            "the whole config refuses to load"
+        );
+    }
+
+    /// E1-T7b: the refusal is for admin-by-domain only. A domain rule for
+    /// another role, or an admin rule that also names a group or an email,
+    /// still loads.
+    #[test]
+    fn domain_rule_for_non_admin_role_loads() {
+        for ok in [
+            ControlPlaneRoleRule {
+                role: ControlPlaneRole::Auditor,
+                ..admin_by_domain()
+            },
+            ControlPlaneRoleRule {
+                group: Some("ops-admins".to_string()),
+                ..admin_by_domain()
+            },
+            ControlPlaneRoleRule {
+                email: Some("boss@corp.com".to_string()),
+                ..admin_by_domain()
+            },
+        ] {
+            let m = ControlPlaneRoleMappingConfig { rules: vec![ok] };
+            assert!(m.validate().is_ok(), "{:?}", m.rules[0]);
+        }
+    }
+
+    /// E1-T14: each admin rule announces, once per load, that it now grants
+    /// gateway admin everywhere: its index, issuer and discriminator kind,
+    /// never an email value. A non-admin rule says nothing.
+    #[test]
+    fn admin_rule_widening_warns_at_load() {
+        let m = ControlPlaneRoleMappingConfig {
+            rules: vec![
+                rule(
+                    "https://idp.corp",
+                    Some("ops-admins"),
+                    None,
+                    None,
+                    ControlPlaneRole::Admin,
+                ),
+                rule(
+                    "https://idp.corp",
+                    Some("aud"),
+                    None,
+                    None,
+                    ControlPlaneRole::Auditor,
+                ),
+                rule(
+                    "https://other.idp",
+                    None,
+                    Some("boss@corp.com"),
+                    None,
+                    ControlPlaneRole::Admin,
+                ),
+            ],
+        };
+        let (result, logs) =
+            crate::security::firewall::response_tests::audit::capture_warnings(|| m.validate());
+        result.expect("the mapping is valid");
+        assert_eq!(
+            logs.matches("now grants gateway admin").count(),
+            2,
+            "one warning per admin rule: {logs}"
+        );
+        assert!(
+            logs.contains("rule 0 (issuer https://idp.corp, group)"),
+            "{logs}"
+        );
+        assert!(
+            logs.contains("rule 2 (issuer https://other.idp, email)"),
+            "{logs}"
+        );
+        assert!(!logs.contains("rule 1"), "an auditor rule is silent: {logs}");
+        assert!(!logs.contains("boss@corp.com"), "no email value: {logs}");
+    }
 }

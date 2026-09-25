@@ -76,6 +76,9 @@ mod r2_identity_keys_tests;
 mod r2_input_keys_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+/// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
+#[cfg(test)]
+mod sso_admin_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
