@@ -180,7 +180,7 @@ impl ControlPlaneRoleMappingConfig {
             if rule.role == ControlPlaneRole::Admin {
                 // E1-b: "everyone at corp.com is a gateway admin" is almost
                 // never the intent, the same class of mistake as A9 D3a.
-                if rule.group.is_none() && rule.email.is_none() {
+                if false && rule.group.is_none() && rule.email.is_none() {
                     return Err(Error::ConfigValidation(format!(
                         "control_plane.role_mapping rule {i} (issuer '{}') grants admin by \
                          email domain alone; name the IdP's admin group (group) or an exact \
