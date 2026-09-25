@@ -6,7 +6,7 @@
 // test that drives a real startup must call the same one rather than a copy of
 // its policy.
 pub(crate) mod account_bindings;
-mod control_plane_store;
+pub(super) mod control_plane_store;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod persistence;
@@ -230,7 +230,9 @@ fn spawn_export_task(
     }
 
     let inv_path = expand_home_path(&config.security.transparency_log.path);
-    let gov_path = control_plane_base(config_path).join("audit.jsonl");
+    let gov_path = control_plane_base(config, config_path)
+        .0
+        .join("audit.jsonl");
     let secret = config.security.transparency_log.shared_secret.clone();
     let sink_path = expand_home_path(&ecfg.sink_path);
 
@@ -1764,7 +1766,7 @@ impl Gateway {
         let meta_mcp_for_shutdown = Arc::clone(&meta_mcp);
 
         let control_plane_store =
-            build_control_plane_store(&self.config, self.config_path.as_deref());
+            build_control_plane_store(&self.config, self.config_path.as_deref())?;
 
         // The durable task runtime, opened before any listener exists.
         //
